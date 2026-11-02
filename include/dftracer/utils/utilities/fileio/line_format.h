@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINE_FORMAT_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 
 #include <charconv>
@@ -44,8 +45,8 @@ struct FixedString {
 
 /// Escape policy: `bound(s)` is the most bytes `write(dst, s)` may write.
 struct PlainEscape {
-    static std::size_t bound(std::string_view s) { return s.size(); }
-    static char* write(char* d, std::string_view s) {
+    static std::size_t bound(dstd::StringView s) { return s.size(); }
+    static char* write(char* d, dstd::StringView s) {
         std::memcpy(d, s.data(), s.size());
         return d + s.size();
     }
@@ -53,9 +54,9 @@ struct PlainEscape {
 
 /// Copied without escaping, whatever the policy.
 struct Raw {
-    std::string_view s;
+    dstd::StringView s;
 };
-inline Raw raw(std::string_view s) { return {s}; }
+inline Raw raw(dstd::StringView s) { return {s}; }
 
 namespace detail {
 
@@ -72,7 +73,7 @@ inline constexpr bool IS_FLOAT =
 
 template <class T>
 inline constexpr bool IS_STR =
-    std::is_same_v<T, std::string_view> || std::is_same_v<T, std::string> ||
+    std::is_same_v<T, dstd::StringView> || std::is_same_v<T, std::string> ||
     std::is_same_v<T, const char*>;
 
 template <class T>
@@ -87,7 +88,7 @@ constexpr std::size_t FLOAT_MAX_CHARS = 32;
 /// four characters `{{}}` are the literal `{}`; every other brace is literal.
 /// Returns an error text, or nullptr.
 template <class Lit, class Hole>
-constexpr const char* scan(std::string_view f, Lit&& lit, Hole&& hole) {
+constexpr const char* scan(dstd::StringView f, Lit&& lit, Hole&& hole) {
     for (std::size_t i = 0; i < f.size(); ++i) {
         const char c = f[i];
         if (c == '\n' || c == '\r')
@@ -124,7 +125,7 @@ template <std::size_t N>
 consteval std::size_t count_holes(const FixedString<N>& f) {
     std::size_t holes = 0;
     if (const char* err =
-            scan(std::string_view(f.v, N - 1), [](char) {}, [&] { ++holes; }))
+            scan(dstd::StringView(f.v, N - 1), [](char) {}, [&] { ++holes; }))
         throw err;
     return holes;
 }
@@ -134,7 +135,7 @@ consteval Pieces<N, H> split(const FixedString<N>& f) {
     Pieces<N, H> p;
     std::size_t hole = 0;
     scan(
-        std::string_view(f.v, N - 1), [&](char c) { p.text[p.total++] = c; },
+        dstd::StringView(f.v, N - 1), [&](char c) { p.text[p.total++] = c; },
         [&] { p.end[hole++] = p.total; });
     p.end[H] = p.total;
     return p;
@@ -157,7 +158,7 @@ std::size_t arg_bound(const T& v) {
     else if constexpr (std::is_same_v<T, Raw>)
         return v.s.size();
     else
-        return E::bound(std::string_view(v));
+        return E::bound(dstd::StringView(v));
 }
 
 template <class E, class T>
@@ -173,14 +174,14 @@ char* put_arg(char* d, const T& v) {
         return std::to_chars(d, d + FLOAT_MAX_CHARS, v).ptr;
 #endif
     } else if constexpr (std::is_same_v<T, bool>) {
-        const std::string_view t = v ? "true" : "false";
+        const dstd::StringView t = v ? "true" : "false";
         std::memcpy(d, t.data(), t.size());
         return d + t.size();
     } else if constexpr (std::is_same_v<T, Raw>) {
         std::memcpy(d, v.s.data(), v.s.size());
         return d + v.s.size();
     } else {
-        return E::write(d, std::string_view(v));
+        return E::write(d, dstd::StringView(v));
     }
 }
 
@@ -219,7 +220,7 @@ constexpr View view() {
 }  // namespace detail
 
 /// What append_fmt accepts: integers (not char types or bool), bool, float,
-/// double, std::string_view, std::string, const char* (null is a returned
+/// double, dstd::StringView, std::string, const char* (null is a returned
 /// error) and Raw. Anything else, such as char, other pointers, nullptr and
 /// enums, is rejected at compile time; cast explicitly.
 template <class T>
@@ -231,7 +232,7 @@ template <class Escape>
 class BasicLineFormat {
    public:
     /// INVALID_ARGUMENT for a format containing a newline or carriage return.
-    static common::Result<BasicLineFormat> parse(std::string_view fmt) {
+    static common::Result<BasicLineFormat> parse(dstd::StringView fmt) {
         BasicLineFormat f;
         const char* err = detail::scan(
             fmt, [&](char c) { f.text_.push_back(c); },

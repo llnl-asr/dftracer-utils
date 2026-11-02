@@ -8,6 +8,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/server/viz/internal.h>
@@ -91,7 +92,7 @@ static constexpr char GROUP_SEP = '\x1f';
 // missing or non-scalar yields "" so events are never dropped - the client
 // renders those under "(none)".
 inline std::string extract_one_group_value(simdjson::dom::element root,
-                                           std::string_view col) {
+                                           dstd::StringView col) {
     if (auto v = find_path(root, col)) return scalar_text(*v);
     auto args = root["args"];
     if (args.error()) return "";
@@ -104,28 +105,28 @@ inline std::string extract_one_group_value(simdjson::dom::element root,
 // each component keeps its raw value (hashes stay hashes) for client-side
 // resolution.
 inline std::string extract_group_value(simdjson::dom::element root,
-                                       std::string_view col) {
-    if (col.find(',') == std::string_view::npos)
+                                       dstd::StringView col) {
+    if (col.find(',') == dstd::StringView::npos)
         return extract_one_group_value(root, col);
     std::string out;
     std::size_t start = 0;
     bool first = true;
     while (start <= col.size()) {
         auto comma = col.find(',', start);
-        auto part = col.substr(start, comma == std::string_view::npos
+        auto part = col.substr(start, comma == dstd::StringView::npos
                                           ? col.size() - start
                                           : comma - start);
         if (!first) out.push_back(GROUP_SEP);
         first = false;
         out += extract_one_group_value(root, part);
-        if (comma == std::string_view::npos) break;
+        if (comma == dstd::StringView::npos) break;
         start = comma + 1;
     }
     return out;
 }
 
-inline std::string extract_group_from_line(std::string_view event,
-                                           std::string_view col) {
+inline std::string extract_group_from_line(dstd::StringView event,
+                                           dstd::StringView col) {
     thread_local dftracer::utils::json::RecordParser parser;
     thread_local std::string buf;
     buf.assign(event);
@@ -141,7 +142,7 @@ inline std::string extract_group_from_line(std::string_view event,
 // sub-threshold events and to demote a dense window's overflow individuals.
 inline void add_to_density(simdjson::dom::element root, double dur,
                            double threshold, double begin, DensityMap& dens,
-                           std::string_view group_col) {
+                           dstd::StringView group_col) {
     double ts = 0;
     auto tr = root["ts"];
     if (!tr.error()) ts = json_number(tr.value_unsafe());
@@ -153,7 +154,7 @@ inline void add_to_density(simdjson::dom::element root, double dur,
     auto tir = root["tid"];
     if (!tir.error())
         tid = static_cast<std::int64_t>(json_number(tir.value_unsafe()));
-    std::string_view name;
+    dstd::StringView name;
     auto nr = root["name"];
     if (!nr.error() && nr.is_string()) name = nr.get_string().value_unsafe();
 
@@ -178,7 +179,7 @@ inline void add_to_density(simdjson::dom::element root, double dur,
 inline bool fold_density(simdjson::dom::element root, double threshold,
                          double begin, DensityMap& dens,
                          double* out_dur = nullptr,
-                         std::string_view group_col = {}) {
+                         dstd::StringView group_col = {}) {
     if (!root.is_object()) return false;
 
     auto dr = root["dur"];
@@ -198,7 +199,7 @@ inline void fold_overflow_events(const std::vector<std::string>& big,
                                  const std::vector<double>& big_dur,
                                  const std::vector<std::uint32_t>& overflow,
                                  double threshold, double begin,
-                                 DensityMap& dens, std::string_view group_col) {
+                                 DensityMap& dens, dstd::StringView group_col) {
     dftracer::utils::json::RecordParser parser;
     for (std::uint32_t i : overflow) {
         auto res = parser.parse(big[i]);
@@ -228,7 +229,7 @@ inline void drop_unreferenced_hash_records(std::vector<std::string>& big) {
         auto root = res.value_unsafe();
         if (!root.is_object()) continue;
         auto nr = root["name"];
-        std::string_view name;
+        dstd::StringView name;
         if (!nr.error() && nr.is_string())
             name = nr.get_string().value_unsafe();
         auto args = root["args"];
@@ -270,7 +271,7 @@ inline void drop_unreferenced_hash_records(std::vector<std::string>& big) {
 
 // Parse just the ts and dur of an event. Returns false for metadata/instant
 // events that lack either field.
-inline bool parse_ts_dur(std::string_view event, double& ts, double& dur) {
+inline bool parse_ts_dur(dstd::StringView event, double& ts, double& dur) {
     EventScalars s;
     if (!parse_event_scalars(event, s) || !s.has_ts || !s.has_dur) return false;
     ts = s.ts;
@@ -280,7 +281,7 @@ inline bool parse_ts_dur(std::string_view event, double& ts, double& dur) {
 
 // Parse pid, tid, ts, dur of an event. Returns false for metadata/instant
 // events that lack ts or dur.
-inline bool parse_lane_ts_dur(std::string_view event, std::int64_t& pid,
+inline bool parse_lane_ts_dur(dstd::StringView event, std::int64_t& pid,
                               std::int64_t& tid, double& ts, double& dur) {
     EventScalars s;
     if (!parse_event_scalars(event, s) || !s.has_ts || !s.has_dur) return false;
@@ -442,7 +443,7 @@ struct CounterAcc {
     }
 };
 
-inline void fold_counter(std::string_view event, double begin, double bucket_us,
+inline void fold_counter(dstd::StringView event, double begin, double bucket_us,
                          std::size_t buckets, CounterAcc& acc) {
     thread_local dftracer::utils::json::RecordParser parser;
     thread_local std::string buf;
@@ -467,9 +468,9 @@ inline void fold_counter(std::string_view event, double begin, double bucket_us,
         if (!ret.error()) bytes = json_number(ret.value_unsafe());
     }
     if (bytes <= 0) return;
-    if (s.name.find("write") != std::string_view::npos)
+    if (s.name.find("write") != dstd::StringView::npos)
         acc.write_bytes[col] += bytes;
-    else if (s.name.find("read") != std::string_view::npos)
+    else if (s.name.find("read") != dstd::StringView::npos)
         acc.read_bytes[col] += bytes;
 }
 
@@ -485,7 +486,7 @@ inline void fold_counter(std::string_view event, double begin, double bucket_us,
 // (pid, tid, col) into the density map.
 inline void add_counter_bucket(DensityMap& dens, std::int64_t pid,
                                std::int64_t tid, std::int64_t col,
-                               std::string_view series, double value_sum,
+                               dstd::StringView series, double value_sum,
                                std::uint32_t count) {
     if (count == 0) return;
     DensityKey k{pid, tid, col, std::string(series)};
@@ -510,7 +511,7 @@ inline void fold_counter_density(simdjson::dom::element root, double begin,
     long col = static_cast<long>((ts - begin) / threshold);
     if (col < 0 || col >= static_cast<long>(ncols)) return;
 
-    std::string_view name;
+    dstd::StringView name;
     auto nr = root["name"];
     if (!nr.error() && nr.is_string()) name = nr.get_string().value_unsafe();
     std::int64_t pid = 0, tid = 0;
@@ -563,7 +564,7 @@ struct AggRec {
 };
 
 inline bool collect_aggregated(simdjson::dom::element root,
-                               std::string_view raw, std::vector<AggRec>& out) {
+                               dstd::StringView raw, std::vector<AggRec>& out) {
     if (!root.is_object()) return false;
     auto tr = root["ts"];
     if (tr.error()) return false;
@@ -574,7 +575,7 @@ inline bool collect_aggregated(simdjson::dom::element root,
     auto tir = root["tid"];
     if (!tir.error())
         tid = static_cast<std::int64_t>(json_number(tir.value_unsafe()));
-    std::string_view name, cat;
+    dstd::StringView name, cat;
     auto nr = root["name"];
     if (!nr.error() && nr.is_string()) name = nr.get_string().value_unsafe();
     auto cr = root["cat"];

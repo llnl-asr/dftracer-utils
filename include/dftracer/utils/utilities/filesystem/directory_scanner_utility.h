@@ -255,7 +255,7 @@ class DirectoryScannerUtility {
     /// @p ctx, as many at once as @p gate admits. An unreadable directory is
     /// skipped rather than aborting the scan.
     static coro::CoroTask<std::vector<FileEntry>> scan_parallel(
-        coro::Scope& ctx, std::shared_ptr<coro::AdaptiveGate> gate,
+        coro::Scope& ctx, dstd::SharedPtr<coro::AdaptiveGate> gate,
         dstd::Path dir, bool populate_size) {
         dstd::Vector<Listed> listing = list_dir(dir.view(), false);
 

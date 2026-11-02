@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -40,7 +41,7 @@ std::string write_single_member_gz(const std::string& path,
 }
 
 // Decode every member; returns (concatenated bytes, per-member last byte).
-std::pair<std::string, std::vector<char>> decode_members(
+dftracer::utils::dstd::Pair<std::string, std::vector<char>> decode_members(
     const std::string& path) {
     int fd = ::open(path.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
@@ -62,7 +63,8 @@ std::pair<std::string, std::vector<char>> decode_members(
     return {out, last_bytes};
 }
 
-std::pair<std::string, int> decode_all(const std::string& path) {
+dftracer::utils::dstd::Pair<std::string, int> decode_all(
+    const std::string& path) {
     auto [bytes, lasts] = decode_members(path);
     return {bytes, static_cast<int>(lasts.size())};
 }

@@ -38,6 +38,9 @@
 // source then produces a distribution-capable dftracer_view; without MPI it is
 // the plain single-node binary.
 #ifdef DFTRACER_UTILS_ENABLE_MPI
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/distributed/mpi_transport.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #endif
@@ -364,7 +367,7 @@ class ViewArgParse : public binaries::ArgParse {
 class FileSink : public ExportSink {
    public:
     explicit FileSink(FILE* f) : f_(f) {}
-    void write(std::string_view data) override {
+    void write(dstd::StringView data) override {
         std::fwrite(data.data(), 1, data.size(), f_);
     }
 
@@ -376,7 +379,7 @@ class FileSink : public ExportSink {
 // without materializing output.
 class NullSink : public ExportSink {
    public:
-    void write(std::string_view) override {}
+    void write(dstd::StringView) override {}
 };
 
 // Re-scan a freshly written trace and confirm the event count round-trips.
@@ -546,7 +549,7 @@ static void print_table(FILE* out, const dataframe::DataFrame& table) {
 static void emit_typed(FILE* out, const dataframe::DataFrame& regular,
                        const dataframe::DataFrame& aggregated,
                        const dataframe::DataFrame& counters) {
-    const std::pair<const char*, const dataframe::DataFrame*> families[] = {
+    const dstd::Pair<const char*, const dataframe::DataFrame*> families[] = {
         {"regular", &regular},
         {"aggregated", &aggregated},
         {"counters", &counters},
@@ -604,7 +607,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     }
 
     using duql::Query;
-    std::optional<Query> query;
+    dstd::Optional<Query> query;
     duql::Params duql_params;
     for (const auto& kv : cli->params) {
         const auto eq = kv.find('=');
@@ -613,7 +616,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                                      kv.c_str());
             co_return 1;
         }
-        auto value = duql::parse_param(std::string_view(kv).substr(eq + 1));
+        auto value = duql::parse_param(dstd::StringView(kv).substr(eq + 1));
         if (!value) {
             DFTRACER_UTILS_LOG_ERROR("Invalid --param '%s': %s", kv.c_str(),
                                      value.error().message.c_str());
@@ -633,7 +636,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         co_return 1;
     }
 
-    std::optional<std::pair<double, double>> time_range;
+    dstd::Optional<dstd::Pair<double, double>> time_range;
     if (!time_range_str.empty()) {
         auto comma = time_range_str.find(',');
         if (comma != std::string::npos) {
@@ -833,7 +836,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         // Sides only feed the scan filter; their lines are indented or
         // start with "side " or "reads ".
         for (std::size_t at = 0; at < plan.size();) {
-            const std::string_view line(plan.data() + at,
+            const dstd::StringView line(plan.data() + at,
                                         plan.find('\n', at) - at);
             if (!line.starts_with("scan ") && !line.starts_with("side ") &&
                 !line.starts_with("reads ") && !line.starts_with(" "))
@@ -1037,7 +1040,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                         }
                     }
 
-                    std::vector<std::string_view> pv(partials.begin(),
+                    std::vector<dstd::StringView> pv(partials.begin(),
                                                      partials.end());
                     View merger = configure(View::from_files({}));
                     if (fg_mode) {

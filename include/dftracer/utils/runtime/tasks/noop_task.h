@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_RUNTIME_TASKS_NOOP_TASK_H
 #define DFTRACER_UTILS_RUNTIME_TASKS_NOOP_TASK_H
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 
 #include <memory>
@@ -34,7 +35,7 @@ class NoOpTask : public Task {
 /**
  * Helper function to create a @ref NoOpTask
  */
-inline std::shared_ptr<NoOpTask> make_noop_task(std::string name = "__noop__") {
+inline dstd::SharedPtr<NoOpTask> make_noop_task(std::string name = "__noop__") {
     return std::make_shared<NoOpTask>(std::move(name));
 }
 

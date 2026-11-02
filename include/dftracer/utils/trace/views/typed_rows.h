@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_TYPED_ROWS_H
 #define DFTRACER_UTILS_TRACE_VIEWS_TYPED_ROWS_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schema_class.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -22,12 +23,12 @@ namespace dftracer::utils::trace::views {
 namespace detail::typed_rows {
 
 // Walks a dotted path; a numeric segment also indexes an array.
-inline bool find_path(simdjson::dom::element root, std::string_view path,
+inline bool find_path(simdjson::dom::element root, dstd::StringView path,
                       simdjson::dom::element& out) {
     simdjson::dom::element cur = root;
     while (true) {
         const std::size_t dot = path.find('.');
-        const std::string_view seg = path.substr(0, dot);
+        const dstd::StringView seg = path.substr(0, dot);
         simdjson::dom::object obj;
         simdjson::dom::array arr;
         if (cur.get(obj) == simdjson::SUCCESS) {
@@ -42,7 +43,7 @@ inline bool find_path(simdjson::dom::element root, std::string_view path,
         } else {
             return false;
         }
-        if (dot == std::string_view::npos) break;
+        if (dot == dstd::StringView::npos) break;
         path.remove_prefix(dot + 1);
     }
     out = cur;
@@ -78,7 +79,7 @@ bool convert(simdjson::dom::element e, V& out) {
         out = static_cast<V>(d);
         return true;
     } else if constexpr (std::same_as<V, std::string>) {
-        std::string_view s;
+        dstd::StringView s;
         if (e.get(s) != simdjson::SUCCESS) return false;
         out.assign(s);
         return true;
@@ -152,7 +153,7 @@ dataframe::LazyResult<std::vector<T>> rows(const View& view, Lazy) {
             [](ViewSession& s) {
                 return s.fold<std::vector<T>>(
                     [](std::vector<T>& out, const json::JsonValue& jv,
-                       std::string_view) {
+                       dstd::StringView) {
                         out.push_back(decode_row<T>(jv.element()));
                     },
                     [](std::vector<T>&& a, std::vector<T>&& b) {

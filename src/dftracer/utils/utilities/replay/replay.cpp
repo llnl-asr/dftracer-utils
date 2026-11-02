@@ -9,7 +9,9 @@
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/dataframe/containment.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
@@ -40,7 +42,7 @@ dftracer::utils::dstd::StringIntern& replay_intern() {
     return instance;
 }
 
-std::string_view intern_sv(std::string_view sv) {
+dstd::StringView intern_sv(dstd::StringView sv) {
     return replay_intern().intern(sv);
 }
 
@@ -380,10 +382,10 @@ bool ReplayEngine::parse_trace_json(json::JsonParser& parser, Trace& trace) {
     // ArgsValueProxy::get<string_view> returns a view directly into the
     // variant's owned string without copying; we then intern so the view
     // outlives ev/ArgsMap (which die at the end of this function).
-    auto fhash_sv = ev.args["fhash"].get<std::string_view>(std::string_view{});
-    auto hhash_sv = ev.args["hhash"].get<std::string_view>(std::string_view{});
-    trace.fhash = fhash_sv.empty() ? std::string_view{} : intern_sv(fhash_sv);
-    trace.hhash = hhash_sv.empty() ? std::string_view{} : intern_sv(hhash_sv);
+    auto fhash_sv = ev.args["fhash"].get<dstd::StringView>(dstd::StringView{});
+    auto hhash_sv = ev.args["hhash"].get<dstd::StringView>(dstd::StringView{});
+    trace.fhash = fhash_sv.empty() ? dstd::StringView{} : intern_sv(fhash_sv);
+    trace.hhash = hhash_sv.empty() ? dstd::StringView{} : intern_sv(hhash_sv);
     trace.size =
         ev.args["size"].get<std::int64_t>(static_cast<std::int64_t>(-1));
     trace.offset =
@@ -655,7 +657,7 @@ ReplayResult ReplayEngine::replay_with_call_tree(
         // Lanes by (pid,tid); each is an independent nesting stack.
         // containment_ walk assigns level (depth) and parent (enclosing event's
         // index).
-        std::map<std::pair<std::uint64_t, std::uint64_t>,
+        std::map<dstd::Pair<std::uint64_t, std::uint64_t>,
                  std::vector<std::int64_t>>
             lane_map;
         for (std::int64_t i = 0; i < n; ++i)
@@ -672,7 +674,7 @@ ReplayResult ReplayEngine::replay_with_call_tree(
                                      return start(a) < start(b);
                                  return end(a) > end(b);
                              });
-            std::vector<std::pair<std::int64_t, std::int64_t>> stack;
+            std::vector<dstd::Pair<std::int64_t, std::int64_t>> stack;
             dataframe::containment_walk(
                 static_cast<std::int64_t>(rows.size()),
                 [&](std::int64_t k) { return start(rows[k]); },

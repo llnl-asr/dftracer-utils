@@ -4,6 +4,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -42,8 +44,8 @@ class DynCursor : public Cursor {
    public:
     explicit DynCursor(std::vector<std::string> dyn) : dyn_(std::move(dyn)) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-        if (next_ >= MORSELS) co_return std::nullopt;
+    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
+        if (next_ >= MORSELS) co_return dstd::nullopt;
         Morsel m;
         m.rows = ROWS;
         m.batch_index = next_;
@@ -65,7 +67,7 @@ class DynCursor : public Cursor {
 
    private:
     std::vector<std::string> dyn_;
-    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+    dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
         std::make_shared<dftracer::utils::dstd::StringIntern>();
     int next_ = 0;
 };

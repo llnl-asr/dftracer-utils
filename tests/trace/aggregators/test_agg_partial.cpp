@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
@@ -44,7 +46,7 @@ struct Ev {
     std::uint64_t dur = 0;
     bool has_dur = true;
     std::string fhash;
-    std::vector<std::pair<std::string, std::uint64_t>> args;
+    std::vector<dftracer::utils::dstd::Pair<std::string, std::uint64_t>> args;
 };
 
 class Acc {
@@ -56,19 +58,21 @@ class Acc {
     bool is_counter() const { return e_.counter; }
     bool is_profile() const { return e_.counter && e_.cat != "sys"; }
     bool is_system() const { return e_.counter && e_.cat == "sys"; }
-    std::string_view name() const { return e_.name; }
-    std::string_view cat() const { return e_.cat; }
+    dftracer::utils::dstd::StringView name() const { return e_.name; }
+    dftracer::utils::dstd::StringView cat() const { return e_.cat; }
     std::uint64_t pid() const { return e_.pid; }
     std::uint64_t tid() const { return e_.tid; }
     std::uint64_t ts() const { return e_.ts; }
     std::uint64_t dur() const { return e_.dur; }
     bool has_dur() const { return e_.has_dur; }
 
-    bool arg_is_number(std::string_view k) const {
+    bool arg_is_number(dftracer::utils::dstd::StringView k) const {
         return k != "fhash" && find(k) != nullptr;
     }
-    std::string_view arg_string(std::string_view k) const {
-        return k == "fhash" ? std::string_view(e_.fhash) : std::string_view{};
+    dftracer::utils::dstd::StringView arg_string(
+        dftracer::utils::dstd::StringView k) const {
+        return k == "fhash" ? dftracer::utils::dstd::StringView(e_.fhash)
+                            : dftracer::utils::dstd::StringView{};
     }
     void metric_args(MetricArgs& m) const {
         for (const auto& [name, v] : e_.args) {
@@ -81,7 +85,7 @@ class Acc {
     }
 
    private:
-    const std::uint64_t* find(std::string_view k) const {
+    const std::uint64_t* find(dftracer::utils::dstd::StringView k) const {
         for (const auto& [name, v] : e_.args)
             if (name == k) return &v;
         return nullptr;
@@ -89,7 +93,7 @@ class Acc {
     const Ev& e_;
 };
 
-using Key = std::pair<std::string, std::string>;
+using Key = dftracer::utils::dstd::Pair<std::string, std::string>;
 
 std::uint64_t next(std::uint64_t& s) {
     s = mmix_lcg_step(s);
@@ -192,7 +196,9 @@ bool is_transfer(const Ev& e) {
 
 struct Truth {
     std::set<std::uint64_t> pids, tids, files;
-    std::map<std::uint64_t, std::pair<std::uint64_t, std::uint64_t>> spans;
+    std::map<std::uint64_t,
+             dftracer::utils::dstd::Pair<std::uint64_t, std::uint64_t>>
+        spans;
     std::vector<double> dur, size, off;
 };
 
@@ -444,7 +450,7 @@ TEST_SUITE("AggPartial") {
     TEST_CASE("the metric args of a POD event clamp like get<uint64>") {
         dftracer::utils::dstd::StringIntern intern;
         const MetricArgIds ids(intern);
-        const auto id = [&intern](std::string_view name) {
+        const auto id = [&intern](dftracer::utils::dstd::StringView name) {
             return intern.get_or_insert(name);
         };
         dftracer::utils::trace::views::detail::FoldEvent ev;

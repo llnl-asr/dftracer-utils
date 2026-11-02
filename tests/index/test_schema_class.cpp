@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schema_class.h>
 #include <doctest/doctest.h>
@@ -15,36 +17,39 @@ namespace ix = dftracer::utils::index;
 namespace {
 
 struct ClassNginx {
-    static constexpr std::string_view id = "class_nginx";
+    static constexpr dftracer::utils::dstd::StringView id = "class_nginx";
     ix::Field<std::int64_t, "status"> status;
     ix::Field<double, "request_time", ix::DurationRole<ix::TimeUnit::S>>
         request_time;
-    ix::Field<std::optional<std::string>, "meta.host"> host;
+    ix::Field<dftracer::utils::dstd::Optional<std::string>, "meta.host"> host;
     ix::Field<std::string, "upstream", ix::AlwaysIndex> upstream;
-    ix::Field<std::optional<ix::Json>, "tags"> tags;
+    ix::Field<dftracer::utils::dstd::Optional<ix::Json>, "tags"> tags;
 };
 
 struct ClassStep {
-    static constexpr std::string_view id = "class_step";
+    static constexpr dftracer::utils::dstd::StringView id = "class_step";
     using extends = ix::schemas::DFTracer;
     ix::Field<std::int64_t, "args.step"> step;
 };
 
 struct ClassWeb {
-    static constexpr std::string_view id = "class_web";
-    static constexpr std::string_view SOURCE =
+    static constexpr dftracer::utils::dstd::StringView id = "class_web";
+    static constexpr dftracer::utils::dstd::StringView SOURCE =
         "errors = where status >= 500; def slow(t) = latency > t";
     ix::Field<std::int64_t, "status"> status;
     ix::Field<double, "latency"> latency;
 };
 
 struct ClassTimed {
-    static constexpr std::string_view id = "class_timed";
+    static constexpr dftracer::utils::dstd::StringView id = "class_timed";
     ix::Field<std::uint64_t, "ts_ms", ix::TimeRole<ix::TimeUnit::Ms>> ts_ms;
     ix::Field<std::string, "worker", ix::EntityRole> worker;
-    ix::Field<std::optional<bool>, "ok"> ok;
-    ix::Field<std::optional<std::int64_t>, "thread", ix::LaneRole> thread;
-    ix::Field<std::optional<std::string>, "op", ix::NameRole> op;
+    ix::Field<dftracer::utils::dstd::Optional<bool>, "ok"> ok;
+    ix::Field<dftracer::utils::dstd::Optional<std::int64_t>, "thread",
+              ix::LaneRole>
+        thread;
+    ix::Field<dftracer::utils::dstd::Optional<std::string>, "op", ix::NameRole>
+        op;
 };
 
 }  // namespace

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/index.h>
@@ -215,8 +216,8 @@ std::map<std::string, double> counts_by_op(const View& v) {
 }
 
 // The file's recorded schema and whether its pruning tier is built.
-std::pair<std::string, bool> index_state(const std::string& gz,
-                                         const std::string& idx) {
+dstd::Pair<std::string, bool> index_state(const std::string& gz,
+                                          const std::string& idx) {
     const auto snapshot = dftu_utils_test::index_snapshot(idx);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
     const auto schema = dftu_utils_test::index_take(ix::schema(snapshot, file));
@@ -243,10 +244,10 @@ std::vector<std::string> nested_calls(
 }
 
 // Each flamegraph node's name path ("all/step/read") -> (total, count).
-std::map<std::string, std::pair<double, std::int64_t>> flame_paths(
+std::map<std::string, dstd::Pair<double, std::int64_t>> flame_paths(
     const df::DataFrame& f) {
     std::vector<std::string> path(static_cast<std::size_t>(f.num_rows()));
-    std::map<std::string, std::pair<double, std::int64_t>> out;
+    std::map<std::string, dstd::Pair<double, std::int64_t>> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
         const auto parent = static_cast<std::int64_t>(bnum(f, r, "parent"));
         path[static_cast<std::size_t>(r)] =
@@ -340,7 +341,7 @@ fields:
         const df::DataFrame tc = run(vc.call_tree().collect());
         REQUIRE(tc.num_rows() == ta.num_rows());
         CHECK(tc.columns[tc.column_index("ts")].type() == df::TypeId::Float64);
-        std::multiset<std::pair<std::string, std::int64_t>> la, lc;
+        std::multiset<dstd::Pair<std::string, std::int64_t>> la, lc;
         for (std::int64_t r = 0; r < ta.num_rows(); ++r) {
             la.emplace(bstr(ta, r, "name"),
                        static_cast<std::int64_t>(bnum(ta, r, "level")));

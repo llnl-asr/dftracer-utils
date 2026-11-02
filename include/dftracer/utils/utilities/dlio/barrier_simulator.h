@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_DLIO_BARRIER_SIMULATOR_H
 #define DFTRACER_UTILS_UTILITIES_DLIO_BARRIER_SIMULATOR_H
 
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/utilities/dlio/statistic.h>
 
 #include <cstdint>
@@ -34,9 +35,9 @@ struct BarrierSimulatorContext {
     double trace_rank_variance = 0.0;
     std::vector<double> trace_per_rank_throughput;
 
-    std::optional<std::vector<std::vector<double>>> getitem_trace;
-    std::optional<Statistic> io_stats;
-    std::optional<std::vector<double>> io_samples;
+    dstd::Optional<std::vector<std::vector<double>>> getitem_trace;
+    dstd::Optional<Statistic> io_stats;
+    dstd::Optional<std::vector<double>> io_samples;
 
     bool sync_mode = false;
     int accumulate_grad_batches = 1;
@@ -77,9 +78,9 @@ struct BarrierSimulationResult {
     ComponentTimeMetrics fetch_iter_metrics;
     ComponentTimeMetrics fetch_block_metrics;
 
-    std::optional<ComponentTimeMetrics> trace_preprocess_metrics;
-    std::optional<ComponentTimeMetrics> trace_fetch_iter_metrics;
-    std::optional<ComponentTimeMetrics> trace_fetch_block_metrics;
+    dstd::Optional<ComponentTimeMetrics> trace_preprocess_metrics;
+    dstd::Optional<ComponentTimeMetrics> trace_fetch_iter_metrics;
+    dstd::Optional<ComponentTimeMetrics> trace_fetch_block_metrics;
 
     std::vector<double> simulated_per_rank_throughput;
     std::vector<double> trace_per_rank_throughput;

@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_FILE_H
 #define DFTRACER_UTILS_INDEX_STORE_FILE_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
@@ -99,16 +102,16 @@ struct ChunkMetadata {
     std::uint64_t records = 0;
     /// The records' distinct names and field paths ("pid", "args.name"),
     /// sorted; nullopt when there were more than METADATA_VALUES_CAP.
-    std::optional<std::vector<std::string>> names = std::vector<std::string>{};
-    std::optional<std::vector<std::string>> paths = std::vector<std::string>{};
+    dstd::Optional<std::vector<std::string>> names = std::vector<std::string>{};
+    dstd::Optional<std::vector<std::string>> paths = std::vector<std::string>{};
 };
 
 inline constexpr std::size_t METADATA_VALUES_CAP = 64;
 
 /// Adds `value` to a sorted @ref ChunkMetadata list, which becomes nullopt past
 /// METADATA_VALUES_CAP.
-void add_metadata_value(std::optional<std::vector<std::string>>& list,
-                        std::string_view value);
+void add_metadata_value(dstd::Optional<std::vector<std::string>>& list,
+                        dstd::StringView value);
 
 /// A set of extensions.
 class ExtensionMask {
@@ -144,9 +147,9 @@ inline constexpr IndexExtension ALL_EXTENSIONS[] = {
     IndexExtension::Agg,     IndexExtension::Rowset};
 
 /// The extension's name, such as "zonemap" or "core.members".
-std::string_view extension_name(IndexExtension ext);
+dstd::StringView extension_name(IndexExtension ext);
 /// The extension named `name`; nullopt for an unknown name.
-std::optional<IndexExtension> parse_extension(std::string_view name);
+dstd::Optional<IndexExtension> parse_extension(dstd::StringView name);
 
 /// A manifest entry: the extension was built for the file at `version` with
 /// configuration `params_hash`; `ready` is false when the build failed.

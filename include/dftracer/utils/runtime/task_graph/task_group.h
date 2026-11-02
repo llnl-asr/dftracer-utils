@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_TASK_GRAPH_TASK_GROUP_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/memory.h>
 
 #include <cassert>
 #include <cstddef>
@@ -40,18 +41,18 @@ class TaskGroup {
     /**
      * Construct from vector of tasks
      */
-    explicit TaskGroup(std::vector<std::shared_ptr<Task>> tasks)
+    explicit TaskGroup(std::vector<dstd::SharedPtr<Task>> tasks)
         : tasks_(std::move(tasks)) {}
 
     /**
      * Construct from single task
      */
-    explicit TaskGroup(std::shared_ptr<Task> task) : tasks_{std::move(task)} {}
+    explicit TaskGroup(dstd::SharedPtr<Task> task) : tasks_{std::move(task)} {}
 
     /**
      * Get all tasks in this group
      */
-    const std::vector<std::shared_ptr<Task>>& tasks() const { return tasks_; }
+    const std::vector<dstd::SharedPtr<Task>>& tasks() const { return tasks_; }
 
     /**
      * Get single task (asserts size == 1)
@@ -59,7 +60,7 @@ class TaskGroup {
      * Use this when you know the group contains exactly one task,
      * e.g., after reduce() which produces a single output.
      */
-    std::shared_ptr<Task> task() const {
+    dstd::SharedPtr<Task> task() const {
         if (tasks_.size() != 1) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Internal,
@@ -72,7 +73,7 @@ class TaskGroup {
     /**
      * Get task at index
      */
-    std::shared_ptr<Task> at(std::size_t index) const {
+    dstd::SharedPtr<Task> at(std::size_t index) const {
         if (index >= tasks_.size()) {
             throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
                                             "TaskGroup index out of range");
@@ -83,7 +84,7 @@ class TaskGroup {
     /**
      * Get task at index (no bounds checking)
      */
-    std::shared_ptr<Task> operator[](std::size_t index) const {
+    dstd::SharedPtr<Task> operator[](std::size_t index) const {
         return tasks_[index];
     }
 
@@ -100,7 +101,7 @@ class TaskGroup {
     /**
      * Add a task to the group
      */
-    void add(std::shared_ptr<Task> task) { tasks_.push_back(std::move(task)); }
+    void add(dstd::SharedPtr<Task> task) { tasks_.push_back(std::move(task)); }
 
     /**
      * Reserve capacity
@@ -116,7 +117,7 @@ class TaskGroup {
     auto cend() const { return tasks_.cend(); }
 
    private:
-    std::vector<std::shared_ptr<Task>> tasks_;
+    std::vector<dstd::SharedPtr<Task>> tasks_;
 };
 
 /**
@@ -126,13 +127,13 @@ template <>
 class TaskGroup<void> {
    public:
     TaskGroup() = default;
-    explicit TaskGroup(std::vector<std::shared_ptr<Task>> tasks)
+    explicit TaskGroup(std::vector<dstd::SharedPtr<Task>> tasks)
         : tasks_(std::move(tasks)) {}
-    explicit TaskGroup(std::shared_ptr<Task> task) : tasks_{std::move(task)} {}
+    explicit TaskGroup(dstd::SharedPtr<Task> task) : tasks_{std::move(task)} {}
 
-    const std::vector<std::shared_ptr<Task>>& tasks() const { return tasks_; }
+    const std::vector<dstd::SharedPtr<Task>>& tasks() const { return tasks_; }
 
-    std::shared_ptr<Task> task() const {
+    dstd::SharedPtr<Task> task() const {
         if (tasks_.size() != 1) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Internal,
@@ -142,7 +143,7 @@ class TaskGroup<void> {
         return tasks_[0];
     }
 
-    std::shared_ptr<Task> at(std::size_t index) const {
+    dstd::SharedPtr<Task> at(std::size_t index) const {
         if (index >= tasks_.size()) {
             throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
                                             "TaskGroup index out of range");
@@ -150,13 +151,13 @@ class TaskGroup<void> {
         return tasks_[index];
     }
 
-    std::shared_ptr<Task> operator[](std::size_t index) const {
+    dstd::SharedPtr<Task> operator[](std::size_t index) const {
         return tasks_[index];
     }
 
     std::size_t size() const { return tasks_.size(); }
     bool empty() const { return tasks_.empty(); }
-    void add(std::shared_ptr<Task> task) { tasks_.push_back(std::move(task)); }
+    void add(dstd::SharedPtr<Task> task) { tasks_.push_back(std::move(task)); }
     void reserve(std::size_t capacity) { tasks_.reserve(capacity); }
 
     auto begin() { return tasks_.begin(); }
@@ -167,7 +168,7 @@ class TaskGroup<void> {
     auto cend() const { return tasks_.cend(); }
 
    private:
-    std::vector<std::shared_ptr<Task>> tasks_;
+    std::vector<dstd::SharedPtr<Task>> tasks_;
 };
 
 }  // namespace dftracer::utils::task_graph

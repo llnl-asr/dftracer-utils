@@ -10,6 +10,9 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -35,8 +38,8 @@ using df::TypeId;
 
 namespace {
 
-using I = std::optional<std::int64_t>;
-using S = std::optional<std::string>;
+using I = dstd::Optional<std::int64_t>;
+using S = dstd::Optional<std::string>;
 
 std::vector<std::uint8_t> bits_of(const std::vector<bool>& valid) {
     std::vector<std::uint8_t> bits((valid.size() + 7) / 8, 0);
@@ -73,14 +76,14 @@ Series f64s(const std::vector<I>& v) {
 }
 
 Series strs(const std::vector<S>& v) {
-    std::vector<std::string_view> views;
+    std::vector<dstd::StringView> views;
     std::vector<bool> valid(v.size());
     for (std::size_t i = 0; i < v.size(); ++i) {
         valid[i] = v[i].has_value();
-        views.emplace_back(v[i] ? std::string_view(*v[i]) : std::string_view());
+        views.emplace_back(v[i] ? dstd::StringView(*v[i]) : dstd::StringView());
     }
     const auto bits = bits_of(valid);
-    return Series::strings(std::span<const std::string_view>(views),
+    return Series::strings(dstd::Span<const dstd::StringView>(views),
                            bits.data());
 }
 
@@ -190,7 +193,7 @@ LazyFrame budgeted(const DataFrame& d, std::uint64_t budget) {
 
 std::vector<DataFrame> run_asof(const Inputs& in, std::uint64_t budget,
                                 const std::vector<std::string>& by,
-                                AsofDirection dir, std::optional<double> tol) {
+                                AsofDirection dir, dstd::Optional<double> tol) {
     return morsels(
         budgeted(in.left, budget).asof(in.right.lazy(), "ts", by, dir, tol));
 }
@@ -202,7 +205,7 @@ TEST_CASE("asof matches the eager op over groups, ties, nulls and any order") {
                                   AsofDirection::Forward,
                                   AsofDirection::Nearest};
     const std::vector<std::vector<std::string>> bys = {{}, {"g"}};
-    const std::optional<double> tols[] = {std::nullopt, 0.0, 3.0, 6.5};
+    const dstd::Optional<double> tols[] = {dstd::nullopt, 0.0, 3.0, 6.5};
     std::uint32_t seed = 1;
     for (const TimeKind kind : {TimeKind::INT, TimeKind::FLOAT}) {
         for (const bool string_key : {false, true}) {
@@ -227,11 +230,11 @@ TEST_CASE("asof matches the eager op over groups, ties, nulls and any order") {
 TEST_CASE("asof leaves in several morsels cut by the budget") {
     const Inputs in = make_inputs(99, 4000, 3000, TimeKind::INT, false);
     const std::vector<DataFrame> parts = run_asof(
-        in, SMALL_BUDGET, {"g"}, AsofDirection::Backward, std::nullopt);
+        in, SMALL_BUDGET, {"g"}, AsofDirection::Backward, dstd::nullopt);
     // Collect-then-eager would hand the whole result over in one morsel.
     CHECK(parts.size() > 4);
     const DataFrame eager = df::asof(in.left, in.right, "ts", {"g"},
-                                     AsofDirection::Backward, std::nullopt);
+                                     AsofDirection::Backward, dstd::nullopt);
     CHECK(row_keys(parts) == row_keys(eager));
 }
 
@@ -242,17 +245,18 @@ TEST_CASE("asof with an empty side") {
     for (const AsofDirection dir :
          {AsofDirection::Backward, AsofDirection::Nearest}) {
         expect_same(
-            morsels(budgeted(none_l, SMALL_BUDGET)
-                        .asof(in.right.lazy(), "ts", {"g"}, dir, std::nullopt)),
-            df::asof(none_l, in.right, "ts", {"g"}, dir, std::nullopt));
+            morsels(
+                budgeted(none_l, SMALL_BUDGET)
+                    .asof(in.right.lazy(), "ts", {"g"}, dir, dstd::nullopt)),
+            df::asof(none_l, in.right, "ts", {"g"}, dir, dstd::nullopt));
         expect_same(
             morsels(budgeted(in.left, SMALL_BUDGET)
-                        .asof(none_r.lazy(), "ts", {"g"}, dir, std::nullopt)),
-            df::asof(in.left, none_r, "ts", {"g"}, dir, std::nullopt));
+                        .asof(none_r.lazy(), "ts", {"g"}, dir, dstd::nullopt)),
+            df::asof(in.left, none_r, "ts", {"g"}, dir, dstd::nullopt));
         expect_same(
             morsels(budgeted(none_l, SMALL_BUDGET)
-                        .asof(none_r.lazy(), "ts", {}, dir, std::nullopt)),
-            df::asof(none_l, none_r, "ts", {}, dir, std::nullopt));
+                        .asof(none_r.lazy(), "ts", {}, dir, dstd::nullopt)),
+            df::asof(none_l, none_r, "ts", {}, dir, dstd::nullopt));
     }
 }
 

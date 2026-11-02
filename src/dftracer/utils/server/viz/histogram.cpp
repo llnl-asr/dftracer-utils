@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
@@ -111,8 +112,8 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
     if (view.query) dv = dv.filter(*view.query);
     if (!single_file || fields.by_path) dv = dv.time_range(begin, end);
     auto scan = co_await dv.map_batches<DurAcc>(
-        [&fields](DurAcc& a, const std::vector<std::string_view>& events) {
-            fields.for_each_event(events, [&a](std::string_view e) {
+        [&fields](DurAcc& a, const std::vector<dstd::StringView>& events) {
+            fields.for_each_event(events, [&a](dstd::StringView e) {
                 EventScalars s;
                 if (parse_event_scalars(e, s) && s.has_dur)
                     a.durs.push_back(s.dur);

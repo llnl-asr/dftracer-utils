@@ -6,6 +6,8 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <nanoarrow/nanoarrow.h>
 
@@ -22,7 +24,7 @@
 /// not part of the public API.
 namespace dftracer::utils::utilities::arrow {
 
-inline std::optional<ColumnType> scalar_type_from_storage(
+inline dstd::Optional<ColumnType> scalar_type_from_storage(
     ArrowType t) noexcept {
     switch (t) {
         case NANOARROW_TYPE_INT64:
@@ -54,13 +56,13 @@ inline std::optional<ColumnType> scalar_type_from_storage(
         case NANOARROW_TYPE_BOOL:
             return ColumnType::Bool;
         default:
-            return std::nullopt;
+            return dstd::nullopt;
     }
 }
 
 enum class KeyKind { Signed, Unsigned, Float, Bytes };
 
-inline std::optional<KeyKind> key_kind_from_storage(ArrowType t) noexcept {
+inline dstd::Optional<KeyKind> key_kind_from_storage(ArrowType t) noexcept {
     switch (t) {
         case NANOARROW_TYPE_INT8:
         case NANOARROW_TYPE_INT16:
@@ -82,7 +84,7 @@ inline std::optional<KeyKind> key_kind_from_storage(ArrowType t) noexcept {
         case NANOARROW_TYPE_LARGE_BINARY:
             return KeyKind::Bytes;
         default:
-            return std::nullopt;
+            return dstd::nullopt;
     }
 }
 
@@ -176,14 +178,14 @@ inline void append_scalar(RecordBatchBuilder& b, std::size_t out, ColumnType ct,
         case ColumnType::String: {
             ArrowStringView s = ArrowArrayViewGetStringUnsafe(v, pos);
             b.append_string(
-                out, std::string_view(s.data,
+                out, dstd::StringView(s.data,
                                       static_cast<std::size_t>(s.size_bytes)));
             break;
         }
         case ColumnType::Binary: {
             ArrowStringView s = ArrowArrayViewGetStringUnsafe(v, pos);
             b.append_binary(
-                out, std::string_view(s.data,
+                out, dstd::StringView(s.data,
                                       static_cast<std::size_t>(s.size_bytes)));
             break;
         }
@@ -207,7 +209,7 @@ inline void append_value(RecordBatchBuilder& b, std::size_t out,
                 ArrowArrayViewListChildOffset(vc.view, row);
             const std::int64_t end =
                 ArrowArrayViewListChildOffset(vc.view, row + 1);
-            std::vector<std::string_view> vals;
+            std::vector<dstd::StringView> vals;
             vals.reserve(static_cast<std::size_t>(end - start));
             for (std::int64_t p = start; p < end; ++p) {
                 ArrowStringView s = ArrowArrayViewGetStringUnsafe(elem, p);
@@ -258,7 +260,7 @@ inline void append_value(RecordBatchBuilder& b, std::size_t out,
                         case ColumnType::Binary: {
                             ArrowStringView s =
                                 ArrowArrayViewGetStringUnsafe(fv, p);
-                            c.str = std::string_view(
+                            c.str = dstd::StringView(
                                 s.data, static_cast<std::size_t>(s.size_bytes));
                             break;
                         }

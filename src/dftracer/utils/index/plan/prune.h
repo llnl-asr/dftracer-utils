@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/duql/query.h>
 
 #include <cstdint>
@@ -41,7 +43,7 @@ struct PruneRequest {
     /// for the whole query. When null, prune_file takes one for the call.
     const index::Snapshot* snapshot = nullptr;
     /// {begin, end} in microseconds; 0 leaves that side open.
-    std::optional<std::pair<double, double>> time_range;
+    dstd::Optional<dstd::Pair<double, double>> time_range;
     /// Chunk count to expand "every chunk" to when a time range applies and
     /// the query pruning did not report one.
     std::uint64_t chunk_count = 0;

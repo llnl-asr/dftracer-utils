@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -108,7 +109,8 @@ TEST_SUITE("RollupStore") {
         df::DataFrame r = df::agg_finalize(*got, "grp");
         REQUIRE(r.num_rows() == 3);
 
-        std::map<std::string, std::pair<std::int64_t, double>> by_group;
+        std::map<std::string, dftracer::utils::dstd::Pair<std::int64_t, double>>
+            by_group;
         for (std::int64_t i = 0; i < r.num_rows(); ++i)
             by_group[std::string(r.column("grp").string_at(i))] = {
                 r.column("n").data<std::int64_t>()[i],

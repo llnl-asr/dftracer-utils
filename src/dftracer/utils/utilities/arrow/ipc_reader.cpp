@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/utilities/arrow/ipc_reader.h>
 #include <nanoarrow/nanoarrow.h>
 #include <nanoarrow/nanoarrow_ipc.h>
@@ -255,7 +256,7 @@ int IpcReader::read_footer() {
     }
 
     // Wrap in shared_ptr with custom deleter
-    shared_schema_ = std::shared_ptr<void>(schema, [](void* p) {
+    shared_schema_ = dstd::SharedPtr<void>(schema, [](void* p) {
         auto* s = static_cast<ArrowSchema*>(p);
         if (s->release) s->release(s);
         delete s;

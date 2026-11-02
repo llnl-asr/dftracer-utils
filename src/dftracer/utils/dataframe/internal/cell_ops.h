@@ -6,6 +6,8 @@
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -107,7 +109,7 @@ inline void append_cell(std::string& key, const Series& c, std::int64_t i);
 /// a field one of them lacks counting as null.
 inline void append_struct_cell(std::string& key, const Series& c,
                                std::int64_t i) {
-    std::vector<std::pair<std::string, Series>> fields;
+    std::vector<dstd::Pair<std::string, Series>> fields;
     for (std::int64_t f = 0; f < c.num_children(); ++f)
         fields.emplace_back(c.field_name(f), c.child(f));
     std::sort(fields.begin(), fields.end(),
@@ -155,7 +157,7 @@ inline void append_cell(std::string& key, const Series& c, std::int64_t i) {
     key.push_back('\1');
     const TypeId t = c.type();
     if (value_domain(t) == ValueDomain::Bytes) {
-        const std::string_view s = read_bytes(c, i);
+        const dstd::StringView s = read_bytes(c, i);
         const auto len = static_cast<std::int32_t>(s.size());
         key.append(reinterpret_cast<const char*>(&len), sizeof(len));
         key.append(s.data(), s.size());

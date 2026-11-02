@@ -36,19 +36,19 @@ struct Member {
     std::string text;
 };
 
-[[noreturn]] void bad(std::string_view origin, std::string_view why) {
+[[noreturn]] void bad(dstd::StringView origin, dstd::StringView why) {
     throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
                                          "source of ", origin, ": ", why);
 }
 
-syn::Program parse_members(std::string_view text, std::string_view origin) {
+syn::Program parse_members(dstd::StringView text, dstd::StringView origin) {
     auto tree = syn::parse("source s {\n" + dstd::String(text) + "\n}");
     if (!tree) bad(origin, tree.error().format());
     return std::move(*tree);
 }
 
 // The members of `text` in order, each as canonical text.
-std::vector<Member> members(std::string_view text, std::string_view origin) {
+std::vector<Member> members(dstd::StringView text, dstd::StringView origin) {
     std::vector<Member> out;
     if (text.empty()) return out;
     syn::Program tree = parse_members(text, origin);
@@ -113,8 +113,8 @@ duql::Roles duql_roles(const RecordSchema& s) {
     return r;
 }
 
-std::string merge_source(std::string_view parent, std::string_view child,
-                         std::string_view origin) {
+std::string merge_source(dstd::StringView parent, dstd::StringView child,
+                         dstd::StringView origin) {
     std::vector<Member> out = members(parent, origin);
     for (auto& m : members(child, origin)) {
         bool replaced = false;
@@ -131,7 +131,7 @@ std::string merge_source(std::string_view parent, std::string_view child,
     return text;
 }
 
-void check_source(const RecordSchema& schema, std::string_view origin) {
+void check_source(const RecordSchema& schema, dstd::StringView origin) {
     if (schema.source.empty()) return;
     const duql::Roles roles = duql_roles(schema);
     auto p = duql::compile_program("where true", {}, &roles, schema.source);

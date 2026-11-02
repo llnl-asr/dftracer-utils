@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -95,7 +96,7 @@ GzipDecode GzipMemberDecompressor::decompress_status(
     }
 }
 
-std::optional<DecompressResult> GzipMemberDecompressor::decompress(
+dstd::Optional<DecompressResult> GzipMemberDecompressor::decompress(
     const void* comp, std::size_t comp_len, void* out,
     std::size_t out_cap) const {
     DecompressResult result{};
@@ -103,16 +104,16 @@ std::optional<DecompressResult> GzipMemberDecompressor::decompress(
         GzipDecode::Ok) {
         return result;
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
-std::optional<std::vector<std::uint8_t>>
+dstd::Optional<std::vector<std::uint8_t>>
 GzipMemberDecompressor::decompress_member(const void* comp,
                                           std::size_t comp_len,
                                           std::size_t uncompressed_size) const {
     std::vector<std::uint8_t> out(uncompressed_size);
     auto res = decompress(comp, comp_len, out.data(), out.size());
-    if (!res) return std::nullopt;
+    if (!res) return dstd::nullopt;
     out.resize(res->out_bytes);
     return out;
 }
@@ -147,11 +148,11 @@ std::size_t GzipMemberCompressor::bound(std::size_t len) const {
     return libdeflate_gzip_compress_bound(c_, len);
 }
 
-std::optional<std::size_t> GzipMemberCompressor::compress(
+dstd::Optional<std::size_t> GzipMemberCompressor::compress(
     const void* data, std::size_t len, void* out, std::size_t out_cap) const {
-    if (!c_) return std::nullopt;
+    if (!c_) return dstd::nullopt;
     const std::size_t n = libdeflate_gzip_compress(c_, data, len, out, out_cap);
-    if (n == 0) return std::nullopt;  // did not fit
+    if (n == 0) return dstd::nullopt;  // did not fit
     return n;
 }
 
@@ -175,18 +176,18 @@ bool GzipMemberCompressor::compress_member_into(std::vector<std::uint8_t>& out,
     return true;
 }
 
-std::optional<std::vector<std::uint8_t>> GzipMemberCompressor::compress_member(
+dstd::Optional<std::vector<std::uint8_t>> GzipMemberCompressor::compress_member(
     const void* data, std::size_t len) const {
     std::vector<std::uint8_t> out;
-    if (!compress_member_into(out, data, len)) return std::nullopt;
+    if (!compress_member_into(out, data, len)) return dstd::nullopt;
     return out;
 }
 
-std::optional<std::size_t> decode_truncated_member(
+dstd::Optional<std::size_t> decode_truncated_member(
     const void* comp, std::size_t comp_len, std::vector<std::uint8_t>& out) {
     GzipStreamInflater gz;
     if (!gz.init(common::constants::indexer::ZLIB_GZIP_WINDOW_BITS))
-        return std::nullopt;
+        return dstd::nullopt;
     const auto* in = static_cast<const unsigned char*>(comp);
     std::size_t in_left = comp_len;
     std::size_t produced = 0;
@@ -219,7 +220,7 @@ std::optional<std::size_t> decode_truncated_member(
         ok = false;     // DataError or any other failure
         break;
     }
-    if (!ok) return std::nullopt;
+    if (!ok) return dstd::nullopt;
     if (complete) return produced;
     std::size_t keep = produced;
     while (keep > 0 && out[keep - 1] != '\n') --keep;

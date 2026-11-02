@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_KERNELS_DICTIONARY_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/span.h>
 
 #include <cstdint>
 #include <span>
@@ -17,7 +18,7 @@ Series dictionary_encode(const Series& v);
 /// A DICTIONARY String column of `codes` over `values` (a flat String column,
 /// moved in). `validity` is an Arrow bitmap of codes.size() bits, or null for
 /// no nulls; a null row's code is ignored but must be in range.
-Series dictionary_from_codes(std::span<const std::int32_t> codes,
+Series dictionary_from_codes(dstd::Span<const std::int32_t> codes,
                              Series&& values, const std::uint8_t* validity);
 
 }  // namespace dftracer::utils::dataframe

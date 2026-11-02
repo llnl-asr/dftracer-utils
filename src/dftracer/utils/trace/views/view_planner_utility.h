@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/store/types.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 
@@ -26,7 +28,7 @@ struct ViewPlannerInput {
     std::string index_path;  // `.dftindex` store path
     std::size_t uncompressed_size = 0;
     std::size_t num_checkpoints = 0;
-    std::optional<std::pair<double, double>> time_range;  // {begin, end}
+    dstd::Optional<dstd::Pair<double, double>> time_range;  // {begin, end}
     // Emit every checkpoint (real byte offsets, still parallel) and skip
     // time-based pruning. For when chunk timestamp stats can't be trusted (e.g.
     // multi-node clock skew); the reader still filters events by the query.

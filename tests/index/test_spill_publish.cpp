@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/index.h>
@@ -161,7 +163,7 @@ TEST_SUITE("SpillPublish") {
                             *read, *ref,
                             [&](std::uint64_t, std::uint32_t, std::uint32_t,
                                 std::uint32_t, std::uint32_t, agg::PartialKind,
-                                std::span<const std::uint8_t>) {
+                                dstd::Span<const std::uint8_t>) {
                                 ++rows;
                                 return false;
                             });
@@ -198,7 +200,7 @@ TEST_SUITE("SpillPublish") {
                 auto stale = idx::rebuild(*index, logical);
                 REQUIRE(stale);
                 idx::put_plugin(*stale, "stale", 1, 5, {{0, dstd::String("x")}},
-                                std::nullopt);
+                                dstd::nullopt);
                 REQUIRE(stale->commit().get());
             }
             auto plugin_count = [&] {

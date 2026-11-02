@@ -3,6 +3,8 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -52,9 +54,9 @@ std::string create_mixed_arg_trace(TestEnvironment& env) {
 
 // (name, x, y) tuples, sorted for order-independent comparison across the
 // streaming (fan-out order) and buffered (accumulate-then-build) paths.
-std::vector<std::tuple<std::string, double, double>> row_key_set(
+std::vector<dstd::Tuple<std::string, double, double>> row_key_set(
     const dataframe::DataFrame& df) {
-    std::vector<std::tuple<std::string, double, double>> rows;
+    std::vector<dstd::Tuple<std::string, double, double>> rows;
     const bool has_x = bhas(df, "args.x");
     const bool has_y = bhas(df, "args.y");
     for (std::int64_t i = 0; i < df.num_rows(); ++i) {
@@ -222,8 +224,8 @@ TEST_SUITE("trace scan - streaming row query") {
             return dftracer::utils::default_runtime()
                 .submit([](scan::ScanPlan vv)
                             -> coro::CoroTask<std::vector<
-                                std::tuple<std::string, double, double>>> {
-                    std::vector<std::tuple<std::string, double, double>> rows;
+                                dstd::Tuple<std::string, double, double>>> {
+                    std::vector<dstd::Tuple<std::string, double, double>> rows;
                     auto gen = scan::stream(vv);
                     while (auto chunk = co_await gen.next()) {
                         auto part = row_key_set(*chunk);
@@ -234,7 +236,7 @@ TEST_SUITE("trace scan - streaming row query") {
                 .get();
         };
 
-        std::vector<std::tuple<std::string, double, double>> via_stream =
+        std::vector<dstd::Tuple<std::string, double, double>> via_stream =
             drain(v);
         std::sort(via_stream.begin(), via_stream.end());
         dataframe::DataFrame via_collect = run(scan::collect(v).collect());
@@ -267,7 +269,7 @@ TEST_SUITE("trace scan - streaming row query") {
             dftracer::utils::default_runtime()
                 .submit([](scan::ScanPlan vv)
                             -> coro::CoroTask<
-                                std::pair<std::size_t, std::int64_t>> {
+                                dstd::Pair<std::size_t, std::int64_t>> {
                     std::size_t n = 0;
                     std::int64_t nrows = 0;
                     auto gen = scan::stream(vv, 10);
@@ -298,7 +300,7 @@ TEST_SUITE("trace scan - streaming row query") {
             dftracer::utils::default_runtime()
                 .submit([](scan::ScanPlan vv)
                             -> coro::CoroTask<
-                                std::pair<std::size_t, std::int64_t>> {
+                                dstd::Pair<std::size_t, std::int64_t>> {
                     std::size_t n = 0;
                     std::int64_t nrows = 0;
                     auto gen = scan::stream(vv, 5);
@@ -778,11 +780,11 @@ TEST_SUITE("trace scan - streaming row query") {
         }
 
         // Expected: the first row of each key in file order.
-        std::vector<std::pair<std::string, std::string>> want;
-        std::set<std::pair<std::string, std::string>> seen;
+        std::vector<dstd::Pair<std::string, std::string>> want;
+        std::set<dstd::Pair<std::string, std::string>> seen;
         for (int i = 0; i < DISTINCT_EVENTS; ++i) {
-            std::pair<std::string, std::string> k{distinct_run(i),
-                                                  distinct_metric(i)};
+            dstd::Pair<std::string, std::string> k{distinct_run(i),
+                                                   distinct_metric(i)};
             if (seen.insert(k).second) want.push_back(k);
         }
         REQUIRE(want.size() > 20);
@@ -811,7 +813,7 @@ TEST_SUITE("trace scan - streaming row query") {
         CHECK(lf2.unique({"args.run"}).explain().find("unique") ==
               std::string::npos);
         df::DataFrame sub = run(lf2.unique({"args.run"}).collect());
-        std::vector<std::pair<std::string, std::string>> want_sub;
+        std::vector<dstd::Pair<std::string, std::string>> want_sub;
         std::set<std::string> seen_run;
         for (int i = 0; i < DISTINCT_EVENTS; ++i)
             if (seen_run.insert(distinct_run(i)).second)

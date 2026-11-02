@@ -12,6 +12,10 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazy/frame_op.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -111,7 +115,7 @@ DataFrame ints(const std::vector<std::string>& names, std::int64_t rows,
 class CountedTimes : public Source {
    public:
     CountedTimes(std::int64_t morsels, std::int64_t rows,
-                 std::shared_ptr<std::int64_t> pulled)
+                 dstd::SharedPtr<std::int64_t> pulled)
         : morsels_(morsels), rows_(rows), pulled_(std::move(pulled)) {}
 
     Schema schema() const override {
@@ -133,10 +137,10 @@ class CountedTimes : public Source {
     class Rows : public Cursor {
        public:
         Rows(std::int64_t morsels, std::int64_t rows,
-             std::shared_ptr<std::int64_t> pulled)
+             dstd::SharedPtr<std::int64_t> pulled)
             : morsels_(morsels), rows_(rows), pulled_(std::move(pulled)) {}
-        coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-            if (*pulled_ >= morsels_) co_return std::nullopt;
+        coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
+            if (*pulled_ >= morsels_) co_return dstd::nullopt;
             std::vector<std::int64_t> t(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_), 1);
             for (std::int64_t i = 0; i < rows_; ++i)
@@ -151,16 +155,16 @@ class CountedTimes : public Source {
 
        private:
         std::int64_t morsels_, rows_;
-        std::shared_ptr<std::int64_t> pulled_;
+        dstd::SharedPtr<std::int64_t> pulled_;
     };
 
     std::int64_t morsels_, rows_;
-    std::shared_ptr<std::int64_t> pulled_;
+    dstd::SharedPtr<std::int64_t> pulled_;
 };
 
 // The morsels pulled from the source when the plan's first morsel came out.
 coro::CoroTask<std::int64_t> pulled_at_first(
-    LazyFrame lf, std::shared_ptr<std::int64_t> pulled) {
+    LazyFrame lf, dstd::SharedPtr<std::int64_t> pulled) {
     auto g = lf.stream(1000);
     auto first = co_await g.next();
     REQUIRE(first.has_value());
@@ -349,7 +353,7 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("every elementwise column op is a registered column op") {
-        for (const std::string_view name :
+        for (const dstd::StringView name :
              lazy_internal::ELEMENTWISE_COLUMN_OPS) {
             const dftu_op_desc* op = dftu_op_find(std::string(name).c_str());
             REQUIRE_MESSAGE(op, name);
@@ -411,7 +415,7 @@ TEST_SUITE("output morsels") {
             GroupAgg{Agg::Min, "t", "lo"}, GroupAgg{Agg::First, "v", "f"},
             GroupAgg{Agg::Last, "v", "l"}};
         for (const auto& [every, period] :
-             {std::pair<std::int64_t, std::int64_t>{1, 1}, {3, 3}, {2, 7}}) {
+             {dstd::Pair<std::int64_t, std::int64_t>{1, 1}, {3, 3}, {2, 7}}) {
             INFO("every=" << every << " period=" << period);
             const auto got =
                 morsels(df.lazy().memory_budget(64 << 10).group_by_dynamic(

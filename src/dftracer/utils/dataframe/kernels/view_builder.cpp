@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstring>
 #include <limits>
@@ -56,7 +57,7 @@ std::int32_t ViewBuilder::cached_buffer(const BufferView& buffer) {
     return last_index_;
 }
 
-void ViewBuilder::append_inline(std::string_view bytes) {
+void ViewBuilder::append_inline(dstd::StringView bytes) {
     if (bytes.size() > static_cast<std::size_t>(INLINE_MAX))
         throw std::length_error("view column: inline value over 12 bytes");
     std::uint8_t* v = new_view();
@@ -66,7 +67,7 @@ void ViewBuilder::append_inline(std::string_view bytes) {
         std::memcpy(v + PREFIX_BYTES, bytes.data(), bytes.size());
 }
 
-void ViewBuilder::append(std::string_view bytes, std::int32_t buffer_index) {
+void ViewBuilder::append(dstd::StringView bytes, std::int32_t buffer_index) {
     if (bytes.size() <= static_cast<std::size_t>(INLINE_MAX))
         return append_inline(bytes);
     if (bytes.size() > static_cast<std::size_t>(INT32_LIMIT))
@@ -113,15 +114,15 @@ void ViewBuilder::append_flat(const dftu_series& c, std::int64_t row) {
         if (begin > INT32_LIMIT) {
             auto copy = new_buffer(static_cast<std::size_t>(len));
             std::memcpy(writable(copy), bytes, static_cast<std::size_t>(len));
-            const std::string_view sv(
+            const dstd::StringView sv(
                 reinterpret_cast<const char*>(copy.data()),
                 static_cast<std::size_t>(len));
             return append(sv, add_buffer(std::move(copy)));
         }
-        return append(std::string_view(bytes, static_cast<std::size_t>(len)),
+        return append(dstd::StringView(bytes, static_cast<std::size_t>(len)),
                       cached_buffer(c.data));
     }
-    append_inline(std::string_view(
+    append_inline(dstd::StringView(
         len ? reinterpret_cast<const char*>(c.data.data()) + begin : "",
         static_cast<std::size_t>(len)));
 }

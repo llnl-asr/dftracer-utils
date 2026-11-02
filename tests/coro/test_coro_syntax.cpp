@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -680,7 +681,7 @@ TEST_CASE("Task - operator& parallel composition") {
     auto output = pipeline.execute();
 
     // Combined result is a tuple wrapped in std::any
-    auto result = combined->get<std::tuple<std::any, std::any>>();
+    auto result = combined->get<dstd::Tuple<std::any, std::any>>();
     int val1 = std::any_cast<int>(std::get<0>(result));
     int val2 = std::any_cast<int>(std::get<1>(result));
 

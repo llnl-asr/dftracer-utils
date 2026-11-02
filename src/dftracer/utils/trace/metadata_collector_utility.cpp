@@ -3,6 +3,10 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
@@ -69,7 +73,7 @@ namespace {
 
 // The index record of `file` when the index holds it unchanged since the stat
 // the caller read. The file is not opened again.
-std::optional<internal::IndexedFile> fresh_index_record(
+dstd::Optional<internal::IndexedFile> fresh_index_record(
     const std::string& index_path, const std::string& file,
     const dftracer::utils::common::InputFileStat& st) {
     namespace idx = dftracer::utils::index;
@@ -80,12 +84,12 @@ std::optional<internal::IndexedFile> fresh_index_record(
         if (snapshot.freshness(
                 logical, idx::SourceStat{static_cast<std::uint64_t>(st.mtime),
                                          st.size}) != idx::Freshness::Current)
-            return std::nullopt;
+            return dstd::nullopt;
         const auto ref = snapshot.file(logical);
-        if (!ref) return std::nullopt;
+        if (!ref) return dstd::nullopt;
         const auto meta =
             dftracer::utils::common::unwrap(idx::file_metadata(snapshot, *ref));
-        if (!meta || meta->checkpoint_size == 0) return std::nullopt;
+        if (!meta || meta->checkpoint_size == 0) return dstd::nullopt;
         return internal::IndexedFile{
             {st.mtime, st.size},
             meta->num_lines,
@@ -96,7 +100,7 @@ std::optional<internal::IndexedFile> fresh_index_record(
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_DEBUG("Index of %s unreadable (%s)", file.c_str(),
                                  e.what());
-        return std::nullopt;
+        return dstd::nullopt;
     }
 }
 
@@ -118,10 +122,10 @@ MetadataCollectorUtility::process_compressed(
                 common::ErrorCode::Io, "cannot stat ", input.file_path);
         meta.compressed_size = input_stat.size;
 
-        const std::shared_ptr<internal::IndexRoot> root =
+        const dstd::SharedPtr<internal::IndexRoot> root =
             internal::index_root(input.index_path);
-        const std::pair<std::int64_t, std::uint64_t> stamp{input_stat.mtime,
-                                                           input_stat.size};
+        const dstd::Pair<std::int64_t, std::uint64_t> stamp{input_stat.mtime,
+                                                            input_stat.size};
         const std::string& file_key = input.file_path;
 
         using dftracer::utils::index::gzip::CheckpointIndexer;
@@ -135,17 +139,17 @@ MetadataCollectorUtility::process_compressed(
             root->current[file_key] = seen;
             return seen;
         };
-        auto known = [&]() -> std::optional<internal::IndexedFile> {
+        auto known = [&]() -> dstd::Optional<internal::IndexedFile> {
             std::lock_guard<std::mutex> lock(root->current_mutex);
             const auto it = root->current.find(file_key);
             if (it == root->current.end() || it->second.stamp != stamp)
-                return std::nullopt;
+                return dstd::nullopt;
             meta.has_index = true;
             return it->second;
         };
 
         // A file this process built or read is not opened again.
-        std::optional<internal::IndexedFile> seen;
+        dstd::Optional<internal::IndexedFile> seen;
         if (!input.force_rebuild) seen = known();
         // A check that meets a writer reads the index as stale and takes the
         // slow path below, which decides again under the writer permits.
@@ -172,7 +176,7 @@ MetadataCollectorUtility::process_compressed(
             if (!seen) {
                 meta.has_index = common::input_exists(
                     dftracer::utils::index::store_of(input.index_path));
-                std::shared_ptr<CheckpointIndexer> indexer;
+                dstd::SharedPtr<CheckpointIndexer> indexer;
                 if (!meta.has_index || input.force_rebuild) {
                     if (input.force_rebuild && meta.has_index) {
                         DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
@@ -244,7 +248,7 @@ MetadataCollectorUtility::process_compressed(
                         trimmed_length > 8) {
                         hasher.reset();
                         hasher.update(
-                            std::string_view(trimmed, trimmed_length));
+                            dstd::StringView(trimmed, trimmed_length));
                         content_hash += hasher.get_hash().value;
                         actual_valid_events++;
                     }

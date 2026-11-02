@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_SERVER_VIZ_SUMMARY_H
 #define DFTRACER_UTILS_SERVER_VIZ_SUMMARY_H
 
+#include <dftracer/utils/dstd/pair.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -111,7 +113,7 @@ struct VizSummary {
 
     /// Operation name -> category (first seen), so the UI can label each
     /// operation with its real layer instead of guessing from the name.
-    std::vector<std::pair<std::string, std::string>> name_cats;
+    std::vector<dstd::Pair<std::string, std::string>> name_cats;
 
     /// Every groupable column present in the trace (top-level scalar fields +
     /// args keys), harvested once per distinct event name. Sorted.
@@ -155,7 +157,7 @@ struct VizSummary {
     std::vector<ForkEdge> forks;
 
     /// HH metadata: hhash -> hostname.
-    std::vector<std::pair<std::string, std::string>> hosts;
+    std::vector<dstd::Pair<std::string, std::string>> hosts;
 
     struct AppSpan {
         std::uint64_t begin = 0;
@@ -179,7 +181,7 @@ struct VizSummary {
 
     /// Absolute-us spans between runs (no lane active, no process alive). Any
     /// present means a multi-run trace the viewer can timelapse-compress.
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> idle_gaps;
+    std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> idle_gaps;
 
     std::int64_t bucket_of(double abs_ts) const {
         return bucket_of(abs_ts, bucket_us, nbuckets);

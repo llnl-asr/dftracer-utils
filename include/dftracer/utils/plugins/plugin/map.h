@@ -3,6 +3,9 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_MAP_H
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/arrow_abi.h>
 #include <dftracer/utils/plugins/owned_arrow.h>
@@ -37,21 +40,21 @@ class Host {
    public:
     explicit Host(const dftu_plugin_host* h) : h_(h) {}
 
-    std::string_view str(StrId id) const {
+    dstd::StringView str(StrId id) const {
         if (id.absent()) return {};
         std::uint32_t n = 0;
         const char* p = h_->resolve(h_->h, id.raw(), &n);
-        return p ? std::string_view{p, n} : std::string_view{};
+        return p ? dstd::StringView{p, n} : dstd::StringView{};
     }
-    StrId intern(std::string_view s) const {
+    StrId intern(dstd::StringView s) const {
         return StrId{
             h_->intern(h_->h, s.data(), static_cast<std::uint32_t>(s.size()))};
     }
-    void log(dftu_log_level level, std::string_view msg) const {
+    void log(dftu_log_level level, dstd::StringView msg) const {
         h_->log(h_->h, static_cast<std::uint8_t>(level), msg.data(),
                 static_cast<std::uint32_t>(msg.size()));
     }
-    void log(LogLevel level, std::string_view msg) const {
+    void log(LogLevel level, dstd::StringView msg) const {
         log(static_cast<dftu_log_level>(level), msg);
     }
 
@@ -112,7 +115,7 @@ class Host {
     }
 
     /// Valid for the whole scan; null on parse error. Do not free.
-    dftu_duql* duql_compile(std::string_view src) const {
+    dftu_duql* duql_compile(dstd::StringView src) const {
         const dftu_svc_duql* e = ext(DFTU_SVC_DUQL, query_ext_);
         return e && e->duql_compile
                    ? e->duql_compile(h_->h, src.data(),
@@ -134,7 +137,7 @@ class Host {
     }
     /// Compile and wrap as a non-owning Query bound to this host; see
     /// duql_compile for lifetime.
-    class Query compile(std::string_view src) const;
+    class Query compile(dstd::StringView src) const;
     /// compile() for a predicate built with `F`/`Field`.
     class Query compile(const Expr& e) const;
 
@@ -348,7 +351,7 @@ class Host {
         v.u.bytes.len = len;
         emit(name, &v);
     }
-    void emit_result(const char* name, std::string_view data) const {
+    void emit_result(const char* name, dstd::StringView data) const {
         emit_result(name, data.data(), data.size());
     }
     /// Moves *a and *s into the host; -1 if the host lacks the result channel.
@@ -536,7 +539,7 @@ class Writer {
                            ? e_->writer_chunk(h(), w_, worker, data, len)
                            : nullptr};
     }
-    AsyncOp chunk(std::uint32_t worker, std::string_view data) const {
+    AsyncOp chunk(std::uint32_t worker, dstd::StringView data) const {
         return chunk(worker, data.data(), data.size());
     }
     /// Flush and finalize; co_await after all chunks are written.
@@ -608,11 +611,11 @@ class InPort {
     /// The value a producer published this batch, or nullopt if none was
     /// published or its length did not match sizeof(T). The read is a copy, so
     /// the result outlives the borrowed port buffer.
-    std::optional<T> recv() const {
-        if (key_ == 0) return std::nullopt;
+    dstd::Optional<T> recv() const {
+        if (key_ == 0) return dstd::nullopt;
         std::uint32_t len = 0;
         const void* p = host_.consume(key_, &len);
-        if (!p || len != sizeof(T)) return std::nullopt;
+        if (!p || len != sizeof(T)) return dstd::nullopt;
         T out;
         std::memcpy(&out, p, sizeof(T));
         return out;
@@ -690,20 +693,20 @@ class Event {
     bool has_hhash() const noexcept;
 
     /// Zero-copy views into the frame's string buffers; empty when absent.
-    std::string_view cat() const noexcept;
-    std::string_view name() const noexcept;
-    std::string_view fhash() const noexcept;
-    std::string_view hhash() const noexcept;
+    dstd::StringView cat() const noexcept;
+    dstd::StringView name() const noexcept;
+    dstd::StringView fhash() const noexcept;
+    dstd::StringView hhash() const noexcept;
 
     /// A dyn (per-key) arg column, present when any event in the batch carried
     /// that flattened dotted key ("args.ret", or the bare key "ret").
-    bool has_arg(std::string_view key) const noexcept;
-    bool arg_is_i64(std::string_view key) const noexcept;
-    bool arg_is_f64(std::string_view key) const noexcept;
-    bool arg_is_str(std::string_view key) const noexcept;
-    std::int64_t arg_i64(std::string_view key) const noexcept;
-    double arg_f64(std::string_view key) const noexcept;
-    std::string_view arg_str(std::string_view key) const noexcept;
+    bool has_arg(dstd::StringView key) const noexcept;
+    bool arg_is_i64(dstd::StringView key) const noexcept;
+    bool arg_is_f64(dstd::StringView key) const noexcept;
+    bool arg_is_str(dstd::StringView key) const noexcept;
+    std::int64_t arg_i64(dstd::StringView key) const noexcept;
+    double arg_f64(dstd::StringView key) const noexcept;
+    dstd::StringView arg_str(dstd::StringView key) const noexcept;
 
    private:
     const Batch* b_ = nullptr;
@@ -740,28 +743,28 @@ class Batch {
     static bool is_str(const detail::ColBuf& c) noexcept {
         return c.type == DFTU_TYPE_STRING;
     }
-    static std::string_view str_at(const detail::ColBuf& c,
+    static dstd::StringView str_at(const detail::ColBuf& c,
                                    std::int64_t row) noexcept {
         if (!c.data || !c.offsets) {
             if (c.type != DFTU_TYPE_STRING) return {};
             std::int64_t n = 0;
             const char* p = dftu_series_string_at(c.handle, row, &n);
-            return p ? std::string_view{p, static_cast<std::size_t>(n)}
-                     : std::string_view{};
+            return p ? dstd::StringView{p, static_cast<std::size_t>(n)}
+                     : dstd::StringView{};
         }
         if (dftu_series_is_null(c.handle, row)) return {};
         const char* base = static_cast<const char*>(c.data);
         return {base + c.offsets[row],
                 static_cast<std::size_t>(c.offsets[row + 1] - c.offsets[row])};
     }
-    const detail::ColBuf* find_dyn(std::string_view key) const noexcept;
+    const detail::ColBuf* find_dyn(dstd::StringView key) const noexcept;
 
     void reset() noexcept;
 
     const dftu_dataframe* df_ = nullptr;
     std::int64_t n_ = 0;
     detail::ColBuf cat_, name_, fhash_, hhash_, pid_, tid_, ts_, dur_, ph_;
-    std::vector<std::pair<std::string, detail::ColBuf>> dyn_;
+    std::vector<dstd::Pair<std::string, detail::ColBuf>> dyn_;
 };
 
 inline const dftu_dataframe* Event::frame() const noexcept { return b_->raw(); }
@@ -802,50 +805,50 @@ inline bool Event::has_fhash() const noexcept {
 inline bool Event::has_hhash() const noexcept {
     return b_->hhash_.data != nullptr;
 }
-inline std::string_view Event::cat() const noexcept {
+inline dstd::StringView Event::cat() const noexcept {
     return Batch::str_at(b_->cat_, row_);
 }
-inline std::string_view Event::name() const noexcept {
+inline dstd::StringView Event::name() const noexcept {
     return Batch::str_at(b_->name_, row_);
 }
-inline std::string_view Event::fhash() const noexcept {
+inline dstd::StringView Event::fhash() const noexcept {
     return Batch::str_at(b_->fhash_, row_);
 }
-inline std::string_view Event::hhash() const noexcept {
+inline dstd::StringView Event::hhash() const noexcept {
     return Batch::str_at(b_->hhash_, row_);
 }
-inline bool Event::has_arg(std::string_view key) const noexcept {
+inline bool Event::has_arg(dstd::StringView key) const noexcept {
     return b_->find_dyn(key) != nullptr;
 }
-inline bool Event::arg_is_i64(std::string_view key) const noexcept {
+inline bool Event::arg_is_i64(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
     return c && c->type == DFTU_TYPE_INT64;
 }
-inline bool Event::arg_is_f64(std::string_view key) const noexcept {
+inline bool Event::arg_is_f64(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
     return c && c->type == DFTU_TYPE_FLOAT64;
 }
-inline bool Event::arg_is_str(std::string_view key) const noexcept {
+inline bool Event::arg_is_str(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
     return c && c->type == DFTU_TYPE_STRING;
 }
-inline std::int64_t Event::arg_i64(std::string_view key) const noexcept {
+inline std::int64_t Event::arg_i64(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
     if (!c || c->type != DFTU_TYPE_INT64 || !c->data ||
         dftu_series_is_null(c->handle, row_))
         return 0;
     return static_cast<const std::int64_t*>(c->data)[row_];
 }
-inline double Event::arg_f64(std::string_view key) const noexcept {
+inline double Event::arg_f64(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
     if (!c || c->type != DFTU_TYPE_FLOAT64 || !c->data ||
         dftu_series_is_null(c->handle, row_))
         return 0.0;
     return static_cast<const double*>(c->data)[row_];
 }
-inline std::string_view Event::arg_str(std::string_view key) const noexcept {
+inline dstd::StringView Event::arg_str(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
-    return c ? Batch::str_at(*c, row_) : std::string_view{};
+    return c ? Batch::str_at(*c, row_) : dstd::StringView{};
 }
 
 inline detail::ColBuf Batch::resolve(const dftu_dataframe* df,
@@ -873,11 +876,11 @@ inline Batch::Batch(const dftu_dataframe* df) noexcept
     dur_ = resolve(df_, "dur");
     ph_ = resolve(df_, "ph");
     const std::int32_t ncols = dftu_dataframe_num_columns(df_);
-    static constexpr std::string_view ARGS_PREFIX = "args.";
+    static constexpr dstd::StringView ARGS_PREFIX = "args.";
     for (std::int32_t i = 0; i < ncols; ++i) {
         const char* n = dftu_dataframe_column_name(df_, i);
         if (!n) continue;
-        std::string_view nv{n};
+        dstd::StringView nv{n};
         if (nv.substr(0, ARGS_PREFIX.size()) != ARGS_PREFIX) continue;
         std::string bare(nv.substr(ARGS_PREFIX.size()));
         dyn_.emplace_back(std::move(bare), resolve(df_, n));
@@ -941,7 +944,7 @@ inline Batch& Batch::operator=(Batch&& o) noexcept {
 }
 
 inline const detail::ColBuf* Batch::find_dyn(
-    std::string_view key) const noexcept {
+    dstd::StringView key) const noexcept {
     for (const auto& [name, c] : dyn_)
         if (name == key) return &c;
     return nullptr;
@@ -986,7 +989,7 @@ class Query {
     dftu_duql* q_ = nullptr;
 };
 
-inline Query Host::compile(std::string_view src) const {
+inline Query Host::compile(dstd::StringView src) const {
     return Query{*this, duql_compile(src)};
 }
 inline Query Host::compile(const Expr& e) const {

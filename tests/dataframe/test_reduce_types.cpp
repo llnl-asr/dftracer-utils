@@ -5,6 +5,8 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -39,14 +41,15 @@ Series bools(const std::vector<bool>& v, const std::vector<bool>& valid = {}) {
                         valid.empty() ? nullptr : vbits.data());
 }
 
-Series strs(const std::vector<std::string_view>& v,
+Series strs(const std::vector<dftracer::utils::dstd::StringView>& v,
             const std::vector<bool>& valid = {}) {
     std::vector<std::uint8_t> vbits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (valid.empty() || valid[i])
             vbits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-    return Series::strings(std::span<const std::string_view>(v),
-                           valid.empty() ? nullptr : vbits.data());
+    return Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(v),
+        valid.empty() ? nullptr : vbits.data());
 }
 
 Series timestamps(const std::vector<std::int64_t>& v) {

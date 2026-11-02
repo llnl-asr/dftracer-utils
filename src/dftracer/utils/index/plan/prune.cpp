@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <ankerl/unordered_dense.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/condition.h>
@@ -22,7 +24,7 @@ namespace {
 std::vector<std::uint64_t> filter_by_time(
     const std::vector<std::uint64_t>& chunks,
     const ankerl::unordered_dense::map<
-        std::uint64_t, std::pair<std::uint64_t, std::uint64_t>>& bounds,
+        std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>& bounds,
     double begin, double end, bool half_open) {
     std::vector<std::uint64_t> kept;
     kept.reserve(chunks.size());
@@ -58,7 +60,7 @@ class Reads {
    private:
     const PruneRequest& request_;
     const index::Snapshot* snapshot_;
-    std::optional<index::Snapshot> owned_;
+    dstd::Optional<index::Snapshot> owned_;
 };
 
 coro::CoroTask<common::Result<PruneResult>> prune_data(
@@ -93,7 +95,7 @@ coro::CoroTask<common::Result<PruneResult>> prune_data(
 
     if (request.index_path.empty()) co_return result;
     ankerl::unordered_dense::map<std::uint64_t,
-                                 std::pair<std::uint64_t, std::uint64_t>>
+                                 dstd::Pair<std::uint64_t, std::uint64_t>>
         bounds;
     ankerl::unordered_dense::set<std::uint64_t> no_starts;
     try {

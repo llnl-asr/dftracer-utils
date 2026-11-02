@@ -5,6 +5,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/corrupt_index.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
@@ -44,7 +46,7 @@ using dftu_utils_test::TestEnvironment;
 
 namespace {
 
-constexpr std::string_view SENTINEL = "agg_extension.sentinel";
+constexpr dstd::StringView SENTINEL = "agg_extension.sentinel";
 
 // `n` POSIX reads of 100 us each, one per millisecond from `start_us`.
 std::string write_trace(const std::string& dir, const std::string& name, int n,
@@ -145,14 +147,14 @@ bool has_sentinel(const std::string& trace) {
                 .empty();
 }
 
-std::optional<index::ExtensionEntry> agg_entry(const Indexer& ix,
-                                               const std::string& trace) {
+dstd::Optional<index::ExtensionEntry> agg_entry(const Indexer& ix,
+                                                const std::string& trace) {
     const auto manifest = ix.manifest();
     for (const auto& f : manifest)
         if (f.path == trace)
             for (const auto& e : f.extensions)
                 if (e.name == "dftracer.agg") return e;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 double count_reads(const std::vector<std::string>& traces) {

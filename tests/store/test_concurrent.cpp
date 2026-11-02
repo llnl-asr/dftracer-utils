@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/data_file.h>
@@ -281,7 +282,7 @@ std::vector<Row> collect(store::engine::ScanCursor& cursor) {
     return rows;
 }
 
-using RowsByScope = std::map<std::pair<std::string, std::string>, std::string>;
+using RowsByScope = std::map<dstd::Pair<std::string, std::string>, std::string>;
 
 RowsByScope index_rows(const std::vector<Row>& rows) {
     RowsByScope out;

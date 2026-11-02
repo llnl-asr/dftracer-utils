@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_TESTS_INDEX_TEST_HELPERS_H
 #define DFTRACER_UTILS_TESTS_INDEX_TEST_HELPERS_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/index.h>
@@ -51,12 +54,12 @@ inline std::string index_key(const std::string& trace_path) {
 }
 
 /// The file of `trace_path`, found under the key the indexer files it by.
-inline std::optional<dftracer::utils::index::FileRef> find_indexed_file(
-    const dftracer::utils::index::Snapshot& snapshot,
-    const std::string& trace_path) {
+inline dftracer::utils::dstd::Optional<dftracer::utils::index::FileRef>
+find_indexed_file(const dftracer::utils::index::Snapshot& snapshot,
+                  const std::string& trace_path) {
     const std::string key = index_key(trace_path);
     auto found = snapshot.file(dftracer::utils::dstd::StringView(key));
-    if (!found) return std::nullopt;
+    if (!found) return dftracer::utils::dstd::nullopt;
     return std::move(*found);
 }
 
@@ -131,8 +134,9 @@ inline void commit_test_build(dftracer::utils::index::FileBuild& build) {
 /// Starts the data of `logical_path`: the file metadata and the Members copy
 /// that holds the file's stat. Commit it with commit_test_build.
 inline dftracer::utils::index::FileBuild register_test_file(
-    const dftracer::utils::index::Index& index, std::string_view logical_path,
-    std::uint64_t hash = 0, std::uint64_t mtime = 0, std::uint64_t size = 0) {
+    const dftracer::utils::index::Index& index,
+    dftracer::utils::dstd::StringView logical_path, std::uint64_t hash = 0,
+    std::uint64_t mtime = 0, std::uint64_t size = 0) {
     dftracer::utils::index::SourceStat stat;
     stat.mtime = mtime;
     stat.size = size;
@@ -172,7 +176,7 @@ inline void put_dimension_stats(
     namespace kinds = dftracer::utils::index::extensions::kinds;
     namespace idx = dftracer::utils::index;
     const auto compressed = ds.compress_value_counts(4096);
-    std::optional<std::uint64_t> present;
+    dftracer::utils::dstd::Optional<std::uint64_t> present;
     if (ds.dimension == "ts" || ds.dimension == "dur") {
         present = observed;
     } else if (compressed && ds.value_counts) {
@@ -199,10 +203,11 @@ inline void put_dimension_stats(
     idx::put_path(build, IndexExtension::Zonemap, dimension);
 }
 
-inline void put_chunk_bloom(dftracer::utils::index::FileBuild& build,
-                            std::uint64_t chunk, std::string_view path,
-                            std::span<const unsigned char> bloom,
-                            std::uint64_t num_entries) {
+inline void put_chunk_bloom(
+    dftracer::utils::index::FileBuild& build, std::uint64_t chunk,
+    dftracer::utils::dstd::StringView path,
+    dftracer::utils::dstd::Span<const unsigned char> bloom,
+    std::uint64_t num_entries) {
     const std::string payload =
         dftracer::utils::index::extensions::kinds::encode_bloom(bloom,
                                                                 num_entries);
@@ -212,10 +217,11 @@ inline void put_chunk_bloom(dftracer::utils::index::FileBuild& build,
         payload);
 }
 
-inline void put_file_bloom(dftracer::utils::index::FileBuild& build,
-                           std::string_view path,
-                           std::span<const unsigned char> bloom,
-                           std::uint64_t num_entries) {
+inline void put_file_bloom(
+    dftracer::utils::index::FileBuild& build,
+    dftracer::utils::dstd::StringView path,
+    dftracer::utils::dstd::Span<const unsigned char> bloom,
+    std::uint64_t num_entries) {
     const std::string payload =
         dftracer::utils::index::extensions::kinds::encode_bloom(bloom,
                                                                 num_entries);
@@ -235,7 +241,8 @@ inline bool pruning_tier_current(
 /// Chunks that hold a bloom of `path`.
 inline std::size_t bloom_chunks(
     const dftracer::utils::index::Snapshot& snapshot,
-    const dftracer::utils::index::FileRef& file, std::string_view path) {
+    const dftracer::utils::index::FileRef& file,
+    dftracer::utils::dstd::StringView path) {
     return index_take(
                dftracer::utils::index::granules(
                    snapshot, file, IndexExtension::Bloom,
@@ -245,7 +252,7 @@ inline std::size_t bloom_chunks(
 
 inline bool has_file_bloom(const dftracer::utils::index::Snapshot& snapshot,
                            const dftracer::utils::index::FileRef& file,
-                           std::string_view path) {
+                           dftracer::utils::dstd::StringView path) {
     return index_take(
                dftracer::utils::index::path_file(
                    snapshot, file, IndexExtension::Bloom,

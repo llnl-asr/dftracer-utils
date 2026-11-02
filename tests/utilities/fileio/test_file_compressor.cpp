@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <doctest/doctest.h>
@@ -25,9 +26,10 @@ static dftracer::utils::dstd::Path create_test_dir() {
 TEST_SUITE("FileCompressor") {
     TEST_CASE("FileCompressor - Basic Compression") {
         auto test_dir = create_test_dir();
-        auto cleanup_dir = std::shared_ptr<void>(nullptr, [&](void*) {
-            dftracer::utils::dstd::fs::remove_all(test_dir).has_value();
-        });
+        auto cleanup_dir =
+            dftracer::utils::dstd::SharedPtr<void>(nullptr, [&](void*) {
+                dftracer::utils::dstd::fs::remove_all(test_dir).has_value();
+            });
 
         SUBCASE("Compress small text file") {
             std::string test_file =
@@ -118,9 +120,10 @@ TEST_SUITE("FileCompressor") {
 
     TEST_CASE("FileCompressor - Compression Levels") {
         auto test_dir = create_test_dir();
-        auto cleanup_dir = std::shared_ptr<void>(nullptr, [&](void*) {
-            dftracer::utils::dstd::fs::remove_all(test_dir).has_value();
-        });
+        auto cleanup_dir =
+            dftracer::utils::dstd::SharedPtr<void>(nullptr, [&](void*) {
+                dftracer::utils::dstd::fs::remove_all(test_dir).has_value();
+            });
 
         SUBCASE("Different compression levels") {
             std::string test_file =
@@ -157,9 +160,10 @@ TEST_SUITE("FileCompressor") {
 
     TEST_CASE("FileCompressor - Large Files") {
         auto test_dir = create_test_dir();
-        auto cleanup_dir = std::shared_ptr<void>(nullptr, [&](void*) {
-            dftracer::utils::dstd::fs::remove_all(test_dir).has_value();
-        });
+        auto cleanup_dir =
+            dftracer::utils::dstd::SharedPtr<void>(nullptr, [&](void*) {
+                dftracer::utils::dstd::fs::remove_all(test_dir).has_value();
+            });
 
         SUBCASE("Compress file with different chunk sizes") {
             std::string test_file =
@@ -213,9 +217,10 @@ TEST_SUITE("FileCompressor") {
 
     TEST_CASE("FileCompressor - Error Handling") {
         auto test_dir = create_test_dir();
-        auto cleanup_dir = std::shared_ptr<void>(nullptr, [&](void*) {
-            dftracer::utils::dstd::fs::remove_all(test_dir).has_value();
-        });
+        auto cleanup_dir =
+            dftracer::utils::dstd::SharedPtr<void>(nullptr, [&](void*) {
+                dftracer::utils::dstd::fs::remove_all(test_dir).has_value();
+            });
 
         SUBCASE("Non-existent input file") {
             FileCompressorUtility compressor;
@@ -274,9 +279,10 @@ TEST_SUITE("FileCompressor") {
 
     TEST_CASE("FileCompressor - Binary Files") {
         auto test_dir = create_test_dir();
-        auto cleanup_dir = std::shared_ptr<void>(nullptr, [&](void*) {
-            dftracer::utils::dstd::fs::remove_all(test_dir).has_value();
-        });
+        auto cleanup_dir =
+            dftracer::utils::dstd::SharedPtr<void>(nullptr, [&](void*) {
+                dftracer::utils::dstd::fs::remove_all(test_dir).has_value();
+            });
 
         SUBCASE("Compress binary data") {
             std::string test_file =

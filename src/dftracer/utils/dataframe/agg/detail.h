@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -154,11 +155,11 @@ enum class ArgDir { Min = 0, Max = 1 };
 /// Bottom) or descending `by` (Top), the repr breaking ties either way.
 enum class ListKind { Sorted = 0, Top = 1, Bottom = 2 };
 
-using ListItems = std::vector<std::pair<double, std::string>>;
+using ListItems = std::vector<dstd::Pair<double, std::string>>;
 
 inline bool list_item_less(ListKind kind,
-                           const std::pair<double, std::string>& a,
-                           const std::pair<double, std::string>& b) {
+                           const dstd::Pair<double, std::string>& a,
+                           const dstd::Pair<double, std::string>& b) {
     if (a.first != b.first)
         return kind == ListKind::Top ? a.first > b.first : a.first < b.first;
     return a.second < b.second;
@@ -169,8 +170,8 @@ inline bool list_item_less(ListKind kind,
 /// merges order-independently.
 inline void list_bound(ListItems& v, ListKind kind, std::size_t k) {
     std::sort(v.begin(), v.end(),
-              [kind](const std::pair<double, std::string>& a,
-                     const std::pair<double, std::string>& b) {
+              [kind](const dstd::Pair<double, std::string>& a,
+                     const dstd::Pair<double, std::string>& b) {
                   return list_item_less(kind, a, b);
               });
     if (k > 0 && v.size() > k) v.resize(k);
@@ -238,7 +239,7 @@ struct DynSlot {
 /// net wrap of each cell whose integer sum overflowed.
 struct DynLightCells {
     dstd::Vector<std::uint64_t> words;
-    dstd::Vector<std::pair<std::uint32_t, std::int64_t>> carry;
+    dstd::Vector<dstd::Pair<std::uint32_t, std::int64_t>> carry;
 };
 
 /// The id word's presence bit. Ids stay below it.
@@ -638,17 +639,17 @@ class AggState {
     /// The id no dyn name has.
     static constexpr std::uint32_t NO_DYN_ID = 0xFFFFFFFFu;
 
-    std::string_view dyn_name(std::uint32_t id) const {
+    dstd::StringView dyn_name(std::uint32_t id) const {
         const dstd::String& n = dyn_names[static_cast<std::size_t>(id)];
-        return std::string_view(n.data(), n.size());
+        return dstd::StringView(n.data(), n.size());
     }
     /// The id of a dyn name, or NO_DYN_ID when this state has not seen it.
-    std::uint32_t dyn_id_of(std::string_view name) const {
+    std::uint32_t dyn_id_of(dstd::StringView name) const {
         const auto it = dyn_ids.find(name);
         return it == dyn_ids.end() ? NO_DYN_ID : it->second;
     }
     /// The id of a dyn name, interning the name with `domain` on first use.
-    std::uint32_t dyn_intern(std::string_view name, FieldStatDomain domain) {
+    std::uint32_t dyn_intern(dstd::StringView name, FieldStatDomain domain) {
         const auto it = dyn_ids.find(name);
         if (it != dyn_ids.end()) return it->second;
         const auto id = static_cast<std::uint32_t>(dyn_names.size());
@@ -765,23 +766,23 @@ class AggState {
 
     /// The net wrap of `id`'s sum in group `g`, 0 when it never overflowed.
     std::int64_t dyn_light_carry_of(std::int64_t g, std::uint32_t id) const {
-        const dstd::Vector<std::pair<std::uint32_t, std::int64_t>>& c =
+        const dstd::Vector<dstd::Pair<std::uint32_t, std::int64_t>>& c =
             dyn_light[static_cast<std::size_t>(g)].carry;
-        const auto it =
-            std::lower_bound(c.begin(), c.end(), id,
-                             [](const std::pair<std::uint32_t, std::int64_t>& p,
-                                std::uint32_t v) { return p.first < v; });
+        const auto it = std::lower_bound(
+            c.begin(), c.end(), id,
+            [](const dstd::Pair<std::uint32_t, std::int64_t>& p,
+               std::uint32_t v) { return p.first < v; });
         return it != c.end() && it->first == id ? it->second : 0;
     }
 
     void dyn_light_carry_add(std::int64_t g, std::uint32_t id,
                              std::int64_t wrap) {
-        dstd::Vector<std::pair<std::uint32_t, std::int64_t>>& c =
+        dstd::Vector<dstd::Pair<std::uint32_t, std::int64_t>>& c =
             dyn_light[static_cast<std::size_t>(g)].carry;
-        const auto it =
-            std::lower_bound(c.begin(), c.end(), id,
-                             [](const std::pair<std::uint32_t, std::int64_t>& p,
-                                std::uint32_t v) { return p.first < v; });
+        const auto it = std::lower_bound(
+            c.begin(), c.end(), id,
+            [](const dstd::Pair<std::uint32_t, std::int64_t>& p,
+               std::uint32_t v) { return p.first < v; });
         if (it != c.end() && it->first == id)
             it->second += wrap;
         else
@@ -791,12 +792,12 @@ class AggState {
     /// Set `id`'s wrap in group `g`, dropping the entry at zero.
     void dyn_light_carry_set(std::int64_t g, std::uint32_t id,
                              std::int64_t wrap) {
-        dstd::Vector<std::pair<std::uint32_t, std::int64_t>>& c =
+        dstd::Vector<dstd::Pair<std::uint32_t, std::int64_t>>& c =
             dyn_light[static_cast<std::size_t>(g)].carry;
-        const auto it =
-            std::lower_bound(c.begin(), c.end(), id,
-                             [](const std::pair<std::uint32_t, std::int64_t>& p,
-                                std::uint32_t v) { return p.first < v; });
+        const auto it = std::lower_bound(
+            c.begin(), c.end(), id,
+            [](const dstd::Pair<std::uint32_t, std::int64_t>& p,
+               std::uint32_t v) { return p.first < v; });
         if (it != c.end() && it->first == id) {
             if (wrap == 0)
                 c.erase(it);
@@ -1409,7 +1410,7 @@ class AggState {
             const std::size_t cv =
                 get_null(k)
                     ? std::size_t{dftracer::utils::dstd::hash::GOLDEN_RATIO}
-                : key_is_bytes[k] ? std::hash<std::string_view>{}(get_str(k))
+                : key_is_bytes[k] ? std::hash<dstd::StringView>{}(get_str(k))
                                   : static_cast<std::size_t>(get_int(k));
             dftracer::utils::dstd::hash_combine(h, cv);
         }
@@ -1445,7 +1446,7 @@ class AggState {
             const bool null = get_null(k);
             nkey_cols[k].push_back(null ? 1 : 0);
             if (key_is_bytes[k])
-                skey_cols[k].emplace_back(null ? std::string_view{}
+                skey_cols[k].emplace_back(null ? dstd::StringView{}
                                                : get_str(k));
             else
                 ikey_cols[k].push_back(null ? 0 : get_int(k));
@@ -1469,13 +1470,13 @@ class AggState {
                 return static_cast<std::int64_t>(
                     read_bits(*keys[k], i, col_domain(keys[k]->type())));
             },
-            [&](std::size_t k) -> std::string_view {
+            [&](std::size_t k) -> dstd::StringView {
                 // String/LargeString are length-delimited (string_at handles
                 // both offset widths); FixedSizeBinary/Decimal128/Decimal256
                 // are `key_byte_width[k]` raw bytes per row, no offsets.
                 const std::int32_t w = key_byte_width[k];
                 if (w <= 0) return keys[k]->string_at(i);
-                return std::string_view(keys[k]->data<char>() + i * w,
+                return dstd::StringView(keys[k]->data<char>() + i * w,
                                         static_cast<std::size_t>(w));
             },
             [&](std::size_t k) { return keys[k]->is_null(i); });
@@ -1491,7 +1492,7 @@ class AggState {
                 other.nkey_cols[k][sj] != 0
                     ? std::size_t{dftracer::utils::dstd::hash::GOLDEN_RATIO}
                 : key_is_bytes[k]
-                    ? std::hash<std::string_view>{}(other.skey_cols[k][sj])
+                    ? std::hash<dstd::StringView>{}(other.skey_cols[k][sj])
                     : static_cast<std::size_t>(other.ikey_cols[k][sj]);
             dftracer::utils::dstd::hash_combine(h, cv);
         }
@@ -1520,7 +1521,7 @@ class AggState {
             [&](std::size_t k) {
                 return other.ikey_cols[k][static_cast<std::size_t>(j)];
             },
-            [&](std::size_t k) -> std::string_view {
+            [&](std::size_t k) -> dstd::StringView {
                 return other.skey_cols[k][static_cast<std::size_t>(j)];
             },
             [&](std::size_t k) {
@@ -1541,7 +1542,7 @@ class AggState {
                     nkey_cols[k][static_cast<std::size_t>(g)]
                         ? std::size_t{dftracer::utils::dstd::hash::GOLDEN_RATIO}
                     : key_is_bytes[k]
-                        ? std::hash<std::string_view>{}(
+                        ? std::hash<dstd::StringView>{}(
                               skey_cols[k][static_cast<std::size_t>(g)])
                         : static_cast<std::size_t>(
                               ikey_cols[k][static_cast<std::size_t>(g)]);

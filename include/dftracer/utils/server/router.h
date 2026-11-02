@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_SERVER_ROUTER_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <functional>
 #include <string>
@@ -19,20 +21,20 @@ struct HttpResponse;
 class QueryParams {
    public:
     /// Parse from a query string ("key=value&key2=value2").
-    static QueryParams parse(std::string_view query);
+    static QueryParams parse(dstd::StringView query);
 
-    std::string_view get(std::string_view key,
-                         std::string_view default_value = {}) const;
-    bool has(std::string_view key) const;
-    int get_int(std::string_view key, int default_value = 0) const;
-    double get_double(std::string_view key, double default_value = 0) const;
+    dstd::StringView get(dstd::StringView key,
+                         dstd::StringView default_value = {}) const;
+    bool has(dstd::StringView key) const;
+    int get_int(dstd::StringView key, int default_value = 0) const;
+    double get_double(dstd::StringView key, double default_value = 0) const;
 
     /// Order-independent signature of all params, for use as a result-cache
     /// key.
     std::string canonical_key() const;
 
    private:
-    std::vector<std::pair<std::string, std::string>> params_;
+    std::vector<dstd::Pair<std::string, std::string>> params_;
 };
 
 /// Handler function type for routes.

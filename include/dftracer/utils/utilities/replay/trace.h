@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_REPLAY_TRACE_H
 #define DFTRACER_UTILS_UTILITIES_REPLAY_TRACE_H
 
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -40,10 +42,10 @@ struct Trace {
     /// Short-lived enum-like strings (cat/func_name) and per-event hashes
     /// (fhash/hhash) are non-owning views into a program-lifetime
     /// @ref dstd::StringIntern pool.
-    std::string_view cat;        ///< Category (e.g., "posix", "stdio", "h5py")
+    dstd::StringView cat;        ///< Category (e.g., "posix", "stdio", "h5py")
     std::string io_cat;          ///< I/O category (read, write, metadata)
     std::string acc_pat;         ///< Access pattern
-    std::string_view func_name;  ///< Function name (e.g., "read", "write")
+    dstd::StringView func_name;  ///< Function name (e.g., "read", "write")
 
     /// Timing information
     double duration;           ///< Duration in microseconds
@@ -58,8 +60,8 @@ struct Trace {
     std::uint64_t tid;  ///< Thread ID
 
     /// File identification
-    std::string_view fhash;  ///< File hash (interned)
-    std::string_view hhash;  ///< Host hash (interned)
+    dstd::StringView fhash;  ///< File hash (interned)
+    dstd::StringView hhash;  ///< Host hash (interned)
     std::uint64_t image_id;  ///< Image ID
 
     /// Trace type

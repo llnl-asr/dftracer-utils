@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/index_encoding.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -46,12 +47,12 @@ void check_separate_ranges(std::initializer_list<std::uint8_t> kinds) {
     }
 }
 
-std::optional<dftu_utils_test::IndexRecord> find_record(
+dftracer::utils::dstd::Optional<dftu_utils_test::IndexRecord> find_record(
     const std::vector<dftu_utils_test::IndexRecord>& records,
     const std::string& name, const std::string& key) {
     for (const auto& record : records)
         if (record.name == name && record.key == key) return record;
-    return std::nullopt;
+    return dftracer::utils::dstd::nullopt;
 }
 
 }  // namespace
@@ -76,7 +77,8 @@ TEST_SUITE("index layout") {
         stat.hash = 1;
         auto build = dftu_utils_test::index_take(
             dftu_utils_test::open_test_index(root).build(
-                dstd::StringView(trace.data(), trace.size()), stat));
+                dftracer::utils::dstd::StringView(trace.data(), trace.size()),
+                stat));
         idx::put_file_metadata(build, 0, 0, 0, false);
         idx::put_gzip_member(build, member);
         idx::put_path_granule(build, store::IndexExtension::Zonemap, "cat", 2,
@@ -140,7 +142,7 @@ TEST_SUITE("index layout") {
         store::ChunkMetadata metadata;
         metadata.records = 0x0102030405060708ULL;
         metadata.names = std::vector<std::string>{"hhash", "name"};
-        metadata.paths = std::nullopt;
+        metadata.paths = dftracer::utils::dstd::nullopt;
         const std::string body = layout::encode_chunk_metadata(metadata);
         const auto decoded = layout::decode_chunk_metadata(body);
         REQUIRE(decoded.has_value());

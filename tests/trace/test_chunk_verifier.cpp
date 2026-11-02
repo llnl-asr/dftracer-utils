@@ -7,6 +7,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/chunk_verifier_utility.h>
 #include <doctest/doctest.h>
@@ -42,7 +43,7 @@ using TestEvent = int;
 // Helper: run a ChunkVerifierUtility via Runtime + coro::with_scope.
 template <typename ChunkType, typename MetadataType, typename EventType>
 static ChunkVerificationUtilityOutput run_verifier(
-    std::shared_ptr<ChunkVerifierUtility<ChunkType, MetadataType, EventType>>
+    dstd::SharedPtr<ChunkVerifierUtility<ChunkType, MetadataType, EventType>>
         verifier,
     const ChunkVerificationUtilityInput<ChunkType, MetadataType>& input,
     std::size_t threads = 4) {

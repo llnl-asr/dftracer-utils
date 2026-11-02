@@ -23,6 +23,7 @@
 // activity, so callers get the graph rather than raw events.
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/pair.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -164,7 +165,7 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
 /// Split `path` into (mount point, path relative to it) using `table`
 /// (longest prefix wins), then the Rabbit rule (/mnt/nnf/\<id\>), then the
 /// first two path components. Exposed for tests.
-std::pair<std::string, std::string> split_mount(
+dstd::Pair<std::string, std::string> split_mount(
     const std::string& path, const std::vector<ProvenanceMount>& table);
 
 }  // namespace dftracer::utils::trace::provenance

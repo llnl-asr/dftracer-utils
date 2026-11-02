@@ -3,6 +3,11 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_OPS_H
 
 #include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -44,13 +49,13 @@ std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_);
 std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_);
 /// The first file of the plan whose index holds no path catalog (no index,
 /// or one built without its statistics tier), or nullopt.
-std::optional<std::string> file_without_catalog(const ScanPlan& plan_);
+dstd::Optional<std::string> file_without_catalog(const ScanPlan& plan_);
 /// Each column's type from the index; a column of mixed JSON types is a JSON
 /// String (DataType::json).
 std::unordered_map<std::string, dataframe::DataType> column_types(
     const ScanPlan& plan_);
 /// The columns `plan_` gives as JSON (see detail::JsonColumns); null when none.
-std::shared_ptr<const detail::JsonColumns> json_columns(
+dstd::SharedPtr<const detail::JsonColumns> json_columns(
     const detail::ViewPlan& plan);
 TimeMetric time_metric(const ScanPlan& plan_);
 ScanPlan filter(const ScanPlan& plan_, Query q);
@@ -70,7 +75,7 @@ ScanPlan agg_numeric_args(const ScanPlan& plan_,
                           std::vector<AggSpec> reductions);
 ScanPlan memory_budget(const ScanPlan& plan_, std::uint64_t bytes);
 ScanPlan count_scans(const ScanPlan& plan_,
-                     std::shared_ptr<ScanCounter> counter);
+                     dstd::SharedPtr<ScanCounter> counter);
 ScanPlan auto_spill(const ScanPlan& plan_);
 ScanPlan select(const ScanPlan& plan_, std::vector<std::string> cols);
 ScanPlan name_columns(const ScanPlan& plan_,
@@ -92,7 +97,7 @@ ScanPlan rollup_root(const ScanPlan& plan_, std::string dir);
 ScanPlan views_root(const ScanPlan& plan_, std::string dir);
 coro::CoroTask<ExportStats> for_each_batch(
     ScanPlan plan_,
-    std::function<void(std::size_t, const std::vector<std::string_view>&)>
+    std::function<void(std::size_t, const std::vector<dstd::StringView>&)>
         on_batch,
     std::size_t num_slots, std::uint64_t limit = 0);
 bool export_would_bootstrap(const ScanPlan& plan_);
@@ -111,16 +116,16 @@ coro::CoroTask<dataframe::DataFrame> call_tree(
 coro::CoroTask<dataframe::DataFrame> flamegraph(
     ScanPlan plan_, std::vector<std::string> partition, std::string ts,
     std::string dur, std::string name, std::vector<std::string> group);
-coro::CoroTask<std::pair<dataframe::DataFrame, dataframe::DataFrame>>
+coro::CoroTask<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>
 containment(ScanPlan plan_, std::vector<std::string> partition, std::string ts,
             std::string dur, std::string name, std::vector<std::string> group);
 coro::CoroTask<std::string> flamegraph_partial(
     ScanPlan plan_, std::vector<std::string> partition, std::string ts,
     std::string dur, std::string name, std::vector<std::string> group);
 dataframe::DataFrame merge_flamegraph_partials(
-    const std::vector<std::string_view>& partials);
+    const std::vector<dstd::StringView>& partials);
 coro::CoroTask<ExportStats> run_folds(
-    ScanPlan plan_, std::span<detail::Fold* const> folds,
+    ScanPlan plan_, dstd::Span<detail::Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern,
     detail::DynamicPrune* dyn_prune = nullptr,
     coro::CoroSemaphore* gate = nullptr);
@@ -134,14 +139,14 @@ coro::CoroTask<TypedResult> collect_typed(ScanPlan plan_, int shard_begin,
                                           const ProgressFn* progress = nullptr);
 coro::CoroTask<ExportStats> export_counters(ScanPlan plan_, ExportSink& sink);
 coro::CoroTask<void> materialize_partials(
-    ScanPlan plan_, const std::vector<std::string_view>& partials);
-std::optional<dataframe::DataFrame> reconstruct_if_cached(
+    ScanPlan plan_, const std::vector<dstd::StringView>& partials);
+dstd::Optional<dataframe::DataFrame> reconstruct_if_cached(
     const ScanPlan& plan_);
 coro::CoroTask<std::string> aggregate_partial(ScanPlan plan_);
 dataframe::DataFrame merge_partials_to_table(
-    const ScanPlan& plan_, const std::vector<std::string_view>& partials);
+    const ScanPlan& plan_, const std::vector<dstd::StringView>& partials);
 ExportStats merge_counter_partials(
-    const ScanPlan& plan_, const std::vector<std::string_view>& partials,
+    const ScanPlan& plan_, const std::vector<dstd::StringView>& partials,
     ExportSink& sink);
 
 }  // namespace dftracer::utils::trace::views::detail::scan

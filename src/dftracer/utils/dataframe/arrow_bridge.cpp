@@ -6,6 +6,8 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <cstring>
@@ -187,8 +189,8 @@ bool from_arrow_type(const ArrowSchemaView& view, TypeId& out) {
 /// as an exported ArrowArray references them, and owns the array's buffer list.
 struct ExportedArray {
     std::vector<BufferView> keep;
-    std::shared_ptr<dftu_series> child_keep;
-    std::vector<std::shared_ptr<dftu_series>> children_keep;
+    dstd::SharedPtr<dftu_series> child_keep;
+    std::vector<dstd::SharedPtr<dftu_series>> children_keep;
     const void* buffers[3];
     std::vector<const void*> view_buffers;
     std::vector<std::int64_t> view_sizes;
@@ -475,7 +477,7 @@ void export_array(const dftu_series& col, ArrowArray* array) {
 
 void build_schema(const dftu_series& col, ArrowSchema* schema);
 
-constexpr std::string_view JSON_EXTENSION = "arrow.json";
+constexpr dstd::StringView JSON_EXTENSION = "arrow.json";
 
 // Marks `schema` as the canonical `arrow.json` extension over utf8.
 void set_json_extension(ArrowSchema* schema) {
@@ -634,7 +636,7 @@ namespace {
 // The validity or bool bits [offset, offset + n) of `bits`: wrapped when the
 // offset is byte-aligned, else copied into a fresh bitmap.
 BufferView import_bits(const void* bits, std::int64_t offset, std::int64_t n,
-                       const std::shared_ptr<void>& owner) {
+                       const dstd::SharedPtr<void>& owner) {
     auto* p = static_cast<std::uint8_t*>(const_cast<void*>(bits));
     const std::size_t bytes = (static_cast<std::size_t>(n) + 7) / 8;
     if (offset % 8 == 0) return borrow_buffer(p + offset / 8, bytes, owner);
@@ -649,7 +651,7 @@ BufferView import_bits(const void* bits, std::int64_t offset, std::int64_t n,
 }
 
 void import_validity(dftu_series* col, const ArrowArray* arr,
-                     const std::shared_ptr<void>& owner) {
+                     const dstd::SharedPtr<void>& owner) {
     if (arr->n_buffers == 0 || arr->buffers[0] == nullptr) return;
     col->validity =
         import_bits(arr->buffers[0], arr->offset, arr->length, owner);
@@ -675,7 +677,7 @@ ArrowArray child_window(const ArrowArray* child, std::int64_t offset,
 // `owner` keeps the backing Arrow array alive for as long as any wrapped buffer
 // survives, so the imported buffers can alias `arr` zero copy.
 Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
-                   std::shared_ptr<void> owner) {
+                   dstd::SharedPtr<void> owner) {
     ArrowSchemaView view;
     ArrowError error;
     if (ArrowSchemaViewInit(&view, schema, &error) != NANOARROW_OK)
@@ -783,14 +785,14 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
 }
 
 Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
-                  std::shared_ptr<void> owner);
+                  dstd::SharedPtr<void> owner);
 
 // LIST and MAP: validity + int32 offsets (n+1), one child array. `map_type`
 // selects which TypeId to tag the result with; both share the same wire
 // layout (int32 offsets over a child array - the Struct{key, value} entries,
 // for MAP), so only the tag differs. The child is imported recursively.
 Series import_list_like(TypeId result_type, const ArrowSchema* schema,
-                        const ArrowArray* arr, std::shared_ptr<void> owner) {
+                        const ArrowArray* arr, dstd::SharedPtr<void> owner) {
     if (schema->n_children != 1 || arr->n_children != 1) return Series{};
     auto* col = new dftu_series();
     col->type = result_type;
@@ -808,13 +810,13 @@ Series import_list_like(TypeId result_type, const ArrowSchema* schema,
         delete col;
         return Series{};
     }
-    col->set_child(std::shared_ptr<dftu_series>(child.release()));
+    col->set_child(dstd::SharedPtr<dftu_series>(child.release()));
     return Series{col};
 }
 
 // LargeList: same shape as import_list_like but with int64 offsets.
 Series import_large_list(const ArrowSchema* schema, const ArrowArray* arr,
-                         std::shared_ptr<void> owner) {
+                         dstd::SharedPtr<void> owner) {
     if (schema->n_children != 1 || arr->n_children != 1) return Series{};
     auto* col = new dftu_series();
     col->type = TypeId::LargeList;
@@ -832,7 +834,7 @@ Series import_large_list(const ArrowSchema* schema, const ArrowArray* arr,
         delete col;
         return Series{};
     }
-    col->set_child(std::shared_ptr<dftu_series>(child.release()));
+    col->set_child(dstd::SharedPtr<dftu_series>(child.release()));
     return Series{col};
 }
 
@@ -840,7 +842,7 @@ Series import_large_list(const ArrowSchema* schema, const ArrowArray* arr,
 // length * fixed_size flattened elements.
 Series import_fixed_size_list(const ArrowSchemaView& view,
                               const ArrowSchema* schema, const ArrowArray* arr,
-                              std::shared_ptr<void> owner) {
+                              dstd::SharedPtr<void> owner) {
     if (schema->n_children != 1 || arr->n_children != 1) return Series{};
     auto* col = new dftu_series();
     col->type = TypeId::FixedSizeList;
@@ -858,14 +860,14 @@ Series import_fixed_size_list(const ArrowSchemaView& view,
         delete col;
         return Series{};
     }
-    col->set_child(std::shared_ptr<dftu_series>(child.release()));
+    col->set_child(dstd::SharedPtr<dftu_series>(child.release()));
     return Series{col};
 }
 
 // Inverse of export_struct; each field column is imported recursively and
 // aliases `arr` through `owner`.
 Series import_struct(const ArrowSchema* schema, const ArrowArray* arr,
-                     std::shared_ptr<void> owner) {
+                     dstd::SharedPtr<void> owner) {
     if (schema->n_children != arr->n_children) return Series{};
     auto* col = new dftu_series();
     col->type = TypeId::Struct;
@@ -882,7 +884,7 @@ Series import_struct(const ArrowSchema* schema, const ArrowArray* arr,
             return Series{};
         }
         col->nested.push_back(
-            {std::shared_ptr<dftu_series>(child.release()),
+            {dstd::SharedPtr<dftu_series>(child.release()),
              schema->children[i]->name ? schema->children[i]->name : ""});
     }
     return Series{col};
@@ -892,7 +894,7 @@ Series import_struct(const ArrowSchema* schema, const ArrowArray* arr,
 // a SELECTION column (the widths the engine and exporter use); any other index
 // width is copied into int32 DICTIONARY codes.
 Series import_dict(const ArrowSchema* schema, const ArrowArray* arr,
-                   std::shared_ptr<void> owner) {
+                   dstd::SharedPtr<void> owner) {
     if (schema->dictionary == nullptr || arr->dictionary == nullptr)
         return Series{};
     ArrowSchemaView view;
@@ -917,7 +919,7 @@ Series import_dict(const ArrowSchema* schema, const ArrowArray* arr,
     adopt_type_from(*col, *values.handle());
     col->length = n;
     col->null_count = arr->null_count < 0 ? 0 : arr->null_count;
-    col->set_child(std::shared_ptr<dftu_series>(values.release()));
+    col->set_child(dstd::SharedPtr<dftu_series>(values.release()));
     import_validity(col, arr, owner);
 
     if (index_type == TypeId::Int64) {
@@ -966,7 +968,7 @@ Series import_dict(const ArrowSchema* schema, const ArrowArray* arr,
 // LargeList/FixedSizeList/Struct/Map nest recursively, everything else (flat
 // fixed-width and variable-width) through import_flat.
 Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
-                  std::shared_ptr<void> owner) {
+                  dstd::SharedPtr<void> owner) {
     if (schema->dictionary != nullptr) return import_dict(schema, arr, owner);
     ArrowSchemaView view;
     ArrowError error;
@@ -988,7 +990,7 @@ Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
     }
     Series out = import_flat(schema, arr, owner);
     if (view.extension_name.data != nullptr &&
-        std::string_view(
+        dstd::StringView(
             view.extension_name.data,
             static_cast<std::size_t>(view.extension_name.size_bytes)) ==
             JSON_EXTENSION &&
@@ -999,10 +1001,10 @@ Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
 
 // Move `array` into a shared owner that runs its release once the last wrapped
 // buffer is dropped; the caller's array is marked released.
-std::shared_ptr<ArrowArray> adopt_array(ArrowArray* array) {
+dstd::SharedPtr<ArrowArray> adopt_array(ArrowArray* array) {
     auto* moved = new ArrowArray(*array);
     array->release = nullptr;
-    return std::shared_ptr<ArrowArray>(moved, [](ArrowArray* a) {
+    return dstd::SharedPtr<ArrowArray>(moved, [](ArrowArray* a) {
         if (a->release != nullptr) a->release(a);
         delete a;
     });
@@ -1011,7 +1013,7 @@ std::shared_ptr<ArrowArray> adopt_array(ArrowArray* array) {
 }  // namespace
 
 Series from_arrow(const ArrowSchema* schema, ArrowArray* array) {
-    std::shared_ptr<ArrowArray> owner = adopt_array(array);
+    dstd::SharedPtr<ArrowArray> owner = adopt_array(array);
     return import_any(schema, owner.get(), owner);
 }
 
@@ -1022,7 +1024,7 @@ DataFrame dataframe_from_arrow(const ArrowSchema* schema, ArrowArray* array) {
         return DataFrame{};
     if (view.type != NANOARROW_TYPE_STRUCT) return DataFrame{};
 
-    std::shared_ptr<ArrowArray> owner = adopt_array(array);
+    dstd::SharedPtr<ArrowArray> owner = adopt_array(array);
     DataFrame df;
     df.names.reserve(static_cast<std::size_t>(schema->n_children));
     df.columns.reserve(static_cast<std::size_t>(schema->n_children));

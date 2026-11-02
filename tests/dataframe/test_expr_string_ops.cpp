@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -222,7 +223,7 @@ TEST_SUITE("expr string ops") {
         Expr p = expr_str_pred(StrPredOp::Like, expr_col(3), "a%");
         std::int32_t col = -1;
         StrPredOp op{};
-        std::string_view pattern;
+        dftracer::utils::dstd::StringView pattern;
         REQUIRE(expr_as_col_str_pred(p, &col, &op, &pattern));
         CHECK(col == 3);
         CHECK(op == StrPredOp::Like);

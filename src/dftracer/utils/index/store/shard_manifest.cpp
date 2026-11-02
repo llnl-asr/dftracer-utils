@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
@@ -16,7 +18,7 @@ namespace dftracer::utils::index::store {
 
 namespace {
 
-void append_escaped(std::string& out, std::string_view s) {
+void append_escaped(std::string& out, dstd::StringView s) {
     out.push_back('"');
     for (char c : s) {
         switch (c) {
@@ -71,7 +73,7 @@ std::string to_json(const IndexShardManifest& manifest) {
     return out;
 }
 
-IndexShardManifest parse_manifest(std::string_view json) {
+IndexShardManifest parse_manifest(dstd::StringView json) {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
     auto err = parser.parse(simdjson::padded_string(json)).get(doc);
@@ -92,7 +94,7 @@ IndexShardManifest parse_manifest(std::string_view json) {
 
     for (simdjson::dom::element s : shards) {
         IndexShardEntry e;
-        std::string_view path;
+        dstd::StringView path;
         if (s["path"].get(path) != simdjson::SUCCESS) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Parse, "shard manifest entry missing path");
@@ -141,11 +143,12 @@ void write_shard_manifest(const std::string& root,
     }
 }
 
-std::optional<IndexShardManifest> read_shard_manifest(const std::string& root) {
+dstd::Optional<IndexShardManifest> read_shard_manifest(
+    const std::string& root) {
     const dstd::Path path{shard_manifest_path(root)};
     // An unreadable path reads as no manifest.
     const auto found = dstd::fs::exists(path.view());
-    if (!found || !*found) return std::nullopt;
+    if (!found || !*found) return dstd::nullopt;
 
     simdjson::padded_string contents;
     auto load_err = simdjson::padded_string::load(path.str()).get(contents);
@@ -155,7 +158,7 @@ std::optional<IndexShardManifest> read_shard_manifest(const std::string& root) {
             common::str_cat("failed to read shard manifest ", path.str(), ": ",
                             simdjson::error_message(load_err)));
     }
-    return parse_manifest(std::string_view(contents.data(), contents.size()));
+    return parse_manifest(dstd::StringView(contents.data(), contents.size()));
 }
 
 bool has_shard_manifest(const std::string& root) {

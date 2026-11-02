@@ -5,6 +5,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 
 #include <cstdint>
 #include <limits>
@@ -144,11 +146,11 @@ DataFrame window(const DataFrame& df,
 /// std::invalid_argument on a non-positive width, a Linear fill over a
 /// non-numeric column or a grid over 10,000,000 points, and
 /// std::out_of_range on an unknown column.
-DataFrame gap_fill(const DataFrame& df,
-                   const std::vector<std::string>& partition_by,
-                   const std::string& time, std::int64_t bucket,
-                   const std::vector<std::string>& values, GapFillMode mode,
-                   std::optional<std::pair<std::int64_t, std::int64_t>> range);
+DataFrame gap_fill(
+    const DataFrame& df, const std::vector<std::string>& partition_by,
+    const std::string& time, std::int64_t bucket,
+    const std::vector<std::string>& values, GapFillMode mode,
+    dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> range);
 
 /// Matches each `left` row to the one `right` row nearest in the numeric time
 /// column `on` (in both frames) within the `by` partition: Backward the
@@ -166,7 +168,7 @@ DataFrame gap_fill(const DataFrame& df,
 /// std::invalid_argument on non-numeric or unequal time or key types.
 DataFrame asof(const DataFrame& left, const DataFrame& right,
                const std::string& on, const std::vector<std::string>& by,
-               AsofDirection direction, std::optional<double> tolerance);
+               AsofDirection direction, dstd::Optional<double> tolerance);
 
 /// Matches each `left.point` to every `right` row whose closed interval
 /// `[lo, hi]` contains it within the `by` partition, one output row per pair

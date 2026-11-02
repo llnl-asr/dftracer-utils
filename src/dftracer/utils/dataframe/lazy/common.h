@@ -34,6 +34,8 @@
 #include <dftracer/utils/dstd/hash/hash.h>
 #include <dftracer/utils/dstd/hash/partition.h>
 #include <dftracer/utils/dstd/int128.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -191,7 +193,7 @@ class MorselFeed {
     }
 
    private:
-    std::optional<Morsel> cur_;
+    dstd::Optional<Morsel> cur_;
     std::int64_t pos_ = 0;
 };
 
@@ -418,9 +420,10 @@ class ProjectCursor : public Cursor {
     ProjectCursor(std::unique_ptr<Cursor> in, std::vector<std::size_t> pick)
         : in_(std::move(in)), pick_(std::move(pick)) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         auto m = co_await in_->next(max_rows);
-        if (!m) co_return std::nullopt;
+        if (!m) co_return dstd::nullopt;
         Morsel out;
         out.rows = m->rows;
         for (std::size_t i : pick_)
@@ -436,16 +439,17 @@ class ProjectCursor : public Cursor {
 // Reads contiguous chunks off an in-memory frame as zero-copy offset views.
 class InMemoryCursor : public Cursor {
    public:
-    explicit InMemoryCursor(std::shared_ptr<const DataFrame> frame)
+    explicit InMemoryCursor(dstd::SharedPtr<const DataFrame> frame)
         : frame_(std::move(frame)), n_(frame_->num_rows()) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        std::optional<Morsel> out;
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
+        dstd::Optional<Morsel> out;
         fill(max_rows, out);
         co_return out;
     }
 
-    bool try_next(std::int64_t max_rows, std::optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
         fill(max_rows, out);
         return true;
     }
@@ -453,7 +457,7 @@ class InMemoryCursor : public Cursor {
    private:
     // Never suspends: the whole frame is already resident, so next() and
     // try_next() share this synchronous slice logic.
-    void fill(std::int64_t max_rows, std::optional<Morsel>& out) {
+    void fill(std::int64_t max_rows, dstd::Optional<Morsel>& out) {
         if (off_ >= n_) {
             out.reset();
             return;
@@ -471,7 +475,7 @@ class InMemoryCursor : public Cursor {
         out = std::move(m);
     }
 
-    std::shared_ptr<const DataFrame> frame_;
+    dstd::SharedPtr<const DataFrame> frame_;
     std::int64_t n_;
     std::int64_t off_ = 0;
     std::int64_t next_index_ = 0;

@@ -5,6 +5,7 @@
 // Helpers shared across the viz_api modules (handlers + summary builder).
 // Internal to the server; not installed.
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -30,8 +31,8 @@ struct EventScalars {
     bool has_pid = false;
     std::int64_t pid = 0;
     std::int64_t tid = 0;
-    std::string_view name;
-    std::string_view cat;
+    dstd::StringView name;
+    dstd::StringView cat;
 };
 
 // Extract the common scalars in a single object walk (cheaper than repeated
@@ -42,7 +43,7 @@ inline bool parse_event_scalars(simdjson::dom::element root,
                                 EventScalars& out) {
     if (!root.is_object()) return false;
     for (auto field : root.get_object()) {
-        std::string_view k = field.key;
+        dstd::StringView k = field.key;
         simdjson::dom::element v = field.value;
         if (k == "ts") {
             out.ts = json::json_number(v);
@@ -66,7 +67,7 @@ inline bool parse_event_scalars(simdjson::dom::element root,
 
 // Parse `event` then extract its scalars. Uses a thread-local parser, so the
 // borrowed name/cat are valid only until the next parse on this thread.
-inline bool parse_event_scalars(std::string_view event, EventScalars& out) {
+inline bool parse_event_scalars(dstd::StringView event, EventScalars& out) {
     thread_local dftracer::utils::json::RecordParser parser;
     thread_local std::string buf;
     buf.assign(event);
@@ -116,13 +117,13 @@ inline std::vector<trace::views::ViewFile> to_view_files(
 
 // A dftracer process-spawning call (POSIX fork/clone family or the kernel
 // syscalls), used to reconstruct the process hierarchy.
-inline bool is_fork_syscall(std::string_view name) {
+inline bool is_fork_syscall(dstd::StringView name) {
     return name == "fork" || name == "vfork" || name == "clone" ||
            name == "clone3" || name == "posix_spawn" ||
            name == "posix_spawnp" ||
-           name.find("sys_clone") != std::string_view::npos ||
-           name.find("sys_fork") != std::string_view::npos ||
-           name.find("sys_vfork") != std::string_view::npos;
+           name.find("sys_clone") != dstd::StringView::npos ||
+           name.find("sys_fork") != dstd::StringView::npos ||
+           name.find("sys_vfork") != dstd::StringView::npos;
 }
 
 }  // namespace dftracer::utils::server

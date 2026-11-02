@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -132,7 +133,7 @@ TEST_SUITE("SchemaView") {
         CHECK(rows(view_of(gz).time_range(2000000, 2500000)) == in_range);
 
         struct Null : ExportSink {
-            void write(std::string_view) override {}
+            void write(dstd::StringView) override {}
         } sink;
         const auto stats =
             view_of(gz).time_range(2000000, 2500000).sink_json(sink).get();

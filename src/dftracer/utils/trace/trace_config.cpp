@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -113,16 +115,16 @@ TimeMetric read_time_metric(const std::string& trace_path) {
     while (pos < uc.size() && lines < 256) {
         std::size_t nl = pos;
         while (nl < uc.size() && uc[nl] != '\n') ++nl;
-        std::string_view line(reinterpret_cast<const char*>(uc.data() + pos),
+        dstd::StringView line(reinterpret_cast<const char*>(uc.data() + pos),
                               nl - pos);
         // Only pay the parse for a candidate line.
-        if (line.find("time_metric") != std::string_view::npos) {
+        if (line.find("time_metric") != dstd::StringView::npos) {
             simdjson::padded_string padded(line);
             simdjson::dom::element doc;
             if (!parser.parse(padded).get(doc)) {
                 auto args = doc["args"];
                 if (!args.error()) {
-                    std::string_view nm, val;
+                    dstd::StringView nm, val;
                     if (!args["name"].get_string().get(nm) &&
                         nm == "time_metric" &&
                         !args["value"].get_string().get(val))
@@ -136,18 +138,18 @@ TimeMetric read_time_metric(const std::string& trace_path) {
     return TimeMetric::Us;
 }
 
-std::optional<TraceConfig> parse_end_event(std::string_view line) {
-    static constexpr std::string_view END_MARK = "\"name\":\"end\"";
-    if (line.empty() || line.find(END_MARK) == std::string_view::npos)
-        return std::nullopt;
+dstd::Optional<TraceConfig> parse_end_event(dstd::StringView line) {
+    static constexpr dstd::StringView END_MARK = "\"name\":\"end\"";
+    if (line.empty() || line.find(END_MARK) == dstd::StringView::npos)
+        return dstd::nullopt;
     thread_local simdjson::dom::parser parser;
     std::string padded(line);
     padded.resize(line.size() + simdjson::SIMDJSON_PADDING);
     auto doc = parser.parse(padded.data(), line.size(), false);
-    if (doc.error()) return std::nullopt;
+    if (doc.error()) return dstd::nullopt;
     DFTracerEvent ev;
     JsonValue jv(doc.value_unsafe());
-    if (!DFTracerEvent::parse(jv, ev) || ev.name != "end") return std::nullopt;
+    if (!DFTracerEvent::parse(jv, ev) || ev.name != "end") return dstd::nullopt;
     return TraceConfig{ev.pid, std::move(ev.args)};
 }
 
@@ -165,7 +167,7 @@ std::vector<TraceConfig> read_trace_config(const std::string& trace_path) {
     while (pos < uc.size()) {
         std::size_t nl = pos;
         while (nl < uc.size() && uc[nl] != '\n') ++nl;
-        std::string_view line(reinterpret_cast<const char*>(uc.data() + pos),
+        dstd::StringView line(reinterpret_cast<const char*>(uc.data() + pos),
                               nl - pos);
         if (auto c = parse_end_event(line)) out.push_back(std::move(*c));
         pos = nl + 1;

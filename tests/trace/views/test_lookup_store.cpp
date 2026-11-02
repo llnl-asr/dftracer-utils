@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/cache/lookup_store.h>
 #include <dftracer/utils/index/indexer.h>
@@ -37,7 +38,8 @@ auto plan_of(const std::string& gz) {
     return p;
 }
 
-std::shared_ptr<cache::CacheStore> store_in(TestEnvironment& env) {
+dftracer::utils::dstd::SharedPtr<cache::CacheStore> store_in(
+    TestEnvironment& env) {
     return cache::open_lookup_db(env.get_dir() + "/lookups",
                                  cache::CacheStore::Mode::ReadWrite);
 }

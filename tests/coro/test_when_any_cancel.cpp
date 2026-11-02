@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
@@ -39,7 +40,7 @@ struct Race {
     std::atomic<int> clock{0};
     std::array<std::atomic<int>, 3> stopped_at;
     std::array<std::atomic<bool>, 3> saw_token;
-    std::array<std::shared_ptr<coro::Channel<int>>, 3> channels;
+    std::array<dstd::SharedPtr<coro::Channel<int>>, 3> channels;
 
     Race() {
         for (std::size_t i = 0; i < channels.size(); ++i) {
@@ -50,9 +51,9 @@ struct Race {
     }
 };
 
-using TokenPtr = std::shared_ptr<std::atomic<bool>>;
+using TokenPtr = dstd::SharedPtr<std::atomic<bool>>;
 
-coro::CoroTask<int> receive_and_record(std::shared_ptr<Race> race,
+coro::CoroTask<int> receive_and_record(dstd::SharedPtr<Race> race,
                                        TokenPtr token, std::size_t slot) {
     auto value = co_await race->channels[slot]->receive();
     race->saw_token[slot].store(token->load());
@@ -67,7 +68,7 @@ class Racer {
    public:
     using result_type = int;
 
-    Racer(std::shared_ptr<Race> race, std::size_t slot,
+    Racer(dstd::SharedPtr<Race> race, std::size_t slot,
           bool throw_on_cancel = false)
         : race_(std::move(race)),
           slot_(slot),
@@ -92,7 +93,7 @@ class Racer {
     }
 
    private:
-    std::shared_ptr<Race> race_;
+    dstd::SharedPtr<Race> race_;
     std::size_t slot_;
     bool throw_on_cancel_;
     TokenPtr token_;
@@ -121,7 +122,7 @@ class Plain {
     coro::CoroTask<T> task_;
 };
 
-std::thread feed_winner_later(const std::shared_ptr<Race>& race,
+std::thread feed_winner_later(const dstd::SharedPtr<Race>& race,
                               std::size_t slot) {
     return std::thread([race, slot] {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -387,11 +388,11 @@ struct Seen {
 };
 
 struct Guard {
-    std::shared_ptr<Seen> seen;
+    dstd::SharedPtr<Seen> seen;
     ~Guard() { seen->destroyed.fetch_add(1); }
 };
 
-coro::CoroTask<int> spins_at_a_wait(std::shared_ptr<Seen> seen) {
+coro::CoroTask<int> spins_at_a_wait(dstd::SharedPtr<Seen> seen) {
     Guard guard{seen};
     try {
         seen->started.store(true);
@@ -402,7 +403,7 @@ coro::CoroTask<int> spins_at_a_wait(std::shared_ptr<Seen> seen) {
     }
 }
 
-coro::CoroTask<int> awaits_a_spinner(std::shared_ptr<Seen> seen) {
+coro::CoroTask<int> awaits_a_spinner(dstd::SharedPtr<Seen> seen) {
     Guard guard{seen};
     try {
         co_return co_await spins_at_a_wait(seen);

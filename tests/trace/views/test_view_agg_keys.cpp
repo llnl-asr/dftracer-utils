@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <trace/views/agg_parity_common.h>
 
@@ -899,9 +900,9 @@ TEST_SUITE("View") {
             dstd::fs::remove(pfw).has_value();
         }
 
-        using Key = std::vector<std::optional<std::string>>;
+        using Key = std::vector<dstd::Optional<std::string>>;
         using Groups = std::map<Key, std::int64_t>;
-        const std::nullopt_t null = std::nullopt;
+        const dstd::NullOpt null = dstd::nullopt;
         auto groups = [](const dataframe::DataFrame& f,
                          const std::vector<std::string>& keys) {
             Groups g;
@@ -1013,7 +1014,7 @@ TEST_SUITE("View") {
             Groups got;
             for (std::int64_t i = 0; i < j.num_rows(); ++i) {
                 const auto& c = j.columns[0];
-                got.emplace(Key{c.is_null(i) ? std::optional<std::string>()
+                got.emplace(Key{c.is_null(i) ? dstd::Optional<std::string>()
                                              : std::string(c.string_at(i))},
                             static_cast<std::int64_t>(bnum(j, i, "l_n")));
             }

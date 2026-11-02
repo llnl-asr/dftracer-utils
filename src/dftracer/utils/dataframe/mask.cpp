@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/mask.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/evaluator.h>
@@ -134,19 +135,19 @@ dataframe::Series compare_mask(const dataframe::Series& col, CompareOp op,
 dataframe::Series in_mask(const dataframe::Series& col, const ArrayNode& arr,
                           bool negated) {
     if (is_string(col)) {
-        std::unordered_set<std::string_view> set;
+        std::unordered_set<dstd::StringView> set;
         for (const LiteralNode& e : arr.elements)
             if (const auto* lit = std::get_if<dstd::String>(&e.value))
                 set.insert(*lit);
         if (set.empty()) return unknown(col.length());
         dataframe::Series m{dataframe::string_mask(
             col.handle(),
-            [&set](std::string_view s) { return set.contains(s); })};
+            [&set](dstd::StringView s) { return set.contains(s); })};
         if (!m.handle())
             unsupported("no comparison kernel for the column type");
         return negated ? negate(std::move(m)) : std::move(m);
     }
-    std::optional<dataframe::Series> acc;
+    dstd::Optional<dataframe::Series> acc;
     for (const LiteralNode& e : arr.elements) {
         if (!comparable(col, e.value)) continue;
         dataframe::Series m = compare_mask(col, CompareOp::Eq, e.value);

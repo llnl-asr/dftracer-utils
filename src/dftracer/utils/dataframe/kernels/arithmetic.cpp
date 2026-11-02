@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/internal/type_promotion.h>
 #include <dftracer/utils/dataframe/kernels/arithmetic.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/optional.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -438,7 +439,7 @@ dftu_series* decimal_binop_exact(const dftu_series* a, const dftu_series* b,
         for (std::int64_t i = 0; i < n && ok; ++i) {
             const i128 va = load_i128(pa + static_cast<std::size_t>(i) * 16);
             const i128 vb = load_i128(pb + static_cast<std::size_t>(i) * 16);
-            std::optional<i128> r;
+            dstd::Optional<i128> r;
             if (op == BinOp::Add || op == BinOp::Sub) {
                 auto ra = rescale_up_i128(va, a->decimal_scale(), result_scale);
                 auto rb = rescale_up_i128(vb, b->decimal_scale(), result_scale);
@@ -474,7 +475,7 @@ dftu_series* decimal_binop_exact(const dftu_series* a, const dftu_series* b,
                 load_limbs256(pb + static_cast<std::size_t>(i) * 32);
             auto ra = rescale_up_256(va, a->decimal_scale(), result_scale);
             auto rb = rescale_up_256(vb, b->decimal_scale(), result_scale);
-            std::optional<Limbs256> r;
+            dstd::Optional<Limbs256> r;
             if (ra && rb)
                 r = addsub_checked_256(*ra, *rb, op == BinOp::Sub,
                                        result_precision);

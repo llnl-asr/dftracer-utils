@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_TRACE_INTERNAL_INDEX_ROOT_H
 
 #include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <cstddef>
@@ -17,7 +19,7 @@ namespace dftracer::utils::trace::internal {
 // A file this process built or found current in an index root, by modification
 // time and size.
 struct IndexedFile {
-    std::pair<std::int64_t, std::uint64_t> stamp;
+    dstd::Pair<std::int64_t, std::uint64_t> stamp;
     std::size_t num_lines = 0;
     std::uint64_t max_bytes = 0;
     std::uint64_t checkpoint_size = 0;
@@ -56,7 +58,7 @@ class RootPermit {
 };
 
 // The shared state of the root at `index_path`, keyed by canonical path.
-std::shared_ptr<IndexRoot> index_root(const std::string& index_path);
+dstd::SharedPtr<IndexRoot> index_root(const std::string& index_path);
 
 }  // namespace dftracer::utils::trace::internal
 

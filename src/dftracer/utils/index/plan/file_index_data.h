@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_INDEX_PLAN_FILE_INDEX_DATA_H
 
 #include <ankerl/unordered_dense.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -27,14 +29,14 @@ using index::store::IndexExtension;
 struct GranuleCounts {
     std::uint64_t observed = 0;
     std::vector<std::uint8_t> compressed;
-    mutable std::optional<dstd::StringViewMap<std::uint64_t>> values;
+    mutable dstd::Optional<dstd::StringViewMap<std::uint64_t>> values;
 
     const dstd::StringViewMap<std::uint64_t>* get() const;
 };
 
 /// Whether a dftracer path is a field every record carries at its top level
 /// (pid, tid, ts, dur, ph, id, or below one), which the catalog leaves out.
-bool unrecorded(std::string_view path);
+bool unrecorded(dstd::StringView path);
 
 /// One file's index data for pruning, shared by the Conditions built for one
 /// query. Each kind's data for a path is read the first time a leaf needs it,
@@ -60,20 +62,20 @@ struct FileIndexData {
 
     /// Whether `path` is a dftracer fixed dimension, built from the record's
     /// top-level field.
-    bool fixed_field(std::string_view path) const;
+    bool fixed_field(dstd::StringView path) const;
     /// The name the evidence answering a query on `path` is stored under, or
     /// nullopt when no evidence answers it: `args.<k>` reads the args key
     /// `k` unless `k` is a fixed dimension, and a bare dftracer path that a
     /// record may hold at its top level, where the evaluator looks first
     /// and the args evidence does not, has none. The accessors below take
     /// query paths and map them through this.
-    const std::optional<std::string>& evidence_name(const std::string& path);
+    const dstd::Optional<std::string>& evidence_name(const std::string& path);
 
     const Zones& zones(const std::string& path);
     const Counts& counts(const std::string& path);
     const Blooms& blooms(const std::string& path);
     using Catalog =
-        dstd::Vector<std::pair<dstd::String, index::store::PathStat>>;
+        dstd::Vector<dstd::Pair<dstd::String, index::store::PathStat>>;
     /// The file's path catalog; empty when it is not current.
     const Catalog& catalog();
 
@@ -87,19 +89,19 @@ struct FileIndexData {
                                                   const std::string& val);
     /// Whether the file holds `val` of `path` per its postings; nullopt when
     /// the file has no postings for the path.
-    std::optional<bool> posting_contains(const std::string& path,
-                                         const std::string& val);
+    dstd::Optional<bool> posting_contains(const std::string& path,
+                                          const std::string& val);
 
    private:
     bool current(IndexExtension ext);
 
     ankerl::unordered_dense::map<std::uint16_t, bool> current_;
-    std::optional<Catalog> catalog_;
-    dstd::StringViewMap<std::optional<std::string>> evidence_names_;
+    dstd::Optional<Catalog> catalog_;
+    dstd::StringViewMap<dstd::Optional<std::string>> evidence_names_;
     dstd::StringViewMap<Zones> zones_;
     dstd::StringViewMap<Counts> counts_;
     dstd::StringViewMap<Blooms> blooms_;
-    dstd::StringViewMap<std::optional<index::extensions::ScalableBloomFilter>>
+    dstd::StringViewMap<dstd::Optional<index::extensions::ScalableBloomFilter>>
         file_blooms_;
     dstd::StringViewMap<std::set<std::uint64_t>> posting_chunks_;
     dstd::StringViewMap<bool> posting_membership_;

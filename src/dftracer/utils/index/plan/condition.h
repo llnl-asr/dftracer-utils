@@ -4,6 +4,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/index/store/file.h>
 
@@ -44,15 +45,15 @@ class Condition {
     /// `leaf` (a result may also name chunks outside `candidates`, which the
     /// evaluator intersects away); nullopt when this source has no evidence
     /// for the leaf.
-    virtual std::optional<ChunkSet> may_match(const duql::QueryNode& leaf,
-                                              const ChunkSet& candidates) = 0;
+    virtual dstd::Optional<ChunkSet> may_match(const duql::QueryNode& leaf,
+                                               const ChunkSet& candidates) = 0;
     /// True when every answer of may_match is exactly the matching chunks,
     /// so no other source can rule out more and the evaluator stops there.
     virtual bool exact() const { return false; }
     /// The chunks in which every event matches `leaf`; nullopt without
     /// evidence.
-    virtual std::optional<ChunkSet> all_match(const duql::QueryNode&) {
-        return std::nullopt;
+    virtual dstd::Optional<ChunkSet> all_match(const duql::QueryNode&) {
+        return dstd::nullopt;
     }
 };
 

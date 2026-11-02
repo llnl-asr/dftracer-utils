@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/server/http_response.h>
 
 #include <algorithm>
@@ -8,12 +10,12 @@ namespace dftracer::utils::server {
 
 namespace {
 
-bool icase_equal(std::string_view a, std::string_view b) {
+bool icase_equal(dstd::StringView a, dstd::StringView b) {
     return ::dftracer::utils::common::detail::iequals(a, b);
 }
 
 bool has_content_length(
-    const std::vector<std::pair<std::string, std::string>> &headers) {
+    const std::vector<dstd::Pair<std::string, std::string>> &headers) {
     return std::any_of(headers.begin(), headers.end(), [](const auto &h) {
         return icase_equal(h.first, "Content-Length");
     });

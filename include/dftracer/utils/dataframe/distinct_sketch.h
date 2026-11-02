@@ -23,6 +23,7 @@
 
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <cmath>
@@ -44,7 +45,7 @@ class BasicDistinctSketch {
     /// Stay sparse (and exact) while the encoded pairs cost less than dense.
     static constexpr std::size_t SPARSE_LIMIT = REGISTERS / 4;
 
-    void add(std::string_view value) {
+    void add(dstd::StringView value) {
         if (!value.empty()) add_hash(hash64(value));
     }
 
@@ -140,7 +141,7 @@ class BasicDistinctSketch {
         sparse_.shrink_to_fit();
     }
 
-    static std::uint64_t hash64(std::string_view s) {
+    static std::uint64_t hash64(dstd::StringView s) {
         return dftracer::utils::dstd::hash::fnv1a_mix(
             dftracer::utils::dstd::hash::fnv1a_hash(s));
     }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -49,7 +51,7 @@ View view_of(const std::string& gz) {
 std::size_t rows(const View& v) { return v.collect().get().num_rows(); }
 
 struct NullSink : ExportSink {
-    void write(std::string_view) override {}
+    void write(dftracer::utils::dstd::StringView) override {}
 };
 
 }  // namespace
@@ -103,7 +105,7 @@ TEST_SUITE("AnyView") {
         TestEnvironment env(10);
         const auto gz = write_tagged(env, 1024);
         for (const auto& [cond, want] :
-             std::vector<std::pair<std::string, std::size_t>>{
+             std::vector<dftracer::utils::dstd::Pair<std::string, std::size_t>>{
                  {R"(any(tags, . == "t7"))", 300},
                  {R"(all(tags, . == "t0"))", 300},
                  {"any(sizes, . >= 2990 and . > ^.sizes[0])", 10},

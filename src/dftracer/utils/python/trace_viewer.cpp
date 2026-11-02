@@ -5,8 +5,12 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -117,7 +121,7 @@ PyObject* stats_dict(const ExportStats& s) {
 views::ProgressFn progress_from(PyObject* obj) {
     if (!obj || obj == Py_None) return {};
     Py_INCREF(obj);
-    std::shared_ptr<PyObject> cb(obj, [](PyObject* p) {
+    dftracer::utils::dstd::SharedPtr<PyObject> cb(obj, [](PyObject* p) {
         PyGILState_STATE g = PyGILState_Ensure();
         Py_DECREF(p);
         PyGILState_Release(g);
@@ -138,7 +142,7 @@ views::ProgressFn progress_from(PyObject* obj) {
 class FileSink : public views::ExportSink {
    public:
     explicit FileSink(FILE* f) : f_(f) {}
-    void write(std::string_view data) override {
+    void write(dftracer::utils::dstd::StringView data) override {
         std::fwrite(data.data(), 1, data.size(), f_.get());
     }
     void flush() override { std::fflush(f_.get()); }
@@ -232,7 +236,7 @@ GroupKey parse_group_key(const std::string& s) {
 // "count" | "op:field" | "argmax:field:by" | "pct:field:q" | "pNN:field".
 // "count" is the group row count; "count:field" counts the rows where the
 // field is present.
-std::optional<AggSpec> parse_agg_spec(const std::string& t) {
+dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(const std::string& t) {
     auto c1 = t.find(':');
     std::string op = t.substr(0, c1);
     std::string field, by;
@@ -267,13 +271,14 @@ std::optional<AggSpec> parse_agg_spec(const std::string& t) {
     if (op.size() >= 2 && op[0] == 'p') {
         double denom = 1.0;
         for (std::size_t i = 1; i < op.size(); ++i) {
-            if (op[i] < '0' || op[i] > '9') return std::nullopt;
+            if (op[i] < '0' || op[i] > '9')
+                return dftracer::utils::dstd::nullopt;
             denom *= 10.0;
         }
         return AggSpec(AggOp::Pct, field, op + "_" + field, "",
                        std::stod(op.substr(1)) / denom);
     }
-    return std::nullopt;
+    return dftracer::utils::dstd::nullopt;
 }
 
 bool parse_specs(PyObject* args, std::vector<AggSpec>& out) {
@@ -281,7 +286,7 @@ bool parse_specs(PyObject* args, std::vector<AggSpec>& out) {
     for (Py_ssize_t i = 0; i < n; ++i) {
         const char* s = as_utf8(PyTuple_GetItem(args, i));
         if (!s) return false;
-        std::optional<AggSpec> spec = parse_agg_spec(s);
+        dftracer::utils::dstd::Optional<AggSpec> spec = parse_agg_spec(s);
         if (!spec) {
             PyErr_Format(PyExc_ValueError, "unknown agg spec: %s", s);
             return false;
@@ -325,7 +330,7 @@ bool parse_containment(PyObject* args, PyObject* kwds, bool with_group,
 // released.
 template <class Make, class T>
 bool run_on(PyObject* runtime_arg, Make&& make, T& out) {
-    std::shared_ptr<dftracer::utils::Runtime> rt =
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return false;
     return run_blocking([&] { out = rt->submit(make()).get(); });
@@ -356,7 +361,7 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
         index_dir = s;
     }
     std::vector<std::string> paths;
-    std::optional<std::string> dir;
+    dftracer::utils::dstd::Optional<std::string> dir;
     if (PyUnicode_Check(files)) {
         const char* path = PyUnicode_AsUTF8(files);
         if (!path) return -1;
@@ -837,7 +842,7 @@ PyObject* tv_typed(PyObject* self, PyObject* args, PyObject* kwds) {
         return nullptr;
     PyObject* d = PyDict_New();
     if (!d) return nullptr;
-    const std::pair<const char*, DataFrame*> parts[] = {
+    const dftracer::utils::dstd::Pair<const char*, DataFrame*> parts[] = {
         {"regular", &typed.regular},
         {"aggregated", &typed.aggregated},
         {"counters", &typed.counters}};
@@ -944,7 +949,8 @@ PyObject* tv_merge_partials(PyObject* self, PyObject* arg) {
     std::vector<std::string> owned;
     if (!py::parse_bytes_seq(arg, "merge_partials expects a sequence", owned))
         return nullptr;
-    std::vector<std::string_view> parts(owned.begin(), owned.end());
+    std::vector<dftracer::utils::dstd::StringView> parts(owned.begin(),
+                                                         owned.end());
     DataFrame out;
     if (!run_blocking([&] { out = tv_of(self).merge_partials(parts); }))
         return nullptr;
@@ -963,8 +969,9 @@ PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
     if (!py::parse_bytes_seq(arg, "materialize_partials expects a sequence",
                              owned))
         return nullptr;
-    std::vector<std::string_view> parts(owned.begin(), owned.end());
-    std::shared_ptr<dftracer::utils::Runtime> rt =
+    std::vector<dftracer::utils::dstd::StringView> parts(owned.begin(),
+                                                         owned.end());
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
     if (!run_blocking(
@@ -974,7 +981,7 @@ PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
 }
 
 PyObject* tv_reconstruct_if_cached(PyObject* self, PyObject*) {
-    std::optional<DataFrame> out;
+    dftracer::utils::dstd::Optional<DataFrame> out;
     if (!run_blocking([&] { out = tv_of(self).reconstruct_if_cached(); }))
         return nullptr;
     if (!out) Py_RETURN_NONE;
@@ -1027,7 +1034,7 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
         py::plugin_host_results(host);
     if (!results) return nullptr;
     Py_INCREF(host);
-    std::shared_ptr<PyObject> keep(host, [](PyObject* p) {
+    dftracer::utils::dstd::SharedPtr<PyObject> keep(host, [](PyObject* p) {
         PyGILState_STATE g = PyGILState_Ensure();
         Py_DECREF(p);
         PyGILState_Release(g);
@@ -1049,7 +1056,8 @@ PyObject* merge_flamegraph_partials_py(PyObject*, PyObject* arg) {
     if (!py::parse_bytes_seq(
             arg, "merge_flamegraph_partials expects a sequence", owned))
         return nullptr;
-    std::vector<std::string_view> parts(owned.begin(), owned.end());
+    std::vector<dftracer::utils::dstd::StringView> parts(owned.begin(),
+                                                         owned.end());
     return guarded([&] {
         return py::wrap_dataframe(View::merge_flamegraph_partials(parts));
     });

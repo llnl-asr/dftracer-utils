@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/server/http_parser.h>
 #include <dftracer/utils/server/http_request.h>
 
@@ -9,7 +10,7 @@ namespace dftracer::utils::server {
 
 namespace {
 
-bool icase_equal(std::string_view a, std::string_view b) {
+bool icase_equal(dstd::StringView a, dstd::StringView b) {
     return ::dftracer::utils::common::detail::iequals(a, b);
 }
 
@@ -33,15 +34,15 @@ int HttpRequest::parse(const char *buf, std::size_t len) {
     return ret;
 }
 
-std::string_view HttpRequest::header(std::string_view name) const {
+dstd::StringView HttpRequest::header(dstd::StringView name) const {
     for (const auto &[k, v] : headers) {
         if (icase_equal(k, name)) return v;
     }
     return {};
 }
 
-bool HttpRequest::has_header(std::string_view name,
-                             std::string_view value) const {
+bool HttpRequest::has_header(dstd::StringView name,
+                             dstd::StringView value) const {
     for (const auto &[k, v] : headers) {
         if (icase_equal(k, name) && icase_equal(v, value)) return true;
     }

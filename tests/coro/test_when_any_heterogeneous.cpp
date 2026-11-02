@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
@@ -144,7 +145,7 @@ TEST_CASE("when_any - Mixed void and non-void") {
 
                     bool correct_type = false;
                     if (result.index == 0) {
-                        correct_type = (result.get<0>() == std::monostate{});
+                        correct_type = (result.get<0>() == dstd::Monostate{});
                     } else {
                         correct_type = (result.get<1>() == 99);
                     }

@@ -6,6 +6,8 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/arrow/partition_writer.h>
 
@@ -36,7 +38,7 @@ struct PartitionConfig {
     Mode mode = Mode::None;
     std::vector<std::string> partition_columns;
     int num_buckets = 0;
-    std::vector<std::pair<std::string, std::optional<std::string>>> views;
+    std::vector<dstd::Pair<std::string, dstd::Optional<std::string>>> views;
 };
 
 using PredicateEvaluator =

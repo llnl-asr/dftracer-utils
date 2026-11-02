@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_FRAME_NATIVE_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <optional>
 #include <string>
@@ -20,7 +22,7 @@ std::string frame_to_native(const DataFrame& f);
 /// The frame `frame_to_native` wrote, or nullopt when `bytes` is another
 /// format or version, is truncated, or holds a column that does not decode.
 /// Never throws.
-std::optional<DataFrame> frame_from_native(std::string_view bytes) noexcept;
+dstd::Optional<DataFrame> frame_from_native(dstd::StringView bytes) noexcept;
 
 }  // namespace dftracer::utils::dataframe
 

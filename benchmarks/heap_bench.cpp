@@ -56,6 +56,9 @@
 // up. Instructions are counted over the whole run of a case, set-up included.
 
 #include <bench_counters.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -346,9 +349,10 @@ std::vector<Case> make_cases() {
     cases.push_back({"mixed", both([](auto policy, const Scale &scale) {
                          return mixed_case<decltype(policy)>(scale);
                      })});
-    for (auto [name, budget] : {std::pair<const char *, std::size_t>{
-                                    "mixed budget", 1024 * 1024 * MIB},
-                                {"mixed tight", 64 * MIB}}) {
+    for (auto [name, budget] :
+         {dftracer::utils::dstd::Pair<const char *, std::size_t>{
+              "mixed budget", 1024 * 1024 * MIB},
+          {"mixed tight", 64 * MIB}}) {
         cases.push_back({name, both([budget](auto policy, const Scale &scale) {
                              return mixed_budget_case<decltype(policy)>(scale,
                                                                         budget);
@@ -369,10 +373,11 @@ struct ChildResult {
     double rss_mib;
 };
 
-std::optional<ChildResult> run_child(const char *self, const std::string &name,
-                                     bool heap) {
+dftracer::utils::dstd::Optional<ChildResult> run_child(const char *self,
+                                                       const std::string &name,
+                                                       bool heap) {
     int fds[2];
-    if (::pipe(fds) != 0) return std::nullopt;
+    if (::pipe(fds) != 0) return dftracer::utils::dstd::nullopt;
     pid_t pid = ::fork();
     if (pid == 0) {
         ::close(fds[0]);
@@ -397,7 +402,7 @@ std::optional<ChildResult> run_child(const char *self, const std::string &name,
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
         std::sscanf(out.c_str(), "RESULT %lf %lf %lf", &result.ns,
                     &result.instr_per_op, &result.heap_bytes) != 3) {
-        return std::nullopt;
+        return dftracer::utils::dstd::nullopt;
     }
 #if defined(__APPLE__)
     double rss_bytes = static_cast<double>(usage.ru_maxrss);
@@ -606,17 +611,17 @@ int run_one(const std::string &name, const std::string &alloc) {
 
 int main(int argc, char **argv) {
     dftu::bench::init_counters();
-    std::string_view first = argc > 1 ? argv[1] : "";
+    dftracer::utils::dstd::StringView first = argc > 1 ? argv[1] : "";
     if (first == "--smoke" && argc == 2) return smoke();
     if (first == "--case" && argc == 5 &&
-        std::string_view(argv[3]) == "--alloc") {
+        dftracer::utils::dstd::StringView(argv[3]) == "--alloc") {
         return run_one(argv[2], argv[4]);
     }
     int rounds = DEFAULT_ROUNDS;
     const char *record = nullptr;
     const char *check = nullptr;
     for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
+        dftracer::utils::dstd::StringView arg = argv[i];
         bool has_value = i + 1 < argc;
         if (arg == "--rounds" && has_value) {
             rounds = std::atoi(argv[++i]);

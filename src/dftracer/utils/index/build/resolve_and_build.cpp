@@ -7,6 +7,8 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/aggregation_run.h>
@@ -143,8 +145,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
                                   files_needing_work_set.end());
 
         // One tier build per recorded schema, which decodes its files.
-        std::map<std::string, std::pair<std::vector<std::string>,
-                                        index::store::ExtensionMask>>
+        std::map<std::string, dstd::Pair<std::vector<std::string>,
+                                         index::store::ExtensionMask>>
             tier_by_schema;
         for (const auto& item : result.needs_bloom) {
             auto& [files, tier] = tier_by_schema[item.schema];
@@ -188,7 +190,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         std::string build_index_dir = input.index_dir;
         std::string build_index_path = result.index_path;
         std::string staged_final_path;
-        std::optional<common::ScratchSession> scratch;
+        dstd::Optional<common::ScratchSession> scratch;
         // should_stage is cheap for the common local destination and short
         // circuits before any mount probing; only a network destination reaches
         // the single-root and size checks below.
@@ -215,20 +217,20 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         }
         const bool staging = scratch && scratch->valid();
 
-        std::optional<AggRun> agg_run{
+        dstd::Optional<AggRun> agg_run{
             start_aggregation(build_index_path, input.aggregation_config)};
 
         auto batch_config =
             std::make_shared<index::build::IndexBuildBatchConfig>();
         batch_config->file_paths = files_needing_work;
         if (result.all_file_sizes.size() == result.all_files.size()) {
-            dstd::HashMap<std::string_view, std::uint64_t> size_of;
+            dstd::HashMap<dstd::StringView, std::uint64_t> size_of;
             size_of.reserve(result.all_files.size());
             for (std::size_t i = 0; i < result.all_files.size(); ++i)
                 size_of.emplace(result.all_files[i], result.all_file_sizes[i]);
             for (const auto& f : files_needing_work)
                 batch_config->file_costs.push_back(
-                    size_of[std::string_view(f)]);
+                    size_of[dstd::StringView(f)]);
         }
         batch_config->index_dir = build_index_dir;
         batch_config->checkpoint_size = input.checkpoint_size;
@@ -338,8 +340,8 @@ coro::CoroTask<void> ensure_index_fresh(std::string directory, std::string file,
 
 namespace {
 
-bool mentions_corruption(std::string_view text) {
-    return text.find("is corrupt") != std::string_view::npos;
+bool mentions_corruption(dstd::StringView text) {
+    return text.find("is corrupt") != dstd::StringView::npos;
 }
 
 [[noreturn]] void throw_corrupt(const std::set<std::string>& roots,

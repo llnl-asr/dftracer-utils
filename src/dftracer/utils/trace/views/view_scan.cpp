@@ -4,6 +4,10 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
@@ -59,13 +63,13 @@ const dftracer::utils::index::RecordSchema& plan_record_schema(
     // Registered record_schemas live until the process exits, so the pointer
     // never dangles.
     plan.record_schema =
-        std::shared_ptr<const ix::RecordSchema>(std::shared_ptr<void>(), found);
+        dstd::SharedPtr<const ix::RecordSchema>(dstd::SharedPtr<void>(), found);
     return *found;
 }
 
-void require_role(const ViewPlan& plan, std::string_view op, TraceRole role) {
+void require_role(const ViewPlan& plan, dstd::StringView op, TraceRole role) {
     const auto& record_schema = plan_record_schema(plan);
-    auto need = [&](const std::string& path, std::string_view name) {
+    auto need = [&](const std::string& path, dstd::StringView name) {
         if (path.empty())
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::InvalidArgument, op, " needs a ", name,
@@ -83,7 +87,7 @@ bool plan_by_path(const ViewPlan& plan) {
 
 namespace {
 
-std::optional<duql::Query> phase_query(const ViewPlan& plan) {
+dstd::Optional<duql::Query> phase_query(const ViewPlan& plan) {
     // Path-decoded records are all data events and carry no phase field.
     if (plan_by_path(plan)) {
         if (plan.phase == Phase::Events || plan.phase == Phase::Any)
@@ -117,8 +121,8 @@ std::optional<duql::Query> phase_query(const ViewPlan& plan) {
 
 }  // namespace
 
-std::optional<duql::Query> effective_query(const ViewPlan& plan) {
-    std::optional<duql::Query> q = phase_query(plan);
+dstd::Optional<duql::Query> effective_query(const ViewPlan& plan) {
+    dstd::Optional<duql::Query> q = phase_query(plan);
     if (!plan.all_records) {
         const std::string& data = plan_record_schema(plan).data;
         if (!data.empty() && data != dftracer::utils::index::NO_METADATA) {
@@ -158,12 +162,12 @@ std::vector<std::string> needed_paths(const ViewPlan& plan) {
     const bool rows = plan.group_by.empty() && plan.agg.empty();
     if (plan.auto_numeric_metrics || (rows && plan.select.empty())) return {};
     std::vector<std::string> out;
-    auto add = [&](std::string_view f) {
+    auto add = [&](dstd::StringView f) {
         if (!f.empty()) out.emplace_back(f);
     };
     for (const auto& sel : plan.select) add(select_source_field(sel));
     if (plan.query)
-        for (std::string_view f : plan.query->fields()) add(f);
+        for (dstd::StringView f : plan.query->fields()) add(f);
     for (const auto& gk : plan.group_by)
         if (gk.kind != GroupKey::Kind::Expr) add(gk.arg);
     for (const auto& a : plan.agg) {
@@ -283,7 +287,7 @@ ViewDefinition make_vdef(const ViewPlan& plan, bool for_aggregation) {
 
 ViewScannerInput make_scanner_input(const ScanUnit& u,
                                     const ViewDefinition& vdef,
-                                    const std::optional<duql::Query>& q) {
+                                    const dstd::Optional<duql::Query>& q) {
     ViewScannerInput sin;
     sin.with_file_path(u.file_path)
         .with_index_path(u.index_path)
@@ -383,7 +387,7 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                         .with_uncompressed_size(uc_sizes[fi])
                         .with_num_checkpoints(ckpt_counts[fi]);
                     const auto held =
-                        snapshots.find(std::string_view(index_path));
+                        snapshots.find(dstd::StringView(index_path));
                     if (held != snapshots.end())
                         pin.with_snapshot(&held->second);
                     // Path-decoded files prune time through their time field.
@@ -508,8 +512,9 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     const ViewPlan& plan, const ViewDefinition& vdef, std::size_t num_slots,
     std::uint64_t limit,
     const std::function<void(std::size_t,
-                             const std::vector<std::string_view>&)>& on_batch,
-    std::span<Fold* const> folds, dftracer::utils::dstd::StringIntern* intern) {
+                             const std::vector<dstd::StringView>&)>& on_batch,
+    dstd::Span<Fold* const> folds,
+    dftracer::utils::dstd::StringIntern* intern) {
     std::uint64_t skipped = 0;
     auto units = co_await gather_units(plan, vdef, skipped);
     // 0 means one worker per unit (max parallelism); otherwise cap the fan-out.
@@ -649,8 +654,8 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     // were attached, so it cannot be a requirement they declare - it has to
     // land here, as a coverage fact.
     if (skipped == 0) {
-        std::unordered_map<std::string_view,
-                           std::pair<std::size_t, std::size_t>>
+        std::unordered_map<dstd::StringView,
+                           dstd::Pair<std::size_t, std::size_t>>
             per_file;
         for (const auto& u : units) {
             auto& c = per_file[u.file_path];

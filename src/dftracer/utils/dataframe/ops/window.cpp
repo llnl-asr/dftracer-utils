@@ -3,6 +3,8 @@
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 
 #include <algorithm>
 #include <cmath>
@@ -22,7 +24,7 @@ using Kind = ColumnView::Kind;
 struct Layout {
     std::int64_t n = 0;
     std::vector<std::int64_t> idx;
-    std::vector<std::pair<std::int64_t, std::int64_t>> parts;
+    std::vector<dstd::Pair<std::int64_t, std::int64_t>> parts;
     const std::vector<ColumnView>* order_keys = nullptr;
 
     // Whether the rows at sorted positions `a` and `b` tie on the order keys.
@@ -394,7 +396,7 @@ Series sessionize(const Layout& lay, const Series& time,
     if (t.is_bytes())
         throw std::invalid_argument(
             "window: RATE/SESSIONIZE over a non-numeric time column");
-    std::optional<ColumnView> e;
+    dstd::Optional<ColumnView> e;
     if (end_column != nullptr) {
         e.emplace(view_of(*end_column, "SESSIONIZE"));
         if (e->is_bytes())
@@ -448,7 +450,7 @@ Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
             "window: RANGE frame needs exactly one numeric order column");
 
     const bool counting = w.func == WindowFunc::FrameCount;
-    std::optional<ColumnView> vv;
+    dstd::Optional<ColumnView> vv;
     if (!counting) {
         vv.emplace(view_of(column, "frame aggregate"));
         if ((w.func == WindowFunc::FrameSum ||

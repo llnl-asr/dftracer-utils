@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
 #include <cstddef>
@@ -85,7 +86,7 @@ class ChunkWriter {
 
    private:
     ChunkWriterConfig config_;
-    std::optional<GzipLineWriter> writer_;
+    dstd::Optional<GzipLineWriter> writer_;
     std::string pending_;
     bool open_ = false;
     std::size_t total_bytes_ = 0;

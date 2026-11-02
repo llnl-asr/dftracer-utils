@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_GOVERNOR_H
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/manager.h>
 
 #include <algorithm>
@@ -19,7 +21,7 @@ namespace dftracer::utils::dataframe {
 // returns true. Inactive (every call a no-op) when the pool table is full.
 class Governor final : public memory::Reclaimer {
    public:
-    explicit Governor(std::string_view name) {
+    explicit Governor(dstd::StringView name) {
         pool_ = memory::current_pool().child(name);
         if (!pool_) return;
         reservation_ = pool_->reserve(0);
@@ -111,7 +113,7 @@ class PluginGovernor {
     }
 
    private:
-    std::optional<Governor> gov_;
+    dstd::Optional<Governor> gov_;
 };
 
 }  // namespace dftracer::utils::dataframe

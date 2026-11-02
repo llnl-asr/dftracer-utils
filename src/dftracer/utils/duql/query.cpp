@@ -53,7 +53,7 @@ Query parse_or_throw(dstd::StringView input) {
 
 dstd::Optional<Query> try_parse(dstd::StringView input) {
     auto result = Query::from_string(input);
-    if (!result) return std::nullopt;
+    if (!result) return dstd::nullopt;
     return std::move(*result);
 }
 

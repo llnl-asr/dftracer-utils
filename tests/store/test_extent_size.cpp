@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/store/extent_size.h>
 #include <doctest/doctest.h>
 #include <unistd.h>
@@ -53,21 +54,24 @@ struct TempDir {
     ~TempDir() { (void)dftracer::utils::dstd::fs::remove_all(path); }
 };
 
-std::uint32_t chosen(std::size_t stripe_size,
-                     dstd::Optional<std::uint64_t> override_bytes =
-                         dstd::Optional<std::uint64_t>{}) {
+std::uint32_t chosen(
+    std::size_t stripe_size,
+    dftracer::utils::dstd::Optional<std::uint64_t> override_bytes =
+        dftracer::utils::dstd::Optional<std::uint64_t>{}) {
     auto result =
         store::engine::choose_extent_size(stripe_size, override_bytes);
     REQUIRE(result.has_value());
     return *result;
 }
 
-void check_override_error(dstd::Expected<std::uint32_t, dstd::Error> result) {
+void check_override_error(
+    dftracer::utils::dstd::Expected<std::uint32_t, dftracer::utils::dstd::Error>
+        result) {
     REQUIRE_FALSE(result.has_value());
-    CHECK(result.error().is(dstd::Condition::InvalidArgument));
+    CHECK(result.error().is(dftracer::utils::dstd::Condition::InvalidArgument));
     CHECK(result.error().message().find(dftracer::utils::common::constants::
                                             store::STORE_EXTENT_BYTES_ENV) !=
-          std::string_view::npos);
+          dftracer::utils::dstd::StringView::npos);
 }
 
 }  // namespace

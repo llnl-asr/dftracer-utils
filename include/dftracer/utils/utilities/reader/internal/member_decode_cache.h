@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/cache/eviction_policy.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/memory.h>
 
 #include <array>
 #include <atomic>
@@ -71,7 +72,7 @@ namespace dftracer::utils::utilities::reader::internal {
 /// only for the brief bookkeeping, never across a decode.
 class MemberDecodeCache {
    public:
-    using Bytes = std::shared_ptr<const DecodedMember>;
+    using Bytes = dstd::SharedPtr<const DecodedMember>;
     using Producer = std::function<coro::CoroTask<Bytes>()>;
 
     static constexpr std::size_t NSHARDS = 16;
@@ -106,7 +107,7 @@ class MemberDecodeCache {
         Shard& shard = shards_[h & (NSHARDS - 1)];
 
         requests_.fetch_add(1, std::memory_order_relaxed);
-        std::shared_ptr<Entry> entry;
+        dstd::SharedPtr<Entry> entry;
         {
             std::lock_guard<std::mutex> g(shard.mu);
             auto it = shard.map.find(key);
@@ -168,7 +169,7 @@ class MemberDecodeCache {
     };
     struct Shard {
         std::mutex mu;
-        ankerl::unordered_dense::map<MemberKey, std::shared_ptr<Entry>> map;
+        ankerl::unordered_dense::map<MemberKey, dstd::SharedPtr<Entry>> map;
         std::unique_ptr<dstd::cache::EvictionPolicy<MemberKey>> policy;
     };
 

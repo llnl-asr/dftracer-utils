@@ -3,6 +3,8 @@
 #include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_partition.h>
@@ -245,7 +247,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
 
     // The aggregation tier is built by every batch, the dataclass only
     // customizes it.
-    std::shared_ptr<
+    dftracer::utils::dstd::SharedPtr<
         dftracer::utils::index::schemas::dft::agg::AggregationConfig>
         agg_config_ptr;
     if (aggregation_config_obj && aggregation_config_obj != Py_None)
@@ -264,7 +266,8 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     const std::string final_root =
         dftracer::utils::index::store::internal::normalize_index_root(
             index_dir);
-    std::optional<dftracer::utils::common::ScratchSession> scratch;
+    dftracer::utils::dstd::Optional<dftracer::utils::common::ScratchSession>
+        scratch;
     std::string build_dir = index_dir;
     if (!dftracer::utils::common::unwrap(
             dftracer::utils::dstd::fs::exists(dftracer::utils::dstd::PathView(
@@ -292,11 +295,12 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     // GIL-holding deleter drops the ref safely after the build.
     if (progress_obj && progress_obj != Py_None) {
         Py_INCREF(progress_obj);
-        std::shared_ptr<PyObject> cb(progress_obj, [](PyObject *p) {
-            PyGILState_STATE g = PyGILState_Ensure();
-            Py_DECREF(p);
-            PyGILState_Release(g);
-        });
+        dftracer::utils::dstd::SharedPtr<PyObject> cb(
+            progress_obj, [](PyObject *p) {
+                PyGILState_STATE g = PyGILState_Ensure();
+                Py_DECREF(p);
+                PyGILState_Release(g);
+            });
         batch_config->progress = [cb](std::size_t done, std::size_t total) {
             PyGILState_STATE g = PyGILState_Ensure();
             PyObject *r = PyObject_CallFunction(cb.get(), "nn",
@@ -437,7 +441,8 @@ static PyMethodDef DistributionMethods[] = {
     {"enable_aggregation_deterministic_ids",
      DFTU_PYCFUNCTION(enable_aggregation_deterministic_ids_fn), METH_NOARGS,
      "enable_aggregation_deterministic_ids() -> None\n"
-     "Flip the global aggregation dstd::StringIntern into deterministic-id "
+     "Flip the global aggregation dftracer::utils::dstd::StringIntern into "
+     "deterministic-id "
      "mode "
      "so the same string maps to the same 32-bit id in every worker "
      "process. Call once at worker startup BEFORE any aggregation work."},

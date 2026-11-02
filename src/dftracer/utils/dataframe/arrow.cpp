@@ -15,6 +15,8 @@
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/arrow_bridge.h>
 #include <dftracer/utils/dataframe/internal/ipc.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 #include <string>
@@ -53,26 +55,26 @@ DataFrame DataFrame::from_arrow(const ArrowSchema* schema,
 }
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-std::optional<DataFrame> frame_from_ipc(std::string_view bytes) {
+dstd::Optional<DataFrame> frame_from_ipc(dstd::StringView bytes) {
     ArrowBuffer buf;
     ArrowBufferInit(&buf);
     if (ArrowBufferAppend(&buf, bytes.data(),
                           static_cast<std::int64_t>(bytes.size())) !=
         NANOARROW_OK) {
         ArrowBufferReset(&buf);
-        return std::nullopt;
+        return dstd::nullopt;
     }
     ArrowIpcInputStream in;
     if (ArrowIpcInputStreamInitBuffer(&in, &buf) != NANOARROW_OK) {
         ArrowBufferReset(&buf);
-        return std::nullopt;
+        return dstd::nullopt;
     }
     ArrowArrayStream stream;
     if (ArrowIpcArrayStreamReaderInit(&stream, &in, nullptr) != NANOARROW_OK) {
         in.release(&in);
-        return std::nullopt;
+        return dstd::nullopt;
     }
-    std::optional<DataFrame> out;
+    dstd::Optional<DataFrame> out;
     ArrowSchema schema;
     if (stream.get_schema(&stream, &schema) == 0) {
         ArrowArray array;

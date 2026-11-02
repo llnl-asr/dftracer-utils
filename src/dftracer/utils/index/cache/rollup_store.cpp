@@ -5,6 +5,10 @@
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_canonical
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -33,10 +37,10 @@ namespace {
 // rest_signature.
 // Part of every rollup key: a rollup persisted under another identity is never
 // matched (it is recomputed instead).
-constexpr std::string_view ROLLUP_FORMAT = "3";
+constexpr dstd::StringView ROLLUP_FORMAT = "3";
 
-constexpr std::string_view DESC_KEY = std::string_view("\x00", 1);
-constexpr std::string_view ROW_TAG = "\x01";
+constexpr dstd::StringView DESC_KEY = dstd::StringView("\x00", 1);
+constexpr dstd::StringView ROW_TAG = "\x01";
 // The size of an entry counts the signature that names it.
 constexpr std::uint64_t SIG_BYTES = 8;
 
@@ -56,7 +60,7 @@ std::string key_identity(const trace::views::GroupKey& gk) {
 
 void add_rest_fields(std::string& sig,
                      const trace::views::detail::ViewPlan& plan) {
-    auto add = [&](std::string_view s) {
+    auto add = [&](dstd::StringView s) {
         sig.append(s);
         sig.push_back('\0');
     };
@@ -130,7 +134,7 @@ void add_rest_fields(std::string& sig,
 
 }  // namespace
 
-std::shared_ptr<CacheStore> open_rollup_db(const std::string& path,
+dstd::SharedPtr<CacheStore> open_rollup_db(const std::string& path,
                                            CacheStore::Mode mode) {
     return CacheStore::open(path, mode);
 }
@@ -144,7 +148,7 @@ void persist_rollup(CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
     // tell a null key apart from an empty one.
     const dataframe::DataFrame finalized =
         dataframe::agg_finalize(state, std::vector<std::string>{});
-    std::vector<std::pair<std::string, std::string>> entries;
+    std::vector<dstd::Pair<std::string, std::string>> entries;
     entries.reserve(static_cast<std::size_t>(ng) + 1);
     std::uint64_t bytes = 0;
     std::string row_key;
@@ -191,7 +195,7 @@ bool rollup_exists(const CacheStore& db, std::uint64_t sig) {
 
 dataframe::AggStatePtr read_rollup(const CacheStore& db, std::uint64_t sig) {
     dataframe::AggStatePtr merged;
-    db.scan(sig, ROW_TAG, [&](std::string_view, std::string_view blob) {
+    db.scan(sig, ROW_TAG, [&](dstd::StringView, dstd::StringView blob) {
         auto one = dataframe::agg_deserialize(std::string(blob));
         if (!merged)
             merged = std::move(one);
@@ -221,7 +225,7 @@ std::uint64_t plan_signature(const trace::views::detail::ViewPlan& plan) {
     return dftracer::utils::dstd::hash::fnv1a_hash(sig);
 }
 
-std::optional<dataframe::DataFrame> find_subsuming_rollup(
+dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
     CacheStore& db, const trace::views::detail::ViewPlan& plan) {
     const std::uint64_t q_rest = rest_signature(plan);
 
@@ -234,7 +238,7 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
 
     db.scan_all(
         DESC_KEY, ROW_TAG,
-        [&](std::uint64_t sig, std::string_view k, std::string_view v) {
+        [&](std::uint64_t sig, dstd::StringView k, dstd::StringView v) {
             if (k != DESC_KEY) return true;
             if (v.size() < 20) return true;
             codec::BinaryReader br(v);
@@ -284,9 +288,9 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
             return true;
         });
 
-    if (!have_best) return std::nullopt;
+    if (!have_best) return dstd::nullopt;
     auto fine = read_rollup(db, best_sig);
-    if (!fine) return std::nullopt;
+    if (!fine) return dstd::nullopt;
     db.touch(best_sig);
 
     // Map the query's grouping onto the stored state's key columns. The state
@@ -310,7 +314,7 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
                 at = i;
                 break;
             }
-        if (at == best_gb.size()) return std::nullopt;  // not subsumed
+        if (at == best_gb.size()) return dstd::nullopt;  // not subsumed
         keep.push_back(static_cast<std::int32_t>(src_off + at));
     }
 

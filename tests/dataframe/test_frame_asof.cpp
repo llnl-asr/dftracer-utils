@@ -4,6 +4,9 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -28,13 +31,14 @@ using df::TypeId;
 
 namespace {
 
-using I = std::optional<std::int64_t>;
-using S = std::optional<std::string>;
-const I NI = std::nullopt;
-const S NS = std::nullopt;
+using I = dftracer::utils::dstd::Optional<std::int64_t>;
+using S = dftracer::utils::dstd::Optional<std::string>;
+const I NI = dftracer::utils::dstd::nullopt;
+const S NS = dftracer::utils::dstd::nullopt;
 
 template <class T>
-std::vector<std::uint8_t> validity(const std::vector<std::optional<T>>& v) {
+std::vector<std::uint8_t> validity(
+    const std::vector<dftracer::utils::dstd::Optional<T>>& v) {
     std::vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (v[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
@@ -91,13 +95,16 @@ Series f64s(const std::vector<double>& v) {
 }
 
 Series strs(const std::vector<S>& v) {
-    std::vector<std::string_view> views;
+    std::vector<dftracer::utils::dstd::StringView> views;
     views.reserve(v.size());
     for (const S& s : v)
-        views.emplace_back(s ? std::string_view(*s) : std::string_view());
+        views.emplace_back(s ? dftracer::utils::dstd::StringView(*s)
+                             : dftracer::utils::dstd::StringView());
     const std::vector<std::uint8_t> bits = validity(v);
-    return Series::strings(std::span<const std::string_view>(views),
-                           bits.data());
+    return Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
+            views),
+        bits.data());
 }
 
 template <class... Cols>
@@ -116,7 +123,7 @@ std::vector<I> i64_col(const DataFrame& d, const std::string& name) {
     std::vector<I> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dftracer::utils::dstd::nullopt);
         else
             out.emplace_back(c.data<std::int64_t>()[i]);
     }
@@ -130,7 +137,7 @@ std::vector<S> str_col(const DataFrame& d, const std::string& name) {
     std::vector<S> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dftracer::utils::dstd::nullopt);
         else
             out.emplace_back(std::string(c.string_at(i)));
     }
@@ -159,7 +166,8 @@ DataFrame ts_vals(const std::vector<I>& ts, const std::vector<S>& vals) {
 }
 
 DataFrame asof_g(const DataFrame& l, const DataFrame& r, AsofDirection dir,
-                 std::optional<double> tol = std::nullopt) {
+                 dftracer::utils::dstd::Optional<double> tol =
+                     dftracer::utils::dstd::nullopt) {
     return df::asof(l, r, "ts", {}, dir, tol);
 }
 
@@ -244,8 +252,8 @@ TEST_CASE("asof - by-key partitioning") {
     const DataFrame l = frame({"pid", "ts"}, i64s({1, 2}), i64s({10, 10}));
     const DataFrame r = frame({"pid", "ts", "val"}, i64s({1, 1, 2}),
                               i64s({5, 8, 3}), strs({"a1", "a2", "b1"}));
-    const DataFrame out =
-        df::asof(l, r, "ts", {"pid"}, AsofDirection::Backward, std::nullopt);
+    const DataFrame out = df::asof(l, r, "ts", {"pid"}, AsofDirection::Backward,
+                                   dftracer::utils::dstd::nullopt);
     CHECK(out.names == std::vector<std::string>{"pid", "ts", "val"});
     CHECK(i64_col(out, "pid") == std::vector<I>{1, 2});
     CHECK(str_col(out, "val") == std::vector<S>{"a2", "b1"});
@@ -255,8 +263,8 @@ TEST_CASE("asof - a null by key matches a null by key") {
     const DataFrame l = frame({"k", "ts"}, i64s({NI, 1}), i64s({10, 10}));
     const DataFrame r = frame({"k", "ts", "val"}, i64s({1, NI}), i64s({5, 7}),
                               strs({"a", "b"}));
-    const DataFrame out =
-        df::asof(l, r, "ts", {"k"}, AsofDirection::Backward, std::nullopt);
+    const DataFrame out = df::asof(l, r, "ts", {"k"}, AsofDirection::Backward,
+                                   dftracer::utils::dstd::nullopt);
     CHECK(i64_col(out, "k") == std::vector<I>{1, NI});
     CHECK(str_col(out, "val") == std::vector<S>{"a", "b"});
 }
@@ -396,12 +404,12 @@ TEST_CASE("asof - an exact ts match is taken") {
 TEST_CASE("asof - errors") {
     const DataFrame l = ts_frame({1});
     const DataFrame r = ts_vals({1}, {"a"});
-    CHECK_THROWS_AS(
-        df::asof(l, r, "nope", {}, AsofDirection::Backward, std::nullopt),
-        std::out_of_range);
-    CHECK_THROWS_AS(
-        df::asof(l, r, "ts", {"nope"}, AsofDirection::Backward, std::nullopt),
-        std::out_of_range);
+    CHECK_THROWS_AS(df::asof(l, r, "nope", {}, AsofDirection::Backward,
+                             dftracer::utils::dstd::nullopt),
+                    std::out_of_range);
+    CHECK_THROWS_AS(df::asof(l, r, "ts", {"nope"}, AsofDirection::Backward,
+                             dftracer::utils::dstd::nullopt),
+                    std::out_of_range);
     CHECK_THROWS_AS(
         asof_g(frame({"ts"}, f64s({1.0})), r, AsofDirection::Backward),
         std::invalid_argument);
@@ -412,7 +420,8 @@ TEST_CASE("asof - errors") {
     CHECK_THROWS_AS(
         df::asof(frame({"k", "ts"}, i64s({1}), i64s({1})),
                  frame({"k", "ts", "val"}, strs({"1"}), i64s({1}), strs({"a"})),
-                 "ts", {"k"}, AsofDirection::Backward, std::nullopt),
+                 "ts", {"k"}, AsofDirection::Backward,
+                 dftracer::utils::dstd::nullopt),
         std::invalid_argument);
 }
 
@@ -558,7 +567,7 @@ int cmp_null_last(const I& a, const I& b) {
 Rows random_rows(std::mt19937& rng, std::int64_t base) {
     std::uniform_int_distribution<int> percent(0, 99);
     auto pick = [&](std::int64_t lo, std::int64_t hi) -> I {
-        if (percent(rng) < 15) return std::nullopt;
+        if (percent(rng) < 15) return dftracer::utils::dstd::nullopt;
         return std::uniform_int_distribution<std::int64_t>(lo, hi)(rng);
     };
     const int n = std::uniform_int_distribution<int>(1, 10)(rng);
@@ -630,11 +639,12 @@ std::vector<std::size_t> left_order(const Rows& l, int by_mode) {
 // smallest time >= x, the first row among equals. Nearest: the closer of the
 // two, Backward on an equal distance. Tolerance applies to the pick.
 I asof_ref(const Rows& l, std::size_t i, const Rows& r, TypeId type,
-           int by_mode, AsofDirection dir, std::optional<std::int64_t> tol) {
+           int by_mode, AsofDirection dir,
+           dftracer::utils::dstd::Optional<std::int64_t> tol) {
     if (!l.t[i]) return NI;
     const double x = tval(type, *l.t[i]);
-    std::optional<std::size_t> back;
-    std::optional<std::size_t> fwd;
+    dftracer::utils::dstd::Optional<std::size_t> back;
+    dftracer::utils::dstd::Optional<std::size_t> fwd;
     for (std::size_t j = 0; j < r.size(); ++j) {
         if (!r.t[j] || !same_keys(l, i, r, j, by_mode)) continue;
         const double y = tval(type, *r.t[j]);
@@ -644,7 +654,7 @@ I asof_ref(const Rows& l, std::size_t i, const Rows& r, TypeId type,
     const auto dist = [&](std::size_t j) {
         return std::fabs(x - tval(type, *r.t[j]));
     };
-    std::optional<std::size_t> pick;
+    dftracer::utils::dstd::Optional<std::size_t> pick;
     if (dir == AsofDirection::Backward)
         pick = back;
     else if (dir == AsofDirection::Forward)
@@ -667,7 +677,8 @@ TEST_CASE("asof matches a nested-loop reference") {
     const AsofDirection DIRS[] = {AsofDirection::Backward,
                                   AsofDirection::Forward,
                                   AsofDirection::Nearest};
-    const std::optional<std::int64_t> TOLS[] = {std::nullopt, 0, 2};
+    const dftracer::utils::dstd::Optional<std::int64_t> TOLS[] = {
+        dftracer::utils::dstd::nullopt, 0, 2};
     for (TypeId type : TIME_TYPES)
         for (int by_mode = 0; by_mode < 4; ++by_mode)
             for (AsofDirection dir : DIRS)

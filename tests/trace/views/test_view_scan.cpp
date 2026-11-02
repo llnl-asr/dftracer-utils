@@ -3,7 +3,9 @@
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
@@ -158,7 +160,7 @@ TEST_SUITE("View") {
             // inside a chunk when it sees the cancel.
             struct CancelAfterFirstBatch : ExportSink {
                 std::atomic<std::uint64_t> events{0};
-                void write(std::string_view data) override {
+                void write(dstd::StringView data) override {
                     if (data == "\n") events.fetch_add(1);
                 }
             } sink;
@@ -536,13 +538,13 @@ TEST_SUITE("View") {
             v.select({"name", "dur", "dur.p99"}).collect().get();
         REQUIRE(sel.names ==
                 std::vector<std::string>{"name", "dur", "args.dur.p99"});
-        std::map<std::string, std::pair<double, double>> by_name;
+        std::map<std::string, dstd::Pair<double, double>> by_name;
         for (std::int64_t i = 0; i < sel.num_rows(); ++i)
             if (bstr(sel, i, "name") != "flat")
                 by_name[bstr(sel, i, "name")] = {bnum(sel, i, "dur"),
                                                  bnum(sel, i, "args.dur.p99")};
-        CHECK(by_name["hot"] == std::pair<double, double>{42, 7000});
-        CHECK(by_name["cold"] == std::pair<double, double>{20, 500});
+        CHECK(by_name["hot"] == dstd::Pair<double, double>{42, 7000});
+        CHECK(by_name["cold"] == dstd::Pair<double, double>{20, 500});
 
         dataframe::DataFrame grouped =
             v.group_by({GroupKey::field("counters.X.p50")})

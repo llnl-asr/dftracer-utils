@@ -7,6 +7,8 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -18,7 +20,7 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-using Row = std::optional<std::string>;
+using Row = dftracer::utils::dstd::Optional<std::string>;
 enum class Layout { Flat, Dictionary, View };
 
 const std::vector<Row> POOL = {
@@ -48,12 +50,12 @@ Morsel make_morsel(std::size_t n, std::size_t rot, std::size_t pool) {
 }
 
 Series flat_keys(const std::vector<Row>& keys) {
-    std::vector<std::string_view> v;
+    std::vector<dftracer::utils::dstd::StringView> v;
     std::vector<std::uint8_t> valid((keys.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < keys.size(); ++i) {
-        v.emplace_back(keys[i] ? std::string_view(*keys[i])
-                               : std::string_view());
+        v.emplace_back(keys[i] ? dftracer::utils::dstd::StringView(*keys[i])
+                               : dftracer::utils::dstd::StringView());
         if (keys[i])
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         else

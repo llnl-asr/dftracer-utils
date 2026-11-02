@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 
@@ -11,7 +13,7 @@ namespace dftracer::utils::index::schemas::dft::agg {
 namespace {
 struct Registry {
     std::mutex mutex;
-    dstd::StringViewMap<std::weak_ptr<AggInternTable>> tables;
+    dstd::StringViewMap<dstd::WeakPtr<AggInternTable>> tables;
 };
 
 Registry& registry() { return dstd::Singleton<Registry>::get(); }
@@ -30,7 +32,7 @@ AggInternPtr new_table() {
 }
 }  // namespace
 
-AggInternPtr intern_for_index(std::string_view index_path) {
+AggInternPtr intern_for_index(dstd::StringView index_path) {
     if (index_path.empty()) return make_intern_table();
 
     auto& r = registry();

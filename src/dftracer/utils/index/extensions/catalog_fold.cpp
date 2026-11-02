@@ -57,7 +57,7 @@ coro::CoroTask<bool> CatalogFold::finalize(
         const std::string logical =
             index::store::internal::get_logical_path(file);
         try {
-            auto at = snapshots.find(std::string_view(fs.index_path));
+            auto at = snapshots.find(dstd::StringView(fs.index_path));
             if (at == snapshots.end()) {
                 const auto opened = common::unwrap(index::Index::open(
                     index::store::internal::normalize_index_root(

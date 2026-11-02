@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -29,8 +30,8 @@ Series i64s(const std::vector<std::int64_t>& v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
-using I = std::optional<std::int64_t>;
-const I NI = std::nullopt;
+using I = dftracer::utils::dstd::Optional<std::int64_t>;
+const I NI = dftracer::utils::dstd::nullopt;
 
 std::vector<I> i64_col(const DataFrame& df, const std::string& name) {
     Series c = df.column(name);
@@ -39,7 +40,7 @@ std::vector<I> i64_col(const DataFrame& df, const std::string& name) {
     std::vector<I> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dftracer::utils::dstd::nullopt);
         else
             out.emplace_back(c.data<std::int64_t>()[i]);
     }
@@ -98,8 +99,9 @@ TEST_SUITE("frame ops") {
         df.columns.push_back(i64s({1, 1, 1}));
         df.columns.push_back(i64s({0, 10, 30}));
         df.columns.push_back(i64s({100, 110, 130}));
-        DataFrame locf = dfm::gap_fill(df, {"pid"}, "ts", 10, {"v"},
-                                       dfm::GapFillMode::Locf, std::nullopt);
+        DataFrame locf =
+            dfm::gap_fill(df, {"pid"}, "ts", 10, {"v"}, dfm::GapFillMode::Locf,
+                          dftracer::utils::dstd::nullopt);
         CHECK(i64_col(locf, "ts") == std::vector<I>{0, 10, 20, 30});
         CHECK(i64_col(locf, "v") == std::vector<I>{100, 110, 110, 130});
         DataFrame ranged =
@@ -122,16 +124,18 @@ TEST_SUITE("frame ops") {
         right.columns.push_back(i64s({1, 1, 2}));
         right.columns.push_back(i64s({5, 20, 50}));
         right.columns.push_back(i64s({50, 200, 500}));
-        DataFrame out = dfm::asof(left, right, "ts", {"pid"},
-                                  dfm::AsofDirection::Backward, std::nullopt);
+        DataFrame out =
+            dfm::asof(left, right, "ts", {"pid"}, dfm::AsofDirection::Backward,
+                      dftracer::utils::dstd::nullopt);
         CHECK(out.names == std::vector<std::string>{"pid", "ts", "x", "y"});
         CHECK(i64_col(out, "x") == std::vector<I>{1, 2, 3});
         CHECK(i64_col(out, "y") == std::vector<I>{50, 200, NI});
         DataFrame tight = dfm::asof(left, right, "ts", {"pid"},
                                     dfm::AsofDirection::Backward, 3);
         CHECK(i64_col(tight, "y") == std::vector<I>{NI, NI, NI});
-        DataFrame fwd = dfm::asof(left, right, "ts", {"pid"},
-                                  dfm::AsofDirection::Forward, std::nullopt);
+        DataFrame fwd =
+            dfm::asof(left, right, "ts", {"pid"}, dfm::AsofDirection::Forward,
+                      dftracer::utils::dstd::nullopt);
         CHECK(i64_col(fwd, "y") == std::vector<I>{200, NI, 500});
     }
 

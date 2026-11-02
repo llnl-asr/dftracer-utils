@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/sharded_mutex.h>
 #include <dftracer/utils/common/typedefs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 
@@ -109,7 +110,7 @@ class Scheduler final : public TaskOwner {
      * @param source Starting task
      * @param input Initial input
      */
-    void schedule(std::shared_ptr<Task> source, const std::any& input = {});
+    void schedule(dstd::SharedPtr<Task> source, const std::any& input = {});
 
     /**
      * Schedule execution starting from source task
@@ -118,7 +119,7 @@ class Scheduler final : public TaskOwner {
      */
     template <typename T, typename = std::enable_if_t<
                               !std::is_same_v<std::decay_t<T>, std::any>>>
-    void schedule(std::shared_ptr<Task> source, T&& input) {
+    void schedule(dstd::SharedPtr<Task> source, T&& input) {
         schedule(source, std::any(std::forward<T>(input)));
     }
 
@@ -126,12 +127,12 @@ class Scheduler final : public TaskOwner {
      * Called by executor when a task completes
      * @param task Completed task
      */
-    void on_task_completed(std::shared_ptr<Task> task);
+    void on_task_completed(dstd::SharedPtr<Task> task);
 
     /// Called by the executor, once per submitted task, when it ends: runs
     /// on_task_completed and then lets the destructor go on. The scheduler
     /// is not touched after its in-flight count reaches zero.
-    void finish_task(std::shared_ptr<Task> task) noexcept override;
+    void finish_task(dstd::SharedPtr<Task> task) noexcept override;
     bool is_stopping() const noexcept override {
         return shutdown_requested_.load();
     }
@@ -141,7 +142,7 @@ class Scheduler final : public TaskOwner {
      * @param task Task to submit
      * @param input Task input
      */
-    void submit_dynamic_task(std::shared_ptr<Task> task, const std::any& input);
+    void submit_dynamic_task(dstd::SharedPtr<Task> task, const std::any& input);
 
     /**
      * Set error handling policy
@@ -243,53 +244,53 @@ class Scheduler final : public TaskOwner {
     /**
      * Validate task graph types (called before scheduling)
      */
-    void validate_task_types(std::shared_ptr<Task> task);
+    void validate_task_types(dstd::SharedPtr<Task> task);
 
     /**
      * Prepare input for a task from its parents' outputs
      */
-    std::any prepare_input_for_task(std::shared_ptr<Task> task);
+    std::any prepare_input_for_task(dstd::SharedPtr<Task> task);
 
     /**
      * Submit a task to the executor queue
      */
-    void submit_task_to_executor(std::shared_ptr<Task> task,
+    void submit_task_to_executor(dstd::SharedPtr<Task> task,
                                  const std::any& input);
 
     /**
      * Count total tasks reachable from source
      */
-    std::size_t count_reachable_tasks(std::shared_ptr<Task> source);
+    std::size_t count_reachable_tasks(dstd::SharedPtr<Task> source);
 
     /**
      * DFS helper for counting tasks
      */
-    void count_tasks_dfs(std::shared_ptr<Task> task,
+    void count_tasks_dfs(dstd::SharedPtr<Task> task,
                          std::unordered_set<common::TaskIndex>& visited,
                          std::size_t& count);
 
     /**
      * Initialize pending counts for all tasks
      */
-    void initialize_pending_counts(std::shared_ptr<Task> source);
+    void initialize_pending_counts(dstd::SharedPtr<Task> source);
 
     /**
      * DFS helper for initializing pending counts
      */
     void initialize_pending_counts_dfs(
-        std::shared_ptr<Task> task,
+        dstd::SharedPtr<Task> task,
         std::unordered_set<common::TaskIndex>& visited);
 
     /**
      * Handle task error
      */
-    void handle_task_error(std::shared_ptr<Task> task);
+    void handle_task_error(dstd::SharedPtr<Task> task);
 
     /**
      * Skip a task and all its descendants (recursive)
      * Used in CONTINUE/CUSTOM error policy
      */
-    void skip_task_and_descendants(std::shared_ptr<Task> task);
+    void skip_task_and_descendants(dstd::SharedPtr<Task> task);
 };
 
 }  // namespace dftracer::utils

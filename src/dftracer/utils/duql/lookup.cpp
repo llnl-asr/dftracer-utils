@@ -75,7 +75,7 @@ dstd::Optional<Cell> cell_of(const df::Series& s, std::int64_t r) {
         case df::TypeId::LargeString:
             return Cell{dstd::String(s.string_at(r))};
         default:
-            return std::nullopt;
+            return dstd::nullopt;
     }
 }
 
@@ -115,9 +115,9 @@ bool append_json_key(dstd::String& out, dstd::StringView text) {
 // containers. A JSON cell's string is kept in `owned`.
 dstd::Optional<Ordered> ordered_of(const df::Series& s, std::int64_t r,
                                    dstd::Deque<dstd::String>& owned) {
-    if (s.is_null(r)) return std::nullopt;
+    if (s.is_null(r)) return dstd::nullopt;
     auto real = [](double d) -> dstd::Optional<Ordered> {
-        if (std::isnan(d)) return std::nullopt;
+        if (std::isnan(d)) return dstd::nullopt;
         return Ordered{d};
     };
     auto whole = [&](auto v) { return Ordered{static_cast<std::int64_t>(v)}; };
@@ -148,14 +148,14 @@ dstd::Optional<Ordered> ordered_of(const df::Series& s, std::int64_t r,
         case df::TypeId::LargeString:
             break;
         default:
-            return std::nullopt;
+            return dstd::nullopt;
     }
     if (!s.is_json()) return Ordered{s.string_at(r)};
     thread_local dftracer::utils::json::RecordParser parser;
     const dstd::StringView text = s.string_at(r);
     simdjson::dom::element el;
     if (parser.parse(text.data(), text.size()).get(el) != simdjson::SUCCESS)
-        return std::nullopt;
+        return dstd::nullopt;
     switch (el.type()) {
         case simdjson::dom::element_type::INT64:
             return Ordered{el.get_int64().value()};
@@ -169,7 +169,7 @@ dstd::Optional<Ordered> ordered_of(const df::Series& s, std::int64_t r,
         case simdjson::dom::element_type::BOOL:
             return Ordered{el.get_bool().value()};
         default:
-            return std::nullopt;
+            return dstd::nullopt;
     }
 }
 
@@ -278,7 +278,7 @@ dstd::Optional<std::size_t> column_of(const df::DataFrame& f,
             dstd::StringView(f.names[i]).starts_with("args.") &&
             dstd::StringView(f.names[i]).substr(5) == name)
             return i;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 dstd::SharedPtr<const LookupTable> make_lookup_table(

@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_spill.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 
@@ -32,7 +33,7 @@ struct AggAccum {
     dataframe::AggSpiller spiller;
 };
 
-inline std::string_view resolve_id(dftracer::utils::dstd::StringIntern& intern,
+inline dstd::StringView resolve_id(dftracer::utils::dstd::StringIntern& intern,
                                    dftu_str id) {
     if (id == DFTU_STR_NONE ||
         id >= dftracer::utils::dstd::StringIntern::FAST_CAPACITY)

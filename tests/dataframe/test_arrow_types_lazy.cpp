@@ -21,6 +21,7 @@
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <nanoarrow/nanoarrow.h>
 
@@ -34,8 +35,9 @@ DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
     return dftracer::utils::default_runtime().submit(std::move(t)).get();
 }
 
-std::optional<Morsel> run(
-    dftracer::utils::coro::CoroTask<std::optional<Morsel>> t) {
+dftracer::utils::dstd::Optional<Morsel> run(
+    dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Optional<Morsel>>
+        t) {
     return dftracer::utils::default_runtime().submit(std::move(t)).get();
 }
 
@@ -207,8 +209,9 @@ Series make_decimal128_scaled(const std::vector<std::int64_t>& unscaled,
 enum class SpillExpect { RoundTrips, Refuses };
 
 // Spills `col` alone in a one-column morsel and reads it back.
-std::optional<Morsel> spill_round_trip(const Series& col, spill::Dir& dir,
-                                       int id) {
+dftracer::utils::dstd::Optional<Morsel> spill_round_trip(const Series& col,
+                                                         spill::Dir& dir,
+                                                         int id) {
     std::vector<Series> cols;
     cols.push_back(col.share());
     const std::string path = dir.run_path(id);

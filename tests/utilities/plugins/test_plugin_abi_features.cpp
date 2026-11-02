@@ -14,6 +14,7 @@
 #include <memory>
 // After plugin.h/fold_adapter.h so nanoarrow is already set up for arrow_abi.h.
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/plugins/compose.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -390,7 +391,7 @@ TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
                                   make_event(intern, "f", "h"),
                                   make_event(intern, "f", "h")};
     ScanUnit unit{};
-    fold.step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+    fold.step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
     CHECK(g_col_state.dur_sum == 15);  // 3 events x dur 5, SIMD-reduced
 }
 
@@ -466,7 +467,7 @@ TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
         evs.push_back(make_event(fx.intern, "fhCCC", "hh2"));
         evs.push_back(make_event(fx.intern, "fhAAA", "hh3"));
         ScanUnit unit{};
-        FoldBatch batch{std::span<const FoldEvent>(evs), unit};
+        FoldBatch batch{dstd::Span<const FoldEvent>(evs), unit};
 
         fx.fold->step(batch);
         CHECK(fx.fold->take_pending() == nullptr);
@@ -487,7 +488,7 @@ TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
         evs.push_back(make_event(fx.intern, "fh2", "hhY"));
         evs.push_back(make_event(fx.intern, "fh3", "hhZ"));
         ScanUnit unit{};
-        FoldBatch batch{std::span<const FoldEvent>(evs), unit};
+        FoldBatch batch{dstd::Span<const FoldEvent>(evs), unit};
 
         fx.fold->step(batch);
         CHECK(g_count.seen == 2);

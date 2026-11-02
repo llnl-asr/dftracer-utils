@@ -8,6 +8,8 @@
 #include <dftracer/utils/dataframe/join.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <cstdint>
@@ -80,11 +82,11 @@ class GraceJoin {
     /// for the unmatched right rows of a right or outer join.
     void start(std::vector<Series> left_templates);
 
-    coro::CoroTask<std::optional<DataFrame>> next(std::int64_t max_rows);
+    coro::CoroTask<dstd::Optional<DataFrame>> next(std::int64_t max_rows);
 
    private:
     struct Part {
-        Part(std::uint64_t budget, const std::shared_ptr<spill::Dir>& dir)
+        Part(std::uint64_t budget, const dstd::SharedPtr<spill::Dir>& dir)
             : right(budget, dir), left(budget, dir) {}
         spill::Spool right;
         spill::Spool left;
@@ -98,13 +100,13 @@ class GraceJoin {
     };
     struct Current {
         std::unique_ptr<Part> part;
-        std::optional<HashJoin> join;
+        dstd::Optional<HashJoin> join;
         std::unique_ptr<Cursor> left;
-        std::optional<DataFrame> left_rows;  // the left morsel being probed
-        std::int64_t left_at = 0;            // its next row
-        std::int64_t left_base = 0;          // its first row in the partition
-        double expansion = 1.0;              // output rows per left row seen
-        std::uint64_t out_row_bytes = 0;     // bytes per output row seen
+        dstd::Optional<DataFrame> left_rows;  // the left morsel being probed
+        std::int64_t left_at = 0;             // its next row
+        std::int64_t left_base = 0;           // its first row in the partition
+        double expansion = 1.0;               // output rows per left row seen
+        std::uint64_t out_row_bytes = 0;      // bytes per output row seen
         // Block by block only.
         bool blocks = false;
         std::unique_ptr<Cursor> right;      // the right spool, read in blocks
@@ -123,15 +125,16 @@ class GraceJoin {
     coro::CoroTask<void> split_part(Work work, std::int64_t max_rows);
     coro::CoroTask<DataFrame> right_rows(Part& part, std::int64_t max_rows);
     DataFrame empty_right() const;
-    coro::CoroTask<std::optional<DataFrame>> right_block(std::int64_t max_rows);
+    coro::CoroTask<dstd::Optional<DataFrame>> right_block(
+        std::int64_t max_rows);
     coro::CoroTask<DataFrame> lookup_heads(std::vector<std::int64_t>& conflicts,
                                            std::int64_t max_rows);
     coro::CoroTask<void> assign_groups(std::int64_t max_rows);
-    coro::CoroTask<std::optional<DataFrame>> next_group(std::int64_t max_rows);
+    coro::CoroTask<dstd::Optional<DataFrame>> next_group(std::int64_t max_rows);
     coro::CoroTask<bool> next_block(std::int64_t max_rows);
     void start_deferred();
-    coro::CoroTask<std::optional<DataFrame>> probe_left(std::int64_t max_rows);
-    coro::CoroTask<std::optional<DataFrame>> deferred_left(
+    coro::CoroTask<dstd::Optional<DataFrame>> probe_left(std::int64_t max_rows);
+    coro::CoroTask<dstd::Optional<DataFrame>> deferred_left(
         std::int64_t max_rows);
 
     std::vector<std::string> left_names_;
@@ -144,11 +147,11 @@ class GraceJoin {
     std::string suffix_;
     std::uint64_t budget_;
     bool nulls_equal_ = false;
-    std::shared_ptr<spill::Dir> dir_;
+    dstd::SharedPtr<spill::Dir> dir_;
     Parts top_;
     std::deque<Work> queue_;
-    std::optional<Current> cur_;
-    std::optional<DataFrame> right_template_;
+    dstd::Optional<Current> cur_;
+    dstd::Optional<DataFrame> right_template_;
     std::vector<Series> left_templates_;
 };
 

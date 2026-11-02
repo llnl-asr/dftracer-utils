@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_SERVER_CANCEL_H
 #define DFTRACER_UTILS_SERVER_CANCEL_H
 
+#include <dftracer/utils/dstd/memory.h>
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -26,7 +28,7 @@ struct CancelState {
 class CancelToken {
    public:
     CancelToken() = default;
-    explicit CancelToken(std::shared_ptr<CancelState> state)
+    explicit CancelToken(dstd::SharedPtr<CancelState> state)
         : state_(std::move(state)) {}
 
     /// True if cancellation was requested, or (when a peer fd is set) the
@@ -39,7 +41,7 @@ class CancelToken {
     explicit operator bool() const { return static_cast<bool>(state_); }
 
    private:
-    std::shared_ptr<CancelState> state_;
+    dstd::SharedPtr<CancelState> state_;
 };
 
 /// Process-global map of request id -> cancel state. Requests register under a
@@ -59,7 +61,7 @@ class CancelRegistry {
 
    private:
     mutable std::mutex mu_;
-    std::unordered_map<std::string, std::shared_ptr<CancelState>> tokens_;
+    std::unordered_map<std::string, dstd::SharedPtr<CancelState>> tokens_;
 };
 
 }  // namespace dftracer::utils::server

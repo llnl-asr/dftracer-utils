@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
@@ -127,8 +128,8 @@ TEST_CASE("when_all - Mixed void and non-void") {
                 auto [mono, val] =
                     co_await when_all(std::move(f1), std::move(f2));
 
-                // mono is std::monostate -- verify it compiles and holds
-                static_assert(std::is_same_v<decltype(mono), std::monostate>);
+                // mono is dstd::Monostate -- verify it compiles and holds
+                static_assert(std::is_same_v<decltype(mono), dstd::Monostate>);
                 int_ptr->store(val, std::memory_order_relaxed);
                 co_return;
             });
@@ -153,24 +154,23 @@ TEST_CASE("when_all - All void types") {
 
     auto task = make_task(
         [ctr](CoroScope&) -> CoroTask<void> {
-            co_await coro::with_scope(
-                [ctr](coro::Scope& scope) -> CoroTask<void> {
-                    auto f1 = scope.spawn_future([ctr]() -> CoroTask<void> {
-                        ctr->fetch_add(1, std::memory_order_relaxed);
-                        co_return;
-                    });
-                    auto f2 = scope.spawn_future([ctr]() -> CoroTask<void> {
-                        ctr->fetch_add(1, std::memory_order_relaxed);
-                        co_return;
-                    });
-
-                    auto [m1, m2] =
-                        co_await when_all(std::move(f1), std::move(f2));
-
-                    static_assert(std::is_same_v<decltype(m1), std::monostate>);
-                    static_assert(std::is_same_v<decltype(m2), std::monostate>);
+            co_await coro::with_scope([ctr](coro::Scope& scope)
+                                          -> CoroTask<void> {
+                auto f1 = scope.spawn_future([ctr]() -> CoroTask<void> {
+                    ctr->fetch_add(1, std::memory_order_relaxed);
                     co_return;
                 });
+                auto f2 = scope.spawn_future([ctr]() -> CoroTask<void> {
+                    ctr->fetch_add(1, std::memory_order_relaxed);
+                    co_return;
+                });
+
+                auto [m1, m2] = co_await when_all(std::move(f1), std::move(f2));
+
+                static_assert(std::is_same_v<decltype(m1), dstd::Monostate>);
+                static_assert(std::is_same_v<decltype(m2), dstd::Monostate>);
+                co_return;
+            });
             co_return;
         },
         "WhenAllAllVoid");

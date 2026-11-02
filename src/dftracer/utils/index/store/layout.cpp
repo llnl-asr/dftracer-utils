@@ -2,13 +2,15 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/layout.h>
 
 #include <algorithm>
 
 namespace dftracer::utils::index::store::layout {
 
-std::string_view ext_name(Ext ext) {
+dstd::StringView ext_name(Ext ext) {
     switch (ext) {
         case Ext::Members:
             return "core.members";
@@ -46,7 +48,7 @@ std::uint32_t ext_version(Ext /*ext*/) {
 
 namespace {
 template <typename T>
-T read_be_checked(std::string_view bytes) {
+T read_be_checked(dstd::StringView bytes) {
     if (bytes.size() < sizeof(T))
         throw common::DFTUtilsException(common::ErrorCode::Parse,
                                         "index layout: truncated integer");
@@ -55,17 +57,17 @@ T read_be_checked(std::string_view bytes) {
 }
 }  // namespace
 
-std::uint16_t read_u16(std::string_view bytes) {
+std::uint16_t read_u16(dstd::StringView bytes) {
     return read_be_checked<std::uint16_t>(bytes);
 }
-std::uint32_t read_u32(std::string_view bytes) {
+std::uint32_t read_u32(dstd::StringView bytes) {
     return read_be_checked<std::uint32_t>(bytes);
 }
-std::uint64_t read_u64(std::string_view bytes) {
+std::uint64_t read_u64(dstd::StringView bytes) {
     return read_be_checked<std::uint64_t>(bytes);
 }
 
-std::string prefix_end(std::string_view prefix) {
+std::string prefix_end(dstd::StringView prefix) {
     std::string end(prefix);
     while (!end.empty()) {
         auto& last = end.back();
@@ -86,10 +88,10 @@ std::string encode_path_stat(const PathStat& stat) {
     return out;
 }
 
-std::optional<PathStat> decode_path_stat(std::string_view body) {
-    if (body.size() != 10) return std::nullopt;
+dstd::Optional<PathStat> decode_path_stat(dstd::StringView body) {
+    if (body.size() != 10) return dstd::nullopt;
     const auto type = static_cast<std::uint8_t>(body[0]);
-    if (type > static_cast<std::uint8_t>(PathType::Array)) return std::nullopt;
+    if (type > static_cast<std::uint8_t>(PathType::Array)) return dstd::nullopt;
     return PathStat{static_cast<PathType>(type),
                     static_cast<std::uint8_t>(body[1]),
                     read_u64(body.substr(2))};
@@ -102,7 +104,7 @@ namespace {
 constexpr std::uint32_t OVER_CAP = 0xFFFFFFFFU;
 
 void append_list(std::string& out,
-                 const std::optional<std::vector<std::string>>& list) {
+                 const dstd::Optional<std::vector<std::string>>& list) {
     if (!list) {
         dstd::append_u32_be(out, OVER_CAP);
         return;
@@ -114,8 +116,8 @@ void append_list(std::string& out,
     }
 }
 
-bool read_list(std::string_view& in,
-               std::optional<std::vector<std::string>>& list) {
+bool read_list(dstd::StringView& in,
+               dstd::Optional<std::vector<std::string>>& list) {
     if (in.size() < 4) return false;
     const std::uint32_t n = read_u32(in);
     in.remove_prefix(4);
@@ -145,13 +147,13 @@ std::string encode_chunk_metadata(const ChunkMetadata& metadata) {
     return body;
 }
 
-std::optional<ChunkMetadata> decode_chunk_metadata(std::string_view body) {
-    if (body.size() < 8) return std::nullopt;
+dstd::Optional<ChunkMetadata> decode_chunk_metadata(dstd::StringView body) {
+    if (body.size() < 8) return dstd::nullopt;
     ChunkMetadata m;
     m.records = read_u64(body);
     body.remove_prefix(8);
     if (!read_list(body, m.names) || !read_list(body, m.paths) || !body.empty())
-        return std::nullopt;
+        return dstd::nullopt;
     return m;
 }
 
@@ -159,18 +161,18 @@ std::optional<ChunkMetadata> decode_chunk_metadata(std::string_view body) {
 
 namespace dftracer::utils::index::store {
 
-std::string_view extension_name(IndexExtension ext) {
+dstd::StringView extension_name(IndexExtension ext) {
     return layout::ext_name(ext);
 }
 
-std::optional<IndexExtension> parse_extension(std::string_view name) {
+dstd::Optional<IndexExtension> parse_extension(dstd::StringView name) {
     for (auto ext : ALL_EXTENSIONS)
         if (layout::ext_name(ext) == name) return ext;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
-void add_metadata_value(std::optional<std::vector<std::string>>& list,
-                        std::string_view value) {
+void add_metadata_value(dstd::Optional<std::vector<std::string>>& list,
+                        dstd::StringView value) {
     if (!list) return;
     auto it = std::lower_bound(list->begin(), list->end(), value);
     if (it != list->end() && *it == value) return;

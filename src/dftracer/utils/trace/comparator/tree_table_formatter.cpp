@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/comparator/tree_table_formatter.h>
 
@@ -215,8 +216,8 @@ struct NodeStats {
     int improvement = 0;  // subtrees with at least one MEDIUM+ improvement
 };
 
-static std::pair<bool, bool> gather_node_stats_impl(const NodeResult& node,
-                                                    NodeStats& stats) {
+static dstd::Pair<bool, bool> gather_node_stats_impl(const NodeResult& node,
+                                                     NodeStats& stats) {
     stats.total++;
 
     bool has_reg = false, has_imp = false;

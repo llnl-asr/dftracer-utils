@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/scalar.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 #include <string_view>
@@ -233,9 +235,9 @@ Series Series::argsort(bool descending) const {
     return Series{dftu_series_argsort(handle_, descending ? 1 : 0)};
 }
 Series Series::take(const std::vector<std::int64_t>& indices) const {
-    return take(std::span<const std::int64_t>(indices));
+    return take(dstd::Span<const std::int64_t>(indices));
 }
-Series Series::take(std::span<const std::int64_t> indices) const {
+Series Series::take(dstd::Span<const std::int64_t> indices) const {
     return Series{dftu_series_take(handle_, indices.data(),
                                    static_cast<std::int64_t>(indices.size()))};
 }
@@ -249,31 +251,31 @@ Series Series::filter(const Series& mask) const {
     return Series{dftu_series_filter(handle_, mask.handle_)};
 }
 
-Series Series::str_eq(std::string_view rhs) const {
+Series Series::str_eq(dstd::StringView rhs) const {
     return Series{dftu_series_str_eq(handle_, rhs.data(),
                                      static_cast<std::int32_t>(rhs.size()))};
 }
-Series Series::str_contains(std::string_view needle) const {
+Series Series::str_contains(dstd::StringView needle) const {
     return Series{dftu_series_str_contains(
         handle_, needle.data(), static_cast<std::int32_t>(needle.size()))};
 }
-Series Series::str_starts_with(std::string_view prefix) const {
+Series Series::str_starts_with(dstd::StringView prefix) const {
     return Series{dftu_series_str_starts_with(
         handle_, prefix.data(), static_cast<std::int32_t>(prefix.size()))};
 }
-Series Series::str_ends_with(std::string_view suffix) const {
+Series Series::str_ends_with(dstd::StringView suffix) const {
     return Series{dftu_series_str_ends_with(
         handle_, suffix.data(), static_cast<std::int32_t>(suffix.size()))};
 }
-Series Series::str_matches(std::string_view pattern) const {
+Series Series::str_matches(dstd::StringView pattern) const {
     return Series{dftu_series_str_matches(
         handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()))};
 }
-Series Series::str_search(std::string_view pattern) const {
+Series Series::str_search(dstd::StringView pattern) const {
     return Series{dftu_series_str_search(
         handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()))};
 }
-Series Series::str_like(std::string_view pattern) const {
+Series Series::str_like(dstd::StringView pattern) const {
     return Series{dftu_series_str_like(
         handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()))};
 }
@@ -283,7 +285,7 @@ Series Series::str_len_bytes() const {
 Series Series::str_len_chars() const {
     return Series{dftu_series_str_len_chars(handle_)};
 }
-Series Series::str_find(std::string_view needle) const {
+Series Series::str_find(dstd::StringView needle) const {
     return Series{dftu_series_str_find(
         handle_, needle.data(), static_cast<std::int32_t>(needle.size()))};
 }
@@ -309,13 +311,13 @@ Series Series::str_lstrip() const {
 Series Series::str_rstrip() const {
     return Series{dftu_series_str_rstrip(handle_)};
 }
-Series Series::str_replace(std::string_view pat, std::string_view repl) const {
+Series Series::str_replace(dstd::StringView pat, dstd::StringView repl) const {
     return Series{dftu_series_str_replace(
         handle_, pat.data(), static_cast<std::int32_t>(pat.size()), repl.data(),
         static_cast<std::int32_t>(repl.size()))};
 }
-Series Series::str_replace_all(std::string_view pat,
-                               std::string_view repl) const {
+Series Series::str_replace_all(dstd::StringView pat,
+                               dstd::StringView repl) const {
     return Series{dftu_series_str_replace_all(
         handle_, pat.data(), static_cast<std::int32_t>(pat.size()), repl.data(),
         static_cast<std::int32_t>(repl.size()))};
@@ -332,17 +334,17 @@ Series Series::str_pad_end(std::int64_t width, char fill) const {
 Series Series::str_zfill(std::int64_t width) const {
     return Series{dftu_series_str_zfill(handle_, width)};
 }
-Series Series::str_split(std::string_view sep) const {
+Series Series::str_split(dstd::StringView sep) const {
     return Series{dftu_series_str_split(handle_, sep.data(),
                                         static_cast<std::int32_t>(sep.size()))};
 }
-Series Series::str_extract(std::string_view pattern, std::int64_t group) const {
+Series Series::str_extract(dstd::StringView pattern, std::int64_t group) const {
     return Series{dftu_series_str_extract(
         handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()),
         group)};
 }
-Series Series::str_regex_replace(std::string_view pattern,
-                                 std::string_view to) const {
+Series Series::str_regex_replace(dstd::StringView pattern,
+                                 dstd::StringView to) const {
     return Series{dftu_series_str_regex_replace(
         handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()),
         to.data(), static_cast<std::int32_t>(to.size()))};
@@ -354,11 +356,11 @@ Series Series::list_get(std::int64_t index) const {
     return Series{dftu_series_list_get(handle_, index)};
 }
 namespace {
-std::int32_t sv_len(std::string_view s) {
+std::int32_t sv_len(dstd::StringView s) {
     return static_cast<std::int32_t>(s.size());
 }
 }  // namespace
-Series Series::list_join(std::string_view sep) const {
+Series Series::list_join(dstd::StringView sep) const {
     return Series{dftu_series_list_join(handle_, sep.data(), sv_len(sep))};
 }
 Series Series::str_case(std::int32_t op) const {
@@ -367,18 +369,18 @@ Series Series::str_case(std::int32_t op) const {
 Series Series::str_is(std::int32_t cls) const {
     return Series{dftu_series_str_is(handle_, cls)};
 }
-Series Series::str_count(std::string_view pat) const {
+Series Series::str_count(dstd::StringView pat) const {
     return Series{dftu_series_str_count(handle_, pat.data(), sv_len(pat))};
 }
-Series Series::str_rfind(std::string_view needle) const {
+Series Series::str_rfind(dstd::StringView needle) const {
     return Series{
         dftu_series_str_rfind(handle_, needle.data(), sv_len(needle))};
 }
-Series Series::str_remove_prefix(std::string_view prefix) const {
+Series Series::str_remove_prefix(dstd::StringView prefix) const {
     return Series{
         dftu_series_str_remove_prefix(handle_, prefix.data(), sv_len(prefix))};
 }
-Series Series::str_remove_suffix(std::string_view suffix) const {
+Series Series::str_remove_suffix(dstd::StringView suffix) const {
     return Series{
         dftu_series_str_remove_suffix(handle_, suffix.data(), sv_len(suffix))};
 }
@@ -391,11 +393,11 @@ Series Series::str_center(std::int64_t width, char fill) const {
 Series Series::str_cat(const Series& other) const {
     return Series{dftu_series_str_cat(handle_, other.handle_)};
 }
-Series Series::str_findall(std::string_view pattern) const {
+Series Series::str_findall(dstd::StringView pattern) const {
     return Series{
         dftu_series_str_findall(handle_, pattern.data(), sv_len(pattern))};
 }
-Series Series::str_partition(std::string_view sep, bool from_right) const {
+Series Series::str_partition(dstd::StringView sep, bool from_right) const {
     return Series{dftu_series_str_partition(handle_, sep.data(), sv_len(sep),
                                             from_right ? 1 : 0)};
 }
@@ -414,11 +416,11 @@ Series Series::dt_part(std::int32_t part, std::int32_t unit) const {
 Series Series::dt_round(std::int64_t every, std::int32_t mode) const {
     return Series{dftu_series_dt_round(handle_, every, mode)};
 }
-Series Series::dt_format(std::string_view fmt, TimeUnit unit) const {
+Series Series::dt_format(dstd::StringView fmt, TimeUnit unit) const {
     return Series{dftu_series_dt_format(handle_, fmt.data(), sv_len(fmt),
                                         static_cast<std::int32_t>(unit))};
 }
-Series Series::with_timezone(std::string_view tz) const {
+Series Series::with_timezone(dstd::StringView tz) const {
     return Series{dftu_series_with_timezone(
         handle_, tz.data(), static_cast<std::int32_t>(tz.size()))};
 }

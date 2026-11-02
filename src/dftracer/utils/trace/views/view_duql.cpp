@@ -13,6 +13,9 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -61,7 +64,7 @@ namespace {
 // The plugin functions the op registry holds now.
 duql::PluginCatalog registry_plugins() {
     duql::PluginCatalog out;
-    out.kind = [](std::string_view name) {
+    out.kind = [](dstd::StringView name) {
         const dftu_op_desc* op = dftu_op_find(std::string(name).c_str());
         if (!op) return duql::PluginKind::None;
         const dftu_op_kind k = dftu_op_kind_of(op->sig);
@@ -77,9 +80,9 @@ duql::PluginCatalog registry_plugins() {
         return duql::PluginKind::Other;
     };
     for (std::uint32_t k = 0; k < dftu_op_count(); ++k) {
-        const std::string_view op = dftu_op_at(k)->name;
+        const dstd::StringView op = dftu_op_at(k)->name;
         const auto dot = op.find('.');
-        if (dot == std::string_view::npos || op.starts_with("dftu.")) continue;
+        if (dot == dstd::StringView::npos || op.starts_with("dftu.")) continue;
         dstd::String ns(op.substr(0, dot));
         if (std::find(out.namespaces.begin(), out.namespaces.end(), ns) ==
             out.namespaces.end())
@@ -92,7 +95,7 @@ duql::PluginCatalog registry_plugins() {
 namespace df = dftracer::utils::dataframe;
 namespace ix = dftracer::utils::index;
 
-[[noreturn]] void refuse(std::string_view why) {
+[[noreturn]] void refuse(dstd::StringView why) {
     throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
                                          "View::duql ", why);
 }
@@ -187,7 +190,7 @@ class FinishSource final : public df::Source {
               projection_(std::move(projection)),
               declared_(std::move(declared)) {}
 
-        coro::CoroTask<std::optional<df::Morsel>> next(
+        coro::CoroTask<dstd::Optional<df::Morsel>> next(
             std::int64_t max_rows) override {
             if (!rows_) {
                 // GCC 12 destroys a temporary built inside co_await twice.
@@ -214,7 +217,7 @@ class FinishSource final : public df::Source {
         std::vector<std::string> projection_;
         std::vector<std::string> declared_;
         std::unique_ptr<df::Cursor> rows_;
-        std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_;
+        dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_;
         std::vector<std::uint32_t> ids_;
     };
 
@@ -257,7 +260,7 @@ class MapSource final : public df::Source {
               projection_(std::move(projection)),
               declared_(std::move(declared)) {}
 
-        coro::CoroTask<std::optional<df::Morsel>> next(
+        coro::CoroTask<dstd::Optional<df::Morsel>> next(
             std::int64_t max_rows) override {
             for (;;) {
                 if (rows_) {
@@ -269,7 +272,7 @@ class MapSource final : public df::Source {
                     }
                 }
                 auto batch = co_await batches_.next();
-                if (!batch) co_return std::nullopt;
+                if (!batch) co_return dstd::nullopt;
                 df::DataFrame f = map_(std::move(*batch));
                 if (!projection_.empty()) f = f.select(projection_);
                 ids_ = frame_ids(f, declared_, *intern_);
@@ -278,7 +281,7 @@ class MapSource final : public df::Source {
         }
 
        private:
-        std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+        dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
             std::make_shared<dftracer::utils::dstd::StringIntern>();
         std::vector<std::uint32_t> ids_;
         coro::AsyncGenerator<df::DataFrame> batches_;
@@ -296,7 +299,7 @@ class MapSource final : public df::Source {
 // `f` with the columns `in` names, in order; one its rows lack is null.
 df::DataFrame aligned(
     df::DataFrame f,
-    const std::vector<std::pair<std::string, df::TypeId>>& in) {
+    const std::vector<dstd::Pair<std::string, df::TypeId>>& in) {
     bool same = f.names.size() == in.size();
     for (std::size_t i = 0; same && i < in.size(); ++i)
         same = f.names[i] == in[i].first;
@@ -333,7 +336,7 @@ df::DataFrame aligned(
 class FoldSource final : public df::Source {
    public:
     FoldSource(df::LazyFrame inner, df::Schema schema,
-               std::vector<std::pair<std::string, df::TypeId>> in,
+               std::vector<dstd::Pair<std::string, df::TypeId>> in,
                std::vector<df::DataType> key_types,
                std::vector<duql::FoldAgg> aggs)
         : inner_(std::move(inner)),
@@ -362,7 +365,7 @@ class FoldSource final : public df::Source {
             for (const auto& f : src.schema_.fields) names_.push_back(f.name);
         }
 
-        coro::CoroTask<std::optional<df::Morsel>> next(
+        coro::CoroTask<dstd::Optional<df::Morsel>> next(
             std::int64_t max_rows) override {
             if (!rows_) {
                 for (;;) {
@@ -380,7 +383,7 @@ class FoldSource final : public df::Source {
        private:
         coro::AsyncGenerator<df::DataFrame> batches_;
         duql::GroupFold fold_;
-        std::vector<std::pair<std::string, df::TypeId>> in_;
+        std::vector<dstd::Pair<std::string, df::TypeId>> in_;
         std::vector<std::string> names_;
         std::vector<std::string> projection_;
         std::unique_ptr<df::Cursor> rows_;
@@ -388,7 +391,7 @@ class FoldSource final : public df::Source {
 
     df::LazyFrame inner_;
     df::Schema schema_;
-    std::vector<std::pair<std::string, df::TypeId>> in_;
+    std::vector<dstd::Pair<std::string, df::TypeId>> in_;
     std::vector<df::DataType> key_types_;
     std::vector<duql::FoldAgg> aggs_;
 };
@@ -455,10 +458,10 @@ std::string agg_name(duql::AggFn fn) {
     return {};
 }
 
-std::optional<AggOp> trace_op(const duql::PipelineAgg& a) {
+dstd::Optional<AggOp> trace_op(const duql::PipelineAgg& a) {
     switch (a.fn) {
         case duql::AggFn::Count:
-            if (a.arg) return std::nullopt;
+            if (a.arg) return dstd::nullopt;
             return AggOp::Count;
         case duql::AggFn::Sum:
             return AggOp::Sum;
@@ -473,7 +476,7 @@ std::optional<AggOp> trace_op(const duql::PipelineAgg& a) {
         case duql::AggFn::Std:
             return AggOp::Std;
         case duql::AggFn::Quantile:
-            if (a.merged || !(a.q > 0 && a.q < 1)) return std::nullopt;
+            if (a.merged || !(a.q > 0 && a.q < 1)) return dstd::nullopt;
             return AggOp::Pct;
         case duql::AggFn::Histogram:
             return AggOp::Hist;
@@ -495,9 +498,9 @@ std::optional<AggOp> trace_op(const duql::PipelineAgg& a) {
         case duql::AggFn::Sketch:
         case duql::AggFn::Merge:
         case duql::AggFn::Plugin:
-            return std::nullopt;
+            return dstd::nullopt;
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // The field a term reads when it is nothing but a whole record field.
@@ -527,7 +530,7 @@ const duql::TField* array_field(const duql::Term& t) {
 }
 
 // `a[0].b` as the dotted path `a.0.b` the index catalog records.
-std::string dotted(std::string_view path) {
+std::string dotted(dstd::StringView path) {
     std::string out;
     for (const char c : path) {
         if (c == '[')
@@ -580,10 +583,10 @@ Reads referenced_fields(
     bool carried) {
     Reads out;
     std::vector<std::string> defined;
-    auto known = [](const std::vector<std::string>& v, std::string_view n) {
+    auto known = [](const std::vector<std::string>& v, dstd::StringView n) {
         return std::find(v.begin(), v.end(), n) != v.end();
     };
-    auto field = [&](std::string_view base, bool array) {
+    auto field = [&](dstd::StringView base, bool array) {
         if (known(defined, base) ||
             known(defined, base.substr(0, base.find_first_of(".["))))
             return;
@@ -753,7 +756,7 @@ df::DataType letter_type(char c) {
     }
 }
 
-bool digits(std::string_view s) {
+bool digits(dstd::StringView s) {
     return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) {
         return c >= '0' && c <= '9';
     });
@@ -764,7 +767,7 @@ const std::string JSON_LIST = detail::list_token("j", "");
 
 // The select token and column type that read the array field `path` as a
 // List, typed from the element paths the index observed.
-std::pair<std::string, df::DataType> list_type(
+dstd::Pair<std::string, df::DataType> list_type(
     const std::vector<SchemaLeaf>& tree, const std::string& path,
     bool args_fallback) {
     char scalar = 0;
@@ -775,21 +778,21 @@ std::pair<std::string, df::DataType> list_type(
     std::vector<std::string> prefixes = {dotted(path) + "."};
     if (args_fallback) prefixes.push_back("args." + dotted(path) + ".");
     for (const auto& leaf : tree) {
-        std::string_view rest;
+        dstd::StringView rest;
         for (const auto& p : prefixes)
             if (leaf.path.size() > p.size() && leaf.path.starts_with(p)) {
-                rest = std::string_view(leaf.path).substr(p.size());
+                rest = dstd::StringView(leaf.path).substr(p.size());
                 break;
             }
         const std::size_t dot = rest.find('.');
         if (!digits(rest.substr(0, dot))) continue;
         const char c = type_letter(leaf.type);
-        if (dot == std::string_view::npos) {
+        if (dot == dstd::StringView::npos) {
             scalars = true;
             scalar = join_letters(scalar, c);
             continue;
         }
-        const std::string_view f = rest.substr(dot + 1);
+        const dstd::StringView f = rest.substr(dot + 1);
         const std::size_t end = f.find('.');
         const std::string name(f.substr(0, end));
         if (digits(name)) {
@@ -798,7 +801,7 @@ std::pair<std::string, df::DataType> list_type(
         }
         objects = true;
         char& slot = fields[name];
-        slot = end == std::string_view::npos ? join_letters(slot, c) : 'j';
+        slot = end == dstd::StringView::npos ? join_letters(slot, c) : 'j';
     }
     if (objects && !scalars && !nested) {
         std::string spec = "{";
@@ -834,8 +837,8 @@ std::vector<std::string> scan_reads(const std::vector<SchemaLeaf>& tree,
     for (const auto& leaf : tree)
         for (const auto& p : prefixes)
             if (leaf.path.size() > p.size() && leaf.path.starts_with(p)) {
-                const std::string_view rest =
-                    std::string_view(leaf.path).substr(p.size());
+                const dstd::StringView rest =
+                    dstd::StringView(leaf.path).substr(p.size());
                 if (digits(rest.substr(0, rest.find('.'))))
                     elements = true;
                 else
@@ -886,7 +889,7 @@ bool is_count(duql::AggFn fn) {
            fn == duql::AggFn::CountDistinct;
 }
 
-std::uint64_t env_count(std::string_view name, std::uint64_t fallback) {
+std::uint64_t env_count(dstd::StringView name, std::uint64_t fallback) {
     return common::Env::get<std::uint64_t>(name).value_or(fallback);
 }
 
@@ -900,7 +903,7 @@ constexpr std::uint64_t LOOKUP_MAX_BYTES = std::uint64_t{256} << 20;
 // `resolved.` columns are gone; an arrow into a row set of the source reads
 // the same value.
 void reject_resolved(const duql::Program& p) {
-    auto check = [](std::string_view path) {
+    auto check = [](dstd::StringView path) {
         if (!path.starts_with("resolved.")) return;
         refuse("'" + std::string(path) +
                "': 'resolved.' columns are removed; write an arrow into a "
@@ -1050,9 +1053,9 @@ void each_pushed(
     if (p.filter) walk(*p.filter);
 }
 
-std::optional<duql::LiteralNode> literal_of(const df::Series& s,
-                                            std::int64_t r) {
-    if (s.is_null(r)) return std::nullopt;
+dstd::Optional<duql::LiteralNode> literal_of(const df::Series& s,
+                                             std::int64_t r) {
+    if (s.is_null(r)) return dstd::nullopt;
     const df::TypeId t = s.type();
     if (t == df::TypeId::Uint64)
         return duql::LiteralNode{s.data<std::uint64_t>()[r]};
@@ -1067,21 +1070,21 @@ std::optional<duql::LiteralNode> literal_of(const df::Series& s,
             ((s.data<std::uint8_t>()[r >> 3] >> (r & 7)) & 1) != 0};
     if (t == df::TypeId::String || t == df::TypeId::LargeString)
         return duql::LiteralNode{dstd::String(s.string_at(r))};
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // The key sets a scan filter takes from its pushed terms: a semi-join's
 // `k in {keys}` replaces its leaf, which it equals at the top of an `and`;
 // an arrow's is added beside it.
 struct Pushdown {
-    std::vector<std::pair<const duql::Term*, duql::Query>> replace;
-    std::optional<duql::Query> extra;
+    std::vector<dstd::Pair<const duql::Term*, duql::Query>> replace;
+    dstd::Optional<duql::Query> extra;
 };
 
 // `query` with `p`'s key sets: the replaced leaves at the top of its `and`s
 // swapped, the others added.
-std::optional<duql::Query> pushed(const Pushdown& p,
-                                  std::optional<duql::Query> query) {
+dstd::Optional<duql::Query> pushed(const Pushdown& p,
+                                   dstd::Optional<duql::Query> query) {
     if (!query) return p.extra;
     duql::QueryNodePtr root = duql::clone(query->root());
     std::function<void(duql::QueryNodePtr&)> walk = [&](duql::QueryNodePtr& n) {
@@ -1114,7 +1117,7 @@ Pushdown key_sets(const duql::Pipeline& p) {
                        const duql::TLookup& l, const duql::Term* cond) {
         const duql::LookupTable& t = *l.slot->table;
         const df::Series& keys = t.frame->columns[t.key_columns.front()];
-        std::optional<df::Series> pass;
+        dstd::Optional<df::Series> pass;
         bool record = false;
         if (cond)
             duql::for_each_term(*cond, [&](const duql::Term& x) {
@@ -1171,16 +1174,16 @@ struct CacheKey {
     std::uint64_t sig = 0;
 };
 
-std::optional<CacheKey> cache_key(const detail::ViewPlan& given,
-                                  duql::InputKind input,
-                                  dstd::StringView text) {
+dstd::Optional<CacheKey> cache_key(const detail::ViewPlan& given,
+                                   duql::InputKind input,
+                                   dstd::StringView text) {
     // A file opened without an index path reads the index beside it.
     detail::ViewPlan plan = given;
     for (auto& f : plan.files)
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
     const std::string path = ix::cache::lookup_cache_path(plan);
-    if (path.empty()) return std::nullopt;
+    if (path.empty()) return dstd::nullopt;
     detail::plan_record_schema(plan);
     // A `data` side reads the View as given: its filters are part of it.
     std::string key(text);
@@ -1195,7 +1198,7 @@ std::optional<CacheKey> cache_key(const detail::ViewPlan& given,
                    number_text(plan.time_range->second);
     }
     const auto sig = ix::cache::lookup_signature(plan, key);
-    if (!sig) return std::nullopt;
+    if (!sig) return dstd::nullopt;
     return CacheKey{path, *sig};
 }
 
@@ -1249,21 +1252,21 @@ class Sides {
           key_once_(program.sides.size()) {}
 
     duql::Program program;
-    std::vector<std::optional<View>> views;
+    std::vector<dstd::Optional<View>> views;
     std::vector<std::vector<duql::VectorColumn>> columns;
-    std::vector<std::optional<CacheKey>> keys;
+    std::vector<dstd::Optional<CacheKey>> keys;
     // The files of each source row set, and whether their indexes hold it.
     std::vector<std::vector<ix::plan::RowSetFile>> files;
     std::vector<char> stored;
 
-    std::shared_ptr<const df::DataFrame> frame(std::size_t i) {
+    dstd::SharedPtr<const df::DataFrame> frame(std::size_t i) {
         std::call_once(once_[i], [&] { frames_[i] = run(i); });
         return frames_[i];
     }
 
     // The first TYPE_PROBE_ROWS rows of side `i`, for the types of its
     // columns.
-    std::shared_ptr<const df::DataFrame> probe(std::size_t i) const {
+    dstd::SharedPtr<const df::DataFrame> probe(std::size_t i) const {
         const df::LazyFrame plan = views[i]->head(TYPE_PROBE_ROWS).lazy();
         df::DataFrame f;
         dftracer::utils::default_runtime().block_on(
@@ -1275,7 +1278,7 @@ class Sides {
     }
 
     // The distinct rows of side `i` for a key-set `in`.
-    std::shared_ptr<const df::DataFrame> key_frame(std::size_t i) {
+    dstd::SharedPtr<const df::DataFrame> key_frame(std::size_t i) {
         std::call_once(key_once_[i], [&] { key_frames_[i] = distinct(i); });
         return key_frames_[i];
     }
@@ -1305,17 +1308,17 @@ class Sides {
     }
 
    private:
-    std::vector<std::shared_ptr<const df::DataFrame>> frames_;
+    std::vector<dstd::SharedPtr<const df::DataFrame>> frames_;
     std::vector<std::once_flag> once_;
-    std::vector<std::shared_ptr<const df::DataFrame>> key_frames_;
+    std::vector<dstd::SharedPtr<const df::DataFrame>> key_frames_;
     std::vector<std::once_flag> key_once_;
     std::mutex bind_;
 
     // Side `i`'s rows with a value in every column, each once. The rows
     // caps do not apply; the View's memory budget bounds them.
-    std::shared_ptr<const df::DataFrame> distinct(std::size_t i) {
+    dstd::SharedPtr<const df::DataFrame> distinct(std::size_t i) {
         const std::string& name = std::string(program.sides[i].name);
-        std::optional<CacheKey> key = keys[i];
+        dstd::Optional<CacheKey> key = keys[i];
         if (key) {
             key->sig = dftracer::utils::dstd::hash::splitmix64(
                 key->sig ^ DISTINCT_CACHE_SALT);
@@ -1389,7 +1392,7 @@ class Sides {
             df::concat(ptrs, df::ConcatHow::Diagonal));
     }
 
-    std::shared_ptr<const df::DataFrame> run(std::size_t i) {
+    dstd::SharedPtr<const df::DataFrame> run(std::size_t i) {
         const std::string& name = std::string(program.sides[i].name);
         const std::uint64_t max_rows =
             env_count("DUQL_LOOKUP_MAX_ROWS", LOOKUP_MAX_ROWS);
@@ -1440,7 +1443,7 @@ class Sides {
 
 // The program a plan reads. Only the main plan owns it: side plans, which
 // Sides owns, hold it weakly and run only while the main plan does.
-std::shared_ptr<Sides> owner(const std::weak_ptr<Sides>& sides) {
+dstd::SharedPtr<Sides> owner(const dstd::WeakPtr<Sides>& sides) {
     auto s = sides.lock();
     if (!s) refuse("a row set ran after the query that reads it was released");
     return s;
@@ -1450,7 +1453,7 @@ std::shared_ptr<Sides> owner(const std::weak_ptr<Sides>& sides) {
 // the build step collected, or the cache's.
 class SideSource final : public df::Source {
    public:
-    SideSource(std::shared_ptr<Sides> strong, std::weak_ptr<Sides> weak,
+    SideSource(dstd::SharedPtr<Sides> strong, dstd::WeakPtr<Sides> weak,
                std::size_t side, df::Schema schema)
         : strong_(std::move(strong)),
           weak_(std::move(weak)),
@@ -1470,13 +1473,13 @@ class SideSource final : public df::Source {
    private:
     class Rows final : public df::Cursor {
        public:
-        Rows(std::shared_ptr<Sides> sides, std::size_t side,
+        Rows(dstd::SharedPtr<Sides> sides, std::size_t side,
              std::vector<std::string> projection)
             : sides_(std::move(sides)),
               side_(side),
               projection_(std::move(projection)) {}
 
-        coro::CoroTask<std::optional<df::Morsel>> next(
+        coro::CoroTask<dstd::Optional<df::Morsel>> next(
             std::int64_t max_rows) override {
             if (!rows_) {
                 const auto frame = sides_->frame(side_);
@@ -1491,14 +1494,14 @@ class SideSource final : public df::Source {
         }
 
        private:
-        std::shared_ptr<Sides> sides_;
+        dstd::SharedPtr<Sides> sides_;
         std::size_t side_;
         std::vector<std::string> projection_;
         std::unique_ptr<df::Cursor> rows_;
     };
 
-    std::shared_ptr<Sides> strong_;
-    std::weak_ptr<Sides> weak_;
+    dstd::SharedPtr<Sides> strong_;
+    dstd::WeakPtr<Sides> weak_;
     std::size_t side_;
     df::Schema schema_;
 };
@@ -1506,8 +1509,8 @@ class SideSource final : public df::Source {
 // The cache write of side `side` as its rows stream into a join. A side past
 // DUQL_LOOKUP_MAX_ROWS or DUQL_LOOKUP_MAX_BYTES is not cached; the engine's
 // join spills it instead of failing. The main plan's tap owns the sides.
-std::shared_ptr<const df::detail::Tap> side_tap(std::shared_ptr<Sides> strong,
-                                                std::weak_ptr<Sides> weak,
+dstd::SharedPtr<const df::detail::Tap> side_tap(dstd::SharedPtr<Sides> strong,
+                                                dstd::WeakPtr<Sides> weak,
                                                 std::size_t side) {
     auto tap = std::make_shared<df::detail::Tap>();
     tap->open = [strong = std::move(strong), weak = std::move(weak), side] {
@@ -1519,7 +1522,7 @@ std::shared_ptr<const df::detail::Tap> side_tap(std::shared_ptr<Sides> strong,
         };
         auto state = std::make_shared<State>();
         const auto s = strong ? strong : owner(weak);
-        const std::optional<CacheKey> key = s->keys[side];
+        const dstd::Optional<CacheKey> key = s->keys[side];
         const std::uint64_t max_rows =
             env_count("DUQL_LOOKUP_MAX_ROWS", LOOKUP_MAX_ROWS);
         const std::uint64_t max_bytes =
@@ -1555,10 +1558,10 @@ struct Built {
 
 // What building a pipeline needs of the View it starts from.
 struct Ctx {
-    std::shared_ptr<Sides> sides;
+    dstd::SharedPtr<Sides> sides;
     duql::Roles roles;
     std::function<View(const View&)> order;
-    std::function<View(const View&, std::shared_ptr<const detail::BuildStep>)>
+    std::function<View(const View&, dstd::SharedPtr<const detail::BuildStep>)>
         with_step;
     std::function<View(const duql::Input&)> input;
     std::function<const ix::RecordSchema&(const View&)> schema;
@@ -1570,7 +1573,7 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
 
 // A side's cache state for explain: whether the store holds it and, when
 // it does, its rows. Reads no trace.
-std::string cache_state(const std::optional<CacheKey>& key) {
+std::string cache_state(const dstd::Optional<CacheKey>& key) {
     if (!key) return "not cached";
     const auto db = ix::cache::open_lookup_db(
         key->path, ix::cache::CacheStore::Mode::ReadOnly);
@@ -1592,9 +1595,9 @@ class Applier {
    public:
     // With `frame`, `v` holds rows with those columns rather than a scan.
     Applier(View v, const ix::RecordSchema& schema, const Ctx& ctx, Reads reads,
-            std::shared_ptr<const detail::BuildStep> step,
+            dstd::SharedPtr<const detail::BuildStep> step,
             std::vector<std::size_t> collected, bool main,
-            std::optional<std::vector<duql::VectorColumn>> frame = {})
+            dstd::Optional<std::vector<duql::VectorColumn>> frame = {})
         : collected_(std::move(collected)),
           main_(main),
           v_(std::move(v)),
@@ -1657,18 +1660,18 @@ class Applier {
     const ix::RecordSchema& schema_;
     const duql::Roles& roles_;
     const Ctx& ctx_;
-    std::shared_ptr<const detail::BuildStep> step_;
+    dstd::SharedPtr<const detail::BuildStep> step_;
     std::vector<duql::VectorColumn> cols_;
     bool scan_ = true;
     bool scan_selected_ = false;
     std::string blocker_;
-    std::optional<duql::PipelineBucket> bucket_;
+    dstd::Optional<duql::PipelineBucket> bucket_;
     std::vector<std::string> fields_;
     std::vector<std::string> arrays_;
     bool closed_ = false;
     std::vector<std::string> extras_;
-    std::optional<std::map<std::string, df::TypeId>> index_types_;
-    std::optional<std::vector<SchemaLeaf>> tree_;
+    dstd::Optional<std::map<std::string, df::TypeId>> index_types_;
+    dstd::Optional<std::vector<SchemaLeaf>> tree_;
     std::size_t quants_ = 0;
     std::size_t lookups_ = 0;
     std::size_t calls_ = 0;
@@ -1731,14 +1734,14 @@ class Applier {
 
     // A field read by the raw scan: a scanned column, or, while the view
     // still reads raw events, any field under the type the index observed.
-    std::optional<duql::VectorColumn> scan_column(const std::string& base) {
+    dstd::Optional<duql::VectorColumn> scan_column(const std::string& base) {
         if (auto i = index(base)) return cols_[*i];
         if (auto i = arg_index(base)) return cols_[*i];
-        if (!scan_) return std::nullopt;
+        if (!scan_) return dstd::nullopt;
         df::TypeId t = observed(base);
         if (t == df::TypeId::Unknown && schema_.args_fallback)
             t = observed("args." + base);
-        if (t == df::TypeId::Unknown) return std::nullopt;
+        if (t == df::TypeId::Unknown) return dstd::nullopt;
         return duql::VectorColumn{base, df::scalar(t), is_json(base)};
     }
 
@@ -1833,20 +1836,20 @@ class Applier {
         return out;
     }
 
-    std::optional<std::size_t> index(std::string_view name) const {
+    dstd::Optional<std::size_t> index(dstd::StringView name) const {
         for (std::size_t i = 0; i < cols_.size(); ++i)
             if (cols_[i].name == name) return i;
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     // The column of the bare name `base` under `args.`, when the source
     // falls back to it.
-    std::optional<std::size_t> arg_index(const std::string& base) const {
-        if (!schema_.args_fallback) return std::nullopt;
+    dstd::Optional<std::size_t> arg_index(const std::string& base) const {
+        if (!schema_.args_fallback) return dstd::nullopt;
         return index("args." + base);
     }
 
-    df::Expr col(std::string_view name) const {
+    df::Expr col(dstd::StringView name) const {
         return df::expr_col(static_cast<std::int32_t>(*index(name)));
     }
 
@@ -1967,7 +1970,7 @@ class Applier {
         df::Schema schema;
         for (const auto& c : next)
             schema.fields.push_back(df::Field{c.name, c.type, true});
-        std::vector<std::pair<std::string, df::TypeId>> in;
+        std::vector<dstd::Pair<std::string, df::TypeId>> in;
         for (const auto& c : cols_) in.emplace_back(c.name, c.type.id);
         v_ = v_.with_lazy(df::LazyFrame::scan(std::make_shared<MapSource>(
             v_.lazy(), std::move(schema),
@@ -2148,7 +2151,7 @@ class Applier {
                         values.push_back(df::eval(args[i], inputs));
                         if (per_batch[i]) types[i] = values.back().data_type();
                     }
-                    std::optional<df::DataType> type;
+                    dstd::Optional<df::DataType> type;
                     try {
                         type = duql::call_type(*term, types);
                     } catch (const std::invalid_argument& e) {
@@ -2166,7 +2169,7 @@ class Applier {
                 std::move(next), "call " + name + " per batch = " + text);
             return;
         }
-        std::optional<df::DataType> type;
+        dstd::Optional<df::DataType> type;
         try {
             type = duql::call_type(*term, arg_types);
         } catch (const std::invalid_argument& e) {
@@ -2198,8 +2201,8 @@ class Applier {
     }
 
     // Binds the pipeline's lookups before a batch reads them.
-    static void ready(const std::shared_ptr<const detail::BuildStep>& step) {
-        if (step) step->run(std::nullopt);
+    static void ready(const dstd::SharedPtr<const detail::BuildStep>& step) {
+        if (step) step->run(dstd::nullopt);
     }
 
     void quantifier(const duql::TermRef& t, const duql::Term* term) {
@@ -2240,7 +2243,7 @@ class Applier {
     }
 
     // The type of the column `name` of side `side`, Unknown when it has none.
-    df::DataType side_type(std::size_t side, std::string_view name) const {
+    df::DataType side_type(std::size_t side, dstd::StringView name) const {
         const auto& cols = ctx_.sides->columns[side];
         for (const auto& c : cols)
             if (c.name == name) return c.type;
@@ -2293,7 +2296,7 @@ class Applier {
         if (side_cols.size() != l.keys.size()) return false;
         for (std::size_t k = 0; k < l.keys.size(); ++k) {
             const auto* f = whole_field(l.keys[k].get());
-            const auto i = f ? index(f->base) : std::nullopt;
+            const auto i = f ? index(f->base) : dstd::nullopt;
             if (!i) return false;
             const df::DataType& a = cols_[*i].type;
             const df::DataType& b = side_cols[k].type;
@@ -2341,7 +2344,7 @@ class Applier {
         lines.push_back(how + std::string(l->name) + " on " + joined(left) +
                         (memory ? " (side from memory)"
                                 : " (side joined, sharing the scan)"));
-        std::optional<std::size_t> field;
+        dstd::Optional<std::size_t> field;
         df::DataType type = df::scalar(df::TypeId::Bool);
         if (in) {
             v_ = v_.with_lazy(v_.lazy().join(std::move(side), left, right,
@@ -2365,12 +2368,12 @@ class Applier {
         }
         std::vector<duql::VectorColumn> next = cols_;
         next.push_back({name, type, false, false, nullptr, l});
-        std::shared_ptr<Sides> strong = main_ ? ctx_.sides : nullptr;
-        std::weak_ptr<Sides> weak = ctx_.sides;
+        dstd::SharedPtr<Sides> strong = main_ ? ctx_.sides : nullptr;
+        dstd::WeakPtr<Sides> weak = ctx_.sides;
         const std::size_t subject = l->keys.size() - l->correlated;
         const bool negated = l->negated;
         const std::string sub = std::string(l->name);
-        const std::optional<std::size_t> empty = l->empty;
+        const dstd::Optional<std::size_t> empty = l->empty;
         map_rows(
             [=](df::DataFrame f) {
                 auto at = [&](const std::string& n) -> const df::Series& {
@@ -2387,7 +2390,7 @@ class Applier {
                     out = duql::in_column(ptrs, subject,
                                           at(matched).materialize(), negated);
                 } else {
-                    std::shared_ptr<const df::DataFrame> none;
+                    dstd::SharedPtr<const df::DataFrame> none;
                     if (empty)
                         none = (strong ? strong : owner(weak))->frame(*empty);
                     out = duql::scalar_column(dstd::String(sub), ptrs,
@@ -2740,7 +2743,7 @@ class Applier {
                      {name, df::scalar(df::TypeId::Int64), false});
     }
 
-    std::optional<std::size_t> field_index(const std::string& field) const {
+    dstd::Optional<std::size_t> field_index(const std::string& field) const {
         if (auto i = index(field)) return i;
         return arg_index(field);
     }
@@ -2797,8 +2800,8 @@ class Applier {
     // Aggregates over each whole partition, as `group` gives them, on every
     // row: the rows grouped by their partition id `pid` and joined back.
     void partition_aggs(
-        const std::vector<std::pair<const duql::PipelineWinCall*, std::string>>&
-            calls,
+        const std::vector<
+            dstd::Pair<const duql::PipelineWinCall*, std::string>>& calls,
         const std::string& pid) {
         std::vector<df::GroupAgg> specs;
         std::vector<std::string> quantiles;
@@ -2903,7 +2906,8 @@ class Applier {
         std::vector<WinSpec> forward, reverse, last, ranged, distribution;
         std::vector<const duql::PipelineWinCall*> ranks;
         std::vector<const duql::PipelineWinCall*> dist;
-        std::vector<std::pair<std::string, const duql::PipelineWinCall*>> edges;
+        std::vector<dstd::Pair<std::string, const duql::PipelineWinCall*>>
+            edges;
         // A sum, mean, min, max or count over its `over` frame, else over
         // the whole partition.
         const auto framed = [&](WinSpec s, const duql::PipelineWinCall& c) {
@@ -2926,7 +2930,7 @@ class Applier {
                 forward.push_back(std::move(s));
             }
         };
-        std::vector<std::pair<const duql::PipelineWinCall*, std::string>>
+        std::vector<dstd::Pair<const duql::PipelineWinCall*, std::string>>
             partition;
         const df::DataType i64 = df::scalar(df::TypeId::Int64);
         for (std::size_t i = 0; i < w.calls.size(); ++i) {
@@ -3520,7 +3524,7 @@ class Applier {
     static duql::PipelineItem column_item(const std::string& name) {
         duql::TField f;
         f.base = dstd::String(name);
-        f.steps.push_back({dstd::String(name), false, std::nullopt});
+        f.steps.push_back({dstd::String(name), false, dstd::nullopt});
         f.neg_at = 1;
         return {dstd::String(name),
                 std::make_shared<const duql::Term>(duql::Term{std::move(f)}),
@@ -3575,7 +3579,7 @@ class Applier {
                 next.push_back({std::string(p.aggs[a].name + ".") + v,
                                 cols_[n_keys + 1 + a].type});
         }
-        std::optional<df::Schema> schema{df::Schema{}};
+        dstd::Optional<df::Schema> schema{df::Schema{}};
         if (p.fixed)
             for (const auto& c : next)
                 schema->fields.push_back(df::Field{c.name, c.type, true});
@@ -3810,14 +3814,14 @@ class Applier {
         const std::vector<std::string> before = names();
         const auto& side_cols = ctx_.sides->columns[l.side];
         auto side_index =
-            [&](dstd::StringView name) -> std::optional<std::size_t> {
+            [&](dstd::StringView name) -> dstd::Optional<std::size_t> {
             for (std::size_t i = 0; i < side_cols.size(); ++i)
                 if (side_cols[i].name == name) return i;
             if (schema_.args_fallback)
                 for (std::size_t i = 0; i < side_cols.size(); ++i)
                     if (side_cols[i].name == "args." + std::string(name))
                         return i;
-            return std::nullopt;
+            return dstd::nullopt;
         };
         std::vector<std::string> left;
         std::vector<std::string> right;
@@ -3961,7 +3965,7 @@ class Applier {
     struct SideValues {
         std::vector<std::string> names;
         std::vector<std::string> added;
-        std::vector<std::pair<std::string, std::string>> fills;
+        std::vector<dstd::Pair<std::string, std::string>> fills;
         std::vector<duql::VectorColumn> columns;
     };
 
@@ -4017,7 +4021,7 @@ class Applier {
         const duql::PipelineLookup& l, const duql::PipelineAsof& a,
         const std::vector<std::string>& left,
         const std::vector<std::string>& right, const std::string& keys_text,
-        const std::function<std::optional<std::size_t>(dstd::StringView)>&
+        const std::function<dstd::Optional<std::size_t>(dstd::StringView)>&
             side_index) {
         const auto& side_cols = ctx_.sides->columns[l.side];
         const auto t = side_index(a.column);
@@ -4123,7 +4127,7 @@ class Applier {
         const duql::PipelineLookup& l, const duql::PipelineOverlap& o,
         const std::vector<std::string>& left,
         const std::vector<std::string>& right, const std::string& keys_text,
-        const std::function<std::optional<std::size_t>(dstd::StringView)>&
+        const std::function<dstd::Optional<std::size_t>(dstd::StringView)>&
             side_index) {
         const auto& side_cols = ctx_.sides->columns[l.side];
         const auto t = side_index(o.time_column);
@@ -4176,11 +4180,11 @@ class Applier {
             return out;
         }();
         const std::vector<std::string> value_names = values.names;
-        std::shared_ptr<Sides> strong = main_ ? ctx_.sides : nullptr;
-        std::weak_ptr<Sides> weak = ctx_.sides;
+        dstd::SharedPtr<Sides> strong = main_ ? ctx_.sides : nullptr;
+        dstd::WeakPtr<Sides> weak = ctx_.sides;
         finish(
             [=](df::DataFrame rows) {
-                const std::shared_ptr<Sides> sides =
+                const dstd::SharedPtr<Sides> sides =
                     strong ? strong : owner(weak);
                 const auto held = sides->frame(side_id);
                 df::DataFrame side;
@@ -4279,10 +4283,10 @@ class Applier {
     // `v` with the columns `cols` as `want`: missing ones null, others cast.
     static View align(View v, const std::vector<duql::VectorColumn>& cols,
                       const std::vector<duql::VectorColumn>& want) {
-        auto at = [&](const std::string& n) -> std::optional<std::size_t> {
+        auto at = [&](const std::string& n) -> dstd::Optional<std::size_t> {
             for (std::size_t i = 0; i < cols.size(); ++i)
                 if (cols[i].name == n) return i;
-            return std::nullopt;
+            return dstd::nullopt;
         };
         std::vector<std::string> order;
         for (const auto& w : want) {
@@ -4336,8 +4340,8 @@ class Applier {
 
     // The column type an aggregate gives on either plan, or nullopt to keep
     // what the plan gives.
-    std::optional<df::TypeId> agg_type(const duql::PipelineAgg& a,
-                                       std::optional<df::TypeId> in) const {
+    dstd::Optional<df::TypeId> agg_type(const duql::PipelineAgg& a,
+                                        dstd::Optional<df::TypeId> in) const {
         switch (a.fn) {
             case duql::AggFn::Count:
             case duql::AggFn::CountIf:
@@ -4348,9 +4352,9 @@ class Applier {
                 return df::TypeId::String;
             case duql::AggFn::Collect:
             case duql::AggFn::Plugin:
-                return std::nullopt;
+                return dstd::nullopt;
             case duql::AggFn::Sum:
-                if (!in) return std::nullopt;
+                if (!in) return dstd::nullopt;
                 return is_integer(*in) ? df::TypeId::Int64
                                        : df::TypeId::Float64;
             case duql::AggFn::Min:
@@ -4362,7 +4366,7 @@ class Applier {
                 if (in && (is_number(*in) || *in == df::TypeId::String ||
                            *in == df::TypeId::Bool))
                     return in;
-                return std::nullopt;
+                return dstd::nullopt;
             case duql::AggFn::Mean:
             case duql::AggFn::Var:
             case duql::AggFn::Std:
@@ -4373,36 +4377,36 @@ class Applier {
             case duql::AggFn::Concurrency:
             case duql::AggFn::Utilization:
             case duql::AggFn::Active:
-                return std::nullopt;
+                return dstd::nullopt;
         }
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
-    std::optional<df::TypeId> term_type(const duql::TermRef& t,
-                                        const std::string& text) {
-        if (!t) return std::nullopt;
+    dstd::Optional<df::TypeId> term_type(const duql::TermRef& t,
+                                         const std::string& text) {
+        if (!t) return dstd::nullopt;
         if (const auto* f = whole_field(t))
             if (const auto c = scan_column(std::string(f->base)))
                 return c->type.id == df::TypeId::Unknown
-                           ? std::nullopt
-                           : std::optional<df::TypeId>(c->type.id);
+                           ? dstd::nullopt
+                           : dstd::Optional<df::TypeId>(c->type.id);
         const df::TypeId id = df::infer_type(compile(t, text), types()).id;
-        if (id == df::TypeId::Unknown) return std::nullopt;
+        if (id == df::TypeId::Unknown) return dstd::nullopt;
         return id;
     }
 
     // A whole-field term's column, usable by the trace aggregation.
-    std::optional<duql::VectorColumn> trace_column(const duql::TermRef& t) {
+    dstd::Optional<duql::VectorColumn> trace_column(const duql::TermRef& t) {
         const auto* f = whole_field(t);
-        if (!f) return std::nullopt;
+        if (!f) return dstd::nullopt;
         auto c = scan_column(std::string(f->base));
-        if (!c || c->json) return std::nullopt;
+        if (!c || c->json) return dstd::nullopt;
         return c;
     }
 
     std::string trace_refusal(
         const duql::PipelineGroup& g,
-        const std::optional<duql::PipelineBucket>& pending) {
+        const dstd::Optional<duql::PipelineBucket>& pending) {
         if (!scan_)
             return "'" + blocker_ +
                    "' comes before it; only where, time_range, bucket and "
@@ -4464,12 +4468,12 @@ class Applier {
     }
 
     void stage(const duql::PipelineGroup& group) {
-        std::optional<duql::PipelineBucket> bucket = std::move(bucket_);
+        dstd::Optional<duql::PipelineBucket> bucket = std::move(bucket_);
         bucket_.reset();
         // A sum over no values is null: a hidden mean tells which groups
         // had one.
         duql::PipelineGroup g = group;
-        std::vector<std::pair<std::string, std::string>> sums;
+        std::vector<dstd::Pair<std::string, std::string>> sums;
         for (const auto& a : group.aggs)
             if (a.fn == duql::AggFn::Sum) {
                 std::string valid =
@@ -4496,14 +4500,14 @@ class Applier {
                 }
             leave_scan("group");
         }
-        std::vector<std::optional<df::TypeId>> key_types;
+        std::vector<dstd::Optional<df::TypeId>> key_types;
         if (bucket)
             key_types.push_back(
                 term_type(bucket->key, std::string(bucket->text))
                     .value_or(df::TypeId::Int64));
         for (const auto& k : g.keys)
             key_types.push_back(term_type(k.term, std::string(k.text)));
-        std::vector<std::optional<df::TypeId>> agg_types;
+        std::vector<dstd::Optional<df::TypeId>> agg_types;
         for (const auto& a : g.aggs)
             agg_types.push_back(
                 agg_type(a, term_type(a.arg, std::string(a.text))));
@@ -4540,7 +4544,7 @@ class Applier {
         for (const auto& f : v_.output_schema().fields)
             cols_.push_back({f.name, f.type, false});
         for (std::size_t i = 0; i < out.size(); ++i) {
-            const std::optional<df::TypeId> want =
+            const dstd::Optional<df::TypeId> want =
                 i < key_types.size() ? key_types[i]
                                      : agg_types[i - key_types.size()];
             if (!want || cols_[i].type.id == *want ||
@@ -4585,7 +4589,7 @@ class Applier {
     }
 
     void trace_group(const duql::PipelineGroup& g,
-                     const std::optional<duql::PipelineBucket>& bucket) {
+                     const dstd::Optional<duql::PipelineBucket>& bucket) {
         // A select before it would project the aggregation's output; the
         // keys and arguments are among the selected columns already.
         View v = v_.select({});
@@ -4799,7 +4803,7 @@ class Applier {
     }
 
     void frame_group(const duql::PipelineGroup& g,
-                     const std::optional<duql::PipelineBucket>& bucket) {
+                     const dstd::Optional<duql::PipelineBucket>& bucket) {
         std::vector<std::string> keys;
         if (bucket) {
             if (bucket->every)
@@ -4950,7 +4954,7 @@ class Applier {
             key_types.push_back(type_of(k));
             schema.fields.push_back(df::Field{k, type_of(k), true});
         }
-        std::vector<std::pair<std::string, df::TypeId>> in;
+        std::vector<dstd::Pair<std::string, df::TypeId>> in;
         for (const auto& n : read) in.emplace_back(n, type_of(n).id);
         for (std::size_t i = 0; i < fold.size(); ++i) {
             auto& f = fold[i];
@@ -4994,7 +4998,7 @@ class Applier {
     }
 
     void finish(FinishSource::Finish fn, const std::string& line,
-                std::optional<df::Schema> schema = std::nullopt) {
+                dstd::Optional<df::Schema> schema = dstd::nullopt) {
         lines.push_back(line);
         if (!schema) schema = v_.output_schema();
         v_ = v_.with_lazy(df::LazyFrame::scan(std::make_shared<FinishSource>(
@@ -5006,7 +5010,7 @@ class Applier {
         std::vector<std::string> counts;
         for (const auto& a : g.aggs)
             if (is_count(a.fn)) counts.push_back(std::string(a.name));
-        std::vector<std::pair<std::string, df::DataType>> cols;
+        std::vector<dstd::Pair<std::string, df::DataType>> cols;
         for (const auto& c : cols_) cols.emplace_back(c.name, c.type);
         finish(
             [counts, cols](df::DataFrame f) {
@@ -5040,8 +5044,8 @@ class Applier {
         const double origin = b.origin;
         const std::uint64_t limit = fill_max_rows();
         const duql::syntax::FillMode mode = b.fill_mode;
-        const std::optional<double> range_lo = b.low;
-        const std::optional<double> range_hi = b.high;
+        const dstd::Optional<double> range_lo = b.low;
+        const dstd::Optional<double> range_hi = b.high;
         finish(
             [counts, n_keys, width, origin, limit, mode, range_lo,
              range_hi](df::DataFrame f) {
@@ -5069,7 +5073,7 @@ class Applier {
                                    1;
                 std::map<std::string, std::int64_t> groups;
                 std::vector<std::int64_t> reps;
-                std::map<std::pair<std::string, std::int64_t>, bool> present;
+                std::map<dstd::Pair<std::string, std::int64_t>, bool> present;
                 const auto texts = [n_keys](const df::DataFrame& fr) {
                     std::vector<df::Series> text;
                     for (std::size_t c = 1; c <= n_keys; ++c)
@@ -5248,7 +5252,7 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
             std::vector<std::string>& lines, bool main, bool ordered) {
     View v = ctx.input(p.input);
     if (ordered && p.input.kind != duql::InputKind::Side) v = ctx.order(v);
-    std::optional<std::vector<duql::VectorColumn>> side_cols;
+    dstd::Optional<std::vector<duql::VectorColumn>> side_cols;
     if (p.input.kind == duql::InputKind::Side) {
         const std::size_t i = p.input.side;
         side_cols = ctx.sides->columns[i];
@@ -5267,7 +5271,7 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
     term_reads(p, reads);
     std::vector<std::size_t> sets;
     set_reads(p, sets);
-    std::shared_ptr<detail::BuildStep> step;
+    dstd::SharedPtr<detail::BuildStep> step;
     if (!reads.empty() || !sets.empty()) {
         struct Once {
             std::once_flag flag;
@@ -5276,8 +5280,8 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
         auto once = std::make_shared<Once>();
         step = std::make_shared<detail::BuildStep>();
         step->run = [once, strong = main ? ctx.sides : nullptr,
-                     weak = std::weak_ptr<Sides>(ctx.sides),
-                     pipeline = &p](std::optional<duql::Query> query) {
+                     weak = dstd::WeakPtr<Sides>(ctx.sides),
+                     pipeline = &p](dstd::Optional<duql::Query> query) {
             std::call_once(once->flag, [&] {
                 once->keys =
                     (strong ? strong : owner(weak))->prepare(*pipeline);
@@ -5326,7 +5330,7 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
     if (!p.scan_select.empty()) {
         lines.push_back("scan select: " + joined(p.scan_select));
         std::vector<std::string> select;
-        std::optional<std::vector<SchemaLeaf>> tree;
+        dstd::Optional<std::vector<SchemaLeaf>> tree;
         for (const auto& f : p.scan_select) {
             const bool array =
                 std::find(fields.arrays.begin(), fields.arrays.end(),
@@ -5373,7 +5377,7 @@ View detail::with_named_columns(const View& v,
     });
 }
 
-std::pair<View, std::vector<std::string>> View::duql_plan(
+dstd::Pair<View, std::vector<std::string>> View::duql_plan(
     dstd::StringView text, const duql::Params& params) const {
     const ix::RecordSchema& schema = detail::plan_record_schema(*plan_);
     Ctx ctx;
@@ -5403,7 +5407,7 @@ std::pair<View, std::vector<std::string>> View::duql_plan(
         });
     };
     ctx.with_step = [](const View& in,
-                       std::shared_ptr<const detail::BuildStep> step) {
+                       dstd::SharedPtr<const detail::BuildStep> step) {
         return in.reshape("duql", [&](const detail::ScanPlan& s) {
             auto next = std::make_shared<detail::ViewPlan>(*s);
             next->build_step = step;

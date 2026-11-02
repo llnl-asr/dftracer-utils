@@ -8,6 +8,8 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -87,7 +89,7 @@ struct RootInfoSummary {
     std::uint64_t total_uncompressed = 0;
 };
 
-static coro::CoroTask<std::shared_ptr<RootInfoSummary>> load_root_info_summary(
+static coro::CoroTask<dstd::SharedPtr<RootInfoSummary>> load_root_info_summary(
     std::string index_path) {
     auto result = std::make_shared<RootInfoSummary>();
 
@@ -145,7 +147,7 @@ process_index_group_info_sync(std::string index_path,
             index::store::internal::get_logical_path(entry.file_path));
         const auto metadata =
             file ? common::unwrap(index::file_metadata(snapshot, *file))
-                 : std::nullopt;
+                 : dstd::nullopt;
         if (!metadata) {
             meta.success = false;
             meta.error_message = "No file metadata found in shared index";
@@ -192,8 +194,8 @@ process_index_group_info_sync(std::string index_path,
 }
 
 static coro::CoroTask<std::vector<MetadataCollectorUtilityOutput>>
-process_index_group_info(std::shared_ptr<std::string> index_path,
-                         std::shared_ptr<std::vector<ResolvedFile>> entries) {
+process_index_group_info(dstd::SharedPtr<std::string> index_path,
+                         dstd::SharedPtr<std::vector<ResolvedFile>> entries) {
     co_return process_index_group_info_sync(std::move(*index_path),
                                             std::move(*entries));
 }

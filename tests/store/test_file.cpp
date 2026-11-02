@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/store/crc.h>
@@ -1675,7 +1676,7 @@ TEST_SUITE("index store file") {
         REQUIRE(directory.has_value());
         REQUIRE(directory->size() == 5);
 
-        const std::vector<std::pair<std::string, std::vector<std::string>>>
+        const std::vector<dstd::Pair<std::string, std::vector<std::string>>>
             order = {{"a.space", {"/t/b.pfw"}},
                      {"b.space", {"/t/a"}},
                      {"b.space", {"/t/a.pfw"}},
@@ -1697,9 +1698,9 @@ TEST_SUITE("index store file") {
                                   paths) == i);
         }
         CHECK(directory->namespace_range("a.space", 3) ==
-              std::pair<std::size_t, std::size_t>{0, 1});
+              dstd::Pair<std::size_t, std::size_t>{0, 1});
         CHECK(directory->namespace_range("b.space", 0) ==
-              std::pair<std::size_t, std::size_t>{1, 5});
+              dstd::Pair<std::size_t, std::size_t>{1, 5});
         CHECK(directory->namespace_range("a.space", 0).first ==
               directory->namespace_range("a.space", 0).second);
         dstd::Vector<dstd::String> absent;

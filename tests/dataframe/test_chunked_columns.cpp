@@ -14,6 +14,9 @@
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -28,12 +31,12 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-dftu_scalar scalar_str(std::string_view v) { return str(v); }
+dftu_scalar scalar_str(dftracer::utils::dstd::StringView v) { return str(v); }
 
 constexpr std::int64_t N = 40;
 const std::int64_t CUTS[] = {0, 13, 14, 29, N};
 
-using Row = std::optional<std::string>;
+using Row = dftracer::utils::dstd::Optional<std::string>;
 using Rows = std::vector<Row>;
 
 const char* const POOL[] = {"read", "write", "a name of exactly 16", "",
@@ -134,7 +137,7 @@ struct Pair {
 };
 
 Pair build(Kind kind, bool nulls) {
-    std::vector<std::shared_ptr<dftu_series>> chunks;
+    std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> chunks;
     for (int k = 0; k < 4; ++k) {
         Series p = piece_of(kind, CUTS[k], CUTS[k + 1], nulls, k);
         chunks.push_back(std::make_shared<dftu_series>(*p.handle()));
@@ -177,12 +180,13 @@ DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
 
 class PartsCursor : public Cursor {
    public:
-    explicit PartsCursor(std::shared_ptr<const std::vector<DataFrame>> parts)
+    explicit PartsCursor(
+        dftracer::utils::dstd::SharedPtr<const std::vector<DataFrame>> parts)
         : parts_(std::move(parts)) {}
 
-    dftracer::utils::coro::CoroTask<std::optional<Morsel>> next(
-        std::int64_t) override {
-        if (next_ >= parts_->size()) co_return std::nullopt;
+    dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Optional<Morsel>>
+    next(std::int64_t) override {
+        if (next_ >= parts_->size()) co_return dftracer::utils::dstd::nullopt;
         const DataFrame& df = (*parts_)[next_++];
         Morsel m;
         m.rows = df.num_rows();
@@ -196,9 +200,9 @@ class PartsCursor : public Cursor {
     }
 
    private:
-    std::shared_ptr<const std::vector<DataFrame>> parts_;
-    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
-        std::make_shared<dftracer::utils::dstd::StringIntern>();
+    dftracer::utils::dstd::SharedPtr<const std::vector<DataFrame>> parts_;
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::dstd::StringIntern>
+        intern_ = std::make_shared<dftracer::utils::dstd::StringIntern>();
     std::size_t next_ = 0;
 };
 
@@ -218,7 +222,7 @@ class PartsSource : public Source {
     }
 
    private:
-    std::shared_ptr<const std::vector<DataFrame>> parts_;
+    dftracer::utils::dstd::SharedPtr<const std::vector<DataFrame>> parts_;
 };
 
 }  // namespace
@@ -268,7 +272,7 @@ TEST_SUITE("chunked columns") {
 
     TEST_CASE("buffer_bytes counts a shared buffer once") {
         Series base = view_of(rows_for(0, N, false));
-        std::vector<std::shared_ptr<dftu_series>> chunks;
+        std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> chunks;
         for (int k = 0; k < 4; ++k)
             chunks.emplace_back(dftu_series_slice(base.handle(), CUTS[k],
                                                   CUTS[k + 1] - CUTS[k]));

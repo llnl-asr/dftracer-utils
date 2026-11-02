@@ -5,7 +5,10 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
@@ -77,7 +80,7 @@ ShardedView ShardedView::from_manifest(const std::string& root) {
     constexpr std::uint32_t INDEX_FORMAT_VERSION =
         static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
     if (manifest->format_version !=
-        std::optional<std::uint32_t>(INDEX_FORMAT_VERSION)) {
+        dstd::Optional<std::uint32_t>(INDEX_FORMAT_VERSION)) {
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
             "shard manifest format version " +
@@ -132,7 +135,7 @@ coro::CoroTask<dftracer::utils::dataframe::DataFrame> ShardedView::aggregate(
     std::vector<std::string> partials =
         co_await collect_partials(std::move(views));
 
-    std::vector<std::string_view> pv(partials.begin(), partials.end());
+    std::vector<dstd::StringView> pv(partials.begin(), partials.end());
     co_return configure(View::from_files({})).merge_partials(pv);
 }
 
@@ -142,7 +145,7 @@ coro::CoroTask<ExportStats> ShardedView::aggregate_counters(
     std::vector<std::string> partials =
         co_await collect_partials(std::move(views));
 
-    std::vector<std::string_view> pv(partials.begin(), partials.end());
+    std::vector<dstd::StringView> pv(partials.begin(), partials.end());
     co_return configure(View::from_files({})).merge_counter_partials(pv, sink);
 }
 
@@ -232,7 +235,7 @@ void copy_agg_data(const idx::Snapshot& source_db,
         source_db, source_file,
         [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
-            std::span<const std::uint8_t> body) {
+            dstd::Span<const std::uint8_t> body) {
             auto parsed = agg::AggPartial::deserialize(
                 dstd::Span<const std::uint8_t>(body.data(), body.size()));
             if (!parsed)
@@ -242,7 +245,7 @@ void copy_agg_data(const idx::Snapshot& source_db,
             idx::put_agg_partial(
                 build, chunk, remap(cat), remap(name), remap(host),
                 remap(extra), static_cast<std::uint8_t>(kind),
-                std::string_view(reinterpret_cast<const char*>(body.data()),
+                dstd::StringView(reinterpret_cast<const char*>(body.data()),
                                  body.size()));
             return true;
         }));
@@ -259,7 +262,7 @@ void copy_agg_data(const idx::Snapshot& source_db,
             agg::encode_chunk_columns(mapped, mapped.columns.size(), bytes);
             idx::put_agg_chunk_columns(
                 build, chunk,
-                std::string_view(reinterpret_cast<const char*>(bytes.data()),
+                dstd::StringView(reinterpret_cast<const char*>(bytes.data()),
                                  bytes.size()));
             return true;
         }));
@@ -287,7 +290,7 @@ std::size_t merge_shard_set(const std::string& root,
 
     agg::AggInternTable out_intern;
     std::size_t files = 0;
-    std::optional<agg::tier::Config> config;
+    dstd::Optional<agg::tier::Config> config;
 
     default_runtime().block_on(
         coro::named("shard merge", [&]() -> coro::CoroTask<void> {

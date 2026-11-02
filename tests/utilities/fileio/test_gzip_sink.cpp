@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/gzip_sink.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -61,7 +62,8 @@ TEST_CASE("GzipSink - pieces split mid-line") {
     {
         GzipSink sink(path, 6);
         for (std::size_t off = 0; off < expected.size(); off += 7777) {
-            sink.write(std::string_view(expected).substr(off, 7777));
+            sink.write(
+                dftracer::utils::dstd::StringView(expected).substr(off, 7777));
         }
     }
 

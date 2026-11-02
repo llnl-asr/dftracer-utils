@@ -45,7 +45,7 @@ dstd::Optional<df::Series> normal(const df::Series& s) {
     if (is_signed(t) || t == TypeId::Bool) return s.cast(TypeId::Int64);
     if (is_float(t)) return s.cast(TypeId::Float64);
     if (t == TypeId::LargeString) return s.cast(TypeId::String);
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 df::Series as_type(const df::Series& s, const df::DataType& type) {
@@ -309,7 +309,8 @@ void GroupFold::add(df::DataFrame batch) {
                     } else {
                         v.clear();
                         if (!append_cell_key(v, in, r)) continue;
-                        const auto t = text ? string_key_text(v) : std::nullopt;
+                        const auto t =
+                            text ? string_key_text(v) : dstd::nullopt;
                         if (!t) {
                             d.tagged.insert(v);
                             continue;

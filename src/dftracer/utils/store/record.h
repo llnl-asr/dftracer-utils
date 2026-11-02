@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/store.h>
 
@@ -157,8 +158,8 @@ struct FileTail {
 using FileTailPtr = dstd::SharedPtr<FileTail>;
 
 using RecordItem =
-    std::variant<NamespaceItem, ScopeItem, CopyItem, DropItem, EraseItem,
-                 ExtentRefItem, CommitRefItem, FileTailPtr>;
+    dstd::Variant<NamespaceItem, ScopeItem, CopyItem, DropItem, EraseItem,
+                  ExtentRefItem, CommitRefItem, FileTailPtr>;
 
 using RecordItems = dstd::Vector<RecordItem>;
 

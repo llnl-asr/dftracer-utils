@@ -4,6 +4,9 @@
 
 #include <dftracer/utils/coro/abi.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/plugin/source.h>
 
 #include <cstdint>
@@ -56,10 +59,10 @@ class OpArgs {
     const dftu_op_val& operator[](int i) const { return a_->args[i]; }
     std::int64_t i64(int i) const { return a_->args[i].i64; }
     double f64(int i) const { return a_->args[i].f64; }
-    std::string_view str(int i) const {
+    dstd::StringView str(int i) const {
         const auto& s = a_->args[i].str;
-        return s.ptr ? std::string_view(s.ptr, static_cast<std::size_t>(s.len))
-                     : std::string_view();
+        return s.ptr ? dstd::StringView(s.ptr, static_cast<std::size_t>(s.len))
+                     : dstd::StringView();
     }
     const dftu_op_arg* raw() const noexcept { return a_; }
 
@@ -83,7 +86,7 @@ struct InputOwnership {
 class InputCursor {
    public:
     InputCursor(void* self, const dftu_cursor_vt* vt,
-                std::shared_ptr<detail::InputOwnership> own) noexcept
+                dstd::SharedPtr<detail::InputOwnership> own) noexcept
         : self_(self), vt_(vt), own_(std::move(own)) {}
     InputCursor(InputCursor&& o) noexcept
         : self_(o.self_),
@@ -101,9 +104,9 @@ class InputCursor {
         }
     }
 
-    /// The next upstream frame, or std::nullopt at the end of the stream.
+    /// The next upstream frame, or dstd::nullopt at the end of the stream.
     /// Throws std::runtime_error when the upstream fails.
-    std::optional<OwnedFrame> next(std::int64_t max_rows) {
+    dstd::Optional<OwnedFrame> next(std::int64_t max_rows) {
         dftu_result_frame out{};
         dftu_task* t = vt_->next(self_, max_rows, &out);
         if (t && dftu_task_run(dftu_default_runtime(), t) != 0)
@@ -111,7 +114,7 @@ class InputCursor {
         if (!DFTU_RESULT_OK(out))
             throw std::runtime_error(out.u.err.message ? out.u.err.message
                                                        : "upstream failed");
-        if (!out.u.value) return std::nullopt;
+        if (!out.u.value) return dstd::nullopt;
         return OwnedFrame(out.u.value);
     }
 
@@ -128,7 +131,7 @@ class InputCursor {
    private:
     void* self_;
     const dftu_cursor_vt* vt_;
-    std::shared_ptr<detail::InputOwnership> own_;
+    dstd::SharedPtr<detail::InputOwnership> own_;
 };
 
 namespace detail {

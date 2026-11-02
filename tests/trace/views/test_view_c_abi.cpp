@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/trace/views/abi.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
@@ -813,7 +814,7 @@ TEST_SUITE("View C ABI") {
         // interleave in an order neither listing controls. Only the multiset
         // of rows is defined.
         auto rows = [](dftu_dataframe* df) {
-            std::vector<std::pair<std::string, double>> out;
+            std::vector<dstd::Pair<std::string, double>> out;
             for (std::int64_t i = 0; i < dftu_dataframe_num_rows(df); ++i)
                 out.emplace_back(abi_str(df, i, "name"), abi_num(df, i, "pid"));
             std::sort(out.begin(), out.end());

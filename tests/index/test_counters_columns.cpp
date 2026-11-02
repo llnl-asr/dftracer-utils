@@ -5,6 +5,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
@@ -108,7 +110,7 @@ struct Group {
 };
 
 using Expected =
-    std::map<std::tuple<std::string, std::string, std::uint64_t>, Group>;
+    std::map<dstd::Tuple<std::string, std::string, std::uint64_t>, Group>;
 
 // The counters the trace above must give: one row per (host, name, second),
 // with the pre-aggregated counter of every third event left out.
@@ -161,12 +163,12 @@ std::vector<double> f64_column(const dataframe::DataFrame& df,
 }
 
 // The row keys of a counters frame, (host, name, time_bucket).
-std::vector<std::tuple<std::string, std::string, std::uint64_t>> row_keys(
+std::vector<dstd::Tuple<std::string, std::string, std::uint64_t>> row_keys(
     const dataframe::DataFrame& df) {
     const auto hosts = string_column(df, "host_hash");
     const auto names = string_column(df, "name");
     const auto buckets = f64_column(df, "time_bucket");
-    std::vector<std::tuple<std::string, std::string, std::uint64_t>> out;
+    std::vector<dstd::Tuple<std::string, std::string, std::uint64_t>> out;
     for (std::size_t r = 0; r < hosts.size(); ++r)
         out.emplace_back(hosts[r], names[r],
                          static_cast<std::uint64_t>(buckets[r]));
@@ -214,7 +216,7 @@ void check_against(const dataframe::DataFrame& df, const Expected& want) {
 }
 
 std::uint16_t shard_of(
-    const std::tuple<std::string, std::string, std::uint64_t>& key) {
+    const dstd::Tuple<std::string, std::string, std::uint64_t>& key) {
     return agg::system_shard(std::get<0>(key), std::get<1>(key));
 }
 
@@ -240,7 +242,7 @@ Blocks blocks_of(const std::string& gz, const std::string& idx) {
             for (std::uint64_t r = 0; r < block.rows; ++r)
                 if (block.phase[r] == static_cast<std::uint8_t>(
                                           trace::RecordPhase::Counter) &&
-                    std::string_view(block.texts[block.cat[r]]) == "sys")
+                    dstd::StringView(block.texts[block.cat[r]]) == "sys")
                     holds_counter = true;
             if (holds_counter) ++out.counters;
             return true;
@@ -298,7 +300,7 @@ TEST_SUITE("CountersColumns") {
         // The union of the splits is the whole frame, no row twice.
         CHECK(first.counters.num_rows() + second.counters.num_rows() ==
               whole.counters.num_rows());
-        std::vector<std::tuple<std::string, std::string, std::uint64_t>> keys =
+        std::vector<dstd::Tuple<std::string, std::string, std::uint64_t>> keys =
             row_keys(first.counters);
         for (const auto& k : row_keys(second.counters)) keys.push_back(k);
         std::sort(keys.begin(), keys.end());

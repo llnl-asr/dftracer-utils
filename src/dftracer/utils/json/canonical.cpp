@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -32,7 +33,7 @@ void append_canonical_json(dstd::String& out, simdjson::dom::element v) {
     using T = simdjson::dom::element_type;
     switch (v.type()) {
         case T::OBJECT: {
-            dstd::Vector<std::pair<dstd::StringView, simdjson::dom::element>>
+            dstd::Vector<dstd::Pair<dstd::StringView, simdjson::dom::element>>
                 members;
             const simdjson::dom::object obj = v.get_object().value_unsafe();
             for (auto kv : obj) members.emplace_back(kv.key, kv.value);

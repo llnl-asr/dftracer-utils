@@ -2,8 +2,11 @@
 #ifndef DFTRACER_UTILS_TRACE_ARGS_MAP_H
 #define DFTRACER_UTILS_TRACE_ARGS_MAP_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/variant.h>
 
 #include <cstdint>
 #include <limits>
@@ -15,8 +18,8 @@
 
 namespace dftracer::utils::trace {
 
-using ArgsValue = std::variant<std::monostate, std::string, std::int64_t,
-                               std::uint64_t, double, bool>;
+using ArgsValue = dstd::Variant<dstd::Monostate, std::string, std::int64_t,
+                                std::uint64_t, double, bool>;
 
 class ArgsValueProxy {
     const ArgsValue* val_;
@@ -26,7 +29,7 @@ class ArgsValueProxy {
 
     bool exists() const {
         return val_ != nullptr &&
-               !std::holds_alternative<std::monostate>(*val_);
+               !std::holds_alternative<dstd::Monostate>(*val_);
     }
     explicit operator bool() const { return exists(); }
     bool is_null() const { return !exists(); }
@@ -50,7 +53,7 @@ class ArgsValueProxy {
 
     template <typename T>
     T get(const T& default_val = T{}) const {
-        if (!val_ || std::holds_alternative<std::monostate>(*val_))
+        if (!val_ || std::holds_alternative<dstd::Monostate>(*val_))
             return default_val;
 
         if constexpr (std::is_same_v<T, bool>) {
@@ -59,9 +62,9 @@ class ArgsValueProxy {
         } else if constexpr (std::is_same_v<T, std::string>) {
             if (auto* p = std::get_if<std::string>(val_)) return *p;
             return default_val;
-        } else if constexpr (std::is_same_v<T, std::string_view>) {
+        } else if constexpr (std::is_same_v<T, dstd::StringView>) {
             if (auto* p = std::get_if<std::string>(val_))
-                return std::string_view(*p);
+                return dstd::StringView(*p);
             return default_val;
         } else if constexpr (std::is_same_v<T, const char*>) {
             if (auto* p = std::get_if<std::string>(val_)) return p->c_str();
@@ -111,23 +114,23 @@ class ArgsValueProxy {
     }
 
     template <typename T>
-    std::optional<T> get_optional() const {
-        if (!val_ || std::holds_alternative<std::monostate>(*val_))
-            return std::nullopt;
+    dstd::Optional<T> get_optional() const {
+        if (!val_ || std::holds_alternative<dstd::Monostate>(*val_))
+            return dstd::nullopt;
 
         if constexpr (std::is_same_v<T, std::string>) {
             if (auto* p = std::get_if<std::string>(val_)) return *p;
-            return std::nullopt;
-        } else if constexpr (std::is_same_v<T, std::string_view>) {
+            return dstd::nullopt;
+        } else if constexpr (std::is_same_v<T, dstd::StringView>) {
             if (auto* p = std::get_if<std::string>(val_))
-                return std::string_view(*p);
-            return std::nullopt;
+                return dstd::StringView(*p);
+            return dstd::nullopt;
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
             if (auto* p = std::get_if<std::uint64_t>(val_)) return *p;
             if (auto* p = std::get_if<std::int64_t>(val_)) {
                 if (*p >= 0) return static_cast<std::uint64_t>(*p);
             }
-            return std::nullopt;
+            return dstd::nullopt;
         } else if constexpr (std::is_same_v<T, std::int64_t>) {
             if (auto* p = std::get_if<std::int64_t>(val_)) return *p;
             if (auto* p = std::get_if<std::uint64_t>(val_)) {
@@ -135,17 +138,17 @@ class ArgsValueProxy {
                     static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
                     return static_cast<std::int64_t>(*p);
             }
-            return std::nullopt;
+            return dstd::nullopt;
         } else if constexpr (std::is_same_v<T, double>) {
             if (auto* p = std::get_if<double>(val_)) return *p;
             if (auto* p = std::get_if<std::int64_t>(val_))
                 return static_cast<double>(*p);
             if (auto* p = std::get_if<std::uint64_t>(val_))
                 return static_cast<double>(*p);
-            return std::nullopt;
+            return dstd::nullopt;
         } else if constexpr (std::is_same_v<T, bool>) {
             if (auto* p = std::get_if<bool>(val_)) return *p;
-            return std::nullopt;
+            return dstd::nullopt;
         } else {
             static_assert(
                 !sizeof(T),
@@ -179,7 +182,7 @@ class ArgsMap {
 
     void set_valid(bool v) { valid_ = v; }
 
-    void insert(std::string_view key, ArgsValue value) {
+    void insert(dstd::StringView key, ArgsValue value) {
         // Store the interned view directly (permanent storage); no key copy.
         data_.emplace(key_intern().intern(key), std::move(value));
     }
@@ -189,7 +192,7 @@ class ArgsMap {
         valid_ = false;
     }
 
-    ArgsValueProxy operator[](std::string_view key) const {
+    ArgsValueProxy operator[](dstd::StringView key) const {
         if (!valid_) return ArgsValueProxy{};
         auto it = data_.find(key);
         return it != data_.end() ? ArgsValueProxy{&it->second}
@@ -197,22 +200,22 @@ class ArgsMap {
     }
 
     ArgsValueProxy operator[](const char* key) const {
-        return (*this)[std::string_view(key)];
+        return (*this)[dstd::StringView(key)];
     }
 
     ArgsValueProxy operator[](const std::string& key) const {
-        return (*this)[std::string_view(key)];
+        return (*this)[dstd::StringView(key)];
     }
 
     ArgsValueProxy at(const char* key) const { return (*this)[key]; }
     ArgsValueProxy at(const std::string& key) const { return (*this)[key]; }
-    ArgsValueProxy at(std::string_view key) const { return (*this)[key]; }
+    ArgsValueProxy at(dstd::StringView key) const { return (*this)[key]; }
 
     template <typename Fn>
     void for_each_member(Fn&& fn) const {
         if (!valid_) return;
         for (const auto& [k, v] : data_) {
-            fn(std::string_view(k), ArgsValueProxy{&v});
+            fn(dstd::StringView(k), ArgsValueProxy{&v});
         }
     }
 

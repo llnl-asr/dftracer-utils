@@ -3,6 +3,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -23,9 +25,12 @@ namespace {
 const std::string SEP(1, '\x1e');
 
 // Group a (rows 0..1) and b (row 2) over the key column `keys`.
-DataFrame set_union_of(const Series& values,
-                       const std::vector<std::string_view>& keys) {
-    Series g = Series::strings(std::span<const std::string_view>(keys));
+DataFrame set_union_of(
+    const Series& values,
+    const std::vector<dftracer::utils::dstd::StringView>& keys) {
+    Series g = Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
+            keys));
     std::vector<const Series*> inputs = {&g, &values};
     return df::group_agg_expr(df::expr_col(0),
                               {df::agg_set_union(df::expr_col(1), "u")}, inputs,
@@ -34,8 +39,10 @@ DataFrame set_union_of(const Series& values,
 
 // The typed form over `values`: groups a (rows 0..1) and b (row 2).
 DataFrame typed_of(const Series& values,
-                   const std::vector<std::string_view>& keys) {
-    Series g = Series::strings(std::span<const std::string_view>(keys));
+                   const std::vector<dftracer::utils::dstd::StringView>& keys) {
+    Series g = Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
+            keys));
     std::vector<const Series*> inputs = {&g, &values};
     return df::group_agg_expr(df::expr_col(0),
                               {df::agg_set_union(df::expr_col(1), "u", true)},

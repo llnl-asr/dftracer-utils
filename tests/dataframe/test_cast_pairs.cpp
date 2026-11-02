@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
@@ -88,8 +90,10 @@ TEST_CASE("numbers cast to bool: nonzero true, NaN and null null") {
 }
 
 TEST_CASE("an unsupported pair is refused; a same-type cast is the column") {
-    std::vector<std::string_view> words{"a", "b"};
-    Series s = Series::strings(std::span<const std::string_view>(words));
+    std::vector<dftracer::utils::dstd::StringView> words{"a", "b"};
+    Series s = Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
+            words));
     CHECK_FALSE(s.cast(TypeId::Bool).valid());
     Series same = s.cast(TypeId::String);
     REQUIRE(same.valid());

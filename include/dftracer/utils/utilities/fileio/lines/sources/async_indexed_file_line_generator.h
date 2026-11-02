@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_line_iterator.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -90,7 +91,7 @@ inline coro::AsyncGenerator<Line> async_indexed_file_lines(
         }
 
         line_buffer.assign(stream_buffer.data(), bytes_read);
-        co_yield Line(std::string_view(line_buffer), current_position);
+        co_yield Line(dstd::StringView(line_buffer), current_position);
         current_position++;
     }
 }

@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/store.h>
@@ -181,8 +182,8 @@ class ExtentPages {
 
     /// The first page and the one past the last whose raw range meets
     /// [raw_offset, raw_offset + length). Both equal for an empty range.
-    std::pair<std::size_t, std::size_t> covering(std::uint32_t raw_offset,
-                                                 std::uint32_t length) const;
+    dstd::Pair<std::size_t, std::size_t> covering(std::uint32_t raw_offset,
+                                                  std::uint32_t length) const;
 
     /// The raw bytes of page `i` in `out`, checked against the page crc, with
     /// `dict` as decode_page takes it. A Parse error when the crc, the codec or

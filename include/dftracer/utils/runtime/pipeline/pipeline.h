@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_PIPELINE_PIPELINE_H
 
 #include <dftracer/utils/common/typedefs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_output.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -28,12 +29,12 @@ class Watchdog;
 /// scheduler/executor.
 class Pipeline {
    private:
-    std::shared_ptr<Task> source_;       ///< Single source (may be NoOpTask)
-    std::shared_ptr<Task> destination_;  ///< Can be nullptr
+    dstd::SharedPtr<Task> source_;       ///< Single source (may be NoOpTask)
+    dstd::SharedPtr<Task> destination_;  ///< Can be nullptr
 
-    std::vector<std::shared_ptr<Task>> all_tasks_;
+    std::vector<dstd::SharedPtr<Task>> all_tasks_;
 
-    std::shared_ptr<Runtime> runtime_;
+    dstd::SharedPtr<Runtime> runtime_;
     std::unique_ptr<Watchdog> watchdog_;
     std::unique_ptr<Scheduler> scheduler_;
 
@@ -58,34 +59,34 @@ class Pipeline {
     Pipeline(Pipeline&&) = delete;
     Pipeline& operator=(Pipeline&&) = delete;
 
-    void set_source(std::shared_ptr<Task> source);
+    void set_source(dstd::SharedPtr<Task> source);
 
     /// Multiple sources auto-create a @ref NoOpTask parent.
-    void set_source(std::initializer_list<std::shared_ptr<Task>> sources);
+    void set_source(std::initializer_list<dstd::SharedPtr<Task>> sources);
 
-    void set_source(const std::vector<std::shared_ptr<Task>>& sources);
+    void set_source(const std::vector<dstd::SharedPtr<Task>>& sources);
 
     template <typename... Tasks>
     auto set_source(Tasks&&... sources) -> std::enable_if_t<
         (sizeof...(Tasks) > 1) &&
-        (std::is_convertible_v<Tasks, std::shared_ptr<Task>> && ...)> {
+        (std::is_convertible_v<Tasks, dstd::SharedPtr<Task>> && ...)> {
         set_source({std::forward<Tasks>(sources)...});
     }
 
     /// Optional. If unset, all terminal tasks are destinations.
-    void set_destination(std::shared_ptr<Task> destination);
+    void set_destination(dstd::SharedPtr<Task> destination);
 
     /// Multiple destinations auto-create a @ref NoOpTask child.
     void set_destination(
-        std::initializer_list<std::shared_ptr<Task>> destinations);
+        std::initializer_list<dstd::SharedPtr<Task>> destinations);
 
     void set_destination(
-        const std::vector<std::shared_ptr<Task>>& destinations);
+        const std::vector<dstd::SharedPtr<Task>>& destinations);
 
     template <typename... Tasks>
     auto set_destination(Tasks&&... destinations) -> std::enable_if_t<
         (sizeof...(Tasks) > 1) &&
-        (std::is_convertible_v<Tasks, std::shared_ptr<Task>> && ...)> {
+        (std::is_convertible_v<Tasks, dstd::SharedPtr<Task>> && ...)> {
         set_destination({std::forward<Tasks>(destinations)...});
     }
 
@@ -107,9 +108,9 @@ class Pipeline {
 
     const std::string& get_name() const { return name_; }
 
-    std::shared_ptr<Task> get_source() const { return source_; }
+    dstd::SharedPtr<Task> get_source() const { return source_; }
 
-    std::shared_ptr<Task> get_destination() const { return destination_; }
+    dstd::SharedPtr<Task> get_destination() const { return destination_; }
 
    private:
     bool validate_reachability();
@@ -118,15 +119,15 @@ class Pipeline {
 
     void collect_all_tasks();
 
-    void collect_tasks_dfs(std::shared_ptr<Task> task,
+    void collect_tasks_dfs(dstd::SharedPtr<Task> task,
                            std::unordered_set<common::TaskIndex>& visited);
 
-    bool has_cycles_dfs(std::shared_ptr<Task> task,
+    bool has_cycles_dfs(dstd::SharedPtr<Task> task,
                         std::unordered_set<common::TaskIndex>& visited,
                         std::unordered_set<common::TaskIndex>& rec_stack);
 
-    bool is_reachable_dfs(std::shared_ptr<Task> current,
-                          std::shared_ptr<Task> target,
+    bool is_reachable_dfs(dstd::SharedPtr<Task> current,
+                          dstd::SharedPtr<Task> target,
                           std::unordered_set<common::TaskIndex>& visited);
 };
 

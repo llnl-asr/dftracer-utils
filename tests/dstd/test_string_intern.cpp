@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
@@ -153,7 +156,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - a chunk outlives the intern") {
-        std::shared_ptr<StringIntern::Chunk> chunk;
+        dftracer::utils::dstd::SharedPtr<StringIntern::Chunk> chunk;
         std::uint32_t len, off;
         {
             StringIntern intern;
@@ -164,7 +167,8 @@ TEST_SUITE("StringIntern") {
             len = loc.len;
             off = loc.offset;
         }
-        CHECK(std::string_view(chunk->data() + off, len) == "kept alive");
+        CHECK(dftracer::utils::dstd::StringView(chunk->data() + off, len) ==
+              "kept alive");
     }
 
     TEST_CASE("StringIntern - locate agrees with resolve under threads") {
@@ -182,7 +186,8 @@ TEST_SUITE("StringIntern") {
                     auto id = intern.get_or_insert(name(t, i));
                     ids[t].push_back(id);
                     auto loc = intern.locate(id);
-                    if (std::string_view(loc.data, loc.len) != name(t, i))
+                    if (dftracer::utils::dstd::StringView(loc.data, loc.len) !=
+                        name(t, i))
                         ids[t].push_back(StringIntern::NO_ID);
                 }
             });
@@ -194,7 +199,8 @@ TEST_SUITE("StringIntern") {
                 auto id = ids[t][k++];
                 REQUIRE(id != StringIntern::NO_ID);
                 auto loc = intern.locate(id);
-                CHECK(std::string_view(loc.data, loc.len) == name(t, i));
+                CHECK(dftracer::utils::dstd::StringView(loc.data, loc.len) ==
+                      name(t, i));
                 CHECK(intern.resolve(id) == name(t, i));
                 auto c = intern.chunk(loc.chunk);
                 CHECK(c->data() + loc.offset == loc.data);
@@ -213,7 +219,7 @@ TEST_SUITE("StringIntern") {
         auto lb = intern.locate(big_id);
         CHECK(lb.len == big.size());
         CHECK(lb.offset == 8);
-        CHECK(std::string_view(lb.data, lb.len) == big);
+        CHECK(dftracer::utils::dstd::StringView(lb.data, lb.len) == big);
         CHECK(intern.chunk(lb.chunk)->size() >= big.size());
         CHECK(lb.chunk != intern.locate(small).chunk);
         CHECK(intern.resolve(after) == "after");
@@ -282,17 +288,19 @@ TEST_SUITE("StringIntern") {
     TEST_CASE("StringIntern - deterministic ids keep their fixed values") {
         StringIntern intern;
         intern.enable_deterministic_ids();
-        const std::pair<const char*, std::uint32_t> expected[] = {
-            {"hello", 229782084},
-            {"world", 62348693},
-            {"read", 100861361},
-            {"write", 33496659},
-            {"args.size", 97378550},
-            {"cat", 208581076},
-            {"POSIX", 130800590},
-            {"/UqBWr9S8D8AAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAA",
-             218384236},
-        };
+        const dftracer::utils::dstd::Pair<const char*, std::uint32_t>
+            expected[] = {
+                {"hello", 229782084},
+                {"world", 62348693},
+                {"read", 100861361},
+                {"write", 33496659},
+                {"args.size", 97378550},
+                {"cat", 208581076},
+                {"POSIX", 130800590},
+                {"/UqBWr9S8D8AAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAA"
+                 "AAA",
+                 218384236},
+            };
         for (const auto& [text, id] : expected) {
             CHECK(intern.get_or_insert(text) == id);
             CHECK(intern.resolve(id) == text);

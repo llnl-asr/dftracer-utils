@@ -4,6 +4,8 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -47,11 +49,11 @@ std::vector<DataFrame> shared(const std::vector<DataFrame>& parts) {
 
 class PartsCursor : public Cursor {
    public:
-    explicit PartsCursor(std::shared_ptr<const std::vector<DataFrame>> parts)
+    explicit PartsCursor(dstd::SharedPtr<const std::vector<DataFrame>> parts)
         : parts_(std::move(parts)) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-        if (next_ >= parts_->size()) co_return std::nullopt;
+    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
+        if (next_ >= parts_->size()) co_return dstd::nullopt;
         const DataFrame& df = (*parts_)[next_++];
         Morsel m;
         m.rows = df.num_rows();
@@ -65,8 +67,8 @@ class PartsCursor : public Cursor {
     }
 
    private:
-    std::shared_ptr<const std::vector<DataFrame>> parts_;
-    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+    dstd::SharedPtr<const std::vector<DataFrame>> parts_;
+    dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
         std::make_shared<dftracer::utils::dstd::StringIntern>();
     std::size_t next_ = 0;
 };
@@ -98,7 +100,7 @@ class PartsSource : public Source {
     }
 
    private:
-    std::shared_ptr<const std::vector<DataFrame>> parts_;
+    dstd::SharedPtr<const std::vector<DataFrame>> parts_;
     std::size_t leading_;
 };
 

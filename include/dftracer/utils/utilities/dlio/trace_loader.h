@@ -23,12 +23,12 @@ using QuantileStore =
 
 /// Default DLIO category / event names; overridable per-component via
 /// @ref TraceLoaderOptions.
-inline constexpr std::string_view CATEGORY_DATALOADER = "dataloader";
-inline constexpr std::string_view CATEGORY_DATA = "data";
-inline constexpr std::string_view EVENT_FETCH_BLOCK = "fetch.block";
-inline constexpr std::string_view EVENT_FETCH_ITER = "fetch.iter";
-inline constexpr std::string_view EVENT_PREPROCESS = "preprocess";
-inline constexpr std::string_view EVENT_ITEM = "item";
+inline constexpr dstd::StringView CATEGORY_DATALOADER = "dataloader";
+inline constexpr dstd::StringView CATEGORY_DATA = "data";
+inline constexpr dstd::StringView EVENT_FETCH_BLOCK = "fetch.block";
+inline constexpr dstd::StringView EVENT_FETCH_ITER = "fetch.iter";
+inline constexpr dstd::StringView EVENT_PREPROCESS = "preprocess";
+inline constexpr dstd::StringView EVENT_ITEM = "item";
 
 /// A (category, name) pair selecting one DLIO component.
 struct EventSelector {

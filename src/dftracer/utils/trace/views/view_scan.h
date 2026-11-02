@@ -3,6 +3,10 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCAN_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -68,7 +72,7 @@ struct ScanUnit {
     std::size_t seq = 0;
     // The View query with resolved columns rewritten for this unit's index;
     // null when there was nothing to rewrite.
-    std::shared_ptr<const duql::Query> query;
+    dstd::SharedPtr<const duql::Query> query;
 };
 
 // The record_schema every file of `plan` was indexed under, or is detected as
@@ -87,14 +91,14 @@ enum class TraceRole : std::uint8_t { Time, Duration };
 
 // Throws INVALID_ARGUMENT naming `op` when the files' record_schema binds no
 // path to `role` (a time role for TIME; time and duration for DURATION).
-void require_role(const ViewPlan& plan, std::string_view op,
+void require_role(const ViewPlan& plan, dstd::StringView op,
                   TraceRole role = TraceRole::Time);
 
 // Fold the phase selector into the query: Events -> ph=="X", Counters ->
 // ph=="C", Any -> no constraint. ANDed with any user filter and, for a plan
 // with a build step, the key sets that step gives, which runs it: call it
 // only when executing the plan.
-std::optional<duql::Query> effective_query(const ViewPlan& plan);
+dstd::Optional<duql::Query> effective_query(const ViewPlan& plan);
 
 // Whether `plan`'s rows include metadata records: phase("metadata") or
 // duql's `all`.
@@ -111,7 +115,7 @@ bool is_cancelled(const ViewPlan& plan);
 // `q` applies unless the unit carries its rewritten query.
 ViewScannerInput make_scanner_input(const ScanUnit& u,
                                     const ViewDefinition& vdef,
-                                    const std::optional<duql::Query>& q);
+                                    const dstd::Optional<duql::Query>& q);
 
 // Plan every file in parallel (metadata + prune) and flatten the surviving
 // candidates into a single work list; `skipped_out` gets the pruned-chunk
@@ -137,8 +141,8 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     const ViewPlan& plan, const ViewDefinition& vdef, std::size_t num_slots,
     std::uint64_t limit,
     const std::function<void(std::size_t,
-                             const std::vector<std::string_view>&)>& on_batch,
-    std::span<Fold* const> folds = {},
+                             const std::vector<dstd::StringView>&)>& on_batch,
+    dstd::Span<Fold* const> folds = {},
     dftracer::utils::dstd::StringIntern* intern = nullptr);
 
 }  // namespace dftracer::utils::trace::views::detail

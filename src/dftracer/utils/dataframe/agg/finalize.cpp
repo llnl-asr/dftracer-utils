@@ -4,6 +4,8 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 
 #include <algorithm>
@@ -40,7 +42,7 @@ OccResult occ_summarize(
     o.total = total;
     o.span = te > ts ? te - ts : 0;
     if (deltas.empty()) return o;
-    std::vector<std::pair<std::uint64_t, std::int64_t>> pts = deltas.values();
+    std::vector<dstd::Pair<std::uint64_t, std::int64_t>> pts = deltas.values();
     std::sort(pts.begin(), pts.end(),
               [](const auto& x, const auto& y) { return x.first < y.first; });
     std::int64_t depth = 0;
@@ -249,7 +251,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
     std::vector<double> fls;
     std::vector<std::uint8_t> bits;
     std::int64_t n = 0;
-    std::vector<std::string_view> sorted;
+    std::vector<dstd::StringView> sorted;
     for (std::int64_t g = 0; g < ng; ++g) {
         sorted.clear();
         if (slot >= 0) {
@@ -260,7 +262,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
         }
         if (et == TypeId::String) {
             std::sort(sorted.begin(), sorted.end());
-            for (const std::string_view x : sorted) strs.emplace_back(x);
+            for (const dstd::StringView x : sorted) strs.emplace_back(x);
         } else if (et == TypeId::Bool) {
             std::sort(sorted.begin(), sorted.end());
             for (std::size_t j = 0; j < sorted.size(); ++j) {
@@ -273,7 +275,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
             }
         } else if (dom == FieldStatDomain::F64) {
             std::vector<double> v;
-            for (const std::string_view x : sorted) {
+            for (const dstd::StringView x : sorted) {
                 double d = 0.0;
                 dstd::from_chars_double(x.data(), x.data() + x.size(), d);
                 if (et == TypeId::Float32)
@@ -286,7 +288,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
             fls.insert(fls.end(), v.begin(), v.end());
         } else if (dom == FieldStatDomain::U64) {
             std::vector<std::uint64_t> v;
-            for (const std::string_view x : sorted) {
+            for (const dstd::StringView x : sorted) {
                 std::uint64_t d = 0;
                 std::from_chars(x.data(), x.data() + x.size(), d);
                 v.push_back(d);
@@ -295,7 +297,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
             uints.insert(uints.end(), v.begin(), v.end());
         } else {
             std::vector<std::int64_t> v;
-            for (const std::string_view x : sorted) {
+            for (const dstd::StringView x : sorted) {
                 std::int64_t d = 0;
                 std::from_chars(x.data(), x.data() + x.size(), d);
                 v.push_back(d);
@@ -627,7 +629,7 @@ static DataFrame finalize_impl(const AggState& st_in,
                     const SpaceSavingMap& m =
                         st.ss_counters[static_cast<std::size_t>(g) * st.n_ss +
                                        static_cast<std::size_t>(slot)];
-                    std::vector<std::pair<std::string, std::uint64_t>> hh(
+                    std::vector<dstd::Pair<std::string, std::uint64_t>> hh(
                         m.begin(), m.end());
                     std::sort(hh.begin(), hh.end(),
                               [](const auto& a, const auto& b) {
@@ -670,12 +672,12 @@ static DataFrame finalize_impl(const AggState& st_in,
                     const AggState::StringSet& gset =
                         st.sets[static_cast<std::size_t>(g) * st.n_set +
                                 static_cast<std::size_t>(slot)];
-                    std::vector<std::string_view> sorted(gset.begin(),
+                    std::vector<dstd::StringView> sorted(gset.begin(),
                                                          gset.end());
                     std::sort(sorted.begin(), sorted.end());
                     bool first =
                         true;  // an empty string is a value, so test position
-                    for (const std::string_view x : sorted) {
+                    for (const dstd::StringView x : sorted) {
                         if (!first) joined.push_back(AGG_SET_SEP);
                         first = false;
                         joined += x;

@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -20,7 +21,7 @@
 
 namespace dftracer::utils::trace::statistics {
 
-using StatCount = std::pair<std::string, std::uint64_t>;
+using StatCount = dstd::Pair<std::string, std::uint64_t>;
 
 /// Which breakdowns a report needs beyond categories (always computed, since
 /// they carry the global duration/timestamp aggregates).
@@ -137,7 +138,7 @@ class StatsView {
                 st.category_counts.emplace_back(
                     std::string(c.columns[0].string_at(i)), ni);
             } else {
-                const std::string_view cat = c.columns[0].string_at(i);
+                const dstd::StringView cat = c.columns[0].string_at(i);
                 const auto it = cat_at.find(cat);
                 if (it == cat_at.end()) {
                     cat_at.emplace(dstd::String(cat),
@@ -191,7 +192,7 @@ class StatsView {
                 std::string key = std::string(pid_col.string_at(i)) + ":" +
                                   std::string(tid_col.string_at(i));
                 const auto n = static_cast<std::uint64_t>(i64_at(cn, i));
-                const auto it = pid_tid_at.find(std::string_view(key));
+                const auto it = pid_tid_at.find(dstd::StringView(key));
                 if (it == pid_tid_at.end()) {
                     pid_tid_at.emplace(dstd::String(key),
                                        st.pid_tid_counts.size());
@@ -297,7 +298,7 @@ namespace detail {
 /// Process-lifetime intern so a ChunkStatistics' StringViewMap keys stay valid
 /// after the owning ViewStats is gone. A one-shot stats CLI bounds this by the
 /// trace's distinct category/name/pid:tid set and frees it at process exit.
-inline std::string_view intern_stat_key(std::string_view s) {
+inline dstd::StringView intern_stat_key(dstd::StringView s) {
     static std::mutex m;
     static std::deque<std::string> store;
     std::lock_guard<std::mutex> lock(m);

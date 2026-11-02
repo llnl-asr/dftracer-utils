@@ -827,7 +827,7 @@ dstd::Optional<LiteralTest> literal_test(const CompiledPattern& p) {
         case Kind::Regex:
             break;
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 std::size_t capture_count(const CompiledPattern& p) {
@@ -878,7 +878,7 @@ compile_substitution(const CompiledPattern& p, dstd::StringView to) {
                                 at};
         flush();
         sub.pieces.push_back({dstd::String(), g, true});
-        return std::nullopt;
+        return dstd::nullopt;
     };
     auto digit = [](char c) { return c >= '0' && c <= '9'; };
     constexpr const char* BAD_DOLLAR =

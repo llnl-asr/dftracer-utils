@@ -40,6 +40,8 @@
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 #endif
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/arrow/ipc_reader.h>
 #include <dftracer/utils/utilities/arrow/ipc_writer.h>
 #endif
@@ -73,7 +75,7 @@ const char* host_resolve(void* h, dftu_str id, std::uint32_t* out_len) {
         id >= dftracer::utils::dstd::StringIntern::FAST_CAPACITY)
         return nullptr;
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
-    std::string_view sv = intern.resolve(id);
+    dstd::StringView sv = intern.resolve(id);
     if (out_len) *out_len = static_cast<std::uint32_t>(sv.size());
     // Interned bytes are stable for the scan, so they outlive the call.
     return sv.data();
@@ -83,7 +85,7 @@ dftu_str host_intern(void* h, const char* s, std::uint32_t len) {
     if (!s) return DFTU_STR_NONE;
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
     try {
-        return intern.get_or_insert(std::string_view{s, len});
+        return intern.get_or_insert(dstd::StringView{s, len});
     } catch (...) {
         return DFTU_STR_NONE;
     }
@@ -491,7 +493,7 @@ void host_sketch_free(void*, ::dftu_sketch* s) {
     delete reinterpret_cast<SketchBox*>(s);
 }
 
-void append_json_escaped(std::string& out, std::string_view s) {
+void append_json_escaped(std::string& out, dstd::StringView s) {
     for (char c : s) {
         switch (c) {
             case '"':
@@ -528,15 +530,15 @@ void append_json_escaped(std::string& out, std::string_view s) {
 // needs every dyn column, not a lookup by name (see plugins::Batch's
 // per-batch column cache for the per-row-loop counterpart).
 struct DynCols {
-    std::vector<std::pair<std::string_view, dftu_series*>> cols;
+    std::vector<dstd::Pair<dstd::StringView, dftu_series*>> cols;
 
     explicit DynCols(const dftu_dataframe* df) {
-        static constexpr std::string_view ARGS_PREFIX = "args.";
+        static constexpr dstd::StringView ARGS_PREFIX = "args.";
         const std::int32_t n = dftu_dataframe_num_columns(df);
         for (std::int32_t i = 0; i < n; ++i) {
             const char* name = dftu_dataframe_column_name(df, i);
             if (!name) continue;
-            std::string_view nv{name};
+            dstd::StringView nv{name};
             if (nv.substr(0, ARGS_PREFIX.size()) != ARGS_PREFIX) continue;
             cols.emplace_back(nv.substr(ARGS_PREFIX.size()),
                               dftu_dataframe_column(df, name));
@@ -551,7 +553,7 @@ struct DynCols {
 
 void serialize_row(std::string& out, const dftu_dataframe* df,
                    const DynCols& dyn, std::int64_t row, std::uint64_t id) {
-    auto str_col = [&](const char* name, std::string_view* out_sv) {
+    auto str_col = [&](const char* name, dstd::StringView* out_sv) {
         dftu_series* c = dftu_dataframe_column(df, name);
         if (!c) return;
         if (dftu_series_type(c) == DFTU_TYPE_STRING) {
@@ -584,7 +586,7 @@ void serialize_row(std::string& out, const dftu_dataframe* df,
         return v;
     };
 
-    std::string_view name_v, cat_v;
+    dstd::StringView name_v, cat_v;
     str_col("name", &name_v);
     str_col("cat", &cat_v);
     bool has_ph = false;
@@ -629,9 +631,9 @@ void serialize_row(std::string& out, const dftu_dataframe* df,
             case DFTU_TYPE_STRING: {
                 std::int64_t n = 0;
                 const char* p = dftu_series_string_at(c, row, &n);
-                const std::string_view sv =
-                    p ? std::string_view{p, static_cast<std::size_t>(n)}
-                      : std::string_view{};
+                const dstd::StringView sv =
+                    p ? dstd::StringView{p, static_cast<std::size_t>(n)}
+                      : dstd::StringView{};
                 out += '"';
                 append_json_escaped(out, sv);
                 out += '"';
@@ -772,9 +774,9 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                 views::View v = views::View::from_file(p);
                 co_await v.for_each_batch(
                     [&](std::size_t,
-                        const std::vector<std::string_view>& events) {
+                        const std::vector<dstd::StringView>& events) {
                         batch_events.clear();
-                        for (std::string_view ev : events) {
+                        for (dstd::StringView ev : events) {
                             simdjson::padded_string ps(ev);
                             simdjson::dom::element root;
                             if (parser.parse(ps).get(root)) continue;
@@ -1120,12 +1122,12 @@ int PluginFold::close_trace_writer(::dftu_trace_writer* w) {
         opts.member_size = common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
         auto writer =
             common::unwrap(fio::GzipLineWriterBlocking::open(tw->path, opts));
-        const std::string_view buf = tw->buffer;
+        const dstd::StringView buf = tw->buffer;
         const std::size_t end = buf.rfind('\n') + 1;
         std::size_t pos = 0;
         while (pos < end) {
             std::size_t cut = buf.find('\n', pos + opts.member_size);
-            cut = cut == std::string_view::npos || cut >= end ? end : cut + 1;
+            cut = cut == dstd::StringView::npos || cut >= end ? end : cut + 1;
             common::unwrap(writer.append(buf.substr(pos, cut - pos)));
             pos = cut;
         }
@@ -1200,7 +1202,7 @@ PluginFold::~PluginFold() {
 
 ::dftu_duql* PluginFold::compile_query(const char* src, std::uint32_t len) {
     if (!src) return nullptr;
-    auto r = Query::from_string(std::string_view{src, len});
+    auto r = Query::from_string(dstd::StringView{src, len});
     if (!r) return nullptr;
     try {
         compiled_queries_.push_back(std::move(*r));
@@ -1213,7 +1215,7 @@ PluginFold::~PluginFold() {
 int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
                             std::int64_t row) {
     match_qmap_.clear();
-    for (std::string_view f : q.fields()) {
+    for (dstd::StringView f : q.fields()) {
         // A path-decoded frame names each column by its path.
         dftu_series* c = dftu_dataframe_column(df, std::string(f).c_str());
         const bool top = f == "cat" || f == "name" || f == "fhash" ||

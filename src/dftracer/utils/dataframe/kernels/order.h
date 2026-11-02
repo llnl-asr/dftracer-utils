@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cmath>
 #include <cstdint>
@@ -64,7 +65,7 @@ class ColumnView {
     /// The value of any numeric column as a double.
     double get_double(std::int64_t i) const noexcept;
     /// The bytes of a Bytes column.
-    std::string_view get_bytes(std::int64_t i) const noexcept;
+    dstd::StringView get_bytes(std::int64_t i) const noexcept;
 
     /// Three-way order of non-null rows `a` and `b` of this column: numeric
     /// by value with NaN last and equal to NaN, bytes by memcmp then length.

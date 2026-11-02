@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -31,8 +32,8 @@ namespace dftracer::utils::trace::views::detail {
 /// The columns an aggregation of `plan` produces, from finalizing an empty
 /// state through the same path, so no trace is read. A column whose type
 /// follows its input's (sum, sumsq, min, max, argmax) is Unknown.
-/// std::nullopt for auto_numeric_metrics, whose columns depend on the data.
-std::optional<dftracer::utils::dataframe::Schema> aggregated_output_schema(
+/// dstd::nullopt for auto_numeric_metrics, whose columns depend on the data.
+dstd::Optional<dftracer::utils::dataframe::Schema> aggregated_output_schema(
     const ViewPlan& plan);
 
 dftracer::utils::dataframe::DataFrame finalize_engine_result(
@@ -63,7 +64,7 @@ struct DynFix {
 /// fixed gaggs in [value, text] order, and the name-keyed dyn side-table
 /// reductions (auto_numeric_metrics) plus the column-name tag they carry.
 struct EnginePrep {
-    std::optional<dftracer::utils::dataframe::LazyFrame> lf;
+    dstd::Optional<dftracer::utils::dataframe::LazyFrame> lf;
     std::vector<std::string> group_key_names;
     std::vector<dftracer::utils::dataframe::GroupAgg> gaggs;
     std::vector<dftracer::utils::dataframe::AggDynSpec> dyn_specs;

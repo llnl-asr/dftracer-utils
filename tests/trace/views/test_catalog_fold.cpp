@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -25,7 +26,8 @@ namespace st = dftracer::utils::index::store;
 
 constexpr int RECORDS = 400;
 
-using Catalog = std::map<std::string, std::tuple<int, int, std::uint64_t>>;
+using Catalog = std::map<std::string,
+                         dftracer::utils::dstd::Tuple<int, int, std::uint64_t>>;
 
 std::string write_gz(TestEnvironment& env, const std::string& dir,
                      const std::vector<std::string>& lines) {

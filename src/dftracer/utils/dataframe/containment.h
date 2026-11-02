@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_CONTAINMENT_H
 #define DFTRACER_UTILS_DATAFRAME_CONTAINMENT_H
 
+#include <dftracer/utils/dstd/pair.h>
+
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -29,7 +31,7 @@ namespace dftracer::utils::dataframe {
 template <class Time, class Handle, class Start, class End, class Sink>
 void containment_walk(std::int64_t n, Start&& start, End&& end_, Handle root,
                       Sink&& sink,
-                      std::vector<std::pair<Time, Handle> >& stack) {
+                      std::vector<dstd::Pair<Time, Handle> >& stack) {
     stack.clear();
     for (std::int64_t k = 0; k < n; ++k) {
         const Time s = start(k);

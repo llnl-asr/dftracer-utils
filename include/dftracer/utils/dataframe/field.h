@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/builder.h>
@@ -69,11 +70,11 @@ struct FNode {
     bool in_is_string = false;   // In: string vs int element type
     dstd::Vector<std::int64_t> in_ints;
     dstd::Vector<dstd::String> in_strs;
-    std::shared_ptr<const FNode> a;
-    std::shared_ptr<const FNode> b;
+    dstd::SharedPtr<const FNode> a;
+    dstd::SharedPtr<const FNode> b;
 };
 
-using FNodePtr = std::shared_ptr<const FNode>;
+using FNodePtr = dstd::SharedPtr<const FNode>;
 
 template <typename... Fields>
 inline FNodePtr make_node(FKind kind, Fields&&... init) {
@@ -195,19 +196,19 @@ class FieldExpr {
 
     /// String-match predicates (filter-only): SQL LIKE / ILIKE, duql regex /
     /// case-insensitive regex, and case-insensitive substring.
-    FieldExpr like(std::string_view pattern) const {
+    FieldExpr like(dstd::StringView pattern) const {
         return match(duql::MatchOp::Like, pattern);
     }
-    FieldExpr ilike(std::string_view pattern) const {
+    FieldExpr ilike(dstd::StringView pattern) const {
         return match(duql::MatchOp::Ilike, pattern);
     }
-    FieldExpr regex(std::string_view pattern) const {
+    FieldExpr regex(dstd::StringView pattern) const {
         return match(duql::MatchOp::Regex, pattern);
     }
-    FieldExpr iregex(std::string_view pattern) const {
+    FieldExpr iregex(dstd::StringView pattern) const {
         return match(duql::MatchOp::Iregex, pattern);
     }
-    FieldExpr contains(std::string_view substring) const {
+    FieldExpr contains(dstd::StringView substring) const {
         return match(duql::MatchOp::Icontains, substring);
     }
 
@@ -236,7 +237,7 @@ class FieldExpr {
     FieldAggExpr count() const { return agg_of(AggFn::Count); }
     /// The value of this field at the row where `by` is maximal (ArgMax). No
     /// argmin: the engine's AggOp has only ArgMax.
-    FieldAggExpr argmax_by(std::string_view by) const {
+    FieldAggExpr argmax_by(dstd::StringView by) const {
         return FieldAggExpr(AggFn::ArgMax, field_name(), false,
                             std::string(by));
     }
@@ -338,7 +339,7 @@ class FieldExpr {
             }));
     }
 
-    FieldExpr match(duql::MatchOp op, std::string_view pattern) const {
+    FieldExpr match(duql::MatchOp op, dstd::StringView pattern) const {
         return FieldExpr(
             detail::make_node(detail::FKind::Match, [&](detail::FNode& n) {
                 n.op = static_cast<int>(op);
@@ -641,7 +642,7 @@ inline FieldExpr operator!(const FieldExpr& a) {
 }
 
 /// A field / column reference by name (the same leaf `F(name)` builds).
-inline FieldExpr field(std::string_view name) {
+inline FieldExpr field(dstd::StringView name) {
     return FieldExpr(detail::make_node(
         detail::FKind::Col,
         [&](detail::FNode& n) { n.name = std::string(name); }));
@@ -669,7 +670,7 @@ struct WildcardField {
 /// - a superset of the predicate-only duql::F. `F.any` is the numeric-args
 /// wildcard (see @ref WildcardField).
 struct FieldFactory {
-    FieldExpr operator()(std::string_view name) const { return field(name); }
+    FieldExpr operator()(dstd::StringView name) const { return field(name); }
     WildcardField any{};
 };
 inline constexpr FieldFactory F{};

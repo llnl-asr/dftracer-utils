@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_RESERVED_ARGS_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_RESERVED_ARGS_H
 
+#include <dftracer/utils/dstd/string.h>
+
 #include <string_view>
 
 namespace dftracer::utils::index::schemas::dft::agg {
@@ -10,7 +12,7 @@ namespace dftracer::utils::index::schemas::dft::agg {
 /// metrics + hashes) and therefore must not treat as custom user fields. Shared
 /// by the aggregation visitor and the aggregation-logic updater so the set
 /// cannot drift between them.
-inline bool is_reserved_arg(std::string_view k) {
+inline bool is_reserved_arg(dstd::StringView k) {
     if (k.empty()) return false;
     switch (k[0]) {
         case 'h':
@@ -31,9 +33,9 @@ inline bool is_reserved_arg(std::string_view k) {
 }
 
 /// True for a pre-aggregated metric field name (ends in _sum / _min / _max).
-inline bool is_preagg_suffix(std::string_view k) {
+inline bool is_preagg_suffix(dstd::StringView k) {
     if (k.size() <= 4) return false;
-    const std::string_view tail = k.substr(k.size() - 4);
+    const dstd::StringView tail = k.substr(k.size() - 4);
     return tail == "_sum" || tail == "_min" || tail == "_max";
 }
 

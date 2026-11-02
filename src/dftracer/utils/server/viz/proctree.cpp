@@ -2,8 +2,11 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
@@ -64,7 +67,7 @@ struct ProcNode {
     std::int64_t parent;
     std::uint64_t spawn_ts;
     std::uint64_t first_ts;
-    std::string_view host;
+    dstd::StringView host;
     std::uint64_t bytes;
     std::uint64_t io_ops;
     double io_busy;
@@ -126,7 +129,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         ankerl::unordered_dense::map<std::int64_t, std::int64_t> ppid;
         // (ts, parent_pid, child_pid): child_pid is args.ret when the fork
         // event records it (dftracer POSIX), else -1 to fall back to inference.
-        std::vector<std::tuple<std::uint64_t, std::int64_t, std::int64_t>>
+        std::vector<dstd::Tuple<std::uint64_t, std::int64_t, std::int64_t>>
             forks;
         ankerl::unordered_dense::map<std::int64_t, std::uint64_t> bytes;
         // I/O operation count and busy time (us) per process, over I/O-category
@@ -145,11 +148,11 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     const TraceFields fields(index.record_schema());
     auto on_batch = [&accs, &fields](
                         std::size_t w,
-                        const std::vector<std::string_view>& events) {
+                        const std::vector<dstd::StringView>& events) {
         thread_local dftracer::utils::json::RecordParser parser;
         thread_local std::string buf;
         Acc& acc = accs[w];
-        fields.for_each_event(events, [&](std::string_view ev) {
+        fields.for_each_event(events, [&](dstd::StringView ev) {
             buf.assign(ev);
             auto res = parser.parse(buf);
             if (res.error()) return;
@@ -223,8 +226,8 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
                         pid, std::string(hr.get_string().value_unsafe()));
             }
             // I/O bytes per process: args.ret on read/write ops.
-            if (ret > 0 && (s.name.find("read") != std::string_view::npos ||
-                            s.name.find("write") != std::string_view::npos))
+            if (ret > 0 && (s.name.find("read") != dstd::StringView::npos ||
+                            s.name.find("write") != dstd::StringView::npos))
                 acc.bytes[pid] += static_cast<std::uint64_t>(ret);
 
             if (s.cat == "POSIX" || s.cat == "STDIO" || s.cat == "IO") {
@@ -270,7 +273,8 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     ankerl::unordered_dense::map<std::int64_t, std::uint64_t> first_ts;
     ankerl::unordered_dense::map<std::int64_t, std::int64_t> parent_of;
     ankerl::unordered_dense::map<std::int64_t, std::uint64_t> spawn_of;
-    std::vector<std::pair<std::uint64_t, std::int64_t>> inf_forks;  // (ts, pid)
+    std::vector<dstd::Pair<std::uint64_t, std::int64_t>>
+        inf_forks;  // (ts, pid)
     for (auto& a : accs) {
         for (auto& kv : a.first_ts) {
             auto it = first_ts.find(kv.first);
@@ -314,7 +318,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         for (auto& kv : a.rank) rank.emplace(kv.first, kv.second);
     }
 
-    std::vector<std::pair<std::uint64_t, std::int64_t>>
+    std::vector<dstd::Pair<std::uint64_t, std::int64_t>>
         procs;  // (first_ts, pid)
     procs.reserve(first_ts.size());
     for (auto& kv : first_ts) procs.emplace_back(kv.second, kv.first);
@@ -366,7 +370,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
                 }
             }
         }
-        std::string_view host;
+        dstd::StringView host;
         auto hp = pid_hhash.find(pid);
         if (hp != pid_hhash.end()) {
             auto hn = hh.find(hp->second);

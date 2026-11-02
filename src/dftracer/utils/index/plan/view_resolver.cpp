@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 
 namespace dftracer::utils::index::plan {
@@ -49,14 +50,14 @@ GroupResolver::GroupResolver(const std::vector<RowSetFile>& files,
 }
 
 const dstd::StringViewMap<std::string>* GroupResolver::column(
-    std::string_view name) const {
+    dstd::StringView name) const {
     for (const auto& [n, values] : columns_)
         if (n == name) return &values;
     return nullptr;
 }
 
-const std::string& GroupResolver::value(std::string_view name,
-                                        std::string_view key) const {
+const std::string& GroupResolver::value(dstd::StringView name,
+                                        dstd::StringView key) const {
     const auto* c = column(name);
     if (!c) return EMPTY;
     auto it = c->find(key);

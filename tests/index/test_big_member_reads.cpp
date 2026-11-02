@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -231,7 +232,7 @@ std::size_t members_lines(const std::string& path) {
 }
 
 struct Indexed {
-    std::shared_ptr<GzipIndexer> indexer;
+    dstd::SharedPtr<GzipIndexer> indexer;
     Indexed(const std::string& path, const std::string& index_path,
             std::uint64_t ckpt = CKPT) {
         indexer = std::make_shared<GzipIndexer>(path, index_path, ckpt, true);
@@ -261,7 +262,7 @@ std::uint64_t bytes_read_by_process() {
 
 std::size_t newlines_before(const std::string& text, std::size_t at);
 
-std::string read_line_bytes(const std::shared_ptr<GzipIndexer>& indexer,
+std::string read_line_bytes(const dstd::SharedPtr<GzipIndexer>& indexer,
                             std::size_t from) {
     GzipReader reader(indexer);
     auto stream = reader.stream(

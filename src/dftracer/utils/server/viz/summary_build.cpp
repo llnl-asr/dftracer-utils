@@ -2,6 +2,9 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
@@ -243,15 +246,15 @@ struct SumBuild {
         std::int64_t pid = 0;
         std::int64_t tid = 0;
         ankerl::unordered_dense::map<std::uint32_t,
-                                     std::pair<double, std::uint32_t>>
+                                     dstd::Pair<double, std::uint32_t>>
             byb;
     };
     std::vector<ankerl::unordered_dense::map<std::string, CtrAccum>> c_series;
 
     // Series identity includes pid/tid so a per-process counter keeps one
     // series per emitter (node-level counters emit under pid 0).
-    void fold_counter_sample(std::size_t w, std::string_view name,
-                             std::string_view key, std::string_view cat,
+    void fold_counter_sample(std::size_t w, dstd::StringView name,
+                             dstd::StringView key, dstd::StringView cat,
                              std::int64_t pid, std::int64_t tid,
                              std::uint32_t bucket, double val) {
         std::string sk;
@@ -355,7 +358,7 @@ struct SumBuild {
         if (lv.size() > long_cap * 2) compact_long(w);
     }
 
-    std::uint32_t intern(std::size_t w, std::string_view name) {
+    std::uint32_t intern(std::size_t w, dstd::StringView name) {
         auto& cache = name_cache[w];
         auto ci = cache.find(name);
         if (ci != cache.end()) return ci->second;
@@ -389,7 +392,7 @@ static void atomic_add_double(std::atomic<double>& a, double v) {
 }
 
 // Fold one (key, dur) sample into a group aggregate, mirroring fold_event.
-static void fold_group(NameMap& m, std::string_view key, double dur) {
+static void fold_group(NameMap& m, dstd::StringView key, double dur) {
     auto it = m.find(key);
     if (it == m.end()) {
         it = m.emplace(std::string(key), NameStat{}).first;
@@ -403,7 +406,7 @@ static void fold_group(NameMap& m, std::string_view key, double dur) {
     it->second.total += dur;
 }
 
-static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
+static void fold_summary(std::size_t w, dstd::StringView event, SumBuild& b) {
     dftracer::utils::json::RecordParser& parser = b.parsers[w];
     std::string& buf = b.parse_bufs[w];
     // Give simdjson zero-filled trailing padding it can over-read into. Parsing
@@ -416,7 +419,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     auto root = res.value_unsafe();
     if (!root.is_object()) return;
 
-    std::string_view name0;
+    dstd::StringView name0;
     {
         auto nr = root["name"];
         if (!nr.error() && nr.is_string())
@@ -438,7 +441,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
             if (bucket < 0) return;
             if (bucket >= static_cast<std::int64_t>(b.nb_fine))
                 bucket = static_cast<std::int64_t>(b.nb_fine) - 1;
-            std::string_view ccat;
+            dstd::StringView ccat;
             auto ccr = root["cat"];
             if (!ccr.error() && ccr.is_string())
                 ccat = ccr.get_string().value_unsafe();
@@ -593,7 +596,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
             if (b.fields.by_path && row.label.empty()) {
                 auto ar = root["args"];
                 auto v = ar.error()
-                             ? std::nullopt
+                             ? dstd::nullopt
                              : find_path(ar.value_unsafe(), b.fields.entity);
                 if (v && v->is_string())
                     row.label = std::string(v->get_string().value_unsafe());
@@ -614,8 +617,8 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
                 if (!hr.error() && hr.is_string() && row.hhash.empty())
                     row.hhash = std::string(hr.get_string().value_unsafe());
             }
-            if (ret > 0 && (name0.find("read") != std::string_view::npos ||
-                            name0.find("write") != std::string_view::npos))
+            if (ret > 0 && (name0.find("read") != dstd::StringView::npos ||
+                            name0.find("write") != dstd::StringView::npos))
                 row.bytes += static_cast<std::uint64_t>(ret);
 
             auto cr = root["cat"];
@@ -638,7 +641,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     // name => same keys), so this is O(distinct names), not O(events).
     if (b.col_seen[w].find(name0) == b.col_seen[w].end()) {
         b.col_seen[w].emplace(name0);
-        static const ankerl::unordered_dense::set<std::string_view> SKIP = {
+        static const ankerl::unordered_dense::set<dstd::StringView> SKIP = {
             "pid", "tid", "ts", "dur", "ph", "id", "args"};
         auto obj = root.get_object();
         if (!obj.error())
@@ -677,7 +680,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
         auto nr = root["name"];
         auto cr = root["cat"];
         if (!nr.error() && nr.is_string()) {
-            std::string_view nm = nr.get_string().value_unsafe();
+            dstd::StringView nm = nr.get_string().value_unsafe();
             fold_group(b.g_name[w], nm, dur);
             if (!cr.error() && cr.is_string() &&
                 b.name_cat[w].find(nm) == b.name_cat[w].end())
@@ -690,7 +693,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
         thread_local std::string pidkey;
         if (b.fields.by_path) {
             auto ar = root["args"];
-            auto v = ar.error() ? std::nullopt
+            auto v = ar.error() ? dstd::nullopt
                                 : find_path(ar.value_unsafe(), b.fields.entity);
             pidkey.assign(v ? scalar_text(*v) : std::string());
         } else {
@@ -722,7 +725,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
 
     std::uint32_t name_id;
     {
-        std::string_view name;
+        dstd::StringView name;
         auto nr = root["name"];
         if (!nr.error() && nr.is_string())
             name = nr.get_string().value_unsafe();
@@ -746,7 +749,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     // Counters: read/write bytes and op counts for POSIX/STDIO/IO events.
     auto cat_r = root["cat"];
     if (cat_r.error() || !cat_r.is_string()) return;
-    std::string_view cat = cat_r.get_string().value_unsafe();
+    dstd::StringView cat = cat_r.get_string().value_unsafe();
     if (cat != "POSIX" && cat != "STDIO" && cat != "IO") return;
     atomic_add_double(b.cops[bi], 1.0);
     double bytes = 0;
@@ -756,11 +759,11 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
         if (!ret.error()) bytes = json_number(ret.value_unsafe());
     }
     if (bytes <= 0) return;
-    std::string_view name;
+    dstd::StringView name;
     auto nr = root["name"];
     if (!nr.error() && nr.is_string()) name = nr.get_string().value_unsafe();
-    bool is_write = name.find("write") != std::string_view::npos;
-    bool is_read = name.find("read") != std::string_view::npos;
+    bool is_write = name.find("write") != dstd::StringView::npos;
+    bool is_read = name.find("read") != dstd::StringView::npos;
     if (is_write)
         atomic_add_double(b.cwrite[bi], bytes);
     else if (is_read)
@@ -852,8 +855,8 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     co_await views::View::from_files(to_view_files(files))
         .phase(views::Phase::Any)  // every record: cells, counters, metadata
         .for_each_batch(
-            [&b](std::size_t w, const std::vector<std::string_view>& events) {
-                b.fields.for_each_event(events, [&](std::string_view ev) {
+            [&b](std::size_t w, const std::vector<dstd::StringView>& events) {
+                b.fields.for_each_event(events, [&](dstd::StringView ev) {
                     fold_summary(w, ev, b);
                 });
             },
@@ -961,7 +964,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     {
         std::size_t total = 0;
         for (auto& acc : b.fine) total += acc.cells.size();
-        std::vector<std::pair<std::uint64_t, VizSummary::Cell>> merged;
+        std::vector<dstd::Pair<std::uint64_t, VizSummary::Cell>> merged;
         merged.reserve(total);
         for (auto& acc : b.fine) {
             for (std::size_t i = 0; i < acc.keys.size(); ++i)
@@ -1286,7 +1289,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
                   [](const auto* lhs, const auto* rhs) {
                       return lhs->begin < rhs->begin;
                   });
-        std::vector<std::pair<std::uint64_t, std::uint64_t>> runs;
+        std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> runs;
         for (const auto* sp : spans) {
             if (!runs.empty() && sp->begin <= runs.back().second)
                 runs.back().second = std::max(runs.back().second, sp->end);

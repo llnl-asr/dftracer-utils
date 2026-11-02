@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_DEFINITION_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_DEFINITION_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
 
@@ -15,9 +17,9 @@ using dftracer::utils::duql::Query;
 
 /// Named view definition with optional query filter.
 struct ViewDefinition {
-    std::string name;            ///< View name.
-    std::string description;     ///< Human-readable description.
-    std::optional<Query> query;  ///< Event filter (nullopt = match all).
+    std::string name;             ///< View name.
+    std::string description;      ///< Human-readable description.
+    dstd::Optional<Query> query;  ///< Event filter (nullopt = match all).
     /// Return ph=M metadata records; they bypass `query` unless one of the
     /// two flags below is set.
     bool include_metadata = false;
@@ -30,7 +32,7 @@ struct ViewDefinition {
     /// Keep data records by time: those with begin <= ts < end, or, with
     /// `window_overlap`, those whose [ts, ts + dur) overlaps [begin, end).
     /// Metadata records are not windowed. nullopt keeps every record.
-    std::optional<std::pair<double, double>> window;
+    dstd::Optional<dstd::Pair<double, double>> window;
     bool window_overlap = false;
     /// Decode records by exact JSON path (decode_record) rather than as
     /// dftracer events.

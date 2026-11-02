@@ -7,6 +7,8 @@
 // a path-decoded record becomes one at the scan boundary. Internal to the
 // server.
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <simdjson.h>
@@ -21,22 +23,22 @@
 namespace dftracer::utils::server {
 
 // The value at dotted `path` under `root`.
-inline std::optional<simdjson::dom::element> find_path(
-    simdjson::dom::element root, std::string_view path) {
+inline dstd::Optional<simdjson::dom::element> find_path(
+    simdjson::dom::element root, dstd::StringView path) {
     simdjson::dom::element cur = root;
     std::size_t start = 0;
     while (start <= path.size()) {
         const auto dot = path.find('.', start);
-        const auto key = path.substr(start, dot == std::string_view::npos
+        const auto key = path.substr(start, dot == dstd::StringView::npos
                                                 ? path.size() - start
                                                 : dot - start);
         if (!key.empty()) {
-            if (!cur.is_object()) return std::nullopt;
+            if (!cur.is_object()) return dstd::nullopt;
             auto next = cur[key];
-            if (next.error()) return std::nullopt;
+            if (next.error()) return dstd::nullopt;
             cur = next.value_unsafe();
         }
-        if (dot == std::string_view::npos) break;
+        if (dot == dstd::StringView::npos) break;
         start = dot + 1;
     }
     return cur;
@@ -110,7 +112,7 @@ struct TraceFields {
     // lane), ts and dur in microseconds (dur 0 for an instant, ts absent for
     // a record without a time), ph 1 and args (the record itself). False
     // when `raw` is not a JSON object.
-    bool to_event(std::string_view raw, std::string& out) const {
+    bool to_event(dstd::StringView raw, std::string& out) const {
         thread_local dftracer::utils::json::RecordParser parser;
         thread_local std::string buf;
         thread_local simdjson::builder::string_builder b;
@@ -120,12 +122,12 @@ struct TraceFields {
         if (res.error() || !res.value_unsafe().is_object()) return false;
         const auto root = res.value_unsafe();
         auto at = [&](const std::string& path) {
-            return path.empty() ? std::nullopt : find_path(root, path);
+            return path.empty() ? dstd::nullopt : find_path(root, path);
         };
-        auto number = [](std::optional<simdjson::dom::element> el)
-            -> std::optional<double> {
+        auto number = [](dstd::Optional<simdjson::dom::element> el)
+            -> dstd::Optional<double> {
             if (!el || !(el->is_int64() || el->is_uint64() || el->is_double()))
-                return std::nullopt;
+                return dstd::nullopt;
             return el->get_double().value_unsafe();
         };
         b.clear();
@@ -133,7 +135,7 @@ struct TraceFields {
         const auto name = at(label);
         const std::string text = name ? scalar_text(*name) : std::string();
         b.append_key_value(
-            "name", std::string_view(text.empty() ? fallback_label : text));
+            "name", dstd::StringView(text.empty() ? fallback_label : text));
         b.append_comma();
         const auto pid = at(entity);
         b.append_key_value("pid", pid ? lane_id(*pid) : std::int64_t{0});
@@ -154,14 +156,14 @@ struct TraceFields {
         b.append_colon();
         b.append_raw(raw);
         b.end_object();
-        out.assign(std::string_view(b));
+        out.assign(dstd::StringView(b));
         return true;
     }
 
     // Calls `fn(root, event)` with the path record `raw` read as a trace
     // event, parsed; both last until `fn` returns.
     template <typename Fn>
-    void with_event(std::string_view raw, Fn&& fn) const {
+    void with_event(dstd::StringView raw, Fn&& fn) const {
         thread_local dftracer::utils::json::RecordParser parser;
         thread_local std::string ev;
         thread_local std::string buf;
@@ -169,13 +171,13 @@ struct TraceFields {
         buf.assign(ev);
         buf.append(simdjson::SIMDJSON_PADDING, '\0');
         auto res = parser.parse(buf.data(), ev.size(), false);
-        if (!res.error()) fn(res.value_unsafe(), std::string_view(ev));
+        if (!res.error()) fn(res.value_unsafe(), dstd::StringView(ev));
     }
 
     // Calls `fn` with each of `events` as a trace event; the view it gets
     // lasts until `fn` returns.
     template <typename Fn>
-    void for_each_event(const std::vector<std::string_view>& events,
+    void for_each_event(const std::vector<dstd::StringView>& events,
                         Fn&& fn) const {
         if (!by_path) {
             for (auto e : events) fn(e);
@@ -183,7 +185,7 @@ struct TraceFields {
         }
         thread_local std::string ev;
         for (auto e : events)
-            if (to_event(e, ev)) fn(std::string_view(ev));
+            if (to_event(e, ev)) fn(dstd::StringView(ev));
     }
 };
 

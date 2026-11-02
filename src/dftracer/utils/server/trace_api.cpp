@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolver.h>
@@ -127,20 +129,20 @@ static coro::CoroTask<HttpResponse> handle_info(const HttpRequest& /*req*/,
     b.escape_and_append_with_quotes("schema");
     b.append_colon();
     b.start_object();
-    b.append_key_value("id", std::string_view(index.record_schema().id));
+    b.append_key_value("id", dstd::StringView(index.record_schema().id));
     b.append_comma();
     b.append_key_value("decoder", fields.by_path ? "path" : "dftracer");
     b.append_comma();
     b.escape_and_append_with_quotes("fields");
     b.append_colon();
     b.start_object();
-    const std::pair<const char*, const std::string*> named[] = {
+    const dstd::Pair<const char*, const std::string*> named[] = {
         {"time", &fields.time},     {"duration", &fields.duration},
         {"entity", &fields.entity}, {"lane", &fields.lane},
         {"label", &fields.label},   {"entity_name", &fields.entity_name}};
     for (std::size_t i = 0; i < std::size(named); ++i) {
         if (i > 0) b.append_comma();
-        b.append_key_value(named[i].first, std::string_view(*named[i].second));
+        b.append_key_value(named[i].first, dstd::StringView(*named[i].second));
     }
     b.end_object();
     b.end_object();

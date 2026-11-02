@@ -5,6 +5,8 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -34,7 +36,7 @@ using dftracer::utils::trace::views::ExportSink;
 using dftracer::utils::trace::views::View;
 
 constexpr int RECORDS = 3000;
-constexpr std::string_view EXT = "index_minmax.range";
+constexpr dftracer::utils::dstd::StringView EXT = "index_minmax.range";
 
 // Records {"op":"read","v":i} in gzip members of about 8 KB, so the chunks
 // hold rising ranges of v.
@@ -70,11 +72,12 @@ Indexer open(const std::string& gz) {
     return Indexer::open({gz}, o);
 }
 
-std::optional<dftracer::utils::index::ExtensionEntry> entry(const Indexer& ix) {
+dftracer::utils::dstd::Optional<dftracer::utils::index::ExtensionEntry> entry(
+    const Indexer& ix) {
     const auto manifest = ix.manifest();
     for (const auto& e : manifest.at(0).extensions)
         if (e.name == EXT) return e;
-    return std::nullopt;
+    return dftracer::utils::dstd::nullopt;
 }
 
 const dftracer::utils::index::ExtensionPrune* pruned(const FileExplain& f) {
@@ -84,7 +87,7 @@ const dftracer::utils::index::ExtensionPrune* pruned(const FileExplain& f) {
 }
 
 struct NullSink : ExportSink {
-    void write(std::string_view) override {}
+    void write(dftracer::utils::dstd::StringView) override {}
 };
 
 View view_of(const std::string& gz) {

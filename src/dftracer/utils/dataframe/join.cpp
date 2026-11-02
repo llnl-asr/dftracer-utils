@@ -115,12 +115,12 @@ struct KeyView {
     bool is_null(std::int64_t i) const {
         return validity && !((validity[i >> 3] >> (i & 7)) & 1);
     }
-    std::string_view bytes(std::int64_t i) const {
+    dstd::StringView bytes(std::int64_t i) const {
         if (kind == Str64)
-            return std::string_view(
+            return dstd::StringView(
                 reinterpret_cast<const char*>(data) + off64[i],
                 static_cast<std::size_t>(off64[i + 1] - off64[i]));
-        return std::string_view(
+        return dstd::StringView(
             reinterpret_cast<const char*>(data) + off32[i],
             static_cast<std::size_t>(off32[i + 1] - off32[i]));
     }
@@ -140,7 +140,7 @@ struct KeyView {
                 std::memcpy(&bits, p,
                             width < sizeof(bits) ? width : sizeof(bits));
                 if (width > sizeof(bits))
-                    bits ^= std::hash<std::string_view>{}(std::string_view(
+                    bits ^= std::hash<dstd::StringView>{}(dstd::StringView(
                         reinterpret_cast<const char*>(p), width));
                 return bits;
             }
@@ -148,7 +148,7 @@ struct KeyView {
                 return (data[i >> 3] >> (i & 7)) & 1;
             case Str32:
             case Str64:
-                return std::hash<std::string_view>{}(bytes(i));
+                return std::hash<dstd::StringView>{}(bytes(i));
         }
         return 0;
     }

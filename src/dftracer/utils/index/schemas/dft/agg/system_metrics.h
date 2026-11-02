@@ -17,8 +17,8 @@ namespace dftracer::utils::index::schemas::dft::agg {
 static constexpr std::uint16_t AGG_KEY_NUM_SHARDS = 4096;
 
 /// Depends on the texts alone, so the buckets of one group share a shard.
-inline std::uint16_t system_shard(std::string_view hhash,
-                                  std::string_view name) {
+inline std::uint16_t system_shard(dstd::StringView hhash,
+                                  dstd::StringView name) {
     utilities::hash::Fnv1aHashBuilder h;
     h.update(hhash);
     h.update(name);
@@ -49,7 +49,7 @@ struct SystemAggregationMetrics {
     SystemAggregationMetrics(SystemAggregationMetrics&&) = default;
     SystemAggregationMetrics& operator=(SystemAggregationMetrics&&) = default;
 
-    void update_metric(std::string_view name, double value,
+    void update_metric(dstd::StringView name, double value,
                        bool compute_percentiles = false) {
         if (!metrics) {
             metrics = dstd::make_unique<SystemMetricsMap>();

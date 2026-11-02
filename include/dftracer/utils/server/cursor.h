@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_SERVER_CURSOR_H
 #define DFTRACER_UTILS_SERVER_CURSOR_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -21,7 +24,7 @@ struct QueryCursor {
     std::string encode() const;
 
     /// Decode a cursor from a Base64 string.
-    static std::optional<QueryCursor> decode(std::string_view cursor);
+    static dstd::Optional<QueryCursor> decode(dstd::StringView cursor);
 };
 
 }  // namespace dftracer::utils::server

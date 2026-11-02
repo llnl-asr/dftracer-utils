@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/record.h>
@@ -16,7 +17,7 @@ namespace {
 
 namespace dstd = dftracer::utils::dstd;
 
-constexpr std::string_view RECORD_MAGIC = "DFTUREC0";
+constexpr dstd::StringView RECORD_MAGIC = "DFTUREC0";
 constexpr std::size_t RECORD_HEADER_BYTES = 40;
 constexpr std::size_t MIN_SCOPE_PATH_BYTES = 1;
 constexpr std::size_t MIN_EXTENT_SEGMENT_BYTES = 30;
@@ -31,7 +32,7 @@ dstd::Unexpected<dstd::Error> invalid_error() {
         dstd::Error(dstd::Condition::InvalidArgument));
 }
 
-void append_magic(dstd::Vector<std::uint8_t>& out, std::string_view magic) {
+void append_magic(dstd::Vector<std::uint8_t>& out, dstd::StringView magic) {
     const auto* begin = reinterpret_cast<const std::uint8_t*>(magic.data());
     out.insert(out.end(), begin, begin + magic.size());
 }

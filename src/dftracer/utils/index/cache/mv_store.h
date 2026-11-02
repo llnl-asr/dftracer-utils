@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_CACHE_MV_STORE_H
 #define DFTRACER_UTILS_INDEX_CACHE_MV_STORE_H
 
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <optional>
@@ -49,7 +50,7 @@ void register_view(const std::string& dir,
 /// implies, and a smaller on-disk footprint than the base - and return the
 /// trace file(s) to redirect the scan onto (with their shared index). nullopt
 /// when none qualifies, so the caller scans the base.
-std::optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
+dstd::Optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
     const trace::views::detail::ViewPlan& plan);
 
 }  // namespace dftracer::utils::index::cache

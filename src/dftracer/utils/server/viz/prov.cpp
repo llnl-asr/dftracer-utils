@@ -3,6 +3,7 @@
 // trace::provenance::extract_provenance_graph over the server's indexed
 // file set (bloom-cache chunk skipping, max_concurrent worker slots).
 // Honors the same file-scoping parameters as the viz endpoints (?file=, ?pid=).
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/router.h>
@@ -31,12 +32,12 @@ coro::CoroTask<HttpResponse> handle_prov_graph(const HttpRequest& req,
     trace::provenance::ProvenanceOptions opts;
     opts.include_io = params.get_int("io", 1) != 0;
     opts.include_all_files = params.get_int("all_files", 0) != 0;
-    std::string_view ms = params.get("mounts");  // comma-separated prefixes
+    dstd::StringView ms = params.get("mounts");  // comma-separated prefixes
     while (!ms.empty()) {
         auto c = ms.find(',');
         auto tok = ms.substr(0, c);
         if (!tok.empty()) opts.mounts.emplace_back(tok);
-        if (c == std::string_view::npos) break;
+        if (c == dstd::StringView::npos) break;
         ms.remove_prefix(c + 1);
     }
     auto graph = co_await trace::provenance::extract_provenance_graph(

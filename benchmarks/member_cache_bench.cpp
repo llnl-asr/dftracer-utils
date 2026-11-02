@@ -18,6 +18,7 @@
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -36,7 +37,7 @@
 using namespace dftracer::utils;
 namespace compress = dftracer::utils::utilities::fileio::compress;
 
-using Bytes = std::shared_ptr<const std::vector<std::uint8_t>>;
+using Bytes = dstd::SharedPtr<const std::vector<std::uint8_t>>;
 
 namespace {
 
@@ -94,10 +95,10 @@ struct MutexCoalesce {
         Bytes bytes;
     };
     std::mutex m_;
-    std::unordered_map<std::uint64_t, std::shared_ptr<Entry>> map_;
+    std::unordered_map<std::uint64_t, dstd::SharedPtr<Entry>> map_;
 
     coro::CoroTask<Bytes> get(std::uint64_t key, const Blob* blob) {
-        std::shared_ptr<Entry> e;
+        dstd::SharedPtr<Entry> e;
         {
             std::lock_guard<std::mutex> g(m_);
             auto& slot = map_[key];
@@ -117,11 +118,11 @@ struct MutexCoalesce {
 // --- strategy: AsyncOnce single-flight (broadcast wake) ----------------------
 struct OnceCoalesce {
     std::mutex m_;
-    std::unordered_map<std::uint64_t, std::shared_ptr<coro::AsyncOnce<Bytes>>>
+    std::unordered_map<std::uint64_t, dstd::SharedPtr<coro::AsyncOnce<Bytes>>>
         map_;
 
     coro::CoroTask<Bytes> get(std::uint64_t key, const Blob* blob) {
-        std::shared_ptr<coro::AsyncOnce<Bytes>> once;
+        dstd::SharedPtr<coro::AsyncOnce<Bytes>> once;
         {
             std::lock_guard<std::mutex> g(m_);
             auto& slot = map_[key];
@@ -186,7 +187,7 @@ double bench_mutex_wake(Runtime& rt, int rounds, int waiters) {
                 tasks.reserve(waiters);
                 for (int w = 0; w < waiters; ++w) {
                     tasks.push_back(
-                        [](std::shared_ptr<Entry> ent) -> coro::CoroTask<int> {
+                        [](dstd::SharedPtr<Entry> ent) -> coro::CoroTask<int> {
                             co_await ent->mutex.lock();
                             coro::AsyncMutexGuard g(ent->mutex);
                             if (!ent->ready) {
@@ -214,7 +215,7 @@ double bench_once_wake(Runtime& rt, int rounds, int waiters) {
                 dstd::Vector<coro::CoroTask<int>> tasks;
                 tasks.reserve(waiters);
                 for (int w = 0; w < waiters; ++w) {
-                    tasks.push_back([](std::shared_ptr<coro::AsyncOnce<int>> o)
+                    tasks.push_back([](dstd::SharedPtr<coro::AsyncOnce<int>> o)
                                         -> coro::CoroTask<int> {
                         co_return co_await o->get(cheap_producer);
                     }(once));

@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_DATAFRAME_LAZY_CURSORS_H
 
 #include <dftracer/utils/dataframe/lazy/frame_op.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 
 namespace dftracer::utils::dataframe::lazy_internal {
 
@@ -55,7 +57,7 @@ LazyFrame compose_compare_agg(const LazyFrame& base, const LazyFrame& variant,
 std::unique_ptr<Cursor> make_window(
     std::unique_ptr<Cursor> in, const std::vector<std::string>& sch,
     const std::vector<Field>& in_fields, const std::string& name,
-    const dftu_op_desc* op, std::shared_ptr<const OwnedFrameOpArgs> args,
+    const dftu_op_desc* op, dstd::SharedPtr<const OwnedFrameOpArgs> args,
     std::uint64_t budget);
 
 // The streaming as-of join (`name` is ASOF_OP) or interval join (INTERVAL_OP)
@@ -78,7 +80,7 @@ LazyFrame compose_asof(const LazyFrame& left, LazyFrame other,
                        const std::string& on,
                        const std::vector<std::string>& by,
                        AsofDirection direction,
-                       std::optional<double> tolerance);
+                       dstd::Optional<double> tolerance);
 
 LazyFrame compose_interval(const LazyFrame& left, LazyFrame other,
                            const std::string& point, const std::string& lo,

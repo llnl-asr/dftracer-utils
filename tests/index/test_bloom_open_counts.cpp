@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
@@ -19,7 +20,7 @@ using index::extensions::BloomFold;
 
 namespace {
 
-using Leaves = std::vector<std::pair<std::uint32_t, std::uint8_t>>;
+using Leaves = std::vector<dstd::Pair<std::uint32_t, std::uint8_t>>;
 
 constexpr auto INT = static_cast<std::uint8_t>(store::PathType::Int);
 constexpr auto STR = static_cast<std::uint8_t>(store::PathType::String);
@@ -66,8 +67,8 @@ struct Fixture {
         return out;
     }
 
-    std::set<std::pair<std::uint32_t, std::uint8_t>> distinct_pairs() const {
-        std::set<std::pair<std::uint32_t, std::uint8_t>> out;
+    std::set<dstd::Pair<std::uint32_t, std::uint8_t>> distinct_pairs() const {
+        std::set<dstd::Pair<std::uint32_t, std::uint8_t>> out;
         for (const auto& s : shapes) out.insert(s.begin(), s.end());
         return out;
     }

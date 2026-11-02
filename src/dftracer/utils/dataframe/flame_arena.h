@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_FLAME_ARENA_H
 #define DFTRACER_UTILS_DATAFRAME_FLAME_ARENA_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // StringViewMap
 
 #include <cstdint>
@@ -36,7 +37,7 @@ struct FlameNode {
 /// handle a containment_walk pushes for the event's nested children). Node 0 is
 /// the caller's root sentinel, so its self is left untouched.
 inline std::uint32_t fold_flame_node(std::vector<FlameNode>& arena,
-                                     std::string_view name, double dur,
+                                     dstd::StringView name, double dur,
                                      std::uint32_t parent) {
     std::uint32_t mi;
     auto it = arena[parent].kids.find(name);

@@ -4,6 +4,9 @@
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_source.h>
@@ -327,7 +330,7 @@ TEST_SUITE("View - builder order") {
 
 namespace {
 
-std::shared_ptr<const ViewSource> absorbed_source(const LazyFrame& lf) {
+dstd::SharedPtr<const ViewSource> absorbed_source(const LazyFrame& lf) {
     return std::dynamic_pointer_cast<const ViewSource>(
         plan_source(optimize_plan(lf)));
 }
@@ -362,14 +365,15 @@ TEST_SUITE("View - collect_all and sessions") {
 
     TEST_CASE("plans on one trace base share the batch key") {
         std::vector<LazyFrame> plans = mixed_plans();
-        std::optional<std::string> key = absorbed_source(plans[0])->batch_key();
+        dstd::Optional<std::string> key =
+            absorbed_source(plans[0])->batch_key();
         REQUIRE(key);
         for (const LazyFrame& lf : plans)
             CHECK(absorbed_source(lf)->batch_key() == key);
     }
 
     TEST_CASE("a batch scans the trace once for every branch") {
-        std::vector<std::shared_ptr<const ViewSource>> members;
+        std::vector<dstd::SharedPtr<const ViewSource>> members;
         for (const LazyFrame& lf : mixed_plans())
             members.push_back(absorbed_source(lf));
         ViewSource::Batch b = run(ViewSource::run_batch(members));
@@ -890,7 +894,7 @@ TEST_SUITE("View - trace terminals") {
     TEST_CASE("partials merge to the collected result") {
         View t = nested_viewer();
         const std::string fp = run(t.flamegraph_partial().collect());
-        const std::vector<std::string_view> fps{fp, fp};
+        const std::vector<dstd::StringView> fps{fp, fp};
         const DataFrame merged = View::merge_flamegraph_partials(fps);
         CHECK(rows_of(merged, {"name", "level"}) ==
               rows_of(run(t.flamegraph().collect()), {"name", "level"}));
@@ -898,7 +902,7 @@ TEST_SUITE("View - trace terminals") {
         View agg =
             t.group_by({GroupKey::name()}).agg({{AggOp::Count, "", "n"}});
         const std::string ap = run(agg.aggregate_partial().collect());
-        const std::vector<std::string_view> aps{ap};
+        const std::vector<dstd::StringView> aps{ap};
         CHECK(rows_of(agg.merge_partials(aps), {"name", "n"}) ==
               rows_of(run(agg.collect()), {"name", "n"}));
     }
@@ -930,7 +934,7 @@ TEST_SUITE("View - trace terminals") {
             agg.aggregate_partial().plans().front(),
             t.duql(R"(cat == "APP")").sink_json(sink, LAZY).plans().front(),
             agg.lazy()};
-        std::vector<std::shared_ptr<const ViewSource>> members;
+        std::vector<dstd::SharedPtr<const ViewSource>> members;
         for (const LazyFrame& lf : plans) {
             members.push_back(absorbed_source(lf));
             CHECK(members.back()->batch_key() == members.front()->batch_key());
@@ -947,11 +951,11 @@ TEST_SUITE("View - trace terminals") {
                           duql::parse_or_throw(R"(cat == "POSIX")"))),
                       FLAME_COLS));
         const std::string fp = trace::views::detail::partial_of(b.frames[3]);
-        const std::vector<std::string_view> fps{fp};
+        const std::vector<dstd::StringView> fps{fp};
         CHECK(rows_of(View::merge_flamegraph_partials(fps), FLAME_COLS) ==
               rows_of(b.frames[0], FLAME_COLS));
         const std::string ap = trace::views::detail::partial_of(b.frames[4]);
-        const std::vector<std::string_view> aps{ap};
+        const std::vector<dstd::StringView> aps{ap};
         CHECK(rows_of(agg.merge_partials(aps), {"name", "n"}) ==
               rows_of(b.frames[6], {"name", "n"}));
         CHECK(trace::views::detail::stats_of(b.frames[5]).events_matched == 16);
@@ -1073,7 +1077,7 @@ TEST_SUITE("View - trace terminals") {
             return s.fold<std::int64_t>(
                 dftracer::utils::duql::parse_or_throw("dur >= 0"),
                 [seen](std::int64_t& n, const json::JsonValue&,
-                       std::string_view) {
+                       dstd::StringView) {
                     ++n;
                     ++*seen;
                 },
@@ -1101,7 +1105,7 @@ TEST_SUITE("View - trace terminals") {
 
     TEST_CASE("a plan owns a shared sink until it is dropped") {
         auto sink = std::make_shared<StringSink>();
-        std::weak_ptr<StringSink> alive = sink;
+        dstd::WeakPtr<StringSink> alive = sink;
         dftracer::utils::dataframe::LazyResult<ExportStats> lazy =
             nested_viewer().duql(R"(cat == "APP")").sink_json(sink, LAZY);
         sink.reset();
@@ -1129,7 +1133,7 @@ TEST_SUITE("View - trace terminals") {
         CHECK_FALSE(agg.reconstruct_if_cached());
         const std::string p = run(agg.aggregate_partial().collect());
         run(agg.materialize_partials({p}));
-        std::optional<DataFrame> cached = agg.reconstruct_if_cached();
+        dstd::Optional<DataFrame> cached = agg.reconstruct_if_cached();
         REQUIRE(cached);
         CHECK(rows_of(*cached, {"name", "n"}) ==
               rows_of(run(agg.collect()), {"name", "n"}));
@@ -1224,13 +1228,13 @@ TEST_SUITE("View - low-level scans") {
         View t = nested_viewer().duql(R"(cat == "POSIX")");
         std::atomic<std::int64_t> n{0};
         run(t.for_each_batch(
-            [&](std::size_t, const std::vector<std::string_view>& events) {
+            [&](std::size_t, const std::vector<dstd::StringView>& events) {
                 n += static_cast<std::int64_t>(events.size());
             },
             4));
         CHECK(n == 16);
         auto counted = run(t.map_batches<std::int64_t>(
-            [](std::int64_t& acc, const std::vector<std::string_view>& ev) {
+            [](std::int64_t& acc, const std::vector<dstd::StringView>& ev) {
                 acc += static_cast<std::int64_t>(ev.size());
             },
             [](std::int64_t&& a, std::int64_t&& b) { return a + b; }, 3));
@@ -1241,7 +1245,7 @@ TEST_SUITE("View - low-level scans") {
         View t = nested_viewer();
         std::atomic<std::int64_t> n{0};
         run(t.head(5).for_each_batch(
-            [&](std::size_t, const std::vector<std::string_view>& events) {
+            [&](std::size_t, const std::vector<dstd::StringView>& events) {
                 n += static_cast<std::int64_t>(events.size());
             },
             1));
@@ -1254,7 +1258,7 @@ TEST_SUITE("View - low-level scans") {
         CHECK(skipped.lines().size() == 2);
         CHECK_THROWS_WITH_AS(
             run(t.slice(2, 5).for_each_batch(
-                [](std::size_t, const std::vector<std::string_view>&) {}, 1)),
+                [](std::size_t, const std::vector<dstd::StringView>&) {}, 1)),
             doctest::Contains("head"),
             dftracer::utils::common::DFTUtilsException);
         CHECK_THROWS_WITH_AS(t.head(5).flamegraph(), doctest::Contains("slice"),

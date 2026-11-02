@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <doctest/doctest.h>
@@ -28,15 +30,15 @@ constexpr int RECORDS = 3000;
 struct Access {
     Field<std::string, "op"> op;
     Field<std::int64_t, "lat"> lat;
-    Field<std::optional<std::int64_t>, "io.off"> off;
-    Field<std::optional<Json>, "tags"> tags;
-    Field<std::optional<std::string>, "hosts.1"> host;
+    Field<dftracer::utils::dstd::Optional<std::int64_t>, "io.off"> off;
+    Field<dftracer::utils::dstd::Optional<Json>, "tags"> tags;
+    Field<dftracer::utils::dstd::Optional<std::string>, "hosts.1"> host;
 };
 
 struct Event {
     Field<std::string, "name"> name;
     Field<double, "ts"> ts;
-    Field<std::optional<std::int64_t>, "args.size"> size;
+    Field<dftracer::utils::dstd::Optional<std::int64_t>, "args.size"> size;
 };
 
 // Record i: op read on even i, lat i, io.off 10*i on multiples of 3, tags on
@@ -93,7 +95,8 @@ TEST_SUITE("TypedRows") {
 
         const auto df = view_of(gz).collect().get();
         REQUIRE(df.num_rows() == RECORDS);
-        std::vector<std::pair<std::string, std::int64_t>> want, have;
+        std::vector<dftracer::utils::dstd::Pair<std::string, std::int64_t>>
+            want, have;
         for (std::int64_t i = 0; i < RECORDS; ++i)
             want.emplace_back(bstr(df, i, "op"),
                               static_cast<std::int64_t>(bnum(df, i, "lat")));

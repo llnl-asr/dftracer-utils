@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/pattern_engine.h>
@@ -31,35 +34,35 @@ constexpr std::size_t MAX_CLAUSES = 16;
 constexpr std::size_t MIN_NEEDLE = 3;
 // Letters from rarest to most common in English text, which key names follow;
 // the rarest letter of a key is the one memchr stops on least.
-constexpr std::string_view LETTERS_BY_RARITY = "zqxjkvbpygfwmucldrhsnioate";
+constexpr dstd::StringView LETTERS_BY_RARITY = "zqxjkvbpygfwmucldrhsnioate";
 
 std::size_t letter_rank(char c) {
     const char lower =
         (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
     const auto i = LETTERS_BY_RARITY.find(lower);
-    return i == std::string_view::npos ? 0 : i;
+    return i == dstd::StringView::npos ? 0 : i;
 }
 
-bool safe(std::string_view v) {
+bool safe(dstd::StringView v) {
     for (unsigned char c : v)
         if (c < 0x20 || c > 0x7E || c == '"' || c == '\\' || c == '/')
             return false;
     return true;
 }
 
-std::optional<std::string> needle(const duql::LiteralNode& lit) {
+dstd::Optional<std::string> needle(const duql::LiteralNode& lit) {
     std::string out;
     if (const auto* s = std::get_if<dstd::String>(&lit.value)) {
-        if (!safe(*s)) return std::nullopt;
+        if (!safe(*s)) return dstd::nullopt;
         out = "\"" + *s + "\"";
     } else if (const auto* i = std::get_if<std::int64_t>(&lit.value)) {
         out = std::to_string(*i);
     } else if (const auto* u = std::get_if<std::uint64_t>(&lit.value)) {
         out = std::to_string(*u);
     } else {
-        return std::nullopt;
+        return dstd::nullopt;
     }
-    if (out.size() < MIN_NEEDLE) return std::nullopt;
+    if (out.size() < MIN_NEEDLE) return dstd::nullopt;
     return out;
 }
 
@@ -124,7 +127,7 @@ Clauses clauses_of(const duql::QueryNode& node) {
 
 // A segment a key can end in: not an array index, no byte a JSON key would
 // escape.
-bool plain_key(std::string_view k) {
+bool plain_key(dstd::StringView k) {
     bool digits_only = true;
     for (unsigned char c : k) {
         if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -148,8 +151,8 @@ void ranges_of(const duql::QueryNode& node,
     // An any() key is followed by an array, not the number a range reads.
     if (!n || n->field.any || n->op == duql::CompareOp::Ne) return;
     const std::string path(n->field.path);
-    const std::string_view key =
-        std::string_view(path).substr(path.rfind('.') + 1);
+    const dstd::StringView key =
+        dstd::StringView(path).substr(path.rfind('.') + 1);
     if (!plain_key(key)) return;
     Prefilter::Bound bound{n->op};
     if (const auto* i = std::get_if<std::int64_t>(&n->value.value)) {
@@ -243,7 +246,7 @@ bool number_holds(const char* p, const char* end, const Prefilter::Range& r) {
 
 // A key ending in the segment of `r` sits at `start`, preceded by its opening
 // quote or a dot, followed by the closing quote, spaces and a colon.
-bool Prefilter::range_may_hold(std::string_view line, const Range& r) {
+bool Prefilter::range_may_hold(dstd::StringView line, const Range& r) {
     const std::string& seg = r.segment;
     const std::size_t n = seg.size() - 1;
     const char* begin = line.data();
@@ -288,7 +291,7 @@ std::size_t pivot_of(const std::string& n) {
 
 // memchr on the pivot byte, then compare: several times faster than memmem
 // or string_view::find, which cost more per line than parsing it.
-bool contains(std::string_view line, const std::string& n, std::size_t p) {
+bool contains(dstd::StringView line, const std::string& n, std::size_t p) {
     if (line.size() < n.size()) return false;
     const char* begin = line.data();
     const char* last = begin + (line.size() - n.size()) + p;
@@ -326,7 +329,7 @@ int on_hit(unsigned id, unsigned long long, unsigned long long, unsigned,
 
 // hs_alloc_scratch allocates and checks on every call, so scan first and
 // grow the scratch only when the scan reports it missing or too small.
-hs_error_t scan_grow(const hs_database_t* db, std::string_view s, Hits& hits) {
+hs_error_t scan_grow(const hs_database_t* db, dstd::StringView s, Hits& hits) {
     thread_local ThreadScratch ts;
     const auto n = static_cast<unsigned>(s.size());
     hs_error_t rc = hs_scan(db, s.data(), n, 0, ts.scratch, on_hit, &hits);
@@ -380,11 +383,11 @@ Prefilter::Prefilter(const duql::Query& q) : clauses_(clauses_of(q.root())) {
         hs_free_compile_error(err);
         return;
     }
-    db_ = std::shared_ptr<hs_database>(db, hs_free_database);
+    db_ = dstd::SharedPtr<hs_database>(db, hs_free_database);
 #endif
 }
 
-bool Prefilter::may_match_per_needle(std::string_view line) const {
+bool Prefilter::may_match_per_needle(dstd::StringView line) const {
     for (std::size_t c = 0; c < clauses_.size(); ++c) {
         bool any = false;
         for (std::size_t k = 0; k < clauses_[c].size(); ++k)
@@ -399,7 +402,7 @@ bool Prefilter::may_match_per_needle(std::string_view line) const {
     return true;
 }
 
-bool Prefilter::may_match(std::string_view line) const {
+bool Prefilter::may_match(dstd::StringView line) const {
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
     if (!db_ || line.size() > std::numeric_limits<unsigned>::max())
         return may_match_per_needle(line);
@@ -428,7 +431,7 @@ bool Prefilter::may_match(std::string_view line) const {
 #endif
 }
 
-bool Prefilter::Gate::may_match(std::string_view line) {
+bool Prefilter::Gate::may_match(dstd::StringView line) {
     if (!on_) return true;
     const bool pass = p_->may_match(line);
     passed_ += pass ? 1 : 0;

@@ -13,6 +13,8 @@
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -118,7 +120,7 @@ void src_schema_types(void*, dftu_schema* out) {
                           DFTU_TIME_UNIT_MILLI, "UTC", 0, 0, 0);
 }
 
-std::shared_ptr<Source> make_int_source(IntSource& fx, bool typed) {
+dstd::SharedPtr<Source> make_int_source(IntSource& fx, bool typed) {
     dftu_source_vt vt{};
     vt.schema = src_schema;
     vt.scan = src_scan;
@@ -385,7 +387,7 @@ void* narrow_src_scan(void* self, const dftu_scan_request*, int32_t*,
     return cs;
 }
 
-std::shared_ptr<Source> make_narrow_source(NarrowSource& fx) {
+dstd::SharedPtr<Source> make_narrow_source(NarrowSource& fx) {
     dftu_source_vt vt{};
     vt.schema = narrow_src_schema;
     vt.scan = narrow_src_scan;
@@ -508,18 +510,19 @@ class ThrowingSyncCursor : public Cursor {
     explicit ThrowingSyncCursor(int throw_on_call = -1)
         : throw_on_call_(throw_on_call) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        std::optional<Morsel> out;
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
+        dstd::Optional<Morsel> out;
         fill(max_rows, out);
         co_return out;
     }
-    bool try_next(std::int64_t max_rows, std::optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
         fill(max_rows, out);
         return true;
     }
 
    private:
-    void fill(std::int64_t, std::optional<Morsel>& out) {
+    void fill(std::int64_t, dstd::Optional<Morsel>& out) {
         ++calls_;
         if (calls_ == throw_on_call_) throw std::runtime_error("sync boom");
         if (calls_ > 1) {
@@ -545,11 +548,11 @@ class ThrowingAsyncCursor : public Cursor {
     explicit ThrowingAsyncCursor(int throw_on_call = -1)
         : throw_on_call_(throw_on_call) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
         co_await dftracer::utils::coro::yield();
         ++calls_;
         if (calls_ == throw_on_call_) throw std::runtime_error("async boom");
-        if (calls_ > 1) co_return std::nullopt;
+        if (calls_ > 1) co_return dstd::nullopt;
         std::vector<std::int64_t> v{9};
         Morsel m;
         m.columns.push_back(Series::flat_i64(v.data(), 1));
@@ -575,18 +578,18 @@ class MultiSyncCursor : public Cursor {
    public:
     MultiSyncCursor(std::vector<std::int64_t> data, std::int64_t chunk)
         : data_(std::move(data)), chunk_(chunk) {}
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-        std::optional<Morsel> out;
+    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
+        dstd::Optional<Morsel> out;
         fill(out);
         co_return out;
     }
-    bool try_next(std::int64_t, std::optional<Morsel>& out) override {
+    bool try_next(std::int64_t, dstd::Optional<Morsel>& out) override {
         fill(out);
         return true;
     }
 
    private:
-    void fill(std::optional<Morsel>& out) {
+    void fill(dstd::Optional<Morsel>& out) {
         const auto n64 = static_cast<std::int64_t>(data_.size());
         if (off_ >= n64) {
             out.reset();
@@ -610,9 +613,9 @@ class MultiAsyncCursor : public Cursor {
    public:
     MultiAsyncCursor(std::vector<std::int64_t> data, std::int64_t chunk)
         : data_(std::move(data)), chunk_(chunk) {}
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
         co_await dftracer::utils::coro::yield();
-        std::optional<Morsel> out;
+        dstd::Optional<Morsel> out;
         const auto n64 = static_cast<std::int64_t>(data_.size());
         if (off_ < n64) {
             const std::int64_t n = std::min(chunk_, n64 - off_);
@@ -640,22 +643,23 @@ class SyncThenAsyncCursor : public Cursor {
                         std::int64_t sync_rows)
         : data_(std::move(data)), chunk_(chunk), sync_rows_(sync_rows) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        std::optional<Morsel> out;
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
+        dstd::Optional<Morsel> out;
         if (try_next(max_rows, out)) co_return out;
         co_await dftracer::utils::coro::yield();
         fill(out);
         co_return out;
     }
 
-    bool try_next(std::int64_t, std::optional<Morsel>& out) override {
+    bool try_next(std::int64_t, dstd::Optional<Morsel>& out) override {
         if (off_ >= sync_rows_) return false;
         fill(out);
         return true;
     }
 
    private:
-    void fill(std::optional<Morsel>& out) {
+    void fill(dstd::Optional<Morsel>& out) {
         const auto n64 = static_cast<std::int64_t>(data_.size());
         if (off_ >= n64) {
             out.reset();
@@ -677,7 +681,7 @@ class SyncThenAsyncCursor : public Cursor {
 // everything) -> select "val" -> with_column "doubled" = val * 2 -> the sync
 // probe node. Exercises FilterCursor, SelectCursor and WithColumnCursor's
 // try_next in series over whatever source cursor is handed in.
-LazyFrame build_probe_chain(std::shared_ptr<Source> src,
+LazyFrame build_probe_chain(dstd::SharedPtr<Source> src,
                             const char* node_name) {
     return LazyFrame::scan(src)
         .filter(col(0) > std::int64_t{0})

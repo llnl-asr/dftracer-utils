@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/pipeline.h>
@@ -22,7 +23,7 @@ using namespace dftracer::utils::duql;
 namespace {
 
 // The runs table {run, app}: 1 laghos, 2 amg, 2 amg.
-std::shared_ptr<const df::DataFrame> runs() {
+dftracer::utils::dstd::SharedPtr<const df::DataFrame> runs() {
     auto f = std::make_shared<df::DataFrame>();
     const std::int64_t ids[] = {1, 2, 2};
     f->names = {"run", "app"};
@@ -185,7 +186,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
         auto p = compile_program(text, {}, nullptr);
         REQUIRE_MESSAGE(p.has_value(), (p ? dftracer::utils::dstd::String()
                                           : p.error().format()));
-        std::shared_ptr<Program> program =
+        dftracer::utils::dstd::SharedPtr<Program> program =
             std::make_shared<Program>(std::move(*p));
         const TLookup* found = nullptr;
         for_each_pipeline_term(program->main, [&](const Term& t) {

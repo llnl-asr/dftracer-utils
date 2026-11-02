@@ -13,6 +13,7 @@
 #include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -67,9 +68,9 @@ DataFrame make_b() {
     return df;
 }
 
-using I = std::optional<std::int64_t>;
-using S = std::optional<std::string>;
-const I NI = std::nullopt;
+using I = dstd::Optional<std::int64_t>;
+using S = dstd::Optional<std::string>;
+const I NI = dstd::nullopt;
 
 std::vector<I> i64_col(const DataFrame& df, const std::string& name) {
     Series c = df.column(name);
@@ -78,7 +79,7 @@ std::vector<I> i64_col(const DataFrame& df, const std::string& name) {
     std::vector<I> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dstd::nullopt);
         else
             out.emplace_back(c.data<std::int64_t>()[i]);
     }
@@ -92,7 +93,7 @@ std::vector<S> str_col(const DataFrame& df, const std::string& name) {
     std::vector<S> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dstd::nullopt);
         else
             out.emplace_back(std::string(c.string_at(i)));
     }
@@ -113,8 +114,8 @@ dftu_dataframe* to_abi(const DataFrame& df) {
 std::vector<S> texts(const Series& s) {
     std::vector<S> out;
     for (std::int64_t i = 0; i < s.length(); ++i)
-        out.push_back(s.is_null(i) ? std::nullopt
-                                   : std::optional<std::string>(
+        out.push_back(s.is_null(i) ? dstd::nullopt
+                                   : dstd::Optional<std::string>(
                                          std::string(s.string_at(i))));
     return out;
 }
@@ -160,7 +161,7 @@ TEST_SUITE("dataframe concat") {
               dftracer::utils::dataframe::Encoding::Dictionary);
         CHECK(out.null_count() == 2);
         CHECK(texts(out) ==
-              std::vector<S>{"p", std::nullopt, "p", std::nullopt, "q", "r"});
+              std::vector<S>{"p", dstd::nullopt, "p", dstd::nullopt, "q", "r"});
     }
 
     TEST_CASE("mixed flat and dictionary parts give a view column") {

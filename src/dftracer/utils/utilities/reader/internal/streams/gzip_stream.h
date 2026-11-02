@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 
 #include <dftracer/utils/dstd/raw_buffer.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/inflater.h>
@@ -76,7 +77,7 @@ class GzipStream : public StreamBase {
 
     bool done() const override { return is_finished_; }
 
-    coro::CoroTask<std::span<const char>> read_async() override = 0;
+    coro::CoroTask<dstd::Span<const char>> read_async() override = 0;
 
     // Copy-drain adapter over the zero-copy read_async(): serves the caller's
     // buffer from buffer_, refilling via the derived read_async() when empty.

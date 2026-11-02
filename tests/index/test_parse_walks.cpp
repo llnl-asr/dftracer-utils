@@ -3,6 +3,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -139,7 +140,7 @@ build::IndexBuildBatchResult build_one(const std::string& file,
 
 // A namespace missing here fails the check.
 struct NamespaceDigest {
-    std::string_view name;
+    dstd::StringView name;
     std::uint64_t digest;
 };
 constexpr NamespaceDigest RECORDED[] = {
@@ -161,7 +162,7 @@ std::map<std::string, std::uint64_t> namespace_digests(
     const std::string& index_path, const std::string& dir) {
     namespace kv = dftracer::utils::store;
     std::map<std::string, std::uint64_t> out;
-    const auto without_dir = [&dir](std::string_view bytes) {
+    const auto without_dir = [&dir](dstd::StringView bytes) {
         std::string text(bytes);
         for (auto at = text.find(dir); at != std::string::npos;
              at = text.find(dir, at))
@@ -182,7 +183,7 @@ std::map<std::string, std::uint64_t> namespace_digests(
             out.emplace(std::string(decl.name.data(), decl.name.size()),
                         dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY);
         std::uint64_t& h = it->second;
-        const auto mix = [&h](std::string_view bytes) {
+        const auto mix = [&h](dstd::StringView bytes) {
             for (unsigned char c : bytes)
                 h = (h ^ c) * dftracer::utils::dstd::hash::FNV1A_PRIME;
             h = (h ^ 0xFF) * dftracer::utils::dstd::hash::FNV1A_PRIME;
@@ -198,9 +199,9 @@ std::map<std::string, std::uint64_t> namespace_digests(
             auto value = cursor.value();
             REQUIRE(value.has_value());
             mix(without_dir(scope));
-            mix(without_dir(std::string_view(key.as<char>(), key.size())));
+            mix(without_dir(dstd::StringView(key.as<char>(), key.size())));
             mix(without_dir(
-                std::string_view(value->as<char>(), value->size())));
+                dstd::StringView(value->as<char>(), value->size())));
         }
         REQUIRE_FALSE(cursor.error().has_value());
     }

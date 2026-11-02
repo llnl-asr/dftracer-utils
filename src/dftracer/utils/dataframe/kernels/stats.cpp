@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/pair.h>
 
 #include <algorithm>
 #include <atomic>
@@ -167,9 +168,9 @@ std::uint64_t sortable_key(double f) {
 // bucket (or two) that holds them is collected and sorted. Falls back to
 // a full sort (NaN) when the keys crowd one bucket.
 template <class T, class KeyFn>
-std::pair<double, double> two_order_statistics(const T* x, std::size_t n,
-                                               const std::uint8_t* validity,
-                                               std::size_t lo, KeyFn key) {
+dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
+                                                const std::uint8_t* validity,
+                                                std::size_t lo, KeyFn key) {
     constexpr std::size_t BUCKETS = 256, OVERSAMPLE = 16;
     constexpr std::int64_t GRAIN = std::int64_t{1} << 16;
     constexpr std::uint16_t NONE = 0xFFFF;
@@ -709,7 +710,7 @@ Series rolling_quantile(const Series& v, std::int64_t window, double q) {
 // Two chunk-transform composers shared by the EWM family: `y -> a*y + c`
 // applied first, then `y -> a*y + c` applied second, composes to
 // `y -> (a1*a2)*y + (a2*c1 + c2)`.
-using AffineT = std::pair<double, double>;
+using AffineT = dstd::Pair<double, double>;
 
 static AffineT affine_compose(AffineT lhs, AffineT rhs) {
     return AffineT{lhs.first * rhs.first, rhs.first * lhs.second + rhs.second};

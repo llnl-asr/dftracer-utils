@@ -28,6 +28,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin.h>
 
@@ -175,8 +176,9 @@ class SdkRange {
        public:
         explicit Cursor(dftracer::utils::plugins::OwnedFrame f)
             : f_(std::move(f)) {}
-        std::optional<dftracer::utils::plugins::OwnedFrame> next(int64_t) {
-            if (!f_) return std::nullopt;
+        dftracer::utils::dstd::Optional<dftracer::utils::plugins::OwnedFrame>
+        next(int64_t) {
+            if (!f_) return dftracer::utils::dstd::nullopt;
             return std::move(f_);
         }
 
@@ -197,12 +199,12 @@ class SdkRange {
                 {}};
     }
 
-    std::optional<dftracer::utils::plugins::Applied<SdkRange>> apply_filter(
-        dftracer::utils::plugins::ExprView pred) const {
+    dftracer::utils::dstd::Optional<dftracer::utils::plugins::Applied<SdkRange>>
+    apply_filter(dftracer::utils::plugins::ExprView pred) const {
         auto cmp = pred.as_compare();
         if (!cmp || cmp->column != 0 || cmp->op != DFTU_CMP_GT ||
             cmp->rhs.kind != DFTU_SCALAR_TAG_I64 || cmp->rhs.value.i + 1 <= lo_)
-            return std::nullopt;
+            return dftracer::utils::dstd::nullopt;
         ++g_sdk_filters;
         return dftracer::utils::plugins::Applied<SdkRange>{
             std::make_unique<SdkRange>(cmp->rhs.value.i + 1, hi_)};
@@ -225,10 +227,10 @@ class DoubleVal {
        public:
         explicit Cursor(dftracer::utils::plugins::InputCursor in)
             : in_(std::move(in)) {}
-        std::optional<dftracer::utils::plugins::OwnedFrame> next(
-            int64_t max_rows) {
+        dftracer::utils::dstd::Optional<dftracer::utils::plugins::OwnedFrame>
+        next(int64_t max_rows) {
             auto f = in_.next(max_rows);
-            if (!f) return std::nullopt;
+            if (!f) return dftracer::utils::dstd::nullopt;
             ::dftu_series* id = ::dftu_dataframe_column(f->get(), "id");
             ::dftu_series* val = ::dftu_dataframe_column(f->get(), "val");
             const int64_t n = ::dftu_series_length(val);

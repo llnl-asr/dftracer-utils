@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_bytes_iterator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -435,7 +436,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(reader != nullptr);
 
             // Test multiple small ranges
-            std::vector<std::pair<std::size_t, std::size_t>> ranges = {
+            std::vector<dstd::Pair<std::size_t, std::size_t>> ranges = {
                 {0, 500}, {500, 1000}, {1000, 1500}};
 
             for (const auto& [start, end] : ranges) {

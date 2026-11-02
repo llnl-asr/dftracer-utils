@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/error.h>
@@ -86,7 +87,7 @@ GzipReader::GzipReader(const std::string &gz_path_,
 }
 
 GzipReader::GzipReader(
-    std::shared_ptr<dftracer::utils::index::gzip::CheckpointIndexer> indexer_)
+    dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer> indexer_)
     : default_buffer_size(DEFAULT_READER_BUFFER_SIZE),
       indexer(std::move(indexer_)) {
     if (!indexer) {

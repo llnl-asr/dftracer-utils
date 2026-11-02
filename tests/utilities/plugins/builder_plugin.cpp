@@ -5,6 +5,7 @@
  */
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/plugin.h>
 
 #include <cstdint>
@@ -46,7 +47,7 @@ struct TotalDur {
     void merge(TotalDur& other) { total += other.total; }
     std::uint64_t bytes() const { return sizeof(TotalDur); }
     std::string serialize() const { return std::to_string(total); }
-    static TotalDur* deserialize(std::string_view b) {
+    static TotalDur* deserialize(dftracer::utils::dstd::StringView b) {
         auto* s = new TotalDur();
         s->total = std::strtoull(std::string(b).c_str(), nullptr, 10);
         return s;

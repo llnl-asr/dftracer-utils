@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_INTERN_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_INTERN_H
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 
 #include <cstdint>
@@ -16,11 +18,11 @@ struct AggInternTable {
     dstd::StringIntern intern;
 };
 
-using AggInternPtr = std::shared_ptr<AggInternTable>;
+using AggInternPtr = dstd::SharedPtr<AggInternTable>;
 
 /// Shared by every handle onto `index_path` in this process, so a writer and
 /// a reader of one index agree on ids.
-AggInternPtr intern_for_index(std::string_view index_path);
+AggInternPtr intern_for_index(dstd::StringView index_path);
 
 /// A table bound to no index, for aggregating without persisting.
 AggInternPtr make_intern_table();

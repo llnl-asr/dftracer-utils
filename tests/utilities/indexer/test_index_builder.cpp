@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
@@ -57,7 +58,7 @@ BuildOutcome build_one(const std::string& gz, bool force = false) {
 
 // Build a gzip file out of `member_texts`, one gzip member each, and return
 // its path plus the compressed offset of every member.
-std::pair<std::string, std::vector<std::uint64_t>> write_multi_member_gz(
+dstd::Pair<std::string, std::vector<std::uint64_t>> write_multi_member_gz(
     const std::vector<std::string>& member_texts) {
     using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
     std::vector<std::uint8_t> bytes;

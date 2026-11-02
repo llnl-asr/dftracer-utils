@@ -6,6 +6,8 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 
@@ -64,7 +66,7 @@ struct StructCell {
     std::int64_t i64 = 0;
     std::uint64_t u64 = 0;
     double f64 = 0.0;
-    std::string_view str;
+    dstd::StringView str;
 };
 
 struct ColumnData {
@@ -83,7 +85,7 @@ struct ColumnData {
     /// Dictionary encoding support (for DICT_STRING)
     std::vector<std::int32_t> dict_indices;  ///< indices into dict_values
     std::deque<std::string> dict_values;     ///< unique strings (dictionary)
-    std::unordered_map<std::string_view, std::int32_t>
+    std::unordered_map<dstd::StringView, std::int32_t>
         dict_map;                            ///< string -> index
 
     /// HIST support: flattened buckets across rows, plus each row's end offset
@@ -131,12 +133,12 @@ class RecordBatchBuilder {
     /// Returns existing index if column already exists; type is ignored for
     /// existing columns - callers must use find_column() to check type before
     /// appending, and fall back to append_null() on mismatch.
-    std::size_t add_or_get_column(std::string_view name, ColumnType type);
+    std::size_t add_or_get_column(dstd::StringView name, ColumnType type);
 
-    /// Returns the index of an existing column, or std::nullopt if not found.
+    /// Returns the index of an existing column, or dstd::nullopt if not found.
     /// Use before appending null values to avoid creating STRING-typed columns
     /// that may later receive typed values.
-    std::optional<std::size_t> find_column(std::string_view name) const;
+    dstd::Optional<std::size_t> find_column(dstd::StringView name) const;
 
     /// Returns the type of column at col_idx.
     ColumnType column_type(std::size_t col_idx) const noexcept;
@@ -145,18 +147,18 @@ class RecordBatchBuilder {
     void append_int64(std::size_t col_idx, std::int64_t value);
     void append_uint64(std::size_t col_idx, std::uint64_t value);
     void append_double(std::size_t col_idx, double value);
-    void append_string(std::size_t col_idx, std::string_view value);
+    void append_string(std::size_t col_idx, dstd::StringView value);
     /// Append raw bytes to a BINARY column; shares STRING's storage, so any
     /// byte (including an embedded NUL) is preserved by length, not by NUL.
-    void append_binary(std::size_t col_idx, std::string_view value);
-    void append_dict_string(std::size_t col_idx, std::string_view value);
+    void append_binary(std::size_t col_idx, dstd::StringView value);
+    void append_dict_string(std::size_t col_idx, dstd::StringView value);
     void append_bool(std::size_t col_idx, bool value);
     /// Append one row's histogram (a list of buckets) to a HIST column.
     void append_hist(std::size_t col_idx,
                      const std::vector<dataframe::HistogramBin>& bins);
     /// Append one row's list of strings to a STRING_LIST column.
     void append_string_list(std::size_t col_idx,
-                            const std::vector<std::string_view>& values);
+                            const std::vector<dstd::StringView>& values);
     /// Append one row's list of int64 values to an INT64_LIST column.
     void append_int64_list(std::size_t col_idx,
                            const std::vector<std::int64_t>& values);
@@ -205,7 +207,7 @@ class RecordBatchBuilder {
     bool schema_locked_ = false;
     std::vector<bool> touched_;
 
-    void init_column(ColumnData& col, ColumnType type, std::string_view name);
+    void init_column(ColumnData& col, ColumnType type, dstd::StringView name);
     void backfill_nulls(ColumnData& col, std::size_t target_count);
     // Dynamic-mode first-touch tracking for column col_idx (no-op once the
     // schema is declared or locked).

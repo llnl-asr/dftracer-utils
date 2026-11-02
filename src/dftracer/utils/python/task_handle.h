@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_PYTHON_TASK_HANDLE_H
 
 #include <Python.h>
+#include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/runtime/task_handle.h>
 
 #include <any>
@@ -13,11 +14,11 @@ typedef struct {
     PyObject_HEAD
 
         // The underlying shared_future<void> for waiting
-        std::shared_future<void>
+        dftracer::utils::dstd::SharedFuture<void>
             future;
 
     // Typed result via type erasure. Empty for void tasks.
-    std::shared_future<std::any> typed_future;
+    dftracer::utils::dstd::SharedFuture<std::any> typed_future;
     bool has_typed_future;
 
     std::string name;

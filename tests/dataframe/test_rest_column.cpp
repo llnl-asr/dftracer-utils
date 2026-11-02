@@ -8,6 +8,9 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -32,7 +35,7 @@ using df::TypeId;
 namespace {
 
 using Names = std::vector<std::string>;
-using Cells = std::vector<std::optional<std::int64_t>>;
+using Cells = std::vector<dftracer::utils::dstd::Optional<std::int64_t>>;
 constexpr std::int64_t NUL = -999;
 
 Series ints(const std::vector<std::int64_t>& v) {
@@ -53,7 +56,9 @@ Series ints(const std::vector<std::int64_t>& v) {
 
 // One morsel: its columns by name, a list column `l` among them when asked.
 struct Part {
-    std::vector<std::pair<std::string, std::vector<std::int64_t>>> cols;
+    std::vector<
+        dftracer::utils::dstd::Pair<std::string, std::vector<std::int64_t>>>
+        cols;
 };
 
 // m0: a, b, x; m1: a, b, x, y; m2: a, b. (1,20,101) and (1,20,103) differ
@@ -90,9 +95,9 @@ class PartsCursor : public df::Cursor {
     PartsCursor(std::vector<Part> parts, bool with_list)
         : parts_(std::move(parts)), with_list_(with_list) {}
 
-    dftracer::utils::coro::CoroTask<std::optional<df::Morsel>> next(
-        std::int64_t) override {
-        if (next_ >= parts_.size()) co_return std::nullopt;
+    dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Optional<df::Morsel>>
+    next(std::int64_t) override {
+        if (next_ >= parts_.size()) co_return dftracer::utils::dstd::nullopt;
         const Part& p = parts_[next_];
         df::Morsel m;
         m.batch_index = static_cast<std::int64_t>(next_++);
@@ -113,8 +118,8 @@ class PartsCursor : public df::Cursor {
    private:
     std::vector<Part> parts_;
     bool with_list_;
-    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
-        std::make_shared<dftracer::utils::dstd::StringIntern>();
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::dstd::StringIntern>
+        intern_ = std::make_shared<dftracer::utils::dstd::StringIntern>();
     std::size_t next_ = 0;
 };
 
@@ -262,7 +267,7 @@ TEST_SUITE("rest column") {
     }
 
     TEST_CASE("every op that moves rows keeps the undeclared columns") {
-        const std::vector<std::pair<const char*, Op>> ops = {
+        const std::vector<dftracer::utils::dstd::Pair<const char*, Op>> ops = {
             {"filter",
              [](const LazyFrame& l) {
                  return l.filter(col(0) > std::int64_t{2});

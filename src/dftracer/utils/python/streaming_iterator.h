@@ -17,6 +17,9 @@
 #include <queue>
 #include <utility>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 #endif
 
@@ -32,7 +35,7 @@ namespace dftracer::utils::python {
 ///
 /// Consumer (Python tp_iternext):
 ///   - Calls pull() which blocks (with GIL released) until item available
-///   - Returns std::nullopt on completion or error
+///   - Returns dstd::nullopt on completion or error
 template <typename ItemT>
 class StreamingState {
    public:
@@ -79,7 +82,7 @@ class StreamingState {
         cv_consumer_.notify_all();
     }
 
-    std::optional<ItemT> pull() {
+    dstd::Optional<ItemT> pull() {
         std::unique_lock<std::mutex> lock(mtx_);
         cv_consumer_.wait(lock, [this] {
             return !queue_.empty() ||
@@ -88,11 +91,11 @@ class StreamingState {
         });
 
         if (cancelled_.load(std::memory_order_acquire) && queue_.empty()) {
-            return std::nullopt;
+            return dstd::nullopt;
         }
 
         if (queue_.empty()) {
-            return std::nullopt;
+            return dstd::nullopt;
         }
 
         auto [item, size] = std::move(queue_.front());
@@ -111,7 +114,7 @@ class StreamingState {
 
     bool done() const { return done_.load(std::memory_order_acquire); }
 
-    void set_task_future(std::shared_future<void> future) {
+    void set_task_future(dstd::SharedFuture<void> future) {
         task_future_ = std::move(future);
     }
 
@@ -129,7 +132,7 @@ class StreamingState {
     std::atomic<bool> done_{false};
     std::size_t memory_budget_bytes_;
     std::atomic<std::size_t> bytes_in_queue_{0};
-    std::shared_future<void> task_future_;
+    dstd::SharedFuture<void> task_future_;
 };
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -139,13 +142,13 @@ using utilities::arrow::ArrowExportResult;
 /// Internal C++ state for ArrowStreamingIterator.
 /// Stored as a pointer to avoid C++ object layout issues with Python.
 struct ArrowStreamingIteratorState {
-    std::shared_ptr<void> state;
+    dstd::SharedPtr<void> state;
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    std::function<std::optional<ArrowExportResult>()> pull_next;
+    std::function<dstd::Optional<ArrowExportResult>()> pull_next;
 #endif
     // When set, the iterator yields native DataFrame chunks instead of Arrow
     // batches (pull_next is then unused). Keeps Arrow off the streaming path.
-    std::function<std::optional<dftracer::utils::dataframe::DataFrame>()>
+    std::function<dstd::Optional<dftracer::utils::dataframe::DataFrame>()>
         pull_df;
     std::function<std::exception_ptr()> get_error;
     std::function<void()> cancel;

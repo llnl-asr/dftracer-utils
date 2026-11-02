@@ -5,7 +5,10 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/file_group.h>
 #include <dftracer/utils/index/index.h>
@@ -51,7 +54,7 @@ using index::SourceStat;
 using index_store::IndexExtension;
 
 constexpr std::size_t CHECKPOINT = 4096;
-constexpr std::string_view PLUGIN = "test_ext";
+constexpr dstd::StringView PLUGIN = "test_ext";
 
 constexpr IndexExtension PATH_KEYED[] = {
     IndexExtension::Zonemap, IndexExtension::Bloom, IndexExtension::Counts,
@@ -113,7 +116,7 @@ void put_plugin_extension(const std::string& index_path,
         index::put_plugin(
             build, PLUGIN, 3, 7,
             {{0, dstd::String("first")}, {1, dstd::String("second")}},
-            std::nullopt);
+            dstd::nullopt);
         ok(run(build.commit()));
     }
 }
@@ -159,10 +162,10 @@ std::vector<PartialRow> partials(const index::Snapshot& snapshot,
     return rows;
 }
 
-using Blocks = std::vector<std::pair<std::uint64_t, agg::ChunkColumns>>;
+using Blocks = std::vector<dstd::Pair<std::uint64_t, agg::ChunkColumns>>;
 
 Blocks blocks(const index::Snapshot& snapshot, const FileRef& file) {
-    std::vector<std::pair<std::uint64_t, agg::ChunkColumns>> out;
+    std::vector<dstd::Pair<std::uint64_t, agg::ChunkColumns>> out;
     ok(index::for_each_agg_chunk_columns(
         snapshot, file,
         [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
@@ -811,7 +814,7 @@ TEST_CASE("a FileBuild writes the data the typed readers read") {
 
 namespace {
 
-void put_zonemap(index::FileBuild& build, std::string_view path,
+void put_zonemap(index::FileBuild& build, dstd::StringView path,
                  std::uint64_t granules, std::uint64_t params_hash) {
     index::put_path(build, IndexExtension::Zonemap, path);
     for (std::uint64_t g = 0; g < granules; ++g) {
@@ -1256,7 +1259,7 @@ TEST_CASE("rebuilding one plugin leaves the other plugin of the file whole") {
     auto first = take(opened->build(path, stat));
     put_members(first, 1);
     index::put_plugin(first, "alpha", 3, 10, {{0, dstd::String("old")}},
-                      std::nullopt);
+                      dstd::nullopt);
     index::put_plugin(first, "beta", 7, 20,
                       {{0, dstd::String("beta0")}, {1, dstd::String("beta1")}},
                       dstd::String("beta-file"));
@@ -1265,7 +1268,7 @@ TEST_CASE("rebuilding one plugin leaves the other plugin of the file whole") {
     SUBCASE("a rewrite of alpha leaves beta") {
         auto again = take(opened->build(path, stat));
         index::put_plugin(again, "alpha", 3, 30, {{1, dstd::String("new")}},
-                          std::nullopt);
+                          dstd::nullopt);
         REQUIRE(run(again.commit()).has_value());
 
         const auto snapshot = take(opened->snapshot());
@@ -1464,7 +1467,7 @@ TEST_CASE("a commit lands from a worker, a process worker and a plain thread") {
 namespace {
 
 std::string write_bytes(const dftracer::utils::dstd::Path& path,
-                        std::string_view contents) {
+                        dstd::StringView contents) {
     std::ofstream out(path.c_str(), std::ios::binary | std::ios::trunc);
     out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
     out.close();

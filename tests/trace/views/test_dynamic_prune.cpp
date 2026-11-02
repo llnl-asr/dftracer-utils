@@ -10,6 +10,9 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
@@ -76,7 +79,7 @@ struct NameCollectorFold : Fold {
 
 std::vector<std::string> matching_names(const NameCollectorFold& f,
                                         StringIntern& intern,
-                                        std::string_view want) {
+                                        dstd::StringView want) {
     std::vector<std::string> out;
     for (std::uint32_t id : f.name_ids) {
         std::string n(intern.resolve(id));
@@ -130,7 +133,7 @@ struct CountingCursor : dataframe::Cursor {
     CountingCursor(std::unique_ptr<dataframe::Cursor> in, std::size_t* r,
                    std::size_t* n)
         : inner(std::move(in)), rows(r), narrows(n) {}
-    coro::CoroTask<std::optional<dataframe::Morsel>> next(
+    coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
         std::int64_t max_rows) override {
         auto m = co_await inner->next(max_rows);
         if (m) *rows += static_cast<std::size_t>(m->rows);
@@ -143,10 +146,10 @@ struct CountingCursor : dataframe::Cursor {
 };
 
 struct CountingSource : dataframe::Source {
-    std::shared_ptr<const dataframe::Source> inner;
+    dstd::SharedPtr<const dataframe::Source> inner;
     mutable std::size_t rows = 0;
     mutable std::size_t narrows = 0;
-    explicit CountingSource(std::shared_ptr<const dataframe::Source> in)
+    explicit CountingSource(dstd::SharedPtr<const dataframe::Source> in)
         : inner(std::move(in)) {}
     dataframe::Schema schema() const override { return inner->schema(); }
     dataframe::ScanResult scan(
@@ -163,7 +166,8 @@ coro::CoroTask<std::uint64_t> scan_unit_events(ScanUnit unit,
                                                ViewDefinition vdef) {
     ViewScannerUtility scanner;
     std::uint64_t matched = 0;
-    const ViewScannerInput input = make_scanner_input(unit, vdef, std::nullopt);
+    const ViewScannerInput input =
+        make_scanner_input(unit, vdef, dstd::nullopt);
     auto gen = scanner(input);
     while (auto batch = co_await gen.next()) matched += batch->events_matched;
     co_return matched;

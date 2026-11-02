@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_STATE_H
 
 #include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -29,7 +31,7 @@ class SpillDir {
     void charge(std::uint64_t bytes) noexcept;
 
    private:
-    std::optional<dftracer::utils::common::ScopedSpillSubdir> dir_;
+    dstd::Optional<dftracer::utils::common::ScopedSpillSubdir> dir_;
     dstd::Path empty_;
 };
 
@@ -74,8 +76,8 @@ class StateAccum {
     bool spill_refused_ = false;
     // shared so a worker's directory outlives the worker once a master fold
     // has adopted the runs inside it.
-    std::shared_ptr<SpillDir> dir_;
-    std::vector<std::shared_ptr<SpillDir>> adopted_dirs_;
+    dstd::SharedPtr<SpillDir> dir_;
+    std::vector<dstd::SharedPtr<SpillDir>> adopted_dirs_;
     dstd::Vector<dstd::Path> runs_;
 };
 

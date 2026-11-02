@@ -3,6 +3,9 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_LAZY_PLAN_H
 
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 
 #include <array>
 #include <cstdint>
@@ -54,23 +57,23 @@ struct Tap {
 };
 
 // `lf` with every morsel shown to `tap` and passed on unchanged.
-LazyFrame tap(const LazyFrame& lf, std::shared_ptr<const Tap> tap);
+LazyFrame tap(const LazyFrame& lf, dstd::SharedPtr<const Tap> tap);
 
 // The plan's leaf source.
-const std::shared_ptr<const Source>& plan_source(const LazyFrame& lf);
+const dstd::SharedPtr<const Source>& plan_source(const LazyFrame& lf);
 
 // `lf`'s ops and memory budget over `source` instead of its own source.
-LazyFrame rebase(const LazyFrame& lf, std::shared_ptr<const Source> source);
+LazyFrame rebase(const LazyFrame& lf, dstd::SharedPtr<const Source> source);
 
 // explain()'s description of the first op in `lf` that is not a filter, or
 // nullopt when every op is a filter.
-std::optional<std::string> first_non_filter_op(const LazyFrame& lf);
+dstd::Optional<std::string> first_non_filter_op(const LazyFrame& lf);
 
 // explain()'s description of the first op in `lf`, or nullopt when it has none.
-std::optional<std::string> first_op(const LazyFrame& lf);
+dstd::Optional<std::string> first_op(const LazyFrame& lf);
 
 // (offset, len) when `lf`'s only op is a row window (head / slice / limit).
-std::optional<std::pair<std::int64_t, std::int64_t>> sole_slice(
+dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> sole_slice(
     const LazyFrame& lf);
 
 // Calls `f` on `lf`, then depth first on every child plan: the other side of a

@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
@@ -133,7 +134,7 @@ Peak peak_of_build(const std::vector<std::string>& files,
     return {top > base ? top - base : 0, result.metrics.max_files_in_flight};
 }
 
-using Family = std::vector<std::pair<std::string, std::string>>;
+using Family = std::vector<dstd::Pair<std::string, std::string>>;
 using Dump = std::map<std::string, Family>;
 
 Dump dump_index(const std::string& first_file, const std::string& index_dir) {

@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_TRACE_PARSE_INFLATED_H
 #define DFTRACER_UTILS_TRACE_PARSE_INFLATED_H
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/trace/event.h>
 #include <simdjson.h>
@@ -81,7 +83,7 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
             if (!err) {
                 for (auto it = stream.begin(); it != stream.end(); ++it) {
                     if ((*it).error()) continue;
-                    std::string_view src = it.source();
+                    dstd::StringView src = it.source();
                     emit((*it).value_unsafe(), src);
                     covered = static_cast<std::size_t>(src.data() - base) +
                               src.size();
@@ -105,7 +107,7 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
                 auto r = parser.parse(base + start, end - start);
                 if (!r.error())
                     emit(r.value_unsafe(),
-                         std::string_view(base + start, end - start));
+                         dstd::StringView(base + start, end - start));
             }
             pos = end + 1;
             continue;
@@ -119,7 +121,7 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
                 auto r = parser.parse(base + at, stop - at);
                 if (!r.error())
                     emit(r.value_unsafe(),
-                         std::string_view(base + at, stop - at));
+                         dstd::StringView(base + at, stop - at));
             }
             at = stop + 1;
         }
@@ -143,13 +145,13 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
 /// chunk is re-parsed line by line so a bad record drops only itself.
 template <typename Cb>
 std::size_t parse_buffer(simdjson::dom::parser& parser,
-                         std::shared_ptr<std::string> chunk_buffer,
+                         dstd::SharedPtr<std::string> chunk_buffer,
                          std::size_t len, std::size_t checkpoint_idx,
                          std::size_t& line_number, Cb&& cb) {
     if (!chunk_buffer || len == 0) return 0;
     return parse_lines(
         parser, chunk_buffer->data(), len,
-        [&](simdjson::dom::element root, std::string_view src) {
+        [&](simdjson::dom::element root, dstd::StringView src) {
             if (!root.is_object()) return;
             json::JsonValue json(root);
             DFTracerEvent ev;

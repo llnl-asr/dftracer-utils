@@ -14,6 +14,7 @@
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -224,7 +225,7 @@ std::map<std::string, Row> run_with_budget(dftu_plugin& p, std::uint64_t budget,
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
             pf->step(FoldBatch{
-                std::span<const FoldEvent>(evs.data() + at, n), unit, {}});
+                dstd::Span<const FoldEvent>(evs.data() + at, n), unit, {}});
         }
         master.merge(*pf);
     }

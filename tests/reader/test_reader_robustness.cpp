@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -221,7 +225,7 @@ struct Prepared {
 
 static Prepared& prepared(std::size_t size_mb, std::size_t bytes_per_line,
                           double checkpoint_mb, bool with_lines = false) {
-    static std::map<std::tuple<std::size_t, std::size_t, double, bool>,
+    static std::map<dstd::Tuple<std::size_t, std::size_t, double, bool>,
                     std::unique_ptr<Prepared>>
         made;
     auto& slot = made[{size_mb, bytes_per_line, checkpoint_mb, with_lines}];
@@ -249,7 +253,7 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
         std::size_t current_start = 0;
         std::size_t total_lines = 0;
         std::vector<std::size_t> chunk_line_counts;
-        std::vector<std::pair<std::size_t, std::size_t>>
+        std::vector<dstd::Pair<std::size_t, std::size_t>>
             id_ranges;  // first and last ID in each chunk
 
         std::vector<char> buffer(buffer_size);
@@ -560,7 +564,7 @@ TEST_CASE("Robustness - Boundary edge cases") {
         const std::size_t buffer_size = 8 * 1024 * 1024;
         std::vector<char> buffer(buffer_size);
 
-        std::vector<std::pair<std::size_t, std::size_t>> id_ranges;
+        std::vector<dstd::Pair<std::size_t, std::size_t>> id_ranges;
 
         // Read several adjacent ranges
         for (std::size_t i = 0; i < 3 && (i * range_size < max_bytes); ++i) {
@@ -771,7 +775,7 @@ TEST_CASE("Robustness - JSON validation and consistency") {
         // Test various read ranges with different buffer sizes
         std::vector<std::size_t> buffer_sizes = {1024, 8192, 64 * 1024,
                                                  1024 * 1024};
-        std::vector<std::pair<std::size_t, std::size_t>> test_ranges = {
+        std::vector<dstd::Pair<std::size_t, std::size_t>> test_ranges = {
             {0, max_bytes / 4},
             {max_bytes / 4, max_bytes / 2},
             {max_bytes / 2, max_bytes * 3 / 4},
@@ -1173,7 +1177,7 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
     SUBCASE("Concurrent reader instances") {
         // Create multiple readers for the same file
-        std::vector<std::shared_ptr<Reader>> readers;
+        std::vector<dstd::SharedPtr<Reader>> readers;
 
         for (std::size_t i = 0; i < 5; ++i) {
             readers.push_back(
@@ -1251,7 +1255,7 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
     SUBCASE("Future-Async Concurrent reader instances") {
         const std::size_t num_futures = 4;
-        std::vector<std::future<std::size_t>> futures;
+        std::vector<dstd::Future<std::size_t>> futures;
 
         for (std::size_t i = 0; i < num_futures; ++i) {
             futures.push_back(std::async(std::launch::async, [&gz_file,
@@ -1415,7 +1419,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         }
 
         // Test various large ranges
-        std::vector<std::pair<std::size_t, std::size_t>> large_ranges = {
+        std::vector<dstd::Pair<std::size_t, std::size_t>> large_ranges = {
             {1, std::min(total_lines, std::size_t(1000))},
             {std::max(std::size_t(1), total_lines / 4),
              std::min(total_lines, total_lines / 4 + 2000)},
@@ -1625,7 +1629,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
 
     SUBCASE("Multiple reader instances return identical results") {
         // Create multiple readers
-        std::vector<std::shared_ptr<Reader>> readers;
+        std::vector<dstd::SharedPtr<Reader>> readers;
         for (std::size_t i = 0; i < 5; ++i) {
             readers.push_back(
                 ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
@@ -1633,7 +1637,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
         }
 
         // Test same line ranges across all readers
-        std::vector<std::pair<std::size_t, std::size_t>> test_ranges = {
+        std::vector<dstd::Pair<std::size_t, std::size_t>> test_ranges = {
             {1, 10},
             {100, 110},
             {std::min(total_lines, std::size_t(1000)),

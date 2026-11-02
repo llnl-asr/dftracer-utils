@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -148,7 +149,7 @@ class ScopeDirectory {
                      ScopeKind kind,
                      dstd::Span<const dstd::String> paths) const;
 
-    std::pair<std::size_t, std::size_t> namespace_range(
+    dstd::Pair<std::size_t, std::size_t> namespace_range(
         dstd::StringView name, std::uint32_t format_version) const;
 
     dstd::Expected<DirectoryKey, dstd::Error> key(std::size_t index) const;

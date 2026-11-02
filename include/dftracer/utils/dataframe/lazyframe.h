@@ -8,7 +8,10 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/tuple.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -39,7 +42,7 @@ struct MorselDyn {
     /// One interned id per column of Morsel::columns, resolved via `intern`;
     /// empty means positional alignment with the plan schema.
     std::vector<std::uint32_t> name_ids;
-    std::shared_ptr<const dftracer::utils::dstd::StringIntern> intern;
+    dstd::SharedPtr<const dftracer::utils::dstd::StringIntern> intern;
 };
 
 /// A chunk of columns flowing through the lazy pipeline. Carries no names - the
@@ -77,20 +80,20 @@ struct Morsel {
 class Cursor {
    public:
     virtual ~Cursor();
-    virtual coro::CoroTask<std::optional<Morsel>> next(
+    virtual coro::CoroTask<dstd::Optional<Morsel>> next(
         std::int64_t max_rows) = 0;
     /// Pull up to `max_rows` rows without suspending, when this cursor can
     /// answer from data it already holds. Returns false when it cannot, and
     /// the caller must await next() instead. A true return with `out` unset
     /// is end of stream, exactly as next() reports it.
-    virtual bool try_next(std::int64_t, std::optional<Morsel>&) {
+    virtual bool try_next(std::int64_t, dstd::Optional<Morsel>&) {
         return false;
     }
     /// Output column names, when they are only known after producing (a
     /// data-dependent schema like pivot/to_dummies). nullopt means the plan's
     /// static schema is authoritative. Valid only after the cursor is drained.
-    virtual std::optional<std::vector<std::string>> out_names() const {
-        return std::nullopt;
+    virtual dstd::Optional<std::vector<std::string>> out_names() const {
+        return dstd::nullopt;
     }
 
     /// Offer `predicate` (positional against this cursor's own schema, like a
@@ -174,7 +177,7 @@ enum class ApplyStatus {
 /// A planning hook's accepted result: a new immutable source that carries the
 /// op. Its schema() is the output after the op.
 struct SourceApplication {
-    std::shared_ptr<const Source> source;
+    dstd::SharedPtr<const Source> source;
     ApplyStatus status = ApplyStatus::Exact;
 };
 
@@ -215,7 +218,7 @@ struct SortSpec {
 /// op it had already absorbed, so nothing remains to run above it. The output
 /// is what LazyFrame::join makes for the same arguments.
 struct JoinSpec {
-    std::shared_ptr<const Source> other;
+    dstd::SharedPtr<const Source> other;
     std::vector<std::string> left_on;
     std::vector<std::string> right_on;
     JoinHow how = JoinHow::Inner;
@@ -229,10 +232,10 @@ struct JoinSpec {
 /// scan) into @ref LazyFrame.
 ///
 /// The apply_* planning hooks let a source absorb the op directly above it at
-/// plan time, before scan(). Each returns std::nullopt for "unsupported or no
+/// plan time, before scan(). Each returns dstd::nullopt for "unsupported or no
 /// change", which is the default. An accepted op must yield a new source
 /// handle, and offering the same op to that handle again must return
-/// std::nullopt. A schema-changing op (projection, aggregation, join) may only
+/// dstd::nullopt. A schema-changing op (projection, aggregation, join) may only
 /// be accepted as Exact.
 class Source {
    public:
@@ -254,69 +257,71 @@ class Source {
     /// columns; it refuses an op that has no rule for them.
     virtual bool undeclared_columns() const { return false; }
 
-    virtual std::optional<SourceApplication> apply_filter(const Expr&) const {
-        return std::nullopt;
+    virtual dstd::Optional<SourceApplication> apply_filter(const Expr&) const {
+        return dstd::nullopt;
     }
-    virtual std::optional<SourceApplication> apply_projection(
+    virtual dstd::Optional<SourceApplication> apply_projection(
         const std::vector<NamedExpr>&) const {
-        return std::nullopt;
+        return dstd::nullopt;
     }
-    virtual std::optional<SourceApplication> apply_aggregation(
+    virtual dstd::Optional<SourceApplication> apply_aggregation(
         const AggregateSpec&) const {
-        return std::nullopt;
+        return dstd::nullopt;
     }
     /// Distinct rows by `subset` (empty = every column), keeping the first
     /// occurrence in source order. The output keeps every column and its
     /// schema. A source that accepts it must produce the first-occurrence
     /// order itself; the planner removes the UniqueOp.
-    virtual std::optional<SourceApplication> apply_distinct(
+    virtual dstd::Optional<SourceApplication> apply_distinct(
         const std::vector<std::string>&) const {
-        return std::nullopt;
+        return dstd::nullopt;
     }
-    virtual std::optional<SourceApplication> apply_sort(const SortSpec&) const {
-        return std::nullopt;
+    virtual dstd::Optional<SourceApplication> apply_sort(
+        const SortSpec&) const {
+        return dstd::nullopt;
     }
     /// The first `k` rows of apply_sort(spec). Exact means no more than `k`
     /// rows come back, already in order.
-    virtual std::optional<SourceApplication> apply_topn(const SortSpec&,
-                                                        std::int64_t) const {
-        return std::nullopt;
+    virtual dstd::Optional<SourceApplication> apply_topn(const SortSpec&,
+                                                         std::int64_t) const {
+        return dstd::nullopt;
     }
     /// Rows [offset, offset + n) in source order.
-    virtual std::optional<SourceApplication> apply_limit(std::int64_t,
-                                                         std::int64_t) const {
-        return std::nullopt;
+    virtual dstd::Optional<SourceApplication> apply_limit(std::int64_t,
+                                                          std::int64_t) const {
+        return dstd::nullopt;
     }
     /// The last `n` rows in source order.
-    virtual std::optional<SourceApplication> apply_tail(std::int64_t) const {
-        return std::nullopt;
+    virtual dstd::Optional<SourceApplication> apply_tail(std::int64_t) const {
+        return dstd::nullopt;
     }
-    virtual std::optional<SourceApplication> apply_join(const JoinSpec&) const {
-        return std::nullopt;
+    virtual dstd::Optional<SourceApplication> apply_join(
+        const JoinSpec&) const {
+        return dstd::nullopt;
     }
 
     /// Sources with equal non-empty keys can run as one batch through
     /// collect_batch(), so collect_all() reads their data once. The default,
-    /// std::nullopt, never batches.
-    virtual std::optional<std::string> batch_key() const {
-        return std::nullopt;
+    /// dstd::nullopt, never batches.
+    virtual dstd::Optional<std::string> batch_key() const {
+        return dstd::nullopt;
     }
     /// One frame per member, in order, each what collecting that member alone
     /// would return. Called on members.front(); every member shares its
     /// batch_key(). The default throws std::logic_error: a source that returns
     /// a batch_key() must override it.
     virtual coro::CoroTask<std::vector<DataFrame>> collect_batch(
-        std::vector<std::shared_ptr<const Source>> members) const;
+        std::vector<dstd::SharedPtr<const Source>> members) const;
     /// One cursor per member, in order, over one shared read that runs in the
     /// background, each yielding what scanning that member alone would. Each
     /// cursor's buffer holds at most `memory_budget` bytes and throttles the
     /// shared read, so the caller must drain every cursor concurrently.
     /// Called on members.front() for members sharing its batch_key();
-    /// std::nullopt (the default) means the source only batches through
+    /// dstd::nullopt (the default) means the source only batches through
     /// collect_batch().
-    virtual std::optional<std::vector<std::unique_ptr<Cursor>>> open_batch(
-        std::vector<std::shared_ptr<const Source>>, std::uint64_t) const {
-        return std::nullopt;
+    virtual dstd::Optional<std::vector<std::unique_ptr<Cursor>>> open_batch(
+        std::vector<dstd::SharedPtr<const Source>>, std::uint64_t) const {
+        return dstd::nullopt;
     }
 
     /// Convenience: the schema's column names. Non-virtual; a caller that only
@@ -339,7 +344,7 @@ class InMemorySource : public Source {
     const DataFrame* as_frame() const override { return frame_.get(); }
 
    private:
-    std::shared_ptr<const DataFrame> frame_;
+    dstd::SharedPtr<const DataFrame> frame_;
 };
 
 /// A deferred query over a Source. Builder methods record ops and return a new
@@ -353,7 +358,7 @@ struct PlanAccess;
 
 class LazyFrame {
    public:
-    static LazyFrame scan(std::shared_ptr<const Source> source);
+    static LazyFrame scan(dstd::SharedPtr<const Source> source);
 
     LazyFrame select(std::vector<std::string> names) const;
     LazyFrame filter(Expr predicate) const;
@@ -539,7 +544,7 @@ class LazyFrame {
     /// for a missing column, when the schemas are known here.
     LazyFrame asof(LazyFrame other, std::string on, std::vector<std::string> by,
                    AsofDirection direction,
-                   std::optional<double> tolerance = std::nullopt) const;
+                   dstd::Optional<double> tolerance = dstd::nullopt) const;
     /// DataFrame::interval over the two plans: each point of `point` pairs with
     /// every row of `other` whose closed range [`lo`, `hi`] holds it within
     /// the `by` partition, ordered by (by, point) then (lo, hi, input order);
@@ -649,22 +654,22 @@ class LazyFrame {
 
    private:
     friend struct detail::PlanAccess;
-    LazyFrame(std::shared_ptr<const Source> source,
-              std::vector<std::shared_ptr<const LazyOp>> ops,
+    LazyFrame(dstd::SharedPtr<const Source> source,
+              std::vector<dstd::SharedPtr<const LazyOp>> ops,
               std::uint64_t memory_budget = 0)
         : source_(std::move(source)),
           ops_(std::move(ops)),
           memory_budget_(memory_budget) {}
     // Clone with a new op list, preserving the source and budget.
-    LazyFrame with_ops(std::vector<std::shared_ptr<const LazyOp>> ops) const {
+    LazyFrame with_ops(std::vector<dstd::SharedPtr<const LazyOp>> ops) const {
         return LazyFrame(source_, std::move(ops), memory_budget_);
     }
     // The ops over a resident frame, whole-column: an op with an eager form
     // runs it, any other runs its own cursor over the frame as one morsel.
     static coro::CoroTask<DataFrame> run_ops_in_memory(
-        DataFrame df, std::vector<std::shared_ptr<const LazyOp>> ops);
-    std::shared_ptr<const Source> source_;
-    std::vector<std::shared_ptr<const LazyOp>> ops_;
+        DataFrame df, std::vector<dstd::SharedPtr<const LazyOp>> ops);
+    dstd::SharedPtr<const Source> source_;
+    std::vector<dstd::SharedPtr<const LazyOp>> ops_;
     std::uint64_t memory_budget_ = 0;
 };
 
@@ -842,7 +847,7 @@ coro::CoroTask<void> finish_roots(Results& results,
 /// root in argument order: a @ref DataFrame for a @ref LazyFrame, a `T` for a
 /// LazyResult<T>. Every root's plans batch as collect_all(plans) batches them.
 template <class... R>
-coro::CoroTask<std::tuple<detail::result_of_root<R>...>> collect_all(
+coro::CoroTask<dstd::Tuple<detail::result_of_root<R>...>> collect_all(
     R... roots) {
     auto results = std::make_tuple(detail::as_result(std::move(roots))...);
     std::vector<LazyFrame> plans;
@@ -854,7 +859,7 @@ coro::CoroTask<std::tuple<detail::result_of_root<R>...>> collect_all(
         results);
     std::vector<DataFrame> frames;
     if (!plans.empty()) frames = co_await collect_all(std::move(plans));
-    std::tuple<detail::result_of_root<R>...> out;
+    dstd::Tuple<detail::result_of_root<R>...> out;
     co_await detail::finish_roots<0>(results, frames, 0, out);
     co_return out;
 }

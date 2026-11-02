@@ -4,7 +4,11 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -57,8 +61,8 @@ namespace dftracer::utils::trace::views::detail::scan {
 
 namespace {
 // A mutable copy of a plan (or a fresh one), ready for one op to mutate.
-std::shared_ptr<detail::ViewPlan> clone(
-    const std::shared_ptr<const detail::ViewPlan>& base) {
+dstd::SharedPtr<detail::ViewPlan> clone(
+    const dstd::SharedPtr<const detail::ViewPlan>& base) {
     return base ? std::make_shared<detail::ViewPlan>(*base)
                 : std::make_shared<detail::ViewPlan>();
 }
@@ -242,7 +246,7 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
             key += std::to_string(f.checkpoint_size);
             if (confirmed_files().keys.contains(key)) continue;
 
-            if (missing_roots.contains(std::string_view(f.index_path)))
+            if (missing_roots.contains(dstd::StringView(f.index_path)))
                 continue;
             if (!snapshots.contains(f.index_path) &&
                 !common::input_exists(ix::store_of(f.index_path))) {
@@ -362,7 +366,7 @@ std::vector<TraceConfig> config(const ScanPlan& plan_) {
 
         struct Sink : ExportSink {
             std::string buf;
-            void write(std::string_view d) override { buf.append(d); }
+            void write(dstd::StringView d) override { buf.append(d); }
         } sink;
         export_json(filter(from_file(f.file_path, f.index_path),
                            duql::parse_or_throw(R"(name == "end")")),
@@ -373,7 +377,7 @@ std::vector<TraceConfig> config(const ScanPlan& plan_) {
             std::size_t nl = sink.buf.find('\n', pos);
             if (nl == std::string::npos) nl = sink.buf.size();
             if (auto c = parse_end_event(
-                    std::string_view(sink.buf).substr(pos, nl - pos)))
+                    dstd::StringView(sink.buf).substr(pos, nl - pos)))
                 out.push_back(std::move(*c));
             pos = nl + 1;
         }
@@ -460,7 +464,7 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
                         ColTypeMap one;
                         for (auto& [path, t] : common::unwrap(
                                  ix::file_column_types(snapshot, *file))) {
-                            std::string_view name(path.data(), path.size());
+                            dstd::StringView name(path.data(), path.size());
                             if (name.starts_with("args."))
                                 name.remove_prefix(5);
                             auto [at, fresh] =
@@ -558,7 +562,7 @@ const char* path_type_name(dftracer::utils::index::store::PathType t) {
 
 }  // namespace
 
-std::optional<std::string> file_without_catalog(const ScanPlan& plan_) {
+dstd::Optional<std::string> file_without_catalog(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;
     Snapshots snapshots;
     for (const auto& f : plan_->files) {
@@ -569,7 +573,7 @@ std::optional<std::string> file_without_catalog(const ScanPlan& plan_) {
                 *found.snapshot, *found.file, st::IndexExtension::Catalog))
             return f.file_path;
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 void ensure_catalog(const ScanPlan& plan_) {
@@ -666,7 +670,7 @@ std::vector<ColumnInfo> schema(const ScanPlan& plan_) {
     return out;
 }
 
-std::shared_ptr<const detail::JsonColumns> json_columns(
+dstd::SharedPtr<const detail::JsonColumns> json_columns(
     const detail::ViewPlan& plan) {
     using CT = dftracer::utils::index::store::ColumnType;
     const bool by_path = detail::plan_by_path(plan);
@@ -949,7 +953,7 @@ ScanPlan memory_budget(const ScanPlan& plan_, std::uint64_t bytes) {
 }
 
 ScanPlan count_scans(const ScanPlan& plan_,
-                     std::shared_ptr<ScanCounter> counter) {
+                     dstd::SharedPtr<ScanCounter> counter) {
     auto next = clone(plan_);
     next->scan_counter = std::move(counter);
     return next;
@@ -1026,8 +1030,8 @@ ScanPlan record_schema(const ScanPlan& plan_, const std::string& id) {
     auto next = clone(plan_);
     // Registered record_schemas live until the process exits.
     next->record_schema =
-        std::shared_ptr<const dftracer::utils::index::RecordSchema>(
-            std::shared_ptr<void>(), &p);
+        dstd::SharedPtr<const dftracer::utils::index::RecordSchema>(
+            dstd::SharedPtr<void>(), &p);
     next->schema.reset();
     next->resolver.reset();
     return next;
@@ -1059,7 +1063,7 @@ ScanPlan views_root(const ScanPlan& plan_, std::string dir) {
 
 coro::CoroTask<ExportStats> for_each_batch(
     ScanPlan plan_,
-    std::function<void(std::size_t, const std::vector<std::string_view>&)>
+    std::function<void(std::size_t, const std::vector<dstd::StringView>&)>
         on_batch,
     std::size_t num_slots, std::uint64_t limit) {
     co_return co_await detail::run_scan_batches(plan_, num_slots, limit,
@@ -1094,7 +1098,7 @@ dataframe::LazyFrame collect(const ScanPlan& plan_) {
     const bool row_query = detail::is_row_query(*plan_);
     const bool select_in_scan = row_query && !plan_->select.empty();
 
-    std::shared_ptr<detail::ViewPlan> stripped = clone(plan_);
+    dstd::SharedPtr<detail::ViewPlan> stripped = clone(plan_);
     if (!select_in_scan) stripped->select.clear();
     stripped->sort_col.clear();
     stripped->sort_desc = false;
@@ -1177,7 +1181,7 @@ coro::CoroTask<dataframe::DataFrame> flamegraph(
         std::move(name), std::move(group));
 }
 
-coro::CoroTask<std::pair<dataframe::DataFrame, dataframe::DataFrame>>
+coro::CoroTask<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>
 containment(ScanPlan plan_, std::vector<std::string> partition, std::string ts,
             std::string dur, std::string name, std::vector<std::string> group) {
     co_return co_await detail::run_containment(
@@ -1194,12 +1198,12 @@ coro::CoroTask<std::string> flamegraph_partial(
 }
 
 dataframe::DataFrame merge_flamegraph_partials(
-    const std::vector<std::string_view>& partials) {
+    const std::vector<dstd::StringView>& partials) {
     return detail::merge_flamegraph_partials(partials);
 }
 
 coro::CoroTask<ExportStats> run_folds(
-    ScanPlan plan_, std::span<detail::Fold* const> folds,
+    ScanPlan plan_, dstd::Span<detail::Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern,
     detail::DynamicPrune* dyn_prune, coro::CoroSemaphore* gate) {
     co_return co_await detail::run_folds(*plan_, folds, intern, dyn_prune,
@@ -1240,11 +1244,11 @@ coro::CoroTask<ExportStats> export_counters(ScanPlan plan_, ExportSink& sink) {
 }
 
 coro::CoroTask<void> materialize_partials(
-    ScanPlan plan_, const std::vector<std::string_view>& partials) {
+    ScanPlan plan_, const std::vector<dstd::StringView>& partials) {
     co_return co_await detail::run_materialize_partials(*plan_, partials);
 }
 
-std::optional<dataframe::DataFrame> reconstruct_if_cached(
+dstd::Optional<dataframe::DataFrame> reconstruct_if_cached(
     const ScanPlan& plan_) {
     return detail::run_reconstruct_if_cached(*plan_);
 }
@@ -1254,12 +1258,12 @@ coro::CoroTask<std::string> aggregate_partial(ScanPlan plan_) {
 }
 
 dataframe::DataFrame merge_partials_to_table(
-    const ScanPlan& plan_, const std::vector<std::string_view>& partials) {
+    const ScanPlan& plan_, const std::vector<dstd::StringView>& partials) {
     return detail::merge_partials_to_table(*plan_, partials);
 }
 
 ExportStats merge_counter_partials(
-    const ScanPlan& plan_, const std::vector<std::string_view>& partials,
+    const ScanPlan& plan_, const std::vector<dstd::StringView>& partials,
     ExportSink& sink) {
     return detail::merge_counters_partials(*plan_, partials, sink);
 }

@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
@@ -71,7 +72,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
                         static_cast<const char*>(nl) - data);
                     // A line inside the member is yielded in place; only one
                     // cut by a member boundary is put together in line_buffer.
-                    std::string_view line(data + pos, nl_pos - pos);
+                    dstd::StringView line(data + pos, nl_pos - pos);
                     if (!line_buffer.empty()) {
                         line_buffer.append(line);
                         line = line_buffer;
@@ -97,7 +98,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
             current_line++;
             if ((start_line == 0 || current_line >= start_line) &&
                 (end_line == 0 || current_line <= end_line)) {
-                co_yield Line(std::string_view(line_buffer), current_line);
+                co_yield Line(dstd::StringView(line_buffer), current_line);
             }
         }
     } catch (...) {

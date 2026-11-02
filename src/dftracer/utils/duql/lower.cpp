@@ -396,7 +396,7 @@ class Lowering {
     }
 
     dstd::Optional<LiteralNode> value_of(const Expr& e) const {
-        if (std::holds_alternative<Param>(e.node)) return std::nullopt;
+        if (std::holds_alternative<Param>(e.node)) return dstd::nullopt;
         return literal(e);
     }
 
@@ -591,7 +591,7 @@ class Lowering {
     dstd::Optional<std::size_t> width(std::size_t side) const {
         const duql::Pipeline& p = prog_.sides[side].pipeline;
         if (p.stages.empty()) {
-            if (p.scan_select.empty()) return std::nullopt;
+            if (p.scan_select.empty()) return dstd::nullopt;
             return p.scan_select.size();
         }
         const auto& last = p.stages.back();
@@ -603,7 +603,7 @@ class Lowering {
                                     p.stages[p.stages.size() - 2]);
             return g->keys.size() + g->aggs.size() + (bucket ? 1 : 0);
         }
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     dstd::SharedPtr<duql::LookupSlot> slot() const {
@@ -776,7 +776,7 @@ class Lowering {
     dstd::Optional<duql::TermPtr> any_match(const Expr& subject,
                                             Cond&& cond) const {
         const auto* a = std::get_if<Arrow>(&subject.node);
-        if (!cond_ || !a) return std::nullopt;
+        if (!cond_ || !a) return dstd::nullopt;
         return make_term(duql::TQuant{
             false, make_term(arrow(*a, subject.span, true)), cond()});
     }
@@ -817,7 +817,7 @@ class Lowering {
     Derive parse_derive(const Parse& n) const {
         const Expr& at = *n.pattern;
         const auto compiled =
-            compile(MatchOp::Regex, pattern(at), std::nullopt, at);
+            compile(MatchOp::Regex, pattern(at), dstd::nullopt, at);
         Derive out;
         for (const auto& [group, name] : duql::capture_names(*compiled)) {
             Call c;
@@ -965,7 +965,7 @@ class Lowering {
         sink->push_back(std::move(st));
         duql::TField f;
         f.base = name;
-        f.steps.push_back({name, false, std::nullopt});
+        f.steps.push_back({name, false, dstd::nullopt});
         f.neg_at = 1;
         return make_term(std::move(f));
     }
@@ -1507,7 +1507,8 @@ class Lowering {
         std::size_t at = 0;
         while (at <= path.size()) {
             const std::size_t dot = std::min(path.find('.', at), path.size());
-            f.steps.push_back({path.substr(at, dot - at), false, std::nullopt});
+            f.steps.push_back(
+                {path.substr(at, dot - at), false, dstd::nullopt});
             at = dot + 1;
         }
         f.neg_at = f.steps.size();
@@ -1520,7 +1521,7 @@ class Lowering {
         if (const auto* u = std::get_if<std::uint64_t>(&v))
             return static_cast<double>(*u);
         if (const auto* d = std::get_if<double>(&v)) return *d;
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     dstd::String text_of(Span span) const {
@@ -1555,16 +1556,16 @@ class Lowering {
 
     dstd::Optional<std::int64_t> whole_number(const Expr& e) const {
         const auto v = literal(e);
-        if (!v) return std::nullopt;
+        if (!v) return dstd::nullopt;
         if (const auto* i = std::get_if<std::int64_t>(&v->value))
-            return *i >= 0 ? dstd::Optional<std::int64_t>(*i) : std::nullopt;
+            return *i >= 0 ? dstd::Optional<std::int64_t>(*i) : dstd::nullopt;
         if (const auto* u = std::get_if<std::uint64_t>(&v->value))
             return *u <= static_cast<std::uint64_t>(
                              std::numeric_limits<std::int64_t>::max())
                        ? dstd::Optional<std::int64_t>(
                              static_cast<std::int64_t>(*u))
-                       : std::nullopt;
-        return std::nullopt;
+                       : dstd::nullopt;
+        return dstd::nullopt;
     }
 
     duql::WinFrame frame_of(const Over& o, Span span) const {
@@ -1644,21 +1645,21 @@ class Lowering {
                 fail(span, "'" + c.name +
                                "' is a window function; it stands in a "
                                "'window' block");
-            return std::nullopt;
+            return dstd::nullopt;
         }
         if (win_arg_ && (w || aggregate_info(c.name)))
             fail(span,
                  "a window function's argument holds no window "
                  "function or aggregate");
-        if (win_arg_) return std::nullopt;
+        if (win_arg_) return dstd::nullopt;
         if (!w) {
             if (aggregate_info(c.name))
                 fail(span, "'" + c.name + "' does not run in a 'window' block");
-            return std::nullopt;
+            return dstd::nullopt;
         }
         if ((w->fn == duql::WinFn::Min || w->fn == duql::WinFn::Max) &&
             c.args.size() > 1)
-            return std::nullopt;
+            return dstd::nullopt;
         const std::size_t n = c.args.size();
         if (n < w->min_args || n > w->max_args)
             fail(span, arity(c.name, w->min_args, w->max_args, n));
@@ -1682,7 +1683,7 @@ class Lowering {
         if (n > 1 && w->fn == duql::WinFn::Quantile) {
             const Expr& level = *c.args[1].value;
             const auto v = literal(level);
-            const auto q = v ? number(v->value) : std::nullopt;
+            const auto q = v ? number(v->value) : dstd::nullopt;
             if (!q || !(*q >= 0 && *q <= 1))
                 fail(level.span,
                      "a quantile level is a number in [0, 1], written as a "
@@ -1715,7 +1716,7 @@ class Lowering {
         if (over) call.frame = frame_of(*over, span);
         duql::TField f;
         f.base = call.column;
-        f.steps.push_back({call.column, false, std::nullopt});
+        f.steps.push_back({call.column, false, dstd::nullopt});
         f.neg_at = 1;
         win_->push_back(std::move(call));
         return make_term(std::move(f));
@@ -1781,11 +1782,11 @@ class Lowering {
                                                   Span span) const {
         const bool plug = plugin_kind(c.name) == duql::PluginKind::Aggregate;
         if (plug && !agg_) fail(span, plugin_aggregate_stage(c.name));
-        if (!agg_ || (!plug && !aggregate_info(c.name))) return std::nullopt;
+        if (!agg_ || (!plug && !aggregate_info(c.name))) return dstd::nullopt;
         const bool is_fn =
             std::any_of(std::begin(duql::FUNCTIONS), std::end(duql::FUNCTIONS),
                         [&](const auto& f) { return f.name == c.name; });
-        if (!plug && is_fn && !aggregate_arity(c)) return std::nullopt;
+        if (!plug && is_fn && !aggregate_arity(c)) return dstd::nullopt;
         dstd::String name = agg_name_;
         if (name.empty()) {
             name = "__duql_a_" + dstd::int_text(agg_hidden_.size());
@@ -1799,7 +1800,7 @@ class Lowering {
         agg_ = sink;
         duql::TField f;
         f.base = name;
-        f.steps.push_back({name, false, std::nullopt});
+        f.steps.push_back({name, false, dstd::nullopt});
         f.neg_at = 1;
         return make_term(std::move(f));
     }
@@ -1885,7 +1886,7 @@ class Lowering {
         if (info->fn == duql::AggFn::Quantile) {
             const Expr& level = *c->args[1].value;
             const auto v = literal(level);
-            const auto q = v ? number(v->value) : std::nullopt;
+            const auto q = v ? number(v->value) : dstd::nullopt;
             if (!q || !(*q >= 0 && *q <= 1))
                 fail(level.span,
                      "a quantile level is a number in [0, 1], written "
@@ -1917,7 +1918,7 @@ class Lowering {
         if (unit == "m") return 60'000'000'000;
         if (unit == "h") return 3'600'000'000'000;
         if (unit == "d") return 86'400'000'000'000;
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     // Nanoseconds per unit of an expression over a field with a time or
@@ -1928,9 +1929,9 @@ class Lowering {
     // `strict` fails on a scaled timed field; otherwise it has no unit.
     dstd::Optional<std::int64_t> unit_of(const Expr& e,
                                          bool strict = true) const {
-        if (!roles_) return std::nullopt;
+        if (!roles_) return dstd::nullopt;
         if (const auto* p = std::get_if<Path>(&e.node)) {
-            if (p->root != PathRoot::Record) return std::nullopt;
+            if (p->root != PathRoot::Record) return dstd::nullopt;
             return column_unit(path_text(*p, e.span));
         }
         if (const auto* b = std::get_if<Binary>(&e.node)) {
@@ -1951,14 +1952,14 @@ class Lowering {
                                  "unit; compare the field itself, or give "
                                  "the unit with as_time(" +
                                  text_of(e) + ", \"ms\")");
-                    return std::nullopt;
+                    return dstd::nullopt;
                 default:
-                    return std::nullopt;
+                    return dstd::nullopt;
             }
         }
         if (const auto* u = std::get_if<Unary>(&e.node))
             return u->op == UnaryOp::Neg ? unit_of(*u->operand, strict)
-                                         : std::nullopt;
+                                         : dstd::nullopt;
         if (const auto* c = std::get_if<Call>(&e.node)) {
             if (c->name == "as_time" || c->name == "now")
                 return roles_->time_ns_per_unit;
@@ -1977,7 +1978,7 @@ class Lowering {
             }
             if (!values.empty()) return common_unit(values, strict);
         }
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     // The unit the timed ones of `parts` share; none when none is timed or
@@ -1989,7 +1990,7 @@ class Lowering {
             if (!p) continue;
             const auto u = unit_of(*p, strict);
             if (!u) continue;
-            if (unit && *unit != *u) return std::nullopt;
+            if (unit && *unit != *u) return dstd::nullopt;
             unit = u;
         }
         return unit;
@@ -2000,11 +2001,11 @@ class Lowering {
     dstd::Optional<std::int64_t> column_unit(dstd::StringView name) const {
         if (const auto c = col_units_.find(name); c != col_units_.end())
             return c->second;
-        if (!record_units_) return std::nullopt;
+        if (!record_units_) return dstd::nullopt;
         auto it = roles_->fields.find(name);
         if (it == roles_->fields.end() && name.starts_with("args."))
             it = roles_->fields.find(name.substr(5));
-        if (it == roles_->fields.end()) return std::nullopt;
+        if (it == roles_->fields.end()) return dstd::nullopt;
         return it->second;
     }
 
@@ -2012,12 +2013,12 @@ class Lowering {
     // result is a value of it.
     dstd::Optional<std::int64_t> aggregate_unit(const Expr& e) const {
         const auto* c = std::get_if<Call>(&e.node);
-        if (!c || c->args.empty()) return std::nullopt;
+        if (!c || c->args.empty()) return dstd::nullopt;
         static constexpr dstd::StringView KEEP[] = {
             "sum", "min", "max", "mean", "first", "last", "quantile", "std"};
         for (dstd::StringView k : KEEP)
             if (c->name == k) return unit_of(*c->args[0].value, false);
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     dstd::String column_name(const Item& it) const {
@@ -2044,7 +2045,7 @@ class Lowering {
                         set(col_units_, a.name, unit_of(*a.value, false));
                 } else if constexpr (std::is_same_v<T, Parse>) {
                     for (const auto& a : parse_derive(n).fields)
-                        set(col_units_, a.name, std::nullopt);
+                        set(col_units_, a.name, dstd::nullopt);
                 } else if constexpr (std::is_same_v<T, Select>) {
                     Units next;
                     for (const auto& it : n.items)
@@ -2070,29 +2071,29 @@ class Lowering {
                     record_units_ = false;
                 } else if constexpr (std::is_same_v<T, Drop>) {
                     for (const auto& p : n.paths)
-                        col_units_[path_text(p, s.span)] = std::nullopt;
+                        col_units_[path_text(p, s.span)] = dstd::nullopt;
                 } else if constexpr (std::is_same_v<T, Rename>) {
                     Units moved;
                     for (const auto& [name, path] : n.pairs)
                         moved[name] = column_unit(path_text(path, s.span));
                     for (const auto& [name, path] : n.pairs)
-                        col_units_[path_text(path, s.span)] = std::nullopt;
+                        col_units_[path_text(path, s.span)] = dstd::nullopt;
                     for (auto& [name, u] : moved) col_units_[name] = u;
                 } else if constexpr (std::is_same_v<T, Expand>) {
-                    set(col_units_, path_text(n.path, s.span), std::nullopt);
-                    set(col_units_, n.as, std::nullopt);
+                    set(col_units_, path_text(n.path, s.span), dstd::nullopt);
+                    set(col_units_, n.as, dstd::nullopt);
                     if (!n.path.steps.empty())
-                        set(col_units_, n.path.steps.back().key, std::nullopt);
-                    set(col_units_, n.with_index, std::nullopt);
+                        set(col_units_, n.path.steps.back().key, dstd::nullopt);
+                    set(col_units_, n.with_index, dstd::nullopt);
                 } else if constexpr (std::is_same_v<T, Session>) {
                     set(col_units_, n.as.empty() ? "session" : n.as,
-                        std::nullopt);
+                        dstd::nullopt);
                 } else if constexpr (std::is_same_v<T, Bucket>) {
                     set(col_units_, n.as.empty() ? "bucket" : n.as,
-                        std::nullopt);
+                        dstd::nullopt);
                 } else if constexpr (std::is_same_v<T, Lookup> ||
                                      std::is_same_v<T, OverlapLookup>) {
-                    set(col_units_, n.into, std::nullopt);
+                    set(col_units_, n.into, dstd::nullopt);
                 } else if constexpr (std::is_same_v<T, Pivot> ||
                                      std::is_same_v<T, Unpivot> ||
                                      std::is_same_v<T, Union> ||
@@ -2159,7 +2160,7 @@ class Lowering {
     dstd::Optional<duql::TermPtr> time_call(const Call& c, Span span) const {
         if (c.name != "bin" && c.name != "to_seconds" && c.name != "as_time" &&
             c.name != "now")
-            return std::nullopt;
+            return dstd::nullopt;
         if (!roles_)
             fail(span, "'" + c.name +
                            "' needs the record schema's time roles; run the "
@@ -2404,14 +2405,14 @@ class Lowering {
 
     dstd::Optional<char> escape_char(const dstd::Optional<dstd::String>& esc,
                                      Span span) const {
-        if (!esc) return std::nullopt;
+        if (!esc) return dstd::nullopt;
         if (esc->size() != 1) fail(span, "'escape' takes one character");
         return (*esc)[0];
     }
 
     QueryNodePtr match(duql::FieldNode f, MatchOp op, dstd::String pattern,
                        bool negated, const Expr& at,
-                       dstd::Optional<char> escape = std::nullopt) const {
+                       dstd::Optional<char> escape = dstd::nullopt) const {
         duql::MatchNode node;
         node.compiled = compile(op, pattern, escape, at);
         node.field = std::move(f);
@@ -2434,7 +2435,7 @@ class Lowering {
                     p = std::get_if<Path>(&c->args[0].value->node);
                     any = p != nullptr;
                 }
-        if (!p || negative_at(*p) != p->steps.size()) return std::nullopt;
+        if (!p || negative_at(*p) != p->steps.size()) return dstd::nullopt;
         return duql::FieldNode{path_text(*p, e.span), any};
     }
 
@@ -2579,17 +2580,17 @@ class Lowering {
                     if (!n.any)
                         return make_term(duql::TMatch{
                             field_term(n.path, e.span), MatchOp::Icontains,
-                            n.text, n.negated, std::nullopt,
-                            compile(MatchOp::Icontains, n.text, std::nullopt,
+                            n.text, n.negated, dstd::nullopt,
+                            compile(MatchOp::Icontains, n.text, dstd::nullopt,
                                     e)});
                     if (quant_ > 0) fail(e.span, NESTED_QUANTIFIER);
                     return make_term(
                         duql::TQuant{false, field_term(n.path, e.span),
                                      or_false(make_term(duql::TMatch{
                                          element(), MatchOp::Icontains, n.text,
-                                         n.negated, std::nullopt,
+                                         n.negated, dstd::nullopt,
                                          compile(MatchOp::Icontains, n.text,
-                                                 std::nullopt, e)}))});
+                                                 dstd::nullopt, e)}))});
                 } else if constexpr (std::is_same_v<T, Between>) {
                     if (auto t = any_match(*n.subject, [&] {
                             return make_term(duql::TBetween{
@@ -2694,14 +2695,14 @@ class Lowering {
             case BinaryOp::Niregex: {
                 const auto [op, negated] = regex_op(b.op);
                 dstd::String p = pattern(*b.right);
-                auto compiled = compile(op, p, std::nullopt, *b.right);
+                auto compiled = compile(op, p, dstd::nullopt, *b.right);
                 if (auto t = any_match(*b.left, [&] {
                         return make_term(duql::TMatch{element(), op, p, negated,
-                                                      std::nullopt, compiled});
+                                                      dstd::nullopt, compiled});
                     }))
                     return std::move(*t);
                 return make_term(duql::TMatch{term(*b.left), op, std::move(p),
-                                              negated, std::nullopt,
+                                              negated, dstd::nullopt,
                                               std::move(compiled)});
             }
             case BinaryOp::Eq:
@@ -2749,7 +2750,7 @@ class Lowering {
     dstd::Optional<duql::TermPtr> quantified(const Binary& b) const {
         const Call* l = quantified_side(*b.left);
         const Call* r = quantified_side(*b.right);
-        if (!l && !r) return std::nullopt;
+        if (!l && !r) return dstd::nullopt;
         const Call* c = l ? l : r;
         if (l && r)
             fail(c->args[0].value->span,
@@ -2830,7 +2831,7 @@ class Lowering {
             pattern(*c.args[1].value, "join() takes a string separator");
         if (info->fn == duql::Fn::Extract) {
             const Expr& at = *c.args[1].value;
-            t.pattern = compile(MatchOp::Regex, pattern(at), std::nullopt, at);
+            t.pattern = compile(MatchOp::Regex, pattern(at), dstd::nullopt, at);
             const std::size_t groups = duql::capture_count(*t.pattern);
             if (t.args.size() > 2)
                 if (const auto* g = std::get_if<duql::TConst>(&t.args[2]->node))
@@ -2845,7 +2846,7 @@ class Lowering {
         if (info->fn == duql::Fn::RegexReplace) {
             const Expr& at = *c.args[1].value;
             const Expr& to = *c.args[2].value;
-            t.pattern = compile(MatchOp::Regex, pattern(at), std::nullopt, at);
+            t.pattern = compile(MatchOp::Regex, pattern(at), dstd::nullopt, at);
             const dstd::String text =
                 pattern(to, "regex_replace() takes a string replacement");
             auto sub = duql::compile_substitution(*t.pattern, text);
@@ -2907,9 +2908,9 @@ class Lowering {
         if (const auto* p = std::get_if<Param>(&e.node))
             return LiteralNode{bound(*p, e.span)};
         if (const auto* u = std::get_if<Unary>(&e.node)) {
-            if (u->op != UnaryOp::Neg) return std::nullopt;
+            if (u->op != UnaryOp::Neg) return dstd::nullopt;
             const auto* lit = std::get_if<Literal>(&u->operand->node);
-            if (!lit) return std::nullopt;
+            if (!lit) return dstd::nullopt;
             if (const auto* v = std::get_if<std::uint64_t>(&lit->value)) {
                 if (*v == 0) return LiteralNode{std::uint64_t{0}};
                 if (*v > static_cast<std::uint64_t>(
@@ -2920,15 +2921,15 @@ class Lowering {
             }
             if (const auto* d = std::get_if<double>(&lit->value))
                 return LiteralNode{-*d};
-            return std::nullopt;
+            return dstd::nullopt;
         }
         const auto* lit = std::get_if<Literal>(&e.node);
-        if (!lit) return std::nullopt;
+        if (!lit) return dstd::nullopt;
         return std::visit(
             [&](const auto& v) -> dstd::Optional<LiteralNode> {
                 using T = std::decay_t<decltype(v)>;
                 if constexpr (std::is_same_v<T, Null>)
-                    return std::nullopt;
+                    return dstd::nullopt;
                 else
                     return LiteralNode{v};
             },

@@ -15,6 +15,7 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -118,8 +119,8 @@ bool is_sorted_impl(const Series& v, bool descending) {
     return true;
 }
 Series is_in_strings(const dftu_series& v, const dftu_series& values) {
-    ankerl::unordered_dense::set<std::string_view> set;
-    std::string_view s;
+    ankerl::unordered_dense::set<dstd::StringView> set;
+    dstd::StringView s;
     for (std::int64_t j = 0; j < values.length; ++j)
         if (str_at(&values, j, s)) set.insert(s);
     const std::int64_t n = v.length;
@@ -137,7 +138,7 @@ Series is_in_strings(const dftu_series& v, const dftu_series& values) {
     }
     constexpr std::int64_t GRAIN = 1 << 15;
     auto probe = [&](std::int64_t b, std::int64_t e) {
-        std::string_view t;
+        dstd::StringView t;
         for (std::int64_t i = b; i < e; ++i) {
             bool hit;
             if (dict) {

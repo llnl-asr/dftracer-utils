@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_REGISTER_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_REGISTER_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin/async.h>
 #include <dftracer/utils/plugins/plugin/map.h>
@@ -55,10 +56,10 @@ class ConfigValue {
     double as_f64(double dflt = 0.0) const noexcept {
         return dftu_as_f64(v_, dflt);
     }
-    std::string_view as_str(std::string_view dflt = {}) const noexcept {
+    dstd::StringView as_str(dstd::StringView dflt = {}) const noexcept {
         std::uint32_t n = 0;
         const char* s = dftu_as_str(v_, &n);
-        return s ? std::string_view{s, n} : dflt;
+        return s ? dstd::StringView{s, n} : dflt;
     }
 
     /// ARRAY child count or OBJECT member count; 0 for any other kind.
@@ -71,11 +72,11 @@ class ConfigValue {
                                              : ConfigValue{};
     }
     /// Member `key` of an OBJECT; absent or not an object yields null.
-    ConfigValue operator[](std::string_view key) const noexcept {
+    ConfigValue operator[](dstd::StringView key) const noexcept {
         if (!is_object()) return ConfigValue{};
         for (std::uint32_t i = 0; i < v_->count; ++i) {
             const dftu_member& m = v_->as.members[i];
-            if (std::string_view{m.key, m.key_len} == key)
+            if (dstd::StringView{m.key, m.key_len} == key)
                 return ConfigValue{m.value};
         }
         return ConfigValue{};
@@ -94,49 +95,49 @@ class Config {
     Config() = default;
     explicit Config(const dftu_value* root) : root_(root) {}
 
-    const dftu_value* find(std::string_view key) const {
+    const dftu_value* find(dstd::StringView key) const {
         if (!root_ || root_->kind != DFTU_VAL_OBJECT) return nullptr;
         for (std::uint32_t i = 0; i < root_->count; ++i) {
             const dftu_member& m = root_->as.members[i];
-            if (std::string_view{m.key, m.key_len} == key) return m.value;
+            if (dstd::StringView{m.key, m.key_len} == key) return m.value;
         }
         return nullptr;
     }
 
-    std::string_view get(std::string_view key,
-                         std::string_view dflt = {}) const {
+    dstd::StringView get(dstd::StringView key,
+                         dstd::StringView dflt = {}) const {
         const dftu_value* v = find(key);
         return (v && v->kind == DFTU_VAL_STR)
-                   ? std::string_view{v->as.str, v->count}
+                   ? dstd::StringView{v->as.str, v->count}
                    : dflt;
     }
-    std::int64_t get_int(std::string_view key, std::int64_t dflt = 0) const {
+    std::int64_t get_int(dstd::StringView key, std::int64_t dflt = 0) const {
         return dftu_as_i64(find(key), dflt);
     }
-    double get_double(std::string_view key, double dflt = 0.0) const {
+    double get_double(dstd::StringView key, double dflt = 0.0) const {
         return dftu_as_f64(find(key), dflt);
     }
-    bool get_bool(std::string_view key, bool dflt = false) const {
+    bool get_bool(dstd::StringView key, bool dflt = false) const {
         return dftu_as_bool(find(key), dflt ? 1 : 0) != 0;
     }
-    Config child(std::string_view key) const {
+    Config child(dstd::StringView key) const {
         const dftu_value* v = find(key);
         return Config{(v && v->kind == DFTU_VAL_OBJECT) ? v : nullptr};
     }
 
     /// Typed view of the value at `key`, of any kind (including ARRAY/OBJECT);
     /// null if absent. Prefer this over raw() for walking nested config.
-    ConfigValue value(std::string_view key) const {
+    ConfigValue value(dstd::StringView key) const {
         return ConfigValue{find(key)};
     }
     /// Typed view of the ARRAY at `key`; null if absent or not an array.
     /// Iterate elements with ConfigValue::size()/operator[].
-    ConfigValue array(std::string_view key) const {
+    ConfigValue array(dstd::StringView key) const {
         return ConfigValue{raw_array(key)};
     }
     /// The ARRAY at `key` coerced to int64 per element (dftu_as_i64 rules);
     /// empty if the key is absent or not an array.
-    std::vector<std::int64_t> get_int_array(std::string_view key) const {
+    std::vector<std::int64_t> get_int_array(dstd::StringView key) const {
         std::vector<std::int64_t> out;
         if (const dftu_value* a = raw_array(key)) {
             out.reserve(a->count);
@@ -147,7 +148,7 @@ class Config {
     }
     /// The ARRAY at `key` coerced to double per element (dftu_as_f64 rules);
     /// empty if the key is absent or not an array.
-    std::vector<double> get_double_array(std::string_view key) const {
+    std::vector<double> get_double_array(dstd::StringView key) const {
         std::vector<double> out;
         if (const dftu_value* a = raw_array(key)) {
             out.reserve(a->count);
@@ -159,15 +160,15 @@ class Config {
     /// The ARRAY at `key` as string_views (non-STR elements yield an empty
     /// view); the views borrow the host-owned config tree. Empty if the key is
     /// absent or not an array.
-    std::vector<std::string_view> get_string_array(std::string_view key) const {
-        std::vector<std::string_view> out;
+    std::vector<dstd::StringView> get_string_array(dstd::StringView key) const {
+        std::vector<dstd::StringView> out;
         if (const dftu_value* a = raw_array(key)) {
             out.reserve(a->count);
             for (std::uint32_t i = 0; i < a->count; ++i) {
                 const dftu_value& e = a->as.items[i];
                 out.push_back(e.kind == DFTU_VAL_STR
-                                  ? std::string_view{e.as.str, e.count}
-                                  : std::string_view{});
+                                  ? dstd::StringView{e.as.str, e.count}
+                                  : dstd::StringView{});
             }
         }
         return out;
@@ -177,7 +178,7 @@ class Config {
     const dftu_value* raw() const { return root_; }
 
    private:
-    const dftu_value* raw_array(std::string_view key) const {
+    const dftu_value* raw_array(dstd::StringView key) const {
         const dftu_value* v = find(key);
         return (v && v->kind == DFTU_VAL_ARRAY) ? v : nullptr;
     }
@@ -483,7 +484,7 @@ concept FrameFinalize = requires(State& s) {
 /// A state that can be written out and read back, which is what lets the host
 /// spill it under the scan's memory budget.
 template <class State>
-concept Spillable = requires(const State& s, std::string_view b) {
+concept Spillable = requires(const State& s, dstd::StringView b) {
     { s.serialize() } -> std::convertible_to<std::string>;
     { State::deserialize(b) } -> std::same_as<State*>;
 };
@@ -570,7 +571,7 @@ const dftu_state_desc& state_desc_of(const char* name) {
                 try {
                     auto box = std::make_unique<Box>();
                     std::unique_ptr<State> s{State::deserialize(
-                        std::string_view{static_cast<const char*>(in.data),
+                        dstd::StringView{static_cast<const char*>(in.data),
                                          static_cast<std::size_t>(in.len)})};
                     if (!s) return nullptr;
                     box->state = std::move(*s);
@@ -682,7 +683,7 @@ class PluginBuilder {
     /// `<plugin>.<name>` and outlive the plugin. State needs update(const
     /// dftu_dataframe*), merge(State&) and finalize(); it additionally gets a
     /// memory budget from bytes() and spilling from serialize() plus a static
-    /// deserialize(std::string_view) -> State*.
+    /// deserialize(dstd::StringView) -> State*.
     template <class State>
     PluginBuilder& state(const char* name) {
         const dftu_svc_agg* agg = ext<dftu_svc_agg>(DFTU_SVC_AGG);

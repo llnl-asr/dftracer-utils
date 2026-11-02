@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_INDEX_PLAN_ROWSETS_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/record_schema.h>
 
 #include <optional>
@@ -39,8 +41,8 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files);
 /// Row set `name` as the index build stored it, the files' rows in file
 /// order; nullopt when a file's index is missing, stale or holds no rows
 /// for it. Never throws for a missing or unreadable index.
-std::optional<dataframe::DataFrame> stored_rowset(
-    const std::vector<RowSetFile>& files, std::string_view name);
+dstd::Optional<dataframe::DataFrame> stored_rowset(
+    const std::vector<RowSetFile>& files, dstd::StringView name);
 
 /// Whether every file's index is fresh and holds its row sets, read from
 /// the manifests only.

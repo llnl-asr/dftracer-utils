@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
@@ -170,9 +171,9 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
 
     auto fold_events = [begin, bucket_us, nb, &fields](
                            CounterAcc& acc,
-                           const std::vector<std::string_view>& events) {
+                           const std::vector<dstd::StringView>& events) {
         if (acc.ops.empty()) acc.init(nb);
-        fields.for_each_event(events, [&](std::string_view ev) {
+        fields.for_each_event(events, [&](dstd::StringView ev) {
             fold_counter(ev, begin, bucket_us, nb, acc);
         });
     };

@@ -7,6 +7,7 @@
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/singleton.h>
 
 #include <mutex>
@@ -29,11 +30,11 @@ std::unordered_map<std::string, NodeEntry>& nodes() {
 
 }  // namespace
 
-std::optional<NodeEntry> find_node(const char* name) {
-    if (!name) return std::nullopt;
+dstd::Optional<NodeEntry> find_node(const char* name) {
+    if (!name) return dstd::nullopt;
     std::lock_guard<std::mutex> lock(registry_mutex());
     auto it = nodes().find(name);
-    if (it == nodes().end()) return std::nullopt;
+    if (it == nodes().end()) return dstd::nullopt;
     return it->second;
 }
 

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/term.h>
@@ -99,8 +102,8 @@ bool trusted_bounds(const Zone& z, bool need_both) {
 // The histogram counts whole timestamps, so a bound that is not a
 // non-negative integer (a fraction, a negative number) leaves it out. A string
 // that is not an integer is a malformed query.
-std::optional<std::uint64_t> timestamp_bound(const std::string& text,
-                                             const duql_ns::CompareNode& n) {
+dstd::Optional<std::uint64_t> timestamp_bound(const std::string& text,
+                                              const duql_ns::CompareNode& n) {
     std::uint64_t out = 0;
     const char* end = text.data() + text.size();
     const auto parsed = std::from_chars(text.data(), end, out);
@@ -109,7 +112,7 @@ std::optional<std::uint64_t> timestamp_bound(const std::string& text,
         throw common::DFTUtilsException::cat(
             common::ErrorCode::InvalidArgument, "ts compared with \"", text,
             "\", which is not an integer timestamp");
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 bool zone_may_match(const Zone& z, duql_ns::CompareOp op,
@@ -174,15 +177,15 @@ bool histogram_has_events(const Zone& z, duql_ns::CompareOp op,
 // the path.
 bool covers_every_line(FileIndexData& d, std::uint64_t ckpt,
                        std::uint64_t observed,
-                       std::optional<std::uint64_t> present) {
+                       dstd::Optional<std::uint64_t> present) {
     const auto ln = d.chunk_lines.find(ckpt);
     return observed != 0 && ln != d.chunk_lines.end() &&
            ln->second == observed && present && *present == observed;
 }
 
-std::optional<std::uint64_t> counted(const GranuleCounts& g) {
+dstd::Optional<std::uint64_t> counted(const GranuleCounts& g) {
     const auto* vc = g.get();
-    if (!vc) return std::nullopt;
+    if (!vc) return dstd::nullopt;
     std::uint64_t carried = 0;
     for (const auto& [value, count] : *vc) carried += count;
     return carried;
@@ -223,9 +226,9 @@ void collect_equality_paths(const duql_ns::QueryNode& node,
         node.data);
 }
 
-std::string_view text_of(const std::string& s) { return s; }
-std::string_view text_of(
-    const std::pair<dstd::String, index::store::PathStat>& entry) {
+dstd::StringView text_of(const std::string& s) { return s; }
+dstd::StringView text_of(
+    const dstd::Pair<dstd::String, index::store::PathStat>& entry) {
     return entry.first;
 }
 
@@ -234,9 +237,9 @@ std::string_view text_of(
 // key along the way.
 template <class Paths>
 bool path_may_exist(const Paths& paths, const std::string& path) {
-    auto near = [&](std::string_view p) {
+    auto near = [&](dstd::StringView p) {
         for (const auto& entry : paths) {
-            const std::string_view s = text_of(entry);
+            const dstd::StringView s = text_of(entry);
             if (s == p ||
                 (s.size() > p.size() && s.starts_with(p) &&
                  s[p.size()] == '.') ||
@@ -332,10 +335,10 @@ class MetadataRecords final : public Condition {
         return IndexExtension::Metadata;
     }
 
-    std::optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
-                                      const ChunkSet& candidates) override {
+    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+                                       const ChunkSet& candidates) override {
         const duql_ns::FieldNode* field = leaf_field(leaf);
-        if (!field) return std::nullopt;
+        if (!field) return dstd::nullopt;
         ChunkSet out;
         for (auto c : candidates) {
             const auto it = meta_.find(c);
@@ -373,9 +376,9 @@ class FileBloom final : public Condition {
         if (paths.empty()) return true;
         return may_match_file(root);
     }
-    std::optional<ChunkSet> may_match(const duql_ns::QueryNode&,
-                                      const ChunkSet&) override {
-        return std::nullopt;
+    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode&,
+                                       const ChunkSet&) override {
+        return dstd::nullopt;
     }
 
    private:
@@ -415,13 +418,13 @@ class FileBloom final : public Condition {
 
 // The path of an `exists(path)` leaf in the catalog's form (`a.0`, not
 // `a[0]`), or nullopt for any other leaf.
-std::optional<std::string> exists_path(const duql_ns::QueryNode& node) {
+dstd::Optional<std::string> exists_path(const duql_ns::QueryNode& node) {
     const auto* leaf = std::get_if<duql_ns::ExprLeaf>(&node.data);
-    if (!leaf) return std::nullopt;
+    if (!leaf) return dstd::nullopt;
     const auto* call = std::get_if<duql_ns::TCall>(&leaf->term->node);
-    if (!call || call->fn != duql_ns::Fn::Exists) return std::nullopt;
+    if (!call || call->fn != duql_ns::Fn::Exists) return dstd::nullopt;
     const auto* field = std::get_if<duql_ns::TField>(&call->args[0]->node);
-    if (!field) return std::nullopt;
+    if (!field) return dstd::nullopt;
     std::string out;
     for (const char c : field->base) {
         if (c == '[')
@@ -433,7 +436,7 @@ std::optional<std::string> exists_path(const duql_ns::QueryNode& node) {
 }
 
 // Whether `p` lies below `base`.
-bool under(std::string_view p, const std::string& base) {
+bool under(dstd::StringView p, const std::string& base) {
     return p.size() > base.size() && p.starts_with(base) &&
            p[base.size()] == '.';
 }
@@ -449,9 +452,9 @@ class CatalogPresence final : public Condition {
     bool file_may_match(const duql_ns::QueryNode& root) override {
         return may_match_file(root);
     }
-    std::optional<ChunkSet> may_match(const duql_ns::QueryNode&,
-                                      const ChunkSet&) override {
-        return std::nullopt;
+    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode&,
+                                       const ChunkSet&) override {
+        return dstd::nullopt;
     }
 
    private:
@@ -482,18 +485,18 @@ class Postings final : public Condition {
         return IndexExtension::Postings;
     }
     bool exact() const override { return true; }
-    std::optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
-                                      const ChunkSet&) override {
+    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+                                       const ChunkSet&) override {
         if (const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data)) {
-            if (n->op != duql_ns::CompareOp::Eq) return std::nullopt;
+            if (n->op != duql_ns::CompareOp::Eq) return dstd::nullopt;
             const auto val = literal_to_string(n->value);
             const auto contains =
                 d_.posting_contains(std::string(n->field.path), val);
-            if (!contains) return std::nullopt;
+            if (!contains) return dstd::nullopt;
             if (!*contains) return ChunkSet{};
             const auto& chunks =
                 d_.posting_chunks(std::string(n->field.path), val);
-            if (chunks.empty()) return std::nullopt;
+            if (chunks.empty()) return dstd::nullopt;
             return chunks;
         }
         if (const auto* n = std::get_if<duql_ns::InNode>(&leaf.data)) {
@@ -507,10 +510,10 @@ class Postings final : public Condition {
                     d_.posting_chunks(std::string(n->field.path), val);
                 out.insert(chunks.begin(), chunks.end());
             }
-            if (out.empty()) return std::nullopt;
+            if (out.empty()) return dstd::nullopt;
             return out;
         }
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
    private:
@@ -523,12 +526,12 @@ class Counts final : public Condition {
     explicit Counts(FileIndexData& d) : d_(d) {}
     IndexExtension extension() const override { return IndexExtension::Counts; }
 
-    std::optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
-                                      const ChunkSet& candidates) override {
+    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+                                       const ChunkSet& candidates) override {
         if (const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data)) {
             if (n->op != duql_ns::CompareOp::Eq &&
                 n->op != duql_ns::CompareOp::Ne)
-                return std::nullopt;
+                return dstd::nullopt;
             const auto& counts = d_.counts(std::string(n->field.path));
             const auto val = literal_to_string(n->value);
             ChunkSet out;
@@ -572,14 +575,15 @@ class Counts final : public Condition {
             }
             return out;
         }
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
-    std::optional<ChunkSet> all_match(const duql_ns::QueryNode& leaf) override {
+    dstd::Optional<ChunkSet> all_match(
+        const duql_ns::QueryNode& leaf) override {
         if (const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data)) {
             if (n->op != duql_ns::CompareOp::Eq &&
                 n->op != duql_ns::CompareOp::Ne)
-                return std::nullopt;
+                return dstd::nullopt;
             const auto val = literal_to_string(n->value);
             return proven(std::string(n->field.path), [&](const auto& vc) {
                 return n->op == duql_ns::CompareOp::Eq
@@ -595,7 +599,7 @@ class Counts final : public Condition {
             return proven(std::string(n->field.path), [&](const auto& vc) {
                 return !vc.empty() && none_listed(vc, n->values);
             });
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
    private:
@@ -651,22 +655,22 @@ class Zonemap final : public Condition {
         return IndexExtension::Zonemap;
     }
 
-    std::optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
-                                      const ChunkSet& candidates) override {
+    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+                                       const ChunkSet& candidates) override {
         if (const auto path = exists_path(leaf))
             return exists_chunks(*path, candidates);
         if (const auto* in = std::get_if<duql_ns::InNode>(&leaf.data))
             return in_list(*in, candidates);
         const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data);
-        if (!n) return std::nullopt;
+        if (!n) return dstd::nullopt;
         // Equality is bounded only on the args fields: a fixed field's text
         // may spell a value differently from the query.
         const bool bounds_equality =
             n->op == duql_ns::CompareOp::Eq && !d_.fixed_field(n->field.path);
-        if (!is_range_op(n->op) && !bounds_equality) return std::nullopt;
+        if (!is_range_op(n->op) && !bounds_equality) return dstd::nullopt;
         const auto& zones = d_.zones(std::string(n->field.path));
         const auto val = literal_to_string(n->value);
-        std::optional<std::uint64_t> ts_val;
+        dstd::Optional<std::uint64_t> ts_val;
         if (!d_.by_path && n->field.path == "ts" && is_range_op(n->op))
             ts_val = timestamp_bound(val, *n);
         ChunkSet out;
@@ -690,9 +694,10 @@ class Zonemap final : public Condition {
         return out;
     }
 
-    std::optional<ChunkSet> all_match(const duql_ns::QueryNode& leaf) override {
+    dstd::Optional<ChunkSet> all_match(
+        const duql_ns::QueryNode& leaf) override {
         const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data);
-        if (!n || !is_range_op(n->op)) return std::nullopt;
+        if (!n || !is_range_op(n->op)) return dstd::nullopt;
         const auto val = literal_to_string(n->value);
         ChunkSet out;
         for (const auto& [ckpt, z] : d_.zones(std::string(n->field.path)))
@@ -705,9 +710,9 @@ class Zonemap final : public Condition {
    private:
     // A chunk may hold a listed value when one lies in its range; bounded,
     // as equality is, only on the args fields.
-    std::optional<ChunkSet> in_list(const duql_ns::InNode& in,
-                                    const ChunkSet& candidates) {
-        if (d_.fixed_field(in.field.path)) return std::nullopt;
+    dstd::Optional<ChunkSet> in_list(const duql_ns::InNode& in,
+                                     const ChunkSet& candidates) {
+        if (d_.fixed_field(in.field.path)) return dstd::nullopt;
         std::vector<std::string> vals;
         vals.reserve(in.values.elements.size());
         for (const auto& elem : in.values.elements)
@@ -734,9 +739,9 @@ class Zonemap final : public Condition {
     // `exists(path)` is false on a chunk whose zone records no value only
     // when no record of the file holds the path as null, an object or an
     // array, which the zone does not see.
-    std::optional<ChunkSet> exists_chunks(const std::string& path,
-                                          const ChunkSet& candidates) {
-        if (!absence_is_missing(path)) return std::nullopt;
+    dstd::Optional<ChunkSet> exists_chunks(const std::string& path,
+                                           const ChunkSet& candidates) {
+        if (!absence_is_missing(path)) return dstd::nullopt;
         const auto& zones = d_.zones(path);
         ChunkSet out;
         for (auto ckpt : candidates) {
@@ -755,7 +760,7 @@ class Zonemap final : public Condition {
         bool scalar = false;
         for (const auto& [p, stat] : d_.catalog()) {
             if (under(p, leaf)) return false;
-            if (std::string_view(p) != leaf) continue;
+            if (dstd::StringView(p) != leaf) continue;
             scalar = (stat.seen & NULL_BIT) == 0 &&
                      stat.type != index::store::PathType::NullValue &&
                      stat.type < index::store::PathType::Mixed;
@@ -771,12 +776,12 @@ class ChunkBloom final : public Condition {
    public:
     explicit ChunkBloom(FileIndexData& d) : d_(d) {}
     IndexExtension extension() const override { return IndexExtension::Bloom; }
-    std::optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
-                                      const ChunkSet& candidates) override {
+    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+                                       const ChunkSet& candidates) override {
         std::vector<std::string> vals;
         std::string path;
         if (const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data)) {
-            if (n->op != duql_ns::CompareOp::Eq) return std::nullopt;
+            if (n->op != duql_ns::CompareOp::Eq) return dstd::nullopt;
             path = n->field.path;
             vals.push_back(literal_to_string(n->value));
         } else if (const auto* in = std::get_if<duql_ns::InNode>(&leaf.data)) {
@@ -784,7 +789,7 @@ class ChunkBloom final : public Condition {
             for (const auto& elem : in->values.elements)
                 vals.push_back(literal_to_string(elem));
         } else {
-            return std::nullopt;
+            return dstd::nullopt;
         }
         const auto& blooms = d_.blooms(path);
         ChunkSet out;
@@ -821,7 +826,7 @@ bool is_leaf(const duql_ns::QueryNode& node) {
 
 ChunkSet eval_leaf(const duql_ns::QueryNode& leaf, const Conditions& cs,
                    const ChunkSet& universe) {
-    std::optional<ChunkSet> acc;
+    dstd::Optional<ChunkSet> acc;
     for (const auto& c : cs) {
         auto s = c->may_match(leaf, acc ? *acc : universe);
         if (!s) continue;
@@ -982,10 +987,10 @@ class PluginCondition final : public Condition {
         return !file_ || may_match_file(root);
     }
 
-    std::optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
-                                      const ChunkSet& candidates) override {
+    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+                                       const ChunkSet& candidates) override {
         void* h = compile(leaf);
-        if (!h) return std::nullopt;
+        if (!h) return dstd::nullopt;
         if (!granules_) {
             granules_.emplace();
             auto listed = common::unwrap(
@@ -1075,7 +1080,7 @@ class PluginCondition final : public Condition {
     FileIndexData& d_;
     index::extensions::PluginExtensionPtr ext_;
     ankerl::unordered_dense::map<const duql_ns::QueryNode*, void*> compiled_;
-    std::optional<ankerl::unordered_dense::map<std::uint64_t, dstd::String>>
+    dstd::Optional<ankerl::unordered_dense::map<std::uint64_t, dstd::String>>
         granules_;
     dstd::Optional<dstd::String> file_;
     bool file_loaded_ = false;
@@ -1097,7 +1102,7 @@ Conditions make_query_conditions(FileIndexData& data) {
         common::unwrap(index::plugins(*data.snapshot, *data.file));
     for (auto& ext : registered) {
         for (const auto& copy : copies) {
-            if (std::string_view(copy.name) != ext->name) continue;
+            if (dstd::StringView(copy.name) != ext->name) continue;
             const store::ExtensionState state{copy.version, copy.params_hash,
                                               copy.ready};
             if (ext->current(state))

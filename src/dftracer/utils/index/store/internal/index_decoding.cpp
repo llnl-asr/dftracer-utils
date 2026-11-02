@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/internal/index_decoding.h>
 #include <dftracer/utils/index/store/internal/index_encoding.h>
@@ -7,7 +8,7 @@
 namespace dftracer::utils::index::store::internal::decoding {
 
 index::schemas::dft::ChunkStatistics decode_chunk_statistics_value(
-    std::string_view value) {
+    dstd::StringView value) {
     Cursor cursor(value);
     index::schemas::dft::ChunkStatistics stats;
     stats.total_events = cursor.u64();
@@ -79,7 +80,7 @@ index::schemas::dft::ChunkStatistics decode_chunk_statistics_value(
 }
 
 index::gzip::GzipMemberRecord decode_gzip_member(std::uint32_t member_idx,
-                                                 std::string_view body) {
+                                                 dstd::StringView body) {
     index::gzip::GzipMemberRecord member;
     member.member_idx = member_idx;
     Cursor cursor(body);
@@ -102,7 +103,7 @@ index::gzip::GzipMemberRecord decode_gzip_member(std::uint32_t member_idx,
 }
 
 dstd::StringViewMap<std::uint64_t> decode_count_map_value(
-    std::string_view value) {
+    dstd::StringView value) {
     Cursor cursor(value);
     dstd::StringViewMap<std::uint64_t> counts;
     auto num_entries = cursor.u32();
@@ -114,7 +115,7 @@ dstd::StringViewMap<std::uint64_t> decode_count_map_value(
     return counts;
 }
 
-FileMetadataResult decode_metadata_record(std::string_view value) {
+FileMetadataResult decode_metadata_record(dstd::StringView value) {
     Cursor cursor(value);
     FileMetadataResult meta;
     meta.checkpoint_size = cursor.u64();

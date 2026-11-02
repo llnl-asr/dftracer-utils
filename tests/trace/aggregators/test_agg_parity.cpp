@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -319,7 +320,7 @@ String table_text(const df::DataFrame& t, const Vector<String>& keys) {
         is_key[c] = std::find(keys.begin(), keys.end(),
                               StringView(t.names[c])) != keys.end();
     }
-    Vector<std::pair<String, String>> rows;
+    Vector<dftracer::utils::dstd::Pair<String, String>> rows;
     for (std::int64_t r = 0; r < t.num_rows(); ++r) {
         String line, key;
         for (std::size_t c = 0; c < ncols; ++c) {

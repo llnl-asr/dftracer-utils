@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_INDEX_PLAN_PREFILTER_H
 
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 
 #include <cstddef>
@@ -37,9 +39,9 @@ class Prefilter {
 
     bool empty() const { return clauses_.empty() && ranges_.empty(); }
     /// `line` may be a whole chunk of lines.
-    bool may_match(std::string_view line) const;
+    bool may_match(dstd::StringView line) const;
     /// The per-needle reference path of `may_match`; same result.
-    bool may_match_per_needle(std::string_view line) const;
+    bool may_match_per_needle(dstd::StringView line) const;
     const std::vector<std::vector<std::string>>& clauses() const {
         return clauses_;
     }
@@ -49,7 +51,7 @@ class Prefilter {
     class Gate {
        public:
         explicit Gate(const Prefilter& p) : p_(&p), on_(!p.empty()) {}
-        bool may_match(std::string_view line);
+        bool may_match(dstd::StringView line);
 
        private:
         const Prefilter* p_;
@@ -82,14 +84,14 @@ class Prefilter {
     };
 
    private:
-    static bool range_may_hold(std::string_view line, const Range& r);
+    static bool range_may_hold(dstd::StringView line, const Range& r);
 
     std::vector<std::vector<std::string>> clauses_;
     std::vector<Range> ranges_;
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
     /// One literal database over the distinct needles; null with none, or
     /// when no clause has HS_MIN_ALTERNATIVES needles.
-    std::shared_ptr<hs_database> db_;
+    dstd::SharedPtr<hs_database> db_;
     /// Per clause needle, its id in `db_`.
     std::vector<std::vector<unsigned>> ids_;
     std::size_t distinct_ = 0;

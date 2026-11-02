@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/utilities/dlio/distributions.h>
 
 #include <algorithm>
@@ -313,12 +314,12 @@ std::vector<FittedDistribution> fit_all_single_distributions(
     return fits;
 }
 
-std::optional<FittedDistribution> best_fit_by_ks(
+dstd::Optional<FittedDistribution> best_fit_by_ks(
     const std::vector<FittedDistribution>& fits) {
     for (const auto& f : fits) {
         if (f.valid) return f;
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 double pdf(const FittedDistribution& fit, double x) {
@@ -376,8 +377,8 @@ double quantile(const FittedDistribution& fit, double p) {
 }
 
 Sampler make_sampler(const FittedDistribution& fit,
-                     std::optional<double> min_bound,
-                     std::optional<double> max_bound) {
+                     dstd::Optional<double> min_bound,
+                     dstd::Optional<double> max_bound) {
     if (!fit.valid) {
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,

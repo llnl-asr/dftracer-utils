@@ -14,6 +14,8 @@
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_op_codes.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -195,9 +197,9 @@ std::vector<std::string> list_at(const dftu_series* col, std::int64_t r) {
 
 // Row `r` of an APPROX_TOPK result column: a list<struct{value, count}>, so the
 // list child is a struct whose two fields are read side by side.
-std::vector<std::pair<std::string, double>> heavy_at(const dftu_series* col,
-                                                     std::int64_t r) {
-    std::vector<std::pair<std::string, double>> out;
+std::vector<dstd::Pair<std::string, double>> heavy_at(const dftu_series* col,
+                                                      std::int64_t r) {
+    std::vector<dstd::Pair<std::string, double>> out;
     const std::int32_t* lo = dftu_series_offsets(col);
     dftu_series* rows = dftu_series_child(col, 0);
     if (!lo || !rows) {
@@ -291,7 +293,7 @@ void run_slices(PluginFold& master,
         auto slice = master.slice();
         auto* pf = static_cast<PluginFold*>(slice.get());
         ScanUnit unit{};
-        pf->step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+        pf->step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
         master.merge(*pf);
     }
 }
@@ -391,7 +393,7 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
         auto slice = master.slice();
         auto* pf = static_cast<PluginFold*>(slice.get());
         ScanUnit unit{};
-        pf->step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+        pf->step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
         master.merge(*pf);
     }
     finalize_now(master);
@@ -529,7 +531,7 @@ TEST_CASE(
         auto slice = master.slice();
         auto* pf = static_cast<PluginFold*>(slice.get());
         ScanUnit unit{};
-        pf->step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+        pf->step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
         master.merge(*pf);
     }
     finalize_now(master);

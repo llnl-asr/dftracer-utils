@@ -13,6 +13,9 @@
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 #endif
 
@@ -29,7 +32,7 @@ using fileio::lines::Line;
 using json::JsonParser;
 
 struct JsonLine {
-    std::string_view content;
+    dstd::StringView content;
     std::size_t line_number;
     JsonParser* parser;
 };
@@ -117,7 +120,7 @@ class TraceReader {
     coro::AsyncGenerator<JsonLine> read_json(ReadConfig config = {});
 
     /// Read raw byte chunks.
-    coro::AsyncGenerator<std::span<const char>> read_raw(
+    coro::AsyncGenerator<dstd::Span<const char>> read_raw(
         ReadConfig config = {});
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -155,7 +158,7 @@ class TraceReader {
     void probe_index();
     void ensure_metadata_cached();
 
-    std::shared_ptr<internal::Reader> create_indexed_reader();
+    dstd::SharedPtr<internal::Reader> create_indexed_reader();
 
     internal::StreamType resolve_raw_stream_type(
         const ReadConfig& config) const;

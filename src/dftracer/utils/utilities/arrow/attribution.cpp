@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/scope_exit.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/attribution.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
@@ -95,7 +96,7 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
     }
 
     std::vector<
-        std::unordered_map<std::string, std::pair<std::int64_t, std::int64_t>>>
+        std::unordered_map<std::string, dstd::Pair<std::int64_t, std::int64_t>>>
         counts(n_dim);
     std::int64_t total_sel = 0;
     std::int64_t total_base = 0;

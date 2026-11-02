@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/file_index_data.h>
@@ -47,7 +50,7 @@ namespace q = dftracer::utils::duql;
 // the leaf as is, which prunes nothing, to bound the work per chunk.
 constexpr std::size_t MAX_ANY_POSITIONS = 256;
 
-bool is_position(std::string_view digits) {
+bool is_position(dstd::StringView digits) {
     return !digits.empty() &&
            std::all_of(digits.begin(), digits.end(),
                        [](char c) { return c >= '0' && c <= '9'; });
@@ -60,7 +63,7 @@ using Positions = std::map<dstd::String, std::vector<dstd::String>>;
 Positions any_positions(const Snapshot& snapshot, const FileRef& file,
                         const Query& query) {
     Positions out;
-    std::vector<std::pair<std::uint64_t, dstd::String>> found;
+    std::vector<dstd::Pair<std::uint64_t, dstd::String>> found;
     const auto catalog = common::unwrap(index::catalog(snapshot, file));
     for (const dstd::String& path : query.any_paths()) {
         found.clear();
@@ -69,8 +72,8 @@ Positions any_positions(const Snapshot& snapshot, const FileRef& file,
                 if (p.size() <= base.size() + 1 || !p.starts_with(base) ||
                     p[base.size()] != '.')
                     continue;
-                const std::string_view k =
-                    std::string_view(p).substr(base.size() + 1);
+                const dstd::StringView k =
+                    dstd::StringView(p).substr(base.size() + 1);
                 if (is_position(k))
                     found.emplace_back(std::stoull(std::string(k)),
                                        dstd::String(p.data(), p.size()));
@@ -134,9 +137,9 @@ q::QueryNodePtr expand(const q::QueryNode& node, const Positions& positions) {
 // The query with every any() leaf replaced by the OR of the leaf on each
 // array position the file's catalog holds, which matches exactly the same
 // records; nullopt when the query has no any() leaf.
-std::optional<Query> expand_any(const Snapshot& snapshot, const FileRef& file,
-                                const Query& query) {
-    if (query.any_paths().empty()) return std::nullopt;
+dstd::Optional<Query> expand_any(const Snapshot& snapshot, const FileRef& file,
+                                 const Query& query) {
+    if (query.any_paths().empty()) return dstd::nullopt;
     q::QueryNodePtr root =
         expand(query.root(), any_positions(snapshot, file, query));
     return q::Query::from_node(std::move(root));
@@ -151,7 +154,8 @@ ChunkPrunerOutput prune_file_chunks(const Snapshot& snapshot,
     out.file_may_match = true;
     if (!file) return out;
 
-    const std::optional<Query> expanded = expand_any(snapshot, *file, query_in);
+    const dstd::Optional<Query> expanded =
+        expand_any(snapshot, *file, query_in);
     const Query& query = expanded ? *expanded : query_in;
 
     FileIndexData ctx;
@@ -201,7 +205,8 @@ ChunkExplanation explain_file_chunks(const Snapshot& snapshot,
     const auto file = snapshot.file(get_logical_path(file_path));
     if (!file) return out;
     out.indexed = true;
-    const std::optional<Query> expanded = expand_any(snapshot, *file, query_in);
+    const dstd::Optional<Query> expanded =
+        expand_any(snapshot, *file, query_in);
     const Query& query = expanded ? *expanded : query_in;
 
     FileIndexData ctx;
@@ -245,7 +250,7 @@ ChunkExplanation explain_file_chunks(const Snapshot& snapshot,
 coro::CoroTask<ChunkPrunerOutput> ChunkPruner::operator()(
     const ChunkPrunerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("prune chunks");
-    std::optional<Snapshot> owned;
+    dstd::Optional<Snapshot> owned;
     const Snapshot* snapshot = input.snapshot;
     if (!snapshot) {
         owned.emplace(common::unwrap(open_snapshot(input.index_path)));
@@ -258,7 +263,7 @@ common::Result<ChunkPrunerBatchOutput> ChunkPruner::process_batch(
     const ChunkPrunerBatchInput& input) {
     ChunkPrunerBatchOutput batch_out;
     try {
-        std::optional<Snapshot> owned;
+        dstd::Optional<Snapshot> owned;
         const Snapshot* snapshot = input.snapshot;
         if (!snapshot) {
             owned.emplace(common::unwrap(open_snapshot(input.index_path)));

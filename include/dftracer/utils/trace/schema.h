@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_SCHEMA_H
 #define DFTRACER_UTILS_TRACE_SCHEMA_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/parser.h>
 
@@ -47,7 +48,7 @@ constexpr RecordPhase phase_from_int(std::uint64_t v) {
     return v <= 4 ? static_cast<RecordPhase>(v) : RecordPhase::Unknown;
 }
 
-constexpr RecordPhase phase_from_letter(std::string_view s) {
+constexpr RecordPhase phase_from_letter(dstd::StringView s) {
     if (s.size() != 1) return RecordPhase::Unknown;
     switch (s[0]) {
         case 'X':
@@ -91,7 +92,7 @@ constexpr int event_type_to_int(EventType t) { return static_cast<int>(t); }
 /// Best-effort layer inference from "cat" for legacy traces that carry no
 /// "type". Only the unambiguous, closed-vocabulary cats map; anything else
 /// stays Unknown so a reader downstream can decide.
-constexpr EventType event_type_from_cat(std::string_view cat) {
+constexpr EventType event_type_from_cat(dstd::StringView cat) {
     if (cat == "POSIX" || cat == "STDIO") return EventType::LibcIo;
     if (cat == "MPI" || cat == "MPIIO") return EventType::Mpi;
     if (cat == "sys" || cat == "net" || cat == "io") return EventType::Psutil;
@@ -104,7 +105,7 @@ constexpr EventType event_type_from_cat(std::string_view cat) {
 
 inline RecordPhase read_phase(const json::JsonValue& v) {
     if (v.is_uint()) return phase_from_int(v.get<std::uint64_t>());
-    if (v.is_string()) return phase_from_letter(v.get<std::string_view>());
+    if (v.is_string()) return phase_from_letter(v.get<dstd::StringView>());
     return RecordPhase::Unknown;
 }
 
@@ -140,7 +141,7 @@ inline RecordPhase read_phase(simdjson::ondemand::value& v) {
 }
 
 inline RecordPhase read_phase(json::JsonParser& parser,
-                              std::string_view key = "ph") {
+                              dstd::StringView key = "ph") {
     auto v = parser.get_value(key);
     if (!v) return RecordPhase::Unknown;
     return read_phase(*v);

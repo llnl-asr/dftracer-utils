@@ -6,6 +6,10 @@
 #include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <cstring>
@@ -21,7 +25,7 @@ Series dictionary_encode(const Series& v) {
     return Series{dftu_series_dictionary_encode(v.handle())};
 }
 
-Series dictionary_from_codes(std::span<const std::int32_t> codes,
+Series dictionary_from_codes(dstd::Span<const std::int32_t> codes,
                              Series&& values, const std::uint8_t* validity) {
     Series out =
         Series::flat(TypeId::Int32, codes.data(),
@@ -30,7 +34,7 @@ Series dictionary_from_codes(std::span<const std::int32_t> codes,
     h->type = TypeId::String;
     h->params = TypeParams{};
     h->encoding = Encoding::Dictionary;
-    h->set_child(std::shared_ptr<dftu_series>(values.release()));
+    h->set_child(dstd::SharedPtr<dftu_series>(values.release()));
     return out;
 }
 
@@ -54,7 +58,7 @@ constexpr std::int64_t DICT_ENCODE_GRAIN = 1 << 16;
 struct ShortKey {
     std::uint64_t a = 0, b = 0;
     std::uint32_t len = 0;
-    static ShortKey of(std::string_view s) {
+    static ShortKey of(dstd::StringView s) {
         ShortKey k;
         k.len = static_cast<std::uint32_t>(s.size());
         if (s.size() >= 8) {
@@ -99,11 +103,11 @@ std::vector<std::int32_t> dictionary_encode_parallel(
     struct Local {
         ankerl::unordered_dense::map<ShortKey, std::int32_t, ShortKeyHash>
             shorts;
-        ankerl::unordered_dense::map<std::string_view, std::int32_t> longs;
+        ankerl::unordered_dense::map<dstd::StringView, std::int32_t> longs;
         std::vector<std::int64_t> first_row;  // per local code
     };
     auto at = [&](std::int64_t i) {
-        return std::string_view(data + off[i],
+        return dstd::StringView(data + off[i],
                                 static_cast<std::size_t>(off[i + 1] - off[i]));
     };
     std::vector<Local> local(static_cast<std::size_t>(nchunks));
@@ -111,7 +115,7 @@ std::vector<std::int32_t> dictionary_encode_parallel(
     parallel_for(n, DICT_ENCODE_GRAIN, [&](std::int64_t b, std::int64_t e) {
         Local& l = local[static_cast<std::size_t>(b / DICT_ENCODE_GRAIN)];
         for (std::int64_t i = b; i < e; ++i) {
-            const std::string_view s = at(i);
+            const dstd::StringView s = at(i);
             const auto next = static_cast<std::int32_t>(l.first_row.size());
             std::int32_t code;
             bool fresh;
@@ -129,8 +133,8 @@ std::vector<std::int32_t> dictionary_encode_parallel(
         }
     });
     // Global numbering by first appearance.
-    std::vector<std::pair<std::int64_t, std::string_view>> ordered;
-    ankerl::unordered_dense::map<std::string_view, std::int64_t> first_seen;
+    std::vector<dstd::Pair<std::int64_t, dstd::StringView>> ordered;
+    ankerl::unordered_dense::map<dstd::StringView, std::int64_t> first_seen;
     for (const Local& l : local)
         for (const std::int64_t row : l.first_row) {
             auto [it, fresh] = first_seen.try_emplace(at(row), row);
@@ -139,11 +143,11 @@ std::vector<std::int32_t> dictionary_encode_parallel(
     ordered.reserve(first_seen.size());
     for (const auto& [s, row] : first_seen) ordered.emplace_back(row, s);
     std::sort(ordered.begin(), ordered.end());
-    ankerl::unordered_dense::map<std::string_view, std::int32_t> code_of;
+    ankerl::unordered_dense::map<dstd::StringView, std::int32_t> code_of;
     code_of.reserve(ordered.size());
     dict_offsets.assign(1, 0);
     for (std::size_t c = 0; c < ordered.size(); ++c) {
-        const std::string_view s = ordered[c].second;
+        const dstd::StringView s = ordered[c].second;
         code_of.emplace(s, static_cast<std::int32_t>(c));
         dict_data.append(s);
         dict_offsets.push_back(static_cast<Off>(dict_data.size()));
@@ -178,9 +182,9 @@ dftu_series* dictionary_encode_w(const dftu_series* v) {
                                                 dict_offsets, dict_data);
     } else {
         codes.resize(static_cast<std::size_t>(v->length));
-        std::unordered_map<std::string_view, std::int32_t> codes_of;
+        std::unordered_map<dstd::StringView, std::int32_t> codes_of;
         for (std::int64_t i = 0; i < v->length; ++i) {
-            std::string_view s(data + off[i],
+            dstd::StringView s(data + off[i],
                                static_cast<std::size_t>(off[i + 1] - off[i]));
             auto it = codes_of.find(s);
             std::int32_t code;
@@ -217,7 +221,7 @@ dftu_series* dictionary_encode_w(const dftu_series* v) {
     out->data = new_buffer(codes.size() * sizeof(std::int32_t));
     std::memcpy(writable(out->data), codes.data(),
                 codes.size() * sizeof(std::int32_t));
-    out->set_child(std::shared_ptr<dftu_series>(dict));
+    out->set_child(dstd::SharedPtr<dftu_series>(dict));
     return out;
 }
 

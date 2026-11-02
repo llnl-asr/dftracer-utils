@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 #include <memory>
@@ -33,10 +34,10 @@ class ViewBuilder {
     std::int32_t add_buffer(BufferView buffer);
 
     /// A row viewing `bytes`, which must lie inside buffer `buffer_index`.
-    void append(std::string_view bytes, std::int32_t buffer_index);
+    void append(dstd::StringView bytes, std::int32_t buffer_index);
 
     /// A row of at most 12 bytes, copied into the view.
-    void append_inline(std::string_view bytes);
+    void append_inline(dstd::StringView bytes);
 
     void append_null();
 

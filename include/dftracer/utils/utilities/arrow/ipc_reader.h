@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 #include <cstdint>
@@ -83,7 +84,7 @@ class IpcReader {
     void* decoder_ = nullptr;  ///< ArrowIpcDecoder*
 
     /// Shared schema (not deep-copied per batch)
-    std::shared_ptr<void> shared_schema_;  ///< ArrowSchema*, ref-counted
+    dstd::SharedPtr<void> shared_schema_;  ///< ArrowSchema*, ref-counted
 
     /// Block metadata
     std::vector<detail::IpcBlock> blocks_;

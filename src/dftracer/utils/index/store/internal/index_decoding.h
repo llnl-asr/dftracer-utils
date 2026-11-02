@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_INTERNAL_INDEX_DECODING_H
 #define DFTRACER_UTILS_INDEX_STORE_INTERNAL_INDEX_DECODING_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
@@ -16,15 +17,15 @@ namespace dftracer::utils::index::store::internal::decoding {
 // malformed payload.
 
 index::schemas::dft::ChunkStatistics decode_chunk_statistics_value(
-    std::string_view value);
+    dstd::StringView value);
 
 index::gzip::GzipMemberRecord decode_gzip_member(std::uint32_t member_idx,
-                                                 std::string_view body);
+                                                 dstd::StringView body);
 
 dstd::StringViewMap<std::uint64_t> decode_count_map_value(
-    std::string_view value);
+    dstd::StringView value);
 
-FileMetadataResult decode_metadata_record(std::string_view value);
+FileMetadataResult decode_metadata_record(dstd::StringView value);
 
 }  // namespace dftracer::utils::index::store::internal::decoding
 

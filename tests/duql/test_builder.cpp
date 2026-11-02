@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -445,17 +446,24 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
              "as b "
              "| bucket 1ms fill from $lo to $hi + 1ms"},
             {Pipe()
-                 .bucket(duration(5, "s"), false, {}, "zero", std::nullopt,
-                         std::nullopt, duration(1, "s"))
-                 .bucket(duration(5, "s"), false, {}, "zero", std::nullopt,
-                         std::nullopt, duration(1, "s"), duration(500, "ms"))
+                 .bucket(duration(5, "s"), false, {}, "zero",
+                         dftracer::utils::dstd::nullopt,
+                         dftracer::utils::dstd::nullopt, duration(1, "s"))
+                 .bucket(duration(5, "s"), false, {}, "zero",
+                         dftracer::utils::dstd::nullopt,
+                         dftracer::utils::dstd::nullopt, duration(1, "s"),
+                         duration(500, "ms"))
                  .bucket(duration(5, "s"), true, "b", "forward", lit(0),
                          duration(6, "s"), duration(1, "s"),
                          duration(500, "ms"))
-                 .bucket(duration(5, "s"), false, {}, "zero", std::nullopt,
-                         std::nullopt, std::nullopt, duration(500, "ms"))
-                 .bucket(param("w"), false, {}, "zero", std::nullopt,
-                         std::nullopt, param("e"), param("a")),
+                 .bucket(duration(5, "s"), false, {}, "zero",
+                         dftracer::utils::dstd::nullopt,
+                         dftracer::utils::dstd::nullopt,
+                         dftracer::utils::dstd::nullopt, duration(500, "ms"))
+                 .bucket(param("w"), false, {}, "zero",
+                         dftracer::utils::dstd::nullopt,
+                         dftracer::utils::dstd::nullopt, param("e"),
+                         param("a")),
              "bucket 5s every 1s | bucket 5s every 1s at 500ms | bucket 5s "
              "every "
              "1s at 500ms fill forward from 0 to 6s as b | bucket 5s at 500ms "
@@ -463,8 +471,9 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
              "bucket $w every $e at $a"},
             {Pipe()
                  .time_range(param("t0"), param("t0") + duration(10, "s"))
-                 .time_range(duration(1, "s"), std::nullopt)
-                 .time_range(std::nullopt, duration(5, "s"), true)
+                 .time_range(duration(1, "s"), dftracer::utils::dstd::nullopt)
+                 .time_range(dftracer::utils::dstd::nullopt, duration(5, "s"),
+                             true)
                  .bucket(duration(1, "s"), true, "sec")
                  .sample(param("n"), false, param("s"))
                  .union_with("runs"),

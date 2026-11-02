@@ -26,7 +26,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -164,7 +166,7 @@ std::vector<std::string> trace_files(const std::string& input) {
     return files;
 }
 
-std::string quote(std::string_view s) {
+std::string quote(dstd::StringView s) {
     std::string out = "\"";
     for (char c : s) {
         if (c == '"' || c == '\\') out.push_back('\\');
@@ -186,7 +188,7 @@ struct QuerySet {
 bool is_metadata(simdjson::dom::object o) {
     simdjson::dom::element ph;
     if (o["ph"].get(ph) != simdjson::SUCCESS) return true;
-    std::string_view letter;
+    dstd::StringView letter;
     std::int64_t n = 0;
     if (ph.get(letter) == simdjson::SUCCESS) return letter == "M";
     return ph.get(n) == simdjson::SUCCESS && n == 4;
@@ -200,7 +202,7 @@ coro::CoroTask<QuerySet> sample_queries(std::string file) {
         utilities::fileio::lines::sources::async_streaming_gz_lines(file);
     int seen = 0;
     while (auto line = co_await gen.next()) {
-        std::string_view l = line->content;
+        dstd::StringView l = line->content;
         while (!l.empty() && (l.back() == ',' || l.back() == ' '))
             l.remove_suffix(1);
         if (l.empty() || l.front() != '{') continue;
@@ -211,7 +213,7 @@ coro::CoroTask<QuerySet> sample_queries(std::string file) {
         std::int64_t ts = 0;
         if (o["ts"].get(ts) == simdjson::SUCCESS && ts > 0)
             stamps.push_back(ts);
-        std::string_view v;
+        dstd::StringView v;
         if (o["name"].get(v) == simdjson::SUCCESS) ++names[std::string(v)];
         if (o["cat"].get(v) == simdjson::SUCCESS) ++cats[std::string(v)];
         simdjson::dom::object a;
@@ -278,12 +280,12 @@ coro::CoroTask<std::map<std::string, std::string>> sample_genesis(
         utilities::fileio::lines::sources::async_streaming_gz_lines(file);
     int seen = 0;
     while (auto line = co_await gen.next()) {
-        std::string_view l = line->content;
+        dstd::StringView l = line->content;
         simdjson::dom::object o;
         if (l.empty() || l.front() != '{' ||
             parser.parse(l.data(), l.size()).get(o) != simdjson::SUCCESS)
             continue;
-        std::string_view v;
+        dstd::StringView v;
         double d = 0;
         if (shape == 0) {
             if (o["gtype"].get(v) == simdjson::SUCCESS &&
@@ -305,7 +307,7 @@ coro::CoroTask<std::map<std::string, std::string>> sample_genesis(
                 if (o["dur"]["p50"].get(d) == simdjson::SUCCESS)
                     durs.push_back(d);
             } else if (type == "counter") {
-                std::string_view m;
+                dstd::StringView m;
                 if (o["metric"].get(m) == simdjson::SUCCESS &&
                     o["v"]["p50"].get(d) == simdjson::SUCCESS)
                     metrics[std::string(m)].push_back(d);
@@ -428,7 +430,7 @@ Result measure(const Options& opt, const std::string& input,
     r.decode_s = timed(
         [&] {
             ExportStats s = run(view.for_each_batch(
-                [](std::size_t, const std::vector<std::string_view>&) {}, 1));
+                [](std::size_t, const std::vector<dstd::StringView>&) {}, 1));
             r.events = s.events_scanned;
         },
         opt.warmups, opt.runs);
@@ -545,7 +547,7 @@ void put_samples(simdjson::builder::string_builder& sb, const Samples& s) {
     sb.end_array();
 }
 
-void put_map(simdjson::builder::string_builder& sb, std::string_view key,
+void put_map(simdjson::builder::string_builder& sb, dstd::StringView key,
              const std::map<std::string, Samples>& m) {
     sb.escape_and_append_with_quotes(key);
     sb.append_colon();
@@ -599,7 +601,7 @@ std::string to_json(const Result& r) {
     for (const auto& [k, n] : r.rows) {
         if (!first_row) sb.append_comma();
         first_row = false;
-        sb.append_key_value(std::string_view(k), n);
+        sb.append_key_value(dstd::StringView(k), n);
     }
     sb.end_object();
     sb.append_comma();
@@ -610,7 +612,7 @@ std::string to_json(const Result& r) {
     for (const auto& [k, q] : r.queries) {
         if (!first) sb.append_comma();
         first = false;
-        sb.append_key_value(std::string_view(k), std::string_view(q));
+        sb.append_key_value(dstd::StringView(k), dstd::StringView(q));
     }
     sb.end_object();
     sb.end_object();
@@ -618,7 +620,7 @@ std::string to_json(const Result& r) {
 }
 
 // 95% bootstrap interval of median(num) / median(den).
-std::pair<double, double> ratio_ci(const Samples& num, const Samples& den) {
+dstd::Pair<double, double> ratio_ci(const Samples& num, const Samples& den) {
     std::mt19937_64 rng(11);
     std::uniform_int_distribution<std::size_t> pn(0, num.size() - 1);
     std::uniform_int_distribution<std::size_t> pd(0, den.size() - 1);
@@ -716,7 +718,7 @@ std::string write_smoke_trace(const std::string& dir) {
 
 Options parse_args(int argc, char** argv) {
     Options o;
-    if (argc == 2 && std::string_view(argv[1]) == "--smoke") {
+    if (argc == 2 && dstd::StringView(argv[1]) == "--smoke") {
         o.workdir = (dstd::fs::temp_directory() / "index_bench_smoke").str();
         o.out = o.workdir + "/index_bench.json";
         o.build_runs = 1;

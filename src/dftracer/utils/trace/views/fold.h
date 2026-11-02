@@ -5,6 +5,9 @@
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -30,12 +33,12 @@ struct dftu_task;
 namespace dftracer::utils::trace::views::detail {
 
 struct FoldBatch {
-    std::span<const FoldEvent> events;  // valid for the `step` call only
+    dstd::Span<const FoldEvent> events;  // valid for the `step` call only
     const ScanUnit& unit;
     // Raw NDJSON lines, populated only when a wants_raw() fold is present, in
     // scan order. A raw fold parses these itself (arbitrary-JSON access); a
     // FoldEvent fold ignores them. Valid for the `step` call only.
-    std::span<const std::string_view> raw = {};
+    dstd::Span<const dstd::StringView> raw = {};
 };
 
 /// Per-worker keyed byte scratchpad so a producer fold can hand a derived value
@@ -51,7 +54,7 @@ class FoldPortBus {
     /// The batch as a frame after the last transforming fold, for every fold
     /// stepped after it in the same batch; unset until a fold rewrites it,
     /// and each later fold then reads this instead of the events.
-    std::optional<dftracer::utils::dataframe::DataFrame> frame;
+    dstd::Optional<dftracer::utils::dataframe::DataFrame> frame;
 
    private:
     struct Entry {
@@ -172,7 +175,7 @@ class DynamicPrune {
 /// claims run ahead of the oldest open unit.
 coro::CoroTask<ExportStats> fuse(
     const ViewPlan& plan, const ViewDefinition& vdef,
-    std::span<Fold* const> folds, dftracer::utils::dstd::StringIntern& intern,
+    dstd::Span<Fold* const> folds, dftracer::utils::dstd::StringIntern& intern,
     const CoverageSet* covered = nullptr, std::uint64_t limit = 0,
     DynamicPrune* dyn_prune = nullptr, coro::CoroSemaphore* gate = nullptr);
 

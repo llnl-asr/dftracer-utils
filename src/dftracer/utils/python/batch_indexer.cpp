@@ -3,6 +3,9 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
@@ -312,7 +315,7 @@ static AggregationConfig build_aggregation_config(IndexerObject* self) {
     return config;
 }
 
-static std::optional<dftracer::utils::index::IndexerOptions> indexer_options(
+static dstd::Optional<dftracer::utils::index::IndexerOptions> indexer_options(
     IndexerObject* self) {
     dftracer::utils::index::IndexerOptions o;
     const char* index_dir = as_utf8(self->index_dir);
@@ -332,7 +335,7 @@ static std::optional<dftracer::utils::index::IndexerOptions> indexer_options(
         return o;
     }
     auto& b = *o.bloom;
-    if (!requested_bloom_fields(self, b.fields)) return std::nullopt;
+    if (!requested_bloom_fields(self, b.fields)) return dstd::nullopt;
     b.required = self->require_bloom;
     b.false_positive_rate = self->false_positive_rate;
     b.path_budget = self->path_budget;
@@ -344,7 +347,7 @@ static std::optional<dftracer::utils::index::IndexerOptions> indexer_options(
         !dftracer::utils::python::parse_string_seq(
             self->extensions, "extensions must be a sequence of str",
             o.extensions))
-        return std::nullopt;
+        return dstd::nullopt;
     return o;
 }
 
@@ -569,7 +572,7 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
             PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
             return nullptr;
         }
-        indexer->handle = new std::shared_ptr<
+        indexer->handle = new dstd::SharedPtr<
             dftracer::utils::index::gzip::CheckpointIndexer>(std::move(native));
     } catch (const std::exception& e) {
         Py_DECREF((PyObject*)indexer);
@@ -580,15 +583,15 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
     return (PyObject*)indexer;
 }
 
-static std::optional<std::string> resolve_index_path(IndexerObject* self) {
+static dstd::Optional<std::string> resolve_index_path(IndexerObject* self) {
     PyObject* status = Indexer_resolve(self, nullptr);
-    if (!status) return std::nullopt;
+    if (!status) return dstd::nullopt;
     PyObject* obj = PyDict_GetItemString(status, "index_path");
     const char* path = obj ? as_utf8(obj) : nullptr;
     if (!path || path[0] == '\0') {
         Py_DECREF(status);
         PyErr_SetString(PyExc_RuntimeError, "No index path available");
-        return std::nullopt;
+        return dstd::nullopt;
     }
     std::string result(path);
     Py_DECREF(status);
@@ -609,10 +612,10 @@ static PyObject* Indexer_rowset(IndexerObject* self, PyObject* args) {
 namespace {
 
 // The PID of a "pid:tid" key of a pid:tid count map.
-std::uint64_t pid_of(std::string_view key) {
+std::uint64_t pid_of(dstd::StringView key) {
     const std::size_t colon = key.find(':');
-    const std::string_view digits =
-        colon == std::string_view::npos ? key : key.substr(0, colon);
+    const dstd::StringView digits =
+        colon == dstd::StringView::npos ? key : key.substr(0, colon);
     std::uint64_t pid = 0;
     std::from_chars(digits.data(), digits.data() + digits.size(), pid);
     return pid;

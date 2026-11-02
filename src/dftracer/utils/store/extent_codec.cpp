@@ -3,6 +3,7 @@
 #define ZSTD_STATIC_LINKING_ONLY
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/store/crc.h>
@@ -268,7 +269,7 @@ dstd::Expected<ExtentPages, dstd::Error> ExtentPages::parse(
     return ExtentPages(dstd::ByteView{}, std::move(entries), raw_length, dict);
 }
 
-std::pair<std::size_t, std::size_t> ExtentPages::covering(
+dstd::Pair<std::size_t, std::size_t> ExtentPages::covering(
     std::uint32_t raw_offset, std::uint32_t length) const {
     const std::uint64_t begin = raw_offset;
     const std::uint64_t end = begin + length;

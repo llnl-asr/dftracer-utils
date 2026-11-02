@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_BUFFERS_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_BUFFERS_H
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/memory/block.h>
 
 #include <cassert>
@@ -34,13 +35,13 @@ inline std::uint8_t* writable(BufferView& view) noexcept {
 /// dropped when the last view of the block goes, on that thread. Throws
 /// std::bad_alloc, and then the copy is dropped at once.
 inline BufferView borrow_buffer(const void* data, std::size_t bytes,
-                                std::shared_ptr<const void> owner) {
-    auto* held = new std::shared_ptr<const void>(std::move(owner));
+                                dstd::SharedPtr<const void> owner) {
+    auto* held = new dstd::SharedPtr<const void>(std::move(owner));
     try {
         return BufferView(memory::Block::borrow(
             const_cast<void*>(data), bytes,
             [](void* context) {
-                delete static_cast<std::shared_ptr<const void>*>(context);
+                delete static_cast<dstd::SharedPtr<const void>*>(context);
             },
             held));
     } catch (...) {

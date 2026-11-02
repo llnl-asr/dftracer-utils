@@ -9,7 +9,11 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
@@ -110,8 +114,8 @@ class Hooked : public Source {
        public:
         Rows(std::int64_t morsels, std::int64_t rows, Hook hook)
             : morsels_(morsels), rows_(rows), hook_(std::move(hook)) {}
-        coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-            if (at_ >= morsels_) co_return std::nullopt;
+        coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
+            if (at_ >= morsels_) co_return dstd::nullopt;
             if (hook_) hook_(at_);
             std::vector<std::int64_t> k(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_)),
@@ -151,12 +155,12 @@ std::vector<std::int64_t> ints(const DataFrame& f, const std::string& name) {
     return std::vector<std::int64_t>(p, p + c.length());
 }
 
-bool ends_with(std::string_view s, std::string_view tail) {
+bool ends_with(dstd::StringView s, dstd::StringView tail) {
     return s.size() >= tail.size() && s.substr(s.size() - tail.size()) == tail;
 }
 
 // The open pools whose path ends in `tail`.
-std::vector<memory::PoolStats> pools_named(std::string_view tail) {
+std::vector<memory::PoolStats> pools_named(dstd::StringView tail) {
     std::vector<memory::PoolStats> out;
     for (memory::PoolStats& p : memory::pool_stats())
         if (ends_with(p.path, tail)) out.push_back(std::move(p));
@@ -211,7 +215,7 @@ struct Asked {
 // for half of what the budget holds posted at morsel ASK_AT. `before` and
 // `after` are the reservation of the pool ending in `tail` then and its
 // smallest one later.
-Asked run_asked(const Plan& plan, std::string_view tail, bool typed = true) {
+Asked run_asked(const Plan& plan, dstd::StringView tail, bool typed = true) {
     Asked r;
     r.plain = plan(LazyFrame::scan(
                        std::make_shared<Hooked>(MORSELS, ROWS, nullptr, typed)))
@@ -331,7 +335,7 @@ TEST_CASE(
     std::size_t before = 0;
     std::size_t after = SIZE_MAX;
     DataFrame second_got;
-    std::shared_ptr<Hooked> second_source;
+    dstd::SharedPtr<Hooked> second_source;
     auto source = std::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
         if (i == ASK_AT) {
             const std::vector<memory::PoolStats> sorts =
@@ -584,9 +588,9 @@ coro::CoroTask<Held> held_while_streaming(LazyFrame lf, std::string tail) {
 
 TEST_CASE("unique and is_duplicated keep their tables in their own pool") {
     for (const auto& [plan, tail] :
-         {std::pair<Plan, std::string>{
+         {dstd::Pair<Plan, std::string>{
               [](LazyFrame lf) { return lf.unique({"k"}); }, "query/unique"},
-          std::pair<Plan, std::string>{
+          dstd::Pair<Plan, std::string>{
               [](LazyFrame lf) { return lf.select({"k"}).is_duplicated(); },
               "query/is_duplicated"}}) {
         CAPTURE(tail);
@@ -609,7 +613,7 @@ TEST_CASE("is_duplicated reserves its counts on its pool while it emits") {
             .memory_budget(LAZY_BUDGET);
     // One map entry is at least a key string and its count.
     const std::size_t entries =
-        keys.size() * sizeof(std::pair<std::string, std::int64_t>);
+        keys.size() * sizeof(dstd::Pair<std::string, std::int64_t>);
     CHECK(held_while_streaming(lf, "query/is_duplicated").get().reserved >=
           entries);
     CHECK(pools_named("query/is_duplicated").empty());

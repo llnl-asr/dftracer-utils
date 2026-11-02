@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CONFIG_H
 
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
 #include <cstdint>
@@ -56,7 +57,7 @@ struct AggregationConfig {
     /// of the dftracer.agg extension. Data built with another hash is stale.
     std::uint64_t params_hash() const {
         utilities::hash::Fnv1aHashBuilder h;
-        auto text = [&h](std::string_view s) {
+        auto text = [&h](dstd::StringView s) {
             h.update_value(s.size());
             h.update(s);
         };

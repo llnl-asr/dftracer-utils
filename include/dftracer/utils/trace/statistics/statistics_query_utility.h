@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_STATISTICS_QUERY_UTILITY_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/trace/statistics/trace_statistics.h>
 
 #include <cstdint>
@@ -31,7 +32,7 @@ struct StatisticsQueryInput {
 };
 
 struct StatisticsQueryOutput {
-    std::vector<std::pair<std::string, std::uint64_t>> results;
+    std::vector<dstd::Pair<std::string, std::uint64_t>> results;
     std::uint64_t total_events = 0;
 
     std::uint64_t min_timestamp_us = 0;

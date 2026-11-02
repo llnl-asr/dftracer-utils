@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
@@ -220,9 +221,9 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     if (view.query) v = v.filter(*view.query);
     if (!single_file || fields.by_path) v = v.time_range(scan_begin, end);
     auto scan = co_await v.map_batches<EvAcc>(
-        [&fields](EvAcc& a, const std::vector<std::string_view>& events) {
+        [&fields](EvAcc& a, const std::vector<dstd::StringView>& events) {
             a.events.reserve(a.events.size() + events.size());
-            fields.for_each_event(events, [&a](std::string_view ev) {
+            fields.for_each_event(events, [&a](dstd::StringView ev) {
                 a.events.emplace_back(ev);
             });
         },
@@ -350,20 +351,20 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     const std::string page_key =
         all_key + "\n" + std::to_string(offset) + "\n" + std::to_string(limit);
     if (auto hit = index.viz_cache().get(all_key)) {
-        const std::string_view text_rows(*hit);
+        const dstd::StringView text_rows(*hit);
         const std::size_t head = text_rows.find('\n');
         const std::uint64_t count = std::strtoull(hit->c_str(), nullptr, 10);
         // Rows [offset, offset + limit): skip `offset` lines, keep `limit`.
         std::size_t pos =
-            head == std::string_view::npos ? text_rows.size() : head;
+            head == dstd::StringView::npos ? text_rows.size() : head;
         for (int i = 0; i < offset && pos < text_rows.size(); ++i) {
             const std::size_t nl = text_rows.find('\n', pos + 1);
-            pos = nl == std::string_view::npos ? text_rows.size() : nl;
+            pos = nl == dstd::StringView::npos ? text_rows.size() : nl;
         }
         std::size_t end = pos;
         for (int i = 0; i < limit && end < text_rows.size(); ++i) {
             const std::size_t nl = text_rows.find('\n', end + 1);
-            end = nl == std::string_view::npos ? text_rows.size() : nl;
+            end = nl == dstd::StringView::npos ? text_rows.size() : nl;
         }
         std::string page;
         if (end > pos) {
@@ -420,7 +421,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
         for (std::int64_t r = 0; r < rows.num_rows(); ++r, ++count) {
             const bool in_page = count >= first && count < last;
             if (!whole && !in_page) continue;
-            const std::size_t at = std::string_view(rb).size();
+            const std::size_t at = dstd::StringView(rb).size();
             rb.start_object();
             for (std::size_t c = 0; c < rows.names.size(); ++c) {
                 if (c > 0) rb.append_comma();
@@ -440,7 +441,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
                 rb.append_raw(R"(,"cat":null,"ph":1)");
             }
             rb.end_object();
-            const std::string_view row = std::string_view(rb).substr(at);
+            const dstd::StringView row = dstd::StringView(rb).substr(at);
             if (whole) {
                 all_rows += '\n';
                 all_rows += row;

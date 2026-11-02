@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 
@@ -43,7 +44,7 @@ dataframe::DataFrame events_to_frame(
 
 dataframe::Morsel events_to_morsel(
     EventRows events,
-    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern,
+    dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern,
     const ColumnSpec& spec) {
     dataframe::DataFrame f = events_to_frame(events, *intern, spec);
 

@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_TYPES_H
 #define DFTRACER_UTILS_DATAFRAME_TYPES_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -143,9 +146,9 @@ enum class TimeUnit : std::int32_t {
 
 /// The id of time zone `name` in the process-wide zone table; 0 is no zone.
 /// Thread-safe. Names are never freed.
-std::uint32_t intern_timezone(std::string_view name);
+std::uint32_t intern_timezone(dstd::StringView name);
 /// The name of zone `id` (empty for 0). The view lives for the process.
-std::string_view timezone_name(std::uint32_t id);
+dstd::StringView timezone_name(std::uint32_t id);
 
 /// The parameters of a type, in one union keyed by the type's TypeId: the
 /// time unit and interned zone of a temporal type, the precision and scale of
@@ -158,9 +161,9 @@ class TypeParams {
         return temporal(id) ? static_cast<TimeUnit>(bits_.time.unit ^ MICRO)
                             : TimeUnit::Micro;
     }
-    std::string_view timezone(TypeId id) const {
+    dstd::StringView timezone(TypeId id) const {
         return id == TypeId::Timestamp ? timezone_name(bits_.time.zone)
-                                       : std::string_view();
+                                       : dstd::StringView();
     }
     std::int32_t decimal_precision(TypeId id) const noexcept {
         return decimal(id) ? bits_.decimal.precision : 0;
@@ -177,7 +180,7 @@ class TypeParams {
         if (temporal(id))
             bits_.time.unit = static_cast<std::int32_t>(unit) ^ MICRO;
     }
-    void set_timezone(TypeId id, std::string_view zone) {
+    void set_timezone(TypeId id, dstd::StringView zone) {
         if (id == TypeId::Timestamp) bits_.time.zone = intern_timezone(zone);
     }
     void set_decimal(TypeId id, std::int32_t precision,
@@ -251,7 +254,7 @@ struct DataType {
     /// Timestamp, Time32, Time64, Duration; Micro otherwise.
     TimeUnit time_unit() const noexcept { return params.time_unit(id); }
     /// Timestamp only; empty means no timezone (a naive timestamp).
-    std::string_view timezone() const { return params.timezone(id); }
+    dstd::StringView timezone() const { return params.timezone(id); }
     /// Decimal128, Decimal256; 0 otherwise.
     std::int32_t decimal_precision() const noexcept {
         return params.decimal_precision(id);
@@ -274,7 +277,7 @@ struct DataType {
         params.set_time_unit(id, unit);
         return *this;
     }
-    DataType& set_timezone(std::string_view zone) {
+    DataType& set_timezone(dstd::StringView zone) {
         params.set_timezone(id, zone);
         return *this;
     }
@@ -947,7 +950,7 @@ enum class ScalarTag : std::int32_t {
 /// here; use the @ref DataType or (TypeId, fixed_size) overload for it.
 constexpr std::size_t buffer_bytes(TypeId t, std::int64_t n) noexcept;
 
-/// Byte width of a fixed-width type. std::nullopt for a variable-width type
+/// Byte width of a fixed-width type. dstd::nullopt for a variable-width type
 /// (String/Binary/List/Struct/Map, their Large* counterparts) and for a type
 /// whose width is a @ref DataType parameter rather than a per-TypeId constant
 /// (FixedSizeBinary, FixedSizeList): a TypeId alone cannot answer for those,
@@ -956,7 +959,7 @@ constexpr std::size_t buffer_bytes(TypeId t, std::int64_t n) noexcept;
 /// mis-key rows for FixedSizeBinary. Callers holding a @ref DataType or a
 /// dftu_series/Series (has `fixed_size`) should use one of the overloads
 /// below instead, which can always answer for FixedSizeBinary.
-constexpr std::optional<std::size_t> byte_width(TypeId t) noexcept {
+constexpr dstd::Optional<std::size_t> byte_width(TypeId t) noexcept {
     switch (t) {
         case TypeId::Bool:
         case TypeId::Int8:
@@ -995,9 +998,9 @@ constexpr std::optional<std::size_t> byte_width(TypeId t) noexcept {
         case TypeId::FixedSizeList:
         case TypeId::Map:
         case TypeId::Unknown:
-            return std::nullopt;
+            return dstd::nullopt;
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 /// Byte width of `t`, given its own `fixed_size` @ref DataType parameter.
@@ -1005,17 +1008,17 @@ constexpr std::optional<std::size_t> byte_width(TypeId t) noexcept {
 /// type ignores `fixed_size` and defers to the TypeId-only overload. The shape
 /// most callers holding a dftu_series/Series/@ref DataType want, since all
 /// three carry a `fixed_size` field alongside the type.
-constexpr std::optional<std::size_t> byte_width(
+constexpr dstd::Optional<std::size_t> byte_width(
     TypeId t, std::int32_t fixed_size) noexcept {
     if (t == TypeId::FixedSizeBinary)
-        return fixed_size >= 0 ? std::optional<std::size_t>(
+        return fixed_size >= 0 ? dstd::Optional<std::size_t>(
                                      static_cast<std::size_t>(fixed_size))
-                               : std::nullopt;
+                               : dstd::nullopt;
     return byte_width(t);
 }
 
 /// Byte width of `dt`, resolving FixedSizeBinary via `dt.fixed_size`.
-constexpr std::optional<std::size_t> byte_width(const DataType& dt) noexcept {
+constexpr dstd::Optional<std::size_t> byte_width(const DataType& dt) noexcept {
     return byte_width(dt.id, dt.fixed_size());
 }
 

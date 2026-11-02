@@ -6,7 +6,10 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/index.h>
@@ -656,7 +659,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                         }
 
                         namespace ix = dftracer::utils::index;
-                        std::optional<ix::Snapshot> snapshot;
+                        dstd::Optional<ix::Snapshot> snapshot;
                         try {
                             snapshot.emplace(
                                 common::unwrap(ix::plan::open_snapshot(ipath)));
@@ -868,8 +871,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
     load_persisted_viz_summary();
 }
 
-std::string TraceIndex::resolve(std::string_view rowset, std::string_view key,
-                                std::string_view value, const std::string& k) {
+std::string TraceIndex::resolve(dstd::StringView rowset, dstd::StringView key,
+                                dstd::StringView value, const std::string& k) {
     if (k.empty()) return {};
     std::string column(rowset);
     column.append(1, '\0').append(key).append(1, '\0').append(value);
@@ -1001,7 +1004,7 @@ const TraceIndex::FileInfo* TraceIndex::file_at(std::size_t index) const {
     return &files_[index];
 }
 
-std::shared_ptr<const TraceIndex::FileChunkMeta> TraceIndex::chunk_meta(
+dstd::SharedPtr<const TraceIndex::FileChunkMeta> TraceIndex::chunk_meta(
     const FileInfo& file) {
     {
         std::lock_guard<std::mutex> lock(chunk_meta_mutex_);
@@ -1011,7 +1014,7 @@ std::shared_ptr<const TraceIndex::FileChunkMeta> TraceIndex::chunk_meta(
 
     // Build outside the lock: the index read is slow and the result is
     // immutable, so a rare concurrent double-read just discards one copy.
-    std::shared_ptr<const FileChunkMeta> meta;  // null == known-unavailable
+    dstd::SharedPtr<const FileChunkMeta> meta;  // null == known-unavailable
     if (!file.index_path.empty()) {
         try {
             namespace ix = dftracer::utils::index;

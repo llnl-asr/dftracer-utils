@@ -5,8 +5,11 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_value.h>
@@ -267,8 +270,8 @@ struct FoldEvent {
     /// Declared-field values that did not convert and read as null.
     std::uint16_t unconverted = 0;
     using ArgValue =
-        std::variant<double, std::int64_t, std::uint32_t, std::uint64_t>;
-    using Arg = std::pair<std::uint32_t, ArgValue>;
+        dstd::Variant<double, std::int64_t, std::uint32_t, std::uint64_t>;
+    using Arg = dstd::Pair<std::uint32_t, ArgValue>;
     ArenaVec<Arg> args;
     /// Top-level values for schema fields the POD does not carry as a scalar
     /// (type/ph/id), kept apart from `args` so a same-named args key cannot
@@ -300,12 +303,12 @@ struct FoldEvent {
     /// (interned exact path id -> index::store::PathType): "args.io.off",
     /// "args.hosts.1", a top-level "type". Filled only when the scan captures
     /// schema (the index build); empty otherwise.
-    using SchemaLeaf = std::pair<std::uint32_t, std::uint8_t>;
+    using SchemaLeaf = dstd::Pair<std::uint32_t, std::uint8_t>;
     ArenaVec<SchemaLeaf> schema_leaves;
 };
 
 /// Rewrite every interned id of `ev` through `map`, indexed by the old id.
-inline void remap_ids(FoldEvent& ev, std::span<const std::uint32_t> map) {
+inline void remap_ids(FoldEvent& ev, dstd::Span<const std::uint32_t> map) {
     constexpr std::uint32_t NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
     const auto at = [&](std::uint32_t& id) {
         if (id != NO_ID) id = map[id];
@@ -386,8 +389,10 @@ class FoldEventBuffer {
                specials_.bytes() + leaves_.bytes();
     }
     const FoldEvent& back() const { return slots_[live_ - 1]; }
-    std::span<const FoldEvent> events() const { return {slots_.data(), live_}; }
-    std::span<FoldEvent> events_mut() { return {slots_.data(), live_}; }
+    dstd::Span<const FoldEvent> events() const {
+        return {slots_.data(), live_};
+    }
+    dstd::Span<FoldEvent> events_mut() { return {slots_.data(), live_}; }
 
    private:
     void bind(FoldEvent& ev) {
@@ -409,12 +414,12 @@ class FoldEventBuffer {
 /// without copying a FoldEvent. Borrows both; they must outlive the view.
 class EventRows {
    public:
-    EventRows(std::span<const FoldEvent> all)
+    EventRows(dstd::Span<const FoldEvent> all)
         : base_(all.data()), n_(all.size()) {}
     EventRows(const std::vector<FoldEvent>& all)
         : base_(all.data()), n_(all.size()) {}
-    EventRows(std::span<const FoldEvent> all,
-              std::span<const std::uint32_t> pick)
+    EventRows(dstd::Span<const FoldEvent> all,
+              dstd::Span<const std::uint32_t> pick)
         : base_(all.data()), pick_(pick.data()), n_(pick.size()) {}
 
     std::size_t size() const { return n_; }
@@ -450,15 +455,15 @@ class EventRows {
 /// The fixed top-level fields of the trace schema. A bare reference to one of
 /// these resolves to the top-level value, never a same-named args key; reach an
 /// args field with the same name through the explicit `args.<name>` path.
-inline bool is_schema_field(std::string_view f) {
+inline bool is_schema_field(dstd::StringView f) {
     return f == "name" || f == "cat" || f == "pid" || f == "tid" || f == "ts" ||
            f == "dur" || f == "ph" || f == "id" || f == "type";
 }
 
 /// True when `field` addresses a nested value (`a.b`, `a[0]`, `a.0.b`), so it
 /// needs path resolution rather than a single object-key lookup.
-inline bool is_nested_path(std::string_view field) {
-    return field.find_first_of(".[") != std::string_view::npos;
+inline bool is_nested_path(dstd::StringView field) {
+    return field.find_first_of(".[") != dstd::StringView::npos;
 }
 
 /// Resolve a dotted/bracketed path from `root` (`a.b[0].c`, `a.b.0`); `ok` is
@@ -467,7 +472,7 @@ inline bool is_nested_path(std::string_view field) {
 /// single path walker (JsonValue::at) so flat dotted member keys resolve here
 /// too; on failure `ok` is false and `root` is returned unchanged.
 inline simdjson::dom::element resolve_json_path(simdjson::dom::element root,
-                                                std::string_view path,
+                                                dstd::StringView path,
                                                 bool& ok) {
     json::JsonValue v = json::JsonValue(root).at(path);
     ok = v.exists();
@@ -608,7 +613,7 @@ struct DecodeHints {
     /// The keys of the record being decoded by append_dftracer_record that are
     /// catalog paths, in order, kept from its one walk of the record.
     struct WalkedKey {
-        std::string_view key;
+        dstd::StringView key;
         simdjson::dom::element value;
     };
     dftracer::utils::dstd::Vector<WalkedKey> walked;

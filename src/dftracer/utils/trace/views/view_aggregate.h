@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -62,7 +63,7 @@ const AggSchema& ensure_schema(const ViewPlan& plan);
 
 // The row set column a file, host or rank group key relabels its key with;
 // nullopt for any other key.
-std::optional<dftracer::utils::index::plan::GroupResolver::Column>
+dstd::Optional<dftracer::utils::index::plan::GroupResolver::Column>
 resolver_column(GroupKey::Kind kind);
 
 // Lazily build (and cache on the plan) the resolver over the source's

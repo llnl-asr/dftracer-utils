@@ -8,6 +8,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
@@ -184,9 +187,9 @@ const std::vector<std::string> QUERIES = {
     R"(fhash in ["1a2b3c4d5e6f7081"] and name == "read")",
 };
 
-using TimeRange = std::optional<std::pair<double, double>>;
+using TimeRange = dstd::Optional<dstd::Pair<double, double>>;
 const std::vector<TimeRange> TIME_RANGES = {
-    std::nullopt,
+    dstd::nullopt,
     std::make_pair(1050000.0, 1150000.0),
     std::make_pair(0.0, 1020000.0),
     std::make_pair(1300000.0, 0.0),
@@ -346,7 +349,7 @@ std::uint64_t count_view_unpruned(const std::string& trace,
     const auto spans = dftu_utils_test::index_take(index::spans(
         snapshot, dftu_utils_test::require_indexed_file(snapshot, trace)));
     REQUIRE_FALSE(spans.empty());
-    std::shared_ptr<const duql::Query> q;
+    dstd::SharedPtr<const duql::Query> q;
     const trace::views::detail::ScanUnit u{
         trace, index_path, trace::views::detail::checkpoint_size_or_default(0),
         0,     0,          spans.back().uc_offset + spans.back().uc_size,

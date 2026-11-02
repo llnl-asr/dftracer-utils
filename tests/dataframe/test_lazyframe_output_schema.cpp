@@ -15,6 +15,7 @@
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/arrow.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <nanoarrow/nanoarrow.h>
 #endif
 
@@ -56,7 +57,7 @@ Series f64(std::vector<double> v) {
     return Series::flat_f64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
-std::shared_ptr<const Source> src(DataFrame df) {
+dftracer::utils::dstd::SharedPtr<const Source> src(DataFrame df) {
     return std::make_shared<const InMemorySource>(std::move(df));
 }
 

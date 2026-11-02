@@ -2,8 +2,10 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/subsumption.h>
 #include <dftracer/utils/index/cache/mv_store.h>
@@ -44,9 +46,9 @@ struct BaseId {
     std::int64_t mtime = 0;
 };
 
-std::optional<BaseId> stat_base(const std::string& path) {
+dstd::Optional<BaseId> stat_base(const std::string& path) {
     dftracer::utils::common::InputFileStat st;
-    if (!dftracer::utils::common::stat_input(path, st)) return std::nullopt;
+    if (!dftracer::utils::common::stat_input(path, st)) return dstd::nullopt;
     return BaseId{path, st.size, st.mtime};
 }
 
@@ -200,7 +202,7 @@ dstd::Vector<dstd::Path> list_kind(dstd::StringView dir,
 struct Manifest {
     /// Params hash of the record schema the view was filtered under; views
     /// written before it was recorded have none and never match.
-    std::optional<std::uint64_t> schema;
+    dstd::Optional<std::uint64_t> schema;
     std::uint64_t bytes = 0;
     std::string query;
     int phase = static_cast<int>(trace::views::Phase::Any);
@@ -210,24 +212,24 @@ struct Manifest {
     std::vector<BaseId> bases;
 };
 
-std::optional<Manifest> read_manifest(dstd::StringView dir) {
+dstd::Optional<Manifest> read_manifest(dstd::StringView dir) {
     const dstd::Path path = manifest_path(dir);
     const auto found = dstd::fs::exists(path.view());
-    if (!found || !*found) return std::nullopt;
+    if (!found || !*found) return dstd::nullopt;
     try {
         simdjson::dom::parser parser;
         simdjson::dom::element root = parser.load(path.c_str());
         std::int64_t version = 0;
         if (root["version"].get(version) != simdjson::SUCCESS ||
             version != MANIFEST_VERSION)
-            return std::nullopt;
+            return dstd::nullopt;
         Manifest m;
-        std::string_view schema;
+        dstd::StringView schema;
         if (root["schema"].get(schema) == simdjson::SUCCESS)
             m.schema = std::stoull(std::string(schema), nullptr, 16);
         std::uint64_t bytes = 0;
         if (root["bytes"].get(bytes) == simdjson::SUCCESS) m.bytes = bytes;
-        m.query = std::string(std::string_view(root["query"]));
+        m.query = std::string(dstd::StringView(root["query"]));
         m.phase = static_cast<int>(std::int64_t(root["phase"]));
         simdjson::dom::element w = root["window"];
         if (!w.is_null()) {
@@ -237,7 +239,7 @@ std::optional<Manifest> read_manifest(dstd::StringView dir) {
         }
         for (simdjson::dom::element b : simdjson::dom::array(root["bases"])) {
             BaseId id;
-            id.path = std::string(std::string_view(b["path"]));
+            id.path = std::string(dstd::StringView(b["path"]));
             id.size = std::uint64_t(std::int64_t(b["size"]));
             id.mtime = std::int64_t(b["mtime"]);
             m.bases.push_back(std::move(id));
@@ -247,9 +249,9 @@ std::optional<Manifest> read_manifest(dstd::StringView dir) {
             [](const BaseId& a, const BaseId& c) { return a.path < c.path; });
         return m;
     } catch (const simdjson::simdjson_error&) {
-        return std::nullopt;
+        return dstd::nullopt;
     } catch (const std::logic_error&) {
-        return std::nullopt;
+        return dstd::nullopt;
     }
 }
 
@@ -520,16 +522,16 @@ void register_view(const std::string& dir,
     if (!root.empty()) evict_views(root, dir);
 }
 
-std::optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
+dstd::Optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
     const trace::views::detail::ViewPlan& plan) {
     const std::string root = views_root(plan);
-    if (root.empty()) return std::nullopt;
+    if (root.empty()) return dstd::nullopt;
     const auto root_is_dir = dstd::fs::is_directory(dstd::PathView(root));
-    if (!root_is_dir || !*root_is_dir) return std::nullopt;
+    if (!root_is_dir || !*root_is_dir) return dstd::nullopt;
 
     const auto q_bases = plan_bases(plan);
     if (q_bases.size() != plan.files.size())
-        return std::nullopt;  // unstattable
+        return dstd::nullopt;  // unstattable
     const std::uint64_t base_bytes = [&] {
         std::uint64_t s = 0;
         for (const auto& b : q_bases) s += b.size;
@@ -564,7 +566,7 @@ std::optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
         best_bytes = bytes;
     }
 
-    if (best.empty()) return std::nullopt;
+    if (best.empty()) return dstd::nullopt;
     touch_last_used(best_dir);
     return best;
 }

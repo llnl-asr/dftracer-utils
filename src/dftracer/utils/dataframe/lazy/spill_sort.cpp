@@ -2,6 +2,8 @@
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 namespace dftracer::utils::dataframe {
 
@@ -19,7 +21,7 @@ struct KeyData {
     Kind kind = Kind::Int;
     std::vector<std::int64_t> ints;
     std::vector<double> floats;
-    std::vector<std::string_view> bytes;  // strings, binary and decimal cells
+    std::vector<dstd::StringView> bytes;  // strings, binary and decimal cells
     std::vector<std::uint8_t> nulls;
 
     // The key is read by its physical type, so a Date, Timestamp, Time or
@@ -51,7 +53,7 @@ struct KeyData {
                 const char* base =
                     reinterpret_cast<const char*>(c.data<std::uint8_t>());
                 for (std::size_t i = 0; i < size; ++i)
-                    bytes[i] = std::string_view(base + i * width, width);
+                    bytes[i] = dstd::StringView(base + i * width, width);
                 break;
             }
             case TypeId::Float16:
@@ -163,7 +165,7 @@ class RunMerger {
             load(k, co_await runs_[k]->next(max_rows));
     }
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) {
+    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t max_rows) {
         // A heap over the run heads picks the next row; the rows taken from one
         // run morsel are gathered once, and one more gather puts the pieces in
         // order, so the cost per row is a few comparisons, not a morsel.
@@ -240,7 +242,7 @@ class RunMerger {
         }
         for (std::size_t k = 0; k < cur_.size(); ++k)
             if (open_segment[k] >= 0) close_segment(k);
-        if (out_rows == 0) co_return std::nullopt;
+        if (out_rows == 0) co_return dstd::nullopt;
 
         Morsel out;
         out.rows = out_rows;
@@ -294,7 +296,7 @@ class RunMerger {
         return 0;
     }
 
-    void load(std::size_t k, std::optional<Morsel> m) {
+    void load(std::size_t k, dstd::Optional<Morsel> m) {
         cur_[k] = std::move(m);
         pos_[k] = 0;
         run_keys_[k].clear();
@@ -312,7 +314,7 @@ class RunMerger {
     std::vector<int> key_idx_;
     std::vector<bool> descending_;
     std::vector<std::unique_ptr<Cursor>> runs_;
-    std::vector<std::optional<Morsel>> cur_;
+    std::vector<dstd::Optional<Morsel>> cur_;
     std::vector<std::vector<KeyData>> run_keys_;
     std::vector<std::int64_t> pos_;
 };
@@ -348,12 +350,13 @@ class SortMergeCursor : public Cursor {
 
     std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
 
         if (merger_) co_return co_await merger_->next(max_rows);
         if (empty_) {
-            std::optional<Morsel> m = std::move(empty_);
+            dstd::Optional<Morsel> m = std::move(empty_);
             empty_.reset();
             co_return m;
         }
@@ -526,9 +529,9 @@ class SortMergeCursor : public Cursor {
     bool built_ = false;
     std::vector<int> key_idx_;
     spill::Dir dir_;
-    std::optional<RunMerger> merger_;
+    dstd::Optional<RunMerger> merger_;
     std::unique_ptr<Cursor> single_;
-    std::optional<Morsel> empty_;
+    dstd::Optional<Morsel> empty_;
     Governor gov_{"sort"};
 };
 

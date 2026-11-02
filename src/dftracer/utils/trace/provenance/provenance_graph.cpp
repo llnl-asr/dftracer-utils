@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/provenance/provenance_graph.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -17,12 +19,12 @@ namespace dftracer::utils::trace::provenance {
 
 namespace {
 
-constexpr std::string_view ENTITY_PREFIX = "prov_entity:";
-constexpr std::string_view TYPE_PREFIX = "prov_type:";
+constexpr dstd::StringView ENTITY_PREFIX = "prov_entity:";
+constexpr dstd::StringView TYPE_PREFIX = "prov_type:";
 
 // Per-slot partial: keyed for O(1) merge, flattened into vectors at the end.
 // dftracer entity API enums (common/entity.h), rendered as names.
-std::string store_name(std::string_view v) {
+std::string store_name(dstd::StringView v) {
     static const char* names[] = {"memory",      "gpu_memory",   "local_disk",
                                   "parallel_fs", "burst_buffer", "object_store",
                                   "database",    "network",      "other"};
@@ -32,7 +34,7 @@ std::string store_name(std::string_view v) {
     if (end == s.c_str()) return s.empty() ? "memory" : s;  // already a name
     return (i >= 0 && i < 9) ? names[i] : "other";
 }
-std::string role_name(std::string_view v) {
+std::string role_name(dstd::StringView v) {
     static const char* names[] = {"unknown",      "input",     "output",
                                   "intermediate", "parameter", "reference"};
     char* end = nullptr;
@@ -41,7 +43,7 @@ std::string role_name(std::string_view v) {
     if (end == s.c_str()) return s;
     return (i >= 0 && i < 6) ? names[i] : "unknown";
 }
-std::string relation_name(std::string_view v) {
+std::string relation_name(dstd::StringView v) {
     std::string s(v);
     switch (std::strtol(s.c_str(), nullptr, 10)) {
         case 16:
@@ -62,29 +64,29 @@ std::string relation_name(std::string_view v) {
             return "related";
     }
 }
-constexpr std::string_view EVENT_RELATIONS[] = {"used", "generated",
+constexpr dstd::StringView EVENT_RELATIONS[] = {"used", "generated",
                                                 "invalidated", "updated"};
 
 // Cheap byte-level prefilter: only lines that can hold provenance get parsed.
-bool maybe_provenance(std::string_view line) {
+bool maybe_provenance(dstd::StringView line) {
     for (auto r : EVENT_RELATIONS) {
         std::string needle = "\"";
         needle.append(r).append("\":[");
-        if (line.find(needle) != std::string_view::npos) return true;
+        if (line.find(needle) != dstd::StringView::npos) return true;
     }
-    return line.find("\"relations\":{") != std::string_view::npos ||
-           line.find("\"name\":\"EH\"") != std::string_view::npos ||
-           line.find("\"name\":\"ET\"") != std::string_view::npos ||
-           line.find("\"name\":\"ER\"") != std::string_view::npos ||
-           line.find("prov_") != std::string_view::npos;
+    return line.find("\"relations\":{") != dstd::StringView::npos ||
+           line.find("\"name\":\"EH\"") != dstd::StringView::npos ||
+           line.find("\"name\":\"ET\"") != dstd::StringView::npos ||
+           line.find("\"name\":\"ER\"") != dstd::StringView::npos ||
+           line.find("prov_") != dstd::StringView::npos;
 }
 
-void str_array(simdjson::dom::object o, std::string_view k,
+void str_array(simdjson::dom::object o, dstd::StringView k,
                std::vector<std::string>& out) {
     simdjson::dom::array arr;
     if (o[k].get(arr) != simdjson::SUCCESS) return;
     for (simdjson::dom::element e : arr) {
-        std::string_view sv;
+        dstd::StringView sv;
         if (e.get(sv) == simdjson::SUCCESS) out.emplace_back(sv);
     }
 }
@@ -97,23 +99,23 @@ struct Acc {
     ProvenanceStats stats;
 };
 
-void split_hashes(std::string_view s, std::vector<std::string>& out) {
+void split_hashes(dstd::StringView s, std::vector<std::string>& out) {
     while (!s.empty()) {
         auto c = s.find(',');
         auto tok = s.substr(0, c);
         if (!tok.empty()) out.emplace_back(tok);
-        if (c == std::string_view::npos) break;
+        if (c == dstd::StringView::npos) break;
         s.remove_prefix(c + 1);
     }
 }
 
-std::string_view str_field(simdjson::dom::object o, std::string_view k) {
+dstd::StringView str_field(simdjson::dom::object o, dstd::StringView k) {
     auto v = o[k];
     if (v.error() || !v.is_string()) return {};
     return v.get_string().value_unsafe();
 }
 
-std::int64_t int_field(simdjson::dom::object o, std::string_view k,
+std::int64_t int_field(simdjson::dom::object o, dstd::StringView k,
                        std::int64_t dflt) {
     auto v = o[k];
     if (v.error()) return dflt;
@@ -130,7 +132,7 @@ void add_pid(std::vector<std::int64_t>& v, std::int64_t pid) {
     if (std::find(v.begin(), v.end(), pid) == v.end()) v.push_back(pid);
 }
 
-void ingest(Acc& a, std::string_view line) {
+void ingest(Acc& a, dstd::StringView line) {
     thread_local simdjson::dom::parser parser;
     auto doc = parser.parse(line.data(), line.size());
     if (doc.error() || !doc.value_unsafe().is_object()) return;
@@ -145,7 +147,7 @@ void ingest(Acc& a, std::string_view line) {
     // ---- dftracer entity API records (EH / ET / ER) and relation arrays.
     auto rec = str_field(root, "name");
     // Structured fields (current) or name/value with '|' (earlier prototype).
-    auto field_or = [&](std::string_view k, int idx) -> std::string {
+    auto field_or = [&](dstd::StringView k, int idx) -> std::string {
         auto v = args[k];
         if (!v.error()) {
             if (v.is_string())
@@ -156,10 +158,10 @@ void ingest(Acc& a, std::string_view line) {
                 return std::to_string(v.get_uint64().value_unsafe());
         }
         if (idx < 0) return {};  // structured-only field (no pipe fallback)
-        std::string_view val = str_field(args, "value");
+        dstd::StringView val = str_field(args, "value");
         for (int i = 0; i < idx; ++i) {
             auto bar = val.find('|');
-            if (bar == std::string_view::npos) return {};
+            if (bar == dstd::StringView::npos) return {};
             val.remove_prefix(bar + 1);
         }
         return std::string(val.substr(0, val.find('|')));
@@ -241,11 +243,11 @@ void ingest(Acc& a, std::string_view line) {
         key.substr(0, TYPE_PREFIX.size()) == TYPE_PREFIX) {
         std::string name(key.substr(TYPE_PREFIX.size()));
         if (!a.types.count(name)) {
-            std::string_view val = str_field(args, "value");
+            dstd::StringView val = str_field(args, "value");
             auto bar = val.find('|');
             ProvenanceType t;
             t.name = name;
-            if (bar != std::string_view::npos) {
+            if (bar != dstd::StringView::npos) {
                 t.role = val.substr(0, bar);
                 t.description = val.substr(bar + 1);
             } else {
@@ -262,12 +264,12 @@ void ingest(Acc& a, std::string_view line) {
         auto& e = a.entities[hash];
         if (e.hash.empty()) {
             e.hash = hash;
-            std::string_view val = str_field(args, "value");
-            std::string_view parts[4];
+            dstd::StringView val = str_field(args, "value");
+            dstd::StringView parts[4];
             for (auto& part : parts) {
                 auto bar = val.find('|');
                 part = val.substr(0, bar);
-                val = bar == std::string_view::npos ? std::string_view{}
+                val = bar == dstd::StringView::npos ? dstd::StringView{}
                                                     : val.substr(bar + 1);
             }
             e.type = parts[0];
@@ -359,7 +361,7 @@ ProvenanceGraph finish(Acc&& a) {
     g.entity_relations = a.entity_relations;
     std::sort(g.types.begin(), g.types.end(),
               [](const auto& x, const auto& y) { return x.name < y.name; });
-    std::unordered_set<std::string_view> referenced(referenced_extra.begin(),
+    std::unordered_set<dstd::StringView> referenced(referenced_extra.begin(),
                                                     referenced_extra.end());
     for (const auto& [aid, act] : a.activities) {
         if (!act.has_main) ++g.stats.orphan_chunks;
@@ -446,17 +448,17 @@ const Span* find_span(const SpanIndex& idx, std::int64_t pid,
     return nullptr;
 }
 
-std::string_view classify(std::string_view name) {
-    static const std::unordered_set<std::string_view> reads = {
+dstd::StringView classify(dstd::StringView name) {
+    static const std::unordered_set<dstd::StringView> reads = {
         "read",  "pread", "pread64", "readv",  "preadv", "fread", "fgets",
         "fgetc", "getc",  "getline", "fscanf", "mmap",   "mmap64"};
-    static const std::unordered_set<std::string_view> writes = {
+    static const std::unordered_set<dstd::StringView> writes = {
         "write", "pwrite", "pwrite64", "writev",  "pwritev",   "fwrite",
         "fputs", "fputc",  "putc",     "fprintf", "ftruncate", "truncate"};
-    static const std::unordered_set<std::string_view> opens = {
+    static const std::unordered_set<dstd::StringView> opens = {
         "open",    "open64", "openat",  "openat64", "creat",
         "creat64", "fopen",  "fopen64", "fdopen",   "freopen"};
-    static const std::unordered_set<std::string_view> deletes = {
+    static const std::unordered_set<dstd::StringView> deletes = {
         "unlink", "unlinkat", "remove", "rmdir"};
     if (reads.count(name)) return "read";
     if (writes.count(name)) return "write";
@@ -481,8 +483,8 @@ struct IoAcc {
     std::uint64_t events = 0, attributed = 0;
 };
 
-void add_io(IoAcc& a, std::string_view aid, std::string_view fhash,
-            std::string_view op, std::uint64_t bytes) {
+void add_io(IoAcc& a, dstd::StringView aid, dstd::StringView fhash,
+            dstd::StringView op, std::uint64_t bytes) {
     std::string key;
     key.reserve(aid.size() + fhash.size() + op.size() + 2);
     key.append(aid).push_back('\x1f');
@@ -493,7 +495,7 @@ void add_io(IoAcc& a, std::string_view aid, std::string_view fhash,
     g.bytes += bytes;
 }
 
-void ingest_io(IoAcc& a, const SpanIndex& spans, std::string_view line) {
+void ingest_io(IoAcc& a, const SpanIndex& spans, dstd::StringView line) {
     thread_local simdjson::dom::parser parser;
     auto doc = parser.parse(line.data(), line.size());
     if (doc.error() || !doc.value_unsafe().is_object()) return;
@@ -568,15 +570,15 @@ IoAcc merge_io(IoAcc&& x, IoAcc&& y) {
     return std::move(x);
 }
 
-bool starts_with(std::string_view s, std::string_view p) {
+bool starts_with(dstd::StringView s, dstd::StringView p) {
     return s.size() >= p.size() && s.substr(0, p.size()) == p;
 }
-bool ends_with(std::string_view s, std::string_view p) {
+bool ends_with(dstd::StringView s, dstd::StringView p) {
     return s.size() >= p.size() && s.substr(s.size() - p.size()) == p;
 }
 
 // Interpreter/system noise that is never a science entity.
-bool excluded(std::string_view p) {
+bool excluded(dstd::StringView p) {
     if (p.empty() || p.front() != '/')
         return true;  // relative ("."), unresolved
     for (auto suf : {".py", ".pyc", ".pyi", ".so", ".pth", ".typed"})
@@ -586,7 +588,7 @@ bool excluded(std::string_view p) {
     for (auto sub : {"/site-packages/", "/dist-packages/", "/__pycache__/",
                      ".so.", "/lib/python", "/.cache/", "/comgr-", "/cache/",
                      "/triton/", "/dace/", "openmm.cache", "/cppattn_cache"})
-        if (p.find(sub) != std::string_view::npos) return true;
+        if (p.find(sub) != dstd::StringView::npos) return true;
     if (starts_with(p, "/dev/shm/")) return false;
     for (auto pre :
          {"/proc/", "/sys/", "/dev/", "/etc/", "/usr/lib", "/usr/share/",
@@ -629,7 +631,7 @@ std::vector<ProvenanceMount> host_mount_table(
 
 }  // namespace
 
-std::pair<std::string, std::string> split_mount(
+dstd::Pair<std::string, std::string> split_mount(
     const std::string& path, const std::vector<ProvenanceMount>& table) {
     const ProvenanceMount* best = nullptr;
     for (const auto& m : table) {
@@ -872,7 +874,7 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
     // byte-level prefilter skip lines that cannot hold provenance.
     views::View v = view.phase(views::Phase::Any);
     auto scan = co_await v.map_batches<Acc>(
-        [](Acc& a, const std::vector<std::string_view>& events) {
+        [](Acc& a, const std::vector<dstd::StringView>& events) {
             for (auto ev : events)
                 if (maybe_provenance(ev)) ingest(a, ev);
         },
@@ -889,7 +891,7 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
                 "cat == \"POSIX\" or cat == \"STDIO\" or name == \"FH\" or "
                 "name == \"SH\" or name == \"start\""));
     auto ios = co_await io.map_batches<IoAcc>(
-        [&spans](IoAcc& a, const std::vector<std::string_view>& events) {
+        [&spans](IoAcc& a, const std::vector<dstd::StringView>& events) {
             for (auto ev : events) ingest_io(a, spans, ev);
         },
         [](IoAcc&& x, IoAcc&& y) {

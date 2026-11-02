@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_SOURCE_H
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <concepts>
@@ -25,22 +27,22 @@
  *   std::vector<std::string> names() const;
  *   ScanResult<C> scan(const ScanView&) const;
  * where C is a cursor type with
- *   std::optional<OwnedFrame> next(std::int64_t max_rows);
+ *   dstd::Optional<OwnedFrame> next(std::int64_t max_rows);
  * and optionally, each wired only when present,
  *   bool narrow(ExprView predicate);          // advisory, see dftu_cursor_vt
  *   std::uint64_t resident_bytes();
  *   std::uint64_t reclaim(std::uint64_t want);
  * and optionally
  *   void schema(SchemaBuilder&) const;               // column types
- *   std::optional<Applied<S>> apply_filter(ExprView) const;
- *   std::optional<Applied<S>> apply_projection(const std::vector<NamedExpr>&)
- * const; std::optional<Applied<S>> apply_aggregation(const AggregationView&)
- * const; std::optional<Applied<S>> apply_sort(const SortView&) const;
- *   std::optional<Applied<S>> apply_topn(const SortView&, std::int64_t k)
- * const; std::optional<Applied<S>> apply_limit(std::int64_t offset,
- * std::int64_t n) const; std::optional<Applied<S>> apply_tail(std::int64_t n)
- * const; std::optional<Applied<S>> apply_join(const JoinView<S>&) const; The
- * apply_* contract is dftu_source_vt::apply's: std::nullopt for unsupported or
+ *   dstd::Optional<Applied<S>> apply_filter(ExprView) const;
+ *   dstd::Optional<Applied<S>> apply_projection(const std::vector<NamedExpr>&)
+ * const; dstd::Optional<Applied<S>> apply_aggregation(const AggregationView&)
+ * const; dstd::Optional<Applied<S>> apply_sort(const SortView&) const;
+ *   dstd::Optional<Applied<S>> apply_topn(const SortView&, std::int64_t k)
+ * const; dstd::Optional<Applied<S>> apply_limit(std::int64_t offset,
+ * std::int64_t n) const; dstd::Optional<Applied<S>> apply_tail(std::int64_t n)
+ * const; dstd::Optional<Applied<S>> apply_join(const JoinView<S>&) const; The
+ * apply_* contract is dftu_source_vt::apply's: dstd::nullopt for unsupported or
  * no change, a new S otherwise, projection / aggregation / join only as
  * Apply::Exact. A cursor error is a thrown std::exception; a throwing apply_*
  * reads as no change and a throwing scan() as a failed scan. */
@@ -115,9 +117,9 @@ class ExprView {
     explicit operator bool() const noexcept { return e_ != nullptr; }
 
     /// The column when this is a bare column reference.
-    std::optional<std::int32_t> column() const {
+    dstd::Optional<std::int32_t> column() const {
         const std::int32_t c = e_ ? dftu_expr_col_index(e_) : -1;
-        if (c < 0) return std::nullopt;
+        if (c < 0) return dstd::nullopt;
         return c;
     }
 
@@ -126,41 +128,41 @@ class ExprView {
         dftu_cmp_op op;
         dftu_scalar rhs;  ///< a string borrows from this expression
     };
-    std::optional<Compare> as_compare() const {
+    dstd::Optional<Compare> as_compare() const {
         std::int32_t col = -1, op = 0;
         dftu_scalar rhs{};
         if (!e_ || !dftu_expr_as_col_cmp(e_, &col, &op, &rhs))
-            return std::nullopt;
+            return dstd::nullopt;
         return Compare{col, static_cast<dftu_cmp_op>(op), rhs};
     }
 
     struct Logical;
-    std::optional<Logical> as_logical() const;
-    std::optional<OwnedExpr> as_not() const;
+    dstd::Optional<Logical> as_logical() const;
+    dstd::Optional<OwnedExpr> as_not() const;
 
     struct StrPred {
         std::int32_t column;
         dftu_str_pred_op op;
-        std::string_view pattern;  ///< borrows from this expression
+        dstd::StringView pattern;  ///< borrows from this expression
     };
-    std::optional<StrPred> as_str_pred() const {
+    dstd::Optional<StrPred> as_str_pred() const {
         std::int32_t col = -1, op = 0, len = 0;
         const char* pat = nullptr;
         if (!e_ || !dftu_expr_as_col_str_pred(e_, &col, &op, &pat, &len))
-            return std::nullopt;
+            return dstd::nullopt;
         return StrPred{col, static_cast<dftu_str_pred_op>(op),
-                       std::string_view(pat, static_cast<std::size_t>(len))};
+                       dstd::StringView(pat, static_cast<std::size_t>(len))};
     }
 
     struct IsIn {
         std::int32_t column;
         OwnedSeries values;
     };
-    std::optional<IsIn> as_is_in() const {
+    dstd::Optional<IsIn> as_is_in() const {
         std::int32_t col = -1;
         dftu_series* values = nullptr;
         if (!e_ || !dftu_expr_as_col_is_in(e_, &col, &values))
-            return std::nullopt;
+            return dstd::nullopt;
         return IsIn{col, OwnedSeries(values)};
     }
 
@@ -207,32 +209,32 @@ struct ExprView::Logical {
     OwnedExpr rhs;
 };
 
-inline std::optional<ExprView::Logical> ExprView::as_logical() const {
+inline dstd::Optional<ExprView::Logical> ExprView::as_logical() const {
     std::int32_t op = 0;
     dftu_expr* a = nullptr;
     dftu_expr* b = nullptr;
-    if (!e_ || !dftu_expr_as_logical(e_, &op, &a, &b)) return std::nullopt;
+    if (!e_ || !dftu_expr_as_logical(e_, &op, &a, &b)) return dstd::nullopt;
     return Logical{static_cast<dftu_logical_op>(op), OwnedExpr(a),
                    OwnedExpr(b)};
 }
 
-inline std::optional<OwnedExpr> ExprView::as_not() const {
+inline dstd::Optional<OwnedExpr> ExprView::as_not() const {
     dftu_expr* a = nullptr;
-    if (!e_ || !dftu_expr_as_not(e_, &a)) return std::nullopt;
+    if (!e_ || !dftu_expr_as_not(e_, &a)) return dstd::nullopt;
     return OwnedExpr(a);
 }
 
 struct NamedExpr {
-    std::string_view name;
+    dstd::StringView name;
     ExprView expr;
 };
 
 struct AggView {
-    std::string_view op;  ///< canonical aggregate name, e.g. "sum"
+    dstd::StringView op;  ///< canonical aggregate name, e.g. "sum"
     ExprView input;       ///< empty for count
     ExprView by;          ///< set only for ops that read a second column
     double param = 0.0;
-    std::string_view out;
+    dstd::StringView out;
 };
 
 struct AggregationView {
@@ -241,21 +243,21 @@ struct AggregationView {
 };
 
 struct SortView {
-    std::vector<std::string_view> by;
+    std::vector<dstd::StringView> by;
     std::vector<bool> descending;
 };
 
 template <class S>
 struct JoinView {
     const S& other;  ///< the right side, fully absorbed into its own source
-    std::vector<std::string_view> left_on;
-    std::vector<std::string_view> right_on;
+    std::vector<dstd::StringView> left_on;
+    std::vector<dstd::StringView> right_on;
     dftu_join_how how;
-    std::string_view suffix;
+    dstd::StringView suffix;
 };
 
 struct ScanView {
-    std::vector<std::string_view> projection;  ///< empty: every column
+    std::vector<dstd::StringView> projection;  ///< empty: every column
     std::vector<ExprView> filters;  ///< positional against the projection
     std::int64_t limit = -1;        ///< -1: none
     std::uint64_t memory_budget = 0;
@@ -312,7 +314,7 @@ struct CursorVt {
                            dftu_result_frame* out) {
         auto* box = static_cast<CursorBox<C>*>(self);
         try {
-            std::optional<OwnedFrame> f = box->cursor->next(max_rows);
+            dstd::Optional<OwnedFrame> f = box->cursor->next(max_rows);
             out->ok = 1;
             out->u.value = f ? f->release() : nullptr;
         } catch (const std::exception& e) {
@@ -399,9 +401,9 @@ concept HasApply =
     requires(const S& s) { s.apply_tail(std::int64_t{}); } ||
     requires(const S& s, const JoinView<S>& v) { s.apply_join(v); };
 
-inline std::vector<std::string_view> string_views(const char* const* p,
+inline std::vector<dstd::StringView> string_views(const char* const* p,
                                                   std::int32_t n) {
-    std::vector<std::string_view> out;
+    std::vector<dstd::StringView> out;
     out.reserve(static_cast<std::size_t>(n > 0 ? n : 0));
     for (std::int32_t i = 0; i < n; ++i) out.emplace_back(p[i] ? p[i] : "");
     return out;
@@ -469,8 +471,8 @@ struct SourceVt {
         }
     }
 
-    static std::optional<Applied<S>> dispatch(const S& s,
-                                              const dftu_apply_request& req) {
+    static dstd::Optional<Applied<S>> dispatch(const S& s,
+                                               const dftu_apply_request& req) {
         switch (req.kind) {
             case DFTU_APPLY_FILTER:
                 if constexpr (requires { s.apply_filter(ExprView{}); })
@@ -545,7 +547,7 @@ struct SourceVt {
             default:
                 break;
         }
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     static SortView sort_view(const dftu_apply_sort_args& a) {
@@ -560,7 +562,7 @@ struct SourceVt {
                       dftu_apply_result* out) {
         auto* box = static_cast<Box*>(self);
         try {
-            std::optional<Applied<S>> r = dispatch(*box->source, *req);
+            dstd::Optional<Applied<S>> r = dispatch(*box->source, *req);
             if (!r || !r->source) return;
             auto* next = new Box{std::move(r->source), {}, {}, false};
             out->status = r->status == Apply::Exact ? DFTU_APPLY_EXACT

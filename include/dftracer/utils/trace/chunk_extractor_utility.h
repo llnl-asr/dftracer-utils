@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
 
 #include <atomic>
@@ -153,7 +154,7 @@ class ExtractionAdmission {
 
 /// The trimmed event in a trace line, or an empty view when the line is not an
 /// event (a blank line, a bracket or invalid JSON).
-std::string_view event_of_line(std::string_view line);
+dstd::StringView event_of_line(dstd::StringView line);
 
 /**
  * @brief Streams DFTracer gzip traces into chunk files of about a given size.

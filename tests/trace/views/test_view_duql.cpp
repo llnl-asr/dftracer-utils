@@ -3,6 +3,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
@@ -159,7 +162,7 @@ df::DataFrame pipe(const std::string& text, const duql::Params& p = {}) {
     return frame(base().duql(text, p));
 }
 
-std::vector<double> nums(const df::DataFrame& f, std::string_view name) {
+std::vector<double> nums(const df::DataFrame& f, dstd::StringView name) {
     std::vector<double> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out.push_back(bnum(f, r, name));
@@ -168,7 +171,7 @@ std::vector<double> nums(const df::DataFrame& f, std::string_view name) {
 
 // Row `r` of the list column `name`, as `[a,b]`.
 std::string items(const df::DataFrame& f, std::int64_t r,
-                  std::string_view name) {
+                  dstd::StringView name) {
     const df::Series& c = f.columns[static_cast<std::size_t>(bcol(f, name))];
     if (c.is_null(r)) return "null";
     const df::Series l = c.materialize();
@@ -264,7 +267,7 @@ std::vector<std::string> null_dur_lines() {
     return lines;
 }
 
-std::int32_t col_of(const View& v, std::string_view name) {
+std::int32_t col_of(const View& v, dstd::StringView name) {
     const auto names = v.schema();
     for (std::size_t i = 0; i < names.size(); ++i)
         if (names[i] == name) return static_cast<std::int32_t>(i);
@@ -803,7 +806,7 @@ TEST_SUITE("View duql pipeline") {
             create_multimember_trace(small, 300, 1024)};
         for (const auto& q : queries) {
             INFO("query: ", q);
-            std::optional<std::string> want;
+            dstd::Optional<std::string> want;
             for (const auto& gz : files)
                 for (std::size_t workers : {1, 2, 8}) {
                     dftracer::utils::Runtime rt(workers);
@@ -1190,10 +1193,10 @@ TEST_SUITE("View duql aggregation") {
         struct Cell {
             std::string g;
             int bucket;
-            std::optional<double> v;
+            dstd::Optional<double> v;
         };
         const std::vector<Cell> data = {{"a", 1, 10.0},
-                                        {"a", 3, std::nullopt},
+                                        {"a", 3, dstd::nullopt},
                                         {"a", 4, 40.0},
                                         {"b", 0, 5.0},
                                         {"b", 6, 65.0}};
@@ -1219,15 +1222,15 @@ TEST_SUITE("View duql aggregation") {
             return -1;
         };
         const auto real = [&](const std::string& g,
-                              int b) -> std::optional<Cell> {
+                              int b) -> dstd::Optional<Cell> {
             for (const auto& c : data)
                 if (c.g == g && c.bucket == b) return c;
-            return std::nullopt;
+            return dstd::nullopt;
         };
         const auto present = [&](const std::string& g,
-                                 int b) -> std::optional<double> {
+                                 int b) -> dstd::Optional<double> {
             const auto c = real(g, b);
-            return c ? c->v : std::nullopt;
+            return c ? c->v : dstd::nullopt;
         };
         const auto before = [&](const std::string& g, int b) {
             for (int i = b - 1; i >= 0; --i)
@@ -1253,7 +1256,7 @@ TEST_SUITE("View duql aggregation") {
                     CHECK(bnum(f, r, "n") == (c ? 1 : 0));
                     const int lo = before(g, b);
                     const int hi = after(g, b);
-                    std::optional<double> want;
+                    dstd::Optional<double> want;
                     if (c) {
                         want = c->v;
                     } else if (std::string(mode) == "forward" && lo >= 0) {
@@ -1319,12 +1322,12 @@ TEST_SUITE("View duql aggregation") {
         const char* g;
         int size;
     };
-    using HopCell = std::pair<std::int64_t, std::int64_t>;
+    using HopCell = dstd::Pair<std::int64_t, std::int64_t>;
 
     // Brute force: each window start T + k * E that holds the time.
-    static std::map<std::pair<std::int64_t, std::string>, HopCell>
+    static std::map<dstd::Pair<std::int64_t, std::string>, HopCell>
     hop_reference(const std::vector<HopRow>& rows, int W, int E, int T) {
-        std::map<std::pair<std::int64_t, std::string>, HopCell> out;
+        std::map<dstd::Pair<std::int64_t, std::string>, HopCell> out;
         for (const auto& r : rows)
             for (int k = -200; k <= 200; ++k) {
                 const int s = T + k * E;
@@ -1642,7 +1645,7 @@ TEST_SUITE("View duql quantifiers") {
             env, {line("io", 1, R"("h":[])"), line("io", 2, R"("h":[1,5])"),
                   line("io", 3, R"("x":1)")});
         for (const auto& [cond, want] :
-             std::vector<std::pair<std::string, std::string>>{
+             std::vector<dstd::Pair<std::string, std::string>>{
                  {"all(h, . > 0)", "1;2"},
                  {"any(h, . > 3)", "2"},
                  {"not all(h, . > 0)", ""},
@@ -1662,7 +1665,7 @@ TEST_SUITE("View duql quantifiers") {
                                            line("io", 2, R"("h":[9,"a"])"),
                                            line("io", 3, R"("h":[1,2])")});
         for (const auto& [cond, want] :
-             std::vector<std::pair<std::string, std::string>>{
+             std::vector<dstd::Pair<std::string, std::string>>{
                  {"any(h, . > 3)", "2"},
                  {"not any(h, . > 3)", "3"},
                  {"all(h, . < 3)", "3"},
@@ -1708,7 +1711,7 @@ TEST_SUITE("View duql window") {
             "window fhash sort -dur { r = row_number() } | where r <= 3"
             " | select fhash, dur, r");
         // Reference: per fhash, the three largest dur (ties by input order).
-        std::map<std::string, std::vector<std::pair<double, std::int64_t>>> by;
+        std::map<std::string, std::vector<dstd::Pair<double, std::int64_t>>> by;
         for (std::int64_t r = 0; r < all.num_rows(); ++r)
             by[cell(all.columns[0], r)].emplace_back(bnum(all, r, "dur"), r);
         std::map<std::int64_t, std::int64_t> rank;
@@ -1808,10 +1811,10 @@ TEST_SUITE("View duql window") {
     struct Pt {
         std::string g;
         std::int64_t key;
-        std::optional<std::int64_t> x;
+        dstd::Optional<std::int64_t> x;
     };
 
-    static std::string shown(std::optional<double> v) {
+    static std::string shown(dstd::Optional<double> v) {
         if (!v) return "null";
         if (*v == static_cast<double>(static_cast<std::int64_t>(*v)))
             return std::to_string(static_cast<std::int64_t>(*v));
@@ -1863,8 +1866,8 @@ TEST_SUITE("View duql window") {
     TEST_CASE("rows frames against a reference") {
         TestEnvironment env;
         const std::vector<Pt> pts = {
-            {"a", 1, 4}, {"a", 2, std::nullopt}, {"a", 3, 7}, {"b", 4, 2},
-            {"a", 5, 1}, {"b", 6, std::nullopt}, {"b", 7, 9}, {"a", 8, 5}};
+            {"a", 1, 4}, {"a", 2, dstd::nullopt}, {"a", 3, 7}, {"b", 4, 2},
+            {"a", 5, 1}, {"b", 6, dstd::nullopt}, {"b", 7, 9}, {"a", 8, 5}};
         const View v = points_view(env, pts, false);
         std::vector<std::size_t> at(pts.size());
         std::map<std::string, std::size_t> seen;
@@ -1918,14 +1921,14 @@ TEST_SUITE("View duql window") {
         TestEnvironment env;
         // Rows out of key order, with ties and null values.
         const std::vector<Pt> pts = {{"a", 3000000, 4},
-                                     {"a", 400000, std::nullopt},
+                                     {"a", 400000, dstd::nullopt},
                                      {"b", 900000, 2},
                                      {"a", 3000000, 7},
-                                     {"b", 900000, std::nullopt},
-                                     {"a", 400000, std::nullopt},
+                                     {"b", 900000, dstd::nullopt},
+                                     {"a", 400000, dstd::nullopt},
                                      {"b", 2500000, 9},
                                      {"a", 1200000, 5},
-                                     {"a", 3400000, std::nullopt}};
+                                     {"a", 3400000, dstd::nullopt}};
         const View v = points_view(env, pts, true);
         for (const char* fn : {"sum", "mean", "min", "max", "count"}) {
             const std::string want =
@@ -1957,14 +1960,14 @@ TEST_SUITE("View duql window") {
     TEST_CASE("more window functions against a reference") {
         TestEnvironment env;
         const std::vector<Pt> pts = {{"a", 3, 4},
-                                     {"a", 1, std::nullopt},
+                                     {"a", 1, dstd::nullopt},
                                      {"b", 2, 8},
                                      {"a", 3, 7},
-                                     {"b", 2, std::nullopt},
+                                     {"b", 2, dstd::nullopt},
                                      {"a", 5, 1},
                                      {"b", 9, 2},
                                      {"a", 1, 6},
-                                     {"a", 4, std::nullopt}};
+                                     {"a", 4, dstd::nullopt}};
         const View v = points_view(env, pts, false);
         // Each partition in sort order, ties in row order.
         std::map<std::string, std::vector<std::size_t>> order;
@@ -1986,9 +1989,9 @@ TEST_SUITE("View duql window") {
             return text;
         };
         const auto x_at = [&](const std::vector<std::size_t>& idx,
-                              std::size_t p) -> std::optional<double> {
+                              std::size_t p) -> dstd::Optional<double> {
             if (pts[idx[p]].x) return static_cast<double>(*pts[idx[p]].x);
-            return std::nullopt;
+            return dstd::nullopt;
         };
         const auto run_q = [&](const std::string& entry) {
             return rows(frame(
@@ -2425,7 +2428,7 @@ TEST_SUITE("View duql reshape determinism") {
                                                 reshape_trace(small, 2048)};
         for (const auto& q : queries) {
             INFO("query: ", q);
-            std::optional<std::string> want;
+            dstd::Optional<std::string> want;
             for (const auto& gz : files)
                 for (std::size_t workers : {1, 2, 8}) {
                     dftracer::utils::Runtime rt(workers);
@@ -2775,7 +2778,7 @@ TEST_SUITE("View duql array indexes and lists") {
     TEST_CASE("each form in the scan filter and after it") {
         TestEnvironment env(10);
         const View v = arrays_view(env);
-        const std::vector<std::pair<const char*, std::size_t>> conds = {
+        const std::vector<dstd::Pair<const char*, std::size_t>> conds = {
             {R"(index_of(tags, "a") == 1)", 1},
             {"len(sort(tags)) == 4", 1},
             {"len(unique(tags)) == 3", 1},
@@ -2913,7 +2916,7 @@ TEST_SUITE("View duql session") {
               "{ n = count(), t = sum(dur) } | sort pid, tid, session",
               "session pid gap 300 max 5000 | select ts, pid, session"}) {
             INFO("query: ", q);
-            std::optional<std::string> want;
+            dstd::Optional<std::string> want;
             for (const auto& gz : files)
                 for (std::size_t workers : {1, 2, 8}) {
                     dftracer::utils::Runtime rt(workers);

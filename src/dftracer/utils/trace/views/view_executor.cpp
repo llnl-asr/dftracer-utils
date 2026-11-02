@@ -13,7 +13,10 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
@@ -131,7 +134,7 @@ bool export_bootstrap_eligible(const ViewPlan& plan) {
 // caller-owned: a thread_local parser is unsafe here because the export emit
 // runs on pooled coroutine threads.
 static dstd::String project_event(simdjson::dom::parser& parser,
-                                  std::string_view ev,
+                                  dstd::StringView ev,
                                   const std::vector<std::string>& select,
                                   bool args_fallback) {
     simdjson::padded_string padded(ev);
@@ -208,7 +211,7 @@ struct BootstrapSource {
     bool ok = false;
 };
 
-BootstrapSource open_bootstrap_source(std::string_view file,
+BootstrapSource open_bootstrap_source(dstd::StringView file,
                                       dstd::SharedPtr<dstd::ScopedFd> shared) {
     BootstrapSource out;
     if (!shared)
@@ -289,7 +292,7 @@ struct BootstrapBuild {
     std::string failure;
 };
 
-BootstrapBuild open_bootstrap_build(BootstrapRoot& root, std::string_view file,
+BootstrapBuild open_bootstrap_build(BootstrapRoot& root, dstd::StringView file,
                                     std::uint64_t mtime,
                                     const BootstrapSource& source) {
     namespace idx = dftracer::utils::index;
@@ -351,13 +354,13 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
         const std::size_t last_nl = buf_.rfind('\n');
         if (last_nl == std::string::npos) co_return;
         if (!drop_metadata_) {
-            sink_->write(std::string_view(buf_.data(), last_nl + 1));
+            sink_->write(dstd::StringView(buf_.data(), last_nl + 1));
         } else {
             kept_.clear();
             std::size_t pos = 0;
             while (pos <= last_nl) {
                 const std::size_t nl = buf_.find('\n', pos);
-                const std::string_view line(buf_.data() + pos, nl - pos);
+                const dstd::StringView line(buf_.data() + pos, nl - pos);
                 if (phase_of(line) != trace::RecordPhase::Metadata) {
                     kept_.append(line);
                     kept_.push_back('\n');
@@ -371,7 +374,7 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
     }
 
    private:
-    trace::RecordPhase phase_of(std::string_view line) {
+    trace::RecordPhase phase_of(dstd::StringView line) {
         pad_.assign(line);
         pad_.resize(line.size() + simdjson::SIMDJSON_PADDING);
         simdjson::ondemand::document doc;
@@ -525,7 +528,7 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
     dftracer::utils::json::RecordParser proj_parser;
     ExportStats stats = co_await for_each_scanned_batch(
         plan, vdef, /*num_slots=*/0, cap,
-        [&](std::size_t, const std::vector<std::string_view>& events) {
+        [&](std::size_t, const std::vector<dstd::StringView>& events) {
             std::lock_guard<std::mutex> lk(sink_mtx);
             for (const auto& ev : events) {
                 if (seen++ < plan.offset) continue;
@@ -657,7 +660,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
 }
 
 coro::CoroTask<ExportStats> run_folds(
-    const ViewPlan& plan, std::span<Fold* const> folds,
+    const ViewPlan& plan, dstd::Span<Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern, DynamicPrune* dyn_prune,
     coro::CoroSemaphore* gate) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
@@ -1079,13 +1082,13 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
 // stored AggState partials to `plan`'s grouping and finalize. Shared by the
 // engine collect path and the session so the two agree on what a rollup
 // answers.
-std::optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
+dstd::Optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
     const std::string rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (!rdir.empty()) plan_record_schema(plan);
     if (rdir.empty() ||
         !dftracer::utils::index::cache::CacheStore::exists(rdir))
-        return std::nullopt;
+        return dstd::nullopt;
     // A materialize() query opens ReadWrite so a miss reuses the handle to
     // persist below (avoids a RO-then-RW conflict).
     const auto mode =
@@ -1102,7 +1105,7 @@ std::optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
         // never fail the query over the cache.
         DFTRACER_UTILS_LOG_WARN("rollup read skipped: %s", e.what());
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // On a hit fills `out` (a mergeable engine AggState, finalize with
@@ -1334,7 +1337,7 @@ class DistinctRowFold : public Fold {
         for (std::size_t i : order) evs.push_back(std::move(entries_[i].ev));
         entries_.clear();
         index_.clear();
-        return build_row_frame(std::span<const FoldEvent>(evs), *intern_,
+        return build_row_frame(dstd::Span<const FoldEvent>(evs), *intern_,
                                select_, time_scale_, by_path_);
     }
 
@@ -1581,7 +1584,7 @@ coro::CoroTask<dataframe::DataFrame> run_flamegraph(
         std::move(name_field), std::move(group), &ContainmentFold::flamegraph);
 }
 
-coro::CoroTask<std::pair<dataframe::DataFrame, dataframe::DataFrame>>
+coro::CoroTask<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>
 run_containment(const ViewPlan& plan, std::vector<std::string> partition,
                 std::string ts_field, std::string dur_field,
                 std::string name_field, std::vector<std::string> group) {
@@ -1617,9 +1620,9 @@ std::string encode_agg_partial(const dataframe::AggState& st) {
 // Merge every partial into one AggState. An empty or unknown-tagged blob is
 // rejected, not misparsed.
 dataframe::AggStatePtr decode_partials(
-    const std::vector<std::string_view>& partials) {
+    const std::vector<dstd::StringView>& partials) {
     dataframe::AggStatePtr state;
-    for (std::string_view p : partials) {
+    for (dstd::StringView p : partials) {
         if (p.empty())
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Aggregation,
@@ -1659,7 +1662,7 @@ dataframe::AggStatePtr empty_engine_state(const ViewPlan& plan) {
 // Distributed materialize: combine the rank-local partials and persist the
 // merged rollup.
 coro::CoroTask<void> run_materialize_partials(
-    const ViewPlan& plan, const std::vector<std::string_view>& partials) {
+    const ViewPlan& plan, const std::vector<dstd::StringView>& partials) {
     ensure_schema(plan);
     const std::string rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
@@ -1682,18 +1685,18 @@ coro::CoroTask<void> run_materialize_partials(
     co_return;
 }
 
-std::optional<dataframe::DataFrame> run_reconstruct_if_cached(
+dstd::Optional<dataframe::DataFrame> run_reconstruct_if_cached(
     const ViewPlan& plan) {
-    if (plan.group_by.empty() && plan.agg.empty()) return std::nullopt;
+    if (plan.group_by.empty() && plan.agg.empty()) return dstd::nullopt;
     ensure_schema(plan);
     return try_serve_rollup(plan);
 }
 
 coro::CoroTask<ExportStats> run_scan_batches(
-    const std::shared_ptr<const ViewPlan>& plan_ptr, std::size_t num_slots,
+    const dstd::SharedPtr<const ViewPlan>& plan_ptr, std::size_t num_slots,
     std::uint64_t limit,
     const std::function<void(std::size_t,
-                             const std::vector<std::string_view>&)>& on_batch) {
+                             const std::vector<dstd::StringView>&)>& on_batch) {
     bool from_mv = false;
     const ViewPlan plan = redirect_reads(*plan_ptr, &from_mv);
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
@@ -1714,14 +1717,14 @@ struct FoldFactory {
 };
 
 struct StreamBranch {
-    std::shared_ptr<const ViewPlan> plan;
-    std::shared_ptr<coro::Channel<dataframe::Morsel>> channel;
-    std::shared_ptr<coro::CoroSemaphore> budget;
-    std::shared_ptr<const std::atomic<bool>> dropped;
+    dstd::SharedPtr<const ViewPlan> plan;
+    dstd::SharedPtr<coro::Channel<dataframe::Morsel>> channel;
+    dstd::SharedPtr<coro::CoroSemaphore> budget;
+    dstd::SharedPtr<const std::atomic<bool>> dropped;
 };
 
 struct ViewSessionState {
-    std::shared_ptr<const ViewPlan> plan;
+    dstd::SharedPtr<const ViewPlan> plan;
     std::vector<BranchHooks> branches;
     std::vector<FoldFactory> fold_factories;
     std::vector<StreamBranch> stream_branches;
@@ -1729,11 +1732,11 @@ struct ViewSessionState {
     /// execute() only when no other branch exists. The scan feeds every
     /// branch, so narrowing it for one would starve the rest; whether that
     /// holds is knowable only here, after every branch has been added.
-    std::optional<duql::Query> proposed_prune;
+    dstd::Optional<duql::Query> proposed_prune;
 };
 
-std::shared_ptr<ViewSessionState> make_view_session_state(
-    std::shared_ptr<const ViewPlan> plan) {
+dstd::SharedPtr<ViewSessionState> make_view_session_state(
+    dstd::SharedPtr<const ViewPlan> plan) {
     auto st = std::make_shared<ViewSessionState>();
     st->plan = std::move(plan);
     return st;
@@ -1748,10 +1751,10 @@ void add_branch(ViewSessionState& state, BranchHooks hooks) {
 }
 
 void add_stream_branch(
-    ViewSessionState& state, std::shared_ptr<const ViewPlan> plan,
-    std::shared_ptr<coro::Channel<dataframe::Morsel>> channel,
-    std::shared_ptr<coro::CoroSemaphore> budget,
-    std::shared_ptr<const std::atomic<bool>> dropped) {
+    ViewSessionState& state, dstd::SharedPtr<const ViewPlan> plan,
+    dstd::SharedPtr<coro::Channel<dataframe::Morsel>> channel,
+    dstd::SharedPtr<coro::CoroSemaphore> budget,
+    dstd::SharedPtr<const std::atomic<bool>> dropped) {
     state.stream_branches.push_back({std::move(plan), std::move(channel),
                                      std::move(budget), std::move(dropped)});
 }
@@ -1810,7 +1813,7 @@ void add_materialize_branch(ViewSessionState& state,
     // session's per-event fold cannot feed, so the materialize branch does no
     // per-event work and (re)builds the rollup through the engine in finalize.
     h.make_consumer = []() -> BranchConsumer {
-        return [](const json::JsonValue&, std::string_view) {};
+        return [](const json::JsonValue&, dstd::StringView) {};
     };
     h.finalize = [plan]() {
         const std::string rdir =
@@ -1842,19 +1845,19 @@ void add_materialize_branch(ViewSessionState& state,
 }
 
 BranchHooks make_export_branch(ExportSink& sink,
-                               std::shared_ptr<ExportStats> out) {
+                               dstd::SharedPtr<ExportStats> out) {
     // The sink is one shared object, so writes still serialize on a mutex; only
     // the count is per worker.
     auto mtx = std::make_shared<std::mutex>();
     auto counts =
-        std::make_shared<std::vector<std::shared_ptr<std::uint64_t>>>();
+        std::make_shared<std::vector<dstd::SharedPtr<std::uint64_t>>>();
 
     BranchHooks h;
     h.make_consumer = [&sink, mtx, counts]() -> BranchConsumer {
         auto count = std::make_shared<std::uint64_t>(0);
         counts->push_back(count);
         return
-            [&sink, mtx, count](const json::JsonValue&, std::string_view raw) {
+            [&sink, mtx, count](const json::JsonValue&, dstd::StringView raw) {
                 std::lock_guard<std::mutex> lk(*mtx);
                 sink.write(raw);
                 sink.write("\n");
@@ -1878,7 +1881,7 @@ class BranchDriverFold : public Fold {
    public:
     // `gate_metadata`: the scan carries metadata records only for the
     // branches that read them, so the others must not see them.
-    BranchDriverFold(std::shared_ptr<std::vector<const BranchHooks*>> branches,
+    BranchDriverFold(dstd::SharedPtr<std::vector<const BranchHooks*>> branches,
                      bool gate_metadata)
         : branches_(std::move(branches)), gate_metadata_(gate_metadata) {}
 
@@ -1894,7 +1897,7 @@ class BranchDriverFold : public Fold {
     }
 
     void step(const FoldBatch& b) override {
-        for (std::string_view line : b.raw) {
+        for (dstd::StringView line : b.raw) {
             buf_.assign(line);
             auto res = parser_.parse(buf_);
             if (res.error()) continue;
@@ -1926,7 +1929,7 @@ class BranchDriverFold : public Fold {
     }
 
    private:
-    std::shared_ptr<std::vector<const BranchHooks*>> branches_;
+    dstd::SharedPtr<std::vector<const BranchHooks*>> branches_;
     bool gate_metadata_;
     std::vector<BranchConsumer> consumers_;
     dftracer::utils::json::RecordParser parser_;
@@ -1934,7 +1937,7 @@ class BranchDriverFold : public Fold {
 };
 
 coro::CoroTask<ExportStats> run_session(
-    std::shared_ptr<ViewSessionState> state) {
+    dstd::SharedPtr<ViewSessionState> state) {
     const ViewPlan& plan = *state->plan;
 
     // Serve each match-all aggregation branch from a rollup or the aggregation
@@ -1943,7 +1946,7 @@ coro::CoroTask<ExportStats> run_session(
     // EngineAggFold.
     struct ScanBranch {
         const BranchHooks* br;
-        std::shared_ptr<ViewPlan> agg_plan;  // set only for a match-all agg
+        dstd::SharedPtr<ViewPlan> agg_plan;  // set only for a match-all agg
         bool apply_query = false;  // branch EngineAggFold filters per event
     };
     std::vector<ScanBranch> scan_branches;
@@ -2157,7 +2160,7 @@ coro::CoroTask<std::string> run_aggregate_partial(const ViewPlan& plan) {
 
 // Merge partials and emit each combined group as a ph="C" counter event.
 ExportStats merge_counters_partials(
-    const ViewPlan& plan, const std::vector<std::string_view>& partials,
+    const ViewPlan& plan, const std::vector<dstd::StringView>& partials,
     ExportSink& sink) {
     const ViewPlan p = resolve_bucket_origin(plan);
     ensure_schema(p);
@@ -2173,7 +2176,7 @@ ExportStats merge_counters_partials(
 
 // Merge partials into a materialized DataFrame (distributed collect()).
 dataframe::DataFrame merge_partials_to_table(
-    const ViewPlan& plan, const std::vector<std::string_view>& partials) {
+    const ViewPlan& plan, const std::vector<dstd::StringView>& partials) {
     const ViewPlan p = resolve_bucket_origin(plan);
     ensure_schema(p);
     dataframe::AggStatePtr state = decode_partials(partials);

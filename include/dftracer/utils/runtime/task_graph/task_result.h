@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_TASK_GRAPH_TASK_RESULT_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/memory.h>
 
 #include <cstddef>
 #include <memory>
@@ -49,7 +50,7 @@ class TaskResult {
     /**
      * Create TaskResult from existing shared_ptr
      */
-    static TaskResult<T> from_shared(std::shared_ptr<T> ptr) {
+    static TaskResult<T> from_shared(dstd::SharedPtr<T> ptr) {
         TaskResult<T> result;
         result.data_ = std::move(ptr);
         return result;
@@ -95,7 +96,7 @@ class TaskResult {
      *
      * Use when you need to extend lifetime or share with others.
      */
-    std::shared_ptr<T> share() const { return data_; }
+    dstd::SharedPtr<T> share() const { return data_; }
 
     /**
      * Check if data is ready (not empty, not spilled)
@@ -124,7 +125,7 @@ class TaskResult {
     explicit operator bool() const { return is_ready(); }
 
    private:
-    std::shared_ptr<T> data_;
+    dstd::SharedPtr<T> data_;
 
     /// Default size estimation
     template <typename U>

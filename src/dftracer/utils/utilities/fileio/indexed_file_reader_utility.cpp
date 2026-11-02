@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
@@ -15,7 +16,7 @@
 
 namespace dftracer::utils::utilities::fileio {
 
-coro::CoroTask<std::shared_ptr<reader::internal::Reader>>
+coro::CoroTask<dstd::SharedPtr<reader::internal::Reader>>
 IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
     // Validate input
     if (!dftracer::utils::common::input_exists(input.file_path)) {

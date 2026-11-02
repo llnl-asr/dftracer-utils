@@ -2,6 +2,8 @@
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 
 namespace dftracer::utils::dataframe {
 
@@ -14,14 +16,14 @@ namespace {
 struct Seg {
     std::vector<Series> cols;
     std::vector<ColumnView> keys;
-    std::optional<ColumnView> t;   // asof time, or interval lo
-    std::optional<ColumnView> hi;  // interval hi
+    dstd::Optional<ColumnView> t;   // asof time, or interval lo
+    dstd::Optional<ColumnView> hi;  // interval hi
     std::int64_t rows = 0;
     std::int64_t live = 0;
     std::uint64_t bytes = 0;
     bool copy = false;
 };
-using SegPtr = std::shared_ptr<Seg>;
+using SegPtr = dstd::SharedPtr<Seg>;
 
 struct Held {
     SegPtr seg;
@@ -47,7 +49,7 @@ struct Layout {
 struct LeftBlock {
     Morsel m;
     std::vector<ColumnView> by;
-    std::optional<ColumnView> t;
+    dstd::Optional<ColumnView> t;
 };
 
 bool is_bytes_type(TypeId t) {
@@ -202,7 +204,7 @@ class RightFeed {
     Layout lay_;
     std::vector<std::string> rsch_;
     std::vector<std::size_t> map_;
-    std::optional<coro::AsyncGenerator<DataFrame>> gen_;
+    dstd::Optional<coro::AsyncGenerator<DataFrame>> gen_;
     SegPtr seg_;
     std::vector<Series> proto_;
     std::int64_t i_ = 0;
@@ -225,7 +227,8 @@ class OrderedJoin : public Cursor {
           budget_(budget),
           who_(std::move(who)) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         max_rows_ = max_rows;
         for (;;) {
             if (lb_ && (busy() || li_ < lb_->m.rows) && !full()) {
@@ -238,11 +241,11 @@ class OrderedJoin : public Cursor {
                 continue;
             }
             const auto load_left_ok = co_await load_left();
-            if (!load_left_ok) co_return std::nullopt;
+            if (!load_left_ok) co_return dstd::nullopt;
         }
     }
 
-    std::optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<std::vector<std::string>> out_names() const override {
         return names_;
     }
 
@@ -420,9 +423,9 @@ class OrderedJoin : public Cursor {
     std::string who_;
     std::int64_t max_rows_ = 0;
 
-    std::shared_ptr<LeftBlock> lb_;
+    dstd::SharedPtr<LeftBlock> lb_;
     std::int64_t li_ = 0;
-    std::shared_ptr<LeftBlock> rep_;
+    dstd::SharedPtr<LeftBlock> rep_;
     std::int64_t rep_row_ = 0;
     bool checked_ = false;
 
@@ -444,7 +447,7 @@ class AsofCursor : public OrderedJoin {
     AsofCursor(std::unique_ptr<Cursor> left, LazyFrame right_sorted,
                const Layout& lay, std::vector<std::string> rsch,
                std::vector<std::string> names, std::uint64_t budget,
-               AsofDirection direction, std::optional<double> tolerance)
+               AsofDirection direction, dstd::Optional<double> tolerance)
         : OrderedJoin(std::move(left), std::move(right_sorted), lay,
                       std::move(rsch), std::move(names), budget, "asof"),
           direction_(direction),
@@ -524,7 +527,7 @@ class AsofCursor : public OrderedJoin {
 
    private:
     AsofDirection direction_;
-    std::optional<double> tolerance_;
+    dstd::Optional<double> tolerance_;
     bool have_back_ = false;
     Held back_first_;
     Held back_last_;
@@ -830,7 +833,7 @@ std::unique_ptr<Cursor> make_ordered_join(std::unique_ptr<Cursor>& in,
         other.sort_by_multi(rkeys, std::vector<bool>(rkeys.size(), false));
     if (asof) {
         const auto direction = static_cast<AsofDirection>(args->i32_at(4));
-        std::optional<double> tol;
+        dstd::Optional<double> tol;
         const double t = args->f64_at(5);
         if (t >= 0) tol = t;
         return std::make_unique<AsofCursor>(std::move(sorted_left),
@@ -846,7 +849,7 @@ LazyFrame compose_asof(const LazyFrame& left, LazyFrame other,
                        const std::string& on,
                        const std::vector<std::string>& by,
                        AsofDirection direction,
-                       std::optional<double> tolerance) {
+                       dstd::Optional<double> tolerance) {
     if (tolerance && !(*tolerance >= 0))
         throw std::invalid_argument("asof: tolerance must not be negative");
     const std::vector<std::string> lnames = left.schema();

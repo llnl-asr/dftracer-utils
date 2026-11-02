@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/task_graph/reduction.h>
 #include <dftracer/utils/runtime/task_graph/task_graph_config.h>
 #include <dftracer/utils/runtime/task_graph/task_group.h>
@@ -67,7 +68,7 @@ class TaskGraph {
      * Use this to connect @ref TaskGraph operations to existing barebone tasks.
      */
     template <typename T>
-    TaskGroup<T> wrap(std::shared_ptr<Task> external_task) {
+    TaskGroup<T> wrap(dstd::SharedPtr<Task> external_task) {
         // Don't add to pipeline - it's already managed externally
         all_tasks_.push_back(external_task);
         return TaskGroup<T>(external_task);
@@ -80,7 +81,7 @@ class TaskGraph {
      * that should be tracked by the graph but weren't created via graph
      * methods.
      */
-    void add(std::shared_ptr<Task> task) { all_tasks_.push_back(task); }
+    void add(dstd::SharedPtr<Task> task) { all_tasks_.push_back(task); }
 
     /**
      * Create a single source task
@@ -232,12 +233,12 @@ class TaskGraph {
             return TaskGroup<U>(task);
         }
 
-        std::vector<std::shared_ptr<Task>> current_level = group.tasks();
+        std::vector<dstd::SharedPtr<Task>> current_level = group.tasks();
         std::size_t level = 0;
 
         while (current_level.size() > 1) {
             auto groups = partition_all(count.count, current_level);
-            std::vector<std::shared_ptr<Task>> next_level;
+            std::vector<dstd::SharedPtr<Task>> next_level;
             next_level.reserve(groups.size());
 
             for (std::size_t group_idx = 0; group_idx < groups.size();
@@ -285,12 +286,12 @@ class TaskGraph {
             return TaskGroup<T>(group.task());
         }
 
-        std::vector<std::shared_ptr<Task>> current_level = group.tasks();
+        std::vector<dstd::SharedPtr<Task>> current_level = group.tasks();
         std::size_t level = 0;
 
         while (current_level.size() > 1) {
             auto groups = partition_all(count.count, current_level);
-            std::vector<std::shared_ptr<Task>> next_level;
+            std::vector<dstd::SharedPtr<Task>> next_level;
             next_level.reserve(groups.size());
 
             for (std::size_t group_idx = 0; group_idx < groups.size();
@@ -406,12 +407,12 @@ class TaskGraph {
             return TaskGroup<std::vector<T>>(group.task());
         }
 
-        std::vector<std::shared_ptr<Task>> current_level = group.tasks();
+        std::vector<dstd::SharedPtr<Task>> current_level = group.tasks();
         std::size_t level = 0;
 
         while (current_level.size() > 1) {
             auto groups = partition_all(count.count, current_level);
-            std::vector<std::shared_ptr<Task>> next_level;
+            std::vector<dstd::SharedPtr<Task>> next_level;
             next_level.reserve(groups.size());
 
             for (std::size_t group_idx = 0; group_idx < groups.size();
@@ -454,7 +455,7 @@ class TaskGraph {
     /**
      * Get all tasks in the graph
      */
-    const std::vector<std::shared_ptr<Task>>& tasks() const {
+    const std::vector<dstd::SharedPtr<Task>>& tasks() const {
         return all_tasks_;
     }
 
@@ -478,13 +479,13 @@ class TaskGraph {
         return max_concurrency_;
     }
 
-    void register_task(std::shared_ptr<Task> task) {
+    void register_task(dstd::SharedPtr<Task> task) {
         all_tasks_.push_back(task);
     }
 
     std::string name_;
     std::size_t max_concurrency_ = 0;
-    std::vector<std::shared_ptr<Task>> all_tasks_;
+    std::vector<dstd::SharedPtr<Task>> all_tasks_;
 };
 
 }  // namespace dftracer::utils::task_graph

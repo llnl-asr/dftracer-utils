@@ -6,6 +6,8 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/term.h>
@@ -53,7 +55,7 @@ constexpr char EXTRA_SEP = '\x1f';
 // A path-decoded role maps to the tier's field only when the tier holds exactly
 // the value the scan reads: a required field, in microseconds for times. Empty
 // when it does not.
-std::string tier_field(const ViewPlan& plan, std::string_view f) {
+std::string tier_field(const ViewPlan& plan, dstd::StringView f) {
     if (!plan_by_path(plan)) return std::string(f);
     namespace ix = dftracer::utils::index;
     const ix::RecordSchema& s = plan_record_schema(plan);
@@ -79,7 +81,7 @@ std::string tier_field(const ViewPlan& plan, std::string_view f) {
 bool roles_complete(const ViewPlan& plan) {
     namespace ix = dftracer::utils::index;
     const ix::Roles& r = plan_record_schema(plan).roles;
-    std::vector<std::string_view> paths;
+    std::vector<dstd::StringView> paths;
     for (const std::string* p :
          {&r.name, &r.entity, &r.lane, &r.duration, &r.time})
         if (!tier_field(plan, *p).empty()) paths.push_back(*p);
@@ -99,7 +101,7 @@ bool roles_complete(const ViewPlan& plan) {
                                             store::IndexExtension::Zonemap))
             return false;
         const auto spans = common::unwrap(ix::spans(snapshot, *file));
-        for (std::string_view p : paths) {
+        for (dstd::StringView p : paths) {
             std::map<std::uint64_t,
                      dftracer::utils::index::extensions::kinds::Zone>
                 zones;
@@ -138,12 +140,12 @@ bool rows_match(const ViewPlan& plan) {
 }
 
 // nullopt when a key is one the partials cannot answer.
-std::optional<std::vector<GroupKey>> partial_keys(const ViewPlan& plan) {
+dstd::Optional<std::vector<GroupKey>> partial_keys(const ViewPlan& plan) {
     using Kind = GroupKey::Kind;
     std::vector<GroupKey> keys = plan.group_by;
     if (plan_by_path(plan)) {
         for (auto& gk : keys) {
-            if (gk.kind != Kind::Field) return std::nullopt;
+            if (gk.kind != Kind::Field) return dstd::nullopt;
             const std::string t = tier_field(plan, gk.arg);
             if (t == "name")
                 gk.kind = Kind::Name;
@@ -152,7 +154,7 @@ std::optional<std::vector<GroupKey>> partial_keys(const ViewPlan& plan) {
             else if (t == "tid")
                 gk.kind = Kind::Tid;
             else
-                return std::nullopt;
+                return dstd::nullopt;
         }
         return keys;
     }
@@ -175,7 +177,7 @@ std::optional<std::vector<GroupKey>> partial_keys(const ViewPlan& plan) {
             case Kind::Rank:
             case Kind::Field:
             case Kind::Expr:
-                return std::nullopt;
+                return dstd::nullopt;
         }
     }
     return keys;
@@ -210,7 +212,7 @@ bool query_answerable(const ViewPlan& plan) {
     if (!q.any_paths().empty()) return false;
     // The view binds a row set's rows only on the scan path.
     if (reads_lookup(q.root())) return false;
-    for (std::string_view f : q.fields()) {
+    for (dstd::StringView f : q.fields()) {
         const std::string t = tier_field(plan, f);
         if (t != "name" && t != "pid" && t != "tid" && t != "fhash" &&
             t != "hhash" && t != "cat")
@@ -385,12 +387,12 @@ struct Prepared {
     bool by_path = false;
 };
 
-std::nullopt_t declined(const std::string& why) {
+dstd::NullOpt declined(const std::string& why) {
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the index partials cannot answer this query (%s); the traces "
         "are scanned",
         why.c_str());
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 enum class PrepSource { Partials, Trace };
@@ -398,8 +400,8 @@ enum class PrepSource { Partials, Trace };
 // nullopt when the partials cannot answer `plan`. With Trace a file the index
 // does not hold, a stale tier and an unreadable index leave the file to be read
 // whole instead of declining the plan.
-std::optional<Prepared> prepare(const ViewPlan& plan, bool typed,
-                                PrepSource from) {
+dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
+                                 PrepSource from) {
     const bool trace = from == PrepSource::Trace;
     if (plan.files.empty()) return declined("no files");
     if (!plan.computed.empty()) return declined("computed columns");
@@ -705,8 +707,8 @@ class Seeder {
     }
 
    private:
-    std::string_view text(std::uint32_t id) const {
-        return id == dstd::StringIntern::NO_ID ? std::string_view{}
+    dstd::StringView text(std::uint32_t id) const {
+        return id == dstd::StringIntern::NO_ID ? dstd::StringView{}
                                                : texts_.resolve(id);
     }
 
@@ -747,12 +749,12 @@ class Seeder {
             case GroupKey::Kind::Arg: {
                 // The extra values are joined by 0x1F, one per key of the
                 // query's extra_group_keys.
-                std::string_view rest = text(k.extra);
+                dstd::StringView rest = text(k.extra);
                 for (const auto& name : extra_) {
                     const std::size_t at = rest.find(EXTRA_SEP);
-                    const std::string_view part = rest.substr(0, at);
+                    const dstd::StringView part = rest.substr(0, at);
                     if (name == gk.arg) return std::string(part);
-                    if (at == std::string_view::npos) break;
+                    if (at == dstd::StringView::npos) break;
                     rest.remove_prefix(at + 1);
                 }
                 return {};

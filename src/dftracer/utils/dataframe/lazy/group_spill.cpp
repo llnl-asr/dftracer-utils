@@ -2,6 +2,8 @@
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 
 namespace dftracer::utils::dataframe {
@@ -24,9 +26,10 @@ class SlicedRows : public Cursor {
     SlicedRows(Cursor& in, const std::int64_t& cap, std::int64_t& taken)
         : in_(in), cap_(cap), taken_(taken) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         const auto fill_ok = co_await feed_.fill(in_, max_rows);
-        if (!fill_ok) co_return std::nullopt;
+        if (!fill_ok) co_return dstd::nullopt;
         Morsel m = feed_.take(std::min(max_rows, cap_));
         taken_ += m.rows;
         co_return m;
@@ -63,20 +66,21 @@ class GroupByCursor : public Cursor {
           dyn_specs_(std::move(dyn)),
           dyn_prefix_(std::move(dyn_prefix)) {}
 
-    std::optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<std::vector<std::string>> out_names() const override {
         return out_names_;
     }
 
     std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
         if (!spilled_) {
             if (!done_) {
                 done_ = true;
                 chunks_.set(std::move(result_));
             }
-            if (chunks_.empty()) co_return std::nullopt;
+            if (chunks_.empty()) co_return dstd::nullopt;
             co_return chunks_.next(max_rows, output_share(budget_));
         }
         co_return merge_next(max_rows);
@@ -125,7 +129,7 @@ class GroupByCursor : public Cursor {
 
         // Dyn columns are the prefix-tagged plan columns, and the
         // prefix-tagged fields of the rest column.
-        std::vector<std::pair<int, std::string>> sch_dyn;
+        std::vector<dstd::Pair<int, std::string>> sch_dyn;
         if (!dyn_specs_.empty() && !dyn_prefix_.empty())
             for (std::size_t i = 0; i < sch_.size(); ++i)
                 if (sch_[i].rfind(dyn_prefix_, 0) == 0)
@@ -368,11 +372,11 @@ class GroupByCursor : public Cursor {
     // Merges one part of the spill at a time and emits its groups. With dyn
     // columns every part finalizes under the union of the names the flushed
     // states held, noted as they were written.
-    std::optional<Morsel> merge_next(std::int64_t max_rows) {
+    dstd::Optional<Morsel> merge_next(std::int64_t max_rows) {
         while (true) {
             if (!chunks_.empty())
                 return chunks_.next(max_rows, output_share(budget_));
-            if (todo_.empty()) return std::nullopt;
+            if (todo_.empty()) return dstd::nullopt;
             const Part part = std::move(todo_.back());
             todo_.pop_back();
             AggStatePtr merged = agg_new(specs_, dyn_specs_);
@@ -409,7 +413,7 @@ class GroupByCursor : public Cursor {
     std::vector<AggDynSpec> dyn_specs_;
     std::string dyn_prefix_;
     std::vector<AggSpec> specs_;
-    std::optional<std::vector<std::string>> out_names_;
+    dstd::Optional<std::vector<std::string>> out_names_;
     bool built_ = false;
     bool done_ = false;
     bool spilled_ = false;
@@ -451,9 +455,10 @@ class GroupByDynamicCursor : public Cursor {
           budget_(budget),
           state_(agg_new(specs_)) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         while (chunks_.empty()) {
-            if (eof_) co_return std::nullopt;
+            if (eof_) co_return dstd::nullopt;
             auto m = co_await in_->next(max_rows);
             if (!m) {
                 eof_ = true;

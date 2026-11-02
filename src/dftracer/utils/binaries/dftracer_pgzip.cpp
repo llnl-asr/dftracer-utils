@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
@@ -107,13 +108,13 @@ static coro::CoroTask<FileResult> compress_file_parallel(
             ifs.read(buf.data(), static_cast<std::streamsize>(buf.size()));
             auto n = static_cast<std::size_t>(ifs.gcount());
             if (n == 0) break;
-            std::string_view block(buf.data(), n);
+            dstd::StringView block(buf.data(), n);
             auto nl = block.rfind('\n');
-            if (nl == std::string_view::npos) {
+            if (nl == dstd::StringView::npos) {
                 carry.append(block);
                 continue;
             }
-            std::string_view whole = block.substr(0, nl + 1);
+            dstd::StringView whole = block.substr(0, nl + 1);
             if (carry.empty()) {
                 common::unwrap(co_await writer.append(whole));
             } else {

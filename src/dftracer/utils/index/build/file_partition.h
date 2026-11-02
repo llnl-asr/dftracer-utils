@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_FILE_PARTITION_H
 #define DFTRACER_UTILS_INDEX_BUILD_FILE_PARTITION_H
 
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
 
 #include <algorithm>
@@ -34,7 +35,7 @@ plan_lpt_partition(std::vector<utilities::filesystem::FileEntry> files,
 
     // Min-heap of (total_size, bucket_idx): next file goes to the currently
     // lightest bucket.
-    using HeapEntry = std::pair<std::size_t, std::size_t>;
+    using HeapEntry = dstd::Pair<std::size_t, std::size_t>;
     std::priority_queue<HeapEntry, std::vector<HeapEntry>, std::greater<>> heap;
     for (std::size_t i = 0; i < num_workers; ++i) {
         heap.emplace(0, i);

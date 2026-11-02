@@ -54,7 +54,7 @@ void append_string_key(dstd::String& out, dstd::StringView v) {
 }
 
 dstd::Optional<dstd::StringView> string_key_text(dstd::StringView key) {
-    if (key.size() < 9 || key[0] != STRING_TAG) return std::nullopt;
+    if (key.size() < 9 || key[0] != STRING_TAG) return dstd::nullopt;
     return key.substr(9);
 }
 

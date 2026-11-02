@@ -7,6 +7,11 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -77,7 +82,7 @@ coro::CoroTask<bool> try_serve_aggregate_no_scan(
 /// Serve `plan` from a subsuming persisted rollup with no scan: re-aggregate
 /// the stored AggState partials to `plan`'s grouping and finalize. nullopt when
 /// no rollup subsumes it (the query must scan or use another fast path).
-std::optional<dftracer::utils::dataframe::DataFrame> try_serve_rollup(
+dstd::Optional<dftracer::utils::dataframe::DataFrame> try_serve_rollup(
     const ViewPlan& plan);
 
 /// True for a row query (no group_by / agg / numeric-args): collect() returns
@@ -113,7 +118,7 @@ coro::CoroTask<dataframe::DataFrame> run_flamegraph(
     const ViewPlan& plan, std::vector<std::string> partition,
     std::string ts_field, std::string dur_field, std::string name_field,
     std::vector<std::string> group = {});
-coro::CoroTask<std::pair<dataframe::DataFrame, dataframe::DataFrame>>
+coro::CoroTask<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>
 run_containment(const ViewPlan& plan, std::vector<std::string> partition,
                 std::string ts_field, std::string dur_field,
                 std::string name_field, std::vector<std::string> group = {});
@@ -127,7 +132,7 @@ coro::CoroTask<std::string> run_flamegraph_partial(
 // forwarded to fuse() so a cursor's narrow() can still prune units not yet
 // claimed.
 coro::CoroTask<ExportStats> run_folds(
-    const ViewPlan& plan, std::span<Fold* const> folds,
+    const ViewPlan& plan, dstd::Span<Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern,
     DynamicPrune* dyn_prune = nullptr, coro::CoroSemaphore* gate = nullptr);
 
@@ -140,7 +145,7 @@ coro::CoroTask<ExportStats> run_materialize(
 // Distributed materialize: reduce rank-local partials (from aggregate_partial)
 // app-side and persist the rollup, without re-scanning.
 coro::CoroTask<void> run_materialize_partials(
-    const ViewPlan& plan, const std::vector<std::string_view>& partials);
+    const ViewPlan& plan, const std::vector<dstd::StringView>& partials);
 
 // Read the aggregation index's three record families (regular events,
 // aggregated records, counters) from shard range [shard_begin, shard_end).
@@ -151,7 +156,7 @@ coro::CoroTask<TypedResult> run_collect_typed(
 
 // Return a subsuming rollup as a table, or nullopt on a miss, so a distributed
 // caller decides read vs recompute without a scan.
-std::optional<dataframe::DataFrame> run_reconstruct_if_cached(
+dstd::Optional<dataframe::DataFrame> run_reconstruct_if_cached(
     const ViewPlan& plan);
 
 // Streaming, out-of-core counter aggregation under a per-worker memory budget
@@ -165,19 +170,19 @@ coro::CoroTask<ExportStats> run_export_counters(const ViewPlan& plan,
 // the caller so the View core stays transport-free.
 coro::CoroTask<std::string> run_aggregate_partial(const ViewPlan& plan);
 ExportStats merge_counters_partials(
-    const ViewPlan& plan, const std::vector<std::string_view>& partials,
+    const ViewPlan& plan, const std::vector<dstd::StringView>& partials,
     ExportSink& sink);
 dataframe::DataFrame merge_partials_to_table(
-    const ViewPlan& plan, const std::vector<std::string_view>& partials);
+    const ViewPlan& plan, const std::vector<dstd::StringView>& partials);
 
 // Drive the plan's index-pruned parallel scan; invoke `on_batch(slot, events)`
 // per decoded batch on worker slots in [0, num_slots), stopping at `limit`
 // (0 = unlimited).
 coro::CoroTask<ExportStats> run_scan_batches(
-    const std::shared_ptr<const ViewPlan>& plan, std::size_t num_slots,
+    const dstd::SharedPtr<const ViewPlan>& plan, std::size_t num_slots,
     std::uint64_t limit,
     const std::function<void(std::size_t,
-                             const std::vector<std::string_view>&)>& on_batch);
+                             const std::vector<dstd::StringView>&)>& on_batch);
 
 // The fused-session engine behind ViewSession; internal to the executor.
 struct ViewSessionState;
@@ -188,19 +193,19 @@ struct ViewSessionState;
 struct AggBranch {
     std::vector<GroupKey> group_by;
     std::vector<AggSpec> agg;
-    std::shared_ptr<dataframe::DataFrame> out;
+    dstd::SharedPtr<dataframe::DataFrame> out;
     // The branch's full plan (collect(const View&)), used directly instead of
     // overlaying group_by/agg on the base. apply_query filters per event on the
     // shared scan, keeping the branch off the no-scan rollup/tier path.
-    std::shared_ptr<const ViewPlan> plan;
+    dstd::SharedPtr<const ViewPlan> plan;
     bool apply_query = false;
     // When set, emits the serialized (raw-keyed) aggregate partial into
     // `partial_out` for a distributed merge instead of a DataFrame into `out`.
     // Forces a scan (raw partial, no rollup relabel).
-    std::shared_ptr<std::string> partial_out;
+    dstd::SharedPtr<std::string> partial_out;
     // A predicated collect (no branch plan): the per-event filter overlaid onto
     // the base plan, applied by the branch's engine fold (apply_query).
-    std::optional<duql::Query> query;
+    dstd::Optional<duql::Query> query;
 };
 
 // One branch of a fused session: a predicate selecting events, a per-event
@@ -213,13 +218,13 @@ struct AggBranch {
 /// runs once after the scan and reduces whatever state those consumers hold.
 /// A branch's per-worker consumer: the parsed event plus its raw JSON bytes.
 using BranchConsumer =
-    std::function<void(const json::JsonValue&, std::string_view)>;
+    std::function<void(const json::JsonValue&, dstd::StringView)>;
 
 struct BranchHooks {
-    std::optional<duql::Query> predicate;  // nullopt = match all
+    dstd::Optional<duql::Query> predicate;  // nullopt = match all
     std::function<BranchConsumer()> make_consumer;
     std::function<void()> finalize;
-    std::optional<AggBranch> agg;
+    dstd::Optional<AggBranch> agg;
     bool wants_metadata = false;  // the consumer reads metadata records as rows
 };
 
@@ -247,8 +252,8 @@ void add_selection_fold_branch(ViewSessionState& state,
 void add_materialize_branch(ViewSessionState& state,
                             std::vector<GroupKey> group_by,
                             std::vector<AggSpec> agg);
-std::shared_ptr<ViewSessionState> make_view_session_state(
-    std::shared_ptr<const ViewPlan> plan);
+dstd::SharedPtr<ViewSessionState> make_view_session_state(
+    dstd::SharedPtr<const ViewPlan> plan);
 void add_branch(ViewSessionState& state, BranchHooks hooks);
 
 /// Stream the events `plan` selects (its phase and query, over the session's
@@ -256,10 +261,10 @@ void add_branch(ViewSessionState& state, BranchHooks hooks);
 /// bytes in flight. The channel closes when the scan ends. Once `dropped` is
 /// set, the branch stops sending.
 void add_stream_branch(
-    ViewSessionState& state, std::shared_ptr<const ViewPlan> plan,
-    std::shared_ptr<coro::Channel<dataframe::Morsel>> channel,
-    std::shared_ptr<coro::CoroSemaphore> budget,
-    std::shared_ptr<const std::atomic<bool>> dropped);
+    ViewSessionState& state, dstd::SharedPtr<const ViewPlan> plan,
+    dstd::SharedPtr<coro::Channel<dataframe::Morsel>> channel,
+    dstd::SharedPtr<coro::CoroSemaphore> budget,
+    dstd::SharedPtr<const std::atomic<bool>> dropped);
 
 /// Offer `q` as a narrowing of the session's shared scan. execute() applies it
 /// only when no other branch is registered; see ViewSessionState.
@@ -273,11 +278,11 @@ void add_fold_factory(
         make,
     std::function<void()> finalize);
 coro::CoroTask<ExportStats> run_session(
-    std::shared_ptr<ViewSessionState> state);
+    dstd::SharedPtr<ViewSessionState> state);
 
 // Built-in branch terminals; the caller sets `predicate` on the returned hooks.
 BranchHooks make_export_branch(ExportSink& sink,
-                               std::shared_ptr<ExportStats> out);
+                               dstd::SharedPtr<ExportStats> out);
 
 }  // namespace dftracer::utils::trace::views::detail
 

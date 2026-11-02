@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/trace/agg_event_fold.h>
@@ -52,11 +53,11 @@ AggEventRules::AggEventRules(const AggQuery& query,
 
 std::uint32_t AggEventFolder::read_cat(std::uint32_t id) {
     return build_cat_.get(id, [&](std::uint32_t i) {
-        const std::string_view raw = i == dstd::StringIntern::NO_ID
-                                         ? std::string_view{}
+        const dstd::StringView raw = i == dstd::StringIntern::NO_ID
+                                         ? dstd::StringView{}
                                          : r_.read.resolve(i);
         std::string storage;
-        const std::string_view lower =
+        const dstd::StringView lower =
             trace::internal::to_lower_ascii(raw, storage);
         if (!r_.categories.empty() &&
             r_.categories.find(lower) == r_.categories.end())
@@ -67,8 +68,8 @@ std::uint32_t AggEventFolder::read_cat(std::uint32_t id) {
 
 std::uint32_t AggEventFolder::read_name(std::uint32_t id) {
     return build_name_.get(id, [&](std::uint32_t i) {
-        const std::string_view raw = i == dstd::StringIntern::NO_ID
-                                         ? std::string_view{}
+        const dstd::StringView raw = i == dstd::StringIntern::NO_ID
+                                         ? dstd::StringView{}
                                          : r_.read.resolve(i);
         if (!r_.names.empty() && r_.names.find(raw) == r_.names.end())
             return AGG_REJECT;
@@ -78,8 +79,8 @@ std::uint32_t AggEventFolder::read_name(std::uint32_t id) {
 
 std::uint32_t AggEventFolder::read_host(std::uint32_t id) {
     return build_host_.get(id, [&](std::uint32_t i) {
-        const std::string_view raw = i == dstd::StringIntern::NO_ID
-                                         ? std::string_view{}
+        const dstd::StringView raw = i == dstd::StringIntern::NO_ID
+                                         ? dstd::StringView{}
                                          : r_.read.resolve(i);
         if (!r_.hosts.empty() && r_.hosts.find(raw) == r_.hosts.end())
             return AGG_REJECT;

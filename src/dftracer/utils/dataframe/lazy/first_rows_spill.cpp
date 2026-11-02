@@ -3,6 +3,9 @@
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/hash_arena.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <memory>
@@ -165,8 +168,8 @@ class FirstRowsSpill {
         replay_ = spool_.reader();
     }
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) {
-        if (runs_.empty()) co_return std::nullopt;
+    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t max_rows) {
+        if (runs_.empty()) co_return dstd::nullopt;
         for (;;) {
             auto m = co_await replay_->next(max_rows);
             if (!m) break;
@@ -196,14 +199,14 @@ class FirstRowsSpill {
             DataFrame mf = frame_of(std::move(m->columns));
             co_return morsel_of(take(mf, keep));
         }
-        co_return std::nullopt;
+        co_return dstd::nullopt;
     }
 
    private:
     struct Run {
         explicit Run(std::unique_ptr<spill::Reader> r) : reader(std::move(r)) {}
         std::unique_ptr<spill::Reader> reader;
-        std::optional<Morsel> cur;
+        dstd::Optional<Morsel> cur;
         std::int64_t pos = 0;
         bool done = false;
     };
@@ -215,7 +218,7 @@ class FirstRowsSpill {
         heads.reserve(paths.size());
         for (const std::string& path : paths)
             heads.emplace_back(std::make_unique<spill::Reader>(path));
-        using Entry = std::pair<std::int64_t, std::size_t>;
+        using Entry = dstd::Pair<std::int64_t, std::size_t>;
         std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>>
             heap;
         const auto load = [&](std::size_t k) -> coro::CoroTask<void> {
@@ -308,7 +311,7 @@ class FirstRowsSpill {
             if (!m) break;
             const std::int64_t* row_ids = m->columns[0].data<std::int64_t>();
             for (std::int64_t i = 0; i < m->rows; ++i) {
-                const std::string_view key = m->columns[1].string_at(i);
+                const dstd::StringView key = m->columns[1].string_at(i);
                 auto it = emitted.find(key);
                 if (it == emitted.end())
                     it = emitted
@@ -360,8 +363,9 @@ class HeadByCursor : public Cursor {
 
     std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (n_ <= 0) co_return std::nullopt;
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
+        if (n_ <= 0) co_return dstd::nullopt;
         if (!spilling_) {
             for (;;) {
                 auto m = co_await in_->next(max_rows);
@@ -398,7 +402,7 @@ class HeadByCursor : public Cursor {
                 out.ordered_descending = m->ordered_descending;
                 co_return out;
             }
-            if (!spilling_) co_return std::nullopt;
+            if (!spilling_) co_return dstd::nullopt;
         }
         if (!external_) {
             external_ = std::make_unique<FirstRowsSpill>(
@@ -469,7 +473,8 @@ class UniqueCursor : public Cursor {
 
     std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         if (!spilling_) {
             for (;;) {
                 auto m = co_await in_->next(max_rows);
@@ -584,7 +589,7 @@ class UniqueCursor : public Cursor {
                 }
                 if (spilling_) break;
             }
-            if (!spilling_) co_return std::nullopt;
+            if (!spilling_) co_return dstd::nullopt;
         }
         if (!external_) {
             external_ = std::make_unique<FirstRowsSpill>(

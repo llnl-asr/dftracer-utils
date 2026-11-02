@@ -4,6 +4,8 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -67,10 +69,11 @@ TEST_CASE("a null on either side leaves the row out") {
 TEST_CASE("columns that cannot compare fail with an error naming both types") {
     DataFrame d;
     d.names = {"s", "i"};
-    std::vector<std::string_view> words{"a", "b"};
+    std::vector<dftracer::utils::dstd::StringView> words{"a", "b"};
     std::vector<std::int64_t> ints{1, 2};
-    d.columns.push_back(
-        Series::strings(std::span<const std::string_view>(words)));
+    d.columns.push_back(Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
+            words)));
     d.columns.push_back(Series::flat_i64(ints.data(), 2));
     try {
         run(d.lazy()

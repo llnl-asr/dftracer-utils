@@ -2,6 +2,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -22,13 +25,13 @@ namespace dftracer::utils::trace::views {
 namespace {
 
 // A null key cell is nullopt, so it joins other null keys but never "".
-using Key = std::vector<std::optional<std::string>>;
+using Key = std::vector<dstd::Optional<std::string>>;
 
 struct KeyHash {
     std::size_t operator()(const Key& k) const {
         std::size_t h = dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
-        for (const std::optional<std::string>& s : k) {
-            std::size_t sh = std::hash<std::optional<std::string>>{}(s);
+        for (const dstd::Optional<std::string>& s : k) {
+            std::size_t sh = std::hash<dstd::Optional<std::string>>{}(s);
             h ^= sh + dftracer::utils::dstd::hash::GOLDEN_RATIO + (h << 6) +
                  (h >> 2);
         }
@@ -121,18 +124,18 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
     }
 
     dataframe::DataFrame out;
-    std::vector<std::string_view> vals(rows.size());
+    std::vector<dstd::StringView> vals(rows.size());
     std::vector<std::uint8_t> vbits((rows.size() + 7) / 8);
     for (std::int64_t k = 0; k < n_key; ++k) {
         std::fill(vbits.begin(), vbits.end(), std::uint8_t{0});
         for (std::size_t r = 0; r < rows.size(); ++r) {
             const auto& cell = rows[r].key[static_cast<std::size_t>(k)];
-            vals[r] = cell ? std::string_view(*cell) : std::string_view();
+            vals[r] = cell ? dstd::StringView(*cell) : dstd::StringView();
             if (cell) vbits[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
         }
         out.names.push_back(left.names[static_cast<std::size_t>(k)]);
         out.columns.push_back(dataframe::Series::strings(
-            std::span<const std::string_view>(vals), vbits.data()));
+            dstd::Span<const dstd::StringView>(vals), vbits.data()));
     }
     for (std::size_t j = static_cast<std::size_t>(n_key);
          j < left.columns.size(); ++j) {

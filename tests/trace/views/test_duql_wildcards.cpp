@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -87,7 +89,7 @@ std::string error_of(const View& v, const std::string& q) {
 }
 
 struct NullSink : ExportSink {
-    void write(std::string_view) override {}
+    void write(dstd::StringView) override {}
 };
 
 }  // namespace
@@ -150,7 +152,7 @@ TEST_SUITE("DuqlWildcards") {
         TestEnvironment env(10);
         const auto v = view_of(write_counters(env));
         for (const auto& [q, pattern] :
-             std::vector<std::pair<std::string, std::string>>{
+             std::vector<dstd::Pair<std::string, std::string>>{
                  {"select args.nope.*", "args.nope.*"},
                  {"drop args.counters.*.p42", "args.counters.*.p42"},
                  {"where any(args.counters.*.zz) > 1", "args.counters.*.zz"},
@@ -216,7 +218,7 @@ TEST_SUITE("DuqlWildcards") {
             return view_of(gz);
         };
         for (const auto& [wild, spelled] :
-             std::vector<std::pair<std::string, std::string>>{
+             std::vector<dstd::Pair<std::string, std::string>>{
                  {"select name, args.counters.*.p50 | take 40",
                   "select name, args.counters.a.p50, args.counters.b.p50, "
                   "args.counters.c.p50 | take 40"},

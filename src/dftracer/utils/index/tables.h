@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -64,7 +65,7 @@ template <class T>
 using Result = dstd::Expected<T, dstd::Error>;
 
 /// (granule, payload) in granule order.
-using GranuleList = dstd::Vector<std::pair<std::uint64_t, dstd::String>>;
+using GranuleList = dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>>;
 
 /// The data of a plugin extension of one file.
 struct PluginData {
@@ -110,7 +111,7 @@ Result<dstd::Optional<dstd::HashMap<std::uint64_t, store::ChunkMetadata>>>
 chunk_meta(const Snapshot& snapshot, const FileRef& file);
 
 /// The file's path catalog, sorted by path.
-Result<dstd::Vector<std::pair<dstd::String, store::PathStat>>> catalog(
+Result<dstd::Vector<dstd::Pair<dstd::String, store::PathStat>>> catalog(
     const Snapshot& snapshot, const FileRef& file);
 /// The id of the schema the file was indexed with.
 Result<dstd::Optional<dstd::String>> schema(const Snapshot& snapshot,
@@ -201,7 +202,7 @@ bool extension_current(const Snapshot& snapshot, const FileRef& file,
                        store::IndexExtension ext);
 /// The type of each catalog path, in path order, without the paths whose
 /// observed values have none.
-Result<dstd::Vector<std::pair<dstd::String, store::ColumnType>>>
+Result<dstd::Vector<dstd::Pair<dstd::String, store::ColumnType>>>
 file_column_types(const Snapshot& snapshot, const FileRef& file);
 
 // Writers. Each writes the keys and values of the current format into the
@@ -274,7 +275,7 @@ void put_plugin(FileBuild& build, dstd::StringView name, std::uint32_t version,
                 const dstd::Optional<dstd::String>& file);
 
 /// As above, with views, which are stored as they are, without a copy.
-using GranuleViews = dstd::Vector<std::pair<std::uint64_t, dstd::StringView>>;
+using GranuleViews = dstd::Vector<dstd::Pair<std::uint64_t, dstd::StringView>>;
 void put_plugin_views(FileBuild& build, dstd::StringView name,
                       std::uint32_t version, std::uint64_t params_hash,
                       const GranuleViews& granules,

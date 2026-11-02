@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
@@ -31,29 +32,29 @@ namespace agg = dftracer::utils::index::schemas::dft::agg;
 namespace store = dftracer::utils::index::store;
 namespace dataframe = dftracer::utils::dataframe;
 
-constexpr std::string_view SYS_CATEGORY = "sys";
+constexpr dstd::StringView SYS_CATEGORY = "sys";
 
 // The args that mark a record as an already aggregated counter, which the
 // counters of a typed collect do not take a second time.
-bool is_preagg_count(std::string_view path) {
+bool is_preagg_count(dstd::StringView path) {
     return path == "count" || path == "dftu_cnt" || path == "dft_cnt";
 }
 
 // The two hash args a counter group does not keep as metrics.
-bool is_hash_arg(std::string_view path) {
+bool is_hash_arg(dstd::StringView path) {
     return path == "hhash" || path == "fhash";
 }
 
 // The plan's time_bucket and group_by do not apply here, as the counters keep
 // their own (host, name, time_bucket) grain.
-std::optional<index::Snapshot> covering_index(const ViewPlan& plan) {
-    if (plan.files.empty()) return std::nullopt;
+dstd::Optional<index::Snapshot> covering_index(const ViewPlan& plan) {
+    if (plan.files.empty()) return dstd::nullopt;
     const std::string& index_path = plan.files.front().index_path;
-    if (index_path.empty()) return std::nullopt;
+    if (index_path.empty()) return dstd::nullopt;
     try {
         auto snapshot = common::unwrap(index::plan::open_snapshot(index_path));
         const auto config = common::unwrap(agg::tier::read_config(snapshot));
-        if (!config) return std::nullopt;
+        if (!config) return dstd::nullopt;
         std::set<std::string> current;
         for (const auto& file : common::unwrap(snapshot.files())) {
             if (snapshot.extension(file, store::IndexExtension::Agg,
@@ -61,15 +62,15 @@ std::optional<index::Snapshot> covering_index(const ViewPlan& plan) {
                 index::Freshness::Current)
                 current.emplace(file.path().data(), file.path().size());
         }
-        if (current.size() != plan.files.size()) return std::nullopt;
+        if (current.size() != plan.files.size()) return dstd::nullopt;
         for (const auto& f : plan.files) {
-            if (f.index_path != index_path) return std::nullopt;
+            if (f.index_path != index_path) return dstd::nullopt;
             if (!current.count(store::internal::get_logical_path(f.file_path)))
-                return std::nullopt;
+                return dstd::nullopt;
         }
         return snapshot;
     } catch (const std::exception&) {
-        return std::nullopt;
+        return dstd::nullopt;
     }
 }
 
@@ -127,7 +128,7 @@ bool counter_group(const agg::ChunkColumns& block, std::uint64_t r,
         static_cast<std::uint8_t>(trace::RecordPhase::Counter))
         return false;
     const dstd::String& cat = block.texts[block.cat[r]];
-    if (std::string_view(cat) != SYS_CATEGORY) return false;
+    if (dstd::StringView(cat) != SYS_CATEGORY) return false;
     for (const agg::ChunkColumn& column : block.columns) {
         if (holds_row(column, r) && is_preagg_count(block.texts[column.path]))
             return false;
@@ -144,7 +145,7 @@ bool counter_group(const agg::ChunkColumns& block, std::uint64_t r,
     for (const agg::ChunkColumn& column : block.columns) {
         const std::size_t at = row_index(column, r);
         if (at == column.bits.size()) continue;
-        const std::string_view path = block.texts[column.path];
+        const dstd::StringView path = block.texts[column.path];
         if (is_hash_arg(path)) continue;
         out_metrics.update_metric(path, value_of(column, at));
     }
@@ -194,13 +195,13 @@ dataframe::DataFrame build_counters_frame(const Groups& groups, int shard_begin,
 
     dataframe::DataFrame b;
     auto add_str = [&](const char* nm, const dstd::Vector<dstd::String>& v) {
-        dstd::Vector<std::string_view> views;
+        dstd::Vector<dstd::StringView> views;
         views.reserve(v.size());
         for (const auto& s : v) views.emplace_back(s);
         b.names.emplace_back(nm);
         b.columns.push_back(dataframe::Series::strings(views));
     };
-    auto add_f64 = [&](std::string_view nm, const dstd::Vector<double>& v) {
+    auto add_f64 = [&](dstd::StringView nm, const dstd::Vector<double>& v) {
         b.names.emplace_back(nm);
         b.columns.push_back(dataframe::Series::flat_f64(
             v.data(), static_cast<std::int64_t>(v.size())));

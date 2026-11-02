@@ -4,7 +4,10 @@
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/scope_filter.h>
 #include <dftracer/utils/store/snapshot.h>
@@ -61,14 +64,14 @@ ByteView bytes_of(const dstd::RawBuffer<std::uint8_t>& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-std::string path_string(dstd::StringView dir, std::string_view name) {
+std::string path_string(dstd::StringView dir, dstd::StringView name) {
     std::string out(dir.data(), dir.size());
     if (!out.empty() && out.back() != '/') out.push_back('/');
     out.append(name.data(), name.size());
     return out;
 }
 
-bool has_data_file_suffix(std::string_view name) {
+bool has_data_file_suffix(dstd::StringView name) {
     return name.size() > DATA_FILE_SUFFIX.size() &&
            name.compare(name.size() - DATA_FILE_SUFFIX.size(),
                         DATA_FILE_SUFFIX.size(), DATA_FILE_SUFFIX) == 0;
@@ -97,7 +100,7 @@ void mark_forked_child() noexcept {
 /// not on its own worker, not in its parallel regions and not in a fork child.
 /// A runtime created here has live workers, so it resets the inherited pools.
 Runtime* fork_join_runtime() {
-    const std::shared_ptr<Runtime> known = peek_default_runtime();
+    const dstd::SharedPtr<Runtime> known = peek_default_runtime();
     Runtime& runtime = default_runtime();
     if (known == nullptr) {
         INHERITED_POOLS.store(false, std::memory_order_relaxed);
@@ -538,7 +541,7 @@ dstd::Expected<Snapshot, dstd::Error> Snapshot::open(dstd::StringView dir) {
 dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     std::size_t cache_bytes =
         common::constants::store::STORE_DEFAULT_PAGE_CACHE_BYTES;
-    if (common::Env::get<std::string_view>(
+    if (common::Env::get<dstd::StringView>(
             common::constants::store::STORE_PAGE_CACHE_BYTES_ENV)
             .has_value()) {
         auto parsed = common::Env::get<std::uint64_t>(
@@ -1199,12 +1202,12 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
                 copy.erases.push_back({erase.ordinal, erase.begin, erase.end});
             }
             // The commits that name one offset share its segment block.
-            dstd::Vector<std::pair<std::uint64_t, detail::LazyBlock*>> blocks;
+            dstd::Vector<dstd::Pair<std::uint64_t, detail::LazyBlock*>> blocks;
             const auto shared_block = [group = group.get(),
                                        &blocks](const BlockHandle& handle) {
                 const auto at = std::lower_bound(
                     blocks.begin(), blocks.end(), handle.offset,
-                    [](const std::pair<std::uint64_t, detail::LazyBlock*>&
+                    [](const dstd::Pair<std::uint64_t, detail::LazyBlock*>&
                            known,
                        std::uint64_t offset) { return known.first < offset; });
                 if (at != blocks.end() && at->first == handle.offset) {
@@ -2711,8 +2714,8 @@ dstd::Expected<dstd::Vector<NamespaceDecl>, dstd::Error> Snapshot::namespaces()
         declared.begin(), declared.end(),
         [](const NamespaceDecl& a, const NamespaceDecl& b) {
             const int order =
-                std::string_view(a.name.data(), a.name.size())
-                    .compare(std::string_view(b.name.data(), b.name.size()));
+                dstd::StringView(a.name.data(), a.name.size())
+                    .compare(dstd::StringView(b.name.data(), b.name.size()));
             if (order != 0) return order < 0;
             return a.format_version < b.format_version;
         });

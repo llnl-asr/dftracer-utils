@@ -2,6 +2,9 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
@@ -56,7 +59,7 @@ using dftracer::utils::json::json_number;
 // flattened with `ts` resolved from the column index. `name` borrows the
 // aggregate's storage.
 struct DensityBlock {
-    std::string_view name;
+    dstd::StringView name;
     std::int64_t pid;
     std::int64_t tid;
     double ts;
@@ -64,7 +67,7 @@ struct DensityBlock {
     std::uint32_t count;
     double total;
     std::uint32_t depth;
-    std::string_view group;  // group_by value; omitted from JSON when empty
+    dstd::StringView group;  // group_by value; omitted from JSON when empty
     bool counter = false;    // ph="C" block: carries a mean counter value
     double value = 0;
 };
@@ -127,7 +130,7 @@ static std::string serialize_density_body(
         // }).
         if (big_depth && i < big_depth->size() && !big[i].empty() &&
             big[i].back() == '}') {
-            b.append_raw(std::string_view(big[i]).substr(0, big[i].size() - 1));
+            b.append_raw(dstd::StringView(big[i]).substr(0, big[i].size() - 1));
             b.append_raw(",\"depth\":");
             b.append(static_cast<std::uint64_t>((*big_depth)[i]));
             b.append_raw("}");
@@ -414,16 +417,16 @@ static std::string serve_density_from_summary(
 
 // The row set column that names the keys a group column holds, for display.
 struct RowSetField {
-    std::string_view rowset;
-    std::string_view key;
-    std::string_view value;
+    dstd::StringView rowset;
+    dstd::StringView key;
+    dstd::StringView value;
 };
 
 // Canonicalize one group column ("args.x" to "x"), and set `rt` when it
 // holds keys of one of the dftracer source's row sets.
 static std::string canonicalize_group_col(std::string col,
-                                          std::optional<RowSetField>& rt) {
-    static constexpr std::pair<std::string_view, RowSetField> KEYS[] = {
+                                          dstd::Optional<RowSetField>& rt) {
+    static constexpr dstd::Pair<dstd::StringView, RowSetField> KEYS[] = {
         {"fhash", {"files", "fhash", "path"}},
         {"cwd", {"files", "fhash", "path"}},
         {"hhash", {"hosts", "hhash", "name"}},
@@ -431,7 +434,7 @@ static std::string canonicalize_group_col(std::string col,
         {"cmd_hash", {"strings", "shash", "value"}},
     };
     col = std::string(common::strip_args_prefix(col));
-    rt = std::nullopt;
+    rt = dstd::nullopt;
     for (const auto& [field, rs] : KEYS)
         if (col == field) rt = rs;
     return col;
@@ -475,7 +478,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // group_by may list several comma-separated columns; canonicalize each
     // and record its row set column so the composite value's components
     // resolve independently.
-    std::vector<std::optional<RowSetField>> resolve_types;
+    std::vector<dstd::Optional<RowSetField>> resolve_types;
     {
         std::string rebuilt;
         std::size_t start = 0;
@@ -484,7 +487,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             std::string part(group_col.substr(
                 start, comma == std::string::npos ? group_col.size() - start
                                                   : comma - start));
-            std::optional<RowSetField> rt;
+            dstd::Optional<RowSetField> rt;
             std::string canon = canonicalize_group_col(std::move(part), rt);
             if (!rebuilt.empty()) rebuilt.push_back(',');
             rebuilt += canon;
@@ -658,7 +661,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     bool truncated = false;
     auto fold_event = [&group_col, threshold, begin](
                           Acc& acc, simdjson::dom::element root,
-                          std::string_view raw) {
+                          dstd::StringView raw) {
         double dur = 0;
         if (!fold_density(root, threshold, begin, acc.dens, &dur, group_col)) {
             acc.big.emplace_back(raw);
@@ -670,9 +673,9 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     auto pass1_path = [&](views::ViewSession& p1run) {
         auto ev_h = p1run.fold<Acc>(
             [&fields, &fold_event](Acc& acc, const auto&,
-                                   std::string_view raw) {
+                                   dstd::StringView raw) {
                 fields.with_event(
-                    raw, [&](simdjson::dom::element root, std::string_view ev) {
+                    raw, [&](simdjson::dom::element root, dstd::StringView ev) {
                         fold_event(acc, root, ev);
                     });
             },
@@ -686,14 +689,14 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     auto pass1 = [&](views::ViewSession& p1run) {
         auto ev_h = p1run.fold<Acc>(
             duql::parse_or_throw("ph == 1 or ph == \"X\""),
-            [&fold_event](Acc& acc, const auto& jv, std::string_view raw) {
+            [&fold_event](Acc& acc, const auto& jv, dstd::StringView raw) {
                 fold_event(acc, jv.element(), raw);
             },
             merge_acc);
         auto cs_h = p1run.fold<Acc>(
             duql::parse_or_throw("ph == 2 or ph == \"C\""),
             [begin, threshold, ncols](Acc& acc, const auto& jv,
-                                      std::string_view) {
+                                      dstd::StringView) {
                 fold_counter_density(jv.element(), begin, threshold, ncols,
                                      acc.dens);
             },
@@ -704,7 +707,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         // window is known.
         auto ag_h = p1run.fold<Acc>(
             duql::parse_or_throw("ph == 3 or ph == \"A\""),
-            [](Acc& acc, const auto& jv, std::string_view raw) {
+            [](Acc& acc, const auto& jv, dstd::StringView raw) {
                 collect_aggregated(jv.element(), raw, acc.agg);
             },
             merge_acc);
@@ -784,18 +787,18 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         Acc agg_back, enc;
         bool back_truncated = false;
         auto back = [&](views::ViewSession& s) {
-            std::optional<views::Deferred<Acc>> agg_h, enc_h;
+            dstd::Optional<views::Deferred<Acc>> agg_h, enc_h;
             if (want_agg)
                 agg_h = s.fold<Acc>(
                     duql::parse_or_throw("ph == 3 or ph == \"A\""),
-                    [agg_lo](Acc& acc, const auto& jv, std::string_view raw) {
+                    [agg_lo](Acc& acc, const auto& jv, dstd::StringView raw) {
                         double ts = 0, dur = 0;
                         if (!parse_ts_dur(raw, ts, dur) || ts < agg_lo) return;
                         collect_aggregated(jv.element(), raw, acc.agg);
                     },
                     merge_acc);
             auto enclose = [begin, enc_lo, skip_from](Acc& acc,
-                                                      std::string_view raw) {
+                                                      dstd::StringView raw) {
                 double ts = 0, dur = 0;
                 if (!parse_ts_dur(raw, ts, dur) || ts < enc_lo) return;
                 if (dur > acc.max_dur) acc.max_dur = dur;
@@ -807,9 +810,9 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             if (want_enc && fields.by_path)
                 enc_h = s.fold<Acc>(
                     [&fields, enclose](Acc& acc, const auto&,
-                                       std::string_view raw) {
+                                       dstd::StringView raw) {
                         fields.with_event(raw, [&](simdjson::dom::element,
-                                                   std::string_view ev) {
+                                                   dstd::StringView ev) {
                             enclose(acc, ev);
                         });
                     },
@@ -817,7 +820,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             else if (want_enc)
                 enc_h = s.fold<Acc>(
                     duql::parse_or_throw("ph == 1 or ph == \"X\""),
-                    [enclose](Acc& acc, const auto&, std::string_view raw) {
+                    [enclose](Acc& acc, const auto&, dstd::StringView raw) {
                         enclose(acc, raw);
                     },
                     merge_acc);
@@ -963,18 +966,18 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         // Split each composite group key into its per-column components and
         // collect the ones from hash columns; resolve each distinct hash once.
         ankerl::unordered_dense::map<std::string, RowSetField> to_resolve;
-        auto collect = [&](std::string_view composite) {
+        auto collect = [&](dstd::StringView composite) {
             std::size_t start = 0, idx = 0;
             while (start <= composite.size() && idx < resolve_types.size()) {
                 auto sep = composite.find(GROUP_SEP, start);
                 auto part =
-                    composite.substr(start, sep == std::string_view::npos
+                    composite.substr(start, sep == dstd::StringView::npos
                                                 ? composite.size() - start
                                                 : sep - start);
                 if (resolve_types[idx] && !part.empty())
                     to_resolve.emplace(std::string(part), *resolve_types[idx]);
                 ++idx;
-                if (sep == std::string_view::npos) break;
+                if (sep == dstd::StringView::npos) break;
                 start = sep + 1;
             }
         };

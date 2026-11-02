@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -186,7 +187,7 @@ TEST_SUITE("lazy_plan") {
         LazyFrame inner = base.concat(base.filter(col(0) > std::int64_t{1}));
         LazyFrame root =
             base.join(inner, {"a"}).filter(col(0) > std::int64_t{2});
-        std::vector<std::pair<std::uint64_t, int>> seen;
+        std::vector<dstd::Pair<std::uint64_t, int>> seen;
         visit_plan(root, [&](const LazyFrame& lf, int depth) {
             seen.emplace_back(plan_fingerprint(lf), depth);
         });

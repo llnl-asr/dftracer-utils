@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
@@ -236,7 +237,7 @@ TEST_SUITE("Fold") {
         // metadata FoldEvents.
         struct DictProbe : Fold {
             const StringIntern* in;
-            std::map<std::string, std::pair<std::string, std::string>> got;
+            std::map<std::string, dstd::Pair<std::string, std::string>> got;
             explicit DictProbe(const StringIntern& i) : in(&i) {}
             bool accepts(const ScanShape&) const override { return true; }
             bool needs_args() const override { return true; }

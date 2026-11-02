@@ -7,6 +7,11 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
@@ -93,9 +98,9 @@ bool has_occupancy(const ViewPlan& plan) {
 
 // The raw [lo, hi) a windowed occupancy plan clips its intervals to; ts is
 // integral, so the window's start rule lo <= ts < hi holds on the ceilings.
-std::optional<std::pair<std::uint64_t, std::uint64_t>> occupancy_window(
+dstd::Optional<dstd::Pair<std::uint64_t, std::uint64_t>> occupancy_window(
     const ViewPlan& plan) {
-    if (!plan.time_range || !has_occupancy(plan)) return std::nullopt;
+    if (!plan.time_range || !has_occupancy(plan)) return dstd::nullopt;
     auto edge = [](double v) {
         return v > 0 ? static_cast<std::uint64_t>(std::ceil(v))
                      : std::uint64_t{0};
@@ -221,13 +226,13 @@ dataframe::Series key_column_to_string(const dataframe::Series& col) {
                 "agg engine: unexpected group-key column type");
     }
     if (col.null_count() == 0) return dataframe::Series::strings(vals);
-    std::vector<std::string_view> views(vals.begin(), vals.end());
+    std::vector<dstd::StringView> views(vals.begin(), vals.end());
     std::vector<std::uint8_t> vbits((static_cast<std::size_t>(n) + 7) / 8, 0);
     for (std::int64_t i = 0; i < n; ++i)
         if (!col.is_null(i))
             vbits[static_cast<std::size_t>(i) >> 3] |=
                 static_cast<std::uint8_t>(1u << (i & 7));
-    return dataframe::Series::strings(std::span<const std::string_view>(views),
+    return dataframe::Series::strings(dstd::Span<const dstd::StringView>(views),
                                       vbits.data());
 }
 
@@ -315,8 +320,8 @@ dataframe::Series resolve_key_column(
             resolve_group_value(resolver, gk, std::string(hashes.string_at(i)));
     }
     if (!nullable) return dataframe::Series::strings(vals);
-    std::vector<std::string_view> views(vals.begin(), vals.end());
-    return dataframe::Series::strings(std::span<const std::string_view>(views),
+    std::vector<dstd::StringView> views(vals.begin(), vals.end());
+    return dataframe::Series::strings(dstd::Span<const dstd::StringView>(views),
                                       vbits.data());
 }
 
@@ -426,7 +431,7 @@ dataframe::DataFrame finalize_engine_frame(
         key_transformed[j] =
             plan.group_by[j].transform != GroupKey::Transform::None ? 1 : 0;
     }
-    std::optional<std::size_t> cat_pos;
+    dstd::Optional<std::size_t> cat_pos;
     for (std::size_t j = 0; j < ng; ++j)
         if (plan.group_by[j].kind == GroupKey::Kind::Cat && !key_transformed[j])
             cat_pos = j;
@@ -559,9 +564,9 @@ std::string agg_value_base_field(const std::string& value_name) {
     return value_name;
 }
 
-std::optional<dataframe::Schema> aggregated_output_schema(
+dstd::Optional<dataframe::Schema> aggregated_output_schema(
     const ViewPlan& plan_in) {
-    if (plan_in.auto_numeric_metrics) return std::nullopt;
+    if (plan_in.auto_numeric_metrics) return dstd::nullopt;
     const ViewPlan plan = resolve_bucket_origin(plan_in);
     ensure_schema(plan);
     AggInputSpec spec = make_agg_input_spec(plan);
@@ -914,9 +919,9 @@ static void append_transform_columns(
             frame.columns.push_back(dataframe::Series::strings(vals));
             continue;
         }
-        std::vector<std::string_view> views(vals.begin(), vals.end());
+        std::vector<dstd::StringView> views(vals.begin(), vals.end());
         frame.columns.push_back(dataframe::Series::strings(
-            std::span<const std::string_view>(views), vbits.data()));
+            dstd::Span<const dstd::StringView>(views), vbits.data()));
     }
 }
 
@@ -928,7 +933,7 @@ class TransformSource final : public dataframe::Source {
    public:
     TransformSource(
         dataframe::LazyFrame inner, std::vector<AggInputSpec::Transform> tfs,
-        std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
+        dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
             resolver)
         : inner_(std::move(inner)),
           tfs_(std::move(tfs)),
@@ -959,7 +964,7 @@ class TransformSource final : public dataframe::Source {
               resolver_(src.resolver_),
               projection_(std::move(projection)) {}
 
-        coro::CoroTask<std::optional<dataframe::Morsel>> next(
+        coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
             std::int64_t max_rows) override {
             for (;;) {
                 if (rows_) {
@@ -971,7 +976,7 @@ class TransformSource final : public dataframe::Source {
                     }
                 }
                 auto batch = co_await batches_.next();
-                if (!batch) co_return std::nullopt;
+                if (!batch) co_return dstd::nullopt;
                 dataframe::DataFrame f = std::move(*batch);
                 append_transform_columns(f, tfs_, resolver_.get());
                 if (!projection_.empty()) f = f.select(projection_);
@@ -983,12 +988,12 @@ class TransformSource final : public dataframe::Source {
         }
 
        private:
-        std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+        dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
             std::make_shared<dftracer::utils::dstd::StringIntern>();
         std::vector<std::uint32_t> ids_;
         coro::AsyncGenerator<dataframe::DataFrame> batches_;
         std::vector<AggInputSpec::Transform> tfs_;
-        std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
+        dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
             resolver_;
         std::vector<std::string> projection_;
         std::unique_ptr<dataframe::Cursor> rows_;
@@ -997,7 +1002,7 @@ class TransformSource final : public dataframe::Source {
     dataframe::LazyFrame inner_;
     std::vector<AggInputSpec::Transform> tfs_;
     // Shared, so the plan can run after the ViewPlan that built it is gone.
-    std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
+    dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
         resolver_;
     dataframe::Schema schema_;
 };
@@ -1022,7 +1027,7 @@ dataframe::DataFrame build_agg_input_frame(
         for (const std::string& tok : spec.select)
             inputs.push_back(&f.columns[static_cast<std::size_t>(
                 f.column_index(canonical_row_column_name(tok, spec.by_path)))]);
-        std::vector<std::pair<std::string, dataframe::Series>> out;
+        std::vector<dstd::Pair<std::string, dataframe::Series>> out;
         out.reserve(spec.computed.size());
         for (const AggInputSpec::Computed& c : spec.computed)
             out.emplace_back(c.name, dataframe::eval(c.expr, inputs));
@@ -1066,9 +1071,9 @@ dataframe::DataFrame build_agg_input_frame(
         if (!any_null) {
             f.columns.push_back(dataframe::Series::strings(vals));
         } else {
-            std::vector<std::string_view> views(vals.begin(), vals.end());
+            std::vector<dstd::StringView> views(vals.begin(), vals.end());
             f.columns.push_back(dataframe::Series::strings(
-                std::span<const std::string_view>(views), vbits.data()));
+                dstd::Span<const dstd::StringView>(views), vbits.data()));
         }
     }
 
@@ -1138,7 +1143,7 @@ coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
     next->bucket_origin_min = false;
     next->time_scale = spec.base_time_scale;
 
-    std::shared_ptr<const ViewPlan> raw(std::move(next));
+    dstd::SharedPtr<const ViewPlan> raw(std::move(next));
     dataframe::LazyFrame lf =
         dataframe::LazyFrame::scan(
             ViewSource::engine_scan(raw, plan.auto_numeric_metrics))

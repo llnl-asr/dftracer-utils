@@ -3,6 +3,8 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -380,22 +382,22 @@ TEST_SUITE("SchemaRegistry") {
         CHECK(mentions(g.source, "runs = where gtype == \"run\""));
         CHECK_FALSE(mentions(g.source, "files = "));
 
-        std::vector<std::string_view> lines = {
+        std::vector<dstd::StringView> lines = {
             R"({"gtype":"run","run":"ab","app":"laghos","nodes":1})"};
         for (int i = 0; i < 12; ++i)
             lines.push_back(
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"count":2})");
         CHECK(ix::detect_schema(lines).id == "genesis");
-        const std::vector<std::string_view> counters = {
+        const std::vector<dstd::StringView> counters = {
             R"({"gtype":"counter","run":"ab","path":"main","metric":"m"})"};
         CHECK(ix::detect_schema(counters).id == "genesis");
-        const std::vector<std::string_view> dft = {
+        const std::vector<dstd::StringView> dft = {
             R"({"id":1,"name":"read","cat":"POSIX","ph":"X","ts":1})"};
         CHECK(ix::detect_schema(dft).id == "dftracer");
-        const std::vector<std::string_view> other = {
+        const std::vector<dstd::StringView> other = {
             R"({"kind":"x","id":"a"})"};
         CHECK(ix::detect_schema(other).id == "generic");
-        const std::vector<std::string_view> user = {
+        const std::vector<dstd::StringView> user = {
             R"({"type":"run","run":1})", R"({"type":"run","run":2})"};
         CHECK(ix::detect_schema(user).id == "generic");
     }
@@ -426,10 +428,10 @@ TEST_SUITE("SchemaRegistry") {
             "fields: {status: {type: int}, request_time: {type: float}}\n",
             "det.yaml");
         ix::register_schema("id: aaa_empty\n", "empty.yaml");
-        const std::vector<std::string_view> nginx = {
+        const std::vector<dstd::StringView> nginx = {
             R"({"status":200,"request_time":0.5})",
             R"({"status":404,"request_time":1.5,"x":1})"};
-        const std::vector<std::string_view> plain = {R"({"op":"read"})"};
+        const std::vector<dstd::StringView> plain = {R"({"op":"read"})"};
         CHECK(ix::detect_schema(nginx).id == "det_nginx");
         CHECK(ix::detect_schema(plain).id == "generic");
     }
@@ -439,7 +441,7 @@ TEST_SUITE("SchemaRegistry") {
             "id: exp_nginx\n"
             "fields: {status: {type: int}, request_time: {type: float}}\n",
             "exp.yaml");
-        std::vector<std::string_view> lines;
+        std::vector<dstd::StringView> lines;
         for (int i = 0; i < 8; ++i)
             lines.push_back(R"({"status":200,"request_time":0.5})");
         lines.push_back(R"({"status":200})");
@@ -534,7 +536,7 @@ TEST_SUITE("SchemaDetection") {
     }
 
     static std::string chosen(const std::vector<std::string>& lines) {
-        std::vector<std::string_view> views(lines.begin(), lines.end());
+        std::vector<dstd::StringView> views(lines.begin(), lines.end());
         return ix::detect_schema(views).id;
     }
 
@@ -728,8 +730,8 @@ def args_fallback = true)";
             R"re(data = where gtype != "run";
 runs = where gtype == "run" | select run, app, system, unique_input, nodes, ppn, papi_set, method, sketch_accuracy, leaf | distinct)re";
         for (const auto& [id, old] :
-             {std::pair<std::string, std::string>{"dftracer", dft_old},
-              std::pair<std::string, std::string>{"genesis", genesis_old}}) {
+             {dstd::Pair<std::string, std::string>{"dftracer", dft_old},
+              dstd::Pair<std::string, std::string>{"genesis", genesis_old}}) {
             const auto& s = ix::get_schema(id);
             CHECK(s.source == ix::merge_source({}, old, id));
             ix::RecordSchema before = s;

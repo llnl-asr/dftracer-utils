@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -198,7 +199,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     // Held for the whole build: loading registers the plugins' index
     // extensions, and destroying the set removes them.
-    std::optional<plugins::Plugins> loaded;
+    dstd::Optional<plugins::Plugins> loaded;
     if (!cli->plugins.empty()) {
         auto builder = plugins::Plugins::builder();
         for (const auto& path : cli->plugins) builder.add(path);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
@@ -128,7 +129,7 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
             PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
             return -1;
         }
-        self->handle = new std::shared_ptr<
+        self->handle = new dftracer::utils::dstd::SharedPtr<
             dftracer::utils::index::gzip::CheckpointIndexer>(
             std::move(indexer));
     } catch (const std::exception &e) {

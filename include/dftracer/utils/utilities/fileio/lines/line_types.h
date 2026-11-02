@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINE_TYPES_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINE_TYPES_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <cstddef>
@@ -22,11 +23,11 @@ namespace dftracer::utils::utilities::fileio::lines {
  * until the next call to next() on the iterator.
  */
 struct Line {
-    std::string_view content;
+    dstd::StringView content;
     std::size_t line_number;  ///< 1-based line number
 
     Line() : line_number(0) {}
-    Line(std::string_view content_, std::size_t line_number_)
+    Line(dstd::StringView content_, std::size_t line_number_)
         : content(content_), line_number(line_number_) {}
 
     bool empty() const { return content.empty(); }

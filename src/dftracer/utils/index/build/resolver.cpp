@@ -4,7 +4,10 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
@@ -46,7 +49,7 @@ struct ResolveGroupInput {
     bool require_checkpoints;
     bool require_bloom;
     std::size_t checkpoint_size = 0;
-    std::optional<ChunkIndexerConfig> bloom_config;
+    dstd::Optional<ChunkIndexerConfig> bloom_config;
     std::string schema;
     index::schemas::dft::agg::AggregationConfig aggregation_config =
         index::schemas::dft::agg::standard_aggregation_config();
@@ -114,7 +117,8 @@ bool schema_current(const Snapshot& snapshot, const FileRef& file,
 // settings than `base` gives its schema.
 index::store::ExtensionMask stale_tier(
     const Snapshot& snapshot, const FileRef& file,
-    const std::optional<ChunkIndexerConfig>& base, const RecordSchema* schema) {
+    const dstd::Optional<ChunkIndexerConfig>& base,
+    const RecordSchema* schema) {
     index::store::ExtensionMask stale;
     for (auto ext : {IndexExtension::Stats, IndexExtension::Catalog,
                      IndexExtension::Metadata})
@@ -123,7 +127,7 @@ index::store::ExtensionMask stale_tier(
         if (!stale.empty()) stale.add(index::store::PRUNING_EXTENSIONS);
         return stale;
     }
-    const std::optional<ChunkIndexerConfig> config =
+    const dstd::Optional<ChunkIndexerConfig> config =
         schema ? for_schema(*base, *schema) : *base;
     for (auto ext : index::store::ALL_EXTENSIONS) {
         if (!index::store::PRUNING_EXTENSIONS.has(ext) ||
@@ -145,7 +149,7 @@ index::store::ExtensionMask stale_tier(
         for (const auto& ext : registered) {
             const index::PluginCopy* copy = nullptr;
             for (const auto& candidate : copies)
-                if (std::string_view(candidate.name.data(),
+                if (dstd::StringView(candidate.name.data(),
                                      candidate.name.size()) == ext->name)
                     copy = &candidate;
             if (copy == nullptr ||
@@ -303,7 +307,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
             });
         if (failure) std::rethrow_exception(failure);
 
-        std::vector<std::pair<FileWorkItem, bool>> agg_candidates;
+        std::vector<dstd::Pair<FileWorkItem, bool>> agg_candidates;
         for (std::size_t i = 0; i < input.files.size(); ++i) {
             PendingFile& f = input.files[i];
             FileDecision& d = decisions[i];

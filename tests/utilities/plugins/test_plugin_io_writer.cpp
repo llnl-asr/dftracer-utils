@@ -14,6 +14,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 // compose.h pulls plugin.h/arrow_abi.h; keep it after fold_adapter.h so
 // nanoarrow's full definitions win over arrow_abi.h's fallback structs.
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/compose.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
@@ -222,7 +223,7 @@ dftracer::utils::plugins::Task write_via_writer(
     dftracer::utils::plugins::Writer w = h.writer(path, 1, /*gzip=*/false);
     if (!w) co_return;
     co_await w.open();
-    co_await w.chunk(0, std::string_view{"writer-chunk-payload\n"});
+    co_await w.chunk(0, dstd::StringView{"writer-chunk-payload\n"});
     co_await w.close();
 }
 

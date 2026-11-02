@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
@@ -45,7 +47,7 @@ simdjson::dom::element parse(simdjson::dom::parser& p, std::string& buf,
 // Independent references: a top-then-args string / number extraction straight
 // over the simdjson element, mirroring the contract EventSource must satisfy.
 std::string to_str_ref(simdjson::dom::element e) {
-    std::string_view s;
+    dftracer::utils::dstd::StringView s;
     if (e.get_string().get(s) == simdjson::SUCCESS) return std::string(s);
     std::int64_t i;
     if (e.get_int64().get(i) == simdjson::SUCCESS) return std::to_string(i);
@@ -58,7 +60,8 @@ std::string to_str_ref(simdjson::dom::element e) {
     return {};
 }
 
-std::optional<double> to_number_ref(simdjson::dom::element e) {
+dftracer::utils::dstd::Optional<double> to_number_ref(
+    simdjson::dom::element e) {
     double d;
     if (e.get_double().get(d) == simdjson::SUCCESS) return d;
     std::int64_t i;
@@ -67,7 +70,7 @@ std::optional<double> to_number_ref(simdjson::dom::element e) {
     std::uint64_t u;
     if (e.get_uint64().get(u) == simdjson::SUCCESS)
         return static_cast<double>(u);
-    return std::nullopt;
+    return dftracer::utils::dstd::nullopt;
 }
 
 std::string top_or_args_str(simdjson::dom::element root,
@@ -82,8 +85,8 @@ std::string top_or_args_str(simdjson::dom::element root,
     return {};
 }
 
-std::optional<double> agg_field(simdjson::dom::element root,
-                                const std::string& field) {
+dftracer::utils::dstd::Optional<double> agg_field(simdjson::dom::element root,
+                                                  const std::string& field) {
     auto r = root[field];
     if (!r.error()) return to_number_ref(r.value_unsafe());
     auto args = root["args"];
@@ -91,7 +94,7 @@ std::optional<double> agg_field(simdjson::dom::element root,
         auto rr = args[field];
         if (!rr.error()) return to_number_ref(rr.value_unsafe());
     }
-    return std::nullopt;
+    return dftracer::utils::dstd::nullopt;
 }
 
 }  // namespace
@@ -183,12 +186,14 @@ TEST_SUITE("EventSource") {
         }
 
         std::map<std::string, double> dom_args, pod_args;
-        dom.for_each_numeric_arg([&](std::string_view k, double v) {
-            dom_args[std::string(k)] = v;
-        });
-        pod.for_each_numeric_arg([&](std::string_view k, double v) {
-            pod_args[std::string(k)] = v;
-        });
+        dom.for_each_numeric_arg(
+            [&](dftracer::utils::dstd::StringView k, double v) {
+                dom_args[std::string(k)] = v;
+            });
+        pod.for_each_numeric_arg(
+            [&](dftracer::utils::dstd::StringView k, double v) {
+                pod_args[std::string(k)] = v;
+            });
         CHECK(dom_args == pod_args);
         CHECK(pod.phase() == dom.phase());
     }
@@ -232,8 +237,8 @@ TEST_SUITE("EventSource") {
         DomSource src(root);
 
         std::map<std::string, double> seen;
-        src.for_each_numeric_arg(
-            [&](std::string_view k, double v) { seen[std::string(k)] = v; });
+        src.for_each_numeric_arg([&](dftracer::utils::dstd::StringView k,
+                                     double v) { seen[std::string(k)] = v; });
 
         CHECK(seen.size() == 3);  // ret, offset, dur_d -- not the string path
         CHECK(seen["ret"] == doctest::Approx(4096));

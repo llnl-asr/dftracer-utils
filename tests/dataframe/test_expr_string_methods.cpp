@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -35,7 +36,7 @@ using dftracer::utils::dataframe::TypeId;
 namespace {
 
 Series sample() {
-    const std::vector<std::string_view> rows{
+    const std::vector<dftracer::utils::dstd::StringView> rows{
         "hello world", "Foo-Bar,baz", "",    "  x1 ",
         "ABC",         "a,b,c",       "-42", "null row"};
     const std::uint8_t validity = 0b11111011;  // row 2 is null
@@ -71,8 +72,8 @@ Series run(const Expr& e, const Series& s) {
     return out;
 }
 
-Expr fn(StrFn f, std::string_view t = {}, std::int64_t i0 = 0,
-        std::string_view t2 = {}, std::int64_t i1 = 0) {
+Expr fn(StrFn f, dftracer::utils::dstd::StringView t = {}, std::int64_t i0 = 0,
+        dftracer::utils::dstd::StringView t2 = {}, std::int64_t i1 = 0) {
     return expr_str_fn(f, expr_col(0), nullptr, t, t2, i0, i1);
 }
 
@@ -226,7 +227,7 @@ TEST_SUITE("expression string methods") {
         CHECK(message.find("'o'") != std::string::npos);
         // A null row is not a miss.
         const std::uint8_t only_first = 0b01;
-        const std::vector<std::string_view> pair{"foo", "x"};
+        const std::vector<dftracer::utils::dstd::StringView> pair{"foo", "x"};
         Series with_null = Series::strings(pair, &only_first);
         Series idx0 = run(fn(StrFn::Index, "o"), with_null);
         CHECK(idx0.is_null(1));

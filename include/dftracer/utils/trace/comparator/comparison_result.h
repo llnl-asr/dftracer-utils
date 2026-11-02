@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 #endif
 
@@ -167,10 +168,10 @@ struct GroupKey {
 
     bool operator==(const GroupKey&) const = default;
 
-    std::string_view cat(const dstd::StringIntern& intern) const {
+    dstd::StringView cat(const dstd::StringIntern& intern) const {
         return intern.resolve(cat_id);
     }
-    std::string_view name(const dstd::StringIntern& intern) const {
+    dstd::StringView name(const dstd::StringIntern& intern) const {
         return intern.resolve(name_id);
     }
 };

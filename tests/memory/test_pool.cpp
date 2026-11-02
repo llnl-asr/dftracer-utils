@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
@@ -20,7 +21,7 @@ constexpr std::size_t POOL_SLOTS = 65535;
 std::string g_reports;
 int g_report_count = 0;
 
-void capture(std::string_view text) noexcept {
+void capture(dftracer::utils::dstd::StringView text) noexcept {
     g_reports.append(text.data(), text.size());
     ++g_report_count;
 }

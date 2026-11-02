@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_MULTI_LINE_STREAM_H
 
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 
 #include <cstdio>
@@ -24,7 +25,7 @@ namespace dftracer::utils::utilities::reader::internal {
 class MultiLineStream : public ReaderStream {
    private:
     std::unique_ptr<ReaderStream> underlying_stream_;
-    std::span<const char> current_span_;
+    dstd::Span<const char> current_span_;
     std::string line_accumulator_;
     std::string output_buffer_;
     bool is_finished_;
@@ -59,7 +60,7 @@ class MultiLineStream : public ReaderStream {
 
     ~MultiLineStream() override { reset(); }
 
-    coro::CoroTask<std::span<const char>> read_async() override {
+    coro::CoroTask<dstd::Span<const char>> read_async() override {
         if (!underlying_stream_) {
             co_return {};
         }
@@ -93,8 +94,8 @@ class MultiLineStream : public ReaderStream {
             co_return {};
         }
 
-        co_return std::span<const char>(output_buffer_.data(),
-                                        output_buffer_.size());
+        co_return dstd::Span<const char>(output_buffer_.data(),
+                                         output_buffer_.size());
     }
 
     coro::CoroTask<std::size_t> read_async(char* buffer,
@@ -153,7 +154,7 @@ class MultiLineStream : public ReaderStream {
         }
         line_accumulator_.clear();
         output_buffer_.clear();
-        current_span_ = std::span<const char>();
+        current_span_ = dstd::Span<const char>();
         is_finished_ = false;
         current_line_ = initial_line_;
         lines_output_ = 0;

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -73,59 +74,59 @@ DataFrame make_right() {
     return df;
 }
 
-std::vector<std::optional<std::int64_t>> i64_col(const DataFrame& df,
-                                                 const std::string& name) {
+std::vector<dstd::Optional<std::int64_t>> i64_col(const DataFrame& df,
+                                                  const std::string& name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
-    std::vector<std::optional<std::int64_t>> out;
+    std::vector<dstd::Optional<std::int64_t>> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dstd::nullopt);
         else
             out.emplace_back(c.data<std::int64_t>()[i]);
     }
     return out;
 }
 
-std::vector<std::optional<std::string>> str_col(const DataFrame& df,
-                                                const std::string& name) {
+std::vector<dstd::Optional<std::string>> str_col(const DataFrame& df,
+                                                 const std::string& name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
-    std::vector<std::optional<std::string>> out;
+    std::vector<dstd::Optional<std::string>> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dstd::nullopt);
         else
             out.emplace_back(std::string(c.string_at(i)));
     }
     return out;
 }
 
-std::vector<std::optional<bool>> bool_col(const DataFrame& df,
-                                          const std::string& name) {
+std::vector<dstd::Optional<bool>> bool_col(const DataFrame& df,
+                                           const std::string& name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
     REQUIRE(c.type() == TypeId::Bool);
-    std::vector<std::optional<bool>> out;
+    std::vector<dstd::Optional<bool>> out;
     const auto* bits = c.data<std::uint8_t>();
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dstd::nullopt);
         else
             out.emplace_back(((bits[i >> 3] >> (i & 7)) & 1) != 0);
     }
     return out;
 }
 
-using I = std::optional<std::int64_t>;
-using S = std::optional<std::string>;
-using B = std::optional<bool>;
-const I NI = std::nullopt;
-const S NS = std::nullopt;
-const B NB = std::nullopt;
+using I = dstd::Optional<std::int64_t>;
+using S = dstd::Optional<std::string>;
+using B = dstd::Optional<bool>;
+const I NI = dstd::nullopt;
+const S NS = dstd::nullopt;
+const B NB = dstd::nullopt;
 
 DataFrame lazy_join(JoinHow how, std::int64_t morsel_rows) {
     LazyFrame left =

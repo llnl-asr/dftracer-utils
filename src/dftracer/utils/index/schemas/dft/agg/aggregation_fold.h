@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -65,15 +66,15 @@ class PodAccessor {
     }
     bool is_profile() const { return is_counter() && cat() != "sys"; }
     bool is_system() const { return is_counter() && cat() == "sys"; }
-    std::string_view name() const { return resolve(ev_.name_id); }
-    std::string_view cat() const { return resolve(ev_.cat_id); }
+    dstd::StringView name() const { return resolve(ev_.name_id); }
+    dstd::StringView cat() const { return resolve(ev_.cat_id); }
     std::uint64_t pid() const { return ev_.pid; }
     std::uint64_t tid() const { return ev_.tid; }
     std::uint64_t ts() const { return ev_.ts; }
     std::uint64_t dur() const { return ev_.dur; }
     bool has_dur() const { return ev_.has_dur; }
 
-    std::string_view arg_string(std::string_view k) const {
+    dstd::StringView arg_string(dstd::StringView k) const {
         if (k == "hhash") return resolve(ev_.hhash_id);
         if (k == "fhash") return resolve(ev_.fhash_id);
         const auto* v = find(k);
@@ -106,7 +107,7 @@ class PodAccessor {
         if (const auto* u = std::get_if<std::uint64_t>(&v)) return *u;
         return 0;
     }
-    const ArgValue* find(std::string_view key) const {
+    const ArgValue* find(dstd::StringView key) const {
         if (ev_.args.empty()) return nullptr;
         const std::uint32_t id = intern_.find(key);
         if (id == NO_ID) return nullptr;
@@ -114,8 +115,8 @@ class PodAccessor {
             if (kid == id) return &v;
         return nullptr;
     }
-    std::string_view resolve(std::uint32_t id) const {
-        return id == NO_ID ? std::string_view{} : intern_.resolve(id);
+    dstd::StringView resolve(std::uint32_t id) const {
+        return id == NO_ID ? dstd::StringView{} : intern_.resolve(id);
     }
     // Reproduce ArgsValueProxy::get<uint64_t> applied to a double.
     static std::uint64_t clamp_uint(double d) {

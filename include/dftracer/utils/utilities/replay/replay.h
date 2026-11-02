@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/utilities/replay/trace.h>
 
@@ -112,8 +113,8 @@ struct ReplayResult {
     std::chrono::microseconds total_duration{0};
     std::chrono::microseconds execution_duration{0};
     /// Keys are non-owning views into the replay @ref dstd::StringIntern pool.
-    std::unordered_map<std::string_view, std::size_t> function_counts;
-    std::unordered_map<std::string_view, std::size_t> category_counts;
+    std::unordered_map<dstd::StringView, std::size_t> function_counts;
+    std::unordered_map<dstd::StringView, std::size_t> category_counts;
     std::vector<std::string> error_messages;
 
     /// Extended statistics
@@ -178,7 +179,7 @@ class PosixExecutor : public TraceExecutor {
 
    private:
     /// Keys are interned via the replay @ref dstd::StringIntern pool.
-    std::unordered_map<std::string_view, int> open_files_;
+    std::unordered_map<dstd::StringView, int> open_files_;
     /// Scratch buffer reused across reads and writes.
     std::vector<char> io_buffer_;
 

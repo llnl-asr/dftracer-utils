@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/open_count.h>
@@ -57,7 +58,7 @@ std::string write_trace(const std::string& dir, int n) {
 
 class LineSink : public ExportSink {
    public:
-    void write(std::string_view data) override { text.append(data); }
+    void write(dstd::StringView data) override { text.append(data); }
     std::string text;
 
     // A first touch dumps the raw file, array brackets included.

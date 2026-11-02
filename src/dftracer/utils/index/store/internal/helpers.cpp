@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
@@ -26,18 +27,18 @@ namespace dftracer::utils::index::store::internal {
 // directories are distinct and the key locates the trace. Applied on both the
 // write and read side so lookups stay consistent; relative inputs resolve
 // against the cwd, so the index is not portable across an absolute-layout move.
-std::string get_logical_path(std::string_view path) {
+std::string get_logical_path(dstd::StringView path) {
     const auto abs = dstd::fs::absolute(dstd::PathView(path));
     if (!abs) return std::string(dstd::normalize(dstd::PathView(path)).str());
     return std::string(dstd::normalize(abs->view()).str());
 }
 
-std::string normalize_index_root(std::string_view path) {
+std::string normalize_index_root(dstd::StringView path) {
     if (auto nested = nested_root_of(path)) return *nested;
     // A trailing separator leaves the last component empty, so it is neither
     // the index directory nor a file with an extension.
     if (!path.empty() && path.back() == '/') {
-        std::string_view stripped = path;
+        dstd::StringView stripped = path;
         while (stripped.size() > 1 && stripped.back() == '/') {
             stripped.remove_suffix(1);
         }
@@ -95,7 +96,7 @@ std::uint64_t calculate_file_hash(int fd, std::uint64_t file_size_u64) {
     // Hash the file size itself
     char size_buf[32];
     int n = std::snprintf(size_buf, sizeof(size_buf), "%zu", file_size);
-    hasher.update(std::string_view(size_buf, static_cast<std::size_t>(n)));
+    hasher.update(dstd::StringView(size_buf, static_cast<std::size_t>(n)));
 
     unsigned char buf[SAMPLE_SIZE];
 
@@ -103,7 +104,7 @@ std::uint64_t calculate_file_hash(int fd, std::uint64_t file_size_u64) {
     std::size_t head_bytes = std::min(file_size, SAMPLE_SIZE);
     ssize_t rd = ::pread(fd, buf, head_bytes, 0);
     if (rd > 0) {
-        hasher.update(std::string_view(reinterpret_cast<const char *>(buf),
+        hasher.update(dstd::StringView(reinterpret_cast<const char *>(buf),
                                        static_cast<std::size_t>(rd)));
     }
 
@@ -114,7 +115,7 @@ std::uint64_t calculate_file_hash(int fd, std::uint64_t file_size_u64) {
             static_cast<off_t>(file_size - std::min(file_size, SAMPLE_SIZE));
         rd = ::pread(fd, buf, SAMPLE_SIZE, tail_off);
         if (rd > 0) {
-            hasher.update(std::string_view(reinterpret_cast<const char *>(buf),
+            hasher.update(dstd::StringView(reinterpret_cast<const char *>(buf),
                                            static_cast<std::size_t>(rd)));
         }
     }

@@ -90,9 +90,12 @@ const char* to_string(Agg agg) noexcept {
     return "count";
 }
 
-Agg agg_from_string(std::string_view name) {
+Agg agg_from_string(dstd::StringView name) {
 #define DFTU_AGG_OP(id, code, str) \
     if (name == str) return Agg::id;
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
+
 #include <dftracer/utils/dataframe/agg_ops.def>
 #undef DFTU_AGG_OP
     throw std::out_of_range("agg_from_string: unknown aggregate op " +
@@ -102,7 +105,7 @@ Agg agg_from_string(std::string_view name) {
 // The parts of one column as a CHUNKED column, or joined when they do not
 // share one type and parameters, or are nested (concat checks their fields).
 Series chunked_column(std::vector<Series> parts) {
-    std::vector<std::shared_ptr<dftu_series>> chunks;
+    std::vector<dstd::SharedPtr<dftu_series>> chunks;
     chunks.reserve(parts.size());
     const dftu_series& first = *parts.front().handle();
     for (Series& p : parts) {
@@ -437,7 +440,7 @@ Series concat_text_views(const std::vector<const Series*>& parts) {
         });
     ViewBuilder builder;
     if (dict_all) {
-        ankerl::unordered_dense::map<std::string_view, std::int32_t> seen;
+        ankerl::unordered_dense::map<dstd::StringView, std::int32_t> seen;
         std::vector<std::vector<std::int32_t>> remaps(parts.size());
         std::int32_t distinct = 0;
         bool fits = true;
@@ -452,7 +455,7 @@ Series concat_text_views(const std::vector<const Series*>& parts) {
                 std::int64_t n = 0;
                 const char* d = dftu_series_string_at(ch, k, &n);
                 auto [it, fresh] = seen.try_emplace(
-                    std::string_view(d, static_cast<std::size_t>(n)), distinct);
+                    dstd::StringView(d, static_cast<std::size_t>(n)), distinct);
                 if (fresh) {
                     if (distinct == std::numeric_limits<std::int32_t>::max()) {
                         fits = false;
@@ -636,8 +639,8 @@ Series concat_columns(const std::vector<const Series*>& parts) {
     const std::uint8_t* vptr = any_null ? validity.data() : nullptr;
 
     if (dict_all) {
-        std::unordered_map<std::string_view, std::int32_t> seen;
-        std::vector<std::string_view> merged;
+        std::unordered_map<dstd::StringView, std::int32_t> seen;
+        std::vector<dstd::StringView> merged;
         std::vector<std::vector<std::int32_t>> remaps(mats.size());
         bool fits = true;
         for (std::size_t i = 0; i < mats.size() && fits; ++i) {
@@ -650,7 +653,7 @@ Series concat_columns(const std::vector<const Series*>& parts) {
             for (std::int64_t k = 0; k < ch->length; ++k) {
                 std::int64_t n = 0;
                 const char* d = dftu_series_string_at(ch, k, &n);
-                const std::string_view v(d, static_cast<std::size_t>(n));
+                const dstd::StringView v(d, static_cast<std::size_t>(n));
                 auto [it, fresh] = seen.try_emplace(
                     v, static_cast<std::int32_t>(merged.size()));
                 if (fresh) {
@@ -1025,7 +1028,7 @@ dstd::String scalar_cell_to_string(const Series& s, std::int64_t i) {
 Series to_string_series(const Series& s) {
     const std::int64_t n = s.length();
     dstd::Vector<dstd::String> owned(static_cast<std::size_t>(n));
-    std::vector<std::string_view> vals(static_cast<std::size_t>(n));
+    std::vector<dstd::StringView> vals(static_cast<std::size_t>(n));
     std::vector<std::uint8_t> vbits(static_cast<std::size_t>((n + 7) / 8), 0);
     bool any_null = false;
     for (std::int64_t i = 0; i < n; ++i) {
@@ -1038,7 +1041,7 @@ Series to_string_series(const Series& s) {
         vbits[static_cast<std::size_t>(i >> 3)] |=
             static_cast<std::uint8_t>(1u << (i & 7));
     }
-    return Series::strings(std::span<const std::string_view>(vals),
+    return Series::strings(dstd::Span<const dstd::StringView>(vals),
                            any_null ? vbits.data() : nullptr);
 }
 
@@ -1056,7 +1059,7 @@ Series to_json_series(const Series& s) {
                         t == TypeId::Float16;
     if (!scalar) return Series::nulls(TypeId::String, n).as_json();
     dstd::Vector<dstd::String> owned(static_cast<std::size_t>(n));
-    std::vector<std::string_view> vals(static_cast<std::size_t>(n));
+    std::vector<dstd::StringView> vals(static_cast<std::size_t>(n));
     std::vector<std::uint8_t> vbits(static_cast<std::size_t>((n + 7) / 8), 0);
     bool any_null = false;
     for (std::int64_t i = 0; i < n; ++i) {
@@ -1085,7 +1088,7 @@ Series to_json_series(const Series& s) {
         vbits[static_cast<std::size_t>(i >> 3)] |=
             static_cast<std::uint8_t>(1u << (i & 7));
     }
-    return Series::strings(std::span<const std::string_view>(vals),
+    return Series::strings(dstd::Span<const dstd::StringView>(vals),
                            any_null ? vbits.data() : nullptr)
         .as_json();
 }
@@ -1593,7 +1596,7 @@ DataFrame sort_by_multi(const DataFrame& b,
                 }
                 r = ra < rb ? -1 : (ra > rb ? 1 : 0);
             } else if (kr.text) {
-                std::string_view x, y;
+                dstd::StringView x, y;
                 const bool va = str_at(kr.h, a, x);
                 const bool vb = str_at(kr.h, bb, y);
                 if (!va || !vb) {

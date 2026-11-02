@@ -16,6 +16,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -58,7 +59,7 @@ void fail_hung(const char* what) {
 
 void shutdown_or_fail(Runtime& rt) {
     std::promise<void> done;
-    std::future<void> finished = done.get_future();
+    dstd::Future<void> finished = done.get_future();
     std::thread t([&] {
         rt.shutdown();
         done.set_value();

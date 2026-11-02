@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -41,8 +42,8 @@ std::string read_text(const Path& path) {
 
 bool running_as_root() { return ::geteuid() == 0; }
 
-bool contains(std::string_view text, std::string_view part) {
-    return text.find(part) != std::string_view::npos;
+bool contains(dstd::StringView text, dstd::StringView part) {
+    return text.find(part) != dstd::StringView::npos;
 }
 
 }  // namespace

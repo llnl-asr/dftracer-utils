@@ -10,7 +10,9 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>
@@ -53,7 +55,7 @@ static dstd::Optional<FileRef> current_file(const Snapshot& snapshot,
     const std::string logical =
         index::store::internal::get_logical_path(f.trace);
     if (snapshot.freshness(logical, now) != Freshness::Current)
-        return std::nullopt;
+        return dstd::nullopt;
     return snapshot.file(logical);
 }
 
@@ -126,7 +128,7 @@ void for_each_index(std::size_t n, Fn&& fn) {
 const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
     // A missing trace with no recorded schema is read as dftracer here, and
     // the scan reports the missing trace.
-    dstd::Map<std::string, std::optional<Snapshot>> snapshots;
+    dstd::Map<std::string, dstd::Optional<Snapshot>> snapshots;
     dstd::Vector<const Snapshot*> snapshot_of(files.size(), nullptr);
     for (std::size_t i = 0; i < files.size(); ++i) {
         const auto& f = files[i];
@@ -207,28 +209,28 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
     return chosen;
 }
 
-std::optional<df::DataFrame> stored_rowset(const std::vector<RowSetFile>& files,
-                                           std::string_view name) {
-    if (files.empty()) return std::nullopt;
-    std::map<std::string, std::optional<Snapshot>, std::less<>> snapshots;
+dstd::Optional<df::DataFrame> stored_rowset(
+    const std::vector<RowSetFile>& files, dstd::StringView name) {
+    if (files.empty()) return dstd::nullopt;
+    std::map<std::string, dstd::Optional<Snapshot>, std::less<>> snapshots;
     std::vector<df::DataFrame> parts;
     try {
         for (const auto& f : files) {
-            if (f.index.empty()) return std::nullopt;
+            if (f.index.empty()) return dstd::nullopt;
             auto [it, fresh] = snapshots.try_emplace(f.index);
             if (fresh)
                 it->second.emplace(common::unwrap(open_snapshot(f.index)));
             const Snapshot& snapshot = *it->second;
             const auto file = current_file(snapshot, f);
-            if (!file) return std::nullopt;
+            if (!file) return dstd::nullopt;
             auto bytes = common::unwrap(index::rowset(snapshot, *file, name));
-            if (!bytes) return std::nullopt;
+            if (!bytes) return dstd::nullopt;
             auto frame = df::frame_from_native(*bytes);
-            if (!frame) return std::nullopt;
+            if (!frame) return dstd::nullopt;
             parts.push_back(std::move(*frame));
         }
     } catch (const std::exception&) {
-        return std::nullopt;
+        return dstd::nullopt;
     }
     if (parts.size() == 1) return std::move(parts.front());
     std::vector<const df::DataFrame*> ptrs;
@@ -238,7 +240,7 @@ std::optional<df::DataFrame> stored_rowset(const std::vector<RowSetFile>& files,
 
 bool has_stored_rowsets(const std::vector<RowSetFile>& files) {
     if (files.empty()) return false;
-    std::map<std::string, std::optional<Snapshot>, std::less<>> snapshots;
+    std::map<std::string, dstd::Optional<Snapshot>, std::less<>> snapshots;
     try {
         for (const auto& f : files) {
             if (f.index.empty()) return false;

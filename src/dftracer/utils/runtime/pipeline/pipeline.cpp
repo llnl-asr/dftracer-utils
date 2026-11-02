@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
@@ -48,7 +49,7 @@ Pipeline::~Pipeline() {
     if (watchdog_) watchdog_->stop();
 }
 
-void Pipeline::set_source(std::shared_ptr<Task> source) {
+void Pipeline::set_source(dstd::SharedPtr<Task> source) {
     if (!source) {
         throw PipelineError(PipelineError::ValidationError,
                             "Source task cannot be null");
@@ -57,13 +58,13 @@ void Pipeline::set_source(std::shared_ptr<Task> source) {
     validated_ = false;
 }
 
-void Pipeline::set_destination(std::shared_ptr<Task> destination) {
+void Pipeline::set_destination(dstd::SharedPtr<Task> destination) {
     destination_ = destination;
     validated_ = false;
 }
 
 void Pipeline::set_source(
-    std::initializer_list<std::shared_ptr<Task>> sources) {
+    std::initializer_list<dstd::SharedPtr<Task>> sources) {
     if (sources.size() == 0) {
         throw PipelineError(PipelineError::ValidationError,
                             "Cannot set zero sources");
@@ -88,7 +89,7 @@ void Pipeline::set_source(
 }
 
 void Pipeline::set_destination(
-    std::initializer_list<std::shared_ptr<Task>> destinations) {
+    std::initializer_list<dstd::SharedPtr<Task>> destinations) {
     if (destinations.size() == 0) {
         throw PipelineError(PipelineError::ValidationError,
                             "Cannot set zero destinations");
@@ -112,7 +113,7 @@ void Pipeline::set_destination(
     validated_ = false;
 }
 
-void Pipeline::set_source(const std::vector<std::shared_ptr<Task>>& sources) {
+void Pipeline::set_source(const std::vector<dstd::SharedPtr<Task>>& sources) {
     if (sources.empty()) {
         throw PipelineError(PipelineError::ValidationError,
                             "Cannot set zero sources");
@@ -137,7 +138,7 @@ void Pipeline::set_source(const std::vector<std::shared_ptr<Task>>& sources) {
 }
 
 void Pipeline::set_destination(
-    const std::vector<std::shared_ptr<Task>>& destinations) {
+    const std::vector<dstd::SharedPtr<Task>>& destinations) {
     if (destinations.empty()) {
         throw PipelineError(PipelineError::ValidationError,
                             "Cannot set zero destinations");
@@ -250,7 +251,7 @@ void Pipeline::collect_all_tasks() {
 }
 
 void Pipeline::collect_tasks_dfs(
-    std::shared_ptr<Task> task,
+    dstd::SharedPtr<Task> task,
     std::unordered_set<common::TaskIndex>& visited) {
     if (!task || visited.find(task->get_id()) != visited.end()) {
         return;
@@ -274,7 +275,7 @@ bool Pipeline::validate_reachability() {
 }
 
 bool Pipeline::is_reachable_dfs(
-    std::shared_ptr<Task> current, std::shared_ptr<Task> target,
+    dstd::SharedPtr<Task> current, dstd::SharedPtr<Task> target,
     std::unordered_set<common::TaskIndex>& visited) {
     if (!current) {
         return false;
@@ -315,7 +316,7 @@ bool Pipeline::has_cycles() {
 }
 
 bool Pipeline::has_cycles_dfs(
-    std::shared_ptr<Task> task, std::unordered_set<common::TaskIndex>& visited,
+    dstd::SharedPtr<Task> task, std::unordered_set<common::TaskIndex>& visited,
     std::unordered_set<common::TaskIndex>& rec_stack) {
     if (!task) {
         return false;

@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -163,7 +164,7 @@ class Committer {
     mutable std::mutex queue_mutex_;
     dftracer::utils::dstd::Vector<PendingEntry> entries_;
     std::uint64_t pending_bytes_ = 0;
-    std::shared_ptr<WakeState> wake_state_;
+    dstd::SharedPtr<WakeState> wake_state_;
     std::coroutine_handle<> stop_waiter_{};
     coro::Executor* stop_executor_ = nullptr;
     std::condition_variable done_cv_;

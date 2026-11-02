@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/agg/detail.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -107,7 +108,7 @@ void put_stat(std::string& s, const FieldStat& f, bool compact) {
     else
         put_full(s, f);
 }
-void put_bytes(std::string& s, std::string_view b) {
+void put_bytes(std::string& s, dstd::StringView b) {
     put(s, static_cast<std::uint64_t>(b.size()));
     s.append(b);
 }
@@ -286,9 +287,9 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
     if (st.has_set) {
         for (const AggState::StringSet& gset : st.sets) {
             put(s, static_cast<std::uint32_t>(gset.size()));
-            std::vector<std::string_view> sorted(gset.begin(), gset.end());
+            std::vector<dstd::StringView> sorted(gset.begin(), gset.end());
             std::sort(sorted.begin(), sorted.end());
-            for (const std::string_view v : sorted) put_bytes(s, v);
+            for (const dstd::StringView v : sorted) put_bytes(s, v);
         }
     }
     put(s, static_cast<std::uint8_t>(st.has_occ ? 1 : 0));

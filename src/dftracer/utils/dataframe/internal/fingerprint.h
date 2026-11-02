@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -35,7 +36,7 @@ class Fingerprint {
         bytes(buf, sizeof(T));
     }
 
-    void str(std::string_view s) noexcept {
+    void str(dstd::StringView s) noexcept {
         pod(static_cast<std::uint64_t>(s.size()));
         bytes(s.data(), s.size());
     }
@@ -48,8 +49,8 @@ class Fingerprint {
     void scalar(const dftu_scalar& v) noexcept {
         pod(v.kind);
         if (v.kind == DFTU_SCALAR_TAG_STR)
-            str(v.value.s ? std::string_view(v.value.s, v.len)
-                          : std::string_view());
+            str(v.value.s ? dstd::StringView(v.value.s, v.len)
+                          : dstd::StringView());
         else
             pod(v.value.u);
     }

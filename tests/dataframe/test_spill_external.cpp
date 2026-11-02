@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -86,8 +87,8 @@ class Hooked : public Source {
        public:
         Rows(std::int64_t morsels, std::int64_t rows, Hook hook)
             : morsels_(morsels), rows_(rows), hook_(std::move(hook)) {}
-        coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-            if (at_ >= morsels_) co_return std::nullopt;
+        coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
+            if (at_ >= morsels_) co_return dstd::nullopt;
             if (hook_) hook_(at_);
             std::vector<std::int64_t> k(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_));
@@ -201,7 +202,7 @@ TEST_CASE("merged sort runs leave the spill slot before the query ends") {
                                          .sort_by("k")
                                          .memory_budget(SMALL_SORT_BUDGET)
                                          .open_cursor();
-    std::optional<Morsel> first =
+    dstd::Optional<Morsel> first =
         dftracer::utils::default_runtime().submit(cursor->next(ROWS)).get();
     REQUIRE(first.has_value());
     const std::size_t after_merge = spill_slot_bytes();

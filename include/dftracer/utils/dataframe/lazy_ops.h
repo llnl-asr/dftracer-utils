@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_LAZY_OPS_H
 
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/optional.h>
 
 #include <cstdint>
 #include <memory>
@@ -152,7 +153,7 @@ class LazyOps {
     }
     LazyFrame asof(LazyFrame other, std::string on, std::vector<std::string> by,
                    AsofDirection direction,
-                   std::optional<double> tolerance = std::nullopt) const {
+                   dstd::Optional<double> tolerance = dstd::nullopt) const {
         return lf().asof(std::move(other), std::move(on), std::move(by),
                          direction, tolerance);
     }

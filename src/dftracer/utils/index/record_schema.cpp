@@ -5,10 +5,14 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -81,7 +85,7 @@ void for_each_head_line(int fd, const std::string& path, Emit&& emit) {
             const auto nl = text.find('\n', std::max(pos, from));
             if (nl == std::string::npos) break;
             consumed += nl + 1 - pos;
-            if (!emit(std::string_view(text).substr(pos, nl - pos)) ||
+            if (!emit(dstd::StringView(text).substr(pos, nl - pos)) ||
                 consumed >= MAX_TEXT) {
                 done = true;
                 return;
@@ -126,7 +130,7 @@ void for_each_head_line(int fd, const std::string& path, Emit&& emit) {
         }
         zng_inflateEnd(&zs);
     }
-    if (!done && !text.empty()) emit(std::string_view(text));
+    if (!done && !text.empty()) emit(dstd::StringView(text));
 }
 
 // Scores the registered schemas on lines fed one at a time. A schema judges
@@ -157,7 +161,7 @@ class Detector {
     }
 
     // Whether more lines are wanted.
-    bool add(std::string_view line) {
+    bool add(dstd::StringView line) {
         const char* start = nullptr;
         std::size_t length = 0;
         if (!json::trim_and_validate_with_comma(line.data(), line.size(), start,
@@ -288,17 +292,17 @@ double micros_per(TimeUnit unit) {
     return 1;
 }
 
-const FieldSpec* RecordSchema::field_at(std::string_view path) const {
+const FieldSpec* RecordSchema::field_at(dstd::StringView path) const {
     const auto it = std::lower_bound(
         fields_by_path.begin(), fields_by_path.end(), path,
-        [](const auto& e, std::string_view p) { return e.first < p; });
+        [](const auto& e, dstd::StringView p) { return e.first < p; });
     return it != fields_by_path.end() && it->first == path ? &fields[it->second]
                                                            : nullptr;
 }
 
 std::uint64_t RecordSchema::params_hash() const {
     utilities::hash::HasherUtility hasher;
-    auto text = [&](std::string_view s) {
+    auto text = [&](dstd::StringView s) {
         hasher.update(s);
         hasher.update(std::uint8_t{0});
     };
@@ -523,7 +527,7 @@ class Registry {
                 {std::make_unique<RecordSchema>(std::move(s)), "built-in"});
     }
 
-    const RecordSchema* find(std::string_view id) const {
+    const RecordSchema* find(dstd::StringView id) const {
         std::shared_lock lock(mu_);
         return find_locked(id);
     }
@@ -559,11 +563,11 @@ class Registry {
     }
 
    private:
-    const RecordSchema* find_locked(std::string_view id) const {
+    const RecordSchema* find_locked(dstd::StringView id) const {
         const Entry* e = entry_locked(id);
         return e ? e->schema.get() : nullptr;
     }
-    const Entry* entry_locked(std::string_view id) const {
+    const Entry* entry_locked(dstd::StringView id) const {
         for (const auto& e : entries_)
             if (e.schema->id == id) return &e;
         return nullptr;
@@ -575,7 +579,7 @@ class Registry {
     dstd::Set<dstd::String> loaded_;
 };
 
-std::string_view role_name(Role role) {
+dstd::StringView role_name(Role role) {
     switch (role) {
         case Role::None:
             return "none";
@@ -729,7 +733,7 @@ bool flag_of(const YAML::Node& n, const std::string& key,
 
 template <typename E, std::size_t N>
 E choice_of(const YAML::Node& n, const std::string& key,
-            const std::array<std::pair<const char*, E>, N>& names,
+            const std::array<dstd::Pair<const char*, E>, N>& names,
             const std::string& source) {
     const std::string v = text_of(n, key, source);
     for (const auto& [name, value] : names)
@@ -742,21 +746,21 @@ E choice_of(const YAML::Node& n, const std::string& key,
     spec_error(source, key + " is " + v + "; expected one of " + all);
 }
 
-constexpr std::array<std::pair<const char*, FieldType>, 5> TYPE_NAMES = {{
+constexpr std::array<dstd::Pair<const char*, FieldType>, 5> TYPE_NAMES = {{
     {"bool", FieldType::Bool},
     {"int", FieldType::Int},
     {"float", FieldType::Float},
     {"string", FieldType::String},
     {"json", FieldType::Json},
 }};
-constexpr std::array<std::pair<const char*, Role>, 5> ROLE_NAMES = {{
+constexpr std::array<dstd::Pair<const char*, Role>, 5> ROLE_NAMES = {{
     {"time", Role::Time},
     {"duration", Role::Duration},
     {"entity", Role::Entity},
     {"lane", Role::Lane},
     {"name", Role::Name},
 }};
-constexpr std::array<std::pair<const char*, TimeUnit>, 4> UNIT_NAMES = {{
+constexpr std::array<dstd::Pair<const char*, TimeUnit>, 4> UNIT_NAMES = {{
     {"ns", TimeUnit::Ns},
     {"us", TimeUnit::Us},
     {"ms", TimeUnit::Ms},
@@ -842,7 +846,7 @@ bool spec_file(dstd::PathView p) {
     return ext == ".yaml" || ext == ".yml" || ext == ".json";
 }
 
-const RecordSchema& register_into(Registry& reg, std::string_view text,
+const RecordSchema& register_into(Registry& reg, dstd::StringView text,
                                   const std::string& source) {
     YAML::Node spec;
     try {
@@ -919,7 +923,7 @@ Registry& registry() {
 
 template <typename E, std::size_t N>
 const char* name_of(E value,
-                    const std::array<std::pair<const char*, E>, N>& names) {
+                    const std::array<dstd::Pair<const char*, E>, N>& names) {
     for (const auto& [name, v] : names)
         if (v == value) return name;
     return "";
@@ -927,7 +931,7 @@ const char* name_of(E value,
 
 }  // namespace
 
-std::string_view field_type_name(FieldType type) {
+dstd::StringView field_type_name(FieldType type) {
     return name_of(type, TYPE_NAMES);
 }
 
@@ -935,11 +939,11 @@ std::vector<const RecordSchema*> registered_schemas() {
     return registry().all();
 }
 
-const RecordSchema* find_schema(std::string_view id) {
+const RecordSchema* find_schema(dstd::StringView id) {
     return registry().find(id);
 }
 
-const RecordSchema& get_schema(std::string_view id) {
+const RecordSchema& get_schema(dstd::StringView id) {
     if (const RecordSchema* s = find_schema(id)) return *s;
     std::string ids;
     for (const RecordSchema* s : registered_schemas()) {
@@ -954,12 +958,12 @@ const RecordSchema& get_schema(std::string_view id) {
 }
 
 const RecordSchema& register_schema(const SchemaSpec& spec,
-                                    std::string_view source) {
+                                    dstd::StringView source) {
     return registry().add(spec, std::string(source));
 }
 
-const RecordSchema& register_schema(std::string_view text,
-                                    std::string_view source) {
+const RecordSchema& register_schema(dstd::StringView text,
+                                    dstd::StringView source) {
     return register_into(registry(), text, std::string(source));
 }
 
@@ -967,7 +971,7 @@ void load_schemas(dstd::StringView path) { load_into(registry(), path); }
 
 std::string schemas_json() {
     dstd::String out = "[";
-    auto quoted = [&](std::string_view s) {
+    auto quoted = [&](dstd::StringView s) {
         out += '"';
         json::append_json_escaped(out, s);
         out += '"';
@@ -1037,7 +1041,7 @@ void load_index_schemas(dstd::StringView index_path) {
     }
 }
 
-SchemaDetection explain_schema(std::span<const std::string_view> lines) {
+SchemaDetection explain_schema(dstd::Span<const dstd::StringView> lines) {
     Detector d;
     for (auto line : lines) d.add(line);
     return d.finish();
@@ -1063,16 +1067,16 @@ DetectionCache& detection_cache() {
     return dstd::Singleton<DetectionCache>::get();
 }
 
-std::optional<SchemaDetection> cached_detection(const std::string& file_path,
-                                                std::uint64_t size,
-                                                std::int64_t mtime_ns) {
+dstd::Optional<SchemaDetection> cached_detection(const std::string& file_path,
+                                                 std::uint64_t size,
+                                                 std::int64_t mtime_ns) {
     const std::size_t schemas = registry().size();
     std::lock_guard lock(detection_cache().mu);
     const auto it = detection_cache().map.find(file_path);
     if (it != detection_cache().map.end() && it->second.mtime_ns == mtime_ns &&
         it->second.size == size && it->second.schemas == schemas)
         return it->second.detection;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 }  // namespace
@@ -1083,7 +1087,7 @@ SchemaDetection explain_file_schema(const std::string& file_path, int fd,
         return *hit;
     Detector d;
     for_each_head_line(fd, file_path,
-                       [&](std::string_view line) { return d.add(line); });
+                       [&](dstd::StringView line) { return d.add(line); });
     SchemaDetection out = d.finish();
     {
         std::lock_guard lock(detection_cache().mu);
@@ -1128,7 +1132,7 @@ std::string to_json(const SchemaDetection& d) {
     return std::string(out);
 }
 
-const RecordSchema& detect_schema(std::span<const std::string_view> lines) {
+const RecordSchema& detect_schema(dstd::Span<const dstd::StringView> lines) {
     return *explain_schema(lines).chosen;
 }
 
@@ -1142,12 +1146,12 @@ const RecordSchema& detect_file_schema(const std::string& file_path, int fd,
     return *explain_file_schema(file_path, fd, size, mtime_ns).chosen;
 }
 
-std::optional<std::int64_t> iso8601_micros(std::string_view s) {
-    auto digits = [&](std::size_t at, std::size_t n) -> std::optional<int> {
-        if (at + n > s.size()) return std::nullopt;
+dstd::Optional<std::int64_t> iso8601_micros(dstd::StringView s) {
+    auto digits = [&](std::size_t at, std::size_t n) -> dstd::Optional<int> {
+        if (at + n > s.size()) return dstd::nullopt;
         int v = 0;
         for (std::size_t i = at; i < at + n; ++i) {
-            if (s[i] < '0' || s[i] > '9') return std::nullopt;
+            if (s[i] < '0' || s[i] > '9') return dstd::nullopt;
             v = v * 10 + (s[i] - '0');
         }
         return v;
@@ -1155,10 +1159,10 @@ std::optional<std::int64_t> iso8601_micros(std::string_view s) {
     const auto y = digits(0, 4), mo = digits(5, 2), dd = digits(8, 2);
     if (!y || !mo || !dd || s.size() < 19 || s[4] != '-' || s[7] != '-' ||
         (s[10] != 'T' && s[10] != ' ') || s[13] != ':' || s[16] != ':')
-        return std::nullopt;
+        return dstd::nullopt;
     const auto hh = digits(11, 2), mi = digits(14, 2), ss = digits(17, 2);
     if (!hh || !mi || !ss || *mo < 1 || *mo > 12 || *dd < 1 || *dd > 31)
-        return std::nullopt;
+        return dstd::nullopt;
     std::size_t at = 19;
     std::int64_t frac = 0;
     if (at < s.size() && s[at] == '.') {
@@ -1175,11 +1179,11 @@ std::optional<std::int64_t> iso8601_micros(std::string_view s) {
         const auto oh = digits(at + 1, 2);
         const bool colon = at + 3 < s.size() && s[at + 3] == ':';
         const auto om = digits(at + (colon ? 4 : 3), 2);
-        if (!oh || !om) return std::nullopt;
+        if (!oh || !om) return dstd::nullopt;
         offset = (s[at] == '-' ? -1 : 1) * (*oh * 3600 + *om * 60);
         at += colon ? 6 : 5;
     }
-    if (at != s.size()) return std::nullopt;
+    if (at != s.size()) return dstd::nullopt;
     const std::int64_t days = common::days_from_civil(*y, *mo, *dd);
     const std::int64_t secs =
         days * 86400 + *hh * 3600 + *mi * 60 + *ss - offset;

@@ -51,6 +51,9 @@
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <sys/resource.h>
@@ -244,13 +247,13 @@ class GenSource : public df::Source {
    private:
     class Rows : public df::Cursor {
        public:
-        Rows(std::shared_ptr<const Shape> shape,
+        Rows(dftracer::utils::dstd::SharedPtr<const Shape> shape,
              std::vector<std::size_t> picked)
             : shape_(std::move(shape)), picked_(std::move(picked)) {}
 
-        coro::CoroTask<std::optional<df::Morsel>> next(
+        coro::CoroTask<dftracer::utils::dstd::Optional<df::Morsel>> next(
             std::int64_t max_rows) override {
-            if (pos_ >= shape_->rows) co_return std::nullopt;
+            if (pos_ >= shape_->rows) co_return dftracer::utils::dstd::nullopt;
             const std::int64_t want = max_rows > 0 ? max_rows : MORSEL_ROWS;
             const std::int64_t n = std::min(want, shape_->rows - pos_);
             df::Morsel m;
@@ -263,12 +266,12 @@ class GenSource : public df::Source {
         }
 
        private:
-        std::shared_ptr<const Shape> shape_;
+        dftracer::utils::dstd::SharedPtr<const Shape> shape_;
         std::vector<std::size_t> picked_;
         std::int64_t pos_ = 0;
     };
 
-    std::shared_ptr<const Shape> shape_;
+    dftracer::utils::dstd::SharedPtr<const Shape> shape_;
 };
 
 std::uint64_t data_bytes(std::uint64_t budget) {
@@ -456,7 +459,7 @@ std::uint64_t bytes_written() {
     unsigned long long value = 0;
     std::uint64_t out = 0;
     while (std::fscanf(f, "%63s %llu", key, &value) == 2) {
-        if (std::string_view(key) == "wchar:") {
+        if (dftracer::utils::dstd::StringView(key) == "wchar:") {
             out = value;
             break;
         }
@@ -474,7 +477,8 @@ const char* written_source() {
 #endif
 }
 
-const Case* find_case(const std::vector<Case>& cases, std::string_view name) {
+const Case* find_case(const std::vector<Case>& cases,
+                      dftracer::utils::dstd::StringView name) {
     for (const Case& c : cases)
         if (c.name == name) return &c;
     return nullptr;
@@ -484,7 +488,7 @@ std::int64_t rows_for(std::uint64_t bytes) {
     return static_cast<std::int64_t>(bytes / ROW_BYTES);
 }
 
-int run_one(std::string_view name, std::uint64_t budget) {
+int run_one(dftracer::utils::dstd::StringView name, std::uint64_t budget) {
     std::vector<Case> cases = make_cases();
     const Case* c = find_case(cases, name);
     if (!c) {
@@ -524,11 +528,10 @@ struct ChildResult {
     double ns = 0;
 };
 
-std::optional<ChildResult> run_child(const std::string& binary,
-                                     const std::string& name,
-                                     std::uint64_t budget) {
+dftracer::utils::dstd::Optional<ChildResult> run_child(
+    const std::string& binary, const std::string& name, std::uint64_t budget) {
     int fds[2];
-    if (::pipe(fds) != 0) return std::nullopt;
+    if (::pipe(fds) != 0) return dftracer::utils::dstd::nullopt;
     const std::string budget_arg = std::to_string(budget);
     pid_t pid = ::fork();
     if (pid == 0) {
@@ -559,7 +562,7 @@ std::optional<ChildResult> run_child(const std::string& binary,
                     "RESULT rows=%*s out=%*s base=%llu peak=%llu "
                     "spilled=%llu ns=%lf",
                     &base, &peak, &spilled, &r.ns) != 4) {
-        return std::nullopt;
+        return dftracer::utils::dstd::nullopt;
     }
     r.base = base;
     r.peak = peak;
@@ -659,7 +662,7 @@ int usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string_view first = argc > 1 ? argv[1] : "";
+    dftracer::utils::dstd::StringView first = argc > 1 ? argv[1] : "";
     if (argc == 1) return drive(argv[0]);
     if (first == "--smoke" && argc == 2) return smoke();
     if (first == "--case" && argc == 4) {

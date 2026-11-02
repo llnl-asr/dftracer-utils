@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/event_cost.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -23,7 +24,7 @@ using dataframe::DDSketch;
 using dataframe::Log2Histogram;
 
 template <class V>
-std::uint32_t slot_of(dstd::StringViewMap<V>& map, std::string_view key) {
+std::uint32_t slot_of(dstd::StringViewMap<V>& map, dstd::StringView key) {
     auto it = map.find(key);
     if (it == map.end()) it = map.emplace(std::string(key), V{}).first;
     return static_cast<std::uint32_t>(it - map.begin());
@@ -36,8 +37,8 @@ V& at_slot(dstd::StringViewMap<V>& map, std::uint32_t slot) {
 
 }  // namespace
 
-void ChunkStatistics::update_from_event(std::string_view name,
-                                        std::string_view cat, std::uint64_t pid,
+void ChunkStatistics::update_from_event(dstd::StringView name,
+                                        dstd::StringView cat, std::uint64_t pid,
                                         std::uint64_t tid, std::uint64_t ts,
                                         std::uint64_t dur, bool has_dur) {
     NameSlots names;
@@ -46,8 +47,8 @@ void ChunkStatistics::update_from_event(std::string_view name,
 }
 
 void ChunkStatistics::update_from_event(NameSlots& names, PidSlots& pids,
-                                        std::string_view name,
-                                        std::string_view cat, std::uint64_t pid,
+                                        dstd::StringView name,
+                                        dstd::StringView cat, std::uint64_t pid,
                                         std::uint64_t tid, std::uint64_t ts,
                                         std::uint64_t dur, bool has_dur) {
     ++total_events;
@@ -78,7 +79,7 @@ void ChunkStatistics::update_from_event(NameSlots& names, PidSlots& pids,
                                             "failed to format tid");
         }
         pids.pid_tid_count =
-            slot_of(pid_tid_counts, std::string_view(pt_buf, tp - pt_buf));
+            slot_of(pid_tid_counts, dstd::StringView(pt_buf, tp - pt_buf));
     }
     ++at_slot(category_counts, names.category_count);
     ++at_slot(name_counts, names.name_count);
@@ -136,7 +137,7 @@ void ChunkStatistics::update_from_event(NameSlots& names, PidSlots& pids,
         char pid_buf[std::numeric_limits<std::uint64_t>::digits10 + 2];
         auto [pe, pec] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), pid);
         if (pec != std::errc{}) return;
-        const std::string_view pid_key(pid_buf,
+        const dstd::StringView pid_key(pid_buf,
                                        static_cast<std::size_t>(pe - pid_buf));
         pids.pid_sketch = slot_of(pid_duration_sketches, pid_key);
         pids.pid_sum = slot_of(pid_duration_sums, pid_key);

@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/schema_reconcile.h>
 
 #include <cstdint>
@@ -53,7 +54,7 @@ int build_null_array(const ArrowSchema *child_schema, int64_t length,
     return 0;
 }
 
-void json_escape(std::string_view in, std::string &out) {
+void json_escape(dstd::StringView in, std::string &out) {
     for (char c : in) {
         switch (c) {
             case '"':
@@ -132,7 +133,7 @@ void append_json_scalar(const ArrowArrayView *view, ArrowType t, int64_t row,
         case NANOARROW_TYPE_LARGE_STRING: {
             auto sv = ArrowArrayViewGetStringUnsafe(view, row);
             out.push_back('"');
-            json_escape(std::string_view(sv.data, sv.size_bytes), out);
+            json_escape(dstd::StringView(sv.data, sv.size_bytes), out);
             out.push_back('"');
             break;
         }

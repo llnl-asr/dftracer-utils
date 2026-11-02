@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/internal/budget_share.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
 #include <dftracer/utils/dstd/hash/partition.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/vectorize.h>
 
@@ -149,7 +150,7 @@ void GraceJoin::split(const DataFrame& rows, bool right_side, int level,
                 keyed = false;
                 break;
             }
-        picks[keyed ? dstd::hash::partition_of(std::string_view(text),
+        picks[keyed ? dstd::hash::partition_of(dstd::StringView(text),
                                                into.size(), level)
                     : 0]
             .push_back(r);
@@ -257,7 +258,7 @@ coro::CoroTask<void> GraceJoin::split_part(Work work, std::int64_t max_rows) {
 
 // The next block of the right side of the current partition, about a quarter
 // of the budget share; nothing when it is used up.
-coro::CoroTask<std::optional<DataFrame>> GraceJoin::right_block(
+coro::CoroTask<dstd::Optional<DataFrame>> GraceJoin::right_block(
     std::int64_t max_rows) {
     std::vector<DataFrame> parts;
     std::uint64_t bytes = 0;
@@ -271,7 +272,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::right_block(
         f.columns = std::move(m->columns);
         parts.push_back(std::move(f));
     }
-    if (parts.empty()) co_return std::nullopt;
+    if (parts.empty()) co_return dstd::nullopt;
     g_blocks.fetch_add(1, std::memory_order_relaxed);
     co_return merge_morsels(parts);
 }
@@ -380,10 +381,10 @@ coro::CoroTask<void> GraceJoin::assign_groups(std::int64_t max_rows) {
 
 // The right rows of the next key group, in right order; nothing after the
 // last group.
-coro::CoroTask<std::optional<DataFrame>> GraceJoin::next_group(
+coro::CoroTask<dstd::Optional<DataFrame>> GraceJoin::next_group(
     std::int64_t max_rows) {
     Current& c = *cur_;
-    if (c.group >= c.groups) co_return std::nullopt;
+    if (c.group >= c.groups) co_return dstd::nullopt;
     const std::uint64_t want = c.group++;
     g_blocks.fetch_add(1, std::memory_order_relaxed);
     c.right = c.part->right.reader();
@@ -420,7 +421,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::next_group(
 // partition is then read again from the start. False when the right side is
 // used up.
 coro::CoroTask<bool> GraceJoin::next_block(std::int64_t max_rows) {
-    std::optional<DataFrame> block;
+    dstd::Optional<DataFrame> block;
     if (how_ == JoinHow::Nest)
         block = co_await next_group(max_rows);
     else
@@ -438,7 +439,7 @@ coro::CoroTask<bool> GraceJoin::next_block(std::int64_t max_rows) {
 
 // The next probe of the current join: as many left rows as the output share
 // allows from what the last probes made. Nothing once the left side is read.
-coro::CoroTask<std::optional<DataFrame>> GraceJoin::probe_left(
+coro::CoroTask<dstd::Optional<DataFrame>> GraceJoin::probe_left(
     std::int64_t max_rows) {
     Current& c = *cur_;
     while (!c.left_rows || c.left_at >= c.left_rows->num_rows()) {
@@ -446,7 +447,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::probe_left(
         auto m = co_await c.left->next(max_rows);
         if (!m) {
             c.left_rows.reset();
-            co_return std::nullopt;
+            co_return dstd::nullopt;
         }
         DataFrame f;
         f.names = left_names_;
@@ -483,7 +484,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::probe_left(
 // After the last block: the left rows that leave on no match anywhere (Left,
 // Outer and Anti), or on a match in some block (Semi), one left morsel at a
 // time, joined against an empty right side for the join's output layout.
-coro::CoroTask<std::optional<DataFrame>> GraceJoin::deferred_left(
+coro::CoroTask<dstd::Optional<DataFrame>> GraceJoin::deferred_left(
     std::int64_t max_rows) {
     Current& c = *cur_;
     const std::uint8_t keep = how_ == JoinHow::Semi ? 1 : 0;
@@ -502,7 +503,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::deferred_left(
         if (picks.empty()) continue;
         co_return c.join->probe(f.take(picks));
     }
-    co_return std::nullopt;
+    co_return dstd::nullopt;
 }
 
 // An empty right side gives the output layout: every row a probe sees is
@@ -517,11 +518,11 @@ void GraceJoin::start_deferred() {
     cur_->last_pass = true;
 }
 
-coro::CoroTask<std::optional<DataFrame>> GraceJoin::next(
+coro::CoroTask<dstd::Optional<DataFrame>> GraceJoin::next(
     std::int64_t max_rows) {
     for (;;) {
         if (!cur_) {
-            if (queue_.empty()) co_return std::nullopt;
+            if (queue_.empty()) co_return dstd::nullopt;
             Work work = std::move(queue_.front());
             queue_.pop_front();
             Part& p = *work.part;

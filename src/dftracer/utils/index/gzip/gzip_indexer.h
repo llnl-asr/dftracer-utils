@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
@@ -33,7 +34,7 @@ struct GzipBuildArtifacts {
     std::uint64_t total_uc_size = 0;
     std::vector<GzipMemberRecord> members;
     /// The 32 KiB inflate window of each RESTART piece, keyed by member_idx.
-    std::vector<std::pair<std::uint64_t, std::string>> restart_windows;
+    std::vector<dstd::Pair<std::uint64_t, std::string>> restart_windows;
     /// The last member was cut short; `recovered_bytes` of it were kept.
     bool truncated = false;
     std::uint64_t recovered_bytes = 0;
@@ -65,7 +66,7 @@ struct GzipMemberSlice {
 /// processed. The caller is responsible for ensuring `slice->members`
 /// outlives this coroutine.
 
-coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
+coro::CoroTask<dstd::Optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
     const std::string &gz_path, std::uint64_t ckpt_size,
     const CheckpointIndexer::VisitorList &visitors,
     coro::Scope *scope = nullptr, const GzipMemberSlice *slice = nullptr,
@@ -73,7 +74,7 @@ coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
 
 /// The same over an open file. `fd` stays open and owned by the caller.
 /// `gz_path` only names the file in messages.
-coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
+coro::CoroTask<dstd::Optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
     int fd, const std::string &gz_path, std::uint64_t ckpt_size,
     const CheckpointIndexer::VisitorList &visitors,
     coro::Scope *scope = nullptr, const GzipMemberSlice *slice = nullptr,

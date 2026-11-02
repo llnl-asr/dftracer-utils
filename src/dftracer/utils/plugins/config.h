@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_PLUGINS_CONFIG_H
 #define DFTRACER_UTILS_PLUGINS_CONFIG_H
 
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/abi.h>
 
 #include <cstdint>
@@ -39,7 +41,7 @@ class ConfigTree {
     static ConfigTree from_json_string(const std::string& json);
 
     // Set a leaf at the dotted key, inferring its type from raw_value.
-    void set(std::string_view dotted_key, std::string_view raw_value);
+    void set(dstd::StringView dotted_key, dstd::StringView raw_value);
 
     // Deep merge: object+object merges recursively, else other replaces.
     void merge_from(const ConfigTree& other);
@@ -55,12 +57,12 @@ class ConfigTree {
         double f64 = 0.0;
         std::string str;
         std::vector<Node> items;
-        std::vector<std::pair<std::string, Node>> members;
+        std::vector<dstd::Pair<std::string, Node>> members;
     };
 
     static Node build_node(const simdjson::dom::element& el);
-    static Node* find_member(Node& obj, std::string_view key);
-    static Node infer_leaf(std::string_view raw_value);
+    static Node* find_member(Node& obj, dstd::StringView key);
+    static Node infer_leaf(dstd::StringView raw_value);
     static void deep_merge(Node& dst, const Node& src);
 
     void materialize() const;

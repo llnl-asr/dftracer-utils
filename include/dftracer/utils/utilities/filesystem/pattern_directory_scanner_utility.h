@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 
 #include <algorithm>
@@ -24,7 +25,7 @@ inline const std::vector<std::string>& trace_file_patterns() {
 }
 
 /// Whether `path` ends in one of trace_file_patterns().
-inline bool is_trace_file(std::string_view path) {
+inline bool is_trace_file(dstd::StringView path) {
     const auto& patterns = trace_file_patterns();
     return std::any_of(patterns.begin(), patterns.end(),
                        [&](const std::string& p) { return path.ends_with(p); });

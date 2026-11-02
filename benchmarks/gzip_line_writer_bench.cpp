@@ -10,6 +10,7 @@
 
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
@@ -50,8 +51,9 @@ void require_ok(const dftracer::utils::dstd::Expected<
 constexpr std::size_t MIB = 1024 * 1024;
 constexpr int ROUNDS = 3;
 
-std::vector<std::string_view> split_appends(const std::string& data) {
-    std::vector<std::string_view> out;
+std::vector<dftracer::utils::dstd::StringView> split_appends(
+    const std::string& data) {
+    std::vector<dftracer::utils::dstd::StringView> out;
     std::size_t pos = 0;
     while (pos < data.size()) {
         std::size_t end = std::min(pos + MIB, data.size());
@@ -67,9 +69,9 @@ std::vector<std::string_view> split_appends(const std::string& data) {
     return out;
 }
 
-std::uint64_t run_writer(const std::vector<std::string_view>& appends,
-                         const std::string& path, std::size_t member, int level,
-                         bool comp) {
+std::uint64_t run_writer(
+    const std::vector<dftracer::utils::dstd::StringView>& appends,
+    const std::string& path, std::size_t member, int level, bool comp) {
     fileio::GzipWriterOptions o;
     o.member_size = member;
     o.level = level;
@@ -153,8 +155,9 @@ std::uint64_t run_pgzip(const std::string& data, const std::string& path) {
     return out_bytes;
 }
 
-double memcpy_loop(const std::vector<std::string_view>& appends,
-                   std::size_t member) {
+double memcpy_loop(
+    const std::vector<dftracer::utils::dstd::StringView>& appends,
+    std::size_t member) {
     std::vector<char> buf(member + 2 * MIB);
     auto t0 = Clock::now();
     std::size_t fill = 0;

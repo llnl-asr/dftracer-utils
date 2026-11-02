@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/build_host.h>
@@ -93,7 +96,7 @@ struct Plugins::Impl {
     std::vector<std::size_t> order;
     // The union prune, settled once at build. run() applies it directly;
     // attach() only offers it to the session (see Plugins::attach()).
-    std::optional<Query> prune;
+    dstd::Optional<Query> prune;
 };
 
 struct Plugins::Builder::State {
@@ -104,7 +107,7 @@ struct Plugins::Builder::State {
         // Parsed at build() rather than add(), so a malformed literal fails
         // through the Result build() already returns instead of throwing out
         // of add().
-        std::optional<std::string> config_json;
+        dstd::Optional<std::string> config_json;
     };
     std::vector<Pending> pending;
 };
@@ -122,12 +125,12 @@ namespace {
 
 // The path's file stem (drop directory and the final extension), used to tag
 // the plugin's log lines. "/x/y/name_edges.so" -> "name_edges".
-std::string plugin_name_from_path(std::string_view path) {
+std::string plugin_name_from_path(dstd::StringView path) {
     std::size_t slash = path.find_last_of("/\\");
-    std::string_view base =
-        slash == std::string_view::npos ? path : path.substr(slash + 1);
+    dstd::StringView base =
+        slash == dstd::StringView::npos ? path : path.substr(slash + 1);
     std::size_t dot = base.find_last_of('.');
-    if (dot != std::string_view::npos && dot != 0) base = base.substr(0, dot);
+    if (dot != dstd::StringView::npos && dot != 0) base = base.substr(0, dot);
     return std::string(base);
 }
 
@@ -222,7 +225,7 @@ std::string config_violation(const dftu_plugin* plugin,
 
     if (!config) return {};
     for (std::uint32_t i = 0; i < config->count; ++i) {
-        const std::string_view given{config->as.members[i].key,
+        const dstd::StringView given{config->as.members[i].key,
                                      config->as.members[i].key_len};
         bool declared = false;
         for (const dftu_config_key* k = keys; k->name && !declared; ++k)
@@ -395,7 +398,7 @@ common::Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
 // its registration order. A short return signals a cycle.
 std::vector<std::size_t> topo_sort(
     std::size_t n,
-    const std::vector<std::pair<std::size_t, std::size_t>>& edges) {
+    const std::vector<dstd::Pair<std::size_t, std::size_t>>& edges) {
     std::vector<std::vector<std::size_t>> succ(n);
     std::vector<std::size_t> indeg(n, 0);
     for (const auto& [a, b] : edges) {
@@ -468,7 +471,7 @@ common::Result<void> settle_order(Plugins::Impl& impl) {
         }
     }
 
-    std::vector<std::pair<std::size_t, std::size_t>> edges;
+    std::vector<dstd::Pair<std::size_t, std::size_t>> edges;
     for (std::size_t i = 0; i < impl.plugins.size(); ++i) {
         const dftu_plugin* pl = impl.plugins[i].plugin;
         for (const std::string& name : name_list(pl->consumes, pl->self)) {
@@ -511,18 +514,18 @@ void settle_prune(Plugins::Impl& impl) {
 
 namespace detail {
 
-std::optional<Query> plugin_union_prune_query(
+dstd::Optional<Query> plugin_union_prune_query(
     const std::vector<const char*>& plan_queries) {
     namespace q = duql;
-    if (plan_queries.empty()) return std::nullopt;
+    if (plan_queries.empty()) return dstd::nullopt;
     std::vector<std::string> distinct;
     for (const char* s : plan_queries) {
-        if (!s || !*s) return std::nullopt;
-        std::string_view sv{s};
+        if (!s || !*s) return dstd::nullopt;
+        dstd::StringView sv{s};
         if (!q::try_parse(sv)) {
             DFTRACER_UTILS_LOG_DEBUG(
                 "Plugin plan_duql '%s' failed to parse; scanning all", s);
-            return std::nullopt;
+            return dstd::nullopt;
         }
         if (std::find(distinct.begin(), distinct.end(), sv) == distinct.end())
             distinct.emplace_back(sv);
@@ -547,7 +550,7 @@ Plugins::Builder& Plugins::Builder::operator=(Builder&&) noexcept = default;
 
 Plugins::Builder& Plugins::Builder::add(std::string path, ConfigTree config) {
     state_->pending.push_back(
-        {std::move(path), std::move(config), true, std::nullopt});
+        {std::move(path), std::move(config), true, dstd::nullopt});
     return *this;
 }
 
@@ -562,7 +565,7 @@ Plugins::Builder& Plugins::Builder::add(std::string path,
 
 Plugins::Builder& Plugins::Builder::add(std::string path) {
     state_->pending.push_back(
-        {std::move(path), ConfigTree{}, false, std::nullopt});
+        {std::move(path), ConfigTree{}, false, dstd::nullopt});
     return *this;
 }
 

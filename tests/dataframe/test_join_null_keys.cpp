@@ -8,6 +8,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -44,8 +46,8 @@ Series i64s(const std::vector<std::int64_t>& v,
 // A string column with nulls where `validity` bit i is 0.
 Series strs(const std::vector<std::string>& v,
             const std::vector<std::uint8_t>& validity) {
-    std::vector<std::string_view> views(v.begin(), v.end());
-    return Series::strings(std::span<const std::string_view>(views),
+    std::vector<dstd::StringView> views(v.begin(), v.end());
+    return Series::strings(dstd::Span<const dstd::StringView>(views),
                            validity.data());
 }
 

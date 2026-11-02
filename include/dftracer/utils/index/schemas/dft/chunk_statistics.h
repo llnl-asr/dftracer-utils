@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/log2_histogram.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dataframe/timestamp_histogram.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <algorithm>
@@ -87,7 +88,7 @@ struct ChunkStatistics {
     /// As update_from_event, but a key in `names` or `pids` is found by its
     /// slot without hashing. An empty slot is filled from the strings.
     void update_from_event(NameSlots& names, PidSlots& pids,
-                           std::string_view name, std::string_view cat,
+                           dstd::StringView name, dstd::StringView cat,
                            std::uint64_t pid, std::uint64_t tid,
                            std::uint64_t ts, std::uint64_t dur, bool has_dur);
 
@@ -95,7 +96,7 @@ struct ChunkStatistics {
     /// and timestamps cover every non-metadata event; duration aggregates
     /// (global and per-name) count only events with a duration, matching the
     /// viz stats aggregation.
-    void update_from_event(std::string_view name, std::string_view cat,
+    void update_from_event(dstd::StringView name, dstd::StringView cat,
                            std::uint64_t pid, std::uint64_t tid,
                            std::uint64_t ts, std::uint64_t dur,
                            bool has_dur = true);

@@ -15,6 +15,7 @@
 //   pressure_read_bench --smoke   (5 runs of 100 reads, checks each read is
 //   nonzero)
 
+#include <dftracer/utils/dstd/string.h>
 #include <memory_probe.h>
 
 #include <algorithm>
@@ -129,14 +130,15 @@ bool read_once_file(const std::string& path, Buffer& b) {
 }
 
 std::uint64_t parse_stat(const Buffer& b) {
-    const std::string_view text(b.data, b.size);
+    const dftracer::utils::dstd::StringView text(b.data, b.size);
     std::uint64_t anon = 0;
     std::uint64_t shmem = 0;
     std::size_t pos = 0;
     while (pos < text.size()) {
         std::size_t eol = text.find('\n', pos);
-        if (eol == std::string_view::npos) eol = text.size();
-        const std::string_view line = text.substr(pos, eol - pos);
+        if (eol == dftracer::utils::dstd::StringView::npos) eol = text.size();
+        const dftracer::utils::dstd::StringView line =
+            text.substr(pos, eol - pos);
         if (line.starts_with("anon "))
             anon = std::strtoull(line.data() + 5, nullptr, 10);
         else if (line.starts_with("shmem "))
@@ -151,11 +153,11 @@ std::uint64_t parse_current(const Buffer& b) {
 }
 
 std::uint64_t parse_status(const Buffer& b) {
-    const std::string_view text(b.data, b.size);
+    const dftracer::utils::dstd::StringView text(b.data, b.size);
     std::size_t pos = 0;
     while (pos < text.size()) {
         std::size_t eol = text.find('\n', pos);
-        if (eol == std::string_view::npos) eol = text.size();
+        if (eol == dftracer::utils::dstd::StringView::npos) eol = text.size();
         const std::string line(text.substr(pos, eol - pos));
         if (const auto v = mp::detail::kib_field(line, "RssAnon:")) return v;
         pos = eol + 1;
@@ -167,12 +169,13 @@ std::string cgroup_dir() {
     std::string path;
     Buffer b;
     if (!read_once_file("/proc/self/cgroup", b)) return path;
-    const std::string_view text(b.data, b.size);
+    const dftracer::utils::dstd::StringView text(b.data, b.size);
     std::size_t pos = 0;
     while (pos < text.size()) {
         std::size_t eol = text.find('\n', pos);
-        if (eol == std::string_view::npos) eol = text.size();
-        const std::string_view line = text.substr(pos, eol - pos);
+        if (eol == dftracer::utils::dstd::StringView::npos) eol = text.size();
+        const dftracer::utils::dstd::StringView line =
+            text.substr(pos, eol - pos);
         if (line.starts_with("0::"))
             path = std::string(CGROUP_ROOT) + std::string(line.substr(3));
         pos = eol + 1;
@@ -227,7 +230,8 @@ bool run_platform(std::size_t reads, std::vector<Row>& rows) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke";
+    const bool smoke =
+        argc == 2 && dftracer::utils::dstd::StringView(argv[1]) == "--smoke";
     if (argc > 2 || (argc == 2 && !smoke)) {
         std::fprintf(stderr, "usage: pressure_read_bench [--smoke]\n");
         return 2;

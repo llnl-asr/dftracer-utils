@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/store/segment.h>
 #include <dftracer/utils/store/varint.h>
 
@@ -118,7 +119,7 @@ dstd::ByteView SegmentBuilder::last_key() const {
 dstd::ByteView SegmentBuilder::keep(dstd::ByteView bytes) {
     if (bytes.empty()) return {};
     if (!arena_) arena_ = dstd::make_unique<dstd::StringArena>();
-    const std::string_view kept =
+    const dstd::StringView kept =
         arena_->push(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     return {reinterpret_cast<const std::byte*>(kept.data()), kept.size()};
 }

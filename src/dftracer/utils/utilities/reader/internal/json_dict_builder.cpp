@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/utilities/reader/internal/json_dict_builder.h>
 
 namespace dftracer::utils::utilities::reader::internal {
 
-void insert_simdjson_value(ArgsMap &map, std::string_view key,
+void insert_simdjson_value(ArgsMap &map, dstd::StringView key,
                            simdjson::ondemand::value val) {
     auto type = val.type();
     if (type.error()) return;
@@ -49,7 +50,7 @@ void parse_json_to_event(json::JsonParser &parser, JsonDictEvent &ev,
     ev.top.set_valid(true);
     const bool scale_time =
         time_scale.target && *time_scale.target != time_scale.metric;
-    parser.for_each_field([&](std::string_view key,
+    parser.for_each_field([&](dstd::StringView key,
                               simdjson::ondemand::value val) {
         if (scale_time && (key == "ts" || key == "dur")) {
             auto ri = val.get_int64();

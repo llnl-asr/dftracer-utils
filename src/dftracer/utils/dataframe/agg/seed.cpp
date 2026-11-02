@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/agg/detail.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -321,7 +322,7 @@ void agg_seed_group(AggState& st, const std::vector<std::string>& str_keys,
                 "SetUnion, the co-moments, occupancy)");
     const std::int64_t g = st.find_or_add_group(
         [](std::size_t) -> std::int64_t { return 0; },
-        [&](std::size_t k) -> std::string_view { return str_keys[k]; },
+        [&](std::size_t k) -> dstd::StringView { return str_keys[k]; },
         [&](std::size_t k) { return k < null_keys.size() && null_keys[k]; });
     st.counts[static_cast<std::size_t>(g)] += count;
     for (const AggSeedValue& v : values) {

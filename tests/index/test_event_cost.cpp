@@ -2,6 +2,7 @@
 // The cases count work, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/event_cost.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
@@ -170,7 +171,7 @@ TEST_SUITE("IndexEventCost") {
                                       pid, tid, ts, dur, has_dur);
         }
         const auto keys = [](const auto& map) {
-            std::vector<std::pair<std::string, std::uint64_t>> out;
+            std::vector<dstd::Pair<std::string, std::uint64_t>> out;
             for (const auto& [k, v] : map)
                 out.emplace_back(k, static_cast<std::uint64_t>(v));
             return out;

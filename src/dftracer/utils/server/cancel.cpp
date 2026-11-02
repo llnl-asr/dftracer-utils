@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/server/cancel.h>
 #include <dftracer/utils/server/signal_handler.h>
@@ -68,7 +69,7 @@ void CancelRegistry::remove(const std::string& id) {
 
 bool CancelRegistry::cancel(const std::string& id) {
     if (id.empty()) return false;
-    std::shared_ptr<CancelState> state;
+    dstd::SharedPtr<CancelState> state;
     {
         std::lock_guard<std::mutex> lock(mu_);
         auto it = tokens_.find(id);

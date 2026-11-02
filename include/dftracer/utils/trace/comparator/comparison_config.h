@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_COMPARATOR_COMPARISON_CONFIG_H
 #define DFTRACER_UTILS_TRACE_COMPARATOR_COMPARISON_CONFIG_H
 
+#include <dftracer/utils/dstd/optional.h>
 #include <simdjson.h>
 
 #include <cstddef>
@@ -41,13 +42,13 @@ struct ComparisonNode {
     std::vector<std::string> group_by;
 
     /// Per-node metric override (nullopt = inherit from parent).
-    std::optional<std::vector<std::string>> metrics;
+    dstd::Optional<std::vector<std::string>> metrics;
     /// Per-node percentile override (nullopt = inherit from parent).
-    std::optional<std::vector<double>> percentiles;
+    dstd::Optional<std::vector<double>> percentiles;
     /// Per-node threshold override (nullopt = inherit from parent).
-    std::optional<double> threshold_pct;
+    dstd::Optional<double> threshold_pct;
     /// Per-node sort override (nullopt = inherit from parent).
-    std::optional<std::string> sort_by;
+    dstd::Optional<std::string> sort_by;
 
     /// Child nodes forming the comparison hierarchy.
     std::vector<ComparisonNode> children;
@@ -101,7 +102,7 @@ struct ComparisonConfig {
 
     /// Parse a JSON config file. Returns nullopt and sets @p error on
     /// failure.
-    static std::optional<ComparisonConfig> from_json_file(
+    static dstd::Optional<ComparisonConfig> from_json_file(
         const std::string& path, std::string& error);
 
     /// Build config from CLI arguments (quick mode without JSON).
@@ -113,7 +114,7 @@ struct ComparisonConfig {
 
     /// Build a preset comparison config. Returns nullopt for unknown presets.
     /// Supported presets: "dlio".
-    static std::optional<ComparisonConfig> from_preset(
+    static dstd::Optional<ComparisonConfig> from_preset(
         const std::string& preset, const std::string& baseline,
         const std::string& variant);
 

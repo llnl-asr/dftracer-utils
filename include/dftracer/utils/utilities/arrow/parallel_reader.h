@@ -6,6 +6,7 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 
@@ -26,7 +27,7 @@ namespace dftracer::utils::utilities::arrow {
  */
 struct ArrowFileReadResult {
     std::string path;
-    std::shared_ptr<std::vector<ArrowExportResult>> batches;
+    dstd::SharedPtr<std::vector<ArrowExportResult>> batches;
     std::int64_t total_rows = 0;
     std::string error;
     bool success = true;

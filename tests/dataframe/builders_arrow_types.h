@@ -7,6 +7,7 @@
 // doctest TU can use REQUIRE inside them.
 
 #include <dftracer/utils/dataframe/arrow.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 
@@ -177,7 +178,7 @@ inline Series make_fixed_size_list_i64(
 }
 
 inline Series make_map_string_i64(
-    const std::vector<std::vector<std::pair<std::string, std::int64_t>>>&
+    const std::vector<std::vector<dstd::Pair<std::string, std::int64_t>>>&
         rows) {
     BuiltArrow b;
     REQUIRE(ArrowSchemaInitFromType(&b.schema, NANOARROW_TYPE_MAP) ==

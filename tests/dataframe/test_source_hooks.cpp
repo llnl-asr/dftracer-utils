@@ -13,6 +13,8 @@
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -103,8 +105,8 @@ enum class Kind {
 
 struct Log {
     std::vector<Kind> offered;
-    std::optional<AggregateSpec> last_agg;
-    std::optional<SortSpec> last_sort;
+    dstd::Optional<AggregateSpec> last_agg;
+    dstd::Optional<SortSpec> last_sort;
     std::int64_t last_k = -1;
 };
 
@@ -121,8 +123,8 @@ struct Policy {
 class SmartSource final : public Source,
                           public std::enable_shared_from_this<SmartSource> {
    public:
-    SmartSource(DataFrame df, std::shared_ptr<Log> log,
-                std::shared_ptr<const Policy> policy,
+    SmartSource(DataFrame df, dstd::SharedPtr<Log> log,
+                dstd::SharedPtr<const Policy> policy,
                 std::set<std::uint64_t> seen = {})
         : inner_(share(df)),
           frame_(std::move(df)),
@@ -136,11 +138,11 @@ class SmartSource final : public Source,
     }
     const DataFrame* as_frame() const override { return inner_.as_frame(); }
 
-    std::optional<SourceApplication> apply_filter(
+    dstd::Optional<SourceApplication> apply_filter(
         const Expr& predicate) const override {
         log_->offered.push_back(Kind::Filter);
         const std::uint64_t fp = expr_fingerprint(predicate);
-        if (!accepts(Kind::Filter) || seen_.count(fp)) return std::nullopt;
+        if (!accepts(Kind::Filter) || seen_.count(fp)) return dstd::nullopt;
         std::set<std::uint64_t> seen = seen_;
         seen.insert(fp);
         if (policy_->filter_status == ApplyStatus::Inexact)
@@ -151,10 +153,10 @@ class SmartSource final : public Source,
                       std::move(seen));
     }
 
-    std::optional<SourceApplication> apply_projection(
+    dstd::Optional<SourceApplication> apply_projection(
         const std::vector<NamedExpr>& exprs) const override {
         log_->offered.push_back(Kind::Projection);
-        if (!accepts(Kind::Projection)) return std::nullopt;
+        if (!accepts(Kind::Projection)) return dstd::nullopt;
         std::vector<std::string> names;
         for (const NamedExpr& e : exprs)
             names.push_back(
@@ -164,11 +166,11 @@ class SmartSource final : public Source,
                                                 : ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_aggregation(
+    dstd::Optional<SourceApplication> apply_aggregation(
         const AggregateSpec& spec) const override {
         log_->offered.push_back(Kind::Aggregation);
         log_->last_agg = spec;
-        if (!accepts(Kind::Aggregation)) return std::nullopt;
+        if (!accepts(Kind::Aggregation)) return dstd::nullopt;
         std::vector<std::string> keys;
         for (const NamedExpr& k : spec.keys) keys.push_back(k.name);
         std::vector<GroupAgg> aggs;
@@ -186,43 +188,44 @@ class SmartSource final : public Source,
                       ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_sort(
+    dstd::Optional<SourceApplication> apply_sort(
         const SortSpec& spec) const override {
         log_->offered.push_back(Kind::Sort);
         log_->last_sort = spec;
-        if (!accepts(Kind::Sort)) return std::nullopt;
+        if (!accepts(Kind::Sort)) return dstd::nullopt;
         return derive(frame_.sort_by_multi(spec.by, spec.descending),
                       ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_topn(const SortSpec& spec,
-                                                std::int64_t k) const override {
+    dstd::Optional<SourceApplication> apply_topn(
+        const SortSpec& spec, std::int64_t k) const override {
         log_->offered.push_back(Kind::TopN);
         log_->last_sort = spec;
         log_->last_k = k;
-        if (!accepts(Kind::TopN)) return std::nullopt;
+        if (!accepts(Kind::TopN)) return dstd::nullopt;
         return derive(frame_.sort_by_multi(spec.by, spec.descending).head(k),
                       ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_limit(
+    dstd::Optional<SourceApplication> apply_limit(
         std::int64_t offset, std::int64_t n) const override {
         log_->offered.push_back(Kind::Limit);
-        if (!accepts(Kind::Limit)) return std::nullopt;
+        if (!accepts(Kind::Limit)) return dstd::nullopt;
         return derive(frame_.slice(offset, n), ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_tail(std::int64_t n) const override {
+    dstd::Optional<SourceApplication> apply_tail(
+        std::int64_t n) const override {
         log_->offered.push_back(Kind::Tail);
-        if (!accepts(Kind::Tail)) return std::nullopt;
+        if (!accepts(Kind::Tail)) return dstd::nullopt;
         return derive(frame_.tail(n), ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_join(
+    dstd::Optional<SourceApplication> apply_join(
         const JoinSpec& spec) const override {
         log_->offered.push_back(Kind::Join);
         const auto* other = dynamic_cast<const SmartSource*>(spec.other.get());
-        if (!accepts(Kind::Join) || !other) return std::nullopt;
+        if (!accepts(Kind::Join) || !other) return dstd::nullopt;
         return derive(frame_.join(other->frame_, spec.left_on, spec.right_on,
                                   spec.how, spec.suffix),
                       ApplyStatus::Exact);
@@ -231,9 +234,9 @@ class SmartSource final : public Source,
    private:
     bool accepts(Kind k) const { return policy_->accept.count(k) != 0; }
 
-    std::optional<SourceApplication> derive(
+    dstd::Optional<SourceApplication> derive(
         DataFrame df, ApplyStatus status,
-        std::optional<std::set<std::uint64_t>> seen = std::nullopt) const {
+        dstd::Optional<std::set<std::uint64_t>> seen = dstd::nullopt) const {
         if (policy_->return_same_handle)
             return SourceApplication{shared_from_this(), status};
         return SourceApplication{
@@ -244,13 +247,13 @@ class SmartSource final : public Source,
 
     InMemorySource inner_;
     DataFrame frame_;
-    std::shared_ptr<Log> log_;
-    std::shared_ptr<const Policy> policy_;
+    dstd::SharedPtr<Log> log_;
+    dstd::SharedPtr<const Policy> policy_;
     std::set<std::uint64_t> seen_;
 };
 
 struct Smart {
-    std::shared_ptr<Log> log;
+    dstd::SharedPtr<Log> log;
     LazyFrame lf;
 };
 
@@ -721,7 +724,7 @@ struct BatchLog {
 // An in-memory source that reports a batch key, and counts how it is read.
 class KeyedSource final : public Source {
    public:
-    KeyedSource(DataFrame df, std::string key, std::shared_ptr<BatchLog> log)
+    KeyedSource(DataFrame df, std::string key, dstd::SharedPtr<BatchLog> log)
         : inner_(share(df)),
           frame_(std::move(df)),
           key_(std::move(key)),
@@ -732,10 +735,10 @@ class KeyedSource final : public Source {
         ++log_->scans;
         return inner_.scan(req);
     }
-    std::optional<std::string> batch_key() const override { return key_; }
-    std::optional<
+    dstd::Optional<std::string> batch_key() const override { return key_; }
+    dstd::Optional<
         std::vector<std::unique_ptr<dftracer::utils::dataframe::Cursor>>>
-    open_batch(std::vector<std::shared_ptr<const Source>> members,
+    open_batch(std::vector<dstd::SharedPtr<const Source>> members,
                std::uint64_t) const override {
         ++log_->opened;
         std::vector<std::unique_ptr<dftracer::utils::dataframe::Cursor>> out;
@@ -746,7 +749,7 @@ class KeyedSource final : public Source {
         return out;
     }
     coro::CoroTask<std::vector<DataFrame>> collect_batch(
-        std::vector<std::shared_ptr<const Source>> members) const override {
+        std::vector<dstd::SharedPtr<const Source>> members) const override {
         ++log_->batches;
         log_->last_members = members.size();
         std::vector<DataFrame> out;
@@ -759,10 +762,10 @@ class KeyedSource final : public Source {
     InMemorySource inner_;
     DataFrame frame_;
     std::string key_;
-    std::shared_ptr<BatchLog> log_;
+    dstd::SharedPtr<BatchLog> log_;
 };
 
-LazyFrame keyed(const std::string& key, std::shared_ptr<BatchLog> log) {
+LazyFrame keyed(const std::string& key, dstd::SharedPtr<BatchLog> log) {
     return LazyFrame::scan(
         std::make_shared<KeyedSource>(make_df(), key, std::move(log)));
 }

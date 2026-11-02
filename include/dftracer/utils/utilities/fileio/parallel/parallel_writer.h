@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/utilities/fileio/parallel/layout.h>
 
 #include <cstddef>
@@ -60,15 +62,15 @@ class ParallelWriter {
     /// Returned span is owned by the writer; valid until destruction.
     /// Must be called after `close()` (no concurrent writes).
     /// Empty for layouts that don't expose member boundaries.
-    virtual std::span<const MemberSpan> member_layout() const { return {}; }
+    virtual dstd::Span<const MemberSpan> member_layout() const { return {}; }
 
     /// Span of the most recent `write_chunk(worker_idx, ...)` call on this
     /// worker. Caller must invoke immediately after `co_await write_chunk()`
     /// returns; subsequent calls overwrite. For sharded layouts the offset
     /// is shard-local; remap with `shard_base_offsets()` after close.
-    virtual std::optional<MemberSpan> last_member(
+    virtual dstd::Optional<MemberSpan> last_member(
         std::size_t /*worker_idx*/) const {
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     /// Per-worker base offset to add to a shard-local `MemberSpan.offset` to

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/trace/parse_inflated.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
@@ -17,7 +18,7 @@ using dftracer::utils::trace::strip_array_delimiters;
 namespace {
 
 // parse_buffer needs the buffer to carry simdjson's trailing padding.
-std::shared_ptr<std::string> padded(const std::string& s) {
+dftracer::utils::dstd::SharedPtr<std::string> padded(const std::string& s) {
     auto b = std::make_shared<std::string>(s);
     b->resize(s.size() + simdjson::SIMDJSON_PADDING, '\0');
     return b;

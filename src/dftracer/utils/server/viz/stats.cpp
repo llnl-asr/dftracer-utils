@@ -2,6 +2,8 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
@@ -55,7 +57,7 @@ namespace {
 
 enum class GroupBy { Name, Cat, Pid, Fhash };
 
-static GroupBy parse_group_by(std::string_view g) {
+static GroupBy parse_group_by(dstd::StringView g) {
     if (g == "cat") return GroupBy::Cat;
     if (g == "pid") return GroupBy::Pid;
     if (g == "fhash" || g == "file") return GroupBy::Fhash;
@@ -106,8 +108,8 @@ struct StatAgg {
     }
     double coverage(double bw) const {
         if (cov.empty()) return 0;
-        std::vector<std::pair<std::int32_t, std::int32_t>> pts(cov.begin(),
-                                                               cov.end());
+        std::vector<dstd::Pair<std::int32_t, std::int32_t>> pts(cov.begin(),
+                                                                cov.end());
         std::sort(pts.begin(), pts.end());
         double buckets = 0;
         int running = 0;
@@ -316,10 +318,10 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
 
     auto fold_events = [begin, end, scan_begin, interval_native, &gcol, cov_bw,
                         &fields](StatMap& acc,
-                                 const std::vector<std::string_view>& events) {
+                                 const std::vector<dstd::StringView>& events) {
         thread_local dftracer::utils::json::RecordParser parser;
         thread_local std::string buf;
-        fields.for_each_event(events, [&](std::string_view ev) {
+        fields.for_each_event(events, [&](dstd::StringView ev) {
             // simdjson's SIMD stages read up to SIMDJSON_PADDING bytes past
             // the JSON; a bare std::string leaves those uninitialised.
             // Zero- pad the reused buffer and parse only the event's

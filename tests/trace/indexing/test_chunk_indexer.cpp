@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -13,7 +14,7 @@ using namespace dftracer::utils::index::build;
 
 // Helper to create a test trace file (plain text), then compress to gzip.
 // Returns the .gz path and the uncompressed size.
-static std::pair<std::string, std::size_t> create_test_trace_gz(
+static dstd::Pair<std::string, std::size_t> create_test_trace_gz(
     const std::string& dir, int num_events) {
     std::string plain_path = dir + "/test_index.trace";
     {

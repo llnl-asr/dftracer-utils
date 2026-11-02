@@ -31,7 +31,7 @@ ExprPtr expr_of(ExprNode node) {
 
 ExprPtr field_of(const dstd::String& name) {
     Path p;
-    p.steps.push_back(PathStep{name, false, std::nullopt});
+    p.steps.push_back(PathStep{name, false, dstd::nullopt});
     return expr_of(std::move(p));
 }
 
@@ -382,7 +382,7 @@ dstd::Optional<Decorrelated> decorrelate(const Pipeline& p, bool scalar) {
             auto any = [&](Expr&, Path&) { reads = true; };
             if (e) enclosing(*e, 0, any);
         });
-    if (!reads) return std::nullopt;
+    if (!reads) return dstd::nullopt;
 
     Copy empty = copy_of(p);
     Decorrelated d;

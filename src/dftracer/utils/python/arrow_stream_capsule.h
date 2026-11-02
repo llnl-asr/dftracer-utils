@@ -7,12 +7,13 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 
 #include <memory>
 
 typedef struct {
-    PyObject_HEAD std::shared_ptr<ArrowIteratorState> state;
+    PyObject_HEAD dftracer::utils::dstd::SharedPtr<ArrowIteratorState> state;
     bool consumed;
 } ArrowBatchStreamObject;
 
@@ -22,7 +23,8 @@ namespace dftracer::utils::python {
 
 int init_arrow_batch_stream(PyObject *m);
 
-PyObject *make_arrow_batch_stream(std::shared_ptr<ArrowIteratorState> state);
+PyObject *make_arrow_batch_stream(
+    dftracer::utils::dstd::SharedPtr<ArrowIteratorState> state);
 
 }  // namespace dftracer::utils::python
 

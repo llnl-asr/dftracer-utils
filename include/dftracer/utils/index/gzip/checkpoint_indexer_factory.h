@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/format_detector.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 
 #include <memory>
@@ -28,7 +29,7 @@ class CheckpointIndexerFactory {
      * @return Shared pointer to the appropriate indexer, or nullptr if format
      * not supported
      */
-    static std::shared_ptr<CheckpointIndexer> create(
+    static dstd::SharedPtr<CheckpointIndexer> create(
         const std::string &archive_path, const std::string &index_path = "",
         std::uint64_t checkpoint_size =
             common::constants::indexer::DEFAULT_CHECKPOINT_SIZE,

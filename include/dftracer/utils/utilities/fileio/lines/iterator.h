@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_ITERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_ITERATOR_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 
 #include <iterator>
@@ -64,7 +65,7 @@ class LineIterator {
      */
     LineIterator(Container* parent, bool is_end)
         : parent_(parent),
-          current_line_(std::string_view{}, 0),
+          current_line_(dstd::StringView{}, 0),
           is_end_(is_end) {
         if (!is_end_ && parent_ && parent_->has_next()) {
             current_line_ = parent_->next();

@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_CONTAINMENT_FOLD_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -92,7 +94,7 @@ dataframe::DataFrame build_flamegraph(
 
 // Both frames from one buffer, sorting each lane once. .first = call_tree,
 // .second = flamegraph.
-std::pair<dataframe::DataFrame, dataframe::DataFrame> build_containment_both(
+dstd::Pair<dataframe::DataFrame, dataframe::DataFrame> build_containment_both(
     const std::vector<ContainmentRow>& rows,
     const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 
@@ -104,7 +106,7 @@ std::string flamegraph_partial(
     const std::vector<ContainmentRow>& rows,
     const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 dataframe::DataFrame merge_flamegraph_partials(
-    const std::vector<std::string_view>& partials);
+    const std::vector<dstd::StringView>& partials);
 
 // The View's containment terminal as a fuse-engine Fold: buffers rows during
 // the shared scan, builds in parallel at the end. One fold, two builders
@@ -142,7 +144,7 @@ class ContainmentFold : public Fold {
         return build_flamegraph(rows_, sorted_lanes(rows_), *intern_,
                                 spec_.out);
     }
-    std::pair<dataframe::DataFrame, dataframe::DataFrame> containment() const {
+    dstd::Pair<dataframe::DataFrame, dataframe::DataFrame> containment() const {
         return build_containment_both(rows_, *intern_, spec_.out);
     }
     std::string flamegraph_partial() const {

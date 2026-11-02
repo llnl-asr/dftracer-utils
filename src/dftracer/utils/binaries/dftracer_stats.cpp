@@ -8,6 +8,9 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -71,7 +74,7 @@ struct StatsConfig {
     bool no_auto_index = false;
     std::size_t checkpoint_size = 0;
     std::size_t executor_threads = 0;
-    std::optional<Query> query;
+    dstd::Optional<Query> query;
     std::vector<std::string> filter_names;
     std::vector<std::string> filter_cats;
     std::vector<std::string> group_by;
@@ -256,12 +259,12 @@ struct IndexPartition {
     std::vector<FileWorkItem> files_needing_index;
     std::vector<ResolvedFile> indexed_entries;
     ResolverResult resolver_result;
-    std::vector<std::pair<std::size_t, TraceStatistics>> precomputed_failures;
-    std::vector<std::pair<std::size_t, TraceStatistics>> precomputed_successes;
+    std::vector<dstd::Pair<std::size_t, TraceStatistics>> precomputed_failures;
+    std::vector<dstd::Pair<std::size_t, TraceStatistics>> precomputed_successes;
 };
 
 struct AggregateStatsResult {
-    std::vector<std::pair<std::size_t, TraceStatistics>> indexed_stats;
+    std::vector<dstd::Pair<std::size_t, TraceStatistics>> indexed_stats;
     TraceStatistics total;
     std::size_t successful_count = 0;
     std::size_t failed_count = 0;
@@ -275,7 +278,7 @@ struct IndexedRootSnapshot {
 };
 
 static void append_failed_stats_result(
-    std::vector<std::pair<std::size_t, TraceStatistics>>& results,
+    std::vector<dstd::Pair<std::size_t, TraceStatistics>>& results,
     std::size_t file_index, const std::string& file_path,
     const std::string& error_message) {
     TraceStatistics failed;
@@ -286,7 +289,7 @@ static void append_failed_stats_result(
 }
 
 static void append_empty_indexed_stats_result(
-    std::vector<std::pair<std::size_t, TraceStatistics>>& results,
+    std::vector<dstd::Pair<std::size_t, TraceStatistics>>& results,
     std::size_t file_index, const std::string& file_path,
     const std::string& index_path) {
     TraceStatistics stats;
@@ -301,7 +304,7 @@ static double ns_to_ms(std::uint64_t ns) {
     return static_cast<double>(ns) / 1'000'000.0;
 }
 
-using CountPair = std::pair<std::string, std::uint64_t>;
+using CountPair = dstd::Pair<std::string, std::uint64_t>;
 
 template <typename Map>
 static std::vector<CountPair> sorted_by_count_desc(const Map& counts) {
@@ -452,7 +455,7 @@ static void print_detailed_grouped_duration(
     const DetailedStatistics& detailed, std::uint64_t top_n,
     const std::unordered_map<std::string, std::string>& hash_resolutions) {
     if (!detailed.grouped_duration.empty()) {
-        using DurPair = std::pair<std::string, const DistributionStats*>;
+        using DurPair = dstd::Pair<std::string, const DistributionStats*>;
 
         // Group entries by category
         std::unordered_map<std::string, std::vector<DurPair>> by_category;
@@ -465,7 +468,7 @@ static void print_detailed_grouped_duration(
         }
 
         // Sort categories by total event count descending
-        using CatPair = std::pair<std::string, std::vector<DurPair>*>;
+        using CatPair = dstd::Pair<std::string, std::vector<DurPair>*>;
         std::vector<CatPair> sorted_cats;
         sorted_cats.reserve(by_category.size());
         for (auto& [cat, entries] : by_category) {
@@ -555,7 +558,7 @@ static void print_detailed_grouped_io(
         bool is_global = (detailed.grouped_io.size() == 1 &&
                           detailed.grouped_io.count("__global__") == 1);
 
-        using IOPair = std::pair<std::string, const IOEventMetrics*>;
+        using IOPair = dstd::Pair<std::string, const IOEventMetrics*>;
         std::vector<IOPair> sorted_io;
         sorted_io.reserve(detailed.grouped_io.size());
         for (const auto& [key, io] : detailed.grouped_io) {
@@ -692,7 +695,7 @@ static coro::CoroTask<void> process_file_detailed(
     const std::vector<std::string>* group_by_ptr,
     DetailedStatistics* aggregate_detailed_ptr, std::mutex* aggregate_mutex_ptr,
     std::mutex* output_mutex_ptr,
-    std::vector<std::pair<std::size_t, std::string>>* json_results_ptr) {
+    std::vector<dstd::Pair<std::size_t, std::string>>* json_results_ptr) {
     std::string index_path =
         trace::internal::determine_index_path(file_path, index_dir);
 
@@ -773,7 +776,7 @@ static void run_detailed_query_workers(
     const duql::Query* qp, const std::vector<std::string>* fn,
     const std::vector<std::string>* fc, const std::vector<std::string>* gb,
     DetailedStatistics* ad, std::mutex* am, std::mutex* om,
-    std::vector<std::pair<std::size_t, std::string>>* jr) {
+    std::vector<dstd::Pair<std::size_t, std::string>>* jr) {
     auto file_chan = coro::make_channel<std::size_t>(executor_threads * 2);
 
     scope.spawn([ch = file_chan->producer(),
@@ -976,7 +979,7 @@ static coro::CoroTask<IndexPartition> resolve_index_state(
 
 static coro::CoroTask<dftracer::utils::index::build::IndexBuildBatchResult>
 run_batch_build(
-    std::shared_ptr<dftracer::utils::index::build::IndexBuildBatchConfig>
+    dstd::SharedPtr<dftracer::utils::index::build::IndexBuildBatchConfig>
         config) {
     co_return co_await dftracer::utils::index::build::BatchBuilder::process(
         std::move(config));
@@ -1045,7 +1048,7 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
     auto refresh_result = co_await resolver(refresh_input);
 
     // Add successfully indexed files
-    std::optional<dftracer::utils::index::Snapshot> refreshed;
+    dstd::Optional<dftracer::utils::index::Snapshot> refreshed;
     if (!refresh_result.cached.empty())
         refreshed.emplace(
             common::unwrap(dftracer::utils::index::plan::open_snapshot(
@@ -1096,7 +1099,7 @@ static coro::CoroTask<int> run_detailed_stats(
     std::mutex aggregate_mutex;
     std::mutex output_mutex;
     auto json_results =
-        std::make_unique<std::vector<std::pair<std::size_t, std::string>>>();
+        std::make_unique<std::vector<dstd::Pair<std::size_t, std::string>>>();
 
     auto* filter_names_ptr = &config_ptr->filter_names;
     auto* filter_cats_ptr = &config_ptr->filter_cats;
@@ -1162,15 +1165,15 @@ static coro::CoroTask<int> run_detailed_stats(
 // One file's statistics from the per-file rows the index build wrote. The
 // duration sketch and histogram stay empty, as on the View path. Nullopt when
 // a row the report needs is missing or not current.
-static std::optional<ChunkStatistics> file_rows_to_statistics(
+static dstd::Optional<ChunkStatistics> file_rows_to_statistics(
     const dftracer::utils::index::Snapshot& snapshot,
     const dftracer::utils::index::FileRef& file,
     const MergedStatisticsResult* scalar,
     dstd::StringViewMap<std::uint64_t>* pid_tids, bool cats, bool names) {
-    if (!scalar || scalar->num_chunks == 0) return std::nullopt;
+    if (!scalar || scalar->num_chunks == 0) return dstd::nullopt;
     if ((cats || names) && !dftracer::utils::index::extension_current(
                                snapshot, file, IndexExtension::Counts))
-        return std::nullopt;
+        return dstd::nullopt;
 
     ChunkStatistics cs;
     const auto& row = scalar->stats;
@@ -1201,7 +1204,7 @@ static std::optional<ChunkStatistics> file_rows_to_statistics(
 static coro::CoroTask<void> process_index_group(
     const std::string* index_path_ptr,
     const std::vector<ResolvedFile>* group_ptr,
-    std::vector<std::pair<std::size_t, TraceStatistics>>* indexed_stats_ptr,
+    std::vector<dstd::Pair<std::size_t, TraceStatistics>>* indexed_stats_ptr,
     std::mutex* stats_mutex_ptr, bool needs_per_file_results,
     TraceStatistics* total_ptr, std::mutex* total_mutex_ptr,
     std::atomic<std::size_t>* successful_ptr,

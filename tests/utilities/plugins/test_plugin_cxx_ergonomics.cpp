@@ -13,6 +13,7 @@
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_op_codes.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/trace/schema.h>
@@ -284,7 +285,7 @@ TEST_CASE("plugin cxx: Batch view iterates typed Events") {
             evs[i].has_dur = true;
         }
         ScanUnit unit{};
-        fold.step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+        fold.step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
     }
 
     if (p->destroy) p->destroy(p->self);
@@ -329,7 +330,7 @@ TEST_CASE("plugin cxx: Event args expose typed values and dotted lookup") {
                              intern.get_or_insert("/tmp/a"));
         std::vector<FoldEvent> evs = {fe};
         ScanUnit unit{};
-        fold.step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+        fold.step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
     }
 
     if (p->destroy) p->destroy(p->self);
@@ -484,7 +485,7 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
         auto slice = master.slice();
         auto* pf = static_cast<PluginFold*>(slice.get());
         ScanUnit unit;
-        pf->step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+        pf->step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
         master.merge(*pf);
     }
     Runtime rt(1);

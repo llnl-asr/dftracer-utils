@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -118,7 +120,7 @@ struct ChunkIndexerConfig {
 
 /// A field as the index names its dimension: an args key or a dotted path
 /// below args, without the "args." prefix a query column carries.
-inline std::string extra_dimension_name(std::string_view field) {
+inline std::string extra_dimension_name(dstd::StringView field) {
     if (field.rfind("args.", 0) == 0) field.remove_prefix(5);
     return std::string(field);
 }
@@ -246,7 +248,7 @@ struct ChunkIndexerInput {
     }
 
     /// Existing chunk state for incremental re-scanning
-    std::shared_ptr<ChunkIndexState> existing_state;
+    dstd::SharedPtr<ChunkIndexState> existing_state;
 };
 
 struct ChunkIndexerOutput {

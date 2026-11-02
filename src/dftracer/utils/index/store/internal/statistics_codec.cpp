@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/internal/payload_codec.h>
 #include <dftracer/utils/index/store/internal/statistics_codec.h>
@@ -33,7 +34,7 @@ std::string encode_file_scalar_stats_value(
 }
 
 index::schemas::dft::MergedStatisticsResult decode_file_scalar_stats_value(
-    std::string_view value) {
+    dstd::StringView value) {
     if (value.size() < 8) {
         throw IndexerError(IndexerError::Type::DatabaseError,
                            "Corrupt file scalar statistics value");

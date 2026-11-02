@@ -30,7 +30,7 @@ int order(T a, T b) {
 // to a double, so 2^53 + 1 does not equal 2^53.
 inline dstd::Optional<int> cmp_num(std::int64_t a, double d) {
     constexpr double TWO_POW_63 = 9223372036854775808.0;
-    if (std::isnan(d)) return std::nullopt;
+    if (std::isnan(d)) return dstd::nullopt;
     if (d >= TWO_POW_63) return -1;
     if (d < -TWO_POW_63) return 1;
     const double f = std::floor(d);
@@ -41,7 +41,7 @@ inline dstd::Optional<int> cmp_num(std::int64_t a, double d) {
 
 inline dstd::Optional<int> cmp_num(std::uint64_t a, double d) {
     constexpr double TWO_POW_64 = 18446744073709551616.0;
-    if (std::isnan(d)) return std::nullopt;
+    if (std::isnan(d)) return dstd::nullopt;
     if (d < 0) return 1;
     if (d >= TWO_POW_64) return -1;
     const double f = std::floor(d);
@@ -71,7 +71,7 @@ dstd::Optional<int> compare_numbers(A a, B b) {
     using detail::order;
     if constexpr (std::is_same_v<A, B>) {
         if constexpr (std::is_same_v<A, double>)
-            if (std::isnan(a) || std::isnan(b)) return std::nullopt;
+            if (std::isnan(a) || std::isnan(b)) return dstd::nullopt;
         return order(a, b);
     } else if constexpr (std::is_same_v<A, double>) {
         return flip(cmp_num(b, a));
@@ -126,13 +126,13 @@ inline dstd::Optional<Number> parse_number(dstd::StringView text) {
     if (std::uint64_t u = 0;
         std::from_chars(first, last, u).ptr == last && !text.empty())
         return Number{u};
-    if (text.empty() || !may_start_double(text.front())) return std::nullopt;
+    if (text.empty() || !may_start_double(text.front())) return dstd::nullopt;
     // strtod, not from_chars: the double overload is not on older macOS.
     const dstd::String copy(text);
     char* end = nullptr;
     const double d = std::strtod(copy.c_str(), &end);
     if (!copy.empty() && end == copy.c_str() + copy.size()) return Number{d};
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 }  // namespace dftracer::utils::duql

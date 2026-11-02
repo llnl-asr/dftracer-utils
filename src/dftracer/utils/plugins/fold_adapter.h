@@ -4,6 +4,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -335,7 +336,7 @@ class PluginFold : public trace::views::detail::Fold {
     // This plugin's own plan_duql, compiled once from the C string the
     // plugin's dftu_plugin::plan_duql returns. Unset means deliver every
     // event.
-    std::optional<Query> query_;
+    dstd::Optional<Query> query_;
     ValueMap qmap_;
 
     // dftu_svc_duql::duql_compile/duql_matches: queries a plugin compiles

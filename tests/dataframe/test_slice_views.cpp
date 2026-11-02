@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -28,7 +29,7 @@ namespace {
 
 constexpr std::int64_t N = 40;
 
-using Row = std::optional<std::string>;
+using Row = dftracer::utils::dstd::Optional<std::string>;
 using Rows = std::vector<Row>;
 using Idx = std::vector<std::int64_t>;
 

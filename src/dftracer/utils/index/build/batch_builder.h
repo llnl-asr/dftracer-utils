@@ -6,6 +6,8 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
@@ -47,10 +49,10 @@ inline std::atomic<std::size_t> g_max_sink_bytes{MAX_SINK_BYTES};
 /// are about `workers` blocks of equal cost (equal file counts when `costs` is
 /// empty).
 dstd::Vector<std::size_t> cut_blocks(std::size_t files,
-                                     std::span<const std::uint64_t> costs,
+                                     dstd::Span<const std::uint64_t> costs,
                                      std::size_t workers);
 
-inline constexpr std::array<std::string_view, 7> DEFAULT_BLOOM_DIMENSIONS = {
+inline constexpr std::array<dstd::StringView, 7> DEFAULT_BLOOM_DIMENSIONS = {
     "name", "cat", "pid", "tid", "hhash", "fhash", "shash",
 };
 
@@ -148,7 +150,7 @@ struct IndexBuildBatchResult {
 class BatchBuilder {
    public:
     static coro::CoroTask<IndexBuildBatchResult> process(
-        std::shared_ptr<IndexBuildBatchConfig> config);
+        dstd::SharedPtr<IndexBuildBatchConfig> config);
 };
 
 }  // namespace dftracer::utils::index::build

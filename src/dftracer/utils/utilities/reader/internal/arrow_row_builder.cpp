@@ -6,6 +6,8 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <ankerl/unordered_dense.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/schema.h>
@@ -49,14 +51,14 @@ enum IOCat : std::int8_t {
     IoSync = 7,
 };
 
-std::int8_t get_io_cat(std::string_view func) {
+std::int8_t get_io_cat(dstd::StringView func) {
     using namespace dftracer::utils::trace::internal;
     // Op sets are disjoint, so a single flat lookup preserves the original
     // first-match semantics. Keys view the constexpr op arrays (static
     // storage).
-    static const ankerl::unordered_dense::map<std::string_view, std::int8_t>
+    static const ankerl::unordered_dense::map<dstd::StringView, std::int8_t>
         op_to_cat = [] {
-            ankerl::unordered_dense::map<std::string_view, std::int8_t> m;
+            ankerl::unordered_dense::map<dstd::StringView, std::int8_t> m;
             for (auto op : posix_ops::READ) m.emplace(op, IoRead);
             for (auto op : posix_ops::WRITE) m.emplace(op, IoWrite);
             for (auto op : posix_ops::SYNC) m.emplace(op, IoSync);
@@ -74,9 +76,9 @@ using ::dftracer::utils::common::detail::iequals;
 
 // Fields extracted from a row's "args" object in a single pass.
 struct ParsedArgs {
-    std::optional<std::string_view> name, value, hhash, fhash;
-    std::optional<std::int64_t> epoch, step, size_sum, ret;
-    std::optional<std::int64_t> offset, image_idx, image_size;
+    dstd::Optional<dstd::StringView> name, value, hhash, fhash;
+    dstd::Optional<std::int64_t> epoch, step, size_sum, ret;
+    dstd::Optional<std::int64_t> offset, image_idx, image_size;
     // Other int/float args, kept for profile/sys columns.
     std::unordered_map<std::string, std::int64_t> int_map;
     std::unordered_map<std::string, double> float_map;
@@ -93,7 +95,7 @@ ParsedArgs parse_row_args(simdjson::ondemand::value &args_val) {
         if (field.error()) continue;
         auto key_r = field.unescaped_key();
         if (key_r.error()) continue;
-        std::string_view key = key_r.value_unsafe();
+        dstd::StringView key = key_r.value_unsafe();
         auto val_r = field.value();
         if (val_r.error()) continue;
         auto val = val_r.value_unsafe();
@@ -174,11 +176,11 @@ bool normalize_row(RecordBatchBuilder &builder, dstd::StringArena &arena,
     // member walk (dispatch on key, any field order). ---
     dftracer::utils::trace::RecordPhase phase =
         dftracer::utils::trace::RecordPhase::Unknown;
-    std::string_view name_sv, cat_sv;
-    std::optional<std::int64_t> pid_opt, tid_opt, ts_opt, dur_opt;
+    dstd::StringView name_sv, cat_sv;
+    dstd::Optional<std::int64_t> pid_opt, tid_opt, ts_opt, dur_opt;
     ParsedArgs args;
     parser.for_each_field(
-        [&](std::string_view key, simdjson::ondemand::value val) {
+        [&](dstd::StringView key, simdjson::ondemand::value val) {
             if (key == "ph") {
                 phase = dftracer::utils::trace::read_phase(val);
             } else if (key == "name") {
@@ -229,7 +231,7 @@ bool normalize_row(RecordBatchBuilder &builder, dstd::StringArena &arena,
     bool is_sys = (row_type == RowSystem);
 
     // Name: metadata rows use args.name if available
-    std::string_view out_name = name_sv;
+    dstd::StringView out_name = name_sv;
     if (is_M && args.name && !args.name->empty()) {
         out_name = *args.name;
     }
@@ -367,7 +369,7 @@ bool normalize_row(RecordBatchBuilder &builder, dstd::StringArena &arena,
 
 // Membership test for the projection (linear over a handful of kept keys, so
 // no per-field allocation).
-static bool keep_key(const RowBuildOptions &opts, std::string_view key) {
+static bool keep_key(const RowBuildOptions &opts, dstd::StringView key) {
     if (!opts.keep || opts.keep->empty()) return true;
     for (const auto &k : *opts.keep)
         if (k == key) return true;
@@ -380,7 +382,7 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
     if (normalize) return normalize_row(builder, arena, parser, time_scale);
 
     using SVH = JsonValueHelper;
-    parser.for_each_field([&](std::string_view key_sv,
+    parser.for_each_field([&](dstd::StringView key_sv,
                               simdjson::ondemand::value val) {
         if (!keep_key(opts, key_sv)) return;
         auto type_result = val.type();
@@ -464,7 +466,7 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
 }
 
 bool process_json_line(RecordBatchBuilder &builder, JsonParser &parser,
-                       dstd::StringArena &arena, std::string_view content,
+                       dstd::StringArena &arena, dstd::StringView content,
                        bool normalize, TimeScaleState &time_scale,
                        const RowBuildOptions &opts) {
     const char *trimmed;
@@ -472,7 +474,7 @@ bool process_json_line(RecordBatchBuilder &builder, JsonParser &parser,
     if (!dftracer::utils::json::trim_and_validate_with_comma(
             content.data(), content.size(), trimmed, trimmed_length))
         return false;
-    if (!parser.parse(std::string_view(trimmed, trimmed_length))) return false;
+    if (!parser.parse(dstd::StringView(trimmed, trimmed_length))) return false;
     return build_arrow_row(builder, parser, arena, normalize, time_scale, opts);
 }
 

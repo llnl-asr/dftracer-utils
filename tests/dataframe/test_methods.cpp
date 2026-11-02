@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
 
@@ -860,7 +861,7 @@ TEST_CASE(
     std::vector<std::int64_t> a(n), id(n);
     std::vector<std::int32_t> c(n);
     std::vector<std::string> words(n);
-    std::vector<std::string_view> views(n);
+    std::vector<dftracer::utils::dstd::StringView> views(n);
     std::vector<std::uint8_t> valid((n + 7) / 8, 0);
     std::vector<char> is_valid(n);
     for (std::int64_t i = 0; i < n; ++i) {

@@ -3,6 +3,7 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/arrow.h>
 #include <doctest/doctest.h>
@@ -36,9 +37,9 @@ struct Reader {
     }
 };
 
-using OptB = std::optional<bool>;
-using OptS = std::optional<std::string>;
-using OptI = std::optional<std::int64_t>;
+using OptB = dftracer::utils::dstd::Optional<bool>;
+using OptS = dftracer::utils::dstd::Optional<std::string>;
+using OptI = dftracer::utils::dstd::Optional<std::int64_t>;
 
 ArrowExportResult make_batch(const std::vector<OptB>& sel,
                              const std::vector<OptS>& file,
@@ -230,9 +231,9 @@ TEST_CASE("attribute - empty populations, no div-by-zero") {
 TEST_CASE("attribute - null dim value and null select skipped") {
     // row2 has a null file (skipped in file counts); row3 has a null select
     // (excluded from both populations).
-    std::vector<OptB> sel = {true, false, true, std::nullopt};
-    std::vector<OptS> file = {std::string("a"), std::string("a"), std::nullopt,
-                              std::string("a")};
+    std::vector<OptB> sel = {true, false, true, dftracer::utils::dstd::nullopt};
+    std::vector<OptS> file = {std::string("a"), std::string("a"),
+                              dftracer::utils::dstd::nullopt, std::string("a")};
     std::vector<OptI> rk(4, OptI(0));
     auto in = make_batch(sel, file, rk);
     auto out = attr(in, {1}, 0);

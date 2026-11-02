@@ -8,6 +8,8 @@
 
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -35,7 +37,7 @@ namespace dftracer::utils::server {
 using trace::views::ViewDefinition;
 
 // `value`. No-op when the key is absent. Returns whether it rewrote.
-inline bool rewrite_uint_field(std::string& json, std::string_view key,
+inline bool rewrite_uint_field(std::string& json, dstd::StringView key,
                                std::uint64_t value) {
     auto pos = json.find(key);
     if (pos == std::string::npos) return false;
@@ -126,16 +128,16 @@ struct VizWindow {
 /// per-handler extras (summary/lookback/min_dur/group_by).
 // A bad request when `query` is not a duql filter; an endpoint takes no
 // pipeline stage.
-inline std::optional<HttpResponse> refuse_duql(std::string_view query,
-                                               std::string_view endpoint) {
-    if (query.empty() || duql::try_parse(query)) return std::nullopt;
+inline dstd::Optional<HttpResponse> refuse_duql(dstd::StringView query,
+                                                dstd::StringView endpoint) {
+    if (query.empty() || duql::try_parse(query)) return dstd::nullopt;
     if (auto tree = duql::syntax::parse(query); tree && tree->pipeline) {
         const auto& stages = tree->pipeline->stages;
         for (std::size_t i = 0; i < stages.size(); ++i) {
             if (i == 0 &&
                 std::holds_alternative<duql::syntax::Where>(stages[i].node))
                 continue;
-            std::string_view word = query.substr(stages[i].span.offset);
+            dstd::StringView word = query.substr(stages[i].span.offset);
             word = word.substr(0, word.find_first_of(" \t\r\n("));
             return HttpResponse::bad_request(
                 "endpoint " + std::string(endpoint) +
@@ -148,7 +150,7 @@ inline std::optional<HttpResponse> refuse_duql(std::string_view query,
 
 inline dftracer::utils::dstd::Expected<VizWindow, HttpResponse>
 parse_viz_window(const QueryParams& params, TraceIndex& index,
-                 std::string_view endpoint) {
+                 dstd::StringView endpoint) {
     double begin = params.get_double("begin", 0);
     double end = params.get_double("end", 0);
 
@@ -208,7 +210,7 @@ inline void append_lane_clause(std::string& dsl, const char* field,
     }
 }
 
-inline void apply_lanes(std::string& dsl, std::string_view lanes_str) {
+inline void apply_lanes(std::string& dsl, dstd::StringView lanes_str) {
     if (lanes_str.empty()) return;
 
     thread_local dftracer::utils::json::RecordParser tl_parser;
@@ -252,7 +254,7 @@ inline void apply_lanes(std::string& dsl, std::string_view lanes_str) {
     }
 }
 
-inline void apply_filters(std::string& dsl, std::string_view filters_str,
+inline void apply_filters(std::string& dsl, dstd::StringView filters_str,
                           const TraceFields& fields) {
     if (filters_str.empty()) return;
 

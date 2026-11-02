@@ -13,6 +13,10 @@
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
 
@@ -31,7 +35,7 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-using Row = std::optional<std::string>;
+using Row = dftracer::utils::dstd::Optional<std::string>;
 using Rows = std::vector<Row>;
 using Idx = std::vector<std::int64_t>;
 
@@ -50,12 +54,12 @@ Rows pool_rows(std::size_t n) {
 }
 
 Series flat_of(const Rows& rows) {
-    std::vector<std::string_view> v;
+    std::vector<dftracer::utils::dstd::StringView> v;
     std::vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
-        v.emplace_back(rows[i] ? std::string_view(*rows[i])
-                               : std::string_view());
+        v.emplace_back(rows[i] ? dftracer::utils::dstd::StringView(*rows[i])
+                               : dftracer::utils::dstd::StringView());
         if (rows[i])
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         else
@@ -136,7 +140,7 @@ std::vector<Case> cases() {
     {
         Series values{dftu_series_share(dv.handle()->child().get())};
         const_cast<dftu_series*>(dv.handle())
-            ->set_child(std::shared_ptr<dftu_series>(
+            ->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(
                 view_of(rows_of(values)).release()));
     }
     out.push_back(
@@ -423,12 +427,13 @@ TEST_SUITE("kernels keep layouts") {
     }
 
     TEST_CASE("a dictionary entry that is null makes its rows null") {
-        const std::vector<std::string_view> vals{"a", "", "c"};
+        const std::vector<dftracer::utils::dstd::StringView> vals{"a", "", "c"};
         const std::uint8_t child_valid = 0b101;
         const std::vector<std::int32_t> codes{0, 1, 0, 2};
         Series d = dictionary_from_codes(
             codes,
-            Series::strings(std::span<const std::string_view>(vals),
+            Series::strings(dftracer::utils::dstd::Span<
+                                const dftracer::utils::dstd::StringView>(vals),
                             &child_valid),
             nullptr);
         REQUIRE(d.encoding() == Encoding::Dictionary);
@@ -474,7 +479,8 @@ TEST_SUITE("kernels keep layouts") {
         std::vector<std::string> cats;
         for (int i = 0; i < 1000; ++i)
             cats.push_back(i % 3 == 0 ? "POSIX" : i % 3 == 1 ? "STDIO" : "PO");
-        std::vector<std::string_view> views(cats.begin(), cats.end());
+        std::vector<dftracer::utils::dstd::StringView> views(cats.begin(),
+                                                             cats.end());
         const Series flat = Series::strings(views);
         const Series dict = flat.dictionary_encode();
         REQUIRE(dict.encoding() == Encoding::Dictionary);
@@ -485,12 +491,14 @@ TEST_SUITE("kernels keep layouts") {
     }
 
     TEST_CASE("a null dictionary entry gives null predicate rows") {
-        const std::vector<std::string_view> vals{"apple", "", "pear"};
+        const std::vector<dftracer::utils::dstd::StringView> vals{"apple", "",
+                                                                  "pear"};
         const std::uint8_t child_valid = 0b101;
         const std::vector<std::int32_t> codes{0, 1, 2, 0, 1};
         const Series d = dictionary_from_codes(
             codes,
-            Series::strings(std::span<const std::string_view>(vals),
+            Series::strings(dftracer::utils::dstd::Span<
+                                const dftracer::utils::dstd::StringView>(vals),
                             &child_valid),
             nullptr);
         CHECK(truth_of(run(dftu_series_str_starts_with, d, "a")) == "TNFTN");
@@ -689,7 +697,8 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         std::vector<std::uint8_t> child_valid((child.size() + 7) / 8, 0xFF);
         child_valid[null_entry >> 3] &=
             static_cast<std::uint8_t>(~(1u << (null_entry & 7)));
-        std::vector<std::string_view> views(child.begin(), child.end());
+        std::vector<dftracer::utils::dstd::StringView> views(child.begin(),
+                                                             child.end());
 
         std::vector<std::int32_t> codes(N);
         std::vector<std::uint8_t> row_valid((N + 7) / 8, 0xFF);
@@ -710,7 +719,8 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         }
         Series dict = dictionary_from_codes(
             codes,
-            Series::strings(std::span<const std::string_view>(views),
+            Series::strings(dftracer::utils::dstd::Span<
+                                const dftracer::utils::dstd::StringView>(views),
                             child_valid.data()),
             row_valid.data());
         REQUIRE(dict.encoding() == Encoding::Dictionary);
@@ -784,10 +794,13 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
     }
 
     TEST_CASE("materialize and argsort read nested selection and dictionary") {
-        const std::vector<std::string_view> vals{"a", "b", "c"};
+        const std::vector<dftracer::utils::dstd::StringView> vals{"a", "b",
+                                                                  "c"};
         const std::vector<std::int32_t> codes{0, 1, 0, 2};
         const Series dict = dictionary_from_codes(
-            codes, Series::strings(std::span<const std::string_view>(vals)),
+            codes,
+            Series::strings(dftracer::utils::dstd::Span<
+                            const dftracer::utils::dstd::StringView>(vals)),
             nullptr);
 
         auto* sel = new dftu_series();
@@ -797,8 +810,8 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         sel->data = new_buffer(3 * sizeof(std::int64_t));
         const std::int64_t idx[3] = {3, 0, -1};
         std::memcpy(writable(sel->data), idx, sizeof idx);
-        sel->set_child(
-            std::shared_ptr<dftu_series>(dftu_series_share(dict.handle())));
+        sel->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(
+            dftu_series_share(dict.handle())));
         const Series over_dict{sel};
 
         const Series flat = over_dict.materialize();
@@ -815,7 +828,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         outer->data = new_buffer(2 * sizeof(std::int32_t));
         const std::int32_t outer_codes[2] = {1, 0};
         std::memcpy(writable(outer->data), outer_codes, sizeof outer_codes);
-        outer->set_child(std::shared_ptr<dftu_series>(
+        outer->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(
             dftu_series_share(over_dict.handle())));
         const Series dict_over_sel{outer};
         const Series flat2 = dict_over_sel.materialize();

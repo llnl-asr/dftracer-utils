@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>  // Cursor, Morsel
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 
 #include <atomic>
 #include <cstdint>
@@ -99,7 +100,7 @@ class Writer {
    private:
     struct Codec;
     std::ofstream os_;
-    std::shared_ptr<common::SpillCharge> charge_;
+    dstd::SharedPtr<common::SpillCharge> charge_;
     std::uint64_t written_ = 0;
     std::string blob_;
     std::unique_ptr<Codec> codec_;
@@ -140,7 +141,7 @@ class Reader : public Cursor {
    public:
     explicit Reader(const std::string& path);
     ~Reader() override;
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override;
+    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t max_rows) override;
     /// Moves to `pos`, the start of a morsel (a value of Writer::bytes()), so
     /// the next call of next() reads that morsel.
     void seek(std::uint64_t pos);
@@ -188,7 +189,7 @@ class Spool {
    public:
     /// With `dir`, the run file lives in that shared directory under its own
     /// run id, so many spools can share one directory.
-    explicit Spool(std::uint64_t budget, std::shared_ptr<Dir> dir = nullptr);
+    explicit Spool(std::uint64_t budget, dstd::SharedPtr<Dir> dir = nullptr);
     ~Spool();
     Spool(const Spool&) = delete;
     Spool& operator=(const Spool&) = delete;
@@ -220,7 +221,7 @@ class Spool {
     bool read_ = false;  // reader() ran: the spool no longer takes morsels
     std::vector<Morsel> mem_;
     std::vector<std::uint64_t> offsets_;  // where each spilled morsel starts
-    std::shared_ptr<Dir> dir_;
+    dstd::SharedPtr<Dir> dir_;
     std::string run_;
     std::unique_ptr<Writer> writer_;
 };

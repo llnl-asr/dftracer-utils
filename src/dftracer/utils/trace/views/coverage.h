@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_COVERAGE_H
 #define DFTRACER_UTILS_TRACE_VIEWS_COVERAGE_H
 
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -18,7 +20,7 @@ namespace dftracer::utils::trace::views::detail {
 /// rather than a slow one.
 class CoverageSet {
    public:
-    static std::string key(std::string_view file, std::uint64_t checkpoint) {
+    static std::string key(dstd::StringView file, std::uint64_t checkpoint) {
         std::string k(file);
         k += '\x1f';
         k += std::to_string(checkpoint);
@@ -27,24 +29,24 @@ class CoverageSet {
 
     /// Whole-file unit, for artifacts a single member cannot establish. The
     /// marker is not a digit, so it cannot collide with a checkpoint key.
-    static std::string file_key(std::string_view file) {
+    static std::string file_key(dstd::StringView file) {
         std::string k(file);
         k += '\x1f';
         k += '*';
         return k;
     }
 
-    void add(std::string_view file, std::uint64_t checkpoint) {
+    void add(dstd::StringView file, std::uint64_t checkpoint) {
         units_.insert(key(file, checkpoint));
     }
 
-    bool covers(std::string_view file, std::uint64_t checkpoint) const {
+    bool covers(dstd::StringView file, std::uint64_t checkpoint) const {
         return units_.count(key(file, checkpoint)) != 0;
     }
 
-    void add_file(std::string_view file) { units_.insert(file_key(file)); }
+    void add_file(dstd::StringView file) { units_.insert(file_key(file)); }
 
-    bool covers_file(std::string_view file) const {
+    bool covers_file(dstd::StringView file) const {
         return units_.count(file_key(file)) != 0;
     }
 
@@ -87,7 +89,7 @@ class PendingCoverage {
     ~PendingCoverage() { abandon(); }
 
     /// Record that `checkpoint` of `file` was scanned end to end.
-    void mark_complete(std::string_view file, std::uint64_t checkpoint) {
+    void mark_complete(dstd::StringView file, std::uint64_t checkpoint) {
         pending_.insert(CoverageSet::key(file, checkpoint));
     }
 
@@ -95,7 +97,7 @@ class PendingCoverage {
     /// by artifacts a single member cannot establish: metadata that defines a
     /// hash is emitted at the hash's first use, so a later member referencing
     /// it carries no definition of its own.
-    void mark_file_complete(std::string_view file) {
+    void mark_file_complete(dstd::StringView file) {
         pending_.insert(CoverageSet::file_key(file));
     }
 

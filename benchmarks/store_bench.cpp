@@ -214,7 +214,7 @@ std::vector<std::uint64_t> parse_u64_list(const std::string& text) {
 
 bool parse_args(int argc, char** argv, Options& opt) {
     for (int i = 1; i < argc; ++i) {
-        const std::string_view arg = argv[i];
+        const dftracer::utils::dstd::StringView arg = argv[i];
         const auto value = [&]() -> std::string {
             if (i + 1 < argc) return argv[++i];
             return {};
@@ -339,12 +339,12 @@ void usage() {
            "                   [--space DIR]\n";
 }
 
-dstd::String dstring(std::string_view text) {
-    return dstd::String(text.data(), text.size());
+dftracer::utils::dstd::String dstring(dftracer::utils::dstd::StringView text) {
+    return dftracer::utils::dstd::String(text.data(), text.size());
 }
 
-std::string to_std(const dstd::Error& error) {
-    const std::string_view message = error.message();
+std::string to_std(const dftracer::utils::dstd::Error& error) {
+    const dftracer::utils::dstd::StringView message = error.message();
     if (message.empty()) return std::string(error.name());
     return std::string(error.name()) + ": " + std::string(message);
 }
@@ -1342,7 +1342,7 @@ bool Bench::query_store(const Workload& workload, const std::string& dir,
     const std::uint64_t cold_rss = dftu::bench::peak_heap_bytes();
     const auto cold_started = std::chrono::steady_clock::now();
     std::uint64_t cold_nanos = 0;
-    dstd::Optional<Snapshot> cold;
+    dftracer::utils::dstd::Optional<Snapshot> cold;
     {
         auto opened_cold = Snapshot::open(dir);
         cold_nanos =
@@ -1411,7 +1411,7 @@ bool Bench::query_store(const Workload& workload, const std::string& dir,
             }
             const auto& value = *found;
             if (!value.has_value() ||
-                std::string_view(
+                dftracer::utils::dstd::StringView(
                     reinterpret_cast<const char*>(value->bytes().data()),
                     value->bytes().size()) !=
                     values.for_key(item.key.data(), item.key.size())) {
@@ -1720,10 +1720,11 @@ FoldScan Bench::fold_scan(const Snapshot& snapshot,
             const std::size_t begin = scopes.size() * part / count;
             const std::size_t end = scopes.size() * (part + 1) / count;
             std::vector<std::int64_t>& sums = parts[part];
-            auto cursor = snapshot.scan(
-                namespace_spec,
-                dstd::Span<const ScopeKey>(scopes.data() + begin, end - begin),
-                {}, {});
+            auto cursor =
+                snapshot.scan(namespace_spec,
+                              dftracer::utils::dstd::Span<const ScopeKey>(
+                                  scopes.data() + begin, end - begin),
+                              {}, {});
             while (!cursor.at_end()) {
                 auto value = cursor.value();
                 const std::uint64_t index = fold_key_index(cursor.key());

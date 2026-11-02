@@ -2,6 +2,9 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/tables.h>
@@ -40,7 +43,7 @@ bool metadata_phase(const duql::QueryNode& n) {
 
 // The top-level `and` terms of `n` that compare a field with a string.
 void equalities(const duql::QueryNode& n,
-                std::vector<std::pair<std::string, std::string>>& out) {
+                std::vector<dstd::Pair<std::string, std::string>>& out) {
     if (const auto* a = std::get_if<duql::AndNode>(&n.data)) {
         equalities(*a->left, out);
         equalities(*a->right, out);
@@ -70,7 +73,7 @@ duql::QueryNodePtr without_phase(const duql::QueryNode& n) {
     return duql::clone(n);
 }
 
-RowSetFold::Value cell(const views::PodSource& src, std::string_view path) {
+RowSetFold::Value cell(const views::PodSource& src, dstd::StringView path) {
     using V = RowSetFold::Value;
     if (const auto* sp = src.special(path)) {
         switch (*sp) {
@@ -107,7 +110,7 @@ std::string text_of(const RowSetFold::Value& v) {
     return std::visit(
         [](const auto& x) -> std::string {
             using T = std::decay_t<decltype(x)>;
-            if constexpr (std::is_same_v<T, std::monostate>)
+            if constexpr (std::is_same_v<T, dstd::Monostate>)
                 return {};
             else if constexpr (std::is_same_v<T, bool>)
                 return x ? "true" : "false";
@@ -122,7 +125,7 @@ std::string text_of(const RowSetFold::Value& v) {
 std::vector<std::uint8_t> validity(const std::vector<RowSetFold::Value>& c) {
     std::vector<std::uint8_t> bits((c.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < c.size(); ++i)
-        if (!std::holds_alternative<std::monostate>(c[i]))
+        if (!std::holds_alternative<dstd::Monostate>(c[i]))
             bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     return bits;
 }
@@ -135,7 +138,7 @@ df::Series series_of(const std::vector<RowSetFold::Value>& c) {
     bool mixed = false;
     bool numbers = true;
     for (const auto& v : c) {
-        if (std::holds_alternative<std::monostate>(v)) continue;
+        if (std::holds_alternative<dstd::Monostate>(v)) continue;
         const std::size_t k = v.index();
         numbers = numbers && k >= 2 && k <= 4;
         if (kind && kind != k) mixed = true;
@@ -178,7 +181,7 @@ df::Series series_of(const std::vector<RowSetFold::Value>& c) {
     std::vector<std::string> text;
     text.reserve(c.size());
     for (const auto& v : c) text.push_back(text_of(v));
-    const std::vector<std::string_view> views(text.begin(), text.end());
+    const std::vector<dstd::StringView> views(text.begin(), text.end());
     return df::Series::strings(views, bits.data());
 }
 
@@ -197,7 +200,7 @@ RowSetFold::RowSetFold(dftracer::utils::dstd::StringIntern& intern,
         pending_[r].columns.resize(rowsets_[r].columns.size());
         sealed_[r].columns.resize(rowsets_[r].columns.size());
         Guard g;
-        std::vector<std::pair<std::string, std::string>> eq;
+        std::vector<dstd::Pair<std::string, std::string>> eq;
         if (rowsets_[r].filter) equalities(rowsets_[r].filter->root(), eq);
         for (const auto& [field, value] : eq) {
             if (field == "ph" && value == "M")

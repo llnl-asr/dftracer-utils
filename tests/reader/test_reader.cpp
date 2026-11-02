@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
@@ -77,7 +79,7 @@ TEST_CASE("C++ Indexer - Basic functionality") {
         auto indexer2 = std::move(indexer1);
 
         // Move assignment
-        std::shared_ptr<CheckpointIndexer> indexer3 = std::move(indexer2);
+        dstd::SharedPtr<CheckpointIndexer> indexer3 = std::move(indexer2);
         REQUIRE(indexer3 != nullptr);
     }
 }
@@ -1145,7 +1147,7 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
 
         // Read multiple non-overlapping ranges
         std::vector<std::string> segments;
-        std::vector<std::pair<std::size_t, std::size_t>> ranges = {
+        std::vector<dstd::Pair<std::size_t, std::size_t>> ranges = {
             {0, 50}, {50, 100}, {100, 150}};
 
         for (const auto& range : ranges) {
@@ -1491,7 +1493,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
         std::size_t max_bytes = reader->get_max_bytes();
 
         // Test various range sizes to trigger different internal paths
-        std::vector<std::pair<std::size_t, std::size_t>> ranges = {
+        std::vector<dstd::Pair<std::size_t, std::size_t>> ranges = {
             {0, 1},                               // Very small range
             {0, 10},                              // Small range
             {0, 100},                             // Medium range
@@ -1549,7 +1551,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
         }
 
         // Create multiple readers
-        std::vector<std::shared_ptr<Reader>> readers;
+        std::vector<dstd::SharedPtr<Reader>> readers;
         for (int i = 0; i < 5; ++i) {
             readers.push_back(ReaderFactory::create(gz_file, idx_file));
             CHECK(readers.back()->is_valid());

@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_scalar_helpers.h>
@@ -60,11 +61,11 @@ enum {
 
 // A borrowed view of a Python str; valid while `o` lives, which the ast list
 // guarantees for the duration of build_expr.
-bool py_str_view(PyObject* o, std::string_view* out) {
+bool py_str_view(PyObject* o, dftracer::utils::dstd::StringView* out) {
     Py_ssize_t n = 0;
     const char* s = PyUnicode_AsUTF8AndSize(o, &n);
     if (!s) return false;
-    *out = std::string_view(s, static_cast<std::size_t>(n));
+    *out = dftracer::utils::dstd::StringView(s, static_cast<std::size_t>(n));
     return true;
 }
 
@@ -84,7 +85,7 @@ bool py_values_series(PyObject* list, dataframe::Series* out) {
         std::vector<std::string> values;
         values.reserve(static_cast<std::size_t>(n));
         for (Py_ssize_t i = 0; i < n; ++i) {
-            std::string_view s;
+            dftracer::utils::dstd::StringView s;
             if (!py_str_view(PySequence_Fast_GET_ITEM(seq, i), &s)) {
                 Py_DECREF(seq);
                 return false;
@@ -153,7 +154,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 stack.push_back(dataframe::expr_lit(PyFloat_AsDouble(arg(1))));
                 break;
             case AstLitS: {
-                std::string_view v;
+                dftracer::utils::dstd::StringView v;
                 if (!py_str_view(arg(1), &v)) return false;
                 stack.push_back(dataframe::expr_lit_str(v));
                 break;
@@ -176,7 +177,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 if (PyUnicode_Check(arg(2))) {
                     // expr_cmp copies the text into the node, so the borrow
                     // ends with this call.
-                    std::string_view s;
+                    dftracer::utils::dstd::StringView s;
                     if (!py_str_view(arg(2), &s)) return false;
                     rhs.kind = DFTU_SCALAR_TAG_STR;
                     rhs.len = static_cast<std::uint32_t>(s.size());
@@ -237,7 +238,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 break;
             }
             case AstStrPred: {
-                std::string_view pattern;
+                dftracer::utils::dstd::StringView pattern;
                 if (!py_str_view(arg(2), &pattern)) return false;
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_str_pred(
@@ -278,7 +279,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 break;
             }
             case AstStrFn: {
-                std::string_view text, text2;
+                dftracer::utils::dstd::StringView text, text2;
                 if (PyTuple_GET_SIZE(t) != 7 || !py_str_view(arg(2), &text) ||
                     !py_str_view(arg(3), &text2))
                     return false;
@@ -308,14 +309,14 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 break;
             }
             case AstStrFind: {
-                std::string_view needle;
+                dftracer::utils::dstd::StringView needle;
                 if (!py_str_view(arg(1), &needle)) return false;
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_str_find(a, needle));
                 break;
             }
             case AstStrReplace: {
-                std::string_view from, to;
+                dftracer::utils::dstd::StringView from, to;
                 if (!py_str_view(arg(1), &from) || !py_str_view(arg(2), &to))
                     return false;
                 dataframe::Expr a = pop();

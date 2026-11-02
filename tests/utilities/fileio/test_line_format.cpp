@@ -3,6 +3,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/fileio/json_line_format.h>
 #include <doctest/doctest.h>
@@ -35,7 +36,7 @@ std::string fmt_ct(const A&... a) {
 }
 
 template <class E = PlainEscape, class... A>
-std::string fmt_rt(std::string_view f, const A&... a) {
+std::string fmt_rt(dstd::StringView f, const A&... a) {
     auto lf = line_format::BasicLineFormat<E>::parse(f);
     REQUIRE(lf.has_value());
     const auto v = lf->view();
@@ -65,7 +66,7 @@ concept RtOne = requires(GzipLineWriter& w, const LineFormat& f, T v) {
 enum class Color { Red };
 
 static_assert(CtOne<int> && CtOne<std::uint64_t> && CtOne<bool> &&
-              CtOne<double> && CtOne<std::string_view> && CtOne<std::string> &&
+              CtOne<double> && CtOne<dstd::StringView> && CtOne<std::string> &&
               CtOne<const char*> && CtOne<line_format::Raw>);
 static_assert(RtOne<int> && RtOne<std::string> && RtOne<line_format::Raw>);
 template <class T>
@@ -123,8 +124,8 @@ TEST_CASE("line_format - values and escapes") {
           "-5 18446744073709551615 -8 9\n");
     CHECK(fmt_ct<"{} {}">(true, false) == "true false\n");
     CHECK(fmt_ct<"{} {} {}">(2.5, 0.1f, 1e300) == "2.5 0.1 1e+300\n");
-    CHECK(fmt_ct<"\"{}\"">(std::string_view("a\"b\\c")) == "\"a\"b\\c\"\n");
-    CHECK(fmt_ct<"\"{}\"", JsonEscape>(std::string_view("a\"b\\c\n\t\x01")) ==
+    CHECK(fmt_ct<"\"{}\"">(dstd::StringView("a\"b\\c")) == "\"a\"b\\c\"\n");
+    CHECK(fmt_ct<"\"{}\"", JsonEscape>(dstd::StringView("a\"b\\c\n\t\x01")) ==
           "\"a\\\"b\\\\c\\n\\t\\u0001\"\n");
     CHECK(fmt_ct<"{}", JsonEscape>(raw("a\"b")) == "a\"b\n");
     CHECK(fmt_rt<JsonEscape>("{}", "q\"") == "q\\\"\n");

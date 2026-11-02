@@ -138,20 +138,20 @@ class JsonValue {
 
     template <typename T>
     dstd::Optional<T> get_optional() const {
-        if (!valid_) return std::nullopt;
+        if (!valid_) return dstd::nullopt;
 
         if constexpr (std::is_same_v<T, dstd::String>) {
             auto r = elem_.get_string();
             return r.error()
-                       ? std::nullopt
+                       ? dstd::nullopt
                        : dstd::Optional<T>(dstd::String(r.value_unsafe()));
         } else if constexpr (std::is_same_v<T, dstd::StringView>) {
             auto r = elem_.get_string();
-            return r.error() ? std::nullopt
+            return r.error() ? dstd::nullopt
                              : dstd::Optional<T>(r.value_unsafe());
         } else if constexpr (std::is_same_v<T, const char*>) {
             auto r = elem_.get_c_str();
-            return r.error() ? std::nullopt
+            return r.error() ? dstd::nullopt
                              : dstd::Optional<T>(r.value_unsafe());
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
             auto r = elem_.get_uint64();
@@ -159,10 +159,10 @@ class JsonValue {
             auto ri = elem_.get_int64();
             if (!ri.error() && ri.value_unsafe() >= 0)
                 return static_cast<std::uint64_t>(ri.value_unsafe());
-            return std::nullopt;
+            return dstd::nullopt;
         } else if constexpr (std::is_same_v<T, std::int64_t>) {
             auto r = elem_.get_int64();
-            return r.error() ? std::nullopt
+            return r.error() ? dstd::nullopt
                              : dstd::Optional<T>(r.value_unsafe());
         } else if constexpr (std::is_same_v<T, double>) {
             auto r = elem_.get_double();
@@ -171,10 +171,10 @@ class JsonValue {
             if (!ri.error()) return static_cast<double>(ri.value_unsafe());
             auto ru = elem_.get_uint64();
             if (!ru.error()) return static_cast<double>(ru.value_unsafe());
-            return std::nullopt;
+            return dstd::nullopt;
         } else if constexpr (std::is_same_v<T, bool>) {
             auto r = elem_.get_bool();
-            return r.error() ? std::nullopt
+            return r.error() ? dstd::nullopt
                              : dstd::Optional<T>(r.value_unsafe());
         } else {
             static_assert(!sizeof(T),

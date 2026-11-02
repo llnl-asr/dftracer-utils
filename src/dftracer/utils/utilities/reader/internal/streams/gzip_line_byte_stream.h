@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 
 #include <cstddef>
@@ -284,7 +285,7 @@ class GzipLineByteStream : public GzipStream {
         }
 
         // Return view to the data in buffer_
-        co_return std::span<const char>(buffer_.data(), valid_bytes_);
+        co_return dstd::Span<const char>(buffer_.data(), valid_bytes_);
     }
 
     void reset() override {

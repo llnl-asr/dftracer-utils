@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/comparator/comparison_aggregation.h>
@@ -44,9 +45,11 @@ static dftracer::utils::dstd::StringIntern& test_intern() {
 
 // A row of a query grouped by pid and window, with `count` events of equal
 // duration and, when `size_total` is set, equal size.
-static void add_row(AggQueryResult& result, std::string_view cat,
-                    std::string_view name, uint64_t pid, uint64_t window,
-                    uint64_t count, uint64_t dur_total, uint64_t size_total) {
+static void add_row(AggQueryResult& result,
+                    dftracer::utils::dstd::StringView cat,
+                    dftracer::utils::dstd::StringView name, uint64_t pid,
+                    uint64_t window, uint64_t count, uint64_t dur_total,
+                    uint64_t size_total) {
     AggKey key;
     key.cat = result.strings().get_or_insert(cat);
     key.name = result.strings().get_or_insert(name);
@@ -327,8 +330,8 @@ TEST_SUITE("ComparisonFilter") {
 
     TEST_CASE("metadata counts processes, threads and file pairs") {
         AggQueryResult merged;
-        auto row = [&](std::string_view name, uint64_t ts, uint64_t te,
-                       uint64_t dur_total, auto&& observe) {
+        auto row = [&](dftracer::utils::dstd::StringView name, uint64_t ts,
+                       uint64_t te, uint64_t dur_total, auto&& observe) {
             AggKey key;
             key.cat = merged.strings().get_or_insert("posix");
             key.name = merged.strings().get_or_insert(name);

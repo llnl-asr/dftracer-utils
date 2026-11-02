@@ -25,7 +25,7 @@ namespace agg = dftracer::utils::index::schemas::dft::agg;
 
 constexpr double US_TO_S = 1e-6;
 
-inline bool matches(std::string_view a, std::string_view b) { return a == b; }
+inline bool matches(dstd::StringView a, dstd::StringView b) { return a == b; }
 
 struct ComponentAccumulator {
     // Per-(pid, time_bucket) entries used to materialize per-rank sample seqs.
@@ -175,8 +175,8 @@ AggregatedTraces load_aggregated_traces(const std::string& index_path,
     for (const auto* row : rows) {
         const trace::AggKey& key = row->first;
         const agg::AggPartial& partial = row->second;
-        const std::string_view cat = result.text(key.cat);
-        const std::string_view name = result.text(key.name);
+        const dstd::StringView cat = result.text(key.cat);
+        const dstd::StringView name = result.text(key.name);
 
         ComponentAccumulator* target = nullptr;
         if (matches(cat, options.fetch_block.cat) &&

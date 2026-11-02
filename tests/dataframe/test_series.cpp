@@ -28,6 +28,8 @@
 #include <vector>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/arrow_bridge.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <cstring>
@@ -385,7 +387,7 @@ TEST_SUITE("vec") {
         const std::string fullwidth = "\xEF\xBC\xA1";
         const std::string hangul = "\xEA\xB0\x80";
         const std::string jamo = "\xE1\x84\x80\xE1\x85\xA1";
-        const std::vector<std::string_view> rows{
+        const std::vector<dftracer::utils::dstd::StringView> rows{
             decomposed, composed, lig, fullwidth, hangul, "plain", "", "a\xFF"};
         const std::uint8_t valid[1] = {0x7F};  // the last row is null
         Series s = Series::strings(rows, valid);
@@ -409,8 +411,8 @@ TEST_SUITE("vec") {
         CHECK(nfkd.string_at(1) == decomposed);
         CHECK(nfc.string_at(4) == hangul);
         // A bad byte in a valid row makes that row null.
-        const std::vector<std::string_view> bad{"ok", "a\xFF", "\xC3",
-                                                "\xED\xA0\x80"};
+        const std::vector<dftracer::utils::dstd::StringView> bad{
+            "ok", "a\xFF", "\xC3", "\xED\xA0\x80"};
         Series b = Series::strings(bad).str_normalize(DFTU_NORM_NFC);
         REQUIRE(b.valid());
         CHECK(b.string_at(0) == "ok");
@@ -431,7 +433,8 @@ TEST_SUITE("vec") {
         // euro sign -> "EUR", w -> two codepoints.
         Series from =
             Series::strings({"l", "o", "\xC3\xA9", "\xE2\x82\xAC", "w"});
-        const std::vector<std::string_view> to_rows{"", "0", "e", "EUR", "vv"};
+        const std::vector<dftracer::utils::dstd::StringView> to_rows{
+            "", "0", "e", "EUR", "vv"};
         const std::uint8_t to_valid[1] = {0x1E};  // row 0 (l) is null: delete
         Series to = Series::strings(to_rows, to_valid);
         Series out = s.str_translate(from, to);
@@ -450,7 +453,8 @@ TEST_SUITE("vec") {
         REQUIRE(same.valid());
         CHECK(same.string_at(0) == "hello world");
         // Nulls stay null; a row that is not valid UTF-8 is null.
-        const std::vector<std::string_view> rows{"abc", "", "a\xFF"};
+        const std::vector<dftracer::utils::dstd::StringView> rows{"abc", "",
+                                                                  "a\xFF"};
         const std::uint8_t valid[1] = {0x05};
         Series n =
             Series::strings(rows, valid)
@@ -471,7 +475,7 @@ TEST_SUITE("vec") {
             s.str_translate(Series::strings({""}), Series::strings({"c"}))
                 .valid());
         const std::uint8_t none[1] = {0};
-        const std::vector<std::string_view> one{"a"};
+        const std::vector<dftracer::utils::dstd::StringView> one{"a"};
         CHECK_FALSE(
             s.str_translate(Series::strings(one, none), Series::strings({"c"}))
                 .valid());
@@ -509,7 +513,8 @@ TEST_SUITE("vec") {
         Series keep = Series::strings({"aaa bbb ccc"})
                           .str_wrap(4, DFTU_WRAP_BREAK_LONG_WORDS);
         CHECK(keep.string_at(0) == "aaa \nbbb \nccc");
-        const std::vector<std::string_view> rows{"ab cd", "", "a\xFF"};
+        const std::vector<dftracer::utils::dstd::StringView> rows{"ab cd", "",
+                                                                  "a\xFF"};
         const std::uint8_t valid[1] = {0x05};
         Series n = Series::strings(rows, valid).str_wrap(2, 0);
         CHECK(n.string_at(0) == "ab\n \ncd");
@@ -1068,7 +1073,8 @@ TEST_SUITE("vec") {
         CHECK(bit(has, 3) == 1);
         CHECK(bit(has, 4) == 0);
         CHECK(bit(has, 5) == 1);
-        // Empty needle contains everywhere (std::string_view::find semantics).
+        // Empty needle contains everywhere
+        // (dftracer::utils::dstd::StringView::find semantics).
         Series empty = s.str_contains("");
         for (std::int64_t i = 0; i < s.length(); ++i) CHECK(bit(empty, i) == 1);
 
@@ -1200,12 +1206,12 @@ TEST_SUITE("vec") {
 
         Series hashed = Series::strings({"POSIX", "read"}).fnv1a();
         CHECK(hashed.type() == TypeId::Uint64);
-        CHECK(
-            hashed.data<std::uint64_t>()[0] ==
-            dftracer::utils::dstd::hash::fnv1a_hash(std::string_view{"POSIX"}));
-        CHECK(
-            hashed.data<std::uint64_t>()[1] ==
-            dftracer::utils::dstd::hash::fnv1a_hash(std::string_view{"read"}));
+        CHECK(hashed.data<std::uint64_t>()[0] ==
+              dftracer::utils::dstd::hash::fnv1a_hash(
+                  dftracer::utils::dstd::StringView{"POSIX"}));
+        CHECK(hashed.data<std::uint64_t>()[1] ==
+              dftracer::utils::dstd::hash::fnv1a_hash(
+                  dftracer::utils::dstd::StringView{"read"}));
 
         Series parsed = Series::strings({"00000000000000ff", "00000000deadbeef",
                                          "deadbeef"})
@@ -3211,7 +3217,7 @@ TEST_CASE("string_at reads dictionary, selection and null rows") {
     CHECK(picked.string_at(1) == "y");
     CHECK(picked.string_at(2) == "z");
 
-    const std::vector<std::string_view> sv = {"a", "b", "a"};
+    const std::vector<dftracer::utils::dstd::StringView> sv = {"a", "b", "a"};
     const std::uint8_t valid[1] = {0x05};
     Series with_null = Series::strings(sv, valid).dictionary_encode();
     REQUIRE(with_null.is_null(1));
@@ -3239,7 +3245,7 @@ TEST_CASE("string_at reads a LargeString dictionary") {
 }
 
 TEST_CASE("dftu_series_string_at returns null and length 0 when no value") {
-    const std::vector<std::string_view> sv = {"a", "b", "a"};
+    const std::vector<dftracer::utils::dstd::StringView> sv = {"a", "b", "a"};
     const std::uint8_t valid[1] = {0x05};
     Series dict = Series::strings(sv, valid).dictionary_encode();
     std::int64_t len = 7;
@@ -3273,10 +3279,13 @@ TEST_CASE("Series::strings refuses more than INT32_MAX total bytes") {
     // The sizes are summed before any byte is read, so the pointer is never
     // dereferenced.
     const char byte = 'x';
-    const std::string_view big(&byte, std::size_t{1} << 30);
-    const std::vector<std::string_view> views = {big, big, big};
-    CHECK_THROWS_AS(Series::strings(std::span<const std::string_view>(views)),
-                    std::length_error);
+    const dftracer::utils::dstd::StringView big(&byte, std::size_t{1} << 30);
+    const std::vector<dftracer::utils::dstd::StringView> views = {big, big,
+                                                                  big};
+    CHECK_THROWS_AS(
+        Series::strings(dftracer::utils::dstd::Span<
+                        const dftracer::utils::dstd::StringView>(views)),
+        std::length_error);
 }
 
 TEST_CASE("dftu_series_new_string rejects wrapped offsets") {

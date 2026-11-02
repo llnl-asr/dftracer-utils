@@ -4,7 +4,9 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
@@ -123,7 +125,7 @@ IndexStatus to_status(const build::ResolverResult& r) {
     s.aggregation_needs_rebuild = !r.stale_aggregation_roots.empty();
     s.ready.reserve(r.cached.size());
     for (const auto& f : r.cached) s.ready.push_back(f.file_path);
-    ankerl::unordered_dense::set<std::string_view> seen;
+    ankerl::unordered_dense::set<dstd::StringView> seen;
     for (const auto* list :
          {&r.needs_checkpoint, &r.needs_bloom, &r.needs_aggregation}) {
         for (const auto& item : *list) {
@@ -142,7 +144,7 @@ void throw_on_failures(const build::ResolverResult& r) {
                                          f.message);
 }
 
-void throw_on_error(const dstd::Error& error, std::string_view what) {
+void throw_on_error(const dstd::Error& error, dstd::StringView what) {
     throw common::DFTUtilsException::cat(common::ErrorCode::Io, what, ": ",
                                          error.message());
 }
@@ -193,7 +195,7 @@ T block_on(Runtime& rt, const char* name, Fn fn) {
 
 }  // namespace
 
-Indexer::Indexer(std::shared_ptr<Impl> impl) : impl_(std::move(impl)) {}
+Indexer::Indexer(dstd::SharedPtr<Impl> impl) : impl_(std::move(impl)) {}
 
 void Indexer::validate_options(Impl& impl) {
     for (const auto& name : impl.options.extensions) {
@@ -208,7 +210,7 @@ void Indexer::validate_options(Impl& impl) {
     if (impl.options.bloom) impl.bloom_config().validate();
 }
 
-Indexer Indexer::finish_open(std::shared_ptr<Impl> impl) {
+Indexer Indexer::finish_open(dstd::SharedPtr<Impl> impl) {
     for (const auto& [index_path, traces] : impl->by_index())
         load_index_schemas(index_path);
     if (!impl->options.schema.empty()) get_schema(impl->options.schema);
@@ -548,7 +550,7 @@ IndexStatus Indexer::drop_extension(std::string extension) {
 
 namespace {
 
-void append_string(dstd::String& out, std::string_view s) {
+void append_string(dstd::String& out, dstd::StringView s) {
     out.push_back('"');
     json::append_json_escaped(out, s);
     out.push_back('"');

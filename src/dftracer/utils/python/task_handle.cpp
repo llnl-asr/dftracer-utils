@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
@@ -23,8 +24,9 @@ static PyObject *TaskHandle_new(PyTypeObject *type, PyObject * /*args*/,
                                 PyObject * /*kwds*/) {
     TaskHandleObject *self = (TaskHandleObject *)type->tp_alloc(type, 0);
     if (self) {
-        new (&self->future) std::shared_future<void>();
-        new (&self->typed_future) std::shared_future<std::any>();
+        new (&self->future) dftracer::utils::dstd::SharedFuture<void>();
+        new (&self->typed_future)
+            dftracer::utils::dstd::SharedFuture<std::any>();
         new (&self->name) std::string();
         self->has_typed_future = false;
         self->task_id = -1;

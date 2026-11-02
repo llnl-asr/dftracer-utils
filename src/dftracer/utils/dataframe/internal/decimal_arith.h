@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_DECIMAL_ARITH_H
 
 #include <dftracer/utils/dstd/int128.h>
+#include <dftracer/utils/dstd/optional.h>
 
 #include <algorithm>
 #include <array>
@@ -54,19 +55,19 @@ inline bool i128_fits_precision(i128 v, std::int32_t precision) noexcept {
 }
 
 /// Rescale `v` (currently at `from_scale`) up to `to_scale` (>= from_scale)
-/// by multiplying by 10^(to_scale - from_scale). std::nullopt when the product
+/// by multiplying by 10^(to_scale - from_scale). dstd::nullopt when the product
 /// would not fit. The bound is checked BEFORE multiplying: signed overflow is
 /// undefined, so a wrapped product cannot be tested after the fact.
-inline std::optional<i128> rescale_up_i128(i128 v, std::int32_t from_scale,
-                                           std::int32_t to_scale) noexcept {
+inline dstd::Optional<i128> rescale_up_i128(i128 v, std::int32_t from_scale,
+                                            std::int32_t to_scale) noexcept {
     if (to_scale == from_scale) return v;
     if (v == 0) return i128{0};
     const u128 factor = pow10_u128(to_scale - from_scale);
-    if (factor == 0) return std::nullopt;
+    if (factor == 0) return dstd::nullopt;
     constexpr u128 I128_MAX = (static_cast<u128>(1) << 127) - 1;
     const bool neg = v < 0;
     const u128 mag = neg ? (~static_cast<u128>(v) + 1) : static_cast<u128>(v);
-    if (mag > I128_MAX / factor) return std::nullopt;
+    if (mag > I128_MAX / factor) return dstd::nullopt;
     const i128 prod = static_cast<i128>(mag * factor);
     return neg ? -prod : prod;
 }
@@ -103,9 +104,9 @@ inline U256 umul128_256(u128 a, u128 b) noexcept {
 }
 
 /// Signed 128x128 multiply widened to 256 bits, checked against a target
-/// decimal precision. Returns std::nullopt if the exact product does not fit
+/// decimal precision. Returns dstd::nullopt if the exact product does not fit
 /// signed int128 at all, or does not fit `result_precision` digits.
-inline std::optional<i128> mul_checked_i128(
+inline dstd::Optional<i128> mul_checked_i128(
     i128 a, i128 b, std::int32_t result_precision) noexcept {
     const bool neg = (a < 0) != (b < 0);
     const u128 ua =
@@ -113,39 +114,39 @@ inline std::optional<i128> mul_checked_i128(
     const u128 ub =
         b < 0 ? static_cast<u128>(-(b + 1)) + 1 : static_cast<u128>(b);
     const U256 prod = umul128_256(ua, ub);
-    if (prod.hi != 0) return std::nullopt;
+    if (prod.hi != 0) return dstd::nullopt;
     // Signed int128 magnitude ceiling is 2^127; the unsigned product can sit
     // right at that boundary only for the (impossible for a decimal-128
     // input) most-negative value, so a plain top-bit check is exact here.
-    if (prod.lo >> 127 != 0) return std::nullopt;
+    if (prod.lo >> 127 != 0) return dstd::nullopt;
     i128 result = static_cast<i128>(prod.lo);
     if (neg) result = -result;
-    if (!i128_fits_precision(result, result_precision)) return std::nullopt;
+    if (!i128_fits_precision(result, result_precision)) return dstd::nullopt;
     return result;
 }
 
 /// Exact `(a * 10^shift) / b`, truncating toward zero, checked against
 /// `result_precision`. Used for decimal division: see decimal_divide_i128.
-/// std::nullopt if the intermediate product does not fit 128 bits (the
+/// dstd::nullopt if the intermediate product does not fit 128 bits (the
 /// scale shift is too large for the operand's magnitude), `b` is zero, or
 /// the quotient does not fit `result_precision`.
-inline std::optional<i128> muldiv_checked_i128(
+inline dstd::Optional<i128> muldiv_checked_i128(
     i128 a, std::int32_t shift, i128 b,
     std::int32_t result_precision) noexcept {
     if (b == 0 || shift < 0 || shift > DECIMAL128_MAX_PRECISION)
-        return std::nullopt;
+        return dstd::nullopt;
     const bool neg = (a < 0) != (b < 0);
     const u128 ua =
         a < 0 ? static_cast<u128>(-(a + 1)) + 1 : static_cast<u128>(a);
     const u128 ub =
         b < 0 ? static_cast<u128>(-(b + 1)) + 1 : static_cast<u128>(b);
     const U256 prod = umul128_256(ua, pow10_u128(shift));
-    if (prod.hi != 0 || (prod.lo >> 127) != 0) return std::nullopt;
+    if (prod.hi != 0 || (prod.lo >> 127) != 0) return dstd::nullopt;
     const u128 quotient = prod.lo / ub;
-    if (quotient >> 127 != 0) return std::nullopt;
+    if (quotient >> 127 != 0) return dstd::nullopt;
     i128 result = static_cast<i128>(quotient);
     if (neg) result = -result;
-    if (!i128_fits_precision(result, result_precision)) return std::nullopt;
+    if (!i128_fits_precision(result, result_precision)) return dstd::nullopt;
     return result;
 }
 
@@ -248,30 +249,30 @@ inline bool limbs256_fits_precision(const Limbs256& v,
 
 /// `a + (neg ? -b : b)`, checked against `result_precision`. Used for both
 /// Decimal256 add (neg=false) and subtract (neg=true).
-inline std::optional<Limbs256> addsub_checked_256(
+inline dstd::Optional<Limbs256> addsub_checked_256(
     const Limbs256& a, const Limbs256& b, bool neg,
     std::int32_t result_precision) noexcept {
     const Limbs256 rhs = neg ? negate256(b) : b;
     bool carry = false;
     const Limbs256 sum = add256_raw(a, rhs, carry);
-    if (add256_overflows(a, rhs, sum)) return std::nullopt;
-    if (!limbs256_fits_precision(sum, result_precision)) return std::nullopt;
+    if (add256_overflows(a, rhs, sum)) return dstd::nullopt;
+    if (!limbs256_fits_precision(sum, result_precision)) return dstd::nullopt;
     return sum;
 }
 
 /// Rescale a 256-bit value up from `from_scale` to `to_scale` (>= from_scale)
 /// by multiplying by 10^(to_scale - from_scale), checked for overflow past
 /// the 256-bit container.
-inline std::optional<Limbs256> rescale_up_256(const Limbs256& v,
-                                              std::int32_t from_scale,
-                                              std::int32_t to_scale) noexcept {
+inline dstd::Optional<Limbs256> rescale_up_256(const Limbs256& v,
+                                               std::int32_t from_scale,
+                                               std::int32_t to_scale) noexcept {
     if (to_scale == from_scale) return v;
     const bool neg = is_negative256(v);
     Limbs256 mag = abs256(v);
     for (std::int32_t i = 0; i < to_scale - from_scale; ++i) {
         bool overflow = false;
         mag = mul10_256(mag, overflow);
-        if (overflow || is_negative256(mag)) return std::nullopt;
+        if (overflow || is_negative256(mag)) return dstd::nullopt;
     }
     return neg ? negate256(mag) : mag;
 }

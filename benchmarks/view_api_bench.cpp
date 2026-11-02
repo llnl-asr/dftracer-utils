@@ -16,6 +16,8 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -221,8 +223,8 @@ double median(std::vector<double> v) {
 }
 
 // 95% bootstrap interval of median(view) / median(base).
-std::pair<double, double> ratio_ci(const std::vector<double>& base_t,
-                                   const std::vector<double>& view_t) {
+dstd::Pair<double, double> ratio_ci(const std::vector<double>& base_t,
+                                    const std::vector<double>& view_t) {
     std::mt19937_64 rng(11);
     std::uniform_int_distribution<std::size_t> pick(0, base_t.size() - 1);
     std::vector<double> ratios;
@@ -247,7 +249,7 @@ struct Case {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke";
+    const bool smoke = argc == 2 && dstd::StringView(argv[1]) == "--smoke";
     const std::int64_t events =
         smoke ? 20'000 : (argc > 1 ? std::atoll(argv[1]) : 2'000'000);
     const std::string dir =
@@ -585,7 +587,7 @@ int main(int argc, char** argv) {
                 "view/base", "95% CI");
     for (const Case& c : cases) {
         if (!smoke && argc > 3 &&
-            std::string_view(c.name).find(argv[3]) == std::string_view::npos)
+            dstd::StringView(c.name).find(argv[3]) == dstd::StringView::npos)
             continue;
         for (int i = 0; i < (smoke ? 0 : WARMUPS); ++i) {
             c.baseline();

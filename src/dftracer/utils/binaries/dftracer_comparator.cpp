@@ -4,6 +4,8 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -182,7 +184,7 @@ static coro::CoroTask<void> aggregate_all(
 // Build the comparison config from CLI args (config file, preset, or
 // baseline/variant), apply CLI overrides, and resolve defaults. Returns
 // nullopt on any user-facing error (already logged).
-static std::optional<ComparisonConfig> build_comparison_config(
+static dstd::Optional<ComparisonConfig> build_comparison_config(
     const ComparatorArgParse* cli) {
     const auto& config_path = cli->config_path;
     const auto& preset = cli->preset;
@@ -203,21 +205,21 @@ static std::optional<ComparisonConfig> build_comparison_config(
         auto parsed = ComparisonConfig::from_json_file(config_path, error);
         if (!parsed) {
             DFTRACER_UTILS_LOG_ERROR("Config error: %s", error.c_str());
-            return std::nullopt;
+            return dstd::nullopt;
         }
         config = std::move(*parsed);
     } else if (!preset.empty()) {
         if (baseline_path.empty() || variant_path.empty()) {
             DFTRACER_UTILS_LOG_ERROR(
                 "--preset requires both --baseline and --variant");
-            return std::nullopt;
+            return dstd::nullopt;
         }
         auto parsed =
             ComparisonConfig::from_preset(preset, baseline_path, variant_path);
         if (!parsed) {
             DFTRACER_UTILS_LOG_ERROR("Unknown preset: %s. Supported: dlio",
                                      preset.c_str());
-            return std::nullopt;
+            return dstd::nullopt;
         }
         config = std::move(*parsed);
         // AND the user query into every top-level node so --duql narrows
@@ -236,7 +238,7 @@ static std::optional<ComparisonConfig> build_comparison_config(
         DFTRACER_UTILS_LOG_ERROR(
             "Must specify --config, --preset, or both --baseline and "
             "--variant");
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     if (!format.empty()) config.format = format;
@@ -389,8 +391,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
         config.variant, config.variant_index_dir);
     bool shared_index = baseline_index_path == variant_index_path;
 
-    std::shared_ptr<Task> enum_index_base;
-    std::shared_ptr<Task> enum_index_var;
+    dstd::SharedPtr<Task> enum_index_base;
+    dstd::SharedPtr<Task> enum_index_var;
 
     if (shared_index) {
         auto enum_index_shared = make_task(
@@ -434,8 +436,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
             "EnumIndexVariant");
     }
 
-    std::shared_ptr<Task> agg_base;
-    std::shared_ptr<Task> agg_var;
+    dstd::SharedPtr<Task> agg_base;
+    dstd::SharedPtr<Task> agg_var;
 
     bool same_files = shared_index && config.baseline == config.variant;
     if (same_files) {

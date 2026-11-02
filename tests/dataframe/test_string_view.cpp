@@ -13,6 +13,9 @@
 #include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -26,7 +29,7 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-using Row = std::optional<std::string>;
+using Row = dftracer::utils::dstd::Optional<std::string>;
 using Rows = std::vector<Row>;
 
 constexpr std::int32_t INLINE_MAX = 12;
@@ -107,12 +110,12 @@ Series make_view(const Rows& rows, int* released) {
 }
 
 Series make_flat(const Rows& rows) {
-    std::vector<std::string_view> v;
+    std::vector<dftracer::utils::dstd::StringView> v;
     std::vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
-        v.emplace_back(rows[i] ? std::string_view(*rows[i])
-                               : std::string_view());
+        v.emplace_back(rows[i] ? dftracer::utils::dstd::StringView(*rows[i])
+                               : dftracer::utils::dstd::StringView());
         if (rows[i])
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         else
@@ -424,7 +427,7 @@ TEST_SUITE("string view kernels match the flat column") {
             DataFrame g = frame(key).group_by(std::string("k"),
                                               {GroupAgg{Agg::Count, "v", "n"}});
             g = g.sort_by("k");
-            std::vector<std::pair<Row, std::int64_t>> out;
+            std::vector<dftracer::utils::dstd::Pair<Row, std::int64_t>> out;
             const Series k = g.column("k");
             const Series n = g.column("n").materialize();
             for (std::int64_t i = 0; i < g.num_rows(); ++i)

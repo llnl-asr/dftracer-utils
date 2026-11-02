@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_GZIP_READER_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/utilities/reader/internal/line_processor.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -19,7 +20,7 @@ class GzipReader : public Reader {
                std::size_t index_ckpt_size = dftracer::utils::index::gzip::
                    CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE);
     explicit GzipReader(
-        std::shared_ptr<dftracer::utils::index::gzip::CheckpointIndexer>
+        dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer>
             indexer);
     ~GzipReader();
 
@@ -61,7 +62,7 @@ class GzipReader : public Reader {
     std::string index_path;
     bool is_open;
     std::size_t default_buffer_size;
-    std::shared_ptr<dftracer::utils::index::gzip::CheckpointIndexer> indexer;
+    dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer> indexer;
     ReaderStreamCache stream_cache_;
 };
 

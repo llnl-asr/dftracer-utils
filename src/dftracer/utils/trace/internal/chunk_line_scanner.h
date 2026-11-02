@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_INTERNAL_CHUNK_LINE_SCANNER_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -12,7 +13,7 @@
 namespace dftracer::utils::trace::internal {
 
 // Drive a byte-range stream and split each read chunk into newline-terminated
-// lines, invoking `per_line(std::string_view line, std::uint32_t line_index)`
+// lines, invoking `per_line(dstd::StringView line, std::uint32_t line_index)`
 // for every non-empty line. `line_index` advances for every line segment
 // (including empty and skipped ones), matching manifest line-number semantics.
 //
@@ -45,7 +46,7 @@ dftracer::utils::coro::CoroTask<void> scan_chunk_lines(Stream& stream,
             const std::size_t line_len =
                 static_cast<std::size_t>(newline - line_start);
             if (line_len > 0) {
-                per_line(std::string_view(line_start, line_len), line_index);
+                per_line(dstd::StringView(line_start, line_len), line_index);
             }
 
             pos = static_cast<std::size_t>(newline - data) + 1;

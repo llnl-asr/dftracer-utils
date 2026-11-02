@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
@@ -21,11 +22,11 @@ namespace {
 // last strong reference dies with that coroutine's frame: the weak_ptr expiring
 // means the producer actually finished.
 struct ProducerSentinel {
-    std::shared_ptr<int> strong = std::make_shared<int>(0);
-    std::weak_ptr<int> weak = strong;
+    dstd::SharedPtr<int> strong = std::make_shared<int>(0);
+    dstd::WeakPtr<int> weak = strong;
 };
 
-bool wait_until_expired(const std::weak_ptr<int>& w) {
+bool wait_until_expired(const dstd::WeakPtr<int>& w) {
     for (int i = 0; i < 400 && !w.expired(); ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return w.expired();

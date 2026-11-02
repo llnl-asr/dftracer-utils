@@ -13,6 +13,7 @@
 #include <dftracer/utils/coro/join_handle.h>
 #include <dftracer/utils/coro/spawn_future.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
 
 #include <atomic>
 #include <cstddef>
@@ -85,20 +86,20 @@ class CoroScope {
     /// watches its executor's shutdown token. One allocation per scope.
     struct CancelChain {
         std::atomic<bool> flag{false};
-        std::shared_ptr<std::atomic<bool>> external;
-        std::shared_ptr<const CancelChain> parent;
+        dstd::SharedPtr<std::atomic<bool>> external;
+        dstd::SharedPtr<const CancelChain> parent;
     };
 
-    static std::shared_ptr<CancelChain> make_chain(
-        std::shared_ptr<std::atomic<bool>> external,
-        std::shared_ptr<const CancelChain> parent) {
+    static dstd::SharedPtr<CancelChain> make_chain(
+        dstd::SharedPtr<std::atomic<bool>> external,
+        dstd::SharedPtr<const CancelChain> parent) {
         auto chain = std::make_shared<CancelChain>();
         chain->external = std::move(external);
         chain->parent = std::move(parent);
         return chain;
     }
 
-    std::shared_ptr<CancelChain> cancel_chain_{
+    dstd::SharedPtr<CancelChain> cancel_chain_{
         make_chain(executor_ ? executor_->shutdown_token() : nullptr, nullptr)};
 
     /// Internal: create a Coro wrapper, track it, and post it.
@@ -124,7 +125,7 @@ class CoroScope {
 
     explicit CoroScope(coro::Executor* executor) : executor_(executor) {}
 
-    CoroScope(coro::Executor* executor, std::shared_ptr<CancelChain> chain)
+    CoroScope(coro::Executor* executor, dstd::SharedPtr<CancelChain> chain)
         : executor_(executor), cancel_chain_(std::move(chain)) {}
 
     // A friend struct, not the constrained run_coro_scope template:
@@ -195,12 +196,12 @@ class CoroScope {
         state->executor = executor_;
         auto chain = make_chain(nullptr, cancel_chain_);
         state->cancel_token =
-            std::shared_ptr<std::atomic<bool>>(chain, &chain->flag);
+            dstd::SharedPtr<std::atomic<bool>>(chain, &chain->flag);
 
         auto make_coro =
             [](auto f, coro::Executor* exec,
-               std::shared_ptr<CancelChain> own_chain,
-               std::shared_ptr<coro::SharedState<void>> st) -> coro::Coro {
+               dstd::SharedPtr<CancelChain> own_chain,
+               dstd::SharedPtr<coro::SharedState<void>> st) -> coro::Coro {
             // Own cancel flag, so cancelling one child leaves its siblings.
             CoroScope child_scope(exec, std::move(own_chain));
             // Publish an exception only after the handler ends: the awaiter
@@ -252,12 +253,12 @@ class CoroScope {
         state->executor = executor_;
         auto chain = make_chain(nullptr, cancel_chain_);
         state->cancel_token =
-            std::shared_ptr<std::atomic<bool>>(chain, &chain->flag);
+            dstd::SharedPtr<std::atomic<bool>>(chain, &chain->flag);
 
         auto make_coro =
             [](auto f, coro::Executor* exec,
-               std::shared_ptr<CancelChain> own_chain,
-               std::shared_ptr<coro::SharedState<R>> st) -> coro::Coro {
+               dstd::SharedPtr<CancelChain> own_chain,
+               dstd::SharedPtr<coro::SharedState<R>> st) -> coro::Coro {
             CoroScope child_scope(exec, std::move(own_chain));
             std::exception_ptr error;
             try {
@@ -290,7 +291,7 @@ class CoroScope {
 
     /// Async receive from channel (shared_ptr).
     template <typename T>
-    auto receive(std::shared_ptr<coro::Channel<T>> channel) {
+    auto receive(dstd::SharedPtr<coro::Channel<T>> channel) {
         return channel->receive();
     }
 
@@ -320,7 +321,7 @@ class CoroScope {
 
     /// Spawn producer feeding Generator<T> into Channel<T> (shared_ptr).
     template <typename T, typename Func>
-    void spawn_producer(std::shared_ptr<coro::Channel<T>> channel,
+    void spawn_producer(dstd::SharedPtr<coro::Channel<T>> channel,
                         Func&& generator_func) {
         spawn([ch = channel->producer(),
                func = std::forward<Func>(generator_func)](
@@ -366,7 +367,7 @@ class CoroScope {
     /// Spawn async producer feeding AsyncGenerator<T> into Channel<T>
     /// (shared_ptr).
     template <typename T, typename Func>
-    void spawn_async_producer(std::shared_ptr<coro::Channel<T>> channel,
+    void spawn_async_producer(dstd::SharedPtr<coro::Channel<T>> channel,
                               Func&& async_generator_func) {
         spawn([ch = channel->producer(),
                func = std::forward<Func>(async_generator_func)](
@@ -389,7 +390,7 @@ class CoroScope {
 
     /// Spawn N producers (shared_ptr).
     template <typename T, typename Func>
-    void spawn_producers(std::shared_ptr<coro::Channel<T>> channel,
+    void spawn_producers(dstd::SharedPtr<coro::Channel<T>> channel,
                          std::size_t count, Func&& producer_func) {
         for (std::size_t i = 0; i < count; ++i) {
             spawn([ch = channel->producer(), func = producer_func,
@@ -434,7 +435,7 @@ class CoroScope {
 
     /// Spawn N consumers draining Channel<T> (shared_ptr).
     template <typename T, typename Func>
-    void spawn_consumers(std::shared_ptr<coro::Channel<T>> channel,
+    void spawn_consumers(dstd::SharedPtr<coro::Channel<T>> channel,
                          std::size_t count, Func&& consumer_func) {
         for (std::size_t i = 0; i < count; i++) {
             spawn([ch = channel->consumer(), func = consumer_func](
@@ -455,8 +456,8 @@ class CoroScope {
 
     /// Spawn N transform workers (shared_ptr).
     template <typename TIn, typename TOut, typename Func>
-    void spawn_transforms(std::shared_ptr<coro::Channel<TIn>> input,
-                          std::shared_ptr<coro::Channel<TOut>> output,
+    void spawn_transforms(dstd::SharedPtr<coro::Channel<TIn>> input,
+                          dstd::SharedPtr<coro::Channel<TOut>> output,
                           std::size_t count, Func&& transform_func) {
         for (std::size_t i = 0; i < count; ++i) {
             spawn([input, op = output->producer(), func = transform_func](
@@ -570,8 +571,8 @@ class CoroScope {
 
     /// This scope's own token. Setting it cancels this scope and the scopes
     /// spawned from it, not its parent or siblings.
-    std::shared_ptr<std::atomic<bool>> get_cancellation_token() const {
-        return std::shared_ptr<std::atomic<bool>>(cancel_chain_,
+    dstd::SharedPtr<std::atomic<bool>> get_cancellation_token() const {
+        return dstd::SharedPtr<std::atomic<bool>>(cancel_chain_,
                                                   &cancel_chain_->flag);
     }
 };

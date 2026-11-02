@@ -8,6 +8,8 @@
 #ifndef DFTRACER_UTILS_SERVER_HTTP_PARSER_H
 #define DFTRACER_UTILS_SERVER_HTTP_PARSER_H
 
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstddef>
 #include <string_view>
 #include <utility>
@@ -16,13 +18,13 @@
 namespace dftracer::utils::server::parser {
 
 struct Header {
-    std::string_view name;
-    std::string_view value;
+    dstd::StringView name;
+    dstd::StringView value;
 };
 
 struct ParsedRequest {
-    std::string_view method;
-    std::string_view path;
+    dstd::StringView method;
+    dstd::StringView path;
     int minor_version = 0;
     std::vector<Header> headers;
 };

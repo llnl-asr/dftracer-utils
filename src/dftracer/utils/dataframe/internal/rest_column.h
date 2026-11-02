@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 #include <memory>
@@ -17,7 +19,7 @@ namespace dftracer::utils::dataframe {
 /// The plan column that carries, as one Struct, the columns a scan returns
 /// beyond the plan's schema. Never part of a collected frame or a public
 /// schema.
-inline constexpr std::string_view REST_COLUMN = "__rest";
+inline constexpr dstd::StringView REST_COLUMN = "__rest";
 
 /// A flat Struct of `rows` rows over `fields` named `names`. Unlike
 /// Series::structs it keeps the length of a struct with no fields.
@@ -30,7 +32,7 @@ inline Series struct_of_length(std::vector<std::string> names,
     col->nested.reserve(fields.size());
     for (std::size_t i = 0; i < fields.size(); ++i)
         col->nested.push_back(
-            {std::shared_ptr<dftu_series>(fields[i].release()),
+            {dstd::SharedPtr<dftu_series>(fields[i].release()),
              std::move(names[i])});
     return Series{col};
 }

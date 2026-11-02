@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -22,7 +24,8 @@ bool bit(const Series& s, std::int64_t i) {
 dftu_scalar str_scalar(const char* t) {
     dftu_scalar s{};
     s.kind = DFTU_SCALAR_TAG_STR;
-    s.len = static_cast<std::uint32_t>(std::string_view(t).size());
+    s.len =
+        static_cast<std::uint32_t>(dftracer::utils::dstd::StringView(t).size());
     s.value.s = t;
     return s;
 }
@@ -55,9 +58,12 @@ TEST_CASE("fillna fills a bool column") {
 }
 
 TEST_CASE("fillna fills a string column") {
-    const std::vector<std::string_view> rows = {"a", "", "c"};
+    const std::vector<dftracer::utils::dstd::StringView> rows = {"a", "", "c"};
     const std::uint8_t valid = 0b101;
-    Series s = Series::strings(std::span<const std::string_view>(rows), &valid);
+    Series s = Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
+            rows),
+        &valid);
     Series r = s.fillna(str_scalar("x"));
     REQUIRE(r.valid());
     CHECK(r.null_count() == 0);
@@ -67,8 +73,10 @@ TEST_CASE("fillna fills a string column") {
 }
 
 TEST_CASE("a fill of the wrong kind is refused") {
-    const std::vector<std::string_view> rows = {"a"};
-    Series s = Series::strings(std::span<const std::string_view>(rows));
+    const std::vector<dftracer::utils::dstd::StringView> rows = {"a"};
+    Series s = Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
+            rows));
     CHECK_FALSE(s.fillna(i64_scalar(1)).valid());
     std::uint8_t bits = 0;
     Series b = Series::flat(dftracer::utils::dataframe::TypeId::Bool, &bits, 1);

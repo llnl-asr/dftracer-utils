@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/store/extent_size.h>
 
 #include <string>
@@ -14,7 +15,7 @@ namespace {
 
 constexpr std::uint64_t EXTENT_ALIGNMENT = 4096;
 
-dstd::Unexpected<dstd::Error> override_error(std::string_view reason) {
+dstd::Unexpected<dstd::Error> override_error(dstd::StringView reason) {
     return dstd::Unexpected<dstd::Error>(dstd::Error(
         dstd::Condition::InvalidArgument,
         common::str_cat(common::constants::store::STORE_EXTENT_BYTES_ENV, " ",
@@ -54,7 +55,7 @@ dstd::Expected<std::uint32_t, dstd::Error> choose_extent_size(
 dstd::Expected<std::uint32_t, dstd::Error> extent_size_for(
     dstd::StringView dir) {
     dstd::Optional<std::uint64_t> override_bytes;
-    if (common::Env::get<std::string_view>(
+    if (common::Env::get<dstd::StringView>(
             common::constants::store::STORE_EXTENT_BYTES_ENV)
             .has_value()) {
         // A set value that is not a number is a mistake, not an absent setting.

@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_INDEX_SOURCE_H
 #define DFTRACER_UTILS_INDEX_SOURCE_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -23,12 +26,12 @@ duql::Roles duql_roles(const RecordSchema& schema);
 /// DFTUtilsException INVALID_ARGUMENT naming `origin` when either does not
 /// parse, a row set is named `all`, `data` is anything but one `where`, or a
 /// name is declared twice.
-std::string merge_source(std::string_view parent, std::string_view child,
-                         std::string_view origin);
+std::string merge_source(dstd::StringView parent, dstd::StringView child,
+                         dstd::StringView origin);
 
 /// Compiles `schema`'s source with its roles. Throws DFTUtilsException
 /// INVALID_ARGUMENT naming the schema and `origin` when it does not compile.
-void check_source(const RecordSchema& schema, std::string_view origin);
+void check_source(const RecordSchema& schema, dstd::StringView origin);
 
 /// The condition of `schema`'s `data` row set, or empty when it reads
 /// `all`.
@@ -39,15 +42,15 @@ bool source_args_fallback(const RecordSchema& schema);
 
 /// The `data` condition that leaves out the metadata phase, which a View
 /// maps onto its phase selection instead of a filter.
-inline constexpr std::string_view NO_METADATA = R"(ph not in ["M", 4])";
+inline constexpr dstd::StringView NO_METADATA = R"(ph not in ["M", 4])";
 
 /// A row set the index build evaluates: its filter (every record when
 /// absent), per output column its name and record path, and whether it
 /// keeps each distinct row once, in the order rows first occur.
 struct IndexedRowSet {
     std::string name;
-    std::optional<duql::Query> filter;
-    std::vector<std::pair<std::string, std::string>> columns;
+    dstd::Optional<duql::Query> filter;
+    std::vector<dstd::Pair<std::string, std::string>> columns;
     bool distinct = false;
 };
 

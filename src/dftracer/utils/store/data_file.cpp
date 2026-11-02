@@ -3,7 +3,9 @@
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -35,9 +37,9 @@ namespace {
 
 namespace dstd = dftracer::utils::dstd;
 
-constexpr std::string_view FILE_MAGIC = "DFTUSTR0";
-constexpr std::string_view TRAILER_MAGIC = "DFTUEND0";
-constexpr std::string_view RECORD_MAGIC = "DFTUREC0";
+constexpr dstd::StringView FILE_MAGIC = "DFTUSTR0";
+constexpr dstd::StringView TRAILER_MAGIC = "DFTUEND0";
+constexpr dstd::StringView RECORD_MAGIC = "DFTUREC0";
 constexpr std::uint32_t FORMAT_VERSION = 0;
 constexpr std::uint64_t RECORD_HEADER_BYTES = 40;
 
@@ -486,10 +488,10 @@ dstd::Expected<std::size_t, dstd::Error> move_data_files(dstd::StringView from,
 
 namespace {
 
-constexpr std::string_view SUMMARY_MAGIC = "DFSM";
+constexpr dstd::StringView SUMMARY_MAGIC = "DFSM";
 constexpr std::size_t SUMMARY_ENTRY_HEADER_BYTES = 12;
 
-std::pair<std::string, std::string> split_path(dstd::StringView path) {
+dstd::Pair<std::string, std::string> split_path(dstd::StringView path) {
     const std::string whole(path.data(), path.size());
     const std::size_t slash = whole.find_last_of('/');
     if (slash == std::string::npos) return {".", whole};
@@ -926,7 +928,7 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
                          b.segment->offset_in_extent;
               });
     dstd::Vector<BlockHandle> block_handles;
-    dstd::Vector<std::pair<SegmentKey, std::uint32_t>> runs;
+    dstd::Vector<dstd::Pair<SegmentKey, std::uint32_t>> runs;
     dstd::Vector<std::uint8_t> block;
     dstd::Vector<std::uint8_t> run_bytes;
     std::uint32_t block_entries = 0;
@@ -976,9 +978,9 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
         first = end;
     }
     if (block_entries > 0) flush();
-    dstd::Vector<std::pair<SegmentKey, BlockHandle>> handles;
+    dstd::Vector<dstd::Pair<SegmentKey, BlockHandle>> handles;
     handles.reserve(runs.size());
-    for (const std::pair<SegmentKey, std::uint32_t>& run : runs) {
+    for (const dstd::Pair<SegmentKey, std::uint32_t>& run : runs) {
         handles.push_back({run.first, block_handles[run.second]});
     }
     const auto segment_handle = [&handles, &less](std::uint64_t sequence,
@@ -986,7 +988,7 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
         const SegmentKey wanted{copy_id, sequence};
         const auto at = std::lower_bound(
             handles.begin(), handles.end(), wanted,
-            [&less](const std::pair<SegmentKey, BlockHandle>& entry,
+            [&less](const dstd::Pair<SegmentKey, BlockHandle>& entry,
                     const SegmentKey& key) { return less(entry.first, key); });
         if (at == handles.end() || less(wanted, at->first))
             return BlockHandle{};

@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/memory.h>
 
 #include <algorithm>
 #include <cstring>
@@ -487,9 +488,10 @@ static dftu_series* gather_struct(const dftu_series& base, const Idx* idx,
     out->length = n;
     out->nested.reserve(base.num_fields());
     for (std::size_t i = 0; i < base.num_fields(); ++i)
-        out->nested.push_back({std::shared_ptr<dftu_series>(gather_column(
-                                   *base.nested[i].series, idx, n, &info)),
-                               base.nested[i].name});
+        out->nested.push_back(
+            {dftracer::utils::dstd::SharedPtr<dftu_series>(
+                 gather_column(*base.nested[i].series, idx, n, &info)),
+             base.nested[i].name});
     out->validity =
         gather_validity(base, idx, n, out->null_count, info.has_neg);
     return out;
@@ -519,7 +521,7 @@ static dftu_series* gather_list_w(const dftu_series& base, const Idx* idx,
     const std::size_t off_bytes = offsets.size() * sizeof(Off);
     offsets_of<Off>(*out) = new_buffer(off_bytes);
     std::memcpy(writable(offsets_of<Off>(*out)), offsets.data(), off_bytes);
-    out->set_child(std::shared_ptr<dftu_series>(
+    out->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(
         gather_column(*base.child(), child_idx.data(),
                       static_cast<std::int64_t>(child_idx.size()))));
     out->validity =
@@ -604,7 +606,8 @@ static dftu_series* gather_chunked_runs(const dftu_series& base, const Idx* idx,
     }
     if (n > begin) runs.push_back({begin, n, top, k});
     if (runs.empty()) return nullptr;
-    std::vector<std::shared_ptr<dftu_series>> pieces(runs.size());
+    std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> pieces(
+        runs.size());
     dftracer::utils::dataframe::parallel_for(
         static_cast<std::int64_t>(runs.size()), 1,
         [&](std::int64_t rb, std::int64_t re) {
@@ -1139,7 +1142,8 @@ dftu_series* dftu_series_materialize(const dftu_series* v) {
 
     const dftu_series& base = *v->child();
     if (base.encoding != Encoding::Flat) {
-        std::shared_ptr<dftu_series> flat_base(dftu_series_materialize(&base));
+        dftracer::utils::dstd::SharedPtr<dftu_series> flat_base(
+            dftu_series_materialize(&base));
         if (!flat_base) return nullptr;
         dftu_series with_flat_base(*v);
         with_flat_base.set_child(std::move(flat_base));

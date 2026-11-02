@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 #include <cstring>
@@ -14,19 +16,19 @@
 namespace dftracer::utils::utilities::serialization {
 
 /// u16 length, then the bytes.
-inline void put_str(std::string& out, std::string_view s) {
+inline void put_str(std::string& out, dstd::StringView s) {
     dstd::append_u16_be(out, static_cast<std::uint16_t>(s.size()));
     out.append(s.data(), s.size());
 }
 
 /// u32 length, then the bytes.
-inline void put_blob(std::string& out, std::span<const std::uint8_t> data) {
+inline void put_blob(std::string& out, dstd::Span<const std::uint8_t> data) {
     dstd::append_u32_be(out, static_cast<std::uint32_t>(data.size()));
     out.append(reinterpret_cast<const char*>(data.data()), data.size());
 }
 
 /// Writes a put_str frame at p, which has room for it, and returns the end.
-inline std::uint8_t* write_str(std::uint8_t* p, std::string_view s) {
+inline std::uint8_t* write_str(std::uint8_t* p, dstd::StringView s) {
     dstd::write_u16_be(p, static_cast<std::uint16_t>(s.size()));
     p += 2;
     std::memcpy(p, s.data(), s.size());
@@ -37,7 +39,7 @@ inline std::uint8_t* write_str(std::uint8_t* p, std::string_view s) {
 /// DFTUtilsException(ErrorCode::Parse).
 class BinaryReader {
    public:
-    explicit BinaryReader(std::string_view data) : data_(data) {}
+    explicit BinaryReader(dstd::StringView data) : data_(data) {}
 
     std::uint8_t u8() { return static_cast<std::uint8_t>(take(1)[0]); }
 
@@ -49,7 +51,7 @@ class BinaryReader {
 
     double f64() { return dstd::read_f64_be(bytes(take(8))); }
 
-    std::string_view blob() {
+    dstd::StringView blob() {
         auto len = be32();
         return take(len);
     }
@@ -61,7 +63,7 @@ class BinaryReader {
         take(len);
     }
 
-    std::string_view str() {
+    dstd::StringView str() {
         auto len = be16();
         return take(len);
     }
@@ -80,16 +82,16 @@ class BinaryReader {
 
     bool has_remaining() const { return off_ < data_.size(); }
 
-    std::string_view remaining() const { return data_.substr(off_); }
+    dstd::StringView remaining() const { return data_.substr(off_); }
 
     std::size_t offset() const { return off_; }
 
    private:
-    static const std::uint8_t* bytes(std::string_view s) {
+    static const std::uint8_t* bytes(dstd::StringView s) {
         return reinterpret_cast<const std::uint8_t*>(s.data());
     }
 
-    std::string_view take(std::size_t n) {
+    dstd::StringView take(std::size_t n) {
         if (off_ + n > data_.size()) {
             throw common::DFTUtilsException(common::ErrorCode::Parse,
                                             "binary_codec: truncated data");
@@ -99,7 +101,7 @@ class BinaryReader {
         return s;
     }
 
-    std::string_view data_;
+    dstd::StringView data_;
     std::size_t off_ = 0;
 };
 

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TESTS_VIEW_COMMON_H
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -136,7 +137,9 @@ inline std::string create_counter_file(dftu_utils_test::TestEnvironment& env,
 // Collects every streamed line.
 struct StringSink : dftracer::utils::trace::views::ExportSink {
     std::string buffer;
-    void write(std::string_view data) override { buffer.append(data); }
+    void write(dftracer::utils::dstd::StringView data) override {
+        buffer.append(data);
+    }
 
     std::vector<std::string> lines() const {
         std::vector<std::string> out;
@@ -163,21 +166,21 @@ inline std::size_t count_containing(const std::vector<std::string>& lines,
 // dftracer::utils::dataframe::DataFrame. A DataFrame stores names + typed
 // columns with no group/value/text category, so tests address columns by name.
 inline std::int64_t bcol(const dftracer::utils::dataframe::DataFrame& b,
-                         std::string_view name) {
+                         dftracer::utils::dstd::StringView name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return static_cast<std::int64_t>(i);
     return -1;
 }
 
 inline bool bhas(const dftracer::utils::dataframe::DataFrame& b,
-                 std::string_view name) {
+                 dftracer::utils::dstd::StringView name) {
     return bcol(b, name) >= 0;
 }
 
 // Numeric value at `row` of the column named `name`, widened to double
 // regardless of the column's stored width (Int64/Uint64/Float64).
 inline double bnum(const dftracer::utils::dataframe::DataFrame& b,
-                   std::int64_t row, std::string_view name) {
+                   std::int64_t row, dftracer::utils::dstd::StringView name) {
     const auto c =
         b.columns[static_cast<std::size_t>(bcol(b, name))].materialize();
     using T = dftracer::utils::dataframe::TypeId;
@@ -194,7 +197,8 @@ inline double bnum(const dftracer::utils::dataframe::DataFrame& b,
 }
 
 inline std::string bstr(const dftracer::utils::dataframe::DataFrame& b,
-                        std::int64_t row, std::string_view name) {
+                        std::int64_t row,
+                        dftracer::utils::dstd::StringView name) {
     return std::string(
         b.columns[static_cast<std::size_t>(bcol(b, name))].string_at(row));
 }

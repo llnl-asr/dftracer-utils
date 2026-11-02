@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
@@ -63,7 +64,8 @@ StaleCheck stale_check(const idx::Index &index,
     for (const idx::FileRef &file :
          dftracer::utils::common::unwrap(snapshot.files())) {
         const dftracer::utils::dstd::StringView path = file.path();
-        const std::string_view logical(path.data(), path.size());
+        const dftracer::utils::dstd::StringView logical(path.data(),
+                                                        path.size());
         if (listed.find(logical) == listed.end())
             result.removed.emplace_back(logical);
     }

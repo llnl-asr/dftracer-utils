@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -76,7 +77,7 @@ Scheduler::~Scheduler() {
     }
 }
 
-void Scheduler::finish_task(std::shared_ptr<Task> task) noexcept {
+void Scheduler::finish_task(dstd::SharedPtr<Task> task) noexcept {
     try {
         on_task_completed(task);
     } catch (const std::exception& e) {
@@ -94,7 +95,7 @@ void Scheduler::finish_task(std::shared_ptr<Task> task) noexcept {
     if (--in_flight_ == 0) in_flight_cv_.notify_all();
 }
 
-void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
+void Scheduler::schedule(dstd::SharedPtr<Task> source, const std::any& input) {
     if (!source) {
         throw PipelineError(PipelineError::ValidationError,
                             "Source task cannot be null");
@@ -231,7 +232,7 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
     DFTRACER_UTILS_LOG_DEBUG("Scheduling complete");
 }
 
-void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
+void Scheduler::on_task_completed(dstd::SharedPtr<Task> task) {
     if (!task) {
         return;
     }
@@ -372,7 +373,7 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
     }
 }
 
-void Scheduler::submit_dynamic_task(std::shared_ptr<Task> task,
+void Scheduler::submit_dynamic_task(dstd::SharedPtr<Task> task,
                                     const std::any& input) {
     if (!running_) {
         DFTRACER_UTILS_LOG_WARN("%s",
@@ -413,7 +414,7 @@ void Scheduler::reset() {
     has_error_ = false;
 }
 
-std::any Scheduler::prepare_input_for_task(std::shared_ptr<Task> task) {
+std::any Scheduler::prepare_input_for_task(dstd::SharedPtr<Task> task) {
     const auto& parents = task->get_parents();
 
     if (parents.empty()) {
@@ -475,7 +476,7 @@ std::any Scheduler::prepare_input_for_task(std::shared_ptr<Task> task) {
     return std::any(parent_outputs);
 }
 
-void Scheduler::submit_task_to_executor(std::shared_ptr<Task> task,
+void Scheduler::submit_task_to_executor(dstd::SharedPtr<Task> task,
                                         const std::any& input) {
     DFTRACER_UTILS_LOG_DEBUG("Submitting task ID %ld ('%s') to executor",
                              task->get_id(), task->get_name());
@@ -498,14 +499,14 @@ void Scheduler::submit_task_to_executor(std::shared_ptr<Task> task,
     executor_->submit_task(task, input_ptr, this, parent_id);
 }
 
-size_t Scheduler::count_reachable_tasks(std::shared_ptr<Task> source) {
+size_t Scheduler::count_reachable_tasks(dstd::SharedPtr<Task> source) {
     std::unordered_set<common::TaskIndex> visited;
     size_t count = 0;
     count_tasks_dfs(source, visited, count);
     return count;
 }
 
-void Scheduler::count_tasks_dfs(std::shared_ptr<Task> task,
+void Scheduler::count_tasks_dfs(dstd::SharedPtr<Task> task,
                                 std::unordered_set<common::TaskIndex>& visited,
                                 size_t& count) {
     if (!task || visited.find(task->get_id()) != visited.end()) {
@@ -520,13 +521,13 @@ void Scheduler::count_tasks_dfs(std::shared_ptr<Task> task,
     }
 }
 
-void Scheduler::initialize_pending_counts(std::shared_ptr<Task> source) {
+void Scheduler::initialize_pending_counts(dstd::SharedPtr<Task> source) {
     std::unordered_set<common::TaskIndex> visited;
     initialize_pending_counts_dfs(source, visited);
 }
 
 void Scheduler::initialize_pending_counts_dfs(
-    std::shared_ptr<Task> task,
+    dstd::SharedPtr<Task> task,
     std::unordered_set<common::TaskIndex>& visited) {
     if (!task || visited.find(task->get_id()) != visited.end()) {
         return;
@@ -542,7 +543,7 @@ void Scheduler::initialize_pending_counts_dfs(
     }
 }
 
-void Scheduler::handle_task_error(std::shared_ptr<Task> task) {
+void Scheduler::handle_task_error(dstd::SharedPtr<Task> task) {
     DFTRACER_UTILS_LOG_ERROR("Task ID %ld ('%s') failed", task->get_id(),
                              task->get_name());
 
@@ -585,10 +586,10 @@ void Scheduler::handle_task_error(std::shared_ptr<Task> task) {
     }
 }
 
-void Scheduler::validate_task_types(std::shared_ptr<Task> task) {
+void Scheduler::validate_task_types(dstd::SharedPtr<Task> task) {
     // BFS to validate types for this task and all descendants
     std::unordered_set<common::TaskIndex> visited;
-    std::queue<std::shared_ptr<Task>> queue;
+    std::queue<dstd::SharedPtr<Task>> queue;
 
     queue.push(task);
     visited.insert(task->get_id());
@@ -641,7 +642,7 @@ void Scheduler::validate_task_types(std::shared_ptr<Task> task) {
     }
 }
 
-void Scheduler::skip_task_and_descendants(std::shared_ptr<Task> task) {
+void Scheduler::skip_task_and_descendants(dstd::SharedPtr<Task> task) {
     if (!task) {
         return;
     }

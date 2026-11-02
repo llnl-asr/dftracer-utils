@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazy/hash_arena.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -75,8 +76,8 @@ TEST_SUITE("hash arena") {
                             .submit(df.lazy().unique().collect(2))
                             .get();
         REQUIRE(out.num_rows() == 4);
-        const std::vector<std::pair<std::string, std::string>> want{
-            {"ab", "c"}, {"a", "bc"}, {"xy", "zz"}, {"xy", "zw"}};
+        const std::vector<dftracer::utils::dstd::Pair<std::string, std::string>>
+            want{{"ab", "c"}, {"a", "bc"}, {"xy", "zz"}, {"xy", "zw"}};
         for (std::int64_t i = 0; i < 4; ++i) {
             CHECK(out.column("a").string_at(i) ==
                   want[static_cast<std::size_t>(i)].first);

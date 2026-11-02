@@ -4,6 +4,9 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -181,7 +184,7 @@ class BloomFold : public trace::views::detail::Fold {
     };
 
     struct SpillState {
-        std::optional<std::uint64_t> max_seen;
+        dstd::Optional<std::uint64_t> max_seen;
         /// Chunks below this are finished.
         std::uint64_t final_upto = 0;
         /// Chunks below this are in runs.
@@ -189,7 +192,7 @@ class BloomFold : public trace::views::detail::Fold {
         /// Estimated bytes of finished chunks still in memory.
         std::uint64_t resident = 0;
         std::uint64_t events = 0;
-        std::optional<index::schemas::dft::BloomCore::FileAccumulator> acc;
+        dstd::Optional<index::schemas::dft::BloomCore::FileAccumulator> acc;
         struct SpilledChunk {
             std::uint64_t checkpoint = 0;
             std::uint64_t events = 0;
@@ -210,7 +213,7 @@ class BloomFold : public trace::views::detail::Fold {
         std::uint64_t run_bytes = 0;
     };
 
-    using SchemaLeaf = std::pair<std::uint32_t, std::uint8_t>;
+    using SchemaLeaf = dstd::Pair<std::uint32_t, std::uint8_t>;
     struct Shape {
         dstd::Vector<SchemaLeaf> leaves;
         std::uint64_t events = 0;
@@ -240,7 +243,7 @@ class BloomFold : public trace::views::detail::Fold {
     // command hash keys the fixed shash dimension already covers.
     ankerl::unordered_dense::set<std::uint32_t> auto_skip_;
     std::uint32_t dur_key_ = 0;
-    std::optional<std::uint64_t> file_bytes_;
+    dstd::Optional<std::uint64_t> file_bytes_;
 
     /// Writes the tier of `file` into `build`, one chunk at a time. Consumes
     /// `fs`.
@@ -261,7 +264,7 @@ class BloomFold : public trace::views::detail::Fold {
         const std::string& file, const FileState& fs, std::uint64_t data_chunks,
         const std::map<std::string, std::uint32_t>& keys) const;
     Catalog catalog(const FileState& fs) const;
-    void observe_shape(FileState& fs, std::span<const SchemaLeaf> leaves);
+    void observe_shape(FileState& fs, dstd::Span<const SchemaLeaf> leaves);
     void flush_shapes(FileState& fs);
     void observe_auto(AutoChunk& chunk,
                       const trace::views::detail::FoldEvent& e);

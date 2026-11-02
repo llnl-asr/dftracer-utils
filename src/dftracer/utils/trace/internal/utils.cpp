@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -39,7 +40,7 @@ std::string determine_index_path(dstd::CStringView cpath,
     return dftracer::utils::index::store::internal::normalize_index_root(root);
 }
 
-std::string_view to_lower_ascii(std::string_view s, std::string& storage) {
+dstd::StringView to_lower_ascii(dstd::StringView s, std::string& storage) {
     bool has_upper = false;
     for (char c : s) {
         if (c >= 'A' && c <= 'Z') {
@@ -53,12 +54,12 @@ std::string_view to_lower_ascii(std::string_view s, std::string& storage) {
     return storage;
 }
 
-bool is_data_transfer_op(std::string_view cat, std::string_view name) {
+bool is_data_transfer_op(dstd::StringView cat, dstd::StringView name) {
     if (!::dftracer::utils::common::detail::iequals(cat, "posix") &&
         !::dftracer::utils::common::detail::iequals(cat, "stdio")) {
         return false;
     }
-    auto eq = [](std::string_view a, std::string_view b) { return a == b; };
+    auto eq = [](dstd::StringView a, dstd::StringView b) { return a == b; };
     for (auto op : posix_ops::READ)
         if (eq(op, name)) return true;
     for (auto op : posix_ops::WRITE)

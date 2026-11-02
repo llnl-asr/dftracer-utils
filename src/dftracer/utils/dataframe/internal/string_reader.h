@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -27,7 +28,7 @@ inline bool is_string_column(const dftu_series& v) {
 /// a null entry below a Dictionary or Selection). `out` points into the
 /// column's buffers.
 inline bool str_at(const dftu_series* c, std::int64_t i,
-                   std::string_view& out) {
+                   dstd::StringView& out) {
     for (;;) {
         if (c->validity.block() &&
             !((c->validity.data()[i >> 3] >> (i & 7)) & 1))
@@ -42,13 +43,13 @@ inline bool str_at(const dftu_series* c, std::int64_t i,
                 if (c->wide_offsets()) {
                     const auto* off = reinterpret_cast<const std::int64_t*>(
                         c->offsets.data());
-                    out = std::string_view(
+                    out = dstd::StringView(
                         d + off[i],
                         static_cast<std::size_t>(off[i + 1] - off[i]));
                 } else {
                     const auto* off = reinterpret_cast<const std::int32_t*>(
                         c->offsets.data());
-                    out = std::string_view(
+                    out = dstd::StringView(
                         d + off[i],
                         static_cast<std::size_t>(off[i + 1] - off[i]));
                 }
@@ -59,7 +60,7 @@ inline bool str_at(const dftu_series* c, std::int64_t i,
                 std::int32_t size;
                 std::memcpy(&size, view, sizeof(size));
                 if (size <= 12) {
-                    out = std::string_view(
+                    out = dstd::StringView(
                         reinterpret_cast<const char*>(view + 4),
                         static_cast<std::size_t>(size));
                     return true;
@@ -67,7 +68,7 @@ inline bool str_at(const dftu_series* c, std::int64_t i,
                 std::int32_t index, offset;
                 std::memcpy(&index, view + 8, sizeof(index));
                 std::memcpy(&offset, view + 12, sizeof(offset));
-                out = std::string_view(
+                out = dstd::StringView(
                     reinterpret_cast<const char*>(
                         (*c->blobs)[static_cast<std::size_t>(index)].data() +
                         offset),
@@ -108,7 +109,7 @@ inline bool dictionary_ranks(const dftu_series* v,
     if (v->encoding != Encoding::Dictionary || !v->child()) return false;
     const dftu_series* dict = v->child().get();
     const auto k = static_cast<std::size_t>(dict->length);
-    std::vector<std::string_view> vals(k);
+    std::vector<dstd::StringView> vals(k);
     std::vector<std::int32_t> live;
     live.reserve(k);
     for (std::size_t j = 0; j < k; ++j)
@@ -151,10 +152,10 @@ inline bool string_ranks(const dftu_series* v,
         return dictionary_ranks(v, per_row, nranks);
     const std::int64_t n = v->length;
     const std::int64_t cap = n / 4;
-    ankerl::unordered_dense::map<std::string_view, std::int32_t> seen;
-    std::vector<std::string_view> vals;
+    ankerl::unordered_dense::map<dstd::StringView, std::int32_t> seen;
+    std::vector<dstd::StringView> vals;
     per_row.resize(static_cast<std::size_t>(n));
-    std::string_view s;
+    dstd::StringView s;
     for (std::int64_t i = 0; i < n; ++i) {
         if (!str_at(v, i, s)) {
             per_row[static_cast<std::size_t>(i)] = -1;
@@ -219,7 +220,7 @@ inline void adopt_string_nulls(dftu_series& out, const dftu_series& v) {
     auto valid = new_buffer(bytes);
     std::memset(writable(valid), 0, bytes);
     std::int64_t nulls = 0;
-    std::string_view s;
+    dstd::StringView s;
     for (std::int64_t i = 0; i < v.length; ++i) {
         if (str_at(&v, i, s))
             writable(valid)[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
@@ -252,7 +253,7 @@ dftu_series* string_mask(const dftu_series* v, Pred pred) {
     if (v->encoding == Encoding::Dictionary && v->child()) {
         const dftu_series* dict = v->child().get();
         std::vector<char> hit(static_cast<std::size_t>(dict->length), 0);
-        std::string_view s;
+        dstd::StringView s;
         for (std::int64_t k = 0; k < dict->length; ++k)
             hit[static_cast<std::size_t>(k)] = str_at(dict, k, s) && pred(s);
         const auto* codes =
@@ -270,14 +271,14 @@ dftu_series* string_mask(const dftu_series* v, Pred pred) {
                             : nullptr;
         parallel_for(v->length, GRAIN, [&](std::int64_t b, std::int64_t e) {
             for (std::int64_t i = b; i < e; ++i)
-                if (pred(std::string_view(
+                if (pred(dstd::StringView(
                         d + off[i],
                         static_cast<std::size_t>(off[i + 1] - off[i]))))
                     set(i);
         });
     } else {
         parallel_for(v->length, GRAIN, [&](std::int64_t b, std::int64_t e) {
-            std::string_view s;
+            dstd::StringView s;
             for (std::int64_t i = b; i < e; ++i)
                 if (str_at(v, i, s) && pred(s)) set(i);
         });
@@ -301,7 +302,7 @@ dftu_series* string_int64(const dftu_series* v, Fn fn) {
     out->length = v->length;
     out->data = new_buffer(buffer_bytes(TypeId::Int64, v->length));
     auto* vals = reinterpret_cast<std::int64_t*>(writable(out->data));
-    std::string_view s;
+    dstd::StringView s;
     if (v->encoding == Encoding::Dictionary && v->child()) {
         const dftu_series* dict = v->child().get();
         std::vector<std::int64_t> per(static_cast<std::size_t>(dict->length),

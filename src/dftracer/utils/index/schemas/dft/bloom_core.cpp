@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
@@ -19,22 +21,22 @@ namespace dftracer::utils::index::schemas::dft {
 
 namespace {
 
-constexpr std::string_view DIM_NAME = "name";
-constexpr std::string_view DIM_CAT = "cat";
-constexpr std::string_view DIM_PID = "pid";
-constexpr std::string_view DIM_TID = "tid";
-constexpr std::string_view DIM_PID_TID = "pid_tid";
-constexpr std::string_view DIM_HHASH = "hhash";
-constexpr std::string_view DIM_FHASH = "fhash";
-constexpr std::string_view DIM_SHASH = "shash";
-constexpr std::string_view DIM_TS = "ts";
-constexpr std::string_view DIM_DUR = "dur";
-constexpr std::string_view DIM_TE = "te";
+constexpr dstd::StringView DIM_NAME = "name";
+constexpr dstd::StringView DIM_CAT = "cat";
+constexpr dstd::StringView DIM_PID = "pid";
+constexpr dstd::StringView DIM_TID = "tid";
+constexpr dstd::StringView DIM_PID_TID = "pid_tid";
+constexpr dstd::StringView DIM_HHASH = "hhash";
+constexpr dstd::StringView DIM_FHASH = "fhash";
+constexpr dstd::StringView DIM_SHASH = "shash";
+constexpr dstd::StringView DIM_TS = "ts";
+constexpr dstd::StringView DIM_DUR = "dur";
+constexpr dstd::StringView DIM_TE = "te";
 
-constexpr std::array<std::string_view, BloomCore::BfCount> FIXED_BLOOM_NAMES = {
+constexpr std::array<dstd::StringView, BloomCore::BfCount> FIXED_BLOOM_NAMES = {
     DIM_NAME, DIM_CAT, DIM_PID, DIM_TID, DIM_HHASH, DIM_FHASH, DIM_SHASH};
 
-constexpr std::array<std::string_view, BloomCore::FdCount> FIXED_DIM_NAMES = {
+constexpr std::array<dstd::StringView, BloomCore::FdCount> FIXED_DIM_NAMES = {
     DIM_NAME,  DIM_CAT,   DIM_PID,   DIM_TID, DIM_PID_TID,
     DIM_HHASH, DIM_FHASH, DIM_SHASH, DIM_TS,  DIM_DUR};
 
@@ -46,21 +48,21 @@ class Tier {
    public:
     explicit Tier(index::FileBuild& build) : build_(build) {}
 
-    void path(IndexExtension ext, std::string_view path) {
+    void path(IndexExtension ext, dstd::StringView path) {
         index::put_path(build_, ext, path);
     }
-    void path_granule(IndexExtension ext, std::string_view path,
-                      std::uint64_t granule, std::string_view payload) {
+    void path_granule(IndexExtension ext, dstd::StringView path,
+                      std::uint64_t granule, dstd::StringView payload) {
         index::put_path_granule(build_, ext, path, granule, payload);
     }
-    void path_file(IndexExtension ext, std::string_view path,
-                   std::string_view payload) {
+    void path_file(IndexExtension ext, dstd::StringView path,
+                   dstd::StringView payload) {
         index::put_path_file(build_, ext, path, payload);
     }
-    void posting(std::string_view path, std::uint64_t value_hash) {
+    void posting(dstd::StringView path, std::uint64_t value_hash) {
         index::put_posting(build_, path, value_hash);
     }
-    void posting_granule(std::string_view path, std::uint64_t value_hash,
+    void posting_granule(dstd::StringView path, std::uint64_t value_hash,
                          std::uint64_t granule) {
         index::put_posting_granule(build_, path, value_hash, granule);
     }
@@ -79,7 +81,7 @@ class Tier {
     void pid_tid_counts(const dstd::StringViewMap<std::uint64_t>& counts) {
         index::put_file_pid_tid_counts(build_, counts);
     }
-    void catalog_path(std::string_view path,
+    void catalog_path(dstd::StringView path,
                       const index::store::PathStat& stat) {
         index::put_catalog_path(build_, path, stat);
     }
@@ -91,7 +93,7 @@ class Tier {
     index::FileBuild& build_;
 };
 
-void put_bloom(Tier& t, std::uint64_t checkpoint_idx, std::string_view path,
+void put_bloom(Tier& t, std::uint64_t checkpoint_idx, dstd::StringView path,
                const ScalableBloomFilter& bf,
                std::vector<unsigned char>& blob) {
     bf.serialize_into(blob);
@@ -100,7 +102,7 @@ void put_bloom(Tier& t, std::uint64_t checkpoint_idx, std::string_view path,
                        blob, static_cast<std::uint64_t>(bf.num_entries())));
 }
 
-void put_file_bloom(Tier& t, std::string_view path,
+void put_file_bloom(Tier& t, dstd::StringView path,
                     const ScalableBloomFilter& bf,
                     std::vector<unsigned char>& blob) {
     bf.serialize_into(blob);
@@ -179,7 +181,7 @@ void write_chunk_to(Tier& t, std::uint64_t checkpoint_idx,
         const auto& values = chunk.extra_values[e];
         // One more than the values, so the last add opens no second level.
         ScalableBloomFilter bf(values.size() + 1, config.false_positive_rate);
-        for (std::string_view v : values) {
+        for (dstd::StringView v : values) {
             bf.add(v);
             file_bloom.bloom.add(v);
         }
@@ -222,7 +224,7 @@ void write_chunk_to(Tier& t, std::uint64_t checkpoint_idx,
 }
 
 void write_absent_extra_to(Tier& t, std::uint64_t checkpoint_idx,
-                           std::string_view dim, std::uint64_t observed,
+                           dstd::StringView dim, std::uint64_t observed,
                            const BloomCore::ChunkIndexerConfig& config) {
     BloomCore::ChunkDimensionStats ds;
     ds.dimension = std::string(dim);
@@ -285,7 +287,7 @@ BloomCore::FileAccumulator::FileAccumulator(const ChunkIndexerConfig& config)
 }
 
 BloomCore::FileAccumulator::ExtraBloom& BloomCore::FileAccumulator::extra(
-    std::string_view dim) {
+    dstd::StringView dim) {
     auto it = extras.find(dim);
     if (it == extras.end())
         it = extras
@@ -310,7 +312,7 @@ void BloomCore::write_chunk(index::FileBuild& build,
 
 void BloomCore::write_absent_extra(index::FileBuild& build,
                                    std::uint64_t checkpoint_idx,
-                                   std::string_view dim, std::uint64_t observed,
+                                   dstd::StringView dim, std::uint64_t observed,
                                    const ChunkIndexerConfig& config) {
     Tier tier(build);
     write_absent_extra_to(tier, checkpoint_idx, dim, observed, config);
@@ -360,7 +362,7 @@ bool observe_type(index::extensions::ChunkDimensionStats& ds,
 }
 
 void observe_bounds(index::extensions::ChunkDimensionStats& ds,
-                    std::string_view text) {
+                    dstd::StringView text) {
     if (ds.min_value.empty() || index::extensions::dimension_value_less(
                                     text, ds.min_value, ds.value_type))
         ds.min_value = text;
@@ -370,7 +372,7 @@ void observe_bounds(index::extensions::ChunkDimensionStats& ds,
 }
 
 void observe_stats(index::extensions::ChunkDimensionStats& ds,
-                   std::string_view text, const char* type) {
+                   dstd::StringView text, const char* type) {
     if (observe_type(ds, type)) observe_bounds(ds, text);
 }
 
@@ -428,7 +430,7 @@ void observe_number(index::extensions::ChunkDimensionStats& ds,
 
 }  // namespace
 
-std::span<const std::string_view> BloomCore::fixed_dimension_names() {
+dstd::Span<const dstd::StringView> BloomCore::fixed_dimension_names() {
     return FIXED_DIM_NAMES;
 }
 
@@ -461,7 +463,7 @@ void BloomCore::observe_value(ChunkDimensionStats& stats, double value) {
 }
 
 void BloomCore::observe_value(ChunkDimensionStats& stats,
-                              std::string_view value) {
+                              dstd::StringView value) {
     observe_stats(stats, value, "string");
 }
 
@@ -486,7 +488,7 @@ void BloomCore::observe_extra(ChunkState& chunk, std::size_t e, double value) {
 }
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
-                              std::string_view value) {
+                              dstd::StringView value) {
     chunk.extra_blooms[e].add(value);
     observe_stats(chunk.extra_dim_stats[e], value, "string");
 }
@@ -520,12 +522,12 @@ void BloomCore::init_chunk_state(ChunkState& chunk,
 }
 
 void BloomCore::observe_metadata_path(ChunkState& chunk,
-                                      std::string_view path) {
+                                      dstd::StringView path) {
     index::store::add_metadata_value(chunk.metadata.paths, path);
 }
 
 void BloomCore::observe_metadata(ChunkState& chunk,
-                                 std::string_view record_name) {
+                                 dstd::StringView record_name) {
     ++chunk.metadata.records;
     index::store::add_metadata_value(chunk.metadata.names, record_name);
 }
@@ -570,11 +572,11 @@ BloomCore::EventCache::PidSlot& BloomCore::EventCache::pid_slot(
 
 void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
                              std::uint32_t name_id, std::uint32_t cat_id,
-                             std::string_view name, std::string_view cat,
+                             dstd::StringView name, dstd::StringView cat,
                              std::uint64_t pid, std::uint64_t tid,
                              std::uint64_t ts, std::uint64_t dur, bool has_dur,
-                             std::string_view hhash, std::string_view fhash,
-                             std::string_view shash) {
+                             dstd::StringView hhash, dstd::StringView fhash,
+                             dstd::StringView shash) {
     EventCache::NameSlot& ns = cache.name_slot(name_id, cat_id);
     EventCache::PidSlot& ps = cache.pid_slot(pid, tid);
     chunk.statistics.update_from_event(ns.stats, ps.stats, name, cat, pid, tid,
@@ -583,7 +585,7 @@ void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
     // A value already in a chunk's bloom adds nothing, so a slot skips the
     // probe.
     auto observe_known = [&chunk](int bloom_idx, std::size_t dim_idx,
-                                  std::string_view val, bool& in_bloom,
+                                  dstd::StringView val, bool& in_bloom,
                                   std::uint32_t& dim_slot) {
         if (val.empty()) return;
         if (bloom_idx >= 0 && !in_bloom) {
@@ -593,7 +595,7 @@ void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
         chunk.fixed_dim_stats[dim_idx].observe(val, dim_slot);
     };
     auto observe_fixed = [&chunk](int bloom_idx, std::size_t dim_idx,
-                                  std::string_view val) {
+                                  dstd::StringView val) {
         if (val.empty()) return;
         if (bloom_idx >= 0) chunk.fixed_blooms[bloom_idx].add(val);
         chunk.fixed_dim_stats[dim_idx].observe(val);
@@ -602,8 +604,8 @@ void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
     observe_known(BfName, FdName, name, ns.name_in_bloom, ns.name_dim);
     observe_known(BfCat, FdCat, cat, ns.cat_in_bloom, ns.cat_dim);
 
-    const std::string_view pid_sv(ps.pid_buf, ps.pid_len);
-    const std::string_view tid_sv(ps.tid_buf, ps.tid_len);
+    const dstd::StringView pid_sv(ps.pid_buf, ps.pid_len);
+    const dstd::StringView tid_sv(ps.tid_buf, ps.tid_len);
     observe_known(BfPid, FdPid, pid_sv, ps.pid_in_bloom, ps.pid_dim);
     observe_known(BfTid, FdTid, tid_sv, ps.tid_in_bloom, ps.tid_dim);
 
@@ -611,7 +613,7 @@ void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
     std::memcpy(pt_buf, ps.pid_buf, ps.pid_len);
     pt_buf[ps.pid_len] = ':';
     std::memcpy(pt_buf + ps.pid_len + 1, ps.tid_buf, ps.tid_len);
-    const std::string_view pt_sv(pt_buf, ps.pid_len + 1 + ps.tid_len);
+    const dstd::StringView pt_sv(pt_buf, ps.pid_len + 1 + ps.tid_len);
     bool no_bloom = false;
     observe_known(-1, FdPidTid, pt_sv, no_bloom, ps.pid_tid_dim);
 

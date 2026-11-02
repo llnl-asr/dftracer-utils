@@ -2,6 +2,10 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_BLOOM_CORE_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_BLOOM_CORE_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
@@ -68,7 +72,7 @@ class BloomCore {
     };
 
     /// The paths the fixed dimensions are stored under, by FixedDim.
-    static std::span<const std::string_view> fixed_dimension_names();
+    static dstd::Span<const dstd::StringView> fixed_dimension_names();
 
     struct ChunkState {
         std::array<index::extensions::ScalableBloomFilter, BfCount>
@@ -79,7 +83,7 @@ class BloomCore {
         std::vector<ChunkDimensionStats> extra_dim_stats;
         /// The values of an extra dimension past extra_blooms, sorted and
         /// borrowed; write_chunk sizes its bloom for them.
-        std::vector<std::vector<std::string_view>> extra_values;
+        std::vector<std::vector<dstd::StringView>> extra_values;
         /// Nonzero where extra dimension `e` keeps no bloom for this chunk,
         /// so a probe answers "may match"; the file then keeps none for it.
         std::vector<std::uint8_t> extra_bloom_skip;
@@ -151,11 +155,11 @@ class BloomCore {
                                  const std::vector<std::string>& extra_dims);
     static void observe_data(ChunkState& chunk, EventCache& cache,
                              std::uint32_t name_id, std::uint32_t cat_id,
-                             std::string_view name, std::string_view cat,
+                             dstd::StringView name, dstd::StringView cat,
                              std::uint64_t pid, std::uint64_t tid,
                              std::uint64_t ts, std::uint64_t dur, bool has_dur,
-                             std::string_view hhash, std::string_view fhash,
-                             std::string_view shash);
+                             dstd::StringView hhash, dstd::StringView fhash,
+                             dstd::StringView shash);
     /// One value of extra dimension `e` (init_chunk_state's extra_dims
     /// order): its text joins the bloom and its value the min/max, kept in
     /// the dimension's own type. Integers and doubles share "double"; a
@@ -167,14 +171,14 @@ class BloomCore {
                               std::uint64_t value);
     static void observe_extra(ChunkState& chunk, std::size_t e, double value);
     static void observe_extra(ChunkState& chunk, std::size_t e,
-                              std::string_view value);
+                              dstd::StringView value);
 
     /// The parsed min and max text of a dimension that one caller alone
     /// observes. `valid` is false until they are parsed, and must be reset
     /// when anything else writes the dimension's bounds.
     struct NumericBounds {
-        std::optional<duql::Number> min;
-        std::optional<duql::Number> max;
+        dstd::Optional<duql::Number> min;
+        dstd::Optional<duql::Number> max;
         bool valid = false;
     };
     /// As observe_value, with the same min and max text, but a value that
@@ -190,7 +194,7 @@ class BloomCore {
     static void observe_value(ChunkDimensionStats& stats, std::uint64_t value);
     static void observe_value(ChunkDimensionStats& stats, double value);
     static void observe_value(ChunkDimensionStats& stats,
-                              std::string_view value);
+                              dstd::StringView value);
 
     /// Merge another chunk slice's stats of one dimension into `dst`.
     static void merge_dimension_stats(ChunkDimensionStats& dst,
@@ -199,8 +203,8 @@ class BloomCore {
     /// One metadata record named `record_name`: counted and its name kept.
     /// observe_metadata_path records each of its fields.
     static void observe_metadata(ChunkState& chunk,
-                                 std::string_view record_name);
-    static void observe_metadata_path(ChunkState& chunk, std::string_view path);
+                                 dstd::StringView record_name);
+    static void observe_metadata_path(ChunkState& chunk, dstd::StringView path);
 
     /// Merge one checkpoint's harvested state into another (fixed/extra blooms,
     /// dim_stats, statistics, metadata counts). `src` is
@@ -214,7 +218,7 @@ class BloomCore {
 
     /// A file's path catalog; the paths are borrowed.
     using Catalog =
-        std::vector<std::pair<std::string_view, index::store::PathStat>>;
+        std::vector<dstd::Pair<dstd::StringView, index::store::PathStat>>;
 
     /// The file-level records a file's chunks add up to: file blooms, file
     /// statistics and the chunk count. write_chunk feeds it; finish_file
@@ -228,7 +232,7 @@ class BloomCore {
             /// A chunk kept no bloom for the dimension, so the file has none.
             bool skip = false;
         };
-        ExtraBloom& extra(std::string_view dim);
+        ExtraBloom& extra(dstd::StringView dim);
 
         ChunkStatistics statistics;
         std::vector<index::extensions::ScalableBloomFilter> fixed_blooms;
@@ -255,7 +259,7 @@ class BloomCore {
     /// dimension it never observed, as write_chunk writes them.
     static void write_absent_extra(index::FileBuild& build,
                                    std::uint64_t checkpoint_idx,
-                                   std::string_view dim, std::uint64_t observed,
+                                   dstd::StringView dim, std::uint64_t observed,
                                    const ChunkIndexerConfig& config);
 
     /// Writes the file-level records, the catalog and the manifest entries

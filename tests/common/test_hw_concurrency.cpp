@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <doctest/doctest.h>
 
 #if defined(__linux__)
@@ -20,7 +21,7 @@ TEST_CASE("the default worker count is never 0") {
 TEST_CASE("the default worker count follows the CPU affinity") {
     // The override wins over the affinity, and the Valgrind runner sets it.
     constexpr const char* OVERRIDE = "DFTRACER_UTILS_HW_CONCURRENCY";
-    std::optional<std::string> kept;
+    dftracer::utils::dstd::Optional<std::string> kept;
     if (const auto v = dftracer::utils::common::Env::get(OVERRIDE))
         kept = std::string(*v);
     ::unsetenv(OVERRIDE);

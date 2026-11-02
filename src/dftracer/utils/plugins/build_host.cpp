@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/build_host.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/state_registry.h>
@@ -145,13 +146,13 @@ const ::dftu_svc_index g_build_index = {build_register_index};
 
 const void* build_get_service(void* h, const char* ext_id) {
     if (!ext_id) return nullptr;
-    if (std::string_view{ext_id} == DFTU_SVC_OPS) return &g_build_ops;
-    if (std::string_view{ext_id} == DFTU_SVC_AGG) return &g_build_agg;
-    if (std::string_view{ext_id} == DFTU_SVC_PORTS) return &g_build_ports;
-    if (std::string_view{ext_id} == DFTU_SVC_PROVIDERS)
+    if (dstd::StringView{ext_id} == DFTU_SVC_OPS) return &g_build_ops;
+    if (dstd::StringView{ext_id} == DFTU_SVC_AGG) return &g_build_agg;
+    if (dstd::StringView{ext_id} == DFTU_SVC_PORTS) return &g_build_ports;
+    if (dstd::StringView{ext_id} == DFTU_SVC_PROVIDERS)
         return &g_build_providers;
-    if (std::string_view{ext_id} == DFTU_SVC_NODES) return &g_build_nodes;
-    if (std::string_view{ext_id} == DFTU_SVC_INDEX) return &g_build_index;
+    if (dstd::StringView{ext_id} == DFTU_SVC_NODES) return &g_build_nodes;
+    if (dstd::StringView{ext_id} == DFTU_SVC_INDEX) return &g_build_index;
     self_of(h).deny(ext_id);
     return nullptr;
 }

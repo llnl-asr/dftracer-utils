@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_TIMESTAMP_HISTOGRAM_H
 #define DFTRACER_UTILS_DATAFRAME_TIMESTAMP_HISTOGRAM_H
 
+#include <dftracer/utils/dstd/pair.h>
+
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -33,7 +35,7 @@ class TimestampHistogram {
     bool empty() const { return bins_.empty(); }
     std::size_t num_bins() const { return bins_.size(); }
 
-    const std::vector<std::pair<std::uint64_t, std::uint64_t>>& bins() const {
+    const std::vector<dstd::Pair<std::uint64_t, std::uint64_t>>& bins() const {
         return bins_;
     }
 
@@ -51,7 +53,7 @@ class TimestampHistogram {
 
    private:
     /// Sorted by bin_index. Sparse: only non-zero bins stored.
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> bins_;
+    std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> bins_;
     std::uint64_t total_count_ = 0;
 };
 

@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
@@ -204,8 +205,8 @@ coro::CoroTask<std::size_t> hash_events(const std::string& path) {
         auto line_opt = co_await line_gen.next();
         if (!line_opt) break;
         const auto& line = *line_opt;
-        const std::string_view event = trace::event_of_line(
-            std::string_view(line.content.data(), line.content.length()));
+        const dstd::StringView event = trace::event_of_line(
+            dstd::StringView(line.content.data(), line.content.length()));
         if (!event.empty()) {
             hasher.reset();
             hasher.update(event);
@@ -494,8 +495,8 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     task_extract_chunks->depends_on(groups_task.task());
     graph.add(task_extract_chunks);
 
-    std::shared_ptr<Task> final_task = task_extract_chunks;
-    std::shared_ptr<Task> task_verify_chunks = nullptr;
+    dstd::SharedPtr<Task> final_task = task_extract_chunks;
+    dstd::SharedPtr<Task> task_verify_chunks = nullptr;
 
     if (verify) {
         DFTRACER_UTILS_LOG_INFO("%s", "Configuring verification...");

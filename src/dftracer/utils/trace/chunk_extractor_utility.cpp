@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
@@ -16,13 +17,13 @@ using utilities::fileio::ChunkWriter;
 using utilities::fileio::ChunkWriterConfig;
 namespace lines = utilities::fileio::lines;
 
-std::string_view event_of_line(std::string_view line) {
+dstd::StringView event_of_line(dstd::StringView line) {
     const char* trimmed;
     std::size_t trimmed_length;
     if (json::trim_and_validate(line.data(), line.length(), trimmed,
                                 trimmed_length) &&
         trimmed_length > 8) {
-        return std::string_view(trimmed, trimmed_length);
+        return dstd::StringView(trimmed, trimmed_length);
     }
     return {};
 }
@@ -111,8 +112,8 @@ ChunkExtractorUtility::extract_and_write(
             auto line_opt = co_await line_gen.next();
             if (!line_opt) break;
             const auto& line = *line_opt;
-            const std::string_view event = event_of_line(
-                std::string_view(line.content.data(), line.content.length()));
+            const dstd::StringView event = event_of_line(
+                dstd::StringView(line.content.data(), line.content.length()));
             if (!event.empty()) {
                 co_await writer.write_line(
                     dstd::ByteView(event.data(), event.size()));

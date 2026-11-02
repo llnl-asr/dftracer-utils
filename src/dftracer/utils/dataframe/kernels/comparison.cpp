@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/kernels/comparison.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cmath>
 #include <cstring>
@@ -282,27 +283,37 @@ dftu_series* dftu_series_compare(const dftu_series* v, dftu_cmp_op op,
     DFTU_PER_CHUNK(v, dftu_series_compare, op, rhs);
     using dftracer::utils::dataframe::CmpOp;
     if (rhs.kind == DFTU_SCALAR_TAG_STR) {
-        const std::string_view r(rhs.value.s,
-                                 static_cast<std::size_t>(rhs.len));
+        const dftracer::utils::dstd::StringView r(
+            rhs.value.s, static_cast<std::size_t>(rhs.len));
         switch (static_cast<CmpOp>(op)) {
             case CmpOp::Eq:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s == r; });
+                    v, [r](dftracer::utils::dstd::StringView s) {
+                        return s == r;
+                    });
             case CmpOp::Ne:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s != r; });
+                    v, [r](dftracer::utils::dstd::StringView s) {
+                        return s != r;
+                    });
             case CmpOp::Lt:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s < r; });
+                    v,
+                    [r](dftracer::utils::dstd::StringView s) { return s < r; });
             case CmpOp::Le:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s <= r; });
+                    v, [r](dftracer::utils::dstd::StringView s) {
+                        return s <= r;
+                    });
             case CmpOp::Gt:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s > r; });
+                    v,
+                    [r](dftracer::utils::dstd::StringView s) { return s > r; });
             case CmpOp::Ge:
                 return dftracer::utils::dataframe::string_mask(
-                    v, [r](std::string_view s) { return s >= r; });
+                    v, [r](dftracer::utils::dstd::StringView s) {
+                        return s >= r;
+                    });
         }
         return nullptr;
     }

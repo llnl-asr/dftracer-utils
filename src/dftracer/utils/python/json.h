@@ -3,12 +3,13 @@
 #define DFTRACER_UTILS_PYTHON_JSON_H
 
 #include <Python.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 
 #include <memory>
 
 typedef struct {
-    PyObject_HEAD std::shared_ptr<JsonDictBatch> batch;
+    PyObject_HEAD dftracer::utils::dstd::SharedPtr<JsonDictBatch> batch;
     std::size_t event_index;
     bool is_args;
 } JsonDictValueObject;

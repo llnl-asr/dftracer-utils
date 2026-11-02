@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -68,7 +70,7 @@ std::vector<std::uint64_t> prune(const std::string& index,
 
 TEST_SUITE("index kinds") {
     TEST_CASE("payloads round-trip and reject garbage") {
-        kinds::Zone zone{"uint", "3", "9", 5, 4, std::nullopt};
+        kinds::Zone zone{"uint", "3", "9", 5, 4, dstd::nullopt};
         auto z = kinds::decode_zone(kinds::encode_zone(zone));
         REQUIRE(z.has_value());
         CHECK(z->value_type == "uint");
@@ -79,7 +81,7 @@ TEST_SUITE("index kinds") {
         CHECK_FALSE(z->histogram.has_value());
         CHECK_FALSE(kinds::decode_zone("\x01").has_value());
 
-        kinds::CountsGranule over{7, std::nullopt};
+        kinds::CountsGranule over{7, dstd::nullopt};
         auto c = kinds::decode_counts(kinds::encode_counts(over));
         REQUIRE(c.has_value());
         CHECK(c->observed == 7);
@@ -129,7 +131,7 @@ TEST_SUITE("index kinds") {
             auto w = dftu_utils_test::register_test_file(idx, trace, 1);
             // Both chunks start their events before 50; only chunk 1's last
             // event runs past it.
-            const std::pair<int, int> spans[] = {{10, 20}, {10, 100}};
+            const dstd::Pair<int, int> spans[] = {{10, 20}, {10, 100}};
             for (std::uint64_t c = 0; c < 2; ++c) {
                 index::put_gzip_member(
                     w, {c, c * 100, 100, c * 200, 200, c * 2 + 1, c * 2 + 2});
@@ -169,7 +171,7 @@ TEST_SUITE("index kinds") {
         auto q = duql::Query::from_string("dur > 5");
         REQUIRE(q.has_value());
         CHECK_THROWS_WITH_AS(
-            index::plan::prune_file({path, trace, &*q, nullptr, std::nullopt})
+            index::plan::prune_file({path, trace, &*q, nullptr, dstd::nullopt})
                 .get(),
             doctest::Contains("corrupt zone map"), std::exception);
     }
@@ -183,14 +185,14 @@ TEST_SUITE("index kinds") {
         auto bad = duql::Query::from_string(R"(ts > "abc")");
         REQUIRE(bad.has_value());
         CHECK_THROWS_WITH_AS(index::plan::prune_file(
-                                 {index, trace, &*bad, nullptr, std::nullopt})
+                                 {index, trace, &*bad, nullptr, dstd::nullopt})
                                  .get(),
                              doctest::Contains("abc"), std::exception);
 
         auto fraction = duql::Query::from_string("ts > 1.5");
         REQUIRE(fraction.has_value());
         CHECK(index::plan::prune_file(
-                  {index, trace, &*fraction, nullptr, std::nullopt})
+                  {index, trace, &*fraction, nullptr, dstd::nullopt})
                   .get());
     }
 }

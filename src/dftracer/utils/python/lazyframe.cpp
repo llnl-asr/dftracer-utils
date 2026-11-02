@@ -10,6 +10,8 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/dataframe.h>
@@ -491,7 +493,7 @@ PyObject* LazyFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
         return nullptr;
     std::vector<std::string> equi;
     if (!parse_string_seq(by, "asof: by must be names", equi)) return nullptr;
-    std::optional<double> tol;
+    dftracer::utils::dstd::Optional<double> tol;
     if (tol_obj != Py_None) {
         const double t = PyFloat_AsDouble(tol_obj);
         if (PyErr_Occurred()) return nullptr;
@@ -804,7 +806,7 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
                                      &morsel_rows, &runtime_arg))
         return nullptr;
-    std::shared_ptr<dftracer::utils::Runtime> rt =
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
     dataframe::DataFrame out;
@@ -817,7 +819,7 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
 // Drains the plan's chunk generator into `state`, which the Python iterator
 // pulls from with the GIL released.
 dftracer::utils::coro::CoroTask<void> drain_stream(
-    std::shared_ptr<
+    dftracer::utils::dstd::SharedPtr<
         dftracer::utils::python::StreamingState<dataframe::DataFrame>>
         state,
     LazyFrame lf, std::int64_t morsel_rows) {
@@ -847,7 +849,7 @@ PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
                                      &morsel_rows, &runtime_arg))
         return nullptr;
-    std::shared_ptr<dftracer::utils::Runtime> rt =
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
     namespace py = dftracer::utils::python;
@@ -1046,7 +1048,7 @@ PyObject* collect_all_py(PyObject*, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O", const_cast<char**>(kw),
                                      &arg, &runtime_arg))
         return nullptr;
-    std::shared_ptr<dftracer::utils::Runtime> rt =
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
     PyObject* seq = PySequence_Fast(arg, "collect_all expects a sequence");

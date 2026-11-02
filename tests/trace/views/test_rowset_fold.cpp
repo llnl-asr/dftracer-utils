@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -112,7 +114,8 @@ std::vector<std::string> rows_of(const df::DataFrame& f) {
     return out;
 }
 
-bool interned(const StringIntern& intern, std::string_view text) {
+bool interned(const StringIntern& intern,
+              dftracer::utils::dstd::StringView text) {
     for (std::size_t i = 0; i < intern.entry_count(); ++i)
         if (intern.resolve(intern.entry_id(i)) == text) return true;
     return false;
@@ -212,7 +215,8 @@ TEST_SUITE("RowSetFold") {
         ScanUnit unit;
         unit.file_path = "x";
         for (int i = 0; i < 2; ++i) {
-            fold.step(FoldBatch{std::span<const FoldEvent>(events), unit});
+            fold.step(FoldBatch{
+                dftracer::utils::dstd::Span<const FoldEvent>(events), unit});
             fold.seal_unit(unit);
         }
         CHECK(fold.entry_count() == 5);
@@ -225,7 +229,8 @@ TEST_SUITE("RowSetFold") {
                         16);
         ScanUnit unit;
         unit.file_path = "x";
-        fold.step(FoldBatch{std::span<const FoldEvent>(events), unit});
+        fold.step(FoldBatch{
+            dftracer::utils::dstd::Span<const FoldEvent>(events), unit});
         fold.seal_unit(unit);
         CHECK(fold.abandoned());
         CHECK(fold.entry_count() == 0);
@@ -238,10 +243,12 @@ TEST_SUITE("RowSetFold") {
                         ix::indexed_rowsets(ix::get_schema("dftracer")));
         ScanUnit unit;
         unit.file_path = "x";
-        fold.step(FoldBatch{std::span<const FoldEvent>(events), unit});
+        fold.step(FoldBatch{
+            dftracer::utils::dstd::Span<const FoldEvent>(events), unit});
         fold.drop_unit(unit);
         CHECK(fold.entry_count() == 0);
-        fold.step(FoldBatch{std::span<const FoldEvent>(events), unit});
+        fold.step(FoldBatch{
+            dftracer::utils::dstd::Span<const FoldEvent>(events), unit});
         fold.seal_unit(unit);
         CHECK(fold.entry_count() == 5);
     }

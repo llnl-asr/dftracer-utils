@@ -3,6 +3,9 @@
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_KINDS_TIME_BOUNDS_H
 
 #include <ankerl/unordered_dense.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/member.h>
 
 #include <cstdint>
@@ -21,13 +24,13 @@ namespace dftracer::utils::index::extensions::kinds {
 /// zonemap; chunks without usable bounds are absent, and so is every chunk
 /// when the zonemap is not current.
 ankerl::unordered_dense::map<std::uint64_t,
-                             std::pair<std::uint64_t, std::uint64_t>>
+                             dstd::Pair<std::uint64_t, std::uint64_t>>
 chunk_time_bounds(const index::Snapshot& snapshot, const index::FileRef& file);
 
 /// Per chunk, [first event start, last event start] from the `ts` zonemap,
 /// under the same conditions as chunk_time_bounds.
 ankerl::unordered_dense::map<std::uint64_t,
-                             std::pair<std::uint64_t, std::uint64_t>>
+                             dstd::Pair<std::uint64_t, std::uint64_t>>
 chunk_start_bounds(const index::Snapshot& snapshot, const index::FileRef& file);
 
 /// Chunks whose `ts` histogram records no event start in [begin, end), under
@@ -44,9 +47,9 @@ index::gzip::TimeBounds file_time_bounds(const index::Snapshot& snapshot,
 /// [min, max] over the file of the numeric zonemap of `path`, in the path's
 /// own unit; nullopt when the zonemap is not current or holds no numeric
 /// bounds for the path.
-std::optional<std::pair<double, double>> file_value_range(
+dstd::Optional<dstd::Pair<double, double>> file_value_range(
     const index::Snapshot& snapshot, const index::FileRef& file,
-    std::string_view path);
+    dstd::StringView path);
 
 }  // namespace dftracer::utils::index::extensions::kinds
 

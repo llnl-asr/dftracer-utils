@@ -5,6 +5,8 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/python/arrow_stream_capsule.h>
 #include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/py_method.h>
@@ -28,7 +30,7 @@ constexpr int STABLE_BATCHES = 5;
 constexpr int MAX_DRAIN = 128;
 
 struct StreamPrivate {
-    std::shared_ptr<ArrowIteratorState> state;
+    dftracer::utils::dstd::SharedPtr<ArrowIteratorState> state;
     dftracer::utils::python::SchemaReconciler reconciler;
     // Drained during discovery, emitted first from get_next.
     std::deque<ArrowExportResult> pending;
@@ -115,7 +117,7 @@ static int stream_get_next(struct ArrowArrayStream *s, struct ArrowArray *out) {
     }
 
     // Drain any discovery-phase batches first, then pull from the channel.
-    std::optional<ArrowExportResult> batch;
+    dftracer::utils::dstd::Optional<ArrowExportResult> batch;
     if (!p->pending.empty()) {
         batch = std::move(p->pending.front());
         p->pending.pop_front();
@@ -309,11 +311,12 @@ int dftracer::utils::python::init_arrow_batch_stream(PyObject *m) {
 }
 
 PyObject *dftracer::utils::python::make_arrow_batch_stream(
-    std::shared_ptr<ArrowIteratorState> state) {
+    dftracer::utils::dstd::SharedPtr<ArrowIteratorState> state) {
     auto *obj = (ArrowBatchStreamObject *)ArrowBatchStreamType.tp_alloc(
         &ArrowBatchStreamType, 0);
     if (!obj) return NULL;
-    new (&obj->state) std::shared_ptr<ArrowIteratorState>(std::move(state));
+    new (&obj->state)
+        dftracer::utils::dstd::SharedPtr<ArrowIteratorState>(std::move(state));
     obj->consumed = false;
     return (PyObject *)obj;
 }

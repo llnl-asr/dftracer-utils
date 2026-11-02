@@ -7,9 +7,12 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/no_destructor.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/fold.h>
@@ -117,7 +120,7 @@ ByteView Batch::keep(ByteView bytes) {
     if (bytes.empty()) return {};
     if (!arena_)
         arena_ = dstd::make_unique<dstd::StringArena>(FIRST_ARENA_BLOCK);
-    const std::string_view kept =
+    const dstd::StringView kept =
         arena_->push(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     return {reinterpret_cast<const std::byte*>(kept.data()), kept.size()};
 }
@@ -290,7 +293,7 @@ struct Store::State {
     /// this store opens.
     dstd::Vector<Namespace> namespaces;
     dstd::SharedPtr<const engine::Snapshot> held;
-    dstd::Vector<std::pair<dstd::String, std::uint64_t>> foreign_seen;
+    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> foreign_seen;
     std::chrono::steady_clock::time_point foreign_checked{};
     /// Changed under the mutex, read without it by snapshot()'s shortcut.
     std::atomic<std::uint64_t> version{0};
@@ -306,7 +309,7 @@ struct Store::State {
     /// makes every snapshot() look.
     std::atomic<std::int64_t> next_look{0};
 
-    using Registry = dstd::Map<dstd::String, std::weak_ptr<State>>;
+    using Registry = dstd::Map<dstd::String, dstd::WeakPtr<State>>;
 
     static Registry& registry() {
         static dstd::NoDestructor<Registry> value;
@@ -328,7 +331,7 @@ struct Store::State {
     open_snapshot_locked();
     dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
     snapshot_locked();
-    dstd::Vector<std::pair<dstd::String, std::uint64_t>> foreign_files_locked()
+    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> foreign_files_locked()
         const;
     void refresh_if_changed_locked();
     dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
@@ -467,9 +470,9 @@ Store::State::snapshot_locked() {
     return held;
 }
 
-dstd::Vector<std::pair<dstd::String, std::uint64_t>>
+dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>>
 Store::State::foreign_files_locked() const {
-    dstd::Vector<std::pair<dstd::String, std::uint64_t>> files;
+    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> files;
     const auto opened = dstd::fs::Dir::open(dir.view());
     if (!opened) return files;
     auto listing = opened->entries();

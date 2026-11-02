@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/binary_file_reader_utility.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
@@ -166,9 +167,9 @@ class FileCompressorUtility {
             for (;;) {
                 auto chunk = co_await gen.next();
                 if (!chunk) break;
-                std::string_view block(chunk->as<char>(), chunk->size());
+                dstd::StringView block(chunk->as<char>(), chunk->size());
                 const auto nl = block.rfind('\n');
-                if (nl == std::string_view::npos) {
+                if (nl == dstd::StringView::npos) {
                     carry.append(block);
                     continue;
                 }

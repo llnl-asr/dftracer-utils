@@ -4,7 +4,9 @@
 
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 
@@ -27,7 +29,7 @@ namespace dftracer::utils::trace::views::detail {
 /// the scan, valid for one step call only, hence held by reference), a Morsel
 /// once materialized.
 using Batch =
-    std::variant<std::reference_wrapper<const FoldBatch>, dataframe::Morsel>;
+    dstd::Variant<std::reference_wrapper<const FoldBatch>, dataframe::Morsel>;
 
 /// The columns a plan gives as JSON, by name: true when the column's text is
 /// already JSON (a declared json field), false when its values convert (a
@@ -44,7 +46,7 @@ struct ColumnSpec {
     /// Name columns by exact path (path-decoded records).
     bool by_path = false;
     /// Columns delivered as JSON, so every batch agrees with the schema.
-    std::shared_ptr<const JsonColumns> json;
+    dstd::SharedPtr<const JsonColumns> json;
 };
 
 /// Materialize `events` into columns: build_row_frame's order for
@@ -58,7 +60,7 @@ dataframe::DataFrame events_to_frame(
 /// shared with the morsel, which keeps it alive.
 dataframe::Morsel events_to_morsel(
     EventRows events,
-    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern,
+    dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern,
     const ColumnSpec& spec);
 
 /// The records of `batch` that `keep` accepts, in scan order. `keep` is called

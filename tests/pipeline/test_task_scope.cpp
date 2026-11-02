@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/generator.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -40,7 +41,7 @@ inline void maybe_io_delay_ms(int ms) {
 }
 
 static void wait_for_task_completion_with_deadline(
-    const std::shared_ptr<Task>& task,
+    const dstd::SharedPtr<Task>& task,
     std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
     bool completed = task->wait(timeout);
     REQUIRE(completed);

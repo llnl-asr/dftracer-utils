@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/format_detector.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 namespace dftracer::utils::index::gzip {
 
-std::shared_ptr<CheckpointIndexer> CheckpointIndexerFactory::create(
+dstd::SharedPtr<CheckpointIndexer> CheckpointIndexerFactory::create(
     const std::string &archive_path, const std::string &index_path,
     std::uint64_t checkpoint_size, bool force) {
     common::ArchiveFormat format = common::FormatDetector::detect(archive_path);

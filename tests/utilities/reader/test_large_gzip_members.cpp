@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
@@ -176,7 +177,7 @@ TEST_SUITE("ReaderInflater") {
     TEST_CASE("the index build counts one large member") {
         const auto text = hex_lines(12u << 20, 7);
         TempFile f(gzip(text));
-        std::optional<index::gzip::GzipBuildArtifacts> arts;
+        dstd::Optional<index::gzip::GzipBuildArtifacts> arts;
         run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
             index::gzip::CheckpointIndexer::VisitorList none;
             arts = co_await index::gzip::build_gzip_index_artifacts(

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -18,9 +19,9 @@ using dftracer::utils::trace::DFTracerEvent;
 
 namespace dftracer::utils::trace::statistics {
 
-inline constexpr std::string_view GLOBAL_GROUP_KEY = "__global__";
+inline constexpr dstd::StringView GLOBAL_GROUP_KEY = "__global__";
 
-static bool is_io_event(std::string_view name) {
+static bool is_io_event(dstd::StringView name) {
     using namespace dftracer::utils::trace::internal;
     for (auto op : posix_ops::FILE_READ)
         if (op == name) return true;
@@ -60,10 +61,10 @@ static void build_group_key(std::string& key,
             }
         } else if (dim == "fhash") {
             if (ev.args.exists())
-                key += ev.args["fhash"].get<std::string_view>();
+                key += ev.args["fhash"].get<dstd::StringView>();
         } else if (dim == "hhash") {
             if (ev.args.exists())
-                key += ev.args["hhash"].get<std::string_view>();
+                key += ev.args["hhash"].get<dstd::StringView>();
         }
     }
 }
@@ -71,8 +72,8 @@ static void build_group_key(std::string& key,
 static void update_event(
     DetailedStatistics& acc, const DFTracerEvent& ev,
     const std::vector<std::string>* group_by,
-    const std::unordered_set<std::string_view>& name_filter,
-    const std::unordered_set<std::string_view>& cat_filter,
+    const std::unordered_set<dstd::StringView>& name_filter,
+    const std::unordered_set<dstd::StringView>& cat_filter,
     std::string& group_key_buf) {
     static const std::string global_key{GLOBAL_GROUP_KEY};
 
@@ -118,8 +119,8 @@ static void update_event(
 
 coro::CoroTask<DetailedStatistics> DetailStatsView::collect(
     const DetailNeeds& needs) const {
-    std::unordered_set<std::string_view> name_filter;
-    std::unordered_set<std::string_view> cat_filter;
+    std::unordered_set<dstd::StringView> name_filter;
+    std::unordered_set<dstd::StringView> cat_filter;
     if (needs.filter_names)
         for (const auto& n : *needs.filter_names) name_filter.insert(n);
     if (needs.filter_categories)
@@ -130,11 +131,11 @@ coro::CoroTask<DetailedStatistics> DetailStatsView::collect(
 
     auto fold = [group_by, &name_filter, &cat_filter](
                     DetailedStatistics& acc,
-                    const std::vector<std::string_view>& lines) {
+                    const std::vector<dstd::StringView>& lines) {
         dftracer::utils::json::RecordParser parser;
         std::string group_key_buf;
         group_key_buf.reserve(128);
-        for (std::string_view line : lines) {
+        for (dstd::StringView line : lines) {
             auto result = parser.parse(line.data(), line.size());
             if (result.error()) continue;
             auto root = result.value_unsafe();

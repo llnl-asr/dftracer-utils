@@ -9,8 +9,12 @@
 #include <dftracer/utils/dataframe/internal/scalar.h>     // scalar_as
 #include <dftracer/utils/dataframe/kernels/string_ops.h>  // str_pattern
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/duql/substr_simd.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -105,20 +109,24 @@ struct ExprNode {
     // the whole evaluation, so the borrow is valid for as long as the
     // compiled program can read it.
     std::string text;
-    std::string text2;                                     // str_replace `to`
-    std::shared_ptr<const duql::CompiledPattern> pattern;  // text: identity
-    std::shared_ptr<const duql::Substitution> subst;       // regex replace
-    Series values;                                         // is_in set
-    std::shared_ptr<const ExprNode> a;  // first child (select: cond)
-    std::shared_ptr<const ExprNode> b;  // second child (select: then)
-    std::shared_ptr<const ExprNode> c;  // select: otherwise
+    std::string text2;  // str_replace `to`
+    dftracer::utils::dstd::SharedPtr<const duql::CompiledPattern>
+        pattern;        // text: identity
+    dftracer::utils::dstd::SharedPtr<const duql::Substitution>
+        subst;          // regex replace
+    Series values;      // is_in set
+    dftracer::utils::dstd::SharedPtr<const ExprNode>
+        a;              // first child (select: cond)
+    dftracer::utils::dstd::SharedPtr<const ExprNode>
+        b;              // second child (select: then)
+    dftracer::utils::dstd::SharedPtr<const ExprNode> c;  // select: otherwise
 };
 
 namespace {
 
 Expr make(ExprKind k, std::int32_t i, dftu_scalar s,
-          std::shared_ptr<const ExprNode> a,
-          std::shared_ptr<const ExprNode> b) {
+          dftracer::utils::dstd::SharedPtr<const ExprNode> a,
+          dftracer::utils::dstd::SharedPtr<const ExprNode> b) {
     auto n = std::make_shared<ExprNode>();
     n->kind = k;
     n->i = i;
@@ -206,7 +214,7 @@ bool expr_as_not(const Expr& e, Expr* a) {
 }
 
 namespace {
-bool node_references(const std::shared_ptr<const ExprNode>& n,
+bool node_references(const dftracer::utils::dstd::SharedPtr<const ExprNode>& n,
                      std::int32_t index) {
     if (!n) return false;
     if (n->kind == ExprKind::Col) return n->i == index;
@@ -220,7 +228,8 @@ bool expr_references(const Expr& e, std::int32_t index) {
 }
 
 namespace {
-std::int32_t node_max_col(const std::shared_ptr<const ExprNode>& n) {
+std::int32_t node_max_col(
+    const dftracer::utils::dstd::SharedPtr<const ExprNode>& n) {
     if (!n) return -1;
     if (n->kind == ExprKind::Col) return n->i;
     return std::max(
@@ -232,7 +241,7 @@ std::int32_t expr_max_col(const Expr& e) { return node_max_col(e.node()); }
 
 namespace {
 // Series is move-only, so a node copy shares the values set explicitly.
-std::shared_ptr<ExprNode> clone(const ExprNode& n) {
+dftracer::utils::dstd::SharedPtr<ExprNode> clone(const ExprNode& n) {
     auto c = std::make_shared<ExprNode>();
     c->kind = n.kind;
     c->i = n.i;
@@ -253,8 +262,8 @@ std::shared_ptr<ExprNode> clone(const ExprNode& n) {
     return c;
 }
 
-std::shared_ptr<const ExprNode> node_remap(
-    const std::shared_ptr<const ExprNode>& n,
+dftracer::utils::dstd::SharedPtr<const ExprNode> node_remap(
+    const dftracer::utils::dstd::SharedPtr<const ExprNode>& n,
     const std::vector<std::int32_t>& old_to_new) {
     if (!n) return nullptr;
     if (n->kind == ExprKind::Col) {
@@ -274,8 +283,9 @@ std::shared_ptr<const ExprNode> node_remap(
     c->c = std::move(c3);
     return c;
 }
-std::shared_ptr<const ExprNode> node_rebind(
-    const std::shared_ptr<const ExprNode>& n, const std::vector<Expr>& by) {
+dftracer::utils::dstd::SharedPtr<const ExprNode> node_rebind(
+    const dftracer::utils::dstd::SharedPtr<const ExprNode>& n,
+    const std::vector<Expr>& by) {
     if (!n) return nullptr;
     if (n->kind == ExprKind::Col) {
         const bool in_range =
@@ -299,8 +309,9 @@ void canonical_scalar(std::string& out, const dftu_scalar& v) {
     out += std::to_string(v.kind);
     out += ':';
     if (v.kind == DFTU_SCALAR_TAG_STR) {
-        const std::string_view s =
-            v.value.s ? std::string_view(v.value.s, v.len) : std::string_view();
+        const dftracer::utils::dstd::StringView s =
+            v.value.s ? dftracer::utils::dstd::StringView(v.value.s, v.len)
+                      : dftracer::utils::dstd::StringView();
         out += std::to_string(s.size());
         out += ':';
         out += s;
@@ -309,7 +320,7 @@ void canonical_scalar(std::string& out, const dftu_scalar& v) {
     }
 }
 
-void canonical_text(std::string& out, std::string_view s) {
+void canonical_text(std::string& out, dftracer::utils::dstd::StringView s) {
     out += std::to_string(s.size());
     out += ':';
     out += s;
@@ -425,7 +436,8 @@ Expr expr_cast(TypeId type, const Expr& a) {
     return make(ExprKind::Cast, static_cast<std::int32_t>(type), {}, a.node(),
                 nullptr);
 }
-Expr expr_str_pred(StrPredOp op, const Expr& a, std::string_view pattern) {
+Expr expr_str_pred(StrPredOp op, const Expr& a,
+                   dftracer::utils::dstd::StringView pattern) {
     Expr e = make(ExprKind::StrPred, static_cast<std::int32_t>(op), {},
                   a.node(), nullptr);
     const_cast<ExprNode*>(e.node().get())->text.assign(pattern);
@@ -439,13 +451,13 @@ Expr expr_lower(const Expr& a) { return expr_str_map(StrMapOp::Lower, a); }
 Expr expr_str_len(const Expr& a, bool chars) {
     return make(ExprKind::StrLen, chars ? 1 : 0, {}, a.node(), nullptr);
 }
-Expr expr_str_find(const Expr& a, std::string_view needle) {
+Expr expr_str_find(const Expr& a, dftracer::utils::dstd::StringView needle) {
     Expr e = make(ExprKind::StrFind, 0, {}, a.node(), nullptr);
     const_cast<ExprNode*>(e.node().get())->text.assign(needle);
     return e;
 }
-Expr expr_str_replace(const Expr& a, std::string_view from, std::string_view to,
-                      bool all) {
+Expr expr_str_replace(const Expr& a, dftracer::utils::dstd::StringView from,
+                      dftracer::utils::dstd::StringView to, bool all) {
     Expr e = make(ExprKind::StrReplace, all ? 1 : 0, {}, a.node(), nullptr);
     auto* n = const_cast<ExprNode*>(e.node().get());
     n->text.assign(from);
@@ -454,7 +466,8 @@ Expr expr_str_replace(const Expr& a, std::string_view from, std::string_view to,
 }
 namespace {
 Expr make_time_node(ExprKind k, std::int32_t part, const Expr& a,
-                    std::int64_t ns_per_unit, std::string_view fmt) {
+                    std::int64_t ns_per_unit,
+                    dftracer::utils::dstd::StringView fmt) {
     if (ns_per_unit <= 0)
         throw std::invalid_argument("expr: time unit must be positive");
     auto n = std::make_shared<ExprNode>();
@@ -473,9 +486,10 @@ Expr expr_date_part(const Expr& a, std::int32_t part,
         throw std::invalid_argument("expr: unknown date part");
     return make_time_node(ExprKind::DatePart, part, a, ns_per_unit, {});
 }
-Expr expr_format_time(const Expr& a, std::string_view fmt,
+Expr expr_format_time(const Expr& a, dftracer::utils::dstd::StringView fmt,
                       std::int64_t ns_per_unit) {
-    const std::string_view bad = common::invalid_time_format(fmt);
+    const dftracer::utils::dstd::StringView bad =
+        common::invalid_time_format(fmt);
     if (!bad.empty())
         throw std::invalid_argument("expr: invalid time format directive '" +
                                     std::string(bad) + "'");
@@ -491,8 +505,10 @@ Expr expr_str_slice(const Expr& a, std::int64_t start, std::int64_t len) {
     n->a = a.node();
     return Expr{std::move(n)};
 }
-Expr expr_str_fn(StrFn fn, const Expr& a, const Expr* b, std::string_view text,
-                 std::string_view text2, std::int64_t i0, std::int64_t i1) {
+Expr expr_str_fn(StrFn fn, const Expr& a, const Expr* b,
+                 dftracer::utils::dstd::StringView text,
+                 dftracer::utils::dstd::StringView text2, std::int64_t i0,
+                 std::int64_t i1) {
     auto n = std::make_shared<ExprNode>();
     n->kind = ExprKind::StrFn;
     n->i = static_cast<std::int32_t>(fn);
@@ -520,7 +536,7 @@ Expr expr_select(const Expr& cond, const Expr& a, const Expr& b) {
     return e;
 }
 
-Expr expr_lit_str(std::string_view value) {
+Expr expr_lit_str(dftracer::utils::dstd::StringView value) {
     Expr e = make(ExprKind::LitStr, 0, {}, nullptr, nullptr);
     const_cast<ExprNode*>(e.node().get())->text.assign(value);
     return e;
@@ -630,9 +646,10 @@ std::string pattern_identity() {
     return "pattern:" + seed + ':' + std::to_string(next++);
 }
 
-Expr pattern_node(ExprKind k, const Expr& a,
-                  std::shared_ptr<const duql::CompiledPattern> p,
-                  std::int64_t group) {
+Expr pattern_node(
+    ExprKind k, const Expr& a,
+    dftracer::utils::dstd::SharedPtr<const duql::CompiledPattern> p,
+    std::int64_t group) {
     dftu_scalar s{};
     s.kind = DFTU_SCALAR_TAG_I64;
     s.value.i = group;
@@ -644,25 +661,29 @@ Expr pattern_node(ExprKind k, const Expr& a,
 }
 }  // namespace
 
-Expr expr_str_pattern(const Expr& a,
-                      std::shared_ptr<const duql::CompiledPattern> p) {
+Expr expr_str_pattern(
+    const Expr& a,
+    dftracer::utils::dstd::SharedPtr<const duql::CompiledPattern> p) {
     return pattern_node(ExprKind::StrPattern, a, std::move(p), 0);
 }
-Expr expr_str_extract(const Expr& a,
-                      std::shared_ptr<const duql::CompiledPattern> p,
-                      std::int64_t group) {
+Expr expr_str_extract(
+    const Expr& a,
+    dftracer::utils::dstd::SharedPtr<const duql::CompiledPattern> p,
+    std::int64_t group) {
     return pattern_node(ExprKind::StrExtract, a, std::move(p), group);
 }
-Expr expr_str_extract_col(const Expr& a,
-                          std::shared_ptr<const duql::CompiledPattern> p,
-                          const Expr& group) {
+Expr expr_str_extract_col(
+    const Expr& a,
+    dftracer::utils::dstd::SharedPtr<const duql::CompiledPattern> p,
+    const Expr& group) {
     Expr e = pattern_node(ExprKind::StrExtractCol, a, std::move(p), 0);
     const_cast<ExprNode*>(e.node().get())->b = group.node();
     return e;
 }
-Expr expr_str_regex_replace(const Expr& a,
-                            std::shared_ptr<const duql::CompiledPattern> p,
-                            duql::Substitution sub) {
+Expr expr_str_regex_replace(
+    const Expr& a,
+    dftracer::utils::dstd::SharedPtr<const duql::CompiledPattern> p,
+    duql::Substitution sub) {
     Expr e = pattern_node(ExprKind::StrRegexReplace, a, std::move(p), 0);
     const_cast<ExprNode*>(e.node().get())->subst =
         std::make_shared<const duql::Substitution>(std::move(sub));
@@ -697,7 +718,7 @@ Expr expr_list_contains(const Expr& a, Scalar value) {
 }
 
 bool expr_as_col_str_pred(const Expr& e, std::int32_t* col, StrPredOp* op,
-                          std::string_view* pattern) {
+                          dftracer::utils::dstd::StringView* pattern) {
     const auto& n = e.node();
     if (!n || n->kind != ExprKind::StrPred || !n->a ||
         n->a->kind != ExprKind::Col)
@@ -725,9 +746,10 @@ namespace {
 // keys, one codepoint each; `text2` is one entry per key, a codepoint L then
 // the value's codepoints, L = 1 + their count, or L = 0 for a deletion. False
 // when either does not parse.
-bool decode_translate_table(std::string_view text, std::string_view text2,
+bool decode_translate_table(dftracer::utils::dstd::StringView text,
+                            dftracer::utils::dstd::StringView text2,
                             Series& from, Series& to) {
-    const auto step = [](std::string_view s, std::size_t pos,
+    const auto step = [](dftracer::utils::dstd::StringView s, std::size_t pos,
                          std::uint32_t& cp) -> std::size_t {
         const auto c = static_cast<unsigned char>(s[pos]);
         const std::size_t n = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
@@ -851,8 +873,8 @@ struct SlotOp {
     dftu_scalar scalar2{};  // clip hi / slice len
     // Borrowed from the ExprNode that emitted the op, which outlives the
     // program (eval_many holds the roots).
-    std::string_view text;
-    std::string_view text2;
+    dftracer::utils::dstd::StringView text;
+    dftracer::utils::dstd::StringView text2;
     const dftu_series* values = nullptr;
     // OP_STR_PATTERN / OP_STR_EXTRACT, keyed by the node identity in `text`.
     const duql::CompiledPattern* pattern = nullptr;
@@ -1847,8 +1869,9 @@ class Compiler {
         return emit_op(op);
     }
 
-    int emit_text(int opcode, int a, std::int32_t param, std::string_view text,
-                  std::string_view text2 = {}) {
+    int emit_text(int opcode, int a, std::int32_t param,
+                  dftracer::utils::dstd::StringView text,
+                  dftracer::utils::dstd::StringView text2 = {}) {
         SlotOp op;
         op.opcode = opcode;
         op.a = a;
@@ -1882,10 +1905,11 @@ class Compiler {
     }
 
     const std::vector<DataType>& input_types_;
-    std::map<std::tuple<int, int, int, int, int, int, std::int64_t,
-                        std::int64_t, std::uint32_t, std::uint32_t, std::string,
-                        std::string, std::uintptr_t>,
-             int>
+    std::map<
+        dftracer::utils::dstd::Tuple<int, int, int, int, int, int, std::int64_t,
+                                     std::int64_t, std::uint32_t, std::uint32_t,
+                                     std::string, std::string, std::uintptr_t>,
+        int>
         memo_;
 };
 
@@ -1941,10 +1965,13 @@ Series const_column(TypeId t, const dftu_scalar& s, std::int64_t len) {
         case TypeId::Float64:
             return const_fixed<double>(t, s, len);
         case TypeId::String: {
-            const std::string_view v(s.value.s ? s.value.s : "", s.len);
-            const std::vector<std::string_view> rows(
+            const dftracer::utils::dstd::StringView v(
+                s.value.s ? s.value.s : "", s.len);
+            const std::vector<dftracer::utils::dstd::StringView> rows(
                 static_cast<std::size_t>(len), v);
-            return Series::strings(std::span<const std::string_view>(rows));
+            return Series::strings(
+                dftracer::utils::dstd::Span<
+                    const dftracer::utils::dstd::StringView>(rows));
         }
         case TypeId::Unknown:
         case TypeId::Float16:
@@ -2010,7 +2037,7 @@ struct TextCol {
             off64 = reinterpret_cast<const std::int64_t*>(h->offsets.data());
     }
     bool ok() const { return off32 || off64; }
-    std::string_view at(std::int64_t i) const {
+    dftracer::utils::dstd::StringView at(std::int64_t i) const {
         if (off32)
             return {data + off32[i],
                     static_cast<std::size_t>(off32[i + 1] - off32[i])};
@@ -2039,7 +2066,7 @@ class Cells {
         set_bit(valid_, i);
         ++set_;
     }
-    void set(std::int64_t i, std::optional<T> v) {
+    void set(std::int64_t i, dftracer::utils::dstd::Optional<T> v) {
         if (v) set(i, *v);
     }
     Series finish(TypeId t) {
@@ -2083,7 +2110,7 @@ class TextCells {
         off_.reserve(static_cast<std::size_t>(n) + 1);
         off_.push_back(0);
     }
-    dstd::String& buf() { return data_; }
+    dftracer::utils::dstd::String& buf() { return data_; }
     void end_row(bool valid) {
         if (valid) {
             set_bit(valid_, static_cast<std::int64_t>(off_.size()) - 1);
@@ -2092,7 +2119,7 @@ class TextCells {
         Series::check_string_bytes(data_.size());
         off_.push_back(static_cast<std::int32_t>(data_.size()));
     }
-    void add(std::string_view s) {
+    void add(dftracer::utils::dstd::StringView s) {
         data_.append(s);
         end_row(true);
     }
@@ -2105,7 +2132,7 @@ class TextCells {
    private:
     std::int64_t n_;
     std::vector<std::int32_t> off_;
-    dstd::String data_;
+    dftracer::utils::dstd::String data_;
     std::vector<std::uint8_t> valid_;
     std::int64_t set_ = 0;
 };
@@ -2131,9 +2158,9 @@ int order(T a, T b) {
 
 // Exact comparison of an integer with a double, as the duql evaluator does
 // it: the integer is never rounded to a double.
-std::optional<int> cmp_num(std::int64_t a, double d) {
+dftracer::utils::dstd::Optional<int> cmp_num(std::int64_t a, double d) {
     constexpr double TWO_POW_63 = 9223372036854775808.0;
-    if (std::isnan(d)) return std::nullopt;
+    if (std::isnan(d)) return dftracer::utils::dstd::nullopt;
     if (d >= TWO_POW_63) return -1;
     if (d < -TWO_POW_63) return 1;
     const double f = std::floor(d);
@@ -2142,9 +2169,9 @@ std::optional<int> cmp_num(std::int64_t a, double d) {
     return d > f ? -1 : 0;
 }
 
-std::optional<int> cmp_num(std::uint64_t a, double d) {
+dftracer::utils::dstd::Optional<int> cmp_num(std::uint64_t a, double d) {
     constexpr double TWO_POW_64 = 18446744073709551616.0;
-    if (std::isnan(d)) return std::nullopt;
+    if (std::isnan(d)) return dftracer::utils::dstd::nullopt;
     if (d < 0) return 1;
     if (d >= TWO_POW_64) return -1;
     const double f = std::floor(d);
@@ -2153,21 +2180,23 @@ std::optional<int> cmp_num(std::uint64_t a, double d) {
     return d > f ? -1 : 0;
 }
 
-std::optional<int> cmp_num(std::int64_t a, std::uint64_t b) {
+dftracer::utils::dstd::Optional<int> cmp_num(std::int64_t a, std::uint64_t b) {
     if (a < 0) return -1;
     return order(static_cast<std::uint64_t>(a), b);
 }
 
-std::optional<int> flip(std::optional<int> c) {
+dftracer::utils::dstd::Optional<int> flip(
+    dftracer::utils::dstd::Optional<int> c) {
     if (c) return -*c;
     return c;
 }
 
 template <class A, class B>
-std::optional<int> cmp_numbers(A a, B b) {
+dftracer::utils::dstd::Optional<int> cmp_numbers(A a, B b) {
     if constexpr (std::is_same_v<A, B>) {
         if constexpr (IS_DOUBLE<A>)
-            if (std::isnan(a) || std::isnan(b)) return std::nullopt;
+            if (std::isnan(a) || std::isnan(b))
+                return dftracer::utils::dstd::nullopt;
         return order(a, b);
     } else if constexpr (IS_DOUBLE<A>) {
         return flip(cmp_num(b, a));
@@ -2213,28 +2242,29 @@ Int int_of(std::int64_t v) {
 }
 Int int_of(std::uint64_t v) { return {false, v}; }
 
-std::optional<std::int64_t> i64_of(Int x) {
+dftracer::utils::dstd::Optional<std::int64_t> i64_of(Int x) {
     if (!x.neg) {
         if (x.mag > static_cast<std::uint64_t>(
                         std::numeric_limits<std::int64_t>::max()))
-            return std::nullopt;
+            return dftracer::utils::dstd::nullopt;
         return static_cast<std::int64_t>(x.mag);
     }
-    if (x.mag > I64_MIN_MAG) return std::nullopt;
+    if (x.mag > I64_MIN_MAG) return dftracer::utils::dstd::nullopt;
     return static_cast<std::int64_t>(std::uint64_t{0} - x.mag);
 }
 
-std::optional<Int> int_add(Int a, Int b) {
+dftracer::utils::dstd::Optional<Int> int_add(Int a, Int b) {
     if (a.neg == b.neg) {
-        if (a.mag > U64_MAX - b.mag) return std::nullopt;
+        if (a.mag > U64_MAX - b.mag) return dftracer::utils::dstd::nullopt;
         return Int{a.neg, a.mag + b.mag};
     }
     if (a.mag >= b.mag) return Int{a.neg, a.mag - b.mag};
     return Int{b.neg, b.mag - a.mag};
 }
 
-std::optional<std::int64_t> int_arith(ArithOp op, Int a, Int b) {
-    std::optional<Int> out;
+dftracer::utils::dstd::Optional<std::int64_t> int_arith(ArithOp op, Int a,
+                                                        Int b) {
+    dftracer::utils::dstd::Optional<Int> out;
     switch (op) {
         case ArithOp::Add:
             out = int_add(a, b);
@@ -2243,37 +2273,39 @@ std::optional<std::int64_t> int_arith(ArithOp op, Int a, Int b) {
             out = int_add(a, Int{!b.neg, b.mag});
             break;
         case ArithOp::Mul:
-            if (a.mag != 0 && b.mag > U64_MAX / a.mag) return std::nullopt;
+            if (a.mag != 0 && b.mag > U64_MAX / a.mag)
+                return dftracer::utils::dstd::nullopt;
             out = Int{a.neg != b.neg, a.mag * b.mag};
             break;
         case ArithOp::FloorDiv: {
-            if (b.mag == 0) return std::nullopt;
+            if (b.mag == 0) return dftracer::utils::dstd::nullopt;
             Int q{a.neg != b.neg, a.mag / b.mag};
             if (q.neg && a.mag % b.mag != 0) ++q.mag;
             out = q;
             break;
         }
         case ArithOp::Mod: {
-            if (b.mag == 0) return std::nullopt;
+            if (b.mag == 0) return dftracer::utils::dstd::nullopt;
             std::uint64_t rem = a.mag % b.mag;
             if (rem != 0 && a.neg != b.neg) rem = b.mag - rem;
             out = Int{b.neg, rem};
             break;
         }
         case ArithOp::Div:
-            return std::nullopt;
+            return dftracer::utils::dstd::nullopt;
     }
-    if (!out) return std::nullopt;
+    if (!out) return dftracer::utils::dstd::nullopt;
     if (out->mag == 0) return 0;
     return i64_of(*out);
 }
 
-std::optional<double> of_double(double d) {
-    if (std::isnan(d)) return std::nullopt;
+dftracer::utils::dstd::Optional<double> of_double(double d) {
+    if (std::isnan(d)) return dftracer::utils::dstd::nullopt;
     return d;
 }
 
-std::optional<double> dbl_arith(ArithOp op, double a, double b) {
+dftracer::utils::dstd::Optional<double> dbl_arith(ArithOp op, double a,
+                                                  double b) {
     switch (op) {
         case ArithOp::Add:
             return of_double(a + b);
@@ -2282,24 +2314,24 @@ std::optional<double> dbl_arith(ArithOp op, double a, double b) {
         case ArithOp::Mul:
             return of_double(a * b);
         case ArithOp::Div:
-            if (b == 0) return std::nullopt;
+            if (b == 0) return dftracer::utils::dstd::nullopt;
             return of_double(a / b);
         case ArithOp::FloorDiv:
-            if (b == 0) return std::nullopt;
+            if (b == 0) return dftracer::utils::dstd::nullopt;
             return of_double(std::floor(a / b));
         case ArithOp::Mod: {
-            if (b == 0) return std::nullopt;
+            if (b == 0) return dftracer::utils::dstd::nullopt;
             double rem = std::fmod(a, b);
             if (rem != 0 && (rem < 0) != (b < 0)) rem += b;
             return of_double(rem);
         }
     }
-    return std::nullopt;
+    return dftracer::utils::dstd::nullopt;
 }
 
 // A number as the output type R: past int64 is null, NaN is null.
 template <class R, class V>
-std::optional<R> num_as(V v) {
+dftracer::utils::dstd::Optional<R> num_as(V v) {
     if constexpr (IS_DOUBLE<R>) {
         return of_double(static_cast<double>(v));
     } else if constexpr (std::is_same_v<R, V>) {
@@ -2308,17 +2340,17 @@ std::optional<R> num_as(V v) {
                          std::is_same_v<V, std::uint64_t>) {
         return i64_of(Int{false, v});
     } else {
-        return std::nullopt;
+        return dftracer::utils::dstd::nullopt;
     }
 }
 
 // A double truncated to int64; null when it is not finite or out of range.
-std::optional<std::int64_t> trunc_i64(double d) {
-    if (!std::isfinite(d)) return std::nullopt;
+dftracer::utils::dstd::Optional<std::int64_t> trunc_i64(double d) {
+    if (!std::isfinite(d)) return dftracer::utils::dstd::nullopt;
     const double t = std::trunc(d);
     if (t >= -9223372036854775808.0 && t < 9223372036854775808.0)
         return static_cast<std::int64_t>(t);
-    return std::nullopt;
+    return dftracer::utils::dstd::nullopt;
 }
 
 bool same_rows(const dftu_series* a, const dftu_series* b) {
@@ -2384,8 +2416,9 @@ Series neg_kernel(const Series& sa) {
             for (std::int64_t i = 0; i < n; ++i) {
                 if (!valid_at(a, i)) continue;
                 const Int x = int_of(pa[i]);
-                c.set(i, x.mag == 0 ? std::optional<std::int64_t>{0}
-                                    : i64_of(Int{!x.neg, x.mag}));
+                c.set(i, x.mag == 0
+                             ? dftracer::utils::dstd::Optional<std::int64_t>{0}
+                             : i64_of(Int{!x.neg, x.mag}));
             }
             out = c.finish(TypeId::Int64);
         }
@@ -2421,7 +2454,8 @@ bool order_rows(const dftu_series* a, const dftu_series* b, Fn&& fn) {
     if (a->type == TypeId::Bool && b->type == TypeId::Bool) {
         for (std::int64_t i = 0; i < n; ++i)
             if (valid_at(a, i) && valid_at(b, i))
-                fn(i, std::optional<int>(order(bit_at(a, i), bit_at(b, i))));
+                fn(i, dftracer::utils::dstd::Optional<int>(
+                          order(bit_at(a, i), bit_at(b, i))));
         return true;
     }
     const TextCol ta(a), tb(b);
@@ -2430,7 +2464,8 @@ bool order_rows(const dftu_series* a, const dftu_series* b, Fn&& fn) {
         return false;
     for (std::int64_t i = 0; i < n; ++i)
         if (valid_at(a, i) && valid_at(b, i))
-            fn(i, std::optional<int>(order(ta.at(i), tb.at(i))));
+            fn(i,
+               dftracer::utils::dstd::Optional<int>(order(ta.at(i), tb.at(i))));
     return true;
 }
 
@@ -2442,9 +2477,10 @@ Series cmp_expr_kernel(const Series& sa, const Series& sb, std::int32_t code) {
     if (!same_rows(a, b)) return {};
     const auto op = static_cast<CmpOp>(code);
     BoolCells c(a->length);
-    if (!order_rows(a, b, [&](std::int64_t i, std::optional<int> o) {
-            if (o) c.set(i, apply_cmp(op, *o));
-        }))
+    if (!order_rows(
+            a, b, [&](std::int64_t i, dftracer::utils::dstd::Optional<int> o) {
+                if (o) c.set(i, apply_cmp(op, *o));
+            }))
         return {};
     return c.finish();
 }
@@ -2461,11 +2497,12 @@ Series extreme_kernel(const Series& sa, const Series& sb, bool least) {
     // first of equal operands.
     std::vector<char> take_b(static_cast<std::size_t>(n), 0);
     std::vector<char> known(static_cast<std::size_t>(n), 0);
-    if (!order_rows(b, a, [&](std::int64_t i, std::optional<int> o) {
-            if (!o) return;
-            known[static_cast<std::size_t>(i)] = 1;
-            take_b[static_cast<std::size_t>(i)] = *o == want;
-        }))
+    if (!order_rows(
+            b, a, [&](std::int64_t i, dftracer::utils::dstd::Optional<int> o) {
+                if (!o) return;
+                known[static_cast<std::size_t>(i)] = 1;
+                take_b[static_cast<std::size_t>(i)] = *o == want;
+            }))
         return {};
     auto pick = [&](std::int64_t i) {
         return take_b[static_cast<std::size_t>(i)] != 0;
@@ -2598,7 +2635,7 @@ bool utf8_continuation(char c) {
 }
 
 // Byte offset of code point `n` in `s`, or s.size() past the end.
-std::size_t utf8_offset(std::string_view s, std::uint64_t n) {
+std::size_t utf8_offset(dftracer::utils::dstd::StringView s, std::uint64_t n) {
     std::size_t i = 0;
     while (i < s.size() && n > 0) {
         ++i;
@@ -2620,8 +2657,8 @@ Series substr_kernel(const Series& sa, std::int64_t start, std::int64_t len) {
             c.end_row(false);
             continue;
         }
-        const std::string_view s = ta.at(i);
-        const std::string_view rest =
+        const dftracer::utils::dstd::StringView s = ta.at(i);
+        const dftracer::utils::dstd::StringView rest =
             s.substr(utf8_offset(s, static_cast<std::uint64_t>(start)));
         c.add(len < 0
                   ? rest
@@ -2634,13 +2671,13 @@ Series substr_kernel(const Series& sa, std::int64_t start, std::int64_t len) {
 // A time operand as whole units: a Float64 is floored, and a NaN, an infinity
 // or a value past int64 is null.
 template <class T>
-std::optional<std::int64_t> time_units(T x) {
+dftracer::utils::dstd::Optional<std::int64_t> time_units(T x) {
     if constexpr (IS_DOUBLE<T>) {
         return trunc_i64(std::floor(x));
     } else if constexpr (std::is_same_v<T, std::uint64_t>) {
         if (x > static_cast<std::uint64_t>(
                     std::numeric_limits<std::int64_t>::max()))
-            return std::nullopt;
+            return dftracer::utils::dstd::nullopt;
         return static_cast<std::int64_t>(x);
     } else {
         return x;
@@ -2667,7 +2704,8 @@ Series date_part_kernel(const Series& sa, std::int32_t part,
     return c.finish(TypeId::Int64);
 }
 
-Series format_time_kernel(const Series& sa, std::string_view fmt,
+Series format_time_kernel(const Series& sa,
+                          dftracer::utils::dstd::StringView fmt,
                           std::int64_t ns_per_unit) {
     const Series fa = flat_view(sa);
     const dftu_series* a = fa.handle();
@@ -2677,7 +2715,8 @@ Series format_time_kernel(const Series& sa, std::string_view fmt,
         using A = decltype(xa);
         const A* pa = values_of<A>(a);
         for (std::int64_t i = 0; i < a->length; ++i) {
-            const auto t = valid_at(a, i) ? time_units<A>(pa[i]) : std::nullopt;
+            const auto t = valid_at(a, i) ? time_units<A>(pa[i])
+                                          : dftracer::utils::dstd::nullopt;
             if (t)
                 common::format_time(c.buf(),
                                     common::civil_time(*t, ns_per_unit), fmt);
@@ -2696,7 +2735,7 @@ Series extract_kernel(const Series& sa, const duql::CompiledPattern& p,
     if (!ta.ok()) return {};
     TextCells c(a->length);
     for (std::int64_t i = 0; i < a->length; ++i) {
-        std::string_view m;
+        dftracer::utils::dstd::StringView m;
         if (valid_at(a, i) &&
             duql::extract(p, ta.at(i), group, m) == duql::MatchResult::Yes)
             c.add(m);
@@ -2713,13 +2752,13 @@ struct IntCol {
     const void* p;
     explicit IntCol(const dftu_series* s)
         : h(s), p(s->data.block() ? s->data.data() : nullptr) {}
-    std::optional<Int> at(std::int64_t i) const {
-        if (!valid_at(h, i)) return std::nullopt;
+    dftracer::utils::dstd::Optional<Int> at(std::int64_t i) const {
+        if (!valid_at(h, i)) return dftracer::utils::dstd::nullopt;
         if (h->type == TypeId::Int64)
             return int_of(static_cast<const std::int64_t*>(p)[i]);
         if (h->type == TypeId::Uint64)
             return int_of(static_cast<const std::uint64_t*>(p)[i]);
-        return std::nullopt;
+        return dftracer::utils::dstd::nullopt;
     }
 };
 
@@ -2737,8 +2776,8 @@ Series str_pred_col_kernel(const Series& sa, const Series& sb,
     BoolCells c(a->length);
     for (std::int64_t i = 0; i < a->length; ++i) {
         if (!valid_at(a, i) || !valid_at(b, i)) continue;
-        const std::string_view s = ta.at(i);
-        const std::string_view n = tb.at(i);
+        const dftracer::utils::dstd::StringView s = ta.at(i);
+        const dftracer::utils::dstd::StringView n = tb.at(i);
         bool hit = false;
         if (op == StrPredOp::StartsWith)
             hit = s.starts_with(n);
@@ -2772,13 +2811,14 @@ Series str_replace_col_kernel(const Series& sa, const Series& sb,
             c.end_row(false);
             continue;
         }
-        const std::string_view s = ta.at(i);
-        const std::string_view from = tb.at(i);
-        const std::string_view to = td.at(i);
-        dstd::String& out = c.buf();
+        const dftracer::utils::dstd::StringView s = ta.at(i);
+        const dftracer::utils::dstd::StringView from = tb.at(i);
+        const dftracer::utils::dstd::StringView to = td.at(i);
+        dftracer::utils::dstd::String& out = c.buf();
         std::size_t pos = 0;
         if (!from.empty()) {
-            for (std::size_t hit = s.find(from); hit != std::string_view::npos;
+            for (std::size_t hit = s.find(from);
+                 hit != dftracer::utils::dstd::StringView::npos;
                  hit = s.find(from, pos)) {
                 out.append(s.substr(pos, hit - pos));
                 out.append(to);
@@ -2805,13 +2845,15 @@ Series substr_col_kernel(const Series& sa, const Series& sb, const Series* sc) {
     const IntCol lens(sc ? d : b);
     TextCells c(a->length);
     for (std::int64_t i = 0; i < a->length; ++i) {
-        const auto start = valid_at(a, i) ? starts.at(i) : std::nullopt;
+        const auto start =
+            valid_at(a, i) ? starts.at(i) : dftracer::utils::dstd::nullopt;
         if (!start || start->neg) {
             c.end_row(false);
             continue;
         }
-        const std::string_view s = ta.at(i);
-        const std::string_view rest = s.substr(utf8_offset(s, start->mag));
+        const dftracer::utils::dstd::StringView s = ta.at(i);
+        const dftracer::utils::dstd::StringView rest =
+            s.substr(utf8_offset(s, start->mag));
         if (!sc) {
             c.add(rest);
             continue;
@@ -2846,14 +2888,16 @@ Series round_col_kernel(const Series& sa, const Series& sb) {
         if constexpr (IS_DOUBLE<A>) {
             Cells<double> c(n);
             for (std::int64_t i = 0; i < n; ++i) {
-                const auto d = valid_at(a, i) ? digits.at(i) : std::nullopt;
+                const auto d = valid_at(a, i) ? digits.at(i)
+                                              : dftracer::utils::dstd::nullopt;
                 if (d && d->mag <= 308) c.set(i, of_double(rounded(pa[i], *d)));
             }
             out = c.finish(TypeId::Float64);
         } else if constexpr (std::is_same_v<A, std::uint64_t>) {
             Cells<std::uint64_t> c(n);
             for (std::int64_t i = 0; i < n; ++i) {
-                const auto d = valid_at(a, i) ? digits.at(i) : std::nullopt;
+                const auto d = valid_at(a, i) ? digits.at(i)
+                                              : dftracer::utils::dstd::nullopt;
                 if (!d) continue;
                 if (!d->neg) {
                     c.set(i, pa[i]);
@@ -2867,7 +2911,8 @@ Series round_col_kernel(const Series& sa, const Series& sb) {
         } else {
             Cells<std::int64_t> c(n);
             for (std::int64_t i = 0; i < n; ++i) {
-                const auto d = valid_at(a, i) ? digits.at(i) : std::nullopt;
+                const auto d = valid_at(a, i) ? digits.at(i)
+                                              : dftracer::utils::dstd::nullopt;
                 if (!d) continue;
                 if (!d->neg)
                     c.set(i, pa[i]);
@@ -2894,8 +2939,9 @@ Series extract_col_kernel(const Series& sa, const Series& sb,
     const std::uint64_t max_group = duql::capture_count(p);
     TextCells c(a->length);
     for (std::int64_t i = 0; i < a->length; ++i) {
-        const auto g = valid_at(a, i) ? groups.at(i) : std::nullopt;
-        std::string_view m;
+        const auto g =
+            valid_at(a, i) ? groups.at(i) : dftracer::utils::dstd::nullopt;
+        dftracer::utils::dstd::StringView m;
         if (g && !g->neg && g->mag <= max_group &&
             duql::extract(p, ta.at(i), static_cast<std::size_t>(g->mag), m) ==
                 duql::MatchResult::Yes)
@@ -2907,10 +2953,11 @@ Series extract_col_kernel(const Series& sa, const Series& sb,
 }
 
 template <class T>
-void append_number(dstd::String& out, T v) {
+void append_number(dftracer::utils::dstd::String& out, T v) {
     if constexpr (std::is_floating_point_v<T>) {
         char buf[32];
-        if (char* end = dstd::to_chars_double(buf, buf + sizeof(buf), v))
+        if (char* end = dftracer::utils::dstd::to_chars_double(
+                buf, buf + sizeof(buf), v))
             out.append(buf, end);
     } else {
         char buf[24];
@@ -2920,22 +2967,25 @@ void append_number(dstd::String& out, T v) {
 }
 
 template <class V>
-std::optional<V> parse_number(std::string_view s) {
+dftracer::utils::dstd::Optional<V> parse_number(
+    dftracer::utils::dstd::StringView s) {
     V out{};
     std::from_chars_result res{};
     if constexpr (std::is_same_v<V, double>)
-        res = dstd::from_chars_double(s.data(), s.data() + s.size(), out);
+        res = dftracer::utils::dstd::from_chars_double(
+            s.data(), s.data() + s.size(), out);
     else
         res = std::from_chars(s.data(), s.data() + s.size(), out);
     if (res.ec != std::errc{} || res.ptr != s.data() + s.size())
-        return std::nullopt;
+        return dftracer::utils::dstd::nullopt;
     return out;
 }
 
-std::optional<std::int64_t> text_to_int(std::string_view s) {
+dftracer::utils::dstd::Optional<std::int64_t> text_to_int(
+    dftracer::utils::dstd::StringView s) {
     if (auto i = parse_number<std::int64_t>(s)) return i;
     if (auto d = parse_number<double>(s)) return trunc_i64(*d);
-    return std::nullopt;
+    return dftracer::utils::dstd::nullopt;
 }
 
 // int(x) / float(x): numbers convert (a double truncates toward zero), Bool
@@ -2944,7 +2994,7 @@ template <class R>
 Series to_number_kernel(const dftu_series* a, TypeId t) {
     const std::int64_t n = a->length;
     Cells<R> c(n);
-    auto convert = [](auto v) -> std::optional<R> {
+    auto convert = [](auto v) -> dftracer::utils::dstd::Optional<R> {
         if constexpr (IS_DOUBLE<R>) {
             return of_double(static_cast<double>(v));
         } else if constexpr (IS_DOUBLE<decltype(v)>) {
@@ -3055,12 +3105,12 @@ struct ListParts {
     const std::int32_t* off = nullptr;
 };
 
-std::optional<ListParts> list_parts(const Series& s) {
+dftracer::utils::dstd::Optional<ListParts> list_parts(const Series& s) {
     ListParts p;
     p.list = flat_view(s);
     const dftu_series* h = p.list.handle();
     if (!h || h->type != TypeId::List || !h->offsets.block() || !h->child())
-        return std::nullopt;
+        return dftracer::utils::dstd::nullopt;
     p.off = reinterpret_cast<const std::int32_t*>(h->offsets.data());
     Series child = flat_view(Series{dftu_series_share(h->child().get())});
     const TypeId t = child.type();
@@ -3070,7 +3120,7 @@ std::optional<ListParts> list_parts(const Series& s) {
             child.handle(),
             static_cast<dftu_dtype>(is_int_type(t) ? TypeId::Int64
                                                    : TypeId::Float64))};
-    if (!child.valid()) return std::nullopt;
+    if (!child.valid()) return dftracer::utils::dstd::nullopt;
     p.elems = std::move(child);
     return p;
 }
@@ -3111,13 +3161,15 @@ Series list_sum_kernel(const Series& s) {
             Cells<std::int64_t> c(n);
             for (std::int64_t i = 0; i < n; ++i) {
                 if (!valid_at(h, i)) continue;
-                std::optional<Int> total = Int{};
+                dftracer::utils::dstd::Optional<Int> total = Int{};
                 for (std::int32_t k = off[i]; k < off[i + 1] && total; ++k)
                     total = valid_at(e, k) ? int_add(*total, int_of(pe[k]))
-                                           : std::nullopt;
+                                           : dftracer::utils::dstd::nullopt;
                 if (total)
-                    c.set(i, total->mag == 0 ? std::optional<std::int64_t>{0}
-                                             : i64_of(*total));
+                    c.set(i,
+                          total->mag == 0
+                              ? dftracer::utils::dstd::Optional<std::int64_t>{0}
+                              : i64_of(*total));
             }
             out = c.finish(TypeId::Int64);
         }
@@ -3146,7 +3198,8 @@ Series list_contains_kernel(const Series& s, const dftu_scalar& v) {
     };
     if (v.kind == DFTU_SCALAR_TAG_STR && is_text_type(e->type)) {
         const TextCol te(e);
-        const std::string_view want(v.value.s ? v.value.s : "", v.len);
+        const dftracer::utils::dstd::StringView want(v.value.s ? v.value.s : "",
+                                                     v.len);
         each_row([&](std::int32_t k) { return te.at(k) == want; });
     } else if (v.kind != DFTU_SCALAR_TAG_STR && is_num_col(e)) {
         const TypeId vt = v.kind == DFTU_SCALAR_TAG_I64   ? TypeId::Int64
@@ -3180,7 +3233,7 @@ void set_eval_error(std::string message) {
     g_eval_error = std::move(message);
 }
 
-Series str_const(std::string_view t, std::int64_t len) {
+Series str_const(dftracer::utils::dstd::StringView t, std::int64_t len) {
     dftu_scalar sc{};
     sc.kind = DFTU_SCALAR_TAG_STR;
     sc.value.s = t.data();
@@ -3850,7 +3903,7 @@ int32_t dftu_expr_as_col_str_pred(const dftu_expr* e, int32_t* col, int32_t* op,
     if (!e || !col || !op || !pattern || !pattern_len) return 0;
     std::int32_t c = -1;
     dataframe::StrPredOp sop{};
-    std::string_view pat;
+    dftracer::utils::dstd::StringView pat;
     if (!dataframe::expr_as_col_str_pred(unwrap(e), &c, &sop, &pat)) return 0;
     *col = c;
     *op = static_cast<int32_t>(sop);
@@ -3892,8 +3945,8 @@ dftu_expr* dftu_expr_str_pred(int32_t op, const dftu_expr* a,
     if (!a || (pattern_len > 0 && !pattern)) return nullptr;
     return wrap(dataframe::expr_str_pred(
         static_cast<dataframe::StrPredOp>(op), unwrap(a),
-        std::string_view(pattern ? pattern : "",
-                         static_cast<std::size_t>(pattern_len))));
+        dftracer::utils::dstd::StringView(
+            pattern ? pattern : "", static_cast<std::size_t>(pattern_len))));
 }
 dftu_expr* dftu_expr_str_pred_col(int32_t op, const dftu_expr* a,
                                   const dftu_expr* needle) {
@@ -3937,9 +3990,10 @@ dftu_expr* dftu_expr_str_fn(int32_t fn, const dftu_expr* a, const dftu_expr* b,
     const dataframe::Expr other = b ? unwrap(b) : dataframe::Expr{};
     return wrap(dataframe::expr_str_fn(
         static_cast<dataframe::StrFn>(fn), unwrap(a), b ? &other : nullptr,
-        std::string_view(text ? text : "", static_cast<std::size_t>(text_len)),
-        std::string_view(text2 ? text2 : "",
-                         static_cast<std::size_t>(text2_len)),
+        dftracer::utils::dstd::StringView(text ? text : "",
+                                          static_cast<std::size_t>(text_len)),
+        dftracer::utils::dstd::StringView(text2 ? text2 : "",
+                                          static_cast<std::size_t>(text2_len)),
         i0, i1));
 }
 dftu_expr* dftu_expr_str_len(const dftu_expr* a, int32_t chars) {
@@ -3950,8 +4004,9 @@ dftu_expr* dftu_expr_str_find(const dftu_expr* a, const char* needle,
                               int32_t needle_len) {
     if (!a || (needle_len > 0 && !needle)) return nullptr;
     return wrap(dataframe::expr_str_find(
-        unwrap(a), std::string_view(needle ? needle : "",
-                                    static_cast<std::size_t>(needle_len))));
+        unwrap(a),
+        dftracer::utils::dstd::StringView(
+            needle ? needle : "", static_cast<std::size_t>(needle_len))));
 }
 dftu_expr* dftu_expr_str_replace(const dftu_expr* a, const char* from,
                                  int32_t from_len, const char* to,
@@ -3959,8 +4014,10 @@ dftu_expr* dftu_expr_str_replace(const dftu_expr* a, const char* from,
     if (!a || (from_len > 0 && !from) || (to_len > 0 && !to)) return nullptr;
     return wrap(dataframe::expr_str_replace(
         unwrap(a),
-        std::string_view(from ? from : "", static_cast<std::size_t>(from_len)),
-        std::string_view(to ? to : "", static_cast<std::size_t>(to_len)),
+        dftracer::utils::dstd::StringView(from ? from : "",
+                                          static_cast<std::size_t>(from_len)),
+        dftracer::utils::dstd::StringView(to ? to : "",
+                                          static_cast<std::size_t>(to_len)),
         all != 0));
 }
 dftu_expr* dftu_expr_date_part(const dftu_expr* a, int32_t part,
@@ -3974,7 +4031,8 @@ dftu_expr* dftu_expr_format_time(const dftu_expr* a, const char* fmt,
                                  int32_t fmt_len, int64_t ns_per_unit) {
     if (!a || fmt_len < 0 || (fmt_len > 0 && !fmt) || ns_per_unit <= 0)
         return nullptr;
-    const std::string_view f(fmt ? fmt : "", static_cast<std::size_t>(fmt_len));
+    const dftracer::utils::dstd::StringView f(
+        fmt ? fmt : "", static_cast<std::size_t>(fmt_len));
     if (!dftracer::utils::common::invalid_time_format(f).empty())
         return nullptr;
     return wrap(dataframe::expr_format_time(unwrap(a), f, ns_per_unit));
@@ -3999,8 +4057,8 @@ dftu_expr* dftu_expr_is_null(const dftu_expr* a, int32_t null) {
 }
 dftu_expr* dftu_expr_lit_str(const char* value, int32_t len) {
     if (len < 0 || (len > 0 && !value)) return nullptr;
-    return wrap(dataframe::expr_lit_str(
-        std::string_view(value ? value : "", static_cast<std::size_t>(len))));
+    return wrap(dataframe::expr_lit_str(dftracer::utils::dstd::StringView(
+        value ? value : "", static_cast<std::size_t>(len))));
 }
 dftu_expr* dftu_expr_lit_bool(int32_t value) {
     return wrap(dataframe::expr_lit_bool(value != 0));

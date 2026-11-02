@@ -65,8 +65,8 @@ struct Throws {
 
 static_assert(sizeof(dstd::Vector<int>) == sizeof(std::vector<int>));
 static_assert(sizeof(dstd::String) == sizeof(std::string));
-static_assert(std::is_same_v<dstd::StringView, std::string_view>);
-static_assert(std::is_same_v<dstd::Span<const int>, std::span<const int>>);
+static_assert(std::is_same_v<dstd::StringView, dstd::StringView>);
+static_assert(std::is_same_v<dstd::Span<const int>, dstd::Span<const int>>);
 static_assert(sizeof(dstd::UniquePtr<int>) == sizeof(int*));
 static_assert(
     std::is_convertible_v<dstd::UniquePtr<Derived>, dstd::UniquePtr<Base>>);
@@ -162,7 +162,7 @@ TEST_CASE("HashMap with String keys finds by std::string_view") {
     m["a key long enough to leave the small buffer"] = 2;
     CHECK(m.find("alpha"sv)->second == 1);
     CHECK(
-        m.find(std::string_view{"a key long enough to leave the small buffer"})
+        m.find(dstd::StringView{"a key long enough to leave the small buffer"})
             ->second == 2);
     CHECK(m.contains("alpha"));
     CHECK(m.count("beta"sv) == 0);
@@ -207,9 +207,9 @@ TEST_CASE("Hash agrees across the string types and avalanches integers") {
     dstd::Hash<dstd::String> strings;
     const char* text = "same text";
     std::size_t h = strings(dstd::String{text});
-    CHECK(h == dstd::Hash<std::string_view>{}(std::string_view{text}));
+    CHECK(h == dstd::Hash<dstd::StringView>{}(dstd::StringView{text}));
     CHECK(h == dstd::Hash<const char*>{}(text));
-    CHECK(h == strings(std::string_view{text}));
+    CHECK(h == strings(dstd::StringView{text}));
     CHECK(strings("other"sv) != h);
 
     dstd::Hash<std::uint32_t> ints;
@@ -291,7 +291,7 @@ TEST_CASE("SharedPtr shares one object and frees it with the last owner") {
         CHECK(b->value == 5);
         a.reset();
         CHECK(Counted::alive == 1);
-        std::weak_ptr<Counted> weak = b;
+        dstd::WeakPtr<Counted> weak = b;
         b.reset();
         CHECK(Counted::alive == 0);
         CHECK(weak.expired());

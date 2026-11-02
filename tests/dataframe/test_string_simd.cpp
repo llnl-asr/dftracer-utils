@@ -10,6 +10,9 @@
 #include <dftracer/utils/dataframe/internal/string_simd.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -28,7 +31,7 @@ namespace simd = dftracer::utils::dataframe::strsimd;
 
 namespace {
 
-using Row = std::optional<std::string>;
+using Row = dftracer::utils::dstd::Optional<std::string>;
 using Rows = std::vector<Row>;
 
 bool alpha(unsigned char c) {
@@ -189,12 +192,12 @@ std::vector<std::string> r_partition(const std::string& s,
 // ---- data ----
 
 Series make(const Rows& rows) {
-    std::vector<std::string_view> views;
+    std::vector<dftracer::utils::dstd::StringView> views;
     std::vector<std::uint8_t> validity((rows.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
-        views.push_back(rows[i] ? std::string_view(*rows[i])
-                                : std::string_view());
+        views.push_back(rows[i] ? dftracer::utils::dstd::StringView(*rows[i])
+                                : dftracer::utils::dstd::StringView());
         if (rows[i])
             validity[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         else
@@ -468,7 +471,8 @@ TEST_SUITE("string simd") {
                         mode);
                 }
                 for (auto [st, ln] :
-                     std::vector<std::pair<std::int64_t, std::int64_t>>{
+                     std::vector<dftracer::utils::dstd::Pair<std::int64_t,
+                                                             std::int64_t>>{
                          {0, 3}, {2, -1}, {-3, 2}, {100, 5}, {0, 0}}) {
                     expect_strings(
                         Series{dftu_series_str_slice(s.handle(), st, ln)},

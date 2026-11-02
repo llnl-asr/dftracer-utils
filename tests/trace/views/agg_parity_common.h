@@ -9,6 +9,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -36,9 +39,10 @@ namespace aggparity {
 // Minimal external Fold for the fold-factory seam: counts events over the
 // shared scan.
 struct CountFold : dftracer::utils::trace::views::detail::Fold {
-    std::shared_ptr<std::atomic<std::uint64_t>> total;
+    dftracer::utils::dstd::SharedPtr<std::atomic<std::uint64_t>> total;
     std::uint64_t local = 0;
-    explicit CountFold(std::shared_ptr<std::atomic<std::uint64_t>> t)
+    explicit CountFold(
+        dftracer::utils::dstd::SharedPtr<std::atomic<std::uint64_t>> t)
         : total(std::move(t)) {}
     bool accepts(const dftracer::utils::trace::views::detail::ScanShape&)
         const override {
@@ -75,7 +79,7 @@ struct HistBin {
 // Bins of a list<struct<lo,hi,count>> hist column at `row`.
 inline std::vector<HistBin> hist_bins(
     const dftracer::utils::dataframe::DataFrame& b, std::int64_t row,
-    std::string_view name) {
+    dftracer::utils::dstd::StringView name) {
     const dftracer::utils::dataframe::Series& lc =
         b.columns[static_cast<std::size_t>(test_view_common::bcol(b, name))];
     const std::int32_t* off = lc.offsets();
@@ -126,7 +130,8 @@ inline void frames_equal(const dftracer::utils::dataframe::DataFrame& a,
     }
     REQUIRE(a.num_rows() == b.num_rows());
     auto keyed = [&](const dftracer::utils::dataframe::DataFrame& df) {
-        std::vector<std::pair<std::string, std::int64_t>> rows;
+        std::vector<dftracer::utils::dstd::Pair<std::string, std::int64_t>>
+            rows;
         for (std::int64_t r = 0; r < df.num_rows(); ++r) {
             std::string s;
             for (const auto& k : keys)
@@ -246,7 +251,7 @@ inline void check_match_multi(const dftracer::utils::dataframe::DataFrame& a0,
         }
         return s;
     };
-    std::vector<std::pair<std::string, std::int64_t>> ar, br;
+    std::vector<dftracer::utils::dstd::Pair<std::string, std::int64_t>> ar, br;
     for (std::int64_t r = 0; r < a0.num_rows(); ++r)
         ar.emplace_back(sort_key(a0, r), r);
     for (std::int64_t r = 0; r < b0.num_rows(); ++r)

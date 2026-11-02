@@ -12,6 +12,9 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -143,7 +146,7 @@ coro::CoroTask<DataFrame> drain_cursor(std::unique_ptr<Cursor> cur) {
     co_return out;
 }
 
-coro::CoroTask<std::pair<std::vector<std::int64_t>, DataFrame>> probe_stream(
+coro::CoroTask<dstd::Pair<std::vector<std::int64_t>, DataFrame>> probe_stream(
     dftracer::utils::coro::AsyncGenerator<DataFrame> gen) {
     std::vector<std::int64_t> chunk_rows;
     std::vector<DataFrame> chunks;
@@ -158,7 +161,7 @@ coro::CoroTask<std::pair<std::vector<std::int64_t>, DataFrame>> probe_stream(
     co_return std::make_pair(std::move(chunk_rows), std::move(merged));
 }
 
-std::pair<std::vector<std::int64_t>, DataFrame> run_stream_probe(
+dstd::Pair<std::vector<std::int64_t>, DataFrame> run_stream_probe(
     dftracer::utils::coro::AsyncGenerator<DataFrame> gen) {
     return dftracer::utils::default_runtime()
         .submit(probe_stream(std::move(gen)))
@@ -198,10 +201,10 @@ std::vector<const Series*> ptrs(const DataFrame& df) {
 // the reconcile-by-name path of drain_to_frame.
 class RaggedCursor : public Cursor {
    public:
-    explicit RaggedCursor(std::shared_ptr<StringIntern> intern)
+    explicit RaggedCursor(dstd::SharedPtr<StringIntern> intern)
         : intern_(std::move(intern)) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
         if (step_ == 0) {
             ++step_;
             std::vector<std::int64_t> a{1, 2};
@@ -228,12 +231,12 @@ class RaggedCursor : public Cursor {
             m.dyn->intern = intern_;
             co_return m;
         }
-        co_return std::nullopt;
+        co_return dstd::nullopt;
     }
 
    private:
     int step_ = 0;
-    std::shared_ptr<StringIntern> intern_;
+    dstd::SharedPtr<StringIntern> intern_;
 };
 
 class RaggedSource : public Source {
@@ -1197,7 +1200,7 @@ TEST_SUITE("lazyframe") {
         };
         const std::int64_t ALL = DFTU_WINDOW_UNBOUNDED;
         using Specs = std::vector<dftu_window_spec>;
-        const std::vector<std::pair<std::string, Specs>> groups = {
+        const std::vector<dstd::Pair<std::string, Specs>> groups = {
             {"ranks",
              {offset_spec(DFTU_WINDOW_NTILE, nullptr, "nt", 4),
               offset_spec(DFTU_WINDOW_ROW_NUMBER, nullptr, "rn", 0),
@@ -1674,7 +1677,7 @@ TEST_SUITE("lazyframe") {
         df.columns.push_back(
             Series::flat(TypeId::Uint64, w.data(), n, wv.data()));
 
-        using Cell = std::optional<double>;
+        using Cell = dstd::Optional<double>;
         struct Col {
             std::string name;
             std::vector<Cell> cells;

@@ -4,6 +4,7 @@
 // dropped. A plugin that declares none keeps the old unchecked behaviour.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <doctest/doctest.h>
@@ -31,8 +32,9 @@ auto load(ConfigTree cfg) {
         .build();
 }
 
-bool has_substr(std::string_view hay, std::string_view needle) {
-    return hay.find(needle) != std::string_view::npos;
+bool has_substr(dftracer::utils::dstd::StringView hay,
+                dftracer::utils::dstd::StringView needle) {
+    return hay.find(needle) != dftracer::utils::dstd::StringView::npos;
 }
 
 }  // namespace

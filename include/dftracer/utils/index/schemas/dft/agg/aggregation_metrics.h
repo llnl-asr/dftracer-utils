@@ -5,6 +5,7 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <bit>
@@ -93,7 +94,7 @@ struct MetricStats {
 /// if absent. Works for any transparent-lookup map whose mapped_type is
 /// constructible from a sketch accuracy. Returns a reference (no copy).
 template <typename Map>
-typename Map::mapped_type& find_or_create(Map& map, std::string_view name,
+typename Map::mapped_type& find_or_create(Map& map, dstd::StringView name,
                                           double accuracy) {
     auto it = map.find(name);
     if (it == map.end()) {

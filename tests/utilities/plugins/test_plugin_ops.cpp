@@ -13,6 +13,7 @@
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <doctest/doctest.h>
 
@@ -194,7 +195,8 @@ dftu_series* doubled_through_data(const dftu_series* v) {
                                 static_cast<std::int64_t>(out.size()), nullptr);
 }
 
-std::shared_ptr<dftu_series> flat_chunk(std::vector<std::int64_t> v) {
+dftracer::utils::dstd::SharedPtr<dftu_series> flat_chunk(
+    std::vector<std::int64_t> v) {
     return {dftu_series_new_flat(DFTU_TYPE_INT64, v.data(),
                                  static_cast<std::int64_t>(v.size()), nullptr),
             dftu_series_free};

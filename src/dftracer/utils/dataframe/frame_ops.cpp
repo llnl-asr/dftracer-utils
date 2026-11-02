@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 
 #include <exception>
 #include <optional>
@@ -63,7 +65,9 @@ dftu_dataframe* dftu_dataframe_gap_fill(
         mode != DFTU_GAP_FILL_LINEAR)
         return nullptr;
     try {
-        std::optional<std::pair<int64_t, int64_t>> r;
+        dftracer::utils::dstd::Optional<
+            dftracer::utils::dstd::Pair<int64_t, int64_t>>
+            r;
         if (n_range == 2) r = std::make_pair(range[0], range[1]);
         return df::dataframe_handle_wrap(df::gap_fill(
             df::dataframe_handle_view(frame), names_of(partition_by, n_part),
@@ -84,7 +88,7 @@ dftu_dataframe* dftu_dataframe_asof(const dftu_dataframe* left,
         direction != DFTU_ASOF_NEAREST)
         return nullptr;
     try {
-        std::optional<double> tol;
+        dftracer::utils::dstd::Optional<double> tol;
         if (tolerance >= 0) tol = tolerance;
         return df::dataframe_handle_wrap(
             df::asof(df::dataframe_handle_view(left),

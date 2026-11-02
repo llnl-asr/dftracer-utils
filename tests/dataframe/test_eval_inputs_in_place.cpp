@@ -10,6 +10,8 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -24,7 +26,7 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-using Row = std::optional<std::string>;
+using Row = dftracer::utils::dstd::Optional<std::string>;
 using Rows = std::vector<Row>;
 using Bounds = std::vector<std::int64_t>;
 
@@ -85,7 +87,7 @@ Series as_view(const Series& flat) {
 }
 
 Series chunk(const Series& flat, const Bounds& bounds) {
-    std::vector<std::shared_ptr<dftu_series>> parts;
+    std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> parts;
     for (std::size_t k = 0; k + 1 < bounds.size(); ++k) {
         Series p{dftu_series_slice(flat.handle(), bounds[k],
                                    bounds[k + 1] - bounds[k])};

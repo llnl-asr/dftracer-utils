@@ -8,6 +8,7 @@
 
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 
 #include <algorithm>
@@ -25,11 +26,11 @@ namespace duql = dftracer::utils::duql;
 namespace {
 
 df::DataFrame frame(std::int64_t rows) {
-    constexpr std::string_view NAMES[] = {"read",     "write",  "open64",
-                                          "MPI_Send", "fwrite", "lseek64"};
+    constexpr dftracer::utils::dstd::StringView NAMES[] = {
+        "read", "write", "open64", "MPI_Send", "fwrite", "lseek64"};
     std::vector<std::int64_t> dur, size, retry;
     std::vector<std::uint8_t> retry_valid((rows + 7) / 8, 0);
-    std::vector<std::string_view> name;
+    std::vector<dftracer::utils::dstd::StringView> name;
     for (std::int64_t i = 0; i < rows; ++i) {
         dur.push_back((i * 37) % 200);
         size.push_back((i * 131) % 4096);

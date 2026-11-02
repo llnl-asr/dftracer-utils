@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
@@ -194,7 +195,8 @@ TEST_SUITE("duql patterns") {
                 pat += pattern_chars[rng() % 5];
             dftracer::utils::dstd::String s;
             for (int k = rng() % 8; k > 0; --k) s += alphabet[rng() % 5];
-            const auto p = compile_like(pat, false, std::nullopt);
+            const auto p =
+                compile_like(pat, false, dftracer::utils::dstd::nullopt);
             REQUIRE(p);
             CAPTURE(pat);
             CAPTURE(s);

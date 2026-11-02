@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_PYTHON_GZIP_SINK_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
@@ -28,9 +30,9 @@ class GzipSink : public trace::views::ExportSink {
     ~GzipSink() override {
         if (writer_) (void)writer_->close(tail_);
     }
-    void write(std::string_view data) override {
+    void write(dstd::StringView data) override {
         const std::size_t nl = data.rfind('\n');
-        if (nl == std::string_view::npos) {
+        if (nl == dstd::StringView::npos) {
             tail_.append(data);
             return;
         }
@@ -45,7 +47,7 @@ class GzipSink : public trace::views::ExportSink {
     }
 
    private:
-    std::optional<utilities::fileio::GzipLineWriterBlocking> writer_;
+    dstd::Optional<utilities::fileio::GzipLineWriterBlocking> writer_;
     std::string tail_;
 };
 

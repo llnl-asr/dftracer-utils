@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 
 #include <algorithm>
@@ -36,7 +37,7 @@ void ScalableBloomFilter::open_level(std::size_t capacity) {
     levels_.push_back(Level{BloomFilter(capacity, rate), capacity, 0});
 }
 
-void ScalableBloomFilter::add(std::string_view value) {
+void ScalableBloomFilter::add(dstd::StringView value) {
     const BloomFilter::Hashes hashes = BloomFilter::hash(value);
     ++hashed_;
     for (const auto& level : levels_)
@@ -52,7 +53,7 @@ void ScalableBloomFilter::add(std::string_view value) {
     }
 }
 
-bool ScalableBloomFilter::possibly_contains(std::string_view value) const {
+bool ScalableBloomFilter::possibly_contains(dstd::StringView value) const {
     const BloomFilter::Hashes hashes = BloomFilter::hash(value);
     for (const auto& level : levels_) {
         if (level.filter.possibly_contains(hashes)) return true;

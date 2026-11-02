@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_LINE_STREAM_H
 
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 
 #include <cstring>
@@ -16,7 +17,7 @@ namespace dftracer::utils::utilities::reader::internal {
 class LineStream : public ReaderStream {
    private:
     std::unique_ptr<internal::ReaderStream> underlying_stream_;
-    std::span<const char> current_span_;
+    dstd::Span<const char> current_span_;
     std::string line_accumulator_;
     std::string current_line_;
     bool is_finished_;
@@ -56,7 +57,7 @@ class LineStream : public ReaderStream {
 
     ~LineStream() override { reset(); }
 
-    coro::CoroTask<std::span<const char>> read_async() override {
+    coro::CoroTask<dstd::Span<const char>> read_async() override {
         if (!underlying_stream_ || is_finished_) {
             co_return {};
         }
@@ -65,8 +66,8 @@ class LineStream : public ReaderStream {
             auto result = try_parse_next_line();
 
             if (result == ParseResult::HasLine) {
-                co_return std::span<const char>(current_line_.data(),
-                                                current_line_.size());
+                co_return dstd::Span<const char>(current_line_.data(),
+                                                 current_line_.size());
             }
             if (result == ParseResult::Finished) {
                 co_return {};
@@ -74,8 +75,8 @@ class LineStream : public ReaderStream {
 
             if (underlying_stream_->done()) {
                 if (handle_eof_line()) {
-                    co_return std::span<const char>(current_line_.data(),
-                                                    current_line_.size());
+                    co_return dstd::Span<const char>(current_line_.data(),
+                                                     current_line_.size());
                 }
                 is_finished_ = true;
                 co_return {};
@@ -148,7 +149,7 @@ class LineStream : public ReaderStream {
         }
         line_accumulator_.clear();
         current_line_.clear();
-        current_span_ = std::span<const char>();
+        current_span_ = dstd::Span<const char>();
         is_finished_ = false;
         has_pending_line_ = false;
         current_line_number_ = initial_line_;

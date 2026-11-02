@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/grace_join.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -43,7 +44,7 @@ struct Rng {
     }
 };
 
-using Cell = std::optional<std::int64_t>;
+using Cell = dstd::Optional<std::int64_t>;
 
 struct Table {
     std::vector<Cell> key;
@@ -55,7 +56,7 @@ Table random_table(Rng& rng, int n, int keys, int skew, std::int64_t scale) {
     Table t;
     for (int i = 0; i < n; ++i) {
         if (rng.next(10) == 0)
-            t.key.push_back(std::nullopt);
+            t.key.push_back(dstd::nullopt);
         else if (static_cast<int>(rng.next(100)) < skew)
             t.key.push_back(3);
         else

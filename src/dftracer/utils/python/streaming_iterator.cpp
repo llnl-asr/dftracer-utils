@@ -6,6 +6,7 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/streaming_iterator.h>
@@ -45,7 +46,7 @@ static PyObject* ArrowStreamingIterator_iter(PyObject* self) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 // The next Arrow batch of a pull_next producer, wrapped in a capsule.
 static PyObject* next_batch(ArrowStreamingIteratorObject* self) {
-    std::optional<ArrowExportResult> result;
+    dstd::Optional<ArrowExportResult> result;
     if (!run_blocking_r([&] { return self->cpp_state->pull_next(); }, result))
         return NULL;
 
@@ -93,7 +94,7 @@ static PyObject* ArrowStreamingIterator_next(
 
     // Native-DataFrame path: pull a DataFrame chunk (GIL released) and wrap it,
     // so the stream never crosses Arrow.
-    std::optional<dftracer::utils::dataframe::DataFrame> df;
+    dstd::Optional<dftracer::utils::dataframe::DataFrame> df;
     if (!run_blocking_r([&] { return self->cpp_state->pull_df(); }, df))
         return NULL;
     if (!df.has_value()) {

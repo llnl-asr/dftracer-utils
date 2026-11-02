@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
@@ -120,7 +121,7 @@ TEST_SUITE("PluginResults") {
             auto* pf = static_cast<PluginFold*>(slice.get());
             auto evs = make_events(n);
             ScanUnit unit;
-            FoldBatch fb{std::span<const FoldEvent>(evs), unit};
+            FoldBatch fb{dstd::Span<const FoldEvent>(evs), unit};
             pf->step(fb);
             master.fold->merge(*pf);
             total += n;

@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
@@ -27,7 +28,7 @@
 namespace dftracer::utils::index::schemas::dft::agg {
 
 /// dftracer hashes are hex; reuse their bits rather than hashing again.
-inline std::uint64_t agg_hash_of_hex(std::string_view sv) {
+inline std::uint64_t agg_hash_of_hex(dstd::StringView sv) {
     std::uint64_t v = 0;
     for (char c : sv) {
         std::uint64_t d;
@@ -72,7 +73,7 @@ enum class MetricArg : std::uint8_t {
 
 inline constexpr std::size_t METRIC_ARG_COUNT = 15;
 
-inline constexpr std::array<std::string_view, METRIC_ARG_COUNT>
+inline constexpr std::array<dstd::StringView, METRIC_ARG_COUNT>
     METRIC_ARG_NAMES = {"dftu_cnt", "dft_cnt",    "count",     "dur_sum",
                         "dur",      "dur_min",    "dur_max",   "ret_sum",
                         "ret",      "ret_min",    "ret_max",   "offset_sum",

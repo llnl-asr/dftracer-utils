@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/plugins/abi/ops.h>
 #include <dftracer/utils/plugins/owned_arrow.h>
 
@@ -190,7 +192,7 @@ struct OwnedLazyFrame {
         return apply("dftu.lazy.sample",
                      dataframe::OpArgs().i64(1, n).u64(2, seed));
     }
-    OwnedLazyFrame take(std::span<const std::int64_t> idx) const {
+    OwnedLazyFrame take(dstd::Span<const std::int64_t> idx) const {
         return apply("dftu.lazy.take", dataframe::OpArgs().i64list(1, idx));
     }
 
@@ -303,7 +305,7 @@ struct OwnedLazyFrame {
 
     OwnedLazyFrame group_by_dynamic(const char* time_col, std::int64_t every,
                                     std::int64_t period,
-                                    std::span<const dftu_group_agg> aggs,
+                                    dstd::Span<const dftu_group_agg> aggs,
                                     std::int64_t origin,
                                     bool origin_min) const {
         return apply("dftu.lazy.group_by_dynamic",
@@ -346,8 +348,8 @@ struct OwnedLazyFrame {
     void* host_ = nullptr;
 };
 
-using NamedResult = std::variant<std::vector<std::byte>, OwnedArrow,
-                                 OwnedDataFrame, OwnedLazyFrame>;
+using NamedResult = dstd::Variant<std::vector<std::byte>, OwnedArrow,
+                                  OwnedDataFrame, OwnedLazyFrame>;
 
 class NamedResultRegistry {
    public:

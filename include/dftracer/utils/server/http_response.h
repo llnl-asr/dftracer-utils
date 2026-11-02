@@ -3,6 +3,9 @@
 #define DFTRACER_UTILS_SERVER_HTTP_RESPONSE_H
 
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <memory>
 #include <span>
@@ -16,11 +19,11 @@ namespace dftracer::utils::server {
 struct HttpResponse {
     int status_code = 200;
     std::string status_text = "OK";
-    std::vector<std::pair<std::string, std::string>> headers;
+    std::vector<dstd::Pair<std::string, std::string>> headers;
     std::string body;
 
     struct StreamChunk {
-        std::span<const std::string_view> views;
+        dstd::Span<const dstd::StringView> views;
     };
 
     using StreamGenerator = coro::AsyncGenerator<StreamChunk>;

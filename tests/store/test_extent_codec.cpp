@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -29,31 +30,32 @@ constexpr std::size_t ALIGN = 4096;
 constexpr std::uint32_t PAGE =
     static_cast<std::uint32_t>(store::engine::PAGE_BYTES);
 
-ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
+ByteView view_of(const dftracer::utils::dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
-dstd::Vector<std::uint8_t> text_bytes(std::size_t length) {
+dftracer::utils::dstd::Vector<std::uint8_t> text_bytes(std::size_t length) {
     static constexpr char LINE[] =
         "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":7,\"dur\":12}\n";
-    dstd::Vector<std::uint8_t> bytes(length);
+    dftracer::utils::dstd::Vector<std::uint8_t> bytes(length);
     for (std::size_t i = 0; i < length; ++i) {
         bytes[i] = static_cast<std::uint8_t>(LINE[i % (sizeof(LINE) - 1)]);
     }
     return bytes;
 }
 
-dstd::Vector<std::uint8_t> random_bytes(std::size_t length) {
+dftracer::utils::dstd::Vector<std::uint8_t> random_bytes(std::size_t length) {
     std::mt19937_64 rng(42);
-    dstd::Vector<std::uint8_t> bytes(length);
+    dftracer::utils::dstd::Vector<std::uint8_t> bytes(length);
     for (std::uint8_t& byte : bytes) byte = static_cast<std::uint8_t>(rng());
     return bytes;
 }
 
-dstd::Vector<std::uint32_t> starts_of(
+dftracer::utils::dstd::Vector<std::uint32_t> starts_of(
     std::vector<store::engine::SegmentSpan> spans, std::uint32_t raw_length) {
     return store::engine::page_starts(
-        dstd::Span<const store::engine::SegmentSpan>(spans), raw_length);
+        dftracer::utils::dstd::Span<const store::engine::SegmentSpan>(spans),
+        raw_length);
 }
 
 std::size_t entry_at(std::size_t i) {
@@ -63,7 +65,7 @@ std::size_t entry_at(std::size_t i) {
 
 /// Writes the header crc of a stored extent again after a change to its
 /// table, so the check under test is the one that refuses it.
-void reseal(dstd::Vector<std::uint8_t>& stored) {
+void reseal(dftracer::utils::dstd::Vector<std::uint8_t>& stored) {
     const std::uint32_t count = read_u32_le(stored.data());
     std::uint32_t crc = store::engine::crc32(0, stored.data(), 8);
     crc = store::engine::crc32(crc, stored.data() + 12,
@@ -142,10 +144,12 @@ TEST_SUITE("store extent codec") {
     }
 
     TEST_CASE("the none codec stores every page raw") {
-        const dstd::Vector<std::uint8_t> raw = text_bytes(2 * PAGE);
+        const dftracer::utils::dstd::Vector<std::uint8_t> raw =
+            text_bytes(2 * PAGE);
         const std::uint32_t starts[] = {0, PAGE};
         auto stored = store::engine::encode_extent(
-            view_of(raw), dstd::Span<const std::uint32_t>(starts), ALIGN,
+            view_of(raw),
+            dftracer::utils::dstd::Span<const std::uint32_t>(starts), ALIGN,
             store::PageCodec::None);
         REQUIRE(stored.has_value());
         auto pages = store::engine::ExtentPages::open(view_of(*stored));
@@ -155,23 +159,27 @@ TEST_SUITE("store extent codec") {
             CHECK(pages->entry(i).codec == store::PageCodec::None);
             CHECK(pages->entry(i).stored_length == PAGE);
         }
-        dstd::Vector<std::uint8_t> decoded = *stored;
+        dftracer::utils::dstd::Vector<std::uint8_t> decoded = *stored;
         REQUIRE(store::engine::decode_extent(decoded).has_value());
         CHECK(decoded == raw);
 
-        CHECK_FALSE(store::engine::encode_extent(
-                        view_of(raw), dstd::Span<const std::uint32_t>(starts),
-                        ALIGN, static_cast<store::PageCodec>(7))
-                        .has_value());
+        CHECK_FALSE(
+            store::engine::encode_extent(
+                view_of(raw),
+                dftracer::utils::dstd::Span<const std::uint32_t>(starts), ALIGN,
+                static_cast<store::PageCodec>(7))
+                .has_value());
     }
 
     TEST_CASE("a compressible page is zstd and an incompressible one is raw") {
-        dstd::Vector<std::uint8_t> raw = text_bytes(PAGE);
-        const dstd::Vector<std::uint8_t> tail = random_bytes(5000);
+        dftracer::utils::dstd::Vector<std::uint8_t> raw = text_bytes(PAGE);
+        const dftracer::utils::dstd::Vector<std::uint8_t> tail =
+            random_bytes(5000);
         raw.insert(raw.end(), tail.begin(), tail.end());
         const std::uint32_t starts[] = {0, PAGE};
         auto stored = store::engine::encode_extent(
-            view_of(raw), dstd::Span<const std::uint32_t>(starts), ALIGN);
+            view_of(raw),
+            dftracer::utils::dstd::Span<const std::uint32_t>(starts), ALIGN);
         REQUIRE(stored.has_value());
         CHECK(stored->size() % ALIGN == 0);
         CHECK(read_u32_le(stored->data()) == 2);
@@ -193,7 +201,7 @@ TEST_SUITE("store extent codec") {
               pages->entry(0).stored_offset + pages->entry(0).stored_length);
 
         for (std::size_t i = 0; i < pages->size(); ++i) {
-            dstd::Vector<std::uint8_t> page;
+            dftracer::utils::dstd::Vector<std::uint8_t> page;
             REQUIRE(pages->decode(i, page).has_value());
             const store::engine::PageEntry& entry = pages->entry(i);
             REQUIRE(page.size() == entry.raw_length);
@@ -207,10 +215,11 @@ TEST_SUITE("store extent codec") {
     }
 
     TEST_CASE("covering names the pages a segment reads") {
-        dstd::Vector<std::uint8_t> raw = text_bytes(3 * PAGE);
+        dftracer::utils::dstd::Vector<std::uint8_t> raw = text_bytes(3 * PAGE);
         const std::uint32_t starts[] = {0, PAGE, 2 * PAGE};
         auto stored = store::engine::encode_extent(
-            view_of(raw), dstd::Span<const std::uint32_t>(starts), ALIGN);
+            view_of(raw),
+            dftracer::utils::dstd::Span<const std::uint32_t>(starts), ALIGN);
         REQUIRE(stored.has_value());
         auto pages = store::engine::ExtentPages::open(view_of(*stored));
         REQUIRE(pages.has_value());
@@ -230,64 +239,69 @@ TEST_SUITE("store extent codec") {
     }
 
     TEST_CASE("an extent that does not decode is a Parse error") {
-        const dstd::Vector<std::uint8_t> raw = text_bytes(2 * PAGE);
+        const dftracer::utils::dstd::Vector<std::uint8_t> raw =
+            text_bytes(2 * PAGE);
         const std::uint32_t starts[] = {0, PAGE};
         auto encoded = store::engine::encode_extent(
-            view_of(raw), dstd::Span<const std::uint32_t>(starts), ALIGN);
+            view_of(raw),
+            dftracer::utils::dstd::Span<const std::uint32_t>(starts), ALIGN);
         REQUIRE(encoded.has_value());
-        const dstd::Vector<std::uint8_t>& stored = *encoded;
+        const dftracer::utils::dstd::Vector<std::uint8_t>& stored = *encoded;
         REQUIRE(store::engine::ExtentPages::open(view_of(stored)).has_value());
 
-        const auto refuses = [](const dstd::Vector<std::uint8_t>& bad) {
-            auto pages = store::engine::ExtentPages::open(view_of(bad));
-            if (pages.has_value()) {
-                dstd::Vector<std::uint8_t> decoded = bad;
-                auto whole = store::engine::decode_extent(decoded);
-                return !whole.has_value() &&
-                       whole.error().is(dstd::Condition::Parse);
-            }
-            return pages.error().is(dstd::Condition::Parse);
-        };
+        const auto refuses =
+            [](const dftracer::utils::dstd::Vector<std::uint8_t>& bad) {
+                auto pages = store::engine::ExtentPages::open(view_of(bad));
+                if (pages.has_value()) {
+                    dftracer::utils::dstd::Vector<std::uint8_t> decoded = bad;
+                    auto whole = store::engine::decode_extent(decoded);
+                    return !whole.has_value() &&
+                           whole.error().is(
+                               dftracer::utils::dstd::Condition::Parse);
+                }
+                return pages.error().is(
+                    dftracer::utils::dstd::Condition::Parse);
+            };
 
         SUBCASE("unknown codec") {
-            dstd::Vector<std::uint8_t> bad = stored;
+            dftracer::utils::dstd::Vector<std::uint8_t> bad = stored;
             bad[entry_at(1) + 20] = 7;
             reseal(bad);
             CHECK(refuses(bad));
         }
         SUBCASE("a reserved byte of the header set") {
-            dstd::Vector<std::uint8_t> bad = stored;
+            dftracer::utils::dstd::Vector<std::uint8_t> bad = stored;
             bad[13] = 1;
             CHECK(refuses(bad));
         }
         SUBCASE("a reserved byte of an entry set") {
-            dstd::Vector<std::uint8_t> bad = stored;
+            dftracer::utils::dstd::Vector<std::uint8_t> bad = stored;
             bad[entry_at(0) + 22] = 1;
             reseal(bad);
             CHECK(refuses(bad));
         }
         SUBCASE("a table entry out of bounds") {
-            dstd::Vector<std::uint8_t> bad = stored;
+            dftracer::utils::dstd::Vector<std::uint8_t> bad = stored;
             write_u32_le(bad.data() + entry_at(0) + 8,
                          static_cast<std::uint32_t>(bad.size()));
             reseal(bad);
             CHECK(refuses(bad));
         }
         SUBCASE("raw ranges that are not contiguous") {
-            dstd::Vector<std::uint8_t> bad = stored;
+            dftracer::utils::dstd::Vector<std::uint8_t> bad = stored;
             write_u32_le(bad.data() + entry_at(1), PAGE + 1);
             reseal(bad);
             CHECK(refuses(bad));
         }
         SUBCASE("a page crc that does not match") {
-            dstd::Vector<std::uint8_t> bad = stored;
+            dftracer::utils::dstd::Vector<std::uint8_t> bad = stored;
             write_u32_le(bad.data() + entry_at(0) + 16,
                          read_u32_le(bad.data() + entry_at(0) + 16) ^ 1U);
             reseal(bad);
             CHECK(refuses(bad));
         }
         SUBCASE("a table that does not match its header crc") {
-            dstd::Vector<std::uint8_t> bad = stored;
+            dftracer::utils::dstd::Vector<std::uint8_t> bad = stored;
             bad[entry_at(1) + 2] ^= 0x01U;
             CHECK(refuses(bad));
             CHECK_FALSE(
@@ -295,17 +309,17 @@ TEST_SUITE("store extent codec") {
                     .has_value());
         }
         SUBCASE("a damaged payload") {
-            dstd::Vector<std::uint8_t> bad = stored;
+            dftracer::utils::dstd::Vector<std::uint8_t> bad = stored;
             bad[entry_at(2)] ^= 0xA5U;
             CHECK(refuses(bad));
         }
         SUBCASE("fewer bytes than a header") {
-            dstd::Vector<std::uint8_t> bad(
+            dftracer::utils::dstd::Vector<std::uint8_t> bad(
                 store::engine::EXTENT_HEADER_BYTES - 1, 0);
             CHECK(refuses(bad));
         }
         SUBCASE("a page longer than a page") {
-            dstd::Vector<std::uint8_t> bad = stored;
+            dftracer::utils::dstd::Vector<std::uint8_t> bad = stored;
             write_u32_le(bad.data() + entry_at(0) + 4, PAGE + 1);
             reseal(bad);
             CHECK(refuses(bad));
@@ -313,12 +327,14 @@ TEST_SUITE("store extent codec") {
     }
 
     TEST_CASE("a page table opens alone and its pages decode one at a time") {
-        const dstd::Vector<std::uint8_t> raw = text_bytes(3 * PAGE - 100);
+        const dftracer::utils::dstd::Vector<std::uint8_t> raw =
+            text_bytes(3 * PAGE - 100);
         const std::uint32_t starts[] = {0, PAGE, 2 * PAGE};
         auto encoded = store::engine::encode_extent(
-            view_of(raw), dstd::Span<const std::uint32_t>(starts), ALIGN);
+            view_of(raw),
+            dftracer::utils::dstd::Span<const std::uint32_t>(starts), ALIGN);
         REQUIRE(encoded.has_value());
-        const dstd::Vector<std::uint8_t>& stored = *encoded;
+        const dftracer::utils::dstd::Vector<std::uint8_t>& stored = *encoded;
 
         const std::size_t head = store::engine::ExtentPages::table_length(
             ByteView{stored.data(), store::engine::EXTENT_HEADER_BYTES});
@@ -331,12 +347,12 @@ TEST_SUITE("store extent codec") {
         REQUIRE(table.has_value());
         REQUIRE(table->size() == 3);
         CHECK(table->raw_length() == raw.size());
-        dstd::Vector<std::uint8_t> out;
+        dftracer::utils::dstd::Vector<std::uint8_t> out;
         CHECK_FALSE(table->decode(0, out).has_value());
 
         for (std::size_t i = 0; i < table->size(); ++i) {
             const store::engine::PageEntry& entry = table->entry(i);
-            dstd::Vector<std::uint8_t> page(entry.raw_length);
+            dftracer::utils::dstd::Vector<std::uint8_t> page(entry.raw_length);
             REQUIRE(store::engine::ExtentPages::decode_page(
                         entry,
                         ByteView{stored.data() + entry.stored_offset,
@@ -361,50 +377,62 @@ TEST_SUITE("store extent codec") {
     }
 
     TEST_CASE("encode refuses starts that do not cut the extent into pages") {
-        const dstd::Vector<std::uint8_t> raw = text_bytes(60000);
+        const dftracer::utils::dstd::Vector<std::uint8_t> raw =
+            text_bytes(60000);
         const std::vector<std::uint32_t> empty;
-        CHECK_FALSE(
-            store::engine::encode_extent(
-                view_of(raw), dstd::Span<const std::uint32_t>(empty), ALIGN)
-                .has_value());
+        CHECK_FALSE(store::engine::encode_extent(
+                        view_of(raw),
+                        dftracer::utils::dstd::Span<const std::uint32_t>(empty),
+                        ALIGN)
+                        .has_value());
 
         const std::uint32_t shifted[] = {1};
         CHECK_FALSE(
             store::engine::encode_extent(
-                view_of(raw), dstd::Span<const std::uint32_t>(shifted), ALIGN)
+                view_of(raw),
+                dftracer::utils::dstd::Span<const std::uint32_t>(shifted),
+                ALIGN)
                 .has_value());
 
         const std::uint32_t unordered[] = {PAGE, 0};
         CHECK_FALSE(
             store::engine::encode_extent(
-                view_of(raw), dstd::Span<const std::uint32_t>(unordered), ALIGN)
+                view_of(raw),
+                dftracer::utils::dstd::Span<const std::uint32_t>(unordered),
+                ALIGN)
                 .has_value());
 
         const std::uint32_t too_big[] = {0};
         CHECK_FALSE(
             store::engine::encode_extent(
-                view_of(raw), dstd::Span<const std::uint32_t>(too_big), ALIGN)
+                view_of(raw),
+                dftracer::utils::dstd::Span<const std::uint32_t>(too_big),
+                ALIGN)
                 .has_value());
     }
 
     TEST_CASE("an empty extent is refused") {
-        const dstd::Vector<std::uint8_t> raw;
+        const dftracer::utils::dstd::Vector<std::uint8_t> raw;
         const std::uint32_t starts[] = {0};
         CHECK_FALSE(
             store::engine::encode_extent(
-                view_of(raw), dstd::Span<const std::uint32_t>(starts), ALIGN)
+                view_of(raw),
+                dftracer::utils::dstd::Span<const std::uint32_t>(starts), ALIGN)
                 .has_value());
         CHECK_FALSE(
             store::engine::encode_extent(
-                view_of(raw), dstd::Span<const std::uint32_t>(starts), 0)
+                view_of(raw),
+                dftracer::utils::dstd::Span<const std::uint32_t>(starts), 0)
                 .has_value());
     }
 
     TEST_CASE("one page of one page keeps no padding without an alignment") {
-        const dstd::Vector<std::uint8_t> raw = random_bytes(100);
+        const dftracer::utils::dstd::Vector<std::uint8_t> raw =
+            random_bytes(100);
         const std::uint32_t starts[] = {0};
         auto stored = store::engine::encode_extent(
-            view_of(raw), dstd::Span<const std::uint32_t>(starts), 1);
+            view_of(raw),
+            dftracer::utils::dstd::Span<const std::uint32_t>(starts), 1);
         REQUIRE(stored.has_value());
         CHECK(stored->size() == store::engine::EXTENT_HEADER_BYTES +
                                     store::engine::EXTENT_TABLE_ENTRY_BYTES +
@@ -415,9 +443,10 @@ TEST_SUITE("store extent codec") {
     }
 
     TEST_CASE("metadata round-trips stored raw or as zstd") {
-        dstd::Vector<std::uint8_t> repeated;
+        dftracer::utils::dstd::Vector<std::uint8_t> repeated;
         for (int i = 0; i < 4096; ++i) {
-            for (const char c : std::string_view("/p/lustre/trace/file.pfw.gz"))
+            for (const char c : dftracer::utils::dstd::StringView(
+                     "/p/lustre/trace/file.pfw.gz"))
                 repeated.push_back(static_cast<std::uint8_t>(c));
         }
         const auto compressed = store::engine::encode_meta(
@@ -430,7 +459,7 @@ TEST_SUITE("store extent codec") {
         CHECK(*back == repeated);
 
         std::mt19937_64 random(7);
-        dstd::Vector<std::uint8_t> noise(4096);
+        dftracer::utils::dstd::Vector<std::uint8_t> noise(4096);
         for (std::uint8_t& byte : noise)
             byte = static_cast<std::uint8_t>(random());
         const auto raw = store::engine::encode_meta(
@@ -441,16 +470,17 @@ TEST_SUITE("store extent codec") {
         REQUIRE(raw_back.has_value());
         CHECK(*raw_back == noise);
 
-        const auto empty =
-            store::engine::encode_meta(view_of(dstd::Vector<std::uint8_t>{}),
-                                       store::engine::META_ZSTD_LEVEL);
+        const auto empty = store::engine::encode_meta(
+            view_of(dftracer::utils::dstd::Vector<std::uint8_t>{}),
+            store::engine::META_ZSTD_LEVEL);
         auto empty_back = store::engine::decode_meta(view_of(empty));
         REQUIRE(empty_back.has_value());
         CHECK(empty_back->empty());
     }
 
     TEST_CASE("metadata with a bad codec, length or frame does not decode") {
-        dstd::Vector<std::uint8_t> repeated(65536, std::uint8_t{'a'});
+        dftracer::utils::dstd::Vector<std::uint8_t> repeated(65536,
+                                                             std::uint8_t{'a'});
         const auto stored = store::engine::encode_meta(
             view_of(repeated), store::engine::META_ZSTD_LEVEL);
         REQUIRE(stored[0] == static_cast<std::uint8_t>(store::PageCodec::Zstd));
@@ -476,8 +506,8 @@ TEST_SUITE("store extent codec") {
     }
 
     TEST_CASE("an extent compressed with a dictionary names it and needs it") {
-        dstd::Vector<std::uint8_t> samples;
-        dstd::Vector<std::size_t> sizes;
+        dftracer::utils::dstd::Vector<std::uint8_t> samples;
+        dftracer::utils::dstd::Vector<std::size_t> sizes;
         std::mt19937_64 rng(11);
         const auto line = [&rng]() {
             return "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":" +
@@ -495,8 +525,8 @@ TEST_SUITE("store extent codec") {
             sizes.push_back(samples.size() - before);
         }
         auto trained = store::engine::train_page_dict(
-            view_of(samples),
-            dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
+            view_of(samples), dftracer::utils::dstd::Span<const std::size_t>(
+                                  sizes.data(), sizes.size()));
         REQUIRE(trained.has_value());
         CHECK(trained->size() <= store::engine::PAGE_DICT_BYTES);
 
@@ -511,14 +541,14 @@ TEST_SUITE("store extent codec") {
             store::engine::PageDict::for_decode(view_of(*trained), ref);
         REQUIRE(decoder.has_value());
 
-        dstd::Vector<std::uint8_t> raw;
+        dftracer::utils::dstd::Vector<std::uint8_t> raw;
         while (raw.size() < 16 * 1024) {
             for (const char c : line())
                 raw.push_back(static_cast<std::uint8_t>(c));
         }
         raw.resize(16 * 1024);
         const std::uint32_t length = static_cast<std::uint32_t>(raw.size());
-        dstd::Vector<std::uint32_t> starts;
+        dftracer::utils::dstd::Vector<std::uint32_t> starts;
         for (std::uint32_t at = 0; at < length; at += 1024)
             starts.push_back(at);
         auto plain = store::engine::encode_extent(view_of(raw), starts, ALIGN);
@@ -570,11 +600,12 @@ TEST_SUITE("store extent codec") {
     }
 
     TEST_CASE("a dictionary whose bytes or header fields disagree is refused") {
-        dstd::Vector<std::uint8_t> samples = text_bytes(256 * 4096);
-        dstd::Vector<std::size_t> sizes(256, 4096);
+        dftracer::utils::dstd::Vector<std::uint8_t> samples =
+            text_bytes(256 * 4096);
+        dftracer::utils::dstd::Vector<std::size_t> sizes(256, 4096);
         auto trained = store::engine::train_page_dict(
-            view_of(samples),
-            dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
+            view_of(samples), dftracer::utils::dstd::Span<const std::size_t>(
+                                  sizes.data(), sizes.size()));
         REQUIRE(trained.has_value());
         store::engine::DictRef ref;
         ref.offset = 4096;
@@ -595,7 +626,8 @@ TEST_SUITE("store extent codec") {
                         view_of(*trained), store::engine::DictRef{})
                         .has_value());
 
-        const dstd::Vector<std::uint8_t> raw = text_bytes(PAGE);
+        const dftracer::utils::dstd::Vector<std::uint8_t> raw =
+            text_bytes(PAGE);
         auto stored = store::engine::encode_extent(
             view_of(raw), starts_of({{0, PAGE}}, PAGE), ALIGN);
         REQUIRE(stored.has_value());

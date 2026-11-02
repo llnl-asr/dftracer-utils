@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_LAYOUT_H
 #define DFTRACER_UTILS_INDEX_STORE_LAYOUT_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/file.h>
 
 #include <cstdint>
@@ -16,7 +18,7 @@ namespace dftracer::utils::index::store::layout {
 
 using Ext = IndexExtension;
 
-std::string_view ext_name(Ext ext);
+dstd::StringView ext_name(Ext ext);
 
 namespace members {
 inline constexpr std::uint8_t MEMBER = 0;
@@ -86,19 +88,19 @@ inline constexpr std::uint8_t COLUMNS = 4;
 /// version is stale.
 std::uint32_t ext_version(Ext ext);
 
-std::uint16_t read_u16(std::string_view bytes);
-std::uint32_t read_u32(std::string_view bytes);
-std::uint64_t read_u64(std::string_view bytes);
+std::uint16_t read_u16(dstd::StringView bytes);
+std::uint32_t read_u32(dstd::StringView bytes);
+std::uint64_t read_u64(dstd::StringView bytes);
 
 /// The first key after every key starting with `prefix`.
-std::string prefix_end(std::string_view prefix);
+std::string prefix_end(dstd::StringView prefix);
 
 std::string encode_chunk_metadata(const ChunkMetadata& metadata);
-std::optional<ChunkMetadata> decode_chunk_metadata(std::string_view body);
+dstd::Optional<ChunkMetadata> decode_chunk_metadata(dstd::StringView body);
 
 /// A catalog record: {type u8, seen u8, count u64}.
 std::string encode_path_stat(const PathStat& stat);
-std::optional<PathStat> decode_path_stat(std::string_view body);
+dstd::Optional<PathStat> decode_path_stat(dstd::StringView body);
 
 }  // namespace dftracer::utils::index::store::layout
 

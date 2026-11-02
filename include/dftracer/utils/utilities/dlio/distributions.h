@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_DLIO_DISTRIBUTIONS_H
 #define DFTRACER_UTILS_UTILITIES_DLIO_DISTRIBUTIONS_H
 
+#include <dftracer/utils/dstd/optional.h>
+
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -44,7 +46,7 @@ std::vector<FittedDistribution> fit_all_single_distributions(
 
 /// Picks the lowest-KS valid fit. Returns nullopt if none of the fits
 /// succeeded.
-std::optional<FittedDistribution> best_fit_by_ks(
+dstd::Optional<FittedDistribution> best_fit_by_ks(
     const std::vector<FittedDistribution>& fits);
 
 /// Distribution PDF / CDF / inverse-CDF. Behavior is undefined when
@@ -60,8 +62,8 @@ using Sampler = std::function<double(std::mt19937_64&)>;
 /// Builds a Sampler from a fitted distribution.
 /// Optional min/max bounds clamp the output (applied after sampling).
 Sampler make_sampler(const FittedDistribution& fit,
-                     std::optional<double> min_bound = std::nullopt,
-                     std::optional<double> max_bound = std::nullopt);
+                     dstd::Optional<double> min_bound = dstd::nullopt,
+                     dstd::Optional<double> max_bound = dstd::nullopt);
 
 /// Returns the parameter count used for BIC. Useful when extending to mixtures.
 int free_parameter_count(DistributionKind kind);

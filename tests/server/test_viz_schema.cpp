@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -231,11 +232,11 @@ DensityTotals density_totals(const std::string& body) {
 }
 
 // name -> (count, total) of a stats body.
-std::map<std::string, std::pair<std::uint64_t, double>> stat_rows(
+std::map<std::string, dstd::Pair<std::uint64_t, double>> stat_rows(
     const std::string& body) {
     simdjson::dom::parser p;
     auto root = p.parse(body).value();
-    std::map<std::string, std::pair<std::uint64_t, double>> out;
+    std::map<std::string, dstd::Pair<std::uint64_t, double>> out;
     for (auto r : root["names"].get_array())
         out[std::string(r["name"].get_string().value())] = {
             r["count"].get_uint64().value(), r["total"].get_double().value()};

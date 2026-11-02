@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
@@ -101,7 +102,7 @@ BloomFilter BloomFilter::from_blob(const unsigned char* data,
                        static_cast<std::size_t>(num_entries));
 }
 
-BloomFilter::Hashes BloomFilter::hash(std::string_view value) {
+BloomFilter::Hashes BloomFilter::hash(dstd::StringView value) {
     utilities::hash::Fnv1aHasherUtility hasher;
     hasher.update(value);
     const std::uint64_t raw = hasher.get_hash().value;

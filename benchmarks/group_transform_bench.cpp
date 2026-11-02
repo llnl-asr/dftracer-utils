@@ -14,6 +14,7 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
@@ -51,7 +52,8 @@ double median_ms(std::vector<double> ms) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke";
+    const bool smoke =
+        argc == 2 && dftracer::utils::dstd::StringView(argv[1]) == "--smoke";
     const std::int64_t n =
         smoke ? 20000 : (argc > 1 ? std::atoll(argv[1]) : 2000000);
     const std::int64_t groups =

@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -114,7 +115,7 @@ dataframe::DataFrame by_cat(const View& v) {
 }
 
 struct NullSink : ExportSink {
-    void write(std::string_view) override {}
+    void write(dstd::StringView) override {}
 };
 
 }  // namespace

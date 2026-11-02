@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_SHARD_MANIFEST_H
 #define DFTRACER_UTILS_INDEX_STORE_SHARD_MANIFEST_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -27,7 +30,7 @@ struct IndexShardEntry {
 /// file. `format_version` is the index FORMAT_VERSION the shards were built
 /// with; a reader rejects a manifest whose version it cannot read.
 struct IndexShardManifest {
-    std::optional<std::uint32_t> format_version;
+    dstd::Optional<std::uint32_t> format_version;
     std::vector<IndexShardEntry> shards;
 };
 
@@ -36,7 +39,7 @@ std::string to_json(const IndexShardManifest& manifest);
 
 /// Parse the on-disk JSON representation. Throws DFTUtilsException on malformed
 /// input.
-IndexShardManifest parse_manifest(std::string_view json);
+IndexShardManifest parse_manifest(dstd::StringView json);
 
 /// Write `manifest` to the root's `shards.json`, creating `root` if needed.
 /// Writes a temporary file beside it and renames it into place so a concurrent
@@ -45,9 +48,10 @@ IndexShardManifest parse_manifest(std::string_view json);
 void write_shard_manifest(const std::string& root,
                           const IndexShardManifest& manifest);
 
-/// Read the root's `shards.json`. Returns std::nullopt when the file is absent;
-/// throws DFTUtilsException when it exists but cannot be read or parsed.
-std::optional<IndexShardManifest> read_shard_manifest(const std::string& root);
+/// Read the root's `shards.json`. Returns dstd::nullopt when the file is
+/// absent; throws DFTUtilsException when it exists but cannot be read or
+/// parsed.
+dstd::Optional<IndexShardManifest> read_shard_manifest(const std::string& root);
 
 /// True when the root holds a `shards.json`: the shards of a build are waiting
 /// to be merged.

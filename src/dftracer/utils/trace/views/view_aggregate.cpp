@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
@@ -77,13 +79,13 @@ const AggSchema& ensure_schema(const ViewPlan& plan) {
 
 namespace {
 
-constexpr std::string_view FILE_PATH = "file.path";
-constexpr std::string_view HOST_NAME = "host.name";
-constexpr std::string_view RANK = "rank";
+constexpr dstd::StringView FILE_PATH = "file.path";
+constexpr dstd::StringView HOST_NAME = "host.name";
+constexpr dstd::StringView RANK = "rank";
 
 }  // namespace
 
-std::optional<dftracer::utils::index::plan::GroupResolver::Column>
+dstd::Optional<dftracer::utils::index::plan::GroupResolver::Column>
 resolver_column(GroupKey::Kind kind) {
     switch (kind) {
         case GroupKey::Kind::FilePath:
@@ -94,7 +96,7 @@ resolver_column(GroupKey::Kind kind) {
         case GroupKey::Kind::Rank:
             return {{std::string(RANK), "ranks", "pid", "rank"}};
         default:
-            return std::nullopt;
+            return dstd::nullopt;
     }
 }
 

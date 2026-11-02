@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/schema.h>
@@ -38,7 +39,7 @@ int col_index(const std::vector<std::string>& cols, const std::string& name) {
 }  // namespace
 
 dstd::String counter_line(const std::vector<std::string>& group_cols,
-                          const std::vector<std::optional<std::string>>& keys,
+                          const std::vector<dstd::Optional<std::string>>& keys,
                           const std::vector<std::string>& value_cols,
                           const std::vector<double>& values,
                           const std::string& entity_col,
@@ -176,7 +177,7 @@ void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
         by_path && !roles.lane.empty() ? roles.lane : "tid";
     const std::int64_t nrows = f.num_rows();
     for (std::int64_t r = 0; r < nrows; ++r) {
-        std::vector<std::optional<std::string>> keys(group_cols.size());
+        std::vector<dstd::Optional<std::string>> keys(group_cols.size());
         for (std::size_t k = 0; k < group_cols.size(); ++k) {
             const df::Series& c = f.columns[static_cast<std::size_t>(gi[k])];
             if (!c.is_null(r)) keys[k] = std::string(c.string_at(r));

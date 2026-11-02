@@ -3,6 +3,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -39,9 +42,9 @@ namespace {
 // Minimal external Fold for the fold-factory seam: counts events over the
 // shared scan.
 struct CountFold : dftracer::utils::trace::views::detail::Fold {
-    std::shared_ptr<std::atomic<std::uint64_t>> total;
+    dstd::SharedPtr<std::atomic<std::uint64_t>> total;
     std::uint64_t local = 0;
-    explicit CountFold(std::shared_ptr<std::atomic<std::uint64_t>> t)
+    explicit CountFold(dstd::SharedPtr<std::atomic<std::uint64_t>> t)
         : total(std::move(t)) {}
     bool accepts(const dftracer::utils::trace::views::detail::ScanShape&)
         const override {
@@ -77,7 +80,7 @@ struct HistBin {
 
 // Bins of a list<struct<lo,hi,count>> hist column at `row`.
 std::vector<HistBin> hist_bins(const dataframe::DataFrame& b, std::int64_t row,
-                               std::string_view name) {
+                               dstd::StringView name) {
     const dataframe::Series& lc =
         b.columns[static_cast<std::size_t>(bcol(b, name))];
     const std::int32_t* off = lc.offsets();
@@ -168,7 +171,7 @@ void frames_equal(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
     }
     REQUIRE(a.num_rows() == b.num_rows());
     auto keyed = [&](const dataframe::DataFrame& df) {
-        std::vector<std::pair<std::string, std::int64_t>> rows;
+        std::vector<dstd::Pair<std::string, std::int64_t>> rows;
         for (std::int64_t r = 0; r < df.num_rows(); ++r) {
             std::string s;
             for (const auto& k : keys) s += bstr(df, r, k) + '\x1f';
@@ -1333,7 +1336,7 @@ TEST_SUITE("View") {
         CHECK_THROWS_AS(v.merge_partials({bad}),
                         dftracer::utils::common::DFTUtilsException);
         // A present-but-empty partial (no tag byte) is also rejected loudly.
-        CHECK_THROWS_AS(v.merge_partials({std::string_view()}),
+        CHECK_THROWS_AS(v.merge_partials({dstd::StringView()}),
                         dftracer::utils::common::DFTUtilsException);
     }
 
@@ -1498,9 +1501,9 @@ TEST_SUITE("View") {
             double small_sum = 0;
             std::vector<std::string> big;
         };
-        auto dur_of = [](std::string_view e) {
+        auto dur_of = [](dstd::StringView e) {
             auto p = e.find("\"dur\":");
-            return p == std::string_view::npos
+            return p == dstd::StringView::npos
                        ? 0.0
                        : std::strtod(std::string(e.substr(p + 6)).c_str(),
                                      nullptr);
@@ -1508,7 +1511,7 @@ TEST_SUITE("View") {
         auto res =
             View::from_file(gz, idx)
                 .map_batches<Acc>(
-                    [&](Acc& a, const std::vector<std::string_view>& evs) {
+                    [&](Acc& a, const std::vector<dstd::StringView>& evs) {
                         for (auto e : evs) {
                             double d = dur_of(e);
                             if (d < 25) {
@@ -1549,7 +1552,7 @@ TEST_SUITE("View") {
         };
         auto res = View::from_file(gz, idx)
                        .map_batches<Cnt>(
-                           [](Cnt& c, const std::vector<std::string_view>& e) {
+                           [](Cnt& c, const std::vector<dstd::StringView>& e) {
                                c.n += e.size();
                            },
                            [](Cnt&& a, Cnt&& b) {
@@ -1588,7 +1591,7 @@ TEST_SUITE("View") {
                 // event.
                 small = run.fold<Small>(
                     Query::from_string("dur < 25").value(),
-                    [](Small& s, const json::JsonValue& jv, std::string_view) {
+                    [](Small& s, const json::JsonValue& jv, dstd::StringView) {
                         ++s.n;
                         s.sum += jv["dur"].get<double>(0);
                     },
@@ -1759,8 +1762,8 @@ TEST_SUITE("View") {
 
     // Exact interval union of half-open [ts, ts+dur) events.
     static std::uint64_t exact_union(
-        const std::vector<std::pair<long, long>>& iv) {
-        std::vector<std::pair<long, long>> spans;
+        const std::vector<dstd::Pair<long, long>>& iv) {
+        std::vector<dstd::Pair<long, long>> spans;
         for (const auto& [ts, dur] : iv) spans.emplace_back(ts, ts + dur);
         std::sort(spans.begin(), spans.end());
         std::uint64_t total = 0;
@@ -1784,7 +1787,7 @@ TEST_SUITE("View") {
     }
 
     static void write_occ_trace(const std::string& pfw,
-                                const std::vector<std::pair<long, long>>& iv,
+                                const std::vector<dstd::Pair<long, long>>& iv,
                                 const char* name = "e") {
         std::ofstream ofs(pfw.c_str());
         for (const auto& [ts, dur] : iv) {
@@ -1800,7 +1803,7 @@ TEST_SUITE("View") {
         // Heavy overlap: many events over the same window; the old per-bucket
         // coverage bitmap coarsened cells on a wide window and drifted busy
         // toward sum(dur). The exact delta-map sweep must not.
-        std::vector<std::pair<long, long>> iv;
+        std::vector<dstd::Pair<long, long>> iv;
         for (int i = 0; i < 50; ++i) iv.emplace_back(1000 + i, 500);
         const std::uint64_t expect_union = exact_union(iv);
         std::uint64_t sum_dur = 0;
@@ -1830,7 +1833,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // 4 events all overlapping at t=1150: peak depth is exactly 4.
-        std::vector<std::pair<long, long>> iv = {
+        std::vector<dstd::Pair<long, long>> iv = {
             {1000, 300}, {1050, 300}, {1100, 300}, {1149, 300}};
         const std::uint64_t expect_union = exact_union(iv);
 
@@ -1856,7 +1859,7 @@ TEST_SUITE("View") {
         "View - occupancy on non-overlapping intervals is exact and serial") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::vector<std::pair<long, long>> iv = {
+        std::vector<dstd::Pair<long, long>> iv = {
             {1000, 100}, {2000, 100}, {3000, 100}};
         std::uint64_t sum_dur = 300;
 
@@ -1885,7 +1888,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // Two intervals with a small gap; a coarse cell can merge them into
         // one covered span, so busy sits in [exact, exact + cell].
-        std::vector<std::pair<long, long>> iv = {{1000, 90}, {1100, 90}};
+        std::vector<dstd::Pair<long, long>> iv = {{1000, 90}, {1100, 90}};
         const std::uint64_t expect_exact = exact_union(iv);
 
         std::string pfw = env.get_dir() + "/occ_tol.pfw";

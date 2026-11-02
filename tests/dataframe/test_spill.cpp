@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -20,8 +21,9 @@ using dftracer::utils::dataframe::Series;
 namespace spill = dftracer::utils::dataframe::spill;
 
 namespace {
-std::optional<Morsel> run(
-    dftracer::utils::coro::CoroTask<std::optional<Morsel>> t) {
+dftracer::utils::dstd::Optional<Morsel> run(
+    dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Optional<Morsel>>
+        t) {
     return dftracer::utils::default_runtime().submit(std::move(t)).get();
 }
 }  // namespace

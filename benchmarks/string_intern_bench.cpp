@@ -28,6 +28,7 @@
 //                                              and every result must be
 //                                              positive and correct)
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 
 #ifdef __APPLE__
@@ -350,7 +351,7 @@ int main(int argc, char** argv) {
     const char* record = nullptr;
     const char* check = nullptr;
     for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
+        dftracer::utils::dstd::StringView arg = argv[i];
         bool has_value = i + 1 < argc;
         if (arg == "--smoke") {
             smoke = true;
@@ -363,7 +364,7 @@ int main(int argc, char** argv) {
         } else if (arg == "--check" && has_value) {
             check = argv[++i];
         } else if (arg == "--format" && has_value) {
-            std::string_view fmt = argv[++i];
+            dftracer::utils::dstd::StringView fmt = argv[++i];
             if (fmt != "csv" && fmt != "table") return usage();
             csv = fmt == "csv";
         } else {

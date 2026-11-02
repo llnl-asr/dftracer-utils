@@ -22,6 +22,9 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <nanoarrow/nanoarrow.h>
 
@@ -43,7 +46,7 @@ struct BuiltArrow {
     }
 };
 
-using Cells = std::vector<std::optional<std::string>>;
+using Cells = std::vector<dftracer::utils::dstd::Optional<std::string>>;
 
 Series make_large_utf8(const Cells& values) {
     BuiltArrow b;
@@ -75,18 +78,22 @@ Series make_string(const Cells& values) {
         if (values[i])
             validity[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     }
-    std::vector<std::string_view> views(data.begin(), data.end());
-    return Series::strings(std::span<const std::string_view>(views),
-                           validity.data());
+    std::vector<dftracer::utils::dstd::StringView> views(data.begin(),
+                                                         data.end());
+    return Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
+            views),
+        validity.data());
 }
 
 Cells cells_of(const Series& s) {
     const Series m = s.materialize();
     Cells out;
     for (std::int64_t i = 0; i < m.length(); ++i)
-        out.push_back(m.is_null(i) ? std::nullopt
-                                   : std::optional<std::string>(
-                                         std::string(m.string_at(i))));
+        out.push_back(m.is_null(i)
+                          ? dftracer::utils::dstd::nullopt
+                          : dftracer::utils::dstd::Optional<std::string>(
+                                std::string(m.string_at(i))));
     return out;
 }
 
@@ -116,12 +123,12 @@ TEST_SUITE("concat string and large_string") {
     }
 
     TEST_CASE("nulls are kept at the same rows") {
-        Series a = make_large_utf8({"a", std::nullopt, "c"});
-        Series b = make_string({std::nullopt, "e"});
+        Series a = make_large_utf8({"a", dftracer::utils::dstd::nullopt, "c"});
+        Series b = make_string({dftracer::utils::dstd::nullopt, "e"});
         Series out = dfops::concat_columns({&a, &b});
         CHECK(out.null_count() == 2);
-        CHECK(cells_of(out) ==
-              Cells{"a", std::nullopt, "c", std::nullopt, "e"});
+        CHECK(cells_of(out) == Cells{"a", dftracer::utils::dstd::nullopt, "c",
+                                     dftracer::utils::dstd::nullopt, "e"});
     }
 
     TEST_CASE("empty values and an empty part") {
@@ -133,10 +140,10 @@ TEST_SUITE("concat string and large_string") {
 
     TEST_CASE("string parts alone stay string") {
         Series a = make_string({"a"});
-        Series b = make_string({"b", std::nullopt});
+        Series b = make_string({"b", dftracer::utils::dstd::nullopt});
         Series out = dfops::concat_columns({&a, &b});
         CHECK(out.type() == TypeId::String);
-        CHECK(cells_of(out) == Cells{"a", "b", std::nullopt});
+        CHECK(cells_of(out) == Cells{"a", "b", dftracer::utils::dstd::nullopt});
     }
 
     TEST_CASE("a string next to an integer still fails") {

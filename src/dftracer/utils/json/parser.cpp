@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/json/parser.h>
 
 namespace dftracer::utils::json {
@@ -29,45 +30,45 @@ void JsonParser::rewind() {
 }
 
 dstd::Optional<std::int64_t> JsonParser::get_int64(dstd::StringView key) {
-    if (!valid_) return std::nullopt;
+    if (!valid_) return dstd::nullopt;
     auto result = active_[key].get_int64();
-    if (result.error()) return std::nullopt;
+    if (result.error()) return dstd::nullopt;
     return result.value();
 }
 
 dstd::Optional<std::uint64_t> JsonParser::get_uint64(dstd::StringView key) {
-    if (!valid_) return std::nullopt;
+    if (!valid_) return dstd::nullopt;
     auto result = active_[key].get_uint64();
-    if (result.error()) return std::nullopt;
+    if (result.error()) return dstd::nullopt;
     return result.value();
 }
 
 dstd::Optional<double> JsonParser::get_double(dstd::StringView key) {
-    if (!valid_) return std::nullopt;
+    if (!valid_) return dstd::nullopt;
     auto result = active_[key].get_double();
-    if (result.error()) return std::nullopt;
+    if (result.error()) return dstd::nullopt;
     return result.value();
 }
 
 dstd::Optional<bool> JsonParser::get_bool(dstd::StringView key) {
-    if (!valid_) return std::nullopt;
+    if (!valid_) return dstd::nullopt;
     auto result = active_[key].get_bool();
-    if (result.error()) return std::nullopt;
+    if (result.error()) return dstd::nullopt;
     return result.value();
 }
 
 dstd::Optional<dstd::StringView> JsonParser::get_string(dstd::StringView key) {
-    if (!valid_) return std::nullopt;
+    if (!valid_) return dstd::nullopt;
     auto result = active_[key].get_string();
-    if (result.error()) return std::nullopt;
+    if (result.error()) return dstd::nullopt;
     return result.value();
 }
 
 dstd::Optional<simdjson::ondemand::value> JsonParser::get_value(
     dstd::StringView key) {
-    if (!valid_) return std::nullopt;
+    if (!valid_) return dstd::nullopt;
     auto result = active_[key];
-    if (result.error()) return std::nullopt;
+    if (result.error()) return dstd::nullopt;
     return result.value();
 }
 

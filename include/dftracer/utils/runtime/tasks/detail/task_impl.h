@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_TASKS_DETAIL_TASK_IMPL_H
 
 #include <dftracer/utils/dstd/coroutine_traits.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/error.h>
 #include <dftracer/utils/runtime/tasks/task_traits.h>
@@ -222,7 +223,7 @@ std::type_index Task::deduce_output_type() {
 // ============================================================================
 
 template <typename... Args>
-std::shared_ptr<Task> Task::with_combiner(
+dstd::SharedPtr<Task> Task::with_combiner(
     std::function<std::any(Args...)> combiner) {
     input_combiner_ =
         [combiner](const std::vector<std::any>& inputs) -> std::any {
@@ -249,7 +250,7 @@ template <typename Func>
 auto Task::with_combiner(Func&& combiner) -> std::enable_if_t<
     !std::is_same_v<std::decay_t<Func>,
                     std::function<std::any(const std::vector<std::any>&)>>,
-    std::shared_ptr<Task>> {
+    dstd::SharedPtr<Task>> {
     using traits = detail::function_traits<std::decay_t<Func>>;
     using func_type = typename traits::template as_std_function<std::any>;
     func_type typed_combiner = std::forward<Func>(combiner);

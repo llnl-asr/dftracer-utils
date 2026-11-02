@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -96,7 +97,7 @@ void* fixture_scan(void* self, const dftu_scan_request*, int32_t*,
 
 void fixture_destroy(void*) {}
 
-std::shared_ptr<Source> make_fixture(Fixture& fx) {
+dftracer::utils::dstd::SharedPtr<Source> make_fixture(Fixture& fx) {
     dftu_source_vt vt{};
     vt.schema = fixture_schema;
     vt.scan = fixture_scan;

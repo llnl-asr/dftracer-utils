@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
@@ -30,7 +32,7 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  * @endcode
  */
 inline coro::AsyncGenerator<Line> async_indexed_file_bytes(
-    std::shared_ptr<reader::internal::Reader> reader, std::size_t start_byte,
+    dstd::SharedPtr<reader::internal::Reader> reader, std::size_t start_byte,
     std::size_t end_byte, std::size_t buffer_size = 1024 * 1024) {
     if (!reader) {
         throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
@@ -69,7 +71,7 @@ inline coro::AsyncGenerator<Line> async_indexed_file_bytes(
         }
 
         line_buffer.assign(stream_buffer.data(), bytes_read);
-        co_yield Line(std::string_view(line_buffer), current_line);
+        co_yield Line(dstd::StringView(line_buffer), current_line);
         current_line++;
     }
 }

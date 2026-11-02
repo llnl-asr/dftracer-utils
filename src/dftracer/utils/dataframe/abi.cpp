@@ -2,6 +2,7 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/memory.h>
 
 #include <cstring>
 
@@ -98,9 +99,11 @@ dftu_series* dftu_series_new_string_view(
     void (*release)(void* ctx), void* ctx) {
     // Runs `release` once when the last column or buffer using it dies, and
     // on every early return below.
-    std::shared_ptr<void> owner(nullptr, [release, ctx](void*) {
-        if (release != nullptr) release(ctx);
-    });
+    dftracer::utils::dstd::SharedPtr<void> owner(nullptr,
+                                                 [release, ctx](void*) {
+                                                     if (release != nullptr)
+                                                         release(ctx);
+                                                 });
     TypeId t = static_cast<TypeId>(type);
     if (t != TypeId::String && t != TypeId::Binary) return nullptr;
     if (n < 0 || n_buffers < 0) return nullptr;
@@ -193,8 +196,9 @@ dftu_series* dftu_series_new_struct(dftu_series** fields, const char** names,
     // deref).
     col->length = n_fields > 0 ? fields[0]->length : 0;
     for (int32_t i = 0; i < n_fields; ++i) {
-        col->nested.push_back({std::shared_ptr<dftu_series>(fields[i]),
-                               names && names[i] ? names[i] : ""});
+        col->nested.push_back(
+            {dftracer::utils::dstd::SharedPtr<dftu_series>(fields[i]),
+             names && names[i] ? names[i] : ""});
     }
     return col;
 }
@@ -210,7 +214,7 @@ dftu_series* dftu_series_new_list(const int32_t* offsets, int64_t n,
     col->offsets = new_buffer(off_bytes);
     if (offsets != nullptr)
         std::memcpy(writable(col->offsets), offsets, off_bytes);
-    col->set_child(std::shared_ptr<dftu_series>(values));
+    col->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(values));
     return col;
 }
 
@@ -418,7 +422,7 @@ int32_t dftu_series_num_children(const dftu_series* col) {
 }
 
 dftu_series* dftu_series_child(const dftu_series* col, int32_t i) {
-    const std::shared_ptr<dftu_series>* ch = nullptr;
+    const dftracer::utils::dstd::SharedPtr<dftu_series>* ch = nullptr;
     if (is_single_child_container(col->type)) {
         if (i == 0 && col->child()) ch = &col->child();
     } else if (i >= 0 && static_cast<std::size_t>(i) < col->num_fields()) {
@@ -531,7 +535,7 @@ dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
     if (col->is_chunked()) {
         const auto* starts =
             reinterpret_cast<const std::int64_t*>(col->data.data());
-        std::vector<std::shared_ptr<dftu_series>> parts;
+        std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> parts;
         for (std::size_t k = 0; k < col->nested.size(); ++k) {
             const std::int64_t lo = std::max(offset, starts[k]);
             const std::int64_t hi = std::min(offset + len, starts[k + 1]);

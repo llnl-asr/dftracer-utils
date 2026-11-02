@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -172,8 +173,9 @@ class GenDlioConfigArgParse : public binaries::ArgParse {
     }
 };
 
-std::optional<dlio::BestModel> fit_best_model(const std::vector<double>& data) {
-    if (data.empty()) return std::nullopt;
+dstd::Optional<dlio::BestModel> fit_best_model(
+    const std::vector<double>& data) {
+    if (data.empty()) return dstd::nullopt;
     const auto singles = dlio::fit_all_single_distributions(data);
     std::vector<dlio::FittedMixture> mixtures;
     if (data.size() >= 20) {
@@ -181,7 +183,7 @@ std::optional<dlio::BestModel> fit_best_model(const std::vector<double>& data) {
         mixtures.push_back(dlio::fit_gaussian_mixture(data, 3));
     }
     const auto best = dlio::select_best_model(singles, mixtures);
-    if (!best) return std::nullopt;
+    if (!best) return dstd::nullopt;
     return best->model;
 }
 
@@ -364,7 +366,7 @@ int main(int argc, char** argv) {
             // --- Emit YAML
             // -----------------------------------------------------------
             dlio::DlioTimingBlock comp_block{*comp_model, comp_max_bound};
-            std::optional<dlio::DlioTimingBlock> prep_block_storage;
+            dstd::Optional<dlio::DlioTimingBlock> prep_block_storage;
             const dlio::DlioTimingBlock* prep_block_ptr = nullptr;
             if (prep_model) {
                 prep_block_storage =

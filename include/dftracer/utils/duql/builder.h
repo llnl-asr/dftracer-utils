@@ -321,19 +321,19 @@ class Col {
     }
     /// A pattern is a string or `param("p")` bound to a string.
     Col like(const Col& pattern,
-             dstd::Optional<dstd::StringView> escape = std::nullopt) const {
+             dstd::Optional<dstd::StringView> escape = dstd::nullopt) const {
         return match("like", pattern, escape);
     }
     Col ilike(const Col& pattern,
-              dstd::Optional<dstd::StringView> escape = std::nullopt) const {
+              dstd::Optional<dstd::StringView> escape = dstd::nullopt) const {
         return match("ilike", pattern, escape);
     }
-    Col not_like(const Col& pattern,
-                 dstd::Optional<dstd::StringView> escape = std::nullopt) const {
+    Col not_like(const Col& pattern, dstd::Optional<dstd::StringView> escape =
+                                         dstd::nullopt) const {
         return match("not like", pattern, escape);
     }
     Col not_ilike(const Col& pattern, dstd::Optional<dstd::StringView> escape =
-                                          std::nullopt) const {
+                                          dstd::nullopt) const {
         return match("not ilike", pattern, escape);
     }
     Col regex(const Col& pattern) const { return binary("~", pattern); }
@@ -466,7 +466,7 @@ inline Col list(const dstd::Vector<Col>& items) {
 /// `case { cond => value, ..., else => otherwise }`; a missing `otherwise`
 /// is null.
 inline Col case_(const dstd::Vector<dstd::Pair<Col, Col>>& pairs,
-                 const dstd::Optional<Col>& otherwise = std::nullopt) {
+                 const dstd::Optional<Col>& otherwise = dstd::nullopt) {
     dstd::Vector<Col> args;
     args.reserve(pairs.size() * 2 + 1);
     for (const auto& [cond, value] : pairs) {
@@ -686,7 +686,7 @@ class Pipe {
     }
     Pipe skip(const Col& count) const { return stage("skip " + count.raw()); }
     Pipe sample(const Col& amount, bool percent = false,
-                dstd::Optional<Col> seed = std::nullopt) const {
+                dstd::Optional<Col> seed = dstd::nullopt) const {
         dstd::String t = "sample " + amount.raw() + (percent ? "%" : "");
         if (seed) t += " seed " + seed->raw();
         return stage(t);
@@ -718,12 +718,12 @@ class Pipe {
     }
     Pipe lookup_asof(dstd::StringView rowset, const dstd::Vector<JoinKey>& on,
                      const JoinKey& time, Asof direction = Asof::Backward,
-                     dstd::Optional<Col> within = std::nullopt) const {
+                     dstd::Optional<Col> within = dstd::nullopt) const {
         return asof_text(dstd::String(rowset), on, time, direction, within);
     }
     Pipe lookup_asof(const Pipe& side, const dstd::Vector<JoinKey>& on,
                      const JoinKey& time, Asof direction = Asof::Backward,
-                     dstd::Optional<Col> within = std::nullopt) const {
+                     dstd::Optional<Col> within = dstd::nullopt) const {
         return asof_text("(" + side.inline_text() + ")", on, time, direction,
                          within);
     }
@@ -763,10 +763,10 @@ class Pipe {
     /// needs `fill`.
     Pipe bucket(const Col& width, bool fill = false, dstd::StringView as = {},
                 dstd::StringView mode = "zero",
-                dstd::Optional<Col> low = std::nullopt,
-                dstd::Optional<Col> high = std::nullopt,
-                dstd::Optional<Col> every = std::nullopt,
-                dstd::Optional<Col> at = std::nullopt) const {
+                dstd::Optional<Col> low = dstd::nullopt,
+                dstd::Optional<Col> high = dstd::nullopt,
+                dstd::Optional<Col> every = dstd::nullopt,
+                dstd::Optional<Col> at = dstd::nullopt) const {
         if (mode != "zero" && mode != "forward" && mode != "linear")
             throw std::invalid_argument(
                 "duql: bucket mode is zero, forward or linear");
@@ -786,7 +786,7 @@ class Pipe {
         return stage(t);
     }
     Pipe session(const dstd::Vector<Item>& keys, const Col& gap,
-                 dstd::Optional<Col> max = std::nullopt,
+                 dstd::Optional<Col> max = dstd::nullopt,
                  dstd::StringView as = {}) const {
         dstd::String t = "session ";
         if (!keys.empty()) t += items_text(keys) + " ";

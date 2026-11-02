@@ -2,6 +2,8 @@
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dstd/hash/partition.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 
 #include <bit>
@@ -59,7 +61,7 @@ std::size_t agg_approx_bytes(const AggState& st) {
         total += st.nkey_cols[k].capacity();
     }
     total += st.key_buckets.values().capacity() *
-             sizeof(std::pair<std::uint64_t, std::int64_t>);
+             sizeof(dstd::Pair<std::uint64_t, std::int64_t>);
     total += st.key_buckets.bucket_count() * 8;
     total += st.next_in_bucket.capacity() * sizeof(std::int64_t);
     total += st.direct_groups.capacity() * sizeof(std::int64_t);
@@ -115,7 +117,7 @@ std::size_t agg_approx_bytes(const AggState& st) {
         total += st.dyn_names.capacity() * sizeof(dstd::String) +
                  st.dyn_domain.capacity() * sizeof(FieldStatDomain) +
                  st.dyn_ids.values().capacity() *
-                     sizeof(std::pair<std::string, std::uint32_t>) +
+                     sizeof(dstd::Pair<std::string, std::uint32_t>) +
                  st.dyn_ids.bucket_count() * sizeof(std::uint32_t);
         for (const dstd::String& n : st.dyn_names)
             total += n.capacity() > SSO_CAPACITY ? n.capacity() + 1 : 0;
@@ -126,7 +128,7 @@ std::size_t agg_approx_bytes(const AggState& st) {
         for (const DynLightCells& cells : st.dyn_light)
             total += cells.words.capacity() * sizeof(std::uint64_t) +
                      cells.carry.capacity() *
-                         sizeof(std::pair<std::uint32_t, std::int64_t>);
+                         sizeof(dstd::Pair<std::uint32_t, std::int64_t>);
         if (st.dyn_has_sketch) {
             total +=
                 st.dyn_sketch.capacity() * sizeof(dstd::Vector<DynSketchCell>);
@@ -152,7 +154,7 @@ std::vector<std::vector<std::int64_t>> agg_split_groups(const AggState& st,
             std::size_t cell = dftracer::utils::dstd::hash::GOLDEN_RATIO;
             if (!st.nkey_cols[k][static_cast<std::size_t>(g)])
                 cell = st.key_is_bytes[k]
-                           ? std::hash<std::string_view>{}(
+                           ? std::hash<dstd::StringView>{}(
                                  st.skey_cols[k][static_cast<std::size_t>(g)])
                            : std::hash<std::int64_t>{}(
                                  st.ikey_cols[k][static_cast<std::size_t>(g)]);

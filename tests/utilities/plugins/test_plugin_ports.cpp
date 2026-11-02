@@ -4,6 +4,7 @@
 // covering the same-batch delivery, the ordering rule, and the per-batch reset.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
@@ -136,7 +137,7 @@ TEST_SUITE("PluginPorts") {
 
         auto evs = make_events(/*with_dur=*/3, /*total=*/5);
         ScanUnit unit;
-        FoldBatch fb{std::span<const FoldEvent>(evs), unit};
+        FoldBatch fb{dftracer::utils::dstd::Span<const FoldEvent>(evs), unit};
 
         g_present = false;
         g_consumed = 0;
@@ -159,7 +160,7 @@ TEST_SUITE("PluginPorts") {
 
         auto evs = make_events(3, 5);
         ScanUnit unit;
-        FoldBatch fb{std::span<const FoldEvent>(evs), unit};
+        FoldBatch fb{dftracer::utils::dstd::Span<const FoldEvent>(evs), unit};
 
         g_present = true;
         g_consumed = 123;
@@ -182,7 +183,7 @@ TEST_SUITE("PluginPorts") {
 
         auto evs = make_events(2, 4);
         ScanUnit unit;
-        FoldBatch fb{std::span<const FoldEvent>(evs), unit};
+        FoldBatch fb{dftracer::utils::dstd::Span<const FoldEvent>(evs), unit};
 
         bus.clear();
         prod.fold->step(fb);

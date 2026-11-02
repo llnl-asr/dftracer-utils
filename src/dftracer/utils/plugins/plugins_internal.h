@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGINS_INTERNAL_H
 #define DFTRACER_UTILS_PLUGINS_PLUGINS_INTERNAL_H
 
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/plugins.h>
 
@@ -24,7 +25,7 @@ namespace detail {
 /// that plugin declared none). nullopt means match all (prune nothing): a
 /// plugin wants every event, or a query failed to parse. Identical strings are
 /// deduplicated so the union never repeats a term.
-std::optional<duql::Query> plugin_union_prune_query(
+dstd::Optional<duql::Query> plugin_union_prune_query(
     const std::vector<const char*>& plan_queries);
 
 }  // namespace detail

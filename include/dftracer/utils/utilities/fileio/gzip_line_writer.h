@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/utilities/fileio/json_line_format.h>
 #include <dftracer/utils/utilities/fileio/line_format.h>
@@ -73,7 +74,7 @@ struct GzipWriterOptions {
     std::function<void(const MemberInfo&)> on_member;
     /// Once per member on a compress worker, concurrently across members.
     /// `plaintext` is valid only during the call.
-    std::function<void(const MemberRef& ref, std::string_view plaintext)> fold;
+    std::function<void(const MemberRef& ref, dstd::StringView plaintext)> fold;
 };
 
 struct WriteSummary {
@@ -128,7 +129,7 @@ class GzipLineWriter {
         ~Producer();
 
         /// Like GzipLineWriter::append, into this producer's buffer.
-        coro::CoroTask<common::Result<void>> append(std::string_view lines);
+        coro::CoroTask<common::Result<void>> append(dstd::StringView lines);
 
         /// Like GzipLineWriter::append_with, formatting at the tail of this
         /// producer's buffer.
@@ -215,7 +216,7 @@ class GzipLineWriter {
 
     /// Copies `lines`. A non-empty span must end with '\n'; otherwise the call
     /// fails with INVALID_ARGUMENT and the writer stays usable.
-    coro::CoroTask<common::Result<void>> append(std::string_view lines);
+    coro::CoroTask<common::Result<void>> append(dstd::StringView lines);
 
     /// Formats lines in place. `fill(dst, cap)` writes whole lines to `dst`
     /// (cap >= max_bytes) and returns the bytes written; a non-empty span must
@@ -283,7 +284,7 @@ class GzipLineWriter {
 
     /// Like close(), with `tail` (any bytes, may lack '\n') appended to the
     /// last member; it forms its own member when none is pending.
-    coro::CoroTask<common::Result<WriteSummary>> close(std::string_view tail);
+    coro::CoroTask<common::Result<WriteSummary>> close(dstd::StringView tail);
 
    private:
     explicit GzipLineWriter(std::unique_ptr<Impl> impl);
@@ -300,13 +301,13 @@ class GzipLineWriterBlocking {
     GzipLineWriterBlocking& operator=(GzipLineWriterBlocking&&) noexcept;
     ~GzipLineWriterBlocking();
 
-    common::Result<void> append(std::string_view lines);
+    common::Result<void> append(dstd::StringView lines);
     common::Result<void> append_with(
         std::size_t max_bytes,
         std::function<std::size_t(char*, std::size_t)> fill);
     common::Result<void> cut();
     common::Result<WriteSummary> close();
-    common::Result<WriteSummary> close(std::string_view tail);
+    common::Result<WriteSummary> close(dstd::StringView tail);
 
    private:
     explicit GzipLineWriterBlocking(GzipLineWriter w);

@@ -92,19 +92,22 @@ auto with_borrowed(const dftu_series* h, Fn&& fn) {
 }
 
 // A dftu_agg_op code as the Agg it names, when it is one reduce() runs.
-std::optional<dftracer::utils::dataframe::Agg> reduce_agg_of(int32_t code) {
+dftracer::utils::dstd::Optional<dftracer::utils::dataframe::Agg> reduce_agg_of(
+    int32_t code) {
     using dftracer::utils::dataframe::Agg;
-    std::optional<Agg> agg;
+    dftracer::utils::dstd::Optional<Agg> agg;
     switch (code) {
 #define DFTU_AGG_OP(id, c, str) \
     case c:                     \
         agg = Agg::id;          \
         break;
+#include <dftracer/utils/dstd/optional.h>
+
 #include <dftracer/utils/dataframe/agg_ops.def>
 #undef DFTU_AGG_OP
     }
     if (agg && !dftracer::utils::dataframe::reduce_broadcasts(*agg))
-        return std::nullopt;
+        return dftracer::utils::dstd::nullopt;
     return agg;
 }
 }  // namespace
@@ -1066,7 +1069,7 @@ dftu_lazyframe* dftu_lazyframe_asof(const dftu_lazyframe* lf,
     try {
         std::vector<std::string> keys;
         for (int32_t i = 0; i < n_by; ++i) keys.emplace_back(by[i]);
-        std::optional<double> tol;
+        dftracer::utils::dstd::Optional<double> tol;
         if (tolerance >= 0) tol = tolerance;
         return wrap_lazy(lf->lf.asof(
             other->lf, on, std::move(keys),

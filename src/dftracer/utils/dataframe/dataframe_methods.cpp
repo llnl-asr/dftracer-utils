@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 #include <string>
@@ -18,14 +19,14 @@ constexpr std::int64_t DEFAULT_MORSEL_ROWS = 65536;
 
 namespace dftracer::utils::dataframe {
 
-std::int64_t DataFrame::column_index(std::string_view name) const {
+std::int64_t DataFrame::column_index(dstd::StringView name) const {
     for (std::size_t i = 0; i < names.size(); ++i) {
         if (names[i] == name) return static_cast<std::int64_t>(i);
     }
     return -1;
 }
 
-Series DataFrame::column(std::string_view name) const {
+Series DataFrame::column(dstd::StringView name) const {
     const std::int64_t i = column_index(name);
     return i < 0 ? Series{} : columns[static_cast<std::size_t>(i)].share();
 }

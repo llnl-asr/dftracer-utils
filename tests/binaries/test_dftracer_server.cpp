@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <arpa/inet.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <doctest/doctest.h>
 #include <netinet/in.h>
@@ -1126,11 +1127,12 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
         auto dur = [](int d) { return "\"dur\":" + std::to_string(d) + ","; };
 
         // Longest first: row i of the sorted order has dur UNTIMED - i.
-        for (auto [offset, limit] : {std::pair<int, int>{0, 3},
-                                     {5, 3},
-                                     {UNTIMED - 2, 10},
-                                     {UNTIMED + 5, 10},
-                                     {0, 0}}) {
+        for (auto [offset, limit] :
+             {dftracer::utils::dstd::Pair<int, int>{0, 3},
+              {5, 3},
+              {UNTIMED - 2, 10},
+              {UNTIMED + 5, 10},
+              {0, 0}}) {
             const auto url =
                 "/api/viz/untimed?offset=" + std::to_string(offset) +
                 "&limit=" + std::to_string(limit);

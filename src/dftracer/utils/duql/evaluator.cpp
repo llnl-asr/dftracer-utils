@@ -61,11 +61,11 @@ dstd::Optional<int> compare(const JsonValue& field, const LiteralNode& lit) {
         [&field](const auto& v) -> dstd::Optional<int> {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, dstd::String>) {
-                if (!field.is_string()) return std::nullopt;
+                if (!field.is_string()) return dstd::nullopt;
                 return order(field.get<dstd::StringView>(),
                              dstd::StringView(v));
             } else if constexpr (std::is_same_v<T, bool>) {
-                if (!field.is_bool()) return std::nullopt;
+                if (!field.is_bool()) return dstd::nullopt;
                 return order(field.get<bool>(), v);
             } else {
                 if (field.is_int())
@@ -74,7 +74,7 @@ dstd::Optional<int> compare(const JsonValue& field, const LiteralNode& lit) {
                     return compare_numbers(field.get<std::uint64_t>(), v);
                 if (field.is_number())
                     return compare_numbers(field.get<double>(), v);
-                return std::nullopt;
+                return dstd::nullopt;
             }
         },
         lit.value);
@@ -93,19 +93,19 @@ dstd::Optional<int> compare(const LiteralValue& a, const LiteralNode& lit) {
                                !std::is_same_v<B, bool>)
                 return compare_numbers(va, vb);
             else
-                return std::nullopt;
+                return dstd::nullopt;
         },
         a, lit.value);
 }
 
 dstd::Optional<dstd::StringView> as_string(const JsonValue& v) {
-    if (!v.is_string()) return std::nullopt;
+    if (!v.is_string()) return dstd::nullopt;
     return v.get<dstd::StringView>();
 }
 
 dstd::Optional<dstd::StringView> as_string(const LiteralValue& v) {
     if (const auto* s = std::get_if<dstd::String>(&v)) return *s;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 bool plain_string(const JsonValue& v) { return v.is_string(); }
@@ -303,7 +303,7 @@ dstd::Optional<int> cmp(const Value& a, const Value& b) {
                                 std::is_same_v<A, dstd::StringView>))
                 return order(x, y);
             else
-                return std::nullopt;
+                return dstd::nullopt;
         },
         a, b);
 }
@@ -334,7 +334,7 @@ dstd::Optional<Int> as_int(const Value& v) {
         return Int{false, static_cast<std::uint64_t>(*i)};
     }
     if (const auto* u = std::get_if<std::uint64_t>(&v)) return Int{false, *u};
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 dstd::Optional<double> as_double(const Value& v) {
@@ -343,7 +343,7 @@ dstd::Optional<double> as_double(const Value& v) {
         return static_cast<double>(*i);
     if (const auto* u = std::get_if<std::uint64_t>(&v))
         return static_cast<double>(*u);
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // An arithmetic result outside int64 is unknown, as in a column.
@@ -366,7 +366,7 @@ Value of_double(double d) {
 
 dstd::Optional<Int> add(Int a, Int b) {
     if (a.neg == b.neg) {
-        if (a.mag > U64_MAX - b.mag) return std::nullopt;
+        if (a.mag > U64_MAX - b.mag) return dstd::nullopt;
         return Int{a.neg, a.mag + b.mag};
     }
     if (a.mag >= b.mag) return Int{a.neg, a.mag - b.mag};
@@ -374,7 +374,7 @@ dstd::Optional<Int> add(Int a, Int b) {
 }
 
 dstd::Optional<Int> mul(Int a, Int b) {
-    if (a.mag != 0 && b.mag > U64_MAX / a.mag) return std::nullopt;
+    if (a.mag != 0 && b.mag > U64_MAX / a.mag) return dstd::nullopt;
     return Int{a.neg != b.neg, a.mag * b.mag};
 }
 
@@ -456,9 +456,9 @@ dstd::Optional<dstd::String> text_of(const Value& v, bool json_strings) {
             using T = std::decay_t<decltype(x)>;
             dstd::String out;
             if constexpr (std::is_same_v<T, VMissing>) {
-                return std::nullopt;
+                return dstd::nullopt;
             } else if constexpr (std::is_same_v<T, VNull>) {
-                if (!json_strings) return std::nullopt;
+                if (!json_strings) return dstd::nullopt;
                 out = "null";
             } else if constexpr (std::is_same_v<T, bool>) {
                 out = x ? "true" : "false";
@@ -536,7 +536,7 @@ dstd::Optional<V> parse_number(dstd::StringView s) {
     else
         res = std::from_chars(s.data(), s.data() + s.size(), out);
     if (res.ec != std::errc{} || res.ptr != s.data() + s.size())
-        return std::nullopt;
+        return dstd::nullopt;
     return out;
 }
 
@@ -670,7 +670,7 @@ dstd::Optional<Ordered> ordered(const Value& v) {
         [](const auto& x) -> dstd::Optional<Ordered> {
             using T = std::decay_t<decltype(x)>;
             if constexpr (std::is_same_v<T, double>) {
-                if (std::isnan(x)) return std::nullopt;
+                if (std::isnan(x)) return dstd::nullopt;
                 return Ordered{x};
             } else if constexpr (std::is_same_v<T, std::int64_t> ||
                                  std::is_same_v<T, std::uint64_t> ||
@@ -678,7 +678,7 @@ dstd::Optional<Ordered> ordered(const Value& v) {
                                  std::is_same_v<T, bool>) {
                 return Ordered{x};
             } else {
-                return std::nullopt;
+                return dstd::nullopt;
             }
         },
         v);
@@ -716,7 +716,7 @@ const LookupTable& bound_table(const TLookup& l) {
 
 dstd::Optional<dstd::StringView> str(const Value& v) {
     if (const auto* s = std::get_if<dstd::StringView>(&v)) return *s;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // The container `json` spells, parsed into the scratch arena.
@@ -734,7 +734,7 @@ void append_element(dstd::String& out, simdjson::dom::element el) {
 // A slice index: from the end when negative, clamped to [0, size].
 dstd::Optional<std::uint64_t> slice_at(const Value& v, std::uint64_t size) {
     const auto i = as_int(v);
-    if (!i) return std::nullopt;
+    if (!i) return dstd::nullopt;
     if (!i->neg) return std::min(i->mag, size);
     return i->mag >= size ? 0 : size - i->mag;
 }
@@ -986,7 +986,7 @@ class TermEval {
     dstd::Optional<dstd::String> key(const TLookup& l) const {
         dstd::String out;
         for (const auto& k : l.keys)
-            if (!value_key(out, (*this)(*k))) return std::nullopt;
+            if (!value_key(out, (*this)(*k))) return dstd::nullopt;
         return out;
     }
 
@@ -1286,7 +1286,7 @@ class TermEval {
             case Fn::Slice:
                 return slice(arg(c, 0), arg(c, 1),
                              c.args.size() > 2 ? dstd::Optional{arg(c, 2)}
-                                               : std::nullopt);
+                                               : dstd::nullopt);
             case Fn::Flatten:
                 return flatten(arg(c, 0));
             case Fn::Keys:

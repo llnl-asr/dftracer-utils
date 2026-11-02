@@ -27,8 +27,8 @@ class Task;
 
 /// Forward declaration for use in template methods
 template <typename Func>
-std::shared_ptr<Task> make_task(
-    Func&& func, std::string_view name = "",
+dstd::SharedPtr<Task> make_task(
+    Func&& func, dstd::StringView name = "",
     std::source_location loc = std::source_location::current());
 
 /**
@@ -53,8 +53,8 @@ class Task : public std::enable_shared_from_this<Task> {
     std::type_index output_type_;
 
     /// DAG structure
-    std::vector<std::weak_ptr<Task>> parents_;
-    std::vector<std::shared_ptr<Task>> children_;
+    std::vector<dstd::WeakPtr<Task>> parents_;
+    std::vector<dstd::SharedPtr<Task>> children_;
     std::atomic<int> pending_parents_count_{0};
 
     /// Result management
@@ -65,7 +65,7 @@ class Task : public std::enable_shared_from_this<Task> {
     bool has_custom_combiner_{false};
 
     /// Optional initial input (for tasks without dependencies)
-    std::optional<std::any> initial_input_;
+    dstd::Optional<std::any> initial_input_;
 
     /// Optional timeout for this task (0 = no timeout)
     std::chrono::milliseconds timeout_{0};
@@ -75,7 +75,7 @@ class Task : public std::enable_shared_from_this<Task> {
      * Constructor with function that takes input and CoroScope
      */
     template <typename Func>
-    explicit Task(Func&& func, std::string_view name = "",
+    explicit Task(Func&& func, dstd::StringView name = "",
                   std::source_location loc = std::source_location::current())
         : name_(name),
           loc_(loc),
@@ -93,21 +93,21 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Add a single parent dependency
      */
-    std::shared_ptr<Task> depends_on(std::shared_ptr<Task> parent);
+    dstd::SharedPtr<Task> depends_on(dstd::SharedPtr<Task> parent);
 
     /**
      * Add multiple parent dependencies (initializer list)
      * Usage: task->depends_on({parent1, parent2, parent3, ...})
      */
-    std::shared_ptr<Task> depends_on(
-        std::initializer_list<std::shared_ptr<Task>> parents);
+    dstd::SharedPtr<Task> depends_on(
+        std::initializer_list<dstd::SharedPtr<Task>> parents);
 
     /**
      * Add multiple parent dependencies (variadic, 2+ parents)
      * Usage: task->depends_on(parent1, parent2, parent3, ...)
      */
     template <typename T1, typename T2, typename... Rest>
-    std::shared_ptr<Task> depends_on(T1&& parent1, T2&& parent2,
+    dstd::SharedPtr<Task> depends_on(T1&& parent1, T2&& parent2,
                                      Rest&&... rest) {
         depends_on(std::forward<T1>(parent1));
         depends_on(std::forward<T2>(parent2));
@@ -119,7 +119,7 @@ class Task : public std::enable_shared_from_this<Task> {
      * Set custom input combiner for multiple parents
      * Accepts a function that takes std::vector<std::any>&
      */
-    std::shared_ptr<Task> with_combiner(
+    dstd::SharedPtr<Task> with_combiner(
         std::function<std::any(const std::vector<std::any>&)> combiner);
 
     /**
@@ -129,7 +129,7 @@ class Task : public std::enable_shared_from_this<Task> {
      * std::string b) { ... }))
      */
     template <typename... Args>
-    std::shared_ptr<Task> with_combiner(
+    dstd::SharedPtr<Task> with_combiner(
         std::function<std::any(Args...)> combiner);
 
     /**
@@ -142,19 +142,19 @@ class Task : public std::enable_shared_from_this<Task> {
     auto with_combiner(Func&& combiner) -> std::enable_if_t<
         !std::is_same_v<std::decay_t<Func>,
                         std::function<std::any(const std::vector<std::any>&)>>,
-        std::shared_ptr<Task>>;
+        dstd::SharedPtr<Task>>;
 
     /**
      * Set task name
      */
-    std::shared_ptr<Task> with_name(std::string name);
+    dstd::SharedPtr<Task> with_name(std::string name);
 
     /**
      * Set timeout for this task
      * @param timeout Timeout duration (0 = no timeout, wait forever)
      * @return This task (for method chaining)
      */
-    std::shared_ptr<Task> with_timeout(std::chrono::milliseconds timeout) {
+    dstd::SharedPtr<Task> with_timeout(std::chrono::milliseconds timeout) {
         timeout_ = timeout;
         return shared_from_this();
     }
@@ -201,8 +201,8 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get parent tasks (returns a copy for thread safety)
      */
-    std::vector<std::shared_ptr<Task>> get_parents() const {
-        std::vector<std::shared_ptr<Task>> result;
+    std::vector<dstd::SharedPtr<Task>> get_parents() const {
+        std::vector<dstd::SharedPtr<Task>> result;
         result.reserve(parents_.size());
         for (const auto& weak_parent : parents_) {
             if (auto locked = weak_parent.lock()) {
@@ -215,7 +215,7 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get child tasks (returns a copy for thread safety)
      */
-    std::vector<std::shared_ptr<Task>> get_children() const {
+    std::vector<dstd::SharedPtr<Task>> get_children() const {
         return children_;
     }
 
@@ -266,7 +266,7 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get initial input (if set)
      */
-    const std::optional<std::any>& get_initial_input() const {
+    const dstd::Optional<std::any>& get_initial_input() const {
         return initial_input_;
     }
 
@@ -309,7 +309,7 @@ class Task : public std::enable_shared_from_this<Task> {
      * @endcode
      */
     template <typename Func>
-    std::shared_ptr<Task> then(Func&& func, std::string name = "") {
+    dstd::SharedPtr<Task> then(Func&& func, std::string name = "") {
         auto new_task = make_task(std::forward<Func>(func), std::move(name));
         new_task->depends_on(shared_from_this());
         return new_task;
@@ -337,7 +337,7 @@ class Task : public std::enable_shared_from_this<Task> {
      * @endcode
      */
     template <typename Func>
-    std::shared_ptr<Task> tap(Func&& func, std::string name = "") {
+    dstd::SharedPtr<Task> tap(Func&& func, std::string name = "") {
         using Traits =
             dftracer::utils::detail::function_traits<std::decay_t<Func>>;
         using TapInputType = typename Traits::input_type;
@@ -368,10 +368,10 @@ class Task : public std::enable_shared_from_this<Task> {
      * Usage:
      * @code
      * auto combined = task1 & task2;  // Both run in parallel
-     * auto [result1, result2] = combined->get<std::tuple<int, std::string>>();
+     * auto [result1, result2] = combined->get<dstd::Tuple<int, std::string>>();
      * @endcode
      */
-    std::shared_ptr<Task> operator&(std::shared_ptr<Task> other);
+    dstd::SharedPtr<Task> operator&(dstd::SharedPtr<Task> other);
 
     /**
      * Operator^ for tap/tee composition - send output to both paths
@@ -392,7 +392,7 @@ class Task : public std::enable_shared_from_this<Task> {
      * // result continues with task1's output type
      * @endcode
      */
-    std::shared_ptr<Task> operator^(std::shared_ptr<Task> tap_task);
+    dstd::SharedPtr<Task> operator^(dstd::SharedPtr<Task> tap_task);
 
    private:
     /**
@@ -423,7 +423,7 @@ class Task : public std::enable_shared_from_this<Task> {
      * Add child task
      * (Internal - called by depends_on)
      */
-    void add_child(std::shared_ptr<Task> child) { children_.push_back(child); }
+    void add_child(dstd::SharedPtr<Task> child) { children_.push_back(child); }
 
     /**
      * Validate type compatibility between tasks
@@ -475,7 +475,7 @@ class Task : public std::enable_shared_from_this<Task> {
  * Helper function to create a shared_ptr<Task>
  */
 template <typename Func>
-std::shared_ptr<Task> make_task(Func&& func, std::string_view name,
+dstd::SharedPtr<Task> make_task(Func&& func, dstd::StringView name,
                                 std::source_location loc) {
     return std::make_shared<Task>(std::forward<Func>(func), name, loc);
 }
@@ -496,7 +496,7 @@ std::shared_ptr<Task> make_task(Func&& func, std::string_view name,
  * @endcode
  */
 template <typename Func>
-std::shared_ptr<Task> operator>(std::shared_ptr<Task> task, Func&& func) {
+dstd::SharedPtr<Task> operator>(dstd::SharedPtr<Task> task, Func&& func) {
     auto new_task = make_task(std::forward<Func>(func));
     new_task->depends_on(task);
     return new_task;
@@ -520,7 +520,7 @@ std::shared_ptr<Task> operator>(std::shared_ptr<Task> task, Func&& func) {
  * @endcode
  */
 template <typename Func>
-std::shared_ptr<Task> operator<(Func&& func, std::shared_ptr<Task> task) {
+dstd::SharedPtr<Task> operator<(Func&& func, dstd::SharedPtr<Task> task) {
     auto new_task = make_task(std::forward<Func>(func));
     new_task->depends_on(task);
     return new_task;
@@ -535,11 +535,11 @@ std::shared_ptr<Task> operator<(Func&& func, std::shared_ptr<Task> task) {
  * Usage:
  * @code
  * auto combined = task1 & task2;  // Natural syntax!
- * auto result = combined->get<std::tuple<std::any, std::any>>();
+ * auto result = combined->get<dstd::Tuple<std::any, std::any>>();
  * @endcode
  */
-inline std::shared_ptr<Task> operator&(std::shared_ptr<Task> lhs,
-                                       std::shared_ptr<Task> rhs) {
+inline dstd::SharedPtr<Task> operator&(dstd::SharedPtr<Task> lhs,
+                                       dstd::SharedPtr<Task> rhs) {
     return lhs->operator&(rhs);
 }
 
@@ -555,8 +555,8 @@ inline std::shared_ptr<Task> operator&(std::shared_ptr<Task> lhs,
  * with task1's type
  * @endcode
  */
-inline std::shared_ptr<Task> operator^(std::shared_ptr<Task> source,
-                                       std::shared_ptr<Task> tap_task) {
+inline dstd::SharedPtr<Task> operator^(dstd::SharedPtr<Task> source,
+                                       dstd::SharedPtr<Task> tap_task) {
     return source->operator^(tap_task);
 }
 
@@ -564,6 +564,10 @@ inline std::shared_ptr<Task> operator^(std::shared_ptr<Task> source,
 
 // Include template implementations
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/runtime/tasks/detail/task_impl.h>
 
 #endif  // DFTRACER_UTILS_RUNTIME_TASKS_TASK_H

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/cache/eviction_policies/eviction_policy_factory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
@@ -22,7 +23,7 @@ namespace {
 
 struct GlobalCache {
     std::mutex mutex;
-    std::optional<MemberDecodeCache> cache;
+    dstd::Optional<MemberDecodeCache> cache;
     std::atomic<MemberDecodeCache*> published{nullptr};
 };
 

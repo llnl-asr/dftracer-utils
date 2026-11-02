@@ -6,6 +6,8 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
@@ -46,7 +48,7 @@ struct IndexerOptions {
     std::size_t parallelism = 0;
     bool checkpoints = true;
     /// nullopt skips the bloom tier.
-    std::optional<BloomOptions> bloom = BloomOptions{};
+    dstd::Optional<BloomOptions> bloom = BloomOptions{};
     /// The pruning extensions the bloom tier builds: any of "zonemap",
     /// "bloom", "counts" and "postings". dft.stats and dft.metadata are built
     /// with the tier.
@@ -218,13 +220,13 @@ class Indexer {
 
    private:
     struct Impl;
-    explicit Indexer(std::shared_ptr<Impl> impl);
+    explicit Indexer(dstd::SharedPtr<Impl> impl);
     static void validate_options(Impl& impl);
-    static Indexer finish_open(std::shared_ptr<Impl> impl);
+    static Indexer finish_open(dstd::SharedPtr<Impl> impl);
     coro::CoroTask<IndexStatus> status_of(
         coro::Scope& scope,
         std::vector<utilities::filesystem::FileEntry> entries) const;
-    std::shared_ptr<Impl> impl_;
+    dstd::SharedPtr<Impl> impl_;
 };
 
 }  // namespace dftracer::utils::index

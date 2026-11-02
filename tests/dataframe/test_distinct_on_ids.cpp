@@ -8,6 +8,9 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
@@ -49,7 +52,7 @@ Series flat_strings() {
     std::vector<std::string> keep;
     for (std::int64_t i = 0; i < N; ++i)
         keep.push_back(POOL[static_cast<std::size_t>((i * 5 + i / 7) % 6)]);
-    std::vector<std::string_view> v(keep.begin(), keep.end());
+    std::vector<dftracer::utils::dstd::StringView> v(keep.begin(), keep.end());
     const auto valid = validity_bits();
     return Series::strings(v, valid.data());
 }
@@ -105,7 +108,7 @@ Series range_of(const Series& flat, std::int64_t b, std::int64_t e) {
 }
 
 Series chunked_of(const Series& flat, bool is_string) {
-    std::vector<std::shared_ptr<dftu_series>> chunks;
+    std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> chunks;
     for (int k = 0; k < 4; ++k) {
         Series piece = range_of(flat, CUTS[k], CUTS[k + 1]);
         switch (k % 4) {
@@ -130,9 +133,10 @@ Series chunked_of(const Series& flat, bool is_string) {
     return Series{make_chunked(std::move(chunks))};
 }
 
-std::vector<std::pair<std::string, Series>> layouts(const Series& flat) {
+std::vector<dftracer::utils::dstd::Pair<std::string, Series>> layouts(
+    const Series& flat) {
     const bool s = flat.type() == TypeId::String;
-    std::vector<std::pair<std::string, Series>> out;
+    std::vector<dftracer::utils::dstd::Pair<std::string, Series>> out;
     out.emplace_back("flat", flat.share());
     if (s) {
         out.emplace_back("view", view_of(flat));
@@ -190,7 +194,7 @@ Series flat_copy(const Series& c) { return c.materialize(); }
 
 TEST_SUITE("distinct on ids") {
     TEST_CASE("series distinct ops match the flat copy in every layout") {
-        const std::pair<const char*, Series> bases[] = {
+        const dftracer::utils::dstd::Pair<const char*, Series> bases[] = {
             {"string", flat_strings()},
             {"int64", flat_i64()},
             {"float64", flat_f64()},

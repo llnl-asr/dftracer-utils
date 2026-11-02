@@ -2,6 +2,8 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/tables.h>
 
@@ -55,7 +57,7 @@ std::uint64_t PluginExtension::max_payload() const {
     return vt.max_payload ? vt.max_payload : DEFAULT_MAX_PAYLOAD;
 }
 
-bool register_plugin_extension(std::string_view name,
+bool register_plugin_extension(dstd::StringView name,
                                const ::dftu_index_extension* vt, void* self) {
     if (!vt || !vt->make_builder || !vt->step || !vt->finish_granule ||
         !vt->destroy_builder || !vt->compile || !vt->may_match ||
@@ -78,7 +80,7 @@ bool register_plugin_extension(std::string_view name,
     return true;
 }
 
-void unregister_plugin_extension(std::string_view name) {
+void unregister_plugin_extension(dstd::StringView name) {
     auto& r = registry();
     std::unique_lock lock(r.mutex);
     if (auto it = r.by_name.find(name); it != r.by_name.end())
@@ -94,7 +96,7 @@ std::vector<PluginExtensionPtr> plugin_extensions() {
     return out;
 }
 
-PluginExtensionPtr find_plugin_extension(std::string_view name) {
+PluginExtensionPtr find_plugin_extension(dstd::StringView name) {
     auto& r = registry();
     std::shared_lock lock(r.mutex);
     auto it = r.by_name.find(name);
@@ -133,12 +135,12 @@ void PluginBuilders::end_granule() {
 }
 
 void PluginBuilders::step(std::uint64_t granule,
-                          std::span<const std::string_view> lines) {
+                          dstd::Span<const dstd::StringView> lines) {
     if (granule_ && *granule_ != granule) end_granule();
     granule_ = granule;
     lines_.clear();
     lines_.reserve(lines.size());
-    for (std::string_view l : lines)
+    for (dstd::StringView l : lines)
         lines_.push_back({l.data(), l.size(), nullptr, nullptr});
     for (auto& b : built_)
         if (b.builder && !b.chunk_failed &&

@@ -11,6 +11,8 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -58,17 +60,18 @@ double clamped(const DDSketch& s, double q) {
 
 struct Cell {
     std::int64_t key;
-    std::optional<std::string> text;
+    dftracer::utils::dstd::Optional<std::string> text;
 };
 
 DataFrame frame_of(const std::vector<Cell>& cells) {
     std::vector<std::int64_t> keys;
-    std::vector<std::string_view> views;
+    std::vector<dftracer::utils::dstd::StringView> views;
     std::vector<std::uint8_t> valid((cells.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < cells.size(); ++i) {
         keys.push_back(cells[i].key);
-        views.push_back(cells[i].text ? std::string_view(*cells[i].text)
-                                      : std::string_view());
+        views.push_back(cells[i].text
+                            ? dftracer::utils::dstd::StringView(*cells[i].text)
+                            : dftracer::utils::dstd::StringView());
         if (cells[i].text) valid[i >> 3] |= std::uint8_t(1u << (i & 7));
     }
     DataFrame d;
@@ -155,12 +158,12 @@ struct Fixture {
             {1, text_of(sketch_of(g1a))},
             {0, text_of(sketch_of(g0b))},
             {2, text_of(sketch_of(g2a))},
-            {2, std::nullopt},
+            {2, dftracer::utils::dstd::nullopt},
             {2, std::string("not base64!")},
             {2, text_of(DDSketch(0.01))},
             {2, text_of(sketch_of({100, 200}, 0.05))},
             {2, text_of(sketch_of(g2b))},
-            {3, std::nullopt},
+            {3, dftracer::utils::dstd::nullopt},
             {3, std::string("###")},
             {3, text_of(DDSketch(0.01))},
             {3, std::string("AAAA")},

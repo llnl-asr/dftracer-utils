@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -39,7 +40,7 @@ bool ensure_directory_exists(const std::string& path) {
 // =============================================================================
 
 bool PosixExecutor::execute(const Trace& trace, const ReplayConfig& config) {
-    std::string_view func_name = trace.func_name;
+    dstd::StringView func_name = trace.func_name;
 
     if (config.dry_run) {
         DFTRACER_UTILS_LOG_DEBUG("DRY RUN: Would execute POSIX %.*s",

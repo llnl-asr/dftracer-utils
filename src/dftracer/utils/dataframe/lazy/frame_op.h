@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_DATAFRAME_LAZY_FRAME_OP_H
 
 #include <dftracer/utils/dataframe/lazy/common.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <iterator>
@@ -167,9 +169,9 @@ class OwnedFrameOpArgs {
 
     // The same operands over other frame plans; `frames` must match the
     // frame operand count.
-    std::shared_ptr<const OwnedFrameOpArgs> with_frames(
+    dstd::SharedPtr<const OwnedFrameOpArgs> with_frames(
         std::vector<LazyFrame> frames) const {
-        auto out = std::shared_ptr<OwnedFrameOpArgs>(new OwnedFrameOpArgs());
+        auto out = dstd::SharedPtr<OwnedFrameOpArgs>(new OwnedFrameOpArgs());
         out->slots_.reserve(slots_.size());
         for (const Slot& s : slots_) {
             Slot c;
@@ -322,7 +324,7 @@ inline constexpr const char* WITH_COLUMN_OP = "dftu.frame.with_column";
 // operands: they run over one morsel at a time, the same rows as over the whole
 // input. Any other column op (a running, rolling, sorting, ranking or
 // reducing one) needs the whole column.
-inline constexpr std::string_view ELEMENTWISE_COLUMN_OPS[] = {
+inline constexpr dstd::StringView ELEMENTWISE_COLUMN_OPS[] = {
     "dftu.series.add",
     "dftu.series.sub",
     "dftu.series.mul",
@@ -386,7 +388,7 @@ inline constexpr std::string_view ELEMENTWISE_COLUMN_OPS[] = {
     "dftu.series.dt_format",
     "dftu.series.with_timezone"};
 
-inline bool column_op_elementwise(std::string_view series_op) {
+inline bool column_op_elementwise(dstd::StringView series_op) {
     return std::find(std::begin(ELEMENTWISE_COLUMN_OPS),
                      std::end(ELEMENTWISE_COLUMN_OPS),
                      series_op) != std::end(ELEMENTWISE_COLUMN_OPS);

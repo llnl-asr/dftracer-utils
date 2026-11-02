@@ -44,7 +44,7 @@ bool in_role_window(simdjson::dom::element root, const ViewDefinition& view) {
         ts = t.get<double>() * view.time_factor;
     } else if (t.is_string()) {
         const auto us =
-            dftracer::utils::index::iso8601_micros(t.get<std::string_view>());
+            dftracer::utils::index::iso8601_micros(t.get<dstd::StringView>());
         if (!us) return false;
         ts = static_cast<double>(*us);
     } else {
@@ -76,7 +76,7 @@ std::size_t record_length(const char* line, std::size_t len) {
                        line[len - 1] == '\r'))
         --len;
     if (len > 0 && line[len - 1] == ',') --len;
-    const std::string_view record(line, len);
+    const dstd::StringView record(line, len);
     return record == "[" || record == "]" ? 0 : len;
 }
 
@@ -186,7 +186,7 @@ static EventProbe probe_event(const char* data, std::size_t n,
 coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     const ViewScannerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("read view");
-    const std::optional<duql::Query>* query_src =
+    const dstd::Optional<duql::Query>* query_src =
         input.query ? &input.query : &input.view.query;
 
     const auto& query = *query_src;
@@ -194,10 +194,10 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
 
     // Metadata lines bypass the query, so only a scan returning none may drop
     // lines unparsed.
-    std::optional<index::plan::Prefilter> prefilter;
+    dstd::Optional<index::plan::Prefilter> prefilter;
     if (use_query && input.view.prefilter && !input.view.include_metadata)
         prefilter.emplace(*query);
-    std::optional<index::plan::Prefilter::Gate> gate;
+    dstd::Optional<index::plan::Prefilter::Gate> gate;
     if (prefilter && !prefilter->empty()) gate.emplace(*prefilter);
 
     auto reader_input =
@@ -283,7 +283,7 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
             }
 
             if (line_len > 0 && gate &&
-                !gate->may_match(std::string_view(line_start, line_len))) {
+                !gate->may_match(dstd::StringView(line_start, line_len))) {
                 batch.events_scanned++;
                 pos = (newline - data) + 1;
                 continue;
@@ -366,6 +366,8 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 
 namespace dftracer::utils::trace::views {
@@ -396,7 +398,7 @@ ArrowExportResult ViewScannerBatch::to_arrow(
         auto obj = obj_result.value_unsafe();
 
         for (auto field : obj) {
-            std::string_view key_sv = field.key;
+            dstd::StringView key_sv = field.key;
             auto val = field.value;
 
             if (val.is_int64()) {

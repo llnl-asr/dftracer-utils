@@ -3,6 +3,9 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_EVENT_SOURCE_H
 
 #include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
@@ -37,7 +40,7 @@ class DomSource {
         auto obj = root.get_object();
         if (obj.error()) return;
         for (auto kv : obj.value_unsafe()) {
-            std::string_view k = kv.key;
+            dstd::StringView k = kv.key;
             if (k == "name") {
                 name_ = {kv.value, true};
             } else if (k == "cat") {
@@ -63,30 +66,30 @@ class DomSource {
                          : read_phase(json::JsonValue(p.value_unsafe()));
     }
 
-    std::optional<double> number(std::string_view field) const {
+    dstd::Optional<double> number(dstd::StringView field) const {
         auto [e, ok] = resolve(field);
-        return ok ? as_number(e) : std::nullopt;
+        return ok ? as_number(e) : dstd::nullopt;
     }
 
-    std::optional<dftracer::utils::dataframe::FieldNum> number_typed(
-        std::string_view field) const {
+    dstd::Optional<dftracer::utils::dataframe::FieldNum> number_typed(
+        dstd::StringView field) const {
         auto [e, ok] = resolve(field);
-        return ok ? as_typed_number(e) : std::nullopt;
+        return ok ? as_typed_number(e) : dstd::nullopt;
     }
 
-    void append_value(dstd::String& out, std::string_view field) const {
+    void append_value(dstd::String& out, dstd::StringView field) const {
         auto [e, ok] = resolve(field);
         if (ok) append_text(out, e);
     }
 
-    void append_arg(dstd::String& out, std::string_view key) const {
+    void append_arg(dstd::String& out, dstd::StringView key) const {
         if (!has_args_) return;
         json::JsonValue av =
             json::JsonValue(args_).at(common::strip_args_prefix(key));
         if (av.exists()) append_text(out, av.element());
     }
 
-    dstd::String value(std::string_view field) const {
+    dstd::String value(dstd::StringView field) const {
         dstd::String s;
         append_value(s, field);
         return s;
@@ -100,12 +103,12 @@ class DomSource {
     }
 
    private:
-    using Cached = std::pair<simdjson::dom::element, bool>;
+    using Cached = dstd::Pair<simdjson::dom::element, bool>;
 
     // Top-level (schema/hot) first so a bare schema name never resolves a
     // same-named arg; then the flat arg key (dotted or not, prefix optional);
     // then a genuinely nested non-args path.
-    Cached resolve(std::string_view field) const {
+    Cached resolve(dstd::StringView field) const {
         if (auto t = top(field); t.second) return t;
         if (has_args_) {
             json::JsonValue av =
@@ -121,7 +124,7 @@ class DomSource {
 
     // The captured element for a hot field, else a live lookup so an uncaptured
     // field still resolves.
-    Cached top(std::string_view field) const {
+    Cached top(dstd::StringView field) const {
         if (field == "name") return name_;
         if (field == "cat") return cat_;
         if (field == "pid") return pid_;
@@ -132,7 +135,7 @@ class DomSource {
         return r.error() ? Cached{{}, false} : Cached{r.value_unsafe(), true};
     }
 
-    static std::optional<double> as_number(simdjson::dom::element e) {
+    static dstd::Optional<double> as_number(simdjson::dom::element e) {
         double d;
         if (e.get_double().get(d) == simdjson::SUCCESS) return d;
         std::int64_t i;
@@ -141,12 +144,12 @@ class DomSource {
         std::uint64_t u;
         if (e.get_uint64().get(u) == simdjson::SUCCESS)
             return static_cast<double>(u);
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     // Integer types are tried before double so an integer field keeps its exact
     // domain (a double would round timestamps/durations past 2^53).
-    static std::optional<dftracer::utils::dataframe::FieldNum> as_typed_number(
+    static dstd::Optional<dftracer::utils::dataframe::FieldNum> as_typed_number(
         simdjson::dom::element e) {
         std::int64_t i;
         if (e.get_int64().get(i) == simdjson::SUCCESS)
@@ -157,14 +160,14 @@ class DomSource {
         double d;
         if (e.get_double().get(d) == simdjson::SUCCESS)
             return dftracer::utils::dataframe::FieldNum::of(d);
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     // Byte-for-byte the same text the group key and per-group value must agree
     // on: string as-is, integers via to_chars, double via to_string, bool
     // spelled out.
     static void append_text(dstd::String& out, simdjson::dom::element e) {
-        std::string_view s;
+        dstd::StringView s;
         if (e.get_string().get(s) == simdjson::SUCCESS) {
             out.append(s);
             return;
@@ -212,21 +215,21 @@ class PodSource {
 
     RecordPhase phase() const { return ev_.phase; }
 
-    std::optional<double> number(std::string_view field) const {
+    dstd::Optional<double> number(dstd::StringView field) const {
         if (ev_.by_path) return as_double(find_arg_by(field));
         if (field == "pid") return static_cast<double>(ev_.pid);
         if (field == "tid") return static_cast<double>(ev_.tid);
         if (field == "ts") return static_cast<double>(ev_.ts);
         if (field == "dur")
             return ev_.has_dur
-                       ? std::optional<double>(static_cast<double>(ev_.dur))
-                       : std::nullopt;
+                       ? dstd::Optional<double>(static_cast<double>(ev_.dur))
+                       : dstd::nullopt;
         return as_double(is_schema_field(field) ? find_top(field)
                                                 : find_arg(field));
     }
 
-    std::optional<dftracer::utils::dataframe::FieldNum> number_typed(
-        std::string_view field) const {
+    dstd::Optional<dftracer::utils::dataframe::FieldNum> number_typed(
+        dstd::StringView field) const {
         using dftracer::utils::dataframe::FieldNum;
         const auto* v = ev_.by_path ? find_arg_by(field) : nullptr;
         if (ev_.by_path) {
@@ -238,15 +241,15 @@ class PodSource {
                 if (const auto* u = std::get_if<std::uint64_t>(v))
                     return FieldNum::of(*u);
             }
-            return std::nullopt;
+            return dstd::nullopt;
         }
         // Top-level POD scalars are unsigned integers.
         if (field == "pid") return FieldNum::of(ev_.pid);
         if (field == "tid") return FieldNum::of(ev_.tid);
         if (field == "ts") return FieldNum::of(ev_.ts);
         if (field == "dur")
-            return ev_.has_dur ? std::optional<FieldNum>(FieldNum::of(ev_.dur))
-                               : std::nullopt;
+            return ev_.has_dur ? dstd::Optional<FieldNum>(FieldNum::of(ev_.dur))
+                               : dstd::nullopt;
         v = is_schema_field(field) ? find_top(field) : find_arg(field);
         if (v) {
             if (const auto* d = std::get_if<double>(v)) return FieldNum::of(*d);
@@ -255,11 +258,11 @@ class PodSource {
             if (const auto* u = std::get_if<std::uint64_t>(v))
                 return FieldNum::of(*u);
         }
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     /// Appends the text of `field`; false when the event lacks it.
-    bool append_value(dstd::String& out, std::string_view field) const {
+    bool append_value(dstd::String& out, dstd::StringView field) const {
         if (ev_.by_path) return append_found(out, find_arg_by(field));
         if (field == "cat") return append_id(out, ev_.cat_id);
         if (field == "name") return append_id(out, ev_.name_id);
@@ -273,22 +276,22 @@ class PodSource {
     }
 
     /// Appends the text of arg `key`; false when the event lacks it.
-    bool append_arg(dstd::String& out, std::string_view key) const {
+    bool append_arg(dstd::String& out, dstd::StringView key) const {
         if (ev_.by_path) return append_found(out, find_arg_by(key));
-        const std::string_view bare = common::strip_args_prefix(key);
+        const dstd::StringView bare = common::strip_args_prefix(key);
         if (bare == "fhash") return append_id(out, ev_.fhash_id);
         if (bare == "hhash") return append_id(out, ev_.hhash_id);
         return append_found(out, find_arg(key));
     }
 
-    dstd::String value(std::string_view field) const {
+    dstd::String value(dstd::StringView field) const {
         dstd::String s;
         append_value(s, field);
         return s;
     }
 
     /// Whether the event holds `field`, found the way append_value finds it.
-    bool has(std::string_view field) const {
+    bool has(dstd::StringView field) const {
         constexpr auto NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
         if (ev_.by_path) return find_arg_by(field) != nullptr;
         if (field == "cat") return ev_.cat_id != NO_ID;
@@ -296,7 +299,7 @@ class PodSource {
         if (field == "pid" || field == "tid" || field == "ts") return true;
         if (field == "dur") return ev_.has_dur;
         if (is_schema_field(field)) return find_top(field) != nullptr;
-        const std::string_view bare = common::strip_args_prefix(field);
+        const dstd::StringView bare = common::strip_args_prefix(field);
         if (bare == "fhash") return ev_.fhash_id != NO_ID;
         if (bare == "hhash") return ev_.hhash_id != NO_ID;
         return find_arg(field) != nullptr;
@@ -304,9 +307,9 @@ class PodSource {
 
     /// The null, bool or empty container the event holds at `field`, found the
     /// way append_value finds a field.
-    const FoldEvent::Special* special(std::string_view field) const {
+    const FoldEvent::Special* special(dstd::StringView field) const {
         if (ev_.specials.empty()) return nullptr;
-        const auto find = [this](std::string_view f,
+        const auto find = [this](dstd::StringView f,
                                  bool top) -> const FoldEvent::Special* {
             const std::uint32_t id = this->intern_lookup(f);
             for (const auto& s : ev_.specials)
@@ -316,7 +319,7 @@ class PodSource {
         if (ev_.by_path) return find(field, false);
         if (is_schema_field(field)) return find(field, true);
         if (const auto* v = find(field, false)) return v;
-        const std::string_view bare = common::strip_args_prefix(field);
+        const dstd::StringView bare = common::strip_args_prefix(field);
         return bare == field ? nullptr : find(bare, false);
     }
 
@@ -333,7 +336,7 @@ class PodSource {
     }
 
    private:
-    static std::optional<double> as_double(const FoldEvent::ArgValue* v) {
+    static dstd::Optional<double> as_double(const FoldEvent::ArgValue* v) {
         if (v) {
             if (const auto* d = std::get_if<double>(v)) return *d;
             if (const auto* i = std::get_if<std::int64_t>(v))
@@ -341,7 +344,7 @@ class PodSource {
             if (const auto* u = std::get_if<std::uint64_t>(v))
                 return static_cast<double>(*u);
         }
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     // Nested/extra fields are captured under their full name including the
@@ -349,13 +352,13 @@ class PodSource {
     // bare. Match the field as written first, then its stripped form, so both
     // "args.meta.host" (nested, prefixed) and "args.cqe.raw_ns" (flat arg key,
     // stored bare) resolve.
-    const FoldEvent::ArgValue* find_arg(std::string_view field) const {
+    const FoldEvent::ArgValue* find_arg(dstd::StringView field) const {
         if (const auto* v = find_arg_by(field)) return v;
-        const std::string_view bare = common::strip_args_prefix(field);
+        const dstd::StringView bare = common::strip_args_prefix(field);
         return bare == field ? nullptr : find_arg_by(bare);
     }
 
-    const FoldEvent::ArgValue* find_arg_by(std::string_view field) const {
+    const FoldEvent::ArgValue* find_arg_by(dstd::StringView field) const {
         const std::uint32_t id = intern_lookup(field);
         if (id == dftracer::utils::dstd::StringIntern::NO_ID) return nullptr;
         for (const auto& [key_id, v] : ev_.args)
@@ -363,7 +366,7 @@ class PodSource {
         return nullptr;
     }
 
-    const FoldEvent::ArgValue* find_top(std::string_view field) const {
+    const FoldEvent::ArgValue* find_top(dstd::StringView field) const {
         const std::uint32_t id = intern_lookup(field);
         if (id == dftracer::utils::dstd::StringIntern::NO_ID) return nullptr;
         for (const auto& [key_id, v] : ev_.top_fields)
@@ -383,7 +386,7 @@ class PodSource {
             append_number(out, std::get<double>(v));
     }
 
-    std::uint32_t intern_lookup(std::string_view field) const {
+    std::uint32_t intern_lookup(dstd::StringView field) const {
         // The event's arg keys are already interned, so resolving a query field
         // to an id is a lookup, not an insert; an unknown field simply misses.
         return const_cast<dftracer::utils::dstd::StringIntern&>(intern_)
@@ -434,9 +437,9 @@ class PodSource {
 
 /// The array or object at `path` rebuilt from the event's flattened keys
 /// (`path.0`, `path.key`), or nullopt when none lies under it.
-std::optional<duql::Cell> container_cell(
+dstd::Optional<duql::Cell> container_cell(
     const FoldEvent& ev, const dftracer::utils::dstd::StringIntern& intern,
-    std::string_view path);
+    dstd::StringView path);
 
 inline duql::Cell special_cell(FoldEvent::Special s) {
     switch (s) {
@@ -467,7 +470,7 @@ inline bool pod_matches(const duql::Query& q, const FoldEvent& ev,
     using dftracer::utils::dataframe::FieldStatDomain;
     PodSource src(ev, intern);
     scratch.clear();
-    for (std::string_view f : q.fields()) {
+    for (dstd::StringView f : q.fields()) {
         if (const auto* sp = src.special(f)) {
             if (*sp == FoldEvent::Special::JsonArray ||
                 *sp == FoldEvent::Special::JsonObject)
@@ -502,12 +505,12 @@ inline bool pod_matches(const duql::Query& q, const FoldEvent& ev,
     // An any() field reads the flattened positions `<path>.<k>`; a dftracer
     // event's args carry no "args." prefix.
     for (const dstd::String& path : q.any_paths()) {
-        const std::string_view bare =
-            std::string_view(path).starts_with("args.")
-                ? std::string_view(path).substr(5)
-                : std::string_view(path);
+        const dstd::StringView bare =
+            dstd::StringView(path).starts_with("args.")
+                ? dstd::StringView(path).substr(5)
+                : dstd::StringView(path);
         for (const auto& [key, value] : ev.args) {
-            const std::string_view name = intern.resolve(key);
+            const dstd::StringView name = intern.resolve(key);
             if (name.size() <= bare.size() || !name.starts_with(bare) ||
                 name[bare.size()] != '.')
                 continue;
@@ -525,7 +528,7 @@ inline bool pod_matches(const duql::Query& q, const FoldEvent& ev,
             if (s.top || s.kind == FoldEvent::Special::JsonArray ||
                 s.kind == FoldEvent::Special::JsonObject)
                 continue;
-            const std::string_view name = intern.resolve(s.key);
+            const dstd::StringView name = intern.resolve(s.key);
             if (name.size() > bare.size() && name.starts_with(bare) &&
                 name[bare.size()] == '.')
                 scratch[name] = special_cell(s.kind);

@@ -3,6 +3,11 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/cache/mv_store.h>
@@ -36,13 +41,13 @@ namespace dftracer::utils::trace::views {
 
 namespace scan = detail::scan;
 
-ViewSession::ViewSession(std::shared_ptr<const detail::ViewPlan> plan)
+ViewSession::ViewSession(dstd::SharedPtr<const detail::ViewPlan> plan)
     : state_(detail::make_view_session_state(std::move(plan))) {}
 
 void ViewSession::attach_fold(
-    std::optional<Query> predicate,
+    dstd::Optional<Query> predicate,
     std::function<
-        std::function<void(const json::JsonValue&, std::string_view)>()>
+        std::function<void(const json::JsonValue&, dstd::StringView)>()>
         make_consumer,
     std::function<void()> finalize) {
     if (predicate)
@@ -95,13 +100,13 @@ Deferred<dataframe::DataFrame> ViewSession::collect(
     detail::BranchHooks h;
     h.agg = detail::AggBranch{
         std::move(group_by), std::move(agg), out, nullptr, false, nullptr,
-        std::nullopt};
+        dstd::nullopt};
     detail::add_branch(*state_, std::move(h));
     return {out, executed_};
 }
 
 Deferred<dataframe::DataFrame> ViewSession::collect(
-    const std::shared_ptr<const detail::ViewPlan>& branch) {
+    const dstd::SharedPtr<const detail::ViewPlan>& branch) {
     auto out = std::make_shared<dataframe::DataFrame>();
     const auto& bp = *branch;
     // Output key columns are [time_bucket?, group_by...], so a bucketed branch
@@ -111,8 +116,8 @@ Deferred<dataframe::DataFrame> ViewSession::collect(
                                  (bp.time_bucket_us > 0 ? 1 : 0));
     detail::BranchHooks h;
     h.agg =
-        detail::AggBranch{bp.group_by,          bp.agg,  out,         branch,
-                          bp.query.has_value(), nullptr, std::nullopt};
+        detail::AggBranch{bp.group_by,          bp.agg,  out,          branch,
+                          bp.query.has_value(), nullptr, dstd::nullopt};
     detail::add_branch(*state_, std::move(h));
     return {out, executed_};
 }
@@ -168,15 +173,15 @@ Deferred<dataframe::DataFrame> ViewSession::compare(
 }
 
 Deferred<std::string> ViewSession::aggregate_partial(
-    const std::shared_ptr<const detail::ViewPlan>& branch) {
+    const dstd::SharedPtr<const detail::ViewPlan>& branch) {
     auto out =
         std::make_shared<dataframe::DataFrame>();  // unused; partial path
     auto partial = std::make_shared<std::string>();
     const auto& bp = *branch;
     detail::BranchHooks h;
     h.agg =
-        detail::AggBranch{bp.group_by,          bp.agg,  out,         branch,
-                          bp.query.has_value(), partial, std::nullopt};
+        detail::AggBranch{bp.group_by,          bp.agg,  out,          branch,
+                          bp.query.has_value(), partial, dstd::nullopt};
     detail::add_branch(*state_, std::move(h));
     return {partial, executed_};
 }
@@ -204,7 +209,7 @@ Deferred<ExportStats> ViewSession::export_json(ExportSink& sink) {
 }
 
 Deferred<dataframe::DataFrame> ViewSession::collect_events(
-    const std::shared_ptr<const detail::ViewPlan>& branch) {
+    const dstd::SharedPtr<const detail::ViewPlan>& branch) {
     const auto& bp = *branch;
     auto out = std::make_shared<dataframe::DataFrame>();
     // Per-worker owned events built straight into native columns (no Arrow);
@@ -214,7 +219,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
         dftracer::utils::dstd::StringIntern intern;
         detail::FoldEventBuffer events;
     };
-    auto slots = std::make_shared<std::vector<std::shared_ptr<Slot>>>();
+    auto slots = std::make_shared<std::vector<dstd::SharedPtr<Slot>>>();
     auto select = std::make_shared<std::vector<std::string>>(bp.select);
     const double time_scale = bp.time_scale;
     const bool by_path = detail::plan_by_path(bp);
@@ -228,7 +233,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
         auto slot = std::make_shared<Slot>();
         slots->push_back(slot);
         return [slot, by_path, keep_metadata, record_schema](
-                   const json::JsonValue& jv, std::string_view) {
+                   const json::JsonValue& jv, dstd::StringView) {
             detail::FoldEvent& fe = slot->events.append();
             if (by_path)
                 detail::decode_record_into(fe, jv.element(), slot->intern,
@@ -274,13 +279,13 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
 // consistency); finalize builds whichever of out_ct/out_fg is requested,
 // sorting each lane once when both are.
 void ViewSession::add_containment_branch(
-    const std::shared_ptr<const detail::ViewPlan>& branch,
+    const dstd::SharedPtr<const detail::ViewPlan>& branch,
     const std::vector<std::string>& partition, const std::string& ts,
     const std::string& dur, const std::string& name,
     const std::vector<std::string>& group,
-    std::shared_ptr<dataframe::DataFrame> out_ct,
-    std::shared_ptr<dataframe::DataFrame> out_fg,
-    std::shared_ptr<std::string> out_partial) {
+    dstd::SharedPtr<dataframe::DataFrame> out_ct,
+    dstd::SharedPtr<dataframe::DataFrame> out_fg,
+    dstd::SharedPtr<std::string> out_partial) {
     const auto& bp = *branch;
     auto intern = std::make_shared<dftracer::utils::dstd::StringIntern>();
     auto spec =
@@ -290,7 +295,7 @@ void ViewSession::add_containment_branch(
                                      : nullptr,
             bp.time_scale));
     auto bufs = std::make_shared<
-        std::vector<std::shared_ptr<std::vector<detail::ContainmentRow>>>>();
+        std::vector<dstd::SharedPtr<std::vector<detail::ContainmentRow>>>>();
     const bool by_path = detail::plan_by_path(bp);
     const dftracer::utils::index::RecordSchema* record_schema =
         by_path && !detail::plan_record_schema(bp).fields.empty()
@@ -304,7 +309,7 @@ void ViewSession::add_containment_branch(
         bufs->push_back(rows);
         auto scratch = std::make_shared<detail::FoldEvent>();
         return [intern, spec, rows, scratch, by_path, record_schema](
-                   const json::JsonValue& jv, std::string_view) {
+                   const json::JsonValue& jv, dstd::StringView) {
             detail::FoldEvent& fe = *scratch;
             if (by_path)
                 detail::decode_record_into(fe, jv.element(), *intern,
@@ -348,7 +353,7 @@ void ViewSession::add_containment_branch(
 }
 
 Deferred<dataframe::DataFrame> ViewSession::call_tree(
-    const std::shared_ptr<const detail::ViewPlan>& branch,
+    const dstd::SharedPtr<const detail::ViewPlan>& branch,
     std::vector<std::string> partition, std::string ts, std::string dur,
     std::string name) {
     auto out = std::make_shared<dataframe::DataFrame>();
@@ -357,7 +362,7 @@ Deferred<dataframe::DataFrame> ViewSession::call_tree(
 }
 
 Deferred<dataframe::DataFrame> ViewSession::flamegraph(
-    const std::shared_ptr<const detail::ViewPlan>& branch,
+    const dstd::SharedPtr<const detail::ViewPlan>& branch,
     std::vector<std::string> partition, std::string ts, std::string dur,
     std::string name) {
     auto out = std::make_shared<dataframe::DataFrame>();
@@ -366,7 +371,7 @@ Deferred<dataframe::DataFrame> ViewSession::flamegraph(
 }
 
 ContainmentHandles ViewSession::containment(
-    const std::shared_ptr<const detail::ViewPlan>& branch,
+    const dstd::SharedPtr<const detail::ViewPlan>& branch,
     std::vector<std::string> partition, std::string ts, std::string dur,
     std::string name) {
     auto out_ct = std::make_shared<dataframe::DataFrame>();
@@ -471,7 +476,7 @@ View View::reshape(
             common::ErrorCode::InvalidArgument,
             std::string("View::") + builder + " " + why);
     };
-    if (std::optional<std::string> op =
+    if (dstd::Optional<std::string> op =
             dataframe::detail::first_non_filter_op(lf_))
         throw refuse("must come before '" + *op + "'");
     if (!dataframe::detail::first_op(lf_)) {
@@ -483,7 +488,7 @@ View View::reshape(
     // The filters before a builder select the events it sees, so they move
     // into the scan first.
     dataframe::LazyFrame planned = dataframe::detail::optimize_plan(lf_);
-    std::optional<std::string> residual = dataframe::detail::first_op(planned);
+    dstd::Optional<std::string> residual = dataframe::detail::first_op(planned);
     if (!residual) {
         const auto& src = static_cast<const ViewSource&>(
             *dataframe::detail::plan_source(planned));
@@ -495,7 +500,7 @@ View View::reshape(
     // A filter the scan cannot evaluate stays above it, which is sound only
     // while the builder leaves the columns and their values as they were.
     scan::ScanPlan next = step(plan_);
-    if (std::string_view(builder) == "time_scale" ||
+    if (dstd::StringView(builder) == "time_scale" ||
         ViewSource(next).names() != ViewSource(plan_).names())
         throw refuse("cannot follow '" + *residual +
                      "': the trace scan cannot evaluate that filter");
@@ -519,10 +524,10 @@ scan::ScanPlan View::absorbed(const char* method, Need need) const {
             std::string("View::") + method + " " + why);
     };
     dataframe::LazyFrame planned = dataframe::detail::optimize_plan(lf_);
-    std::optional<std::pair<std::int64_t, std::int64_t>> window;
+    dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> window;
     if (need == Need::EventsWindow || need == Need::EventsHead)
         window = dataframe::detail::sole_slice(planned);
-    if (std::optional<std::string> op = dataframe::detail::first_op(planned);
+    if (dstd::Optional<std::string> op = dataframe::detail::first_op(planned);
         op && !window)
         throw fail("cannot follow '" + *op + "'");
     const auto* src = dynamic_cast<const ViewSource*>(
@@ -552,7 +557,7 @@ namespace {
 
 dataframe::LazyFrame terminal_plan(scan::ScanPlan v, TraceOutput output,
                                    ContainmentArgs tree = {},
-                                   std::shared_ptr<ExportSink> sink = nullptr) {
+                                   dstd::SharedPtr<ExportSink> sink = nullptr) {
     const std::uint64_t budget = v->memory_budget;
     return dataframe::LazyFrame::scan(
                std::make_shared<ViewSource>(std::move(v), output,
@@ -586,13 +591,13 @@ coro::CoroTask<ExportStats> run_materialize(scan::ScanPlan v,
 }
 
 coro::CoroTask<void> materialize_from_partials(
-    scan::ScanPlan v, std::vector<std::string_view> partials) {
+    scan::ScanPlan v, std::vector<dstd::StringView> partials) {
     co_await detail::run_materialize_partials(*v, partials);
 }
 
 coro::CoroTask<ExportStats> scan_batches(
     scan::ScanPlan v,
-    std::function<void(std::size_t, const std::vector<std::string_view>&)>
+    std::function<void(std::size_t, const std::vector<dstd::StringView>&)>
         on_batch,
     std::size_t num_slots, std::uint64_t limit) {
     const std::uint64_t cap = v->limit;
@@ -602,7 +607,7 @@ coro::CoroTask<ExportStats> scan_batches(
 }
 
 coro::CoroTask<ExportStats> scan_folds(
-    scan::ScanPlan v, std::span<detail::Fold* const> folds,
+    scan::ScanPlan v, dstd::Span<detail::Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern) {
     co_return co_await scan::run_folds(v, folds, intern);
 }
@@ -680,12 +685,12 @@ dataframe::LazyResult<std::string> View::aggregate_partial() const {
 }
 
 dataframe::DataFrame View::merge_flamegraph_partials(
-    const std::vector<std::string_view>& partials) {
+    const std::vector<dstd::StringView>& partials) {
     return scan::merge_flamegraph_partials(partials);
 }
 
 dataframe::DataFrame View::merge_partials(
-    const std::vector<std::string_view>& partials) const {
+    const std::vector<dstd::StringView>& partials) const {
     return scan::merge_partials_to_table(
         absorbed("merge_partials", Need::Aggregate), partials);
 }
@@ -714,11 +719,11 @@ coro::CoroTask<ExportStats> View::sink_json(ExportSink& sink) const {
 dataframe::LazyResult<ExportStats> View::sink_json(ExportSink& sink,
                                                    Lazy) const {
     return sink_json(
-        std::shared_ptr<ExportSink>(std::shared_ptr<void>(), &sink), LAZY);
+        dstd::SharedPtr<ExportSink>(dstd::SharedPtr<void>(), &sink), LAZY);
 }
 
 dataframe::LazyResult<ExportStats> View::sink_json(
-    std::shared_ptr<ExportSink> sink, Lazy) const {
+    dstd::SharedPtr<ExportSink> sink, Lazy) const {
     return stats_result(terminal_plan(absorbed("sink_json", Need::EventsWindow),
                                       TraceOutput::ExportJson, {},
                                       std::move(sink)));
@@ -753,7 +758,7 @@ dataframe::LazyFrame View::compare(const View& variant) const {
 }
 
 coro::CoroTask<ExportStats> View::for_each_batch(
-    std::function<void(std::size_t, const std::vector<std::string_view>&)>
+    std::function<void(std::size_t, const std::vector<dstd::StringView>&)>
         on_batch,
     std::size_t num_slots, std::uint64_t limit) const {
     return scan_batches(absorbed("for_each_batch", Need::EventsHead),
@@ -761,7 +766,7 @@ coro::CoroTask<ExportStats> View::for_each_batch(
 }
 
 coro::CoroTask<ExportStats> View::run_folds(
-    std::span<detail::Fold* const> folds,
+    dstd::Span<detail::Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern) const {
     return scan_folds(absorbed("run_folds", Need::EventsHead), folds, intern);
 }
@@ -836,7 +841,7 @@ bool View::collect_would_bootstrap() const {
 }
 
 ExportStats View::merge_counter_partials(
-    const std::vector<std::string_view>& partials, ExportSink& sink) const {
+    const std::vector<dstd::StringView>& partials, ExportSink& sink) const {
     return scan::merge_counter_partials(
         absorbed("merge_counter_partials", Need::Aggregate), partials, sink);
 }
@@ -850,12 +855,12 @@ dataframe::LazyFrame View::branch(SessionBranch attach) const {
 }
 
 coro::CoroTask<void> View::materialize_partials(
-    const std::vector<std::string_view>& partials) const {
+    const std::vector<dstd::StringView>& partials) const {
     return materialize_from_partials(
         absorbed("materialize_partials", Need::Aggregate), partials);
 }
 
-std::optional<dataframe::DataFrame> View::reconstruct_if_cached() const {
+dstd::Optional<dataframe::DataFrame> View::reconstruct_if_cached() const {
     return scan::reconstruct_if_cached(
         absorbed("reconstruct_if_cached", Need::Aggregate));
 }
@@ -1009,7 +1014,7 @@ View View::cancel_when(std::function<bool()> pred) const {
     });
 }
 
-View View::count_scans(std::shared_ptr<ScanCounter> counter) const {
+View View::count_scans(dstd::SharedPtr<ScanCounter> counter) const {
     scan::ScanPlan next = scan::count_scans(plan_, std::move(counter));
     return View(next, dataframe::detail::rebase(
                           lf_, std::make_shared<ViewSource>(next)));

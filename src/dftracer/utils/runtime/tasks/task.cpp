@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/error.h>
 #include <dftracer/utils/runtime/tasks/task.h>
@@ -12,7 +14,7 @@
 
 namespace dftracer::utils {
 
-std::shared_ptr<Task> Task::depends_on(std::shared_ptr<Task> parent) {
+dstd::SharedPtr<Task> Task::depends_on(dstd::SharedPtr<Task> parent) {
     if (!parent) {
         throw PipelineError(PipelineError::ValidationError,
                             "Cannot add null parent to task");
@@ -30,8 +32,8 @@ std::shared_ptr<Task> Task::depends_on(std::shared_ptr<Task> parent) {
     return shared_from_this();
 }
 
-std::shared_ptr<Task> Task::depends_on(
-    std::initializer_list<std::shared_ptr<Task>> parent_list) {
+dstd::SharedPtr<Task> Task::depends_on(
+    std::initializer_list<dstd::SharedPtr<Task>> parent_list) {
     // Simply delegate to single-parent version for each parent
     for (auto& parent : parent_list) {
         depends_on(parent);
@@ -39,14 +41,14 @@ std::shared_ptr<Task> Task::depends_on(
     return shared_from_this();
 }
 
-std::shared_ptr<Task> Task::with_combiner(
+dstd::SharedPtr<Task> Task::with_combiner(
     std::function<std::any(const std::vector<std::any>&)> combiner) {
     input_combiner_ = std::move(combiner);
     has_custom_combiner_ = true;
     return shared_from_this();
 }
 
-std::shared_ptr<Task> Task::with_name(std::string name) {
+dstd::SharedPtr<Task> Task::with_name(std::string name) {
     name_ = std::move(name);
     return shared_from_this();
 }
@@ -75,7 +77,7 @@ std::any Task::apply_combiner(const std::vector<std::any>& inputs) const {
     return input_combiner_(inputs);
 }
 
-std::shared_ptr<Task> Task::operator&(std::shared_ptr<Task> other) {
+dstd::SharedPtr<Task> Task::operator&(dstd::SharedPtr<Task> other) {
     // Create a combiner task that depends on both this and other
     // When a task has multiple parents, it receives a vector<any> as input
     auto combiner = make_task(
@@ -89,8 +91,8 @@ std::shared_ptr<Task> Task::operator&(std::shared_ptr<Task> other) {
                     "AND combiner expects exactly 2 inputs");
             }
             // Return tuple of both results
-            co_return std::make_any<std::tuple<std::any, std::any>>(inputs[0],
-                                                                    inputs[1]);
+            co_return std::make_any<dstd::Tuple<std::any, std::any>>(inputs[0],
+                                                                     inputs[1]);
         },
         "AND_combiner");
 
@@ -107,7 +109,7 @@ std::shared_ptr<Task> Task::operator&(std::shared_ptr<Task> other) {
     return combiner;
 }
 
-std::shared_ptr<Task> Task::operator^(std::shared_ptr<Task> tap_task) {
+dstd::SharedPtr<Task> Task::operator^(dstd::SharedPtr<Task> tap_task) {
     if (!tap_task) {
         throw PipelineError(PipelineError::ValidationError,
                             "Tap task cannot be null");

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -27,7 +28,8 @@ static PyObject *Runtime_new(PyTypeObject *type, PyObject *, PyObject *) {
     RuntimeObject *self = (RuntimeObject *)type->tp_alloc(type, 0);
     if (self) {
         // Placement-new the shared_ptr (tp_alloc gives raw memory)
-        new (&self->runtime) std::shared_ptr<dftracer::utils::Runtime>(nullptr);
+        new (&self->runtime)
+            dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime>(nullptr);
     }
     return (PyObject *)self;
 }
@@ -335,8 +337,9 @@ static PyObject *get_default_runtime_py(PyObject *Py_UNUSED(module),
     RuntimeObject *obj = (RuntimeObject *)RuntimeType.tp_alloc(&RuntimeType, 0);
     if (!obj) return NULL;
 
-    new (&obj->runtime) std::shared_ptr<dftracer::utils::Runtime>(
-        dftracer::utils::default_runtime_shared());
+    new (&obj->runtime)
+        dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime>(
+            dftracer::utils::default_runtime_shared());
     return (PyObject *)obj;
 }
 
@@ -353,7 +356,8 @@ static PyObject *peek_default_runtime_py(PyObject *Py_UNUSED(module),
     RuntimeObject *obj = (RuntimeObject *)RuntimeType.tp_alloc(&RuntimeType, 0);
     if (!obj) return NULL;
 
-    new (&obj->runtime) std::shared_ptr<dftracer::utils::Runtime>(rt);
+    new (&obj->runtime)
+        dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime>(rt);
     return (PyObject *)obj;
 }
 

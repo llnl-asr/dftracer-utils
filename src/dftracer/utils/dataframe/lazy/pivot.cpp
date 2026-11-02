@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
+#include <dftracer/utils/dstd/optional.h>
 
 namespace dftracer::utils::dataframe {
 
@@ -32,7 +33,8 @@ class PivotCursor : public Cursor {
 
     std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
         const std::int64_t C = static_cast<std::int64_t>(col_of_.size());
         // One output row costs C cells of up to 16 bytes (the source value and
@@ -48,7 +50,7 @@ class PivotCursor : public Cursor {
             // `m` is the next sorted morsel and `ahead_` the one after it, so
             // an index value that continues into the next morsel is held
             // back and every other one leaves with this batch.
-            std::optional<Morsel> m = std::move(ahead_);
+            dstd::Optional<Morsel> m = std::move(ahead_);
             ahead_.reset();
             if (!m && !eof_) {
                 m = co_await sorted_->next(pull);
@@ -58,7 +60,7 @@ class PivotCursor : public Cursor {
                 ahead_ = co_await sorted_->next(pull);
                 if (!ahead_) eof_ = true;
             }
-            if (!m && pending_rows_ == 0) co_return std::nullopt;
+            if (!m && pending_rows_ == 0) co_return dstd::nullopt;
             std::vector<Series> idx, on, val;
             if (pending_rows_ > 0) {
                 idx.push_back(pending_[0].share());
@@ -107,7 +109,7 @@ class PivotCursor : public Cursor {
         }
     }
 
-    std::optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<std::vector<std::string>> out_names() const override {
         return produced_;
     }
 
@@ -246,7 +248,7 @@ class PivotCursor : public Cursor {
     ankerl::unordered_dense::map<std::string, std::int64_t> col_of_;
     std::vector<Series> pending_;
     std::int64_t pending_rows_ = 0;
-    std::optional<Morsel> ahead_;
+    dstd::Optional<Morsel> ahead_;
     std::vector<std::string> produced_;
 };
 

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_TASKS_TASK_TRAITS_H
 
 #include <dftracer/utils/dstd/coroutine_traits.h>
+#include <dftracer/utils/dstd/tuple.h>
 
 #include <any>
 #include <cstddef>
@@ -34,8 +35,8 @@ template <typename C, typename R, typename... Args>
 struct call_traits_base {
     static constexpr bool is_valid = true;
     using return_type = R;
-    using args_tuple = std::tuple<std::decay_t<Args>...>;
-    using raw_args_tuple = std::tuple<Args...>;
+    using args_tuple = dstd::Tuple<std::decay_t<Args>...>;
+    using raw_args_tuple = dstd::Tuple<Args...>;
     static constexpr std::size_t arity = sizeof...(Args);
 };
 
@@ -85,7 +86,7 @@ struct analyze_args;
 
 /// () -> void input, no context
 template <>
-struct analyze_args<std::tuple<>> {
+struct analyze_args<dstd::Tuple<>> {
     using input_type = void;
     static constexpr bool has_context = false;
 };
@@ -93,7 +94,7 @@ struct analyze_args<std::tuple<>> {
 /// (CoroScope) -> void input, has context
 /// Note: std::decay_t<CoroScope&> is CoroScope
 template <>
-struct analyze_args<std::tuple<CoroScope>> {
+struct analyze_args<dstd::Tuple<CoroScope>> {
     using input_type = void;
     static constexpr bool has_context = true;
 };
@@ -101,14 +102,14 @@ struct analyze_args<std::tuple<CoroScope>> {
 /// (T) -> T input, no context
 /// This is less specialized than (CoroScope) above, so no ambiguity.
 template <typename T>
-struct analyze_args<std::tuple<T>> {
+struct analyze_args<dstd::Tuple<T>> {
     using input_type = T;
     static constexpr bool has_context = false;
 };
 
 /// (CoroScope, T) -> T input, has context
 template <typename T>
-struct analyze_args<std::tuple<CoroScope, T>> {
+struct analyze_args<dstd::Tuple<CoroScope, T>> {
     using input_type = T;
     static constexpr bool has_context = true;
 };
@@ -116,15 +117,15 @@ struct analyze_args<std::tuple<CoroScope, T>> {
 /// (CoroScope, T1, T2, ...) -> tuple<T1,T2,...> input, has context
 /// More specialized than (T1, T2, Rest...) below due to CoroScope match.
 template <typename T1, typename T2, typename... Rest>
-struct analyze_args<std::tuple<CoroScope, T1, T2, Rest...>> {
-    using input_type = std::tuple<T1, T2, Rest...>;
+struct analyze_args<dstd::Tuple<CoroScope, T1, T2, Rest...>> {
+    using input_type = dstd::Tuple<T1, T2, Rest...>;
     static constexpr bool has_context = true;
 };
 
 /// (T1, T2, ...) -> tuple<T1,T2,...> input, no context
 template <typename T1, typename T2, typename... Rest>
-struct analyze_args<std::tuple<T1, T2, Rest...>> {
-    using input_type = std::tuple<T1, T2, Rest...>;
+struct analyze_args<dstd::Tuple<T1, T2, Rest...>> {
+    using input_type = dstd::Tuple<T1, T2, Rest...>;
     static constexpr bool has_context = false;
 };
 
@@ -139,7 +140,7 @@ template <typename RetType, typename ArgsTuple>
 struct make_std_function_from_tuple;
 
 template <typename RetType, typename... Args>
-struct make_std_function_from_tuple<RetType, std::tuple<Args...>> {
+struct make_std_function_from_tuple<RetType, dstd::Tuple<Args...>> {
     using type = std::function<RetType(Args...)>;
 };
 
@@ -185,7 +186,7 @@ template <typename T>
 struct is_tuple : std::false_type {};
 
 template <typename... Args>
-struct is_tuple<std::tuple<Args...>> : std::true_type {};
+struct is_tuple<dstd::Tuple<Args...>> : std::true_type {};
 
 template <typename T>
 inline constexpr bool is_tuple_v = is_tuple<T>::value;

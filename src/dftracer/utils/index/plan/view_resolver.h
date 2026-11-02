@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_VIEW_RESOLVER_H
 #define DFTRACER_UTILS_INDEX_PLAN_VIEW_RESOLVER_H
 
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 
@@ -29,12 +31,12 @@ class GroupResolver {
                   const std::vector<Column>& columns);
 
     /// key -> value of column `name`; null when not loaded.
-    const dstd::StringViewMap<std::string>* column(std::string_view name) const;
-    const std::string& value(std::string_view name, std::string_view key) const;
+    const dstd::StringViewMap<std::string>* column(dstd::StringView name) const;
+    const std::string& value(dstd::StringView name, dstd::StringView key) const;
 
    private:
     static const std::string EMPTY;
-    std::vector<std::pair<std::string, dstd::StringViewMap<std::string>>>
+    std::vector<dstd::Pair<std::string, dstd::StringViewMap<std::string>>>
         columns_;
 };
 

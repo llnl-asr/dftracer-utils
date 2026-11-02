@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/memory/manager.h>
@@ -156,7 +157,7 @@ std::string zlib_decode_all(const std::string& path) {
 }
 
 // Each path returns the decoded text, or nullopt when it rejected the input.
-using PathResult = std::optional<std::string>;
+using PathResult = dstd::Optional<std::string>;
 
 PathResult read_with_inflater(const std::string& path, GzipRecordKind kind) {
     const int fd = ::open(path.c_str(), O_RDONLY);
@@ -180,7 +181,7 @@ PathResult read_with_inflater(const std::string& path, GzipRecordKind kind) {
         }
     });
     ::close(fd);
-    if (!ok) return std::nullopt;
+    if (!ok) return dstd::nullopt;
     return out;
 }
 
@@ -193,14 +194,14 @@ PathResult reader_whole_member(const std::string& path) {
 }
 
 PathResult indexer_stream(const std::string& path) {
-    std::optional<index::gzip::GzipBuildArtifacts> art;
+    dstd::Optional<index::gzip::GzipBuildArtifacts> art;
     run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         CrcWindow window;
         art = co_await index::gzip::build_gzip_index_artifacts(
             path, CKPT, index::gzip::CheckpointIndexer::VisitorList{}, &scope);
     });
     // A corrupt member ends the build at that member, short of the full text.
-    if (!art || art->total_uc_size != FULL_TEXT_SIZE) return std::nullopt;
+    if (!art || art->total_uc_size != FULL_TEXT_SIZE) return dstd::nullopt;
     return std::string(art->total_uc_size, 'x');
 }
 
@@ -214,12 +215,12 @@ PathResult truncated_decoder(const std::string& path) {
         in.insert(in.end(), buf, buf + n);
     std::fclose(f);
     std::vector<std::uint8_t> out;
-    std::optional<std::size_t> keep;
+    dstd::Optional<std::size_t> keep;
     {
         CrcWindow window;
         keep = gz::decode_truncated_member(in.data(), in.size(), out);
     }
-    if (!keep) return std::nullopt;
+    if (!keep) return dstd::nullopt;
     return std::string(out.begin(), out.begin() + *keep);
 }
 
@@ -234,7 +235,7 @@ PathResult rechunker(const std::string& path) {
             ok = false;
         }
     });
-    if (!ok) return std::nullopt;
+    if (!ok) return dstd::nullopt;
     auto decoded = zlib_decode_all(out_path);
     return decoded;
 }

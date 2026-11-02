@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -11,8 +13,8 @@
 
 namespace dftracer::utils::index::extensions {
 
-bool dimension_value_less(std::string_view a, std::string_view b,
-                          std::string_view value_type) {
+bool dimension_value_less(dstd::StringView a, dstd::StringView b,
+                          dstd::StringView value_type) {
     if (value_type == "uint" || value_type == "int" || value_type == "double") {
         const auto x = duql::parse_number(a);
         const auto y = duql::parse_number(b);
@@ -21,7 +23,7 @@ bool dimension_value_less(std::string_view a, std::string_view b,
     return a < b;
 }
 
-void ChunkDimensionStats::observe(std::string_view value) {
+void ChunkDimensionStats::observe(dstd::StringView value) {
     ++present;
     if (last_key_ != nullptr && *last_key_ == value) {
         ++*last_counter_;
@@ -77,7 +79,7 @@ void ChunkDimensionStats::observe(std::string_view value) {
     }
 }
 
-void ChunkDimensionStats::observe(std::string_view value, std::uint32_t& slot) {
+void ChunkDimensionStats::observe(dstd::StringView value, std::uint32_t& slot) {
     if (slot != NO_SLOT) {
         ++present;
         ++(value_counts->begin() + slot)->second;
@@ -94,7 +96,7 @@ void ChunkDimensionStats::observe_range_only(std::uint64_t value) {
     char buf[std::numeric_limits<std::uint64_t>::digits10 + 2];
     const auto text = [&] {
         const auto end = std::to_chars(buf, buf + sizeof(buf), value).ptr;
-        return std::string_view(buf, static_cast<std::size_t>(end - buf));
+        return dstd::StringView(buf, static_cast<std::size_t>(end - buf));
     };
     if (min_value.empty()) {
         min_value = text();
@@ -134,21 +136,21 @@ std::vector<std::uint8_t> ChunkDimensionStats::serialize_value_counts() const {
     return buf;
 }
 
-std::optional<std::vector<std::uint8_t>>
+dstd::Optional<std::vector<std::uint8_t>>
 ChunkDimensionStats::compress_value_counts(std::size_t cap_bytes) const {
     auto raw = serialize_value_counts();
-    if (raw.empty()) return std::nullopt;
+    if (raw.empty()) return dstd::nullopt;
 
     namespace compress = dftracer::utils::utilities::fileio::compress;
     compress::GzipMemberCompressor compressor;
-    if (!compressor.valid()) return std::nullopt;
+    if (!compressor.valid()) return dstd::nullopt;
 
     auto member = compressor.compress_member(raw.data(), raw.size());
-    if (!member) return std::nullopt;
+    if (!member) return dstd::nullopt;
 
     // Prefix the decoded length so the reader can size the output buffer
     // exactly instead of guessing.
-    if (4 + member->size() > cap_bytes) return std::nullopt;
+    if (4 + member->size() > cap_bytes) return dstd::nullopt;
     std::vector<std::uint8_t> out(4 + member->size());
     dstd::write_u32_le(out.data(), static_cast<std::uint32_t>(raw.size()));
     std::copy(member->begin(), member->end(), out.begin() + 4);

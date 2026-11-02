@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_ITERATOR_H
 
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 
 #include <fstream>
@@ -54,7 +55,7 @@ class ChunkIterator {
         }
     };
 
-    std::shared_ptr<State> state_;
+    dstd::SharedPtr<State> state_;
 
    public:
     using iterator_category = std::input_iterator_tag;

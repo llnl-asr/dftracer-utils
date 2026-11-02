@@ -6,6 +6,9 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -43,15 +46,15 @@ std::uint64_t morsel_bytes(const dataframe::Morsel& m);
 /// that seq, so the consumer can hand rows out in unit order.
 class StreamRowFold : public Fold {
    public:
-    StreamRowFold(std::shared_ptr<coro::Channel<dataframe::Morsel>> channel,
-                  std::shared_ptr<coro::CoroSemaphore> budget,
-                  std::shared_ptr<dftracer::utils::dstd::StringIntern> intern,
+    StreamRowFold(dstd::SharedPtr<coro::Channel<dataframe::Morsel>> channel,
+                  dstd::SharedPtr<coro::CoroSemaphore> budget,
+                  dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern,
                   std::vector<std::string> select, double time_scale = 1.0,
                   bool keep_metadata = false, bool emit_dyn = false,
-                  std::shared_ptr<const ViewPlan> branch = nullptr,
-                  std::shared_ptr<const std::atomic<bool>> dropped = nullptr,
+                  dstd::SharedPtr<const ViewPlan> branch = nullptr,
+                  dstd::SharedPtr<const std::atomic<bool>> dropped = nullptr,
                   bool by_path = false, bool ordered = false,
-                  std::shared_ptr<const JsonColumns> json = nullptr)
+                  dstd::SharedPtr<const JsonColumns> json = nullptr)
         : channel_(std::move(channel)),
           budget_(std::move(budget)),
           intern_(std::move(intern)),
@@ -73,7 +76,7 @@ class StreamRowFold : public Fold {
     std::vector<std::string> extra_captures() const override {
         std::vector<std::string> fields = select_;
         if (branch_ && branch_->query)
-            for (std::string_view f : branch_->query->fields())
+            for (dstd::StringView f : branch_->query->fields())
                 fields.emplace_back(f);
         return row_fold_extra_captures(fields);
     }
@@ -109,19 +112,19 @@ class StreamRowFold : public Fold {
         co_await channel_->send(std::move(m));
     }
 
-    std::shared_ptr<coro::Channel<dataframe::Morsel>> channel_;
-    std::shared_ptr<coro::CoroSemaphore> budget_;
-    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_;
+    dstd::SharedPtr<coro::Channel<dataframe::Morsel>> channel_;
+    dstd::SharedPtr<coro::CoroSemaphore> budget_;
+    dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_;
     std::vector<std::string> select_;
     double time_scale_;
     bool keep_metadata_;  // phase("metadata"): keep ph=M records
     bool emit_dyn_;       // auto_numeric_metrics: emit per-batch dyn columns
-    std::shared_ptr<const ViewPlan> branch_;
+    dstd::SharedPtr<const ViewPlan> branch_;
     // Set once the consumer let go; the fold then stops sending to it.
-    std::shared_ptr<const std::atomic<bool>> dropped_;
+    dstd::SharedPtr<const std::atomic<bool>> dropped_;
     bool by_path_;
     bool ordered_;
-    std::shared_ptr<const JsonColumns> json_;
+    dstd::SharedPtr<const JsonColumns> json_;
     duql::ValueMap qmap_;
     coro::Channel<dataframe::Morsel>::ProducerGuard guard_;
 
@@ -131,7 +134,7 @@ class StreamRowFold : public Fold {
 
     // fuse() awaits take_pending()'s task right after step() and before the
     // next step() on this fold, so one reused slot is enough.
-    std::optional<coro::CoroTask<void>> pending_task_;
+    dstd::Optional<coro::CoroTask<void>> pending_task_;
     ::dftu_task* pending_ = nullptr;
 };
 

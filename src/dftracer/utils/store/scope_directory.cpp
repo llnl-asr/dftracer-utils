@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/varint.h>
 
@@ -448,7 +449,7 @@ std::size_t ScopeDirectory::find(dstd::StringView name,
     return count_;
 }
 
-std::pair<std::size_t, std::size_t> ScopeDirectory::namespace_range(
+dstd::Pair<std::size_t, std::size_t> ScopeDirectory::namespace_range(
     dstd::StringView name, std::uint32_t format_version) const {
     const dstd::Span<const dstd::String> none;
     const auto bound = [&](bool upper) {

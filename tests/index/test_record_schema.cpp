@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -83,12 +84,12 @@ TEST_SUITE("Schemas") {
 
     TEST_CASE("detection picks the most specific matching schema") {
         using index::detect_schema;
-        const std::vector<std::string_view> dft = {
+        const std::vector<dstd::StringView> dft = {
             R"({"id":1,"name":"read","cat":"POSIX","ph":"X","ts":1})", "[",
             R"({"name":"FH","ph":"M","args":{"name":"/a","value":"1"}})"};
-        const std::vector<std::string_view> plain = {R"({"op":"read"})",
+        const std::vector<dstd::StringView> plain = {R"({"op":"read"})",
                                                      R"({"op":"write"})"};
-        const std::vector<std::string_view> mixed = {
+        const std::vector<dstd::StringView> mixed = {
             R"({"name":"read","ph":"X"})", R"({"op":"read"})"};
         CHECK(detect_schema(dft).id == "dftracer");
         CHECK(detect_schema(plain).id == "generic");
@@ -138,7 +139,7 @@ TEST_SUITE("Schemas") {
             const auto has = [&](const char* name) {
                 return std::any_of(
                     blooms.begin(), blooms.end(), [&](const auto& b) {
-                        return std::string_view(b.data(), b.size()) == name;
+                        return dstd::StringView(b.data(), b.size()) == name;
                     });
             };
             CHECK(has("op"));

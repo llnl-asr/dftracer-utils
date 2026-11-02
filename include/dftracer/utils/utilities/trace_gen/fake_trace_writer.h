@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_TRACE_GEN_FAKE_TRACE_WRITER_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -75,7 +76,7 @@ class TraceWriter {
         buf_.clear();
     }
 
-    std::optional<fileio::GzipLineWriterBlocking> writer_;
+    dstd::Optional<fileio::GzipLineWriterBlocking> writer_;
     std::string buf_;
     std::size_t flush_threshold_;
 };

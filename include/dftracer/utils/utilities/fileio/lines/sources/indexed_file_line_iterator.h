@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -45,7 +47,7 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  */
 class IndexedFileLineIteratorConfig {
    private:
-    std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+    dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
         reader_;
     dftracer::utils::utilities::reader::internal::RangeType range_type_ =
         dftracer::utils::utilities::reader::internal::RangeType::LineRange;
@@ -65,7 +67,7 @@ class IndexedFileLineIteratorConfig {
     }
 
     IndexedFileLineIteratorConfig& with_reader(
-        std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+        dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
             reader) {
         reader_ = reader;
         return *this;
@@ -94,7 +96,7 @@ class IndexedFileLineIteratorConfig {
         return *this;
     }
 
-    std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+    dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
     reader() const {
         return reader_;
     }
@@ -308,7 +310,7 @@ class IndexedFileLineIterator {
         }
 
         // Return the buffered line
-        Line result(std::string_view(line_buffer_), current_position_);
+        Line result(dstd::StringView(line_buffer_), current_position_);
         current_position_++;
 
         // Mark that we need to read the next line on the next has_next() call
@@ -352,7 +354,7 @@ class IndexedFileLineIterator {
     /**
      * @brief Get the underlying Reader.
      */
-    std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+    dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
     get_reader() const {
         return config_.reader();
     }

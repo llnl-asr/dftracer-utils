@@ -6,6 +6,7 @@
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/time_metric.h>
@@ -45,7 +46,7 @@ bool build_arrow_row(arrow::RecordBatchBuilder &builder,
 // Flatten a simdjson object into "prefix.key" columns using native types.
 bool process_json_line(arrow::RecordBatchBuilder &builder,
                        json::JsonParser &parser, dstd::StringArena &arena,
-                       std::string_view content, bool normalize,
+                       dstd::StringView content, bool normalize,
                        TimeScaleState &time_scale,
                        const RowBuildOptions &opts = {});
 

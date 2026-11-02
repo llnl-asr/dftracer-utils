@@ -4,6 +4,9 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 
 #include <algorithm>
@@ -276,11 +279,11 @@ dataframe::DataFrame build_call_tree(
     std::vector<std::int64_t> tid(static_cast<std::size_t>(n));
     std::vector<double> ts(static_cast<std::size_t>(n));
     std::vector<double> dur(static_cast<std::size_t>(n));
-    std::vector<std::string_view> names(static_cast<std::size_t>(n));
+    std::vector<dstd::StringView> names(static_cast<std::size_t>(n));
     std::vector<std::int64_t> level(static_cast<std::size_t>(n), 0);
     std::vector<std::int64_t> parent(static_cast<std::size_t>(n), -1);
     df::parallel_for(nlanes, 1, [&](std::int64_t lb, std::int64_t le) {
-        std::vector<std::pair<std::int64_t, std::int64_t>> stack;
+        std::vector<dstd::Pair<std::int64_t, std::int64_t>> stack;
         for (std::int64_t p = lb; p < le; ++p) {
             const std::vector<std::int64_t>& lane =
                 lanes[lane_order[static_cast<std::size_t>(p)]];
@@ -322,7 +325,7 @@ dataframe::DataFrame build_call_tree(
     out.columns.push_back(times(ts));
     out.columns.push_back(times(dur));
     out.columns.push_back(
-        Series::strings(std::span<const std::string_view>(names)));
+        Series::strings(dstd::Span<const dstd::StringView>(names)));
     out.columns.push_back(Series::flat_i64(level.data(), n));
     out.columns.push_back(Series::flat_i64(parent.data(), n));
     return out;
@@ -341,14 +344,14 @@ static std::vector<df::FlameNode> fold_flame_arena(
         const ContainmentRow& r = rows[static_cast<std::size_t>(i)];
         return r.start + r.dur;
     };
-    auto name_of = [&](std::uint32_t id) -> std::string_view {
-        return id == 0xFFFFFFFFu ? std::string_view{} : intern.resolve(id);
+    auto name_of = [&](std::uint32_t id) -> dstd::StringView {
+        return id == 0xFFFFFFFFu ? dstd::StringView{} : intern.resolve(id);
     };
 
     std::vector<std::vector<df::FlameNode>> arenas(
         static_cast<std::size_t>(nlanes));
     df::parallel_for(nlanes, 1, [&](std::int64_t lb, std::int64_t le) {
-        std::vector<std::pair<std::int64_t, std::uint32_t>> stack;
+        std::vector<dstd::Pair<std::int64_t, std::uint32_t>> stack;
         for (std::int64_t li = lb; li < le; ++li) {
             const std::vector<std::int64_t>& lane =
                 lanes[static_cast<std::size_t>(li)];
@@ -479,11 +482,11 @@ std::string flamegraph_partial(
 }
 
 dataframe::DataFrame merge_flamegraph_partials(
-    const std::vector<std::string_view>& partials) {
+    const std::vector<dstd::StringView>& partials) {
     std::vector<df::FlameNode> merged;
     merged.emplace_back();
     merged[0].name = "all";
-    for (std::string_view p : partials) {
+    for (dstd::StringView p : partials) {
         std::vector<df::FlameNode> a = df::deserialize_flame_arena(
             reinterpret_cast<const std::uint8_t*>(p.data()), p.size());
         if (!a.empty()) df::merge_flame_arena(merged, 0, a, 0);
@@ -491,7 +494,7 @@ dataframe::DataFrame merge_flamegraph_partials(
     return flame_arena_to_frame(std::move(merged));
 }
 
-std::pair<dataframe::DataFrame, dataframe::DataFrame> build_containment_both(
+dstd::Pair<dataframe::DataFrame, dataframe::DataFrame> build_containment_both(
     const std::vector<ContainmentRow>& rows,
     const dftracer::utils::dstd::StringIntern& intern,
     const TimeOut& time_out) {

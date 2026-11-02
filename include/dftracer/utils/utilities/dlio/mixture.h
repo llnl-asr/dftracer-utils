@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_DLIO_MIXTURE_H
 #define DFTRACER_UTILS_UTILITIES_DLIO_MIXTURE_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/utilities/dlio/distributions.h>
 
 #include <cstdint>
@@ -48,10 +50,10 @@ int free_parameter_count(const FittedMixture& mix);
 
 /// Sampler from a fitted mixture. Draws a component by weight then a Normal.
 Sampler make_sampler(const FittedMixture& mix,
-                     std::optional<double> min_bound = std::nullopt,
-                     std::optional<double> max_bound = std::nullopt);
+                     dstd::Optional<double> min_bound = dstd::nullopt,
+                     dstd::Optional<double> max_bound = dstd::nullopt);
 
-using BestModel = std::variant<FittedDistribution, FittedMixture>;
+using BestModel = dstd::Variant<FittedDistribution, FittedMixture>;
 
 struct ModelSelection {
     BestModel model;
@@ -62,15 +64,15 @@ struct ModelSelection {
 /// Selects the lowest-BIC model among the candidates. `single_fits` is
 /// typically the output of fit_all_single_distributions(); `mixtures` is
 /// typically two entries (GMM-2 and GMM-3). Invalid fits are ignored.
-std::optional<ModelSelection> select_best_model(
+dstd::Optional<ModelSelection> select_best_model(
     const std::vector<FittedDistribution>& single_fits,
     const std::vector<FittedMixture>& mixtures);
 
 double pdf(const BestModel& m, double x);
 double cdf(const BestModel& m, double x);
 Sampler make_sampler(const BestModel& m,
-                     std::optional<double> min_bound = std::nullopt,
-                     std::optional<double> max_bound = std::nullopt);
+                     dstd::Optional<double> min_bound = dstd::nullopt,
+                     dstd::Optional<double> max_bound = dstd::nullopt);
 
 }  // namespace dftracer::utils::utilities::dlio
 

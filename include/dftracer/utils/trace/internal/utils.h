@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_TRACE_INTERNAL_UTILS_H
 
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -17,24 +19,24 @@ namespace dftracer::utils::trace::internal {
 namespace posix_ops {
 
 // File descriptor data-transfer ops; excludes socket/network ops.
-constexpr std::string_view FILE_READ[] = {
+constexpr dstd::StringView FILE_READ[] = {
     "read", "pread", "pread64", "readv", "preadv", "preadv2", "fread",
 };
-constexpr std::string_view FILE_WRITE[] = {
+constexpr dstd::StringView FILE_WRITE[] = {
     "write", "pwrite", "pwrite64", "writev", "pwritev", "pwritev2", "fwrite",
 };
 
 // Full data-transfer ops including socket/network ops.
-constexpr std::string_view READ[] = {
+constexpr dstd::StringView READ[] = {
     "read",    "pread", "pread64", "readv",    "preadv",
     "preadv2", "fread", "recv",    "recvfrom", "recvmsg",
 };
-constexpr std::string_view WRITE[] = {
+constexpr dstd::StringView WRITE[] = {
     "write",           "pwrite", "pwrite64", "writev",  "pwritev", "pwritev2",
     "fwrite",          "send",   "sendto",   "sendmsg", "splice",  "sendfile",
     "copy_file_range",
 };
-constexpr std::string_view METADATA[] = {
+constexpr dstd::StringView METADATA[] = {
     "__fxstat",  "__fxstat64", "__lxstat", "__lxstat64", "__xstat",
     "__xstat64", "access",     "close",    "closedir",   "fclose",
     "fcntl",     "fopen",      "fopen64",  "fseek",      "fseeko",
@@ -45,23 +47,23 @@ constexpr std::string_view METADATA[] = {
     "remove",    "rename",     "rmdir",    "seek",       "stat",
     "stat64",    "unlink",
 };
-constexpr std::string_view SYNC[] = {
+constexpr dstd::StringView SYNC[] = {
     "fsync",
     "fdatasync",
     "msync",
     "sync",
 };
-constexpr std::string_view PCTL[] = {
+constexpr dstd::StringView PCTL[] = {
     "exec", "exit", "fork", "kill", "pipe", "wait",
 };
-constexpr std::string_view IPC[] = {
+constexpr dstd::StringView IPC[] = {
     "msgctl", "msgget", "msgrcv", "msgsnd", "semctl", "semget",
     "semop",  "shmat",  "shmctl", "shmdt",  "shmget",
 };
 
 // Build a DSL query fragment: name in ["op1", "op2", ...]
 template <std::size_t N>
-inline std::string name_in_query(const std::string_view (&ops)[N]) {
+inline std::string name_in_query(const dstd::StringView (&ops)[N]) {
     std::string q = "name in [";
     for (std::size_t i = 0; i < N; ++i) {
         if (i > 0) q += ", ";
@@ -76,7 +78,7 @@ inline std::string name_in_query(const std::string_view (&ops)[N]) {
 }  // namespace posix_ops
 
 // True if `name` is a POSIX/STDIO data-transfer op (its `ret` is a byte count).
-inline bool is_read_or_write(std::string_view name) {
+inline bool is_read_or_write(dstd::StringView name) {
     for (auto op : posix_ops::READ)
         if (op == name) return true;
     for (auto op : posix_ops::WRITE)
@@ -85,7 +87,7 @@ inline bool is_read_or_write(std::string_view name) {
 }
 
 template <std::size_t N>
-inline bool name_in(const std::string_view (&ops)[N], std::string_view name) {
+inline bool name_in(const dstd::StringView (&ops)[N], dstd::StringView name) {
     for (auto op : ops)
         if (op == name) return true;
     return false;
@@ -104,7 +106,7 @@ enum class IOCategory : std::int8_t {
     Sync = 7,
 };
 
-inline IOCategory io_category(std::string_view name) {
+inline IOCategory io_category(dstd::StringView name) {
     if (name_in(posix_ops::FILE_READ, name)) return IOCategory::Read;
     if (name_in(posix_ops::FILE_WRITE, name)) return IOCategory::Write;
     if (name_in(posix_ops::SYNC, name)) return IOCategory::Sync;
@@ -118,12 +120,12 @@ inline IOCategory io_category(std::string_view name) {
 // the reader and the aggregator cannot drift: size_sum, else (posix/stdio
 // read|write) ret, else image_size (non-open). Args are the raw values
 // (nullopt if absent); returns nullopt when the event carries no size.
-inline std::optional<std::int64_t> derive_io_size(
-    std::string_view cat, std::string_view name,
-    std::optional<std::int64_t> size_sum, std::optional<std::int64_t> ret,
-    std::optional<std::int64_t> image_size) {
+inline dstd::Optional<std::int64_t> derive_io_size(
+    dstd::StringView cat, dstd::StringView name,
+    dstd::Optional<std::int64_t> size_sum, dstd::Optional<std::int64_t> ret,
+    dstd::Optional<std::int64_t> image_size) {
     if (size_sum) return size_sum;
-    auto ieq = [](std::string_view a, std::string_view b) {
+    auto ieq = [](dstd::StringView a, dstd::StringView b) {
         if (a.size() != b.size()) return false;
         for (std::size_t i = 0; i < a.size(); ++i) {
             char x = a[i], y = b[i];
@@ -135,7 +137,7 @@ inline std::optional<std::int64_t> derive_io_size(
     };
     if (ieq(cat, "posix") || ieq(cat, "stdio")) {
         if (ret && *ret > 0 && is_read_or_write(name)) return ret;
-        return std::nullopt;
+        return dstd::nullopt;
     }
     if (image_size && *image_size > 0) {
         bool has_open = false;  // case-insensitive substring "open"
@@ -151,17 +153,17 @@ inline std::optional<std::int64_t> derive_io_size(
         }
         if (!has_open) return image_size;
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // Lowercase `s`; returns a view over `s` when already lowercase (no copy),
 // else lowercases into `storage` (which must outlive the returned view).
-std::string_view to_lower_ascii(std::string_view s, std::string& storage);
+dstd::StringView to_lower_ascii(dstd::StringView s, std::string& storage);
 
-bool ascii_iequals(std::string_view a, std::string_view b);
+bool ascii_iequals(dstd::StringView a, dstd::StringView b);
 
 // True when the event's return value represents bytes transferred.
-bool is_data_transfer_op(std::string_view cat, std::string_view name);
+bool is_data_transfer_op(dstd::StringView cat, dstd::StringView name);
 
 /**
  * @brief Determine the root-local index path for a given input path.

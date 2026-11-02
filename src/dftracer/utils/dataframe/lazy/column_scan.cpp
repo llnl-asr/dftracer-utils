@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <atomic>
 
@@ -18,7 +20,7 @@ std::atomic<std::uint64_t> g_scan_morsels{0};
 enum class Carry { Output, Input };
 
 struct ScanOp {
-    std::string_view name;
+    dstd::StringView name;
     // The op over floats depends on the order its kernel adds or compares in,
     // so only integers take the streaming form.
     bool integers_only;
@@ -63,7 +65,8 @@ class ColumnScanCursor : public Cursor {
           keep_(keep),
           shift_(shift) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         for (;;) {
             auto m = co_await in_->next(max_rows);
             if (!m) break;
@@ -71,7 +74,7 @@ class ColumnScanCursor : public Cursor {
             sent_ = true;
             co_return scan(std::move(*m));
         }
-        if (sent_) co_return std::nullopt;
+        if (sent_) co_return dstd::nullopt;
         // An input with no rows still leaves as one morsel of typed columns,
         // the op's column typed by the op itself.
         sent_ = true;
@@ -153,9 +156,10 @@ class SeriesColumnCursor : public Cursor {
         operand_.columns.push_back(std::move(column));
     }
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         auto m = co_await in_->next(max_rows);
-        if (!m) co_return std::nullopt;
+        if (!m) co_return dstd::nullopt;
         g_scan_morsels.fetch_add(1, std::memory_order_relaxed);
         if (offset_ + m->rows > operand_.columns[0].length())
             throw std::out_of_range(
@@ -171,7 +175,7 @@ class SeriesColumnCursor : public Cursor {
         co_return std::move(*m);
     }
 
-    std::optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<std::vector<std::string>> out_names() const override {
         return out_names_;
     }
 

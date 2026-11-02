@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_SCALAR_H
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 #include <string_view>
@@ -40,7 +41,7 @@ inline dftu_scalar boolean(bool v) noexcept { return i64(v ? 1 : 0); }
 
 /// Build a STR-tagged scalar BORROWING `v`. `v` must outlive every call the
 /// scalar is passed to; nothing stores a dftu_scalar past the call.
-inline dftu_scalar str(std::string_view v) noexcept {
+inline dftu_scalar str(dstd::StringView v) noexcept {
     dftu_scalar s;
     s.kind = DFTU_SCALAR_TAG_STR;
     s.len = static_cast<std::uint32_t>(v.size());
@@ -111,10 +112,10 @@ struct Scalar {
     /// The borrowed text of a STR-tagged scalar, empty for every other tag.
     /// The view points at whatever the scalar borrowed, so it is valid only as
     /// long as that is.
-    std::string_view str() const noexcept {
+    dstd::StringView str() const noexcept {
         return raw_.kind == DFTU_SCALAR_TAG_STR && raw_.value.s != nullptr
-                   ? std::string_view{raw_.value.s, raw_.len}
-                   : std::string_view{};
+                   ? dstd::StringView{raw_.value.s, raw_.len}
+                   : dstd::StringView{};
     }
 };
 

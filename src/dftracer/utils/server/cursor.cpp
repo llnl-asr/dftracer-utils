@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/server/cursor.h>
 
 #include <cstring>
@@ -18,9 +20,9 @@ std::string QueryCursor::encode() const {
     return dstd::base64_encode(raw, CURSOR_BYTES);
 }
 
-std::optional<QueryCursor> QueryCursor::decode(std::string_view cursor) {
+dstd::Optional<QueryCursor> QueryCursor::decode(dstd::StringView cursor) {
     auto raw = dstd::base64_decode(cursor);
-    if (!raw || raw->size() != CURSOR_BYTES) return std::nullopt;
+    if (!raw || raw->size() != CURSOR_BYTES) return dstd::nullopt;
     QueryCursor c;
     std::memcpy(&c.file_index, raw->data(), 8);
     std::memcpy(&c.chunk_index, raw->data() + 8, 4);

@@ -5,7 +5,9 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/member.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -79,7 +81,7 @@ class TraceIndex {
     /// Chunk spans + statistics for a file, read from the index on first use
     /// and cached for the process lifetime (the index is immutable). Returns
     /// nullptr when the file has no index or the read fails. Thread-safe.
-    std::shared_ptr<const FileChunkMeta> chunk_meta(const FileInfo& file);
+    dstd::SharedPtr<const FileChunkMeta> chunk_meta(const FileInfo& file);
 
     const std::string& directory() const { return directory_; }
     const std::string& index_dir() const { return index_dir_; }
@@ -133,8 +135,8 @@ class TraceIndex {
     /// `k`, read from the row sets the index build stored; each column pair
     /// loads once and stays. Empty when no row matches or no index holds
     /// the row set.
-    std::string resolve(std::string_view rowset, std::string_view key,
-                        std::string_view value, const std::string& k);
+    std::string resolve(dstd::StringView rowset, dstd::StringView key,
+                        dstd::StringView value, const std::string& k);
 
     /// On-disk summary cache (index_dir/.dftviz_summary), keyed by a
     /// fingerprint of the current file set so a re-indexed trace invalidates
@@ -159,7 +161,7 @@ class TraceIndex {
     VizResultCache viz_cache_{VIZ_RESULT_CACHE_BYTES};
 
     std::mutex chunk_meta_mutex_;
-    std::unordered_map<std::string, std::shared_ptr<const FileChunkMeta>>
+    std::unordered_map<std::string, dstd::SharedPtr<const FileChunkMeta>>
         chunk_meta_;
 
     std::mutex rowset_mutex_;

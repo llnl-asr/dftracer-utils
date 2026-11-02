@@ -2,6 +2,8 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/py_errors.h>
@@ -192,8 +194,9 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
                         (JsonDictValueObject *)JsonDictValueType.tp_alloc(
                             &JsonDictValueType, 0);
                     if (!obj) return NULL;
-                    new (&obj->batch) std::shared_ptr<JsonDictBatch>(
-                        self->json_dict_current_batch);
+                    new (&obj->batch)
+                        dftracer::utils::dstd::SharedPtr<JsonDictBatch>(
+                            self->json_dict_current_batch);
                     obj->event_index =
                         static_cast<std::size_t>(self->json_dict_index);
                     obj->is_args = false;
@@ -205,7 +208,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
             }
 
             auto *js = self->json_dict_state.get();
-            std::optional<JsonDictBatch> batch;
+            dftracer::utils::dstd::Optional<JsonDictBatch> batch;
             Py_BEGIN_ALLOW_THREADS batch = js->channel->blocking_receive();
             Py_END_ALLOW_THREADS
 
@@ -238,7 +241,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (self->mode == IteratorMode::Arrow) {
         auto *astate = self->arrow_state.get();
-        std::optional<ArrowExportResult> batch;
+        dftracer::utils::dstd::Optional<ArrowExportResult> batch;
         Py_BEGIN_ALLOW_THREADS batch = astate->channel->blocking_receive();
         Py_END_ALLOW_THREADS
 
@@ -290,7 +293,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
         }
 
         auto *bs = self->batch_state.get();
-        std::optional<MemoryViewBatchData> batch_data;
+        dftracer::utils::dstd::Optional<MemoryViewBatchData> batch_data;
         Py_BEGIN_ALLOW_THREADS batch_data = bs->channel->blocking_receive();
         Py_END_ALLOW_THREADS
 

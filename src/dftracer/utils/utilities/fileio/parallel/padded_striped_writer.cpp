@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/long_lived_release.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
@@ -90,7 +91,7 @@ void pad_to_stripe(std::vector<std::uint8_t>& out, std::size_t stripe_size) {
 
 struct Chunk {
     std::vector<std::uint8_t> data;
-    std::shared_ptr<coro::Channel<ParallelWriter::MemberSpan>> ack;
+    dstd::SharedPtr<coro::Channel<ParallelWriter::MemberSpan>> ack;
 };
 
 // Everything the packer and its children touch. The writer holds it by
@@ -104,9 +105,9 @@ struct PaddedStripedImpl {
     std::atomic<std::uint64_t> next_stripe_idx{0};
 
     dstd::UniquePtr<coro::Scope> packer_scope;
-    std::shared_ptr<coro::Channel<Chunk>> channel;
+    dstd::SharedPtr<coro::Channel<Chunk>> channel;
     std::vector<coro::ChannelProducer<Chunk>> producers;
-    std::optional<coro::SpawnFuture<int>> packer_future;
+    dstd::Optional<coro::SpawnFuture<int>> packer_future;
     bool packer_drained = false;
 
     bool settled() const { return fd < 0 && (packer_drained || !packer_scope); }
@@ -287,7 +288,7 @@ class PaddedStripedWriter : public ParallelWriter {
         }
         s.fd = static_cast<int>(fd);
         s.next_stripe_idx.store(0, std::memory_order_relaxed);
-        per_worker_last_.assign(num_workers, std::nullopt);
+        per_worker_last_.assign(num_workers, dstd::nullopt);
 
         // Valid-gzip placeholder so callers that skip write_header still
         // produce a file gunzip can walk.
@@ -392,9 +393,9 @@ class PaddedStripedWriter : public ParallelWriter {
         return {impl_->path};
     }
 
-    std::optional<MemberSpan> last_member(
+    dstd::Optional<MemberSpan> last_member(
         std::size_t worker_idx) const override {
-        if (worker_idx >= per_worker_last_.size()) return std::nullopt;
+        if (worker_idx >= per_worker_last_.size()) return dstd::nullopt;
         return per_worker_last_[worker_idx];
     }
 
@@ -404,7 +405,7 @@ class PaddedStripedWriter : public ParallelWriter {
     }
 
     std::unique_ptr<PaddedStripedImpl> impl_;
-    std::vector<std::optional<MemberSpan>> per_worker_last_;
+    std::vector<dstd::Optional<MemberSpan>> per_worker_last_;
 };
 
 }  // namespace

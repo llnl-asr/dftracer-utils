@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <fcntl.h>
@@ -21,7 +22,7 @@ class ShardedWriter final : public ParallelWriter {
         shard_paths_.resize(num_workers);
         shard_fds_.assign(num_workers, -1);
         shard_offsets_.assign(num_workers, 0);
-        per_worker_last_.assign(num_workers, std::nullopt);
+        per_worker_last_.assign(num_workers, dstd::nullopt);
         for (std::size_t i = 0; i < num_workers; ++i) {
             shard_paths_[i] = base_path_ + ".shard_" + std::to_string(i) + ext;
             ssize_t fd = co_await ::dftracer::utils::io::open(
@@ -76,9 +77,9 @@ class ShardedWriter final : public ParallelWriter {
         return shard_paths_;
     }
 
-    std::optional<MemberSpan> last_member(
+    dstd::Optional<MemberSpan> last_member(
         std::size_t worker_idx) const override {
-        if (worker_idx >= per_worker_last_.size()) return std::nullopt;
+        if (worker_idx >= per_worker_last_.size()) return dstd::nullopt;
         return per_worker_last_[worker_idx];
     }
 
@@ -113,7 +114,7 @@ class ShardedWriter final : public ParallelWriter {
     std::vector<std::string> shard_paths_;
     std::vector<int> shard_fds_;
     std::vector<std::uint64_t> shard_offsets_;
-    std::vector<std::optional<MemberSpan>> per_worker_last_;
+    std::vector<dstd::Optional<MemberSpan>> per_worker_last_;
 };
 
 }  // namespace

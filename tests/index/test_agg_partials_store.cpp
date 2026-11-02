@@ -3,6 +3,9 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
@@ -52,7 +55,7 @@ constexpr int EVENTS = 400;
 constexpr std::size_t CHECKPOINT_SIZE = 8192;
 constexpr std::uint64_t INTERVAL_US = 100'000;
 
-using Key = std::pair<std::string, std::string>;
+using Key = dstd::Pair<std::string, std::string>;
 
 const char* const NAMES[] = {"read", "write", "open", "close"};
 
@@ -140,7 +143,7 @@ Stored read_partials(const index::Snapshot& snapshot,
         snapshot, file,
         [&](std::uint32_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t, std::uint32_t, agg::PartialKind,
-            std::span<const std::uint8_t> bytes) {
+            dstd::Span<const std::uint8_t> bytes) {
             ++out.count;
             out.chunks.insert(chunk);
             auto p = agg::AggPartial::deserialize(
@@ -200,7 +203,7 @@ std::map<std::string, std::string> agg_rows(const std::string& file,
         snapshot, stored_file,
         [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
-            std::span<const std::uint8_t> bytes) {
+            dstd::Span<const std::uint8_t> bytes) {
             rows.emplace("p " + std::to_string(chunk) + " " + text(cat) + " " +
                              text(name) + " " + text(host) + " " + text(extra) +
                              " " + std::to_string(static_cast<int>(kind)),
@@ -216,7 +219,7 @@ std::map<std::string, std::string> agg_rows(const std::string& file,
                  {&block.cat, &block.name, &block.host, &block.file})
                 for (const std::uint32_t local : *locals)
                     value << ' '
-                          << std::string_view(block.texts[local].data(),
+                          << dstd::StringView(block.texts[local].data(),
                                               block.texts[local].size());
             for (const auto* numbers :
                  {&block.ts, &block.dur, &block.pid, &block.tid})
@@ -557,7 +560,7 @@ TEST_SUITE("AggPartialsStore") {
     // fold has staged runs, so no write commits after that.
     TEST_CASE("a build killed after runs" * doctest::skip()) {
         fresh_process::announce();
-        const auto env_dir = common::Env::get<std::string_view>(CRASH_DIR_ENV);
+        const auto env_dir = common::Env::get<dstd::StringView>(CRASH_DIR_ENV);
         REQUIRE(env_dir.has_value());
         const std::string dir(*env_dir);
         const auto files = crash_files(dir);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <deque>
@@ -20,7 +21,7 @@ Zones& zones() { return dstd::Singleton<Zones>::get(); }
 
 }  // namespace
 
-std::uint32_t intern_timezone(std::string_view name) {
+std::uint32_t intern_timezone(dstd::StringView name) {
     if (name.empty()) return 0;
     Zones& z = zones();
     const std::lock_guard<std::mutex> lock(z.mutex);
@@ -31,7 +32,7 @@ std::uint32_t intern_timezone(std::string_view name) {
     return id;
 }
 
-std::string_view timezone_name(std::uint32_t id) {
+dstd::StringView timezone_name(std::uint32_t id) {
     Zones& z = zones();
     const std::lock_guard<std::mutex> lock(z.mutex);
     return z.names.at(id);

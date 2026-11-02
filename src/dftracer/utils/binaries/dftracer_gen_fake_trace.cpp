@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
@@ -516,7 +517,7 @@ int main(int argc, char** argv) {
             auto* script_name_ptr = &script_name;
             auto* sref_ptr = &script_hash;
             auto* rank_event_counts_ptr = &rank_event_counts;
-            std::vector<std::shared_ptr<Task>> rank_tasks;
+            std::vector<dstd::SharedPtr<Task>> rank_tasks;
             for (int rank = 0; rank < num_ranks; ++rank) {
                 auto task = make_task(
                     [rank, base_seed, num_ranks, num_hosts, num_train_files,
@@ -1057,8 +1058,8 @@ int main(int argc, char** argv) {
                 summary_task->depends_on(rt);
             }
 
-            std::shared_ptr<Task> final_task = summary_task;
-            std::shared_ptr<Task> verify_task;
+            dstd::SharedPtr<Task> final_task = summary_task;
+            dstd::SharedPtr<Task> verify_task;
 
             if (verify) {
                 std::vector<QuerySpec> test_queries;

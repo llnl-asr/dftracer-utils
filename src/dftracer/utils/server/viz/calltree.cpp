@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
@@ -53,12 +54,12 @@ using dftracer::utils::json::json_number;
 // Parse ?group=<field(,field)*> into the flamegraph root-group key.
 static std::vector<std::string> parse_group_param(const QueryParams& params) {
     std::vector<std::string> group;
-    std::string_view g = params.get("group");
+    dstd::StringView g = params.get("group");
     std::size_t pos = 0;
     while (pos < g.size()) {
         std::size_t comma = g.find(',', pos);
-        if (comma == std::string_view::npos) comma = g.size();
-        std::string_view f = g.substr(pos, comma - pos);
+        if (comma == dstd::StringView::npos) comma = g.size();
+        dstd::StringView f = g.substr(pos, comma - pos);
         if (!f.empty()) group.emplace_back(f);
         pos = comma + 1;
     }

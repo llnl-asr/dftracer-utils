@@ -2,6 +2,8 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 
 #include <algorithm>
 #include <stdexcept>
@@ -72,11 +74,11 @@ struct Real {
 
 }  // namespace
 
-DataFrame gap_fill(const DataFrame& df,
-                   const std::vector<std::string>& partition_by,
-                   const std::string& time, std::int64_t bucket,
-                   const std::vector<std::string>& values, GapFillMode mode,
-                   std::optional<std::pair<std::int64_t, std::int64_t>> range) {
+DataFrame gap_fill(
+    const DataFrame& df, const std::vector<std::string>& partition_by,
+    const std::string& time, std::int64_t bucket,
+    const std::vector<std::string>& values, GapFillMode mode,
+    dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> range) {
     if (bucket <= 0)
         throw std::invalid_argument("gap_fill: bucket_width must be positive");
     const std::size_t time_at = ops::column_named(df, time, "gap_fill");

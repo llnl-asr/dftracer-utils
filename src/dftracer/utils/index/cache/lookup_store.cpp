@@ -3,6 +3,10 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/index/cache/lookup_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
@@ -24,7 +28,7 @@ namespace rdb = index::store;
 
 namespace {
 
-constexpr std::string_view VALUE_KEY = "\x01";
+constexpr dstd::StringView VALUE_KEY = "\x01";
 // The size of an entry counts the signature that names it.
 constexpr std::uint64_t SIG_BYTES = 8;
 
@@ -35,15 +39,15 @@ std::string lookup_cache_path(const trace::views::detail::ViewPlan& plan) {
     return dir.empty() ? dir : index::lookups_dir(dir);
 }
 
-std::optional<std::uint64_t> lookup_signature(
-    const trace::views::detail::ViewPlan& plan, std::string_view side_text) {
+dstd::Optional<std::uint64_t> lookup_signature(
+    const trace::views::detail::ViewPlan& plan, dstd::StringView side_text) {
     if (!plan.record_schema)
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
             "lookup signature: the plan's record schema "
             "is not resolved");
     std::string sig;
-    auto add = [&](std::string_view s) {
+    auto add = [&](dstd::StringView s) {
         sig.append(s);
         sig.push_back('\0');
     };
@@ -55,16 +59,16 @@ std::optional<std::uint64_t> lookup_signature(
     for (const auto& f : plan.files) files.push_back(&f);
     std::sort(files.begin(), files.end(),
               [](auto* a, auto* b) { return a->file_path < b->file_path; });
-    std::map<std::string, std::optional<index::Snapshot>, std::less<>> snaps;
+    std::map<std::string, dstd::Optional<index::Snapshot>, std::less<>> snaps;
     for (const auto* f : files) {
-        if (f->index_path.empty()) return std::nullopt;
+        if (f->index_path.empty()) return dstd::nullopt;
         auto [it, fresh] = snaps.try_emplace(f->index_path);
         if (fresh) {
             try {
                 it->second.emplace(
                     common::unwrap(index::plan::open_snapshot(f->index_path)));
             } catch (const common::DFTUtilsException&) {
-                return std::nullopt;
+                return dstd::nullopt;
             }
         }
         const index::Snapshot& snapshot = *it->second;
@@ -75,11 +79,11 @@ std::optional<std::uint64_t> lookup_signature(
         const SourceStat now_stat{static_cast<std::uint64_t>(now.mtime),
                                   now.size};
         if (snapshot.freshness(logical, now_stat) != index::Freshness::Current)
-            return std::nullopt;
+            return dstd::nullopt;
         const auto file = snapshot.file(logical);
-        if (!file) return std::nullopt;
+        if (!file) return dstd::nullopt;
         const auto hash = index::file_hash(snapshot, *file);
-        if (!hash) return std::nullopt;
+        if (!hash) return dstd::nullopt;
         add(logical);
         add(std::to_string(*hash));
         add(std::to_string(file->stat().mtime));
@@ -88,12 +92,12 @@ std::optional<std::uint64_t> lookup_signature(
     return dftracer::utils::dstd::hash::fnv1a_hash(sig);
 }
 
-std::shared_ptr<CacheStore> open_lookup_db(const std::string& path,
+dstd::SharedPtr<CacheStore> open_lookup_db(const std::string& path,
                                            CacheStore::Mode mode) {
     return CacheStore::open(path, mode);
 }
 
-std::optional<std::string> read_lookup(CacheStore& db, std::uint64_t sig) {
+dstd::Optional<std::string> read_lookup(CacheStore& db, std::uint64_t sig) {
     auto value = db.get(sig, VALUE_KEY);
     if (value) db.touch(sig);
     return value;
@@ -103,8 +107,8 @@ bool lookup_exists(const CacheStore& db, std::uint64_t sig) {
     return db.get(sig, VALUE_KEY).has_value();
 }
 
-void persist_lookup(CacheStore& db, std::uint64_t sig, std::string_view value) {
-    std::vector<std::pair<std::string, std::string>> entries;
+void persist_lookup(CacheStore& db, std::uint64_t sig, dstd::StringView value) {
+    std::vector<dstd::Pair<std::string, std::string>> entries;
     entries.emplace_back(VALUE_KEY, value);
     db.put(sig, entries, 2 * (1 + SIG_BYTES) + value.size() + USAGE_BYTES);
 }

@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_SERVER_VIZ_RESULT_CACHE_H
 #define DFTRACER_UTILS_SERVER_VIZ_RESULT_CACHE_H
 
+#include <dftracer/utils/dstd/optional.h>
+
 #include <cstddef>
 #include <list>
 #include <mutex>
@@ -19,10 +21,10 @@ class VizResultCache {
    public:
     explicit VizResultCache(std::size_t max_bytes) : max_bytes_(max_bytes) {}
 
-    std::optional<std::string> get(const std::string& key) {
+    dstd::Optional<std::string> get(const std::string& key) {
         std::lock_guard<std::mutex> lk(mu_);
         auto it = map_.find(key);
-        if (it == map_.end()) return std::nullopt;
+        if (it == map_.end()) return dstd::nullopt;
         order_.splice(order_.begin(), order_, it->second.pos);
         return it->second.body;
     }

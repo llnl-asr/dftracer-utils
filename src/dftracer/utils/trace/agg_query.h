@@ -221,8 +221,8 @@ class AggQueryResult {
     AggQueryStats stats;
 
     /// The text of a cat, name or extra id, and of an arg id in a row.
-    std::string_view text(std::uint32_t id) const {
-        return id == dstd::StringIntern::NO_ID ? std::string_view{}
+    dstd::StringView text(std::uint32_t id) const {
+        return id == dstd::StringIntern::NO_ID ? dstd::StringView{}
                                                : strings_->resolve(id);
     }
     dstd::StringIntern& strings() { return *strings_; }

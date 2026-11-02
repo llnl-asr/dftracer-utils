@@ -5,6 +5,8 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
@@ -32,9 +34,9 @@ namespace {
 using BV = index::schemas::dft::BloomCore;
 constexpr std::uint32_t NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
 
-std::string_view resolve_or_empty(
+dstd::StringView resolve_or_empty(
     const dftracer::utils::dstd::StringIntern& intern, std::uint32_t id) {
-    return id == NO_ID ? std::string_view{} : intern.resolve(id);
+    return id == NO_ID ? dstd::StringView{} : intern.resolve(id);
 }
 
 // What a stored evidence record costs besides its path and payload.
@@ -71,7 +73,7 @@ BloomFold::BloomFold(dftracer::utils::dstd::StringIntern& intern,
     // An args key named like a fixed dimension would be written under the
     // fixed dimension's path and replace its data.
     if (config_.fixed_dimensions)
-        for (std::string_view dim : BV::fixed_dimension_names())
+        for (dstd::StringView dim : BV::fixed_dimension_names())
             auto_skip_.insert(intern_->get_or_insert(dim));
     dur_key_ = intern_->get_or_insert("dur");
 }
@@ -84,7 +86,7 @@ BloomFold::Catalog BloomFold::file_catalog(const std::string& file) {
 }
 
 void BloomFold::observe_shape(FileState& fs,
-                              std::span<const SchemaLeaf> leaves) {
+                              dstd::Span<const SchemaLeaf> leaves) {
     if (leaves.empty()) return;
     auto same = [&](const Shape& s) {
         return std::equal(leaves.begin(), leaves.end(), s.leaves.begin(),
@@ -205,7 +207,7 @@ BloomFold::AutoKeys BloomFold::select_auto_keys(
     std::uint64_t used = data_chunks * config_.extra_dimensions.size() *
                          (2 * RECORD_BYTES + file_bloom_floor);
 
-    std::vector<std::pair<std::uint64_t, const std::string*>> ranked;
+    std::vector<dstd::Pair<std::uint64_t, const std::string*>> ranked;
     ranked.reserve(keys.size());
     for (const auto& [name, k] : keys) {
         auto it =
@@ -543,12 +545,12 @@ void BloomFold::observe(const Lane& lane,
             continue;
         }
 
-        const std::string_view name = resolve_or_empty(*intern_, e.name_id);
-        const std::string_view cat = resolve_or_empty(*intern_, e.cat_id);
-        const std::string_view hhash = resolve_or_empty(*intern_, e.hhash_id);
-        const std::string_view fhash = resolve_or_empty(*intern_, e.fhash_id);
+        const dstd::StringView name = resolve_or_empty(*intern_, e.name_id);
+        const dstd::StringView cat = resolve_or_empty(*intern_, e.cat_id);
+        const dstd::StringView hhash = resolve_or_empty(*intern_, e.hhash_id);
+        const dstd::StringView fhash = resolve_or_empty(*intern_, e.fhash_id);
 
-        std::string_view shash;
+        dstd::StringView shash;
         for (const auto& [k, v] : e.args) {
             const auto* id = std::get_if<std::uint32_t>(&v);
             if (!id) continue;
@@ -668,7 +670,7 @@ coro::CoroTask<bool> BloomFold::finalize(
         const std::string logical =
             index::store::internal::get_logical_path(file);
         try {
-            auto at = snapshots.find(std::string_view(fs.index_path));
+            auto at = snapshots.find(dstd::StringView(fs.index_path));
             if (at == snapshots.end()) {
                 const auto opened = common::unwrap(index::Index::open(
                     index::store::internal::normalize_index_root(

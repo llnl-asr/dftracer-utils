@@ -31,6 +31,7 @@
 #include <dftracer/utils/python/lazyframe.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/python/arrow_helpers.h>
 #include <nanoarrow/nanoarrow.h>
 #endif
@@ -74,7 +75,7 @@ namespace dftracer::utils::python {
 // A host object's mutable side: the built set (immutable once constructed) and
 // the named results of the most recent run or session.
 struct PluginHostState {
-    std::optional<Plugins> set;
+    dstd::Optional<Plugins> set;
     NamedResultRegistry results;
     // wire id -> attribute name, so a caller indexes results[...] with the
     // plugin's declared name rather than its package-qualified wire identity.

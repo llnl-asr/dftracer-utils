@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <sys/resource.h>
@@ -73,7 +74,7 @@ coro::CoroTask<void> wait_for(std::atomic<bool>* go, std::atomic<bool>* done) {
 
 TEST_SUITE("ProcessRuntime") {
     TEST_CASE("threads that ask at once all get one runtime") {
-        std::vector<std::shared_ptr<Runtime>> got(16);
+        std::vector<dstd::SharedPtr<Runtime>> got(16);
         std::vector<std::thread> threads;
         for (std::size_t i = 0; i < got.size(); ++i)
             threads.emplace_back([&, i] { got[i] = default_runtime_shared(); });

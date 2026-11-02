@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_COUNTER_FORMAT_H
 
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -19,7 +20,7 @@ namespace dftracer::utils::trace::views::detail {
 // `group_cols` (nullopt for a null key), `values` to `value_cols`. The group
 // columns `entity_col` and `lane_col` give pid and tid, as index::entity_id.
 dstd::String counter_line(const std::vector<std::string>& group_cols,
-                          const std::vector<std::optional<std::string>>& keys,
+                          const std::vector<dstd::Optional<std::string>>& keys,
                           const std::vector<std::string>& value_cols,
                           const std::vector<double>& values,
                           const std::string& entity_col,

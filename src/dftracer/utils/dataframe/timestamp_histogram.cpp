@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/timestamp_histogram.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/varint.h>
 
 #include <algorithm>
@@ -25,7 +26,7 @@ void TimestampHistogram::add(std::uint64_t timestamp_us) {
 void TimestampHistogram::merge(const TimestampHistogram& other) {
     if (other.bins_.empty()) return;
 
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> merged;
+    std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> merged;
     merged.reserve(bins_.size() + other.bins_.size());
 
     auto a = bins_.begin();

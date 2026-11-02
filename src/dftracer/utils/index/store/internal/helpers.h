@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_INTERNAL_HELPERS_H
 #define DFTRACER_UTILS_INDEX_STORE_INTERNAL_HELPERS_H
 
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstdint>
 #include <ctime>
 #include <string>
@@ -9,8 +11,8 @@
 
 namespace dftracer::utils::index::store::internal {
 
-std::string get_logical_path(std::string_view path);
-std::string normalize_index_root(std::string_view path);
+std::string get_logical_path(dstd::StringView path);
+std::string normalize_index_root(dstd::StringView path);
 time_t get_file_modification_time(const std::string &file_path);
 std::uint64_t calculate_file_hash(const std::string &file_path);
 /// The same hash of an open file of `file_size` bytes.

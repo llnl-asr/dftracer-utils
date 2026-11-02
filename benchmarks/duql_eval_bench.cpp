@@ -9,6 +9,7 @@
 
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_value.h>
 #include <simdjson.h>
@@ -49,12 +50,13 @@ duql::ValueMap map_of(const duql::Query& q, JsonValue v) {
     duql::ValueMap m;
     for (const auto& f : q.fields()) {
         JsonValue x = v.at(std::string(f));
-        if (!x.exists() && !std::string_view(f).starts_with("args."))
+        if (!x.exists() &&
+            !dftracer::utils::dstd::StringView(f).starts_with("args."))
             x = v.at("args." + std::string(f));
         if (!x.exists()) continue;
         if (x.is_string())
-            m[std::string(f)] =
-                dftracer::utils::dstd::String(x.get<std::string_view>());
+            m[std::string(f)] = dftracer::utils::dstd::String(
+                x.get<dftracer::utils::dstd::StringView>());
         else if (x.is_int())
             m[std::string(f)] = x.get<std::int64_t>();
         else if (x.is_uint())
@@ -98,7 +100,8 @@ std::string long_path(std::uint32_t i, std::size_t len) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke";
+    const bool smoke =
+        argc == 2 && dftracer::utils::dstd::StringView(argv[1]) == "--smoke";
     const std::size_t n =
         smoke ? 2000
               : (argc > 1 ? static_cast<std::size_t>(std::atoll(argv[1]))
@@ -168,13 +171,13 @@ int main(int argc, char** argv) {
                     kept == kept_map ? "" : " (map differs)");
     }
     namespace df = dftracer::utils::dataframe;
-    std::vector<std::string_view> names;
+    std::vector<dftracer::utils::dstd::StringView> names;
     names.reserve(n);
     for (std::size_t i = 0; i < n; ++i) names.push_back(NAMES[i % 12]);
     const df::Series col = df::Series::strings(names);
     struct Kernel {
         const char* label;
-        df::Series (df::Series::*fn)(std::string_view) const;
+        df::Series (df::Series::*fn)(dftracer::utils::dstd::StringView) const;
         const char* pattern;
     };
     const Kernel kernels[] = {
@@ -200,7 +203,7 @@ int main(int argc, char** argv) {
 
     constexpr const char* VARIED[] = {"MPI_", "cuda", "read",   "wri",
                                       "H5",   "64",   "Memcpy", "zzz"};
-    std::vector<std::string_view> same_needles, varied_needles;
+    std::vector<dftracer::utils::dstd::StringView> same_needles, varied_needles;
     same_needles.reserve(n);
     varied_needles.reserve(n);
     for (std::size_t i = 0; i < n; ++i) {
@@ -259,7 +262,7 @@ int main(int argc, char** argv) {
             });
             std::printf("%-34s %5zu B %10.1f  kept %zu\n", text, len, ns, kept);
         }
-        std::vector<std::string_view> views;
+        std::vector<dftracer::utils::dstd::StringView> views;
         views.reserve(m);
         std::vector<std::string> own;
         own.reserve(m);

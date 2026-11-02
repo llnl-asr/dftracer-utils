@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/store/internal/payload_codec.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
@@ -31,7 +34,7 @@ std::string encode_zone(const Zone& zone) {
     return out;
 }
 
-std::optional<Zone> decode_zone(std::string_view bytes) {
+dstd::Optional<Zone> decode_zone(dstd::StringView bytes) {
     try {
         codec::Cursor cursor(bytes);
         Zone zone;
@@ -49,7 +52,7 @@ std::optional<Zone> decode_zone(std::string_view bytes) {
         }
         return zone;
     } catch (const std::exception&) {
-        return std::nullopt;
+        return dstd::nullopt;
     }
 }
 
@@ -61,7 +64,7 @@ std::string encode_counts(const CountsGranule& counts) {
     return out;
 }
 
-std::optional<CountsGranule> decode_counts(std::string_view bytes) {
+dstd::Optional<CountsGranule> decode_counts(dstd::StringView bytes) {
     try {
         codec::Cursor cursor(bytes);
         CountsGranule counts;
@@ -72,11 +75,11 @@ std::optional<CountsGranule> decode_counts(std::string_view bytes) {
         }
         return counts;
     } catch (const std::exception&) {
-        return std::nullopt;
+        return dstd::nullopt;
     }
 }
 
-std::string encode_bloom(std::span<const unsigned char> bloom,
+std::string encode_bloom(dstd::Span<const unsigned char> bloom,
                          std::uint64_t num_entries) {
     std::string out;
     dstd::append_u64_be(out, num_entries);
@@ -84,18 +87,18 @@ std::string encode_bloom(std::span<const unsigned char> bloom,
     return out;
 }
 
-std::optional<ScalableBloomFilter> decode_bloom(std::string_view bytes) {
-    if (bytes.size() <= 8) return std::nullopt;
+dstd::Optional<ScalableBloomFilter> decode_bloom(dstd::StringView bytes) {
+    if (bytes.size() <= 8) return dstd::nullopt;
     try {
         return ScalableBloomFilter::from_blob(
             reinterpret_cast<const unsigned char*>(bytes.data() + 8),
             bytes.size() - 8);
     } catch (const std::exception&) {
-        return std::nullopt;
+        return dstd::nullopt;
     }
 }
 
-std::uint64_t value_hash(std::string_view value) {
+std::uint64_t value_hash(dstd::StringView value) {
     return utilities::hash::fnv1a_hash(value);
 }
 

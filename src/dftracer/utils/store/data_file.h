@@ -105,7 +105,7 @@ dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
 
 /// The suffix every data file's name ends with, so a store directory's data
 /// files are recognized by name alone.
-inline constexpr std::string_view DATA_FILE_SUFFIX = ".dfs";
+inline constexpr dstd::StringView DATA_FILE_SUFFIX = ".dfs";
 
 /// Moves every data file of the store directory `from` into `to`, which is
 /// created when it is missing, and returns how many moved. Each move is a
@@ -119,7 +119,7 @@ dstd::Expected<std::size_t, dstd::Error> move_data_files(dstd::StringView from,
 /// file, so a snapshot learns a file's directory without opening it. A writer
 /// appends an entry when its close succeeds. The summary is a cache: a file it
 /// does not list is read as if there were no summary.
-inline constexpr std::string_view SUMMARY_FILE_NAME = "summary.dfsum";
+inline constexpr dstd::StringView SUMMARY_FILE_NAME = "summary.dfsum";
 
 struct SummaryEntry {
     dstd::String name;

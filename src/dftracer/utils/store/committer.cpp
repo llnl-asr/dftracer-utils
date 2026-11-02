@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/completion_latch.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/io_fault.h>
@@ -87,7 +88,7 @@ struct Committer::WakeState {
 /// the counter under, so a wake that arrives first is not lost.
 struct Committer::WaitForWork {
     Committer& committer;
-    std::shared_ptr<WakeState> state = std::make_shared<WakeState>();
+    dstd::SharedPtr<WakeState> state = std::make_shared<WakeState>();
 
     bool await_ready() const {
         std::lock_guard<std::mutex> lock(committer.queue_mutex_);
@@ -254,7 +255,7 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Committer::stop() {
 }
 
 void Committer::wake() {
-    std::shared_ptr<WakeState> state;
+    dstd::SharedPtr<WakeState> state;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         state = wake_state_;

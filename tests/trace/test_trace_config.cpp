@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -63,7 +64,9 @@ TEST_SUITE("trace-config") {
         CHECK(cfgs[0].args["num_events"].get<std::uint64_t>() == 41);
         CHECK(cfgs[0].args["cfg.compression"].get<std::uint64_t>() == 1);
         CHECK(cfgs[0].args["used.MPI"].get<std::uint64_t>() == 1);
-        CHECK(cfgs[0].args["app.model"].get<std::string_view>() == "resnet50");
+        CHECK(cfgs[0]
+                  .args["app.model"]
+                  .get<dftracer::utils::dstd::StringView>() == "resnet50");
     }
 
     TEST_CASE("multiple end events -> one config per process") {
@@ -113,7 +116,9 @@ TEST_SUITE("trace-config") {
 
         auto cfgs = View::from_file(gz, determine_index_path(gz, "")).config();
         REQUIRE(cfgs.size() == 1);
-        CHECK(cfgs[0].args["app.model"].get<std::string_view>() == "resnet50");
+        CHECK(cfgs[0]
+                  .args["app.model"]
+                  .get<dftracer::utils::dstd::StringView>() == "resnet50");
     }
 
     // Scattered end (not in the last member): tail probe misses it, so

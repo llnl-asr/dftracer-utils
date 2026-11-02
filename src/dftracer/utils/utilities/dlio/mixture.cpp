@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/utilities/dlio/mixture.h>
 
 #include <algorithm>
@@ -192,8 +193,8 @@ double cdf(const FittedMixture& mix, double x) {
     return c;
 }
 
-Sampler make_sampler(const FittedMixture& mix, std::optional<double> min_bound,
-                     std::optional<double> max_bound) {
+Sampler make_sampler(const FittedMixture& mix, dstd::Optional<double> min_bound,
+                     dstd::Optional<double> max_bound) {
     if (!mix.valid) {
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
@@ -225,10 +226,10 @@ Sampler make_sampler(const FittedMixture& mix, std::optional<double> min_bound,
     };
 }
 
-std::optional<ModelSelection> select_best_model(
+dstd::Optional<ModelSelection> select_best_model(
     const std::vector<FittedDistribution>& single_fits,
     const std::vector<FittedMixture>& mixtures) {
-    std::optional<ModelSelection> best;
+    dstd::Optional<ModelSelection> best;
     for (const auto& f : single_fits) {
         if (!f.valid) continue;
         if (!best || f.bic < best->bic) {
@@ -253,8 +254,8 @@ double cdf(const BestModel& m, double x) {
     return std::visit([x](const auto& v) { return cdf(v, x); }, m);
 }
 
-Sampler make_sampler(const BestModel& m, std::optional<double> min_bound,
-                     std::optional<double> max_bound) {
+Sampler make_sampler(const BestModel& m, dstd::Optional<double> min_bound,
+                     dstd::Optional<double> max_bound) {
     return std::visit(
         [&](const auto& v) { return make_sampler(v, min_bound, max_bound); },
         m);

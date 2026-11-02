@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/internal/duql_handle.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -43,7 +44,7 @@ dftu_view* wrap(scan::ScanPlan p) { return new dftu_view{std::move(p)}; }
 
 using dftracer::utils::trace::views::View;
 
-char* owned_string(std::string_view s) {
+char* owned_string(dftracer::utils::dstd::StringView s) {
     char* out = static_cast<char*>(std::malloc(s.size() + 1));
     if (!out) return nullptr;
     std::memcpy(out, s.data(), s.size());

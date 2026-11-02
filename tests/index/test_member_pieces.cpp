@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -91,10 +92,11 @@ TEST_SUITE("member pieces") {
             CHECK(got[i].bits == arts.members[i].bits);
         }
         REQUIRE(restart(2).has_value());
-        CHECK(std::string_view(restart(2)->data(), restart(2)->size()) ==
-              window);
+        CHECK(dftracer::utils::dstd::StringView(restart(2)->data(),
+                                                restart(2)->size()) == window);
         REQUIRE(restart(3).has_value());
-        CHECK(std::string_view(restart(3)->data(), restart(3)->size()) ==
+        CHECK(dftracer::utils::dstd::StringView(restart(3)->data(),
+                                                restart(3)->size()) ==
               std::string(32768, 'x'));
         CHECK_FALSE(restart(1).has_value());
 

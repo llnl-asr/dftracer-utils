@@ -3,6 +3,10 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/event_cost.h>
@@ -69,7 +73,7 @@ struct Ids {
     dftracer::utils::dstd::StringIntern& intern;
     dftracer::utils::dstd::InternCache* cache;
 
-    std::uint32_t get_or_insert(std::string_view sv) {
+    std::uint32_t get_or_insert(dstd::StringView sv) {
         return cache ? cache->get_or_insert(sv) : intern.get_or_insert(sv);
     }
 };
@@ -80,7 +84,7 @@ std::uint32_t intern_string(Ids& ids, simdjson::dom::element val) {
 }
 
 std::uint32_t intern_leaf_path(dftracer::utils::dstd::StringIntern& intern,
-                               std::string_view path) {
+                               dstd::StringView path) {
 #if DFTRACER_UTILS_TEST_PROBES
     dftracer::utils::index::event_cost::g_leaf_path_interns.fetch_add(
         1, std::memory_order_relaxed);
@@ -158,7 +162,7 @@ void enumerate_leaves(std::string& path, simdjson::dom::element v,
 
 std::uint32_t arg_leaf_id(DecodeHints& h,
                           dftracer::utils::dstd::StringIntern& intern,
-                          std::uint32_t key_id, std::string_view key) {
+                          std::uint32_t key_id, dstd::StringView key) {
     auto resolve = [&] {
         std::string path("args.");
         path.append(key);
@@ -178,7 +182,7 @@ std::uint32_t arg_leaf_id(DecodeHints& h,
     return it->second;
 }
 
-std::uint64_t pack_key(std::string_view key) {
+std::uint64_t pack_key(dstd::StringView key) {
     std::uint64_t packed = 0;
     std::memcpy(&packed, key.data(), key.size());
     return packed;
@@ -186,7 +190,7 @@ std::uint64_t pack_key(std::string_view key) {
 
 std::uint32_t top_leaf_id(DecodeHints& h,
                           dftracer::utils::dstd::StringIntern& intern,
-                          std::string_view key) {
+                          dstd::StringView key) {
     const bool small = key.size() <= sizeof(std::uint64_t);
     const std::uint64_t packed = small ? pack_key(key) : 0;
     for (const auto& leaf : h.top_leaf)
@@ -199,7 +203,7 @@ std::uint32_t top_leaf_id(DecodeHints& h,
 }
 
 // A switch on the length and bytes keeps this to a few byte compares per key.
-bool is_axis_key(std::string_view k, bool skip_args) {
+bool is_axis_key(dstd::StringView k, bool skip_args) {
     const char* p = k.data();
     switch (k.size()) {
         case 2:
@@ -217,7 +221,7 @@ bool is_axis_key(std::string_view k, bool skip_args) {
     }
 }
 
-void append_arg_leaf(FoldEvent& ev, std::uint32_t key_id, std::string_view key,
+void append_arg_leaf(FoldEvent& ev, std::uint32_t key_id, dstd::StringView key,
                      simdjson::dom::element v, Ids& ids, DecodeHints* leaves) {
     append_scalar_arg(ev.args, ev.specials, key_id, v, ids);
     if (leaves)
@@ -274,7 +278,7 @@ struct JsonNode {
     bool is_leaf = false;
 };
 
-void insert_leaf(JsonNode& root, std::string_view rel, dstd::String text) {
+void insert_leaf(JsonNode& root, dstd::StringView rel, dstd::String text) {
     JsonNode* n = &root;
     std::size_t start = 0;
     for (;;) {
@@ -286,7 +290,7 @@ void insert_leaf(JsonNode& root, std::string_view rel, dstd::String text) {
                               JsonNode{})
                      .first;
         n = &it->second;
-        if (dot == std::string_view::npos) break;
+        if (dot == dstd::StringView::npos) break;
         start = dot + 1;
     }
     n->is_leaf = true;
@@ -350,7 +354,7 @@ dstd::String arg_json(const FoldEvent::ArgValue& v,
     return out;
 }
 
-std::string_view special_json(FoldEvent::Special s) {
+dstd::StringView special_json(FoldEvent::Special s) {
     switch (s) {
         case FoldEvent::Special::NullValue:
             return "null";
@@ -370,7 +374,7 @@ std::string_view special_json(FoldEvent::Special s) {
 }
 
 // The canonical JSON text a declared json field holds in `args`.
-std::string_view json_text(const FoldEvent& ev,
+dstd::StringView json_text(const FoldEvent& ev,
                            const dftracer::utils::dstd::StringIntern& intern,
                            std::uint32_t id) {
     for (const auto& [k, v] : ev.args)
@@ -387,19 +391,19 @@ bool is_json_text(FoldEvent::Special s) {
 
 }  // namespace
 
-std::optional<duql::Cell> container_cell(
+dstd::Optional<duql::Cell> container_cell(
     const FoldEvent& ev, const dftracer::utils::dstd::StringIntern& intern,
-    std::string_view path) {
-    const std::string_view bare = common::strip_args_prefix(path);
-    const std::array<std::string_view, 2> prefixes{path, bare};
+    dstd::StringView path) {
+    const dstd::StringView bare = common::strip_args_prefix(path);
+    const std::array<dstd::StringView, 2> prefixes{path, bare};
     const std::size_t tries = bare != path && !ev.by_path ? 2 : 1;
     for (std::size_t t = 0; t < tries; ++t) {
-        const std::string_view prefix = prefixes[t];
-        auto rel = [&](std::uint32_t id) -> std::optional<std::string_view> {
-            const std::string_view name = intern.resolve(id);
+        const dstd::StringView prefix = prefixes[t];
+        auto rel = [&](std::uint32_t id) -> dstd::Optional<dstd::StringView> {
+            const dstd::StringView name = intern.resolve(id);
             if (name.size() <= prefix.size() || !name.starts_with(prefix) ||
                 name[prefix.size()] != '.')
-                return std::nullopt;
+                return dstd::nullopt;
             return name.substr(prefix.size() + 1);
         };
         JsonNode root;
@@ -421,7 +425,7 @@ std::optional<duql::Cell> container_cell(
                 dftracer::utils::json::canonical_json_text(text), array);
         }
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 void FoldPortBus::publish(std::uint64_t key, const void* data,
@@ -471,7 +475,7 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
     // fhash/hhash are group dimensions even for folds that want no other args,
     // so they are always harvested; the rest only when a fold asks.
     for (auto field : args.get_object()) {
-        std::string_view key = field.key;
+        dstd::StringView key = field.key;
         if (key == "fhash" || key == "hhash") {
             const std::uint32_t id = intern_string(ids, field.value);
             (key == "fhash" ? ev.fhash_id : ev.hhash_id) = id;
@@ -569,10 +573,10 @@ struct LeafDecode {
 };
 
 // The position of `path` in the sorted `paths`, or nullopt.
-std::optional<std::size_t> position(const std::vector<std::string>& paths,
-                                    const std::string& path) {
+dstd::Optional<std::size_t> position(const std::vector<std::string>& paths,
+                                     const std::string& path) {
     const auto it = std::lower_bound(paths.begin(), paths.end(), path);
-    if (it == paths.end() || *it != path) return std::nullopt;
+    if (it == paths.end() || *it != path) return dstd::nullopt;
     return static_cast<std::size_t>(it - paths.begin());
 }
 
@@ -590,9 +594,9 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
     const T type = v.type();
     const bool numeric =
         type == T::INT64 || type == T::UINT64 || type == T::DOUBLE;
-    std::optional<double> num;
+    dstd::Optional<double> num;
     if (numeric) num = v.get_double().value_unsafe();
-    std::optional<duql::Number> text_num;
+    dstd::Optional<duql::Number> text_num;
     if (type == T::STRING &&
         (f.type == ix::FieldType::Int || f.type == ix::FieldType::Float ||
          f.role == ix::Role::Time || f.role == ix::Role::Duration))
@@ -660,7 +664,7 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
             if (type == T::INT64 || type == T::UINT64) {
                 keep();
             } else if (const auto n = type == T::DOUBLE
-                                          ? std::optional<duql::Number>(*num)
+                                          ? dstd::Optional<duql::Number>(*num)
                                           : text_num;
                        n && as_int(*n)) {
                 num = std::visit([](auto x) { return static_cast<double>(x); },
@@ -673,7 +677,7 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
     if (!num && text_num)
         num = std::visit([](auto x) { return static_cast<double>(x); },
                          *text_num);
-    std::optional<double> micros;
+    dstd::Optional<double> micros;
     if (num) micros = ix::micros_per(f.unit.value_or(ix::TimeUnit::Us)) * *num;
     switch (f.role) {
         case ix::Role::None:
@@ -889,7 +893,7 @@ void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
     if (root.get_object().get(obj) != simdjson::SUCCESS) return;
     std::string path;
     for (auto kv : obj) {
-        const std::string_view k = kv.key;
+        const dstd::StringView k = kv.key;
         if (is_axis_key(k, skip_args)) continue;
         const auto type = kv.value.type();
         if (hints && !k.empty() &&
@@ -907,7 +911,7 @@ void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
 namespace {
 
 template <std::size_t N>
-bool key_is(std::string_view key, const char (&literal)[N]) {
+bool key_is(dstd::StringView key, const char (&literal)[N]) {
     return key.size() == N - 1 && std::memcmp(key.data(), literal, N - 1) == 0;
 }
 
@@ -918,8 +922,8 @@ bool read_uint(simdjson::dom::element v, std::uint64_t& out) {
     return true;
 }
 
-bool read_text(simdjson::dom::element v, std::string_view& out) {
-    std::string_view text;
+bool read_text(simdjson::dom::element v, dstd::StringView& out) {
+    dstd::StringView text;
     if (v.get_string().get(text) != simdjson::SUCCESS) return false;
     out = text;
     return true;
@@ -960,7 +964,7 @@ bool same_bytes(const char* a, const char* b, std::size_t n) {
 // `resolve(key)`, which is remembered.
 template <class Resolve>
 std::uint32_t key_at(dftracer::utils::dstd::Vector<DecodeHints::KeyAt>& slots,
-                     std::size_t pos, std::string_view key, Resolve&& resolve) {
+                     std::size_t pos, dstd::StringView key, Resolve&& resolve) {
     if (pos >= MAX_KEY_POSITIONS) return resolve(key);
     if (pos >= slots.size()) slots.resize(pos + 1);
     DecodeHints::KeyAt& slot = slots[pos];
@@ -1000,7 +1004,7 @@ bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
 
     RecordPhase phase = RecordPhase::Unknown;
     std::uint64_t pid = 0, tid = 0, ts = 0, dur = 0;
-    std::string_view cat, name;
+    dstd::StringView cat, name;
     bool has_ph = false;
     bool has_dur = false;
     bool has_args = false;
@@ -1010,7 +1014,7 @@ bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
     // The axis keys are not catalog paths. Every other key is kept, in order,
     // for the leaf pass below.
     for (auto field : top) {
-        const std::string_view key = field.key;
+        const dstd::StringView key = field.key;
         const simdjson::dom::element val = field.value;
         bool leaf = capture_schema;
         switch (key.size()) {
@@ -1073,12 +1077,12 @@ bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
         trace::internal::parse_walks::args_walk();
         DecodeHints* const leaves =
             needs_args && args_walked && capture_schema ? &hints : nullptr;
-        const auto key_id = [&](std::string_view key) {
+        const auto key_id = [&](dstd::StringView key) {
             return ids.get_or_insert(key);
         };
         std::size_t pos = 0;
         for (auto field : args) {
-            const std::string_view key = field.key;
+            const dstd::StringView key = field.key;
             const simdjson::dom::element v = field.value;
             const std::size_t at = pos++;
             if (key_is(key, "fhash") || key_is(key, "hhash")) {
@@ -1119,7 +1123,7 @@ bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
         if (!key.empty() && type != simdjson::dom::element_type::OBJECT &&
             type != simdjson::dom::element_type::ARRAY) {
             ev.schema_leaves.emplace_back(key_at(hints.top_key_at, pos, key,
-                                                 [&](std::string_view k) {
+                                                 [&](dstd::StringView k) {
                                                      return top_leaf_id(
                                                          hints, intern, k);
                                                  }),
@@ -1281,9 +1285,9 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
             if (b->fold_events.empty() && b->events.empty()) continue;
             ctx.produced.fetch_add(b->fold_events.size() + b->events.size(),
                                    std::memory_order_relaxed);
-            FoldBatch fb{std::span<const FoldEvent>(b->fold_events),
+            FoldBatch fb{dstd::Span<const FoldEvent>(b->fold_events),
                          ctx.units[i],
-                         std::span<const std::string_view>(b->events)};
+                         dstd::Span<const dstd::StringView>(b->events)};
             bus.clear();
             for (auto& s : slices) {
                 s->step(fb);
@@ -1309,7 +1313,7 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
 
 coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
                                  const ViewDefinition& vdef_in,
-                                 std::span<Fold* const> folds,
+                                 dstd::Span<Fold* const> folds,
                                  dftracer::utils::dstd::StringIntern& intern,
                                  const CoverageSet* covered,
                                  std::uint64_t limit, DynamicPrune* dyn_prune,
@@ -1430,8 +1434,8 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
     // A file is whole only if nothing was pruned (statically or by a
     // narrow() call mid-scan) and every unit of it sealed.
     if (skipped == 0 && dyn_skipped == 0) {
-        std::unordered_map<std::string_view,
-                           std::pair<std::size_t, std::size_t>>
+        std::unordered_map<dstd::StringView,
+                           dstd::Pair<std::size_t, std::size_t>>
             per_file;
         for (const auto& u : units) {
             auto& c = per_file[u.file_path];

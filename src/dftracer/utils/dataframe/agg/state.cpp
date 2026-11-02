@@ -6,6 +6,8 @@
 #include <dftracer/utils/dataframe/sketch.h>  // DDSketch, sketch_bucket_keys
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 
 #include <algorithm>
@@ -236,7 +238,7 @@ void set_insert(AggState::StringSet& set, std::string v, std::size_t group,
 // KMV element hash. FNV-1a avalanches poorly, so the mix is what makes the
 // bottom-k order (and the [0,1) normalization the estimator divides by)
 // uniform.
-std::uint64_t kmv_hash(std::string_view v) {
+std::uint64_t kmv_hash(dstd::StringView v) {
     return dftracer::utils::dstd::hash::fnv1a_mix(
         dftracer::utils::dstd::hash::fnv1a_hash(v));
 }
@@ -322,7 +324,7 @@ struct PlainKey {
     const char* text = nullptr;
     std::int64_t text_size = 0;
     const std::int32_t* codes = nullptr;
-    std::vector<std::string_view> dvals;
+    std::vector<dstd::StringView> dvals;
     const std::uint8_t* views = nullptr;
     std::vector<const char*> blob_data;
     bool is_str = false;
@@ -331,7 +333,7 @@ struct PlainKey {
     std::int64_t offset(std::int64_t i) const {
         return off64 ? off64[i] : off32[i];
     }
-    std::string_view str(std::int64_t i) const {
+    dstd::StringView str(std::int64_t i) const {
         if (codes) return dvals[static_cast<std::size_t>(codes[i])];
         if (views) {
             const std::uint8_t* v = views + static_cast<std::size_t>(i) * 16;
@@ -339,20 +341,20 @@ struct PlainKey {
             std::memcpy(&size, v, sizeof(size));
             const auto n = static_cast<std::size_t>(size);
             if (size <= 12)
-                return std::string_view(reinterpret_cast<const char*>(v + 4),
+                return dstd::StringView(reinterpret_cast<const char*>(v + 4),
                                         n);
             std::int32_t index, offset;
             std::memcpy(&index, v + 8, sizeof(index));
             std::memcpy(&offset, v + 12, sizeof(offset));
             if (static_cast<std::size_t>(index) >= blob_data.size()) return {};
-            return std::string_view(
+            return dstd::StringView(
                 blob_data[static_cast<std::size_t>(index)] + offset, n);
         }
         if (off64)
-            return std::string_view(
+            return dstd::StringView(
                 text + off64[i],
                 static_cast<std::size_t>(off64[i + 1] - off64[i]));
-        return std::string_view(
+        return dstd::StringView(
             text + off32[i], static_cast<std::size_t>(off32[i + 1] - off32[i]));
     }
 };
@@ -374,7 +376,7 @@ bool plain_key(const Series& c, PlainKey& out) {
             const char* p =
                 dftu_series_string_at(child, static_cast<std::int64_t>(j), &n);
             if (p)
-                out.dvals[j] = std::string_view(p, static_cast<std::size_t>(n));
+                out.dvals[j] = dstd::StringView(p, static_cast<std::size_t>(n));
         }
         out.is_str = true;
         out.fixed.validity = h.validity.block() ? h.validity.data() : nullptr;
@@ -444,7 +446,7 @@ bool key_words(const std::vector<PlainKey>& k, std::int64_t i,
             continue;
         }
         if (kk.by_ref()) {
-            const std::string_view sv = kk.str(i);
+            const dstd::StringView sv = kk.str(i);
             const std::size_t n = sv.size();
             if (n > 16) return false;
             std::uint64_t a = 0, b = 0;
@@ -716,8 +718,8 @@ std::int64_t slow_group_words(AggState& st, const std::vector<PlainKey>& k,
     }
     return st.find_or_add_group(
         [&](std::size_t j) { return static_cast<std::int64_t>(w[at[j]]); },
-        [&](std::size_t j) -> std::string_view {
-            return std::string_view(
+        [&](std::size_t j) -> dstd::StringView {
+            return dstd::StringView(
                 reinterpret_cast<const char*>(w + at[j] + 1),
                 static_cast<std::size_t>(w[at[j]]));
         },
@@ -942,7 +944,7 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
             [&](std::size_t j) {
                 return static_cast<std::int64_t>(k[j].fixed.bits(i));
             },
-            [&](std::size_t j) -> std::string_view { return k[j].str(i); },
+            [&](std::size_t j) -> dstd::StringView { return k[j].str(i); },
             [&](std::size_t j) { return k[j].is_null(i); });
     };
 
@@ -1950,7 +1952,7 @@ AggStatePtr agg_regroup(const AggState& src_in,
                     v = (v / bucket_recut) * bucket_recut;
                 return v;
             },
-            [&](std::size_t k) -> std::string_view {
+            [&](std::size_t k) -> dstd::StringView {
                 return src.skey_cols[static_cast<std::size_t>(keep[k])]
                                     [static_cast<std::size_t>(j)];
             },
@@ -2026,7 +2028,7 @@ AggStatePtr agg_clip_occupancy(const AggState& src_in, std::uint64_t lo,
         rests[it->second].push_back(g);
     }
 
-    std::vector<std::pair<std::uint64_t, std::int64_t>> pts;
+    std::vector<dstd::Pair<std::uint64_t, std::int64_t>> pts;
     std::vector<std::int64_t> ik(nkeys);
     std::vector<std::string> sk(nkeys);
     std::vector<std::uint8_t> nk(nkeys);
@@ -2040,7 +2042,7 @@ AggStatePtr agg_clip_occupancy(const AggState& src_in, std::uint64_t lo,
         auto slot_of = [&](std::int64_t bucket, std::size_t slot) {
             const std::int64_t g = st.find_or_add_group(
                 [&](std::size_t k) { return k == 0 ? bucket : ik[k]; },
-                [&](std::size_t k) { return std::string_view(sk[k]); },
+                [&](std::size_t k) { return dstd::StringView(sk[k]); },
                 [&](std::size_t k) { return k != 0 && nk[k] != 0; });
             return static_cast<std::size_t>(g) * n_occ + slot;
         };

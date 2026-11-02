@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -104,8 +105,8 @@ TEST_SUITE("QueryCache") {
         REQUIRE(declared.has_value());
         bool rollup_in_index = false;
         for (const auto& decl : *declared) {
-            if (std::string_view(decl.name.data(), decl.name.size())
-                    .find("rollup") != std::string_view::npos)
+            if (dstd::StringView(decl.name.data(), decl.name.size())
+                    .find("rollup") != dstd::StringView::npos)
                 rollup_in_index = true;
         }
         CHECK_FALSE(rollup_in_index);

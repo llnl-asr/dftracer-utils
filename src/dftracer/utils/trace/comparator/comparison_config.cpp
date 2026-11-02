@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/trace/comparator/comparison_config.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <simdjson.h>
@@ -107,12 +108,12 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
 }
 
 // static
-std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
+dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
     const std::string& path, std::string& error) {
     std::ifstream file(path);
     if (!file) {
         error = "failed to read or parse JSON file: " + path;
-        return std::nullopt;
+        return dstd::nullopt;
     }
     std::string content((std::istreambuf_iterator<char>(file)),
                         std::istreambuf_iterator<char>());
@@ -121,13 +122,13 @@ std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
     auto result = parser.parse(content);
     if (result.error()) {
         error = "failed to parse JSON file: " + path;
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     auto root = result.value_unsafe();
     if (!root.is_object()) {
         error = "JSON root must be an object";
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     ComparisonConfig cfg;
@@ -136,7 +137,7 @@ std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
     if (baseline_result.error() ||
         !baseline_result.value_unsafe().is_string()) {
         error = "missing required string field 'baseline'";
-        return std::nullopt;
+        return dstd::nullopt;
     }
     cfg.baseline =
         std::string(baseline_result.value_unsafe().get_string().value());
@@ -144,7 +145,7 @@ std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
     auto variant_result = root["variant"];
     if (variant_result.error() || !variant_result.value_unsafe().is_string()) {
         error = "missing required string field 'variant'";
-        return std::nullopt;
+        return dstd::nullopt;
     }
     cfg.variant =
         std::string(variant_result.value_unsafe().get_string().value());
@@ -204,7 +205,7 @@ std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
         for (auto node_elem : nodes_result.value_unsafe().get_array()) {
             ComparisonNode node;
             if (!parse_node(node_elem, node, error)) {
-                return std::nullopt;
+                return dstd::nullopt;
             }
             cfg.nodes.push_back(std::move(node));
         }
@@ -269,12 +270,12 @@ void ComparisonConfig::resolve() {
 }
 
 // static
-std::optional<ComparisonConfig> ComparisonConfig::from_preset(
+dstd::Optional<ComparisonConfig> ComparisonConfig::from_preset(
     const std::string& preset, const std::string& baseline,
     const std::string& variant) {
     namespace ops = dftracer::utils::trace::internal::posix_ops;
 
-    if (preset != "dlio") return std::nullopt;
+    if (preset != "dlio") return dstd::nullopt;
 
     ComparisonConfig cfg;
     cfg.baseline = baseline;

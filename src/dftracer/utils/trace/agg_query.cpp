@@ -7,8 +7,11 @@
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/member.h>
 #include <dftracer/utils/index/index.h>
@@ -211,19 +214,19 @@ class Task {
 
     template <class Filter>
     std::uint32_t map_root(std::uint32_t id, const Filter& filter) {
-        const std::string_view text = text_of(id);
+        const dstd::StringView text = text_of(id);
         if (!filter.empty() && filter.find(text) == filter.end())
             return AGG_REJECT;
         return r_.rules.strings.get_or_insert(text);
     }
 
-    std::string_view text_of(std::uint32_t id) const {
+    dstd::StringView text_of(std::uint32_t id) const {
         const auto at = texts_.find(id);
         if (at == texts_.end())
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Parse, "aggregation query: dictionary id ",
                 id, " is missing in ", src_.path);
-        return std::string_view(at->second.data(), at->second.size());
+        return dstd::StringView(at->second.data(), at->second.size());
     }
 
     PidFit pid_fit(const agg::AggPartial& p) const {
@@ -255,7 +258,7 @@ class Task {
     }
 
     void take_partial(std::uint32_t chunk, const AggGroup& group,
-                      std::span<const std::uint8_t> bytes);
+                      dstd::Span<const std::uint8_t> bytes);
     bool bins_answer(const agg::AggPartial& p) const;
     void take_bins(const agg::AggPartial& p, AggKey key);
 
@@ -270,7 +273,7 @@ class Task {
         const std::string& path, std::uint32_t chunk,
         const index::gzip::ChunkSpan* spans);
 
-    coro::CoroTask<std::shared_ptr<utilities::reader::internal::Reader>>
+    coro::CoroTask<dstd::SharedPtr<utilities::reader::internal::Reader>>
     open_reader(const std::string& path);
 
     void parse_lines_of(std::string& pending, std::uint32_t chunk,
@@ -289,7 +292,7 @@ class Task {
     views::detail::FoldEventBuffer buffer_;
     FoldEvent column_event_;
     json::RecordParser parser_;
-    std::shared_ptr<std::string> buf_ = std::make_shared<std::string>();
+    dstd::SharedPtr<std::string> buf_ = std::make_shared<std::string>();
 };
 
 void trim_row(agg::AggPartial& p, const AggKeep& keep) {
@@ -332,7 +335,7 @@ void Runner::Stripe::add_sums(const dstd::Vector<Row*>& part) {
 }
 
 void Runner::Stripe::drain(bool offset) {
-    dstd::Vector<std::pair<std::size_t, const Moments*>> order;
+    dstd::Vector<dstd::Pair<std::size_t, const Moments*>> order;
     for (const auto& file : moments) {
         for (const Moments& m : file) {
             const auto it = rows.find(m.key);
@@ -584,7 +587,7 @@ coro::CoroTask<void> Task::scan_file(
             [&](std::uint32_t chunk, std::uint32_t cat_root,
                 std::uint32_t name_root, std::uint32_t host_root,
                 std::uint32_t extra_root, AggKind kind,
-                std::span<const std::uint8_t> bytes) {
+                dstd::Span<const std::uint8_t> bytes) {
                 ++seen;
                 ++stats.partials_read;
                 const std::uint32_t cat =
@@ -606,7 +609,7 @@ coro::CoroTask<void> Task::scan_file(
                 }
                 const std::uint32_t extra =
                     root_extra_.get(extra_root, [&](std::uint32_t id) {
-                        const std::string_view text = text_of(id);
+                        const dstd::StringView text = text_of(id);
                         return text.empty()
                                    ? dstd::StringIntern::NO_ID
                                    : r_.rules.strings.get_or_insert(text);
@@ -703,7 +706,7 @@ coro::CoroTask<void> Task::whole_file_chunks(const std::string& path,
 }
 
 void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
-                        std::span<const std::uint8_t> bytes) {
+                        dstd::Span<const std::uint8_t> bytes) {
     if (r_.reread_only && !r_.has_time && r_.rules.pids.empty()) {
         queue_reread(chunk, group);
         return;
@@ -833,7 +836,7 @@ void Task::take_bins(const agg::AggPartial& p, AggKey key) {
     ++stats.partials_binned;
 }
 
-coro::CoroTask<std::shared_ptr<utilities::reader::internal::Reader>>
+coro::CoroTask<dstd::SharedPtr<utilities::reader::internal::Reader>>
 Task::open_reader(const std::string& path) {
     auto input =
         utilities::fileio::IndexedReadInput::from_file(path).with_index(
@@ -861,9 +864,9 @@ coro::CoroTask<std::string> Task::tail_before(
         while (!stream->done()) {
             auto piece = co_await stream->read_async();
             if (piece.empty()) break;
-            const std::string_view data(piece.data(), piece.size());
+            const dstd::StringView data(piece.data(), piece.size());
             const std::size_t nl = data.rfind('\n');
-            if (nl == std::string_view::npos) {
+            if (nl == dstd::StringView::npos) {
                 after.append(data);
             } else {
                 after.assign(data.substr(nl + 1));

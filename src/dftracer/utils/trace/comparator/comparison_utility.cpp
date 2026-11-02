@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/comparator/comparison_utility.h>
 
 #include <algorithm>
@@ -28,7 +29,7 @@ double vec_mean(std::vector<double>& v) {
 // Empty cat_filter merges every entry; otherwise only entries with that cat.
 CollapsedMetrics merge_collapsed(const CollapsedMap& cm,
                                  const dstd::StringIntern& intern,
-                                 std::string_view cat_filter = "") {
+                                 dstd::StringView cat_filter = "") {
     CollapsedMetrics total;
     std::vector<double> counts, dur_means, size_means, xfers, bws;
     // Merged in the order of the group texts: a hash map's order depends on
@@ -71,7 +72,7 @@ CollapsedMetrics merge_all(const CollapsedMap& cm,
 
 CollapsedMetrics merge_by_cat(const CollapsedMap& cm,
                               const dstd::StringIntern& intern,
-                              std::string_view cat) {
+                              dstd::StringView cat) {
     return merge_collapsed(cm, intern, cat);
 }
 
@@ -86,7 +87,7 @@ double worst_regression(const std::vector<MetricComparison>& metrics) {
     return worst;
 }
 
-GroupComparison make_group(std::string_view label,
+GroupComparison make_group(dstd::StringView label,
                            const CollapsedMetrics& base_cm,
                            const CollapsedMetrics& var_cm, bool base_present,
                            bool var_present,
@@ -104,7 +105,7 @@ GroupComparison make_group(std::string_view label,
 }  // namespace
 
 // One GroupComparison per (cat, name), grouped by cat.
-static std::map<std::string_view, std::vector<GroupComparison>>
+static std::map<dstd::StringView, std::vector<GroupComparison>>
 build_per_cat_groups(const CollapsedMap& base_collapsed,
                      const CollapsedMap& var_collapsed,
                      const dstd::StringIntern& intern,
@@ -117,7 +118,7 @@ build_per_cat_groups(const CollapsedMap& base_collapsed,
     for (const auto& [k, _] : base_collapsed) all_keys.insert(k);
     for (const auto& [k, _] : var_collapsed) all_keys.insert(k);
 
-    std::map<std::string_view, std::vector<GroupComparison>> by_cat;
+    std::map<dstd::StringView, std::vector<GroupComparison>> by_cat;
 
     for (const auto& key : all_keys) {
         auto base_it = base_collapsed.find(key);

@@ -2,9 +2,11 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/trace/schema.h>
@@ -30,8 +32,8 @@ namespace dftracer::utils::index::extensions {
 class RowSetFold : public trace::views::detail::Fold {
    public:
     using Value =
-        std::variant<std::monostate, bool, std::int64_t, std::uint64_t, double,
-                     dftracer::utils::dstd::String>;
+        dstd::Variant<dstd::Monostate, bool, std::int64_t, std::uint64_t,
+                      double, dftracer::utils::dstd::String>;
 
     RowSetFold(dftracer::utils::dstd::StringIntern& intern,
                std::vector<IndexedRowSet> rowsets,
@@ -70,11 +72,11 @@ class RowSetFold : public trace::views::detail::Fold {
    private:
     // Cheap tests a record must pass before its filter runs.
     struct Guard {
-        std::optional<trace::RecordPhase> phase;
-        std::optional<std::uint32_t> name;
+        dstd::Optional<trace::RecordPhase> phase;
+        dstd::Optional<std::uint32_t> name;
         // The filter without the phase term the guard checks, for records
         // whose phase is a field of the event rather than a value.
-        std::optional<duql::Query> rest;
+        dstd::Optional<duql::Query> rest;
     };
     struct Rows {
         std::vector<std::vector<Value>> columns;

@@ -321,7 +321,7 @@ struct PipelineLookup {
     std::size_t side = 0;
     dstd::String name;
     dstd::Vector<dstd::Pair<PipelineItem, dstd::String>> keys;
-    dstd::Variant<std::monostate, PipelineNest, PipelineAsof, PipelineOverlap>
+    dstd::Variant<dstd::Monostate, PipelineNest, PipelineAsof, PipelineOverlap>
         mode;
     syntax::LookupKind kind = syntax::LookupKind::Left;
 };

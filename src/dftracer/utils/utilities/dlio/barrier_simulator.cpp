@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/utilities/dlio/barrier_simulator.h>
 #include <dftracer/utils/utilities/dlio/statistic.h>
 #include <dftracer/utils/utilities/dlio/worker_queue.h>
@@ -153,7 +154,7 @@ BarrierSimulationResult BarrierSimulator::simulate(
     }
 
     auto worker_batch_sampler_for = [&](int rank, bool record_simulated) {
-        return [&, rank, record_simulated]() -> std::pair<double, double> {
+        return [&, rank, record_simulated]() -> dstd::Pair<double, double> {
             Rng& rrng = preprocess_rngs[static_cast<std::size_t>(rank)];
             double sampled_preprocess = 0.0;
             double sampled_getitem = 0.0;

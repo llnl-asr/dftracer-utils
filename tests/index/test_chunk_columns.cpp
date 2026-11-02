@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
@@ -180,17 +182,17 @@ struct Row {
     std::map<std::string, Num, std::less<>> args;
 };
 
-std::string_view quoted(const std::string& text, std::string_view key) {
+dstd::StringView quoted(const std::string& text, dstd::StringView key) {
     const std::string pattern = "\"" + std::string(key) + "\":\"";
     const auto at = text.find(pattern);
     if (at == std::string::npos) return {};
     const auto from = at + pattern.size();
     const auto to = text.find('"', from);
     if (to == std::string::npos) return {};
-    return std::string_view(text).substr(from, to - from);
+    return dstd::StringView(text).substr(from, to - from);
 }
 
-bool number(const std::string& text, std::string_view key, std::uint64_t& out) {
+bool number(const std::string& text, dstd::StringView key, std::uint64_t& out) {
     const std::string pattern = "\"" + std::string(key) + "\":";
     const auto at = text.find(pattern);
     if (at == std::string::npos) return false;
@@ -202,7 +204,7 @@ bool number(const std::string& text, std::string_view key, std::uint64_t& out) {
     return true;
 }
 
-std::uint8_t phase_of(std::string_view letter) {
+std::uint8_t phase_of(dstd::StringView letter) {
     if (letter == "X") return 1;
     if (letter == "C") return 2;
     if (letter == "A") return 3;
@@ -417,7 +419,7 @@ void check_row_core(const agg::ChunkColumns& block, std::size_t r,
 
 // One arg path holds one column per kind its values take.
 const agg::ChunkColumn* column_for(const agg::ChunkColumns& block,
-                                   std::string_view path,
+                                   dstd::StringView path,
                                    agg::ColumnKind kind) {
     for (const agg::ChunkColumn& column : block.columns)
         if (column.kind == kind && block.texts[column.path] == path)
@@ -519,7 +521,7 @@ index::FileRef file_of(const index::Snapshot& snapshot,
     return std::move(*file);
 }
 
-dstd::Span<const std::uint8_t> span_of(std::string_view bytes) {
+dstd::Span<const std::uint8_t> span_of(dstd::StringView bytes) {
     return dstd::Span<const std::uint8_t>(
         reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
 }
@@ -553,10 +555,10 @@ std::string repeated_key_trace() {
     return text.str();
 }
 
-std::vector<std::pair<std::uint64_t, std::uint64_t>> values_of(
-    const agg::ChunkColumns& block, std::string_view path,
+std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> values_of(
+    const agg::ChunkColumns& block, dstd::StringView path,
     agg::ColumnKind kind) {
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> out;
+    std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> out;
     const agg::ChunkColumn* column = column_for(block, path, kind);
     if (column == nullptr) return out;
     REQUIRE(column->rows.size() == column->bits.size());
@@ -565,9 +567,9 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> values_of(
     return out;
 }
 
-std::vector<std::pair<std::uint64_t, std::uint64_t>> first_values(
+std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> first_values(
     std::size_t rows, std::size_t at, std::int64_t first) {
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> out;
+    std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> out;
     for (std::size_t r = 0; r < rows; ++r)
         out.emplace_back(r, static_cast<std::uint64_t>(
                                 first + static_cast<std::int64_t>(at + r)));
@@ -954,10 +956,10 @@ TEST_SUITE("ChunkColumns") {
         std::size_t blocks = 0;
         std::size_t partials = 0;
         for (const auto& record : dftu_utils_test::dump_index(index_path)) {
-            constexpr std::string_view AGG = "dftu.idx.dftracer.agg";
+            constexpr dstd::StringView AGG = "dftu.idx.dftracer.agg";
             if (record.name != AGG) continue;
             REQUIRE_FALSE(record.key.empty());
-            const std::string_view value = record.value;
+            const dstd::StringView value = record.value;
             const auto kind = static_cast<std::uint8_t>(record.key[0]);
             if (kind == layout::agg_kind::COLUMNS) {
                 const auto decoded = agg::decode_chunk_columns(span_of(value));

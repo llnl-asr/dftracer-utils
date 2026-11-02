@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/router.h>
@@ -14,7 +16,7 @@ namespace dftracer::utils::server {
 // QueryParams
 // ============================================================================
 
-static std::string url_decode(std::string_view sv) {
+static std::string url_decode(dstd::StringView sv) {
     std::string result;
     result.reserve(sv.size());
     for (std::size_t i = 0; i < sv.size(); ++i) {
@@ -36,16 +38,16 @@ static std::string url_decode(std::string_view sv) {
     return result;
 }
 
-QueryParams QueryParams::parse(std::string_view query) {
+QueryParams QueryParams::parse(dstd::StringView query) {
     QueryParams params;
     while (!query.empty()) {
         auto amp = query.find('&');
         auto pair = query.substr(0, amp);
-        query = (amp == std::string_view::npos) ? std::string_view{}
+        query = (amp == dstd::StringView::npos) ? dstd::StringView{}
                                                 : query.substr(amp + 1);
 
         auto eq = pair.find('=');
-        if (eq == std::string_view::npos) {
+        if (eq == dstd::StringView::npos) {
             params.params_.emplace_back(url_decode(pair), "");
         } else {
             params.params_.emplace_back(url_decode(pair.substr(0, eq)),
@@ -55,15 +57,15 @@ QueryParams QueryParams::parse(std::string_view query) {
     return params;
 }
 
-std::string_view QueryParams::get(std::string_view key,
-                                  std::string_view default_value) const {
+dstd::StringView QueryParams::get(dstd::StringView key,
+                                  dstd::StringView default_value) const {
     for (const auto& [k, v] : params_) {
         if (k == key) return v;
     }
     return default_value;
 }
 
-bool QueryParams::has(std::string_view key) const {
+bool QueryParams::has(dstd::StringView key) const {
     for (const auto& [k, v] : params_) {
         if (k == key) return true;
     }
@@ -71,7 +73,7 @@ bool QueryParams::has(std::string_view key) const {
 }
 
 std::string QueryParams::canonical_key() const {
-    std::vector<const std::pair<std::string, std::string>*> sorted;
+    std::vector<const dstd::Pair<std::string, std::string>*> sorted;
     sorted.reserve(params_.size());
     for (const auto& p : params_) sorted.push_back(&p);
     std::sort(sorted.begin(), sorted.end(), [](const auto* a, const auto* b) {
@@ -88,7 +90,7 @@ std::string QueryParams::canonical_key() const {
     return key;
 }
 
-int QueryParams::get_int(std::string_view key, int default_value) const {
+int QueryParams::get_int(dstd::StringView key, int default_value) const {
     auto sv = get(key);
     if (sv.empty()) return default_value;
     int val = default_value;
@@ -96,7 +98,7 @@ int QueryParams::get_int(std::string_view key, int default_value) const {
     return val;
 }
 
-double QueryParams::get_double(std::string_view key,
+double QueryParams::get_double(dstd::StringView key,
                                double default_value) const {
     auto sv = get(key);
     if (sv.empty()) return default_value;
@@ -132,8 +134,8 @@ void Router::post(const std::string& path, RouteHandler handler, RouteDoc doc) {
 namespace {
 
 // RFC 9110 section 11.1: the auth scheme name is case-insensitive.
-bool strip_bearer_prefix(std::string_view h, std::string_view& token) {
-    constexpr std::string_view BEARER = "Bearer ";
+bool strip_bearer_prefix(dstd::StringView h, dstd::StringView& token) {
+    constexpr dstd::StringView BEARER = "Bearer ";
     if (h.size() <= BEARER.size()) return false;
     if (!::dftracer::utils::common::detail::iequals(h.substr(0, BEARER.size()),
                                                     BEARER))
@@ -147,9 +149,9 @@ bool strip_bearer_prefix(std::string_view h, std::string_view& token) {
 coro::CoroTask<HttpResponse> Router::handle(const HttpRequest& req) {
     // Split path and query string.
     auto path = req.path;
-    std::string_view query_str;
+    dstd::StringView query_str;
     auto qpos = path.find('?');
-    if (qpos != std::string_view::npos) {
+    if (qpos != dstd::StringView::npos) {
         query_str = path.substr(qpos + 1);
         path = path.substr(0, qpos);
     }
@@ -174,7 +176,7 @@ coro::CoroTask<HttpResponse> Router::handle(const HttpRequest& req) {
     if (!auth_token_.empty()) {
         bool ok = params.get("token") == auth_token_;
         if (!ok) {
-            std::string_view token;
+            dstd::StringView token;
             if (strip_bearer_prefix(req.header("Authorization"), token))
                 ok = token == auth_token_;
         }

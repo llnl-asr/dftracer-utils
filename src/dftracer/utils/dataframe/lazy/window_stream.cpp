@@ -4,6 +4,9 @@
 #include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 namespace dftracer::utils::dataframe {
 
@@ -152,7 +155,7 @@ struct PartitionStats {
         return blob;
     }
 
-    Part decode(std::string_view blob) const {
+    Part decode(dstd::StringView blob) const {
         if (blob.size() != figure_bytes())
             throw std::logic_error("window: a figure of the wrong size");
         Part p = fresh();
@@ -309,10 +312,11 @@ class FigureWriter {
 class StatsCursor : public Cursor {
    public:
     StatsCursor(std::unique_ptr<Cursor> in,
-                std::shared_ptr<PartitionStats> stats)
+                dstd::SharedPtr<PartitionStats> stats)
         : in_(std::move(in)), stats_(std::move(stats)) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         auto m = co_await in_->next(max_rows);
         if (m) stats_->add(*m);
         co_return m;
@@ -322,7 +326,7 @@ class StatsCursor : public Cursor {
 
    private:
     std::unique_ptr<Cursor> in_;
-    std::shared_ptr<PartitionStats> stats_;
+    dstd::SharedPtr<PartitionStats> stats_;
 };
 
 // Hands on the rows of one cursor with the columns of another, in the same
@@ -332,10 +336,11 @@ class AppendCursor : public Cursor {
     AppendCursor(std::unique_ptr<Cursor> rows, std::unique_ptr<Cursor> extra)
         : rows_(std::move(rows)), extra_(std::move(extra)) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         auto m = co_await rows_->next(max_rows);
         auto e = co_await extra_->next(max_rows);
-        if (!m && !e) co_return std::nullopt;
+        if (!m && !e) co_return dstd::nullopt;
         if (!m || !e || m->rows != e->rows)
             throw std::logic_error("window: the suffix columns miss the rows");
         for (Series& c : e->columns) m->columns.push_back(std::move(c));
@@ -597,8 +602,8 @@ class WindowStreamCursor : public Cursor {
         std::unique_ptr<Cursor> sorted, std::vector<std::string> sch,
         std::vector<std::size_t> part, std::vector<std::size_t> order,
         std::vector<WindowSpecInfo> specs, std::string name,
-        const dftu_op_desc* op, std::shared_ptr<const OwnedFrameOpArgs> args,
-        std::shared_ptr<PartitionStats> stats, std::uint64_t budget)
+        const dftu_op_desc* op, dstd::SharedPtr<const OwnedFrameOpArgs> args,
+        dstd::SharedPtr<PartitionStats> stats, std::uint64_t budget)
         : in_(std::move(sorted)),
           sch_(std::move(sch)),
           part_(std::move(part)),
@@ -618,7 +623,8 @@ class WindowStreamCursor : public Cursor {
 
     std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         while (true) {
             while (!eof_ &&
                    (held_rows_ <= after_ || held_bytes_ < chunk_bytes_ ||
@@ -650,7 +656,7 @@ class WindowStreamCursor : public Cursor {
                 held_.push_back(std::move(*m));
                 govern();
             }
-            if (held_rows_ == 0) co_return std::nullopt;
+            if (held_rows_ == 0) co_return dstd::nullopt;
 
             const std::size_t ncols = sch_.size();
             const std::size_t wide = ncols + suffix_.size();
@@ -730,7 +736,7 @@ class WindowStreamCursor : public Cursor {
         }
     }
 
-    std::optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<std::vector<std::string>> out_names() const override {
         return out_names_;
     }
 
@@ -1148,7 +1154,7 @@ class WindowStreamCursor : public Cursor {
         const auto close = [&](const std::vector<Series>& last) {
             figures.add(cur, last);
         };
-        std::optional<Morsel> m = std::move(first);
+        dstd::Optional<Morsel> m = std::move(first);
         while (m) {
             if (m->rows > 0) {
                 const std::vector<Series> pk =
@@ -1330,8 +1336,8 @@ class WindowStreamCursor : public Cursor {
         struct Work {
             NumCells cells;
             NumClass cls = NumClass::Signed;
-            std::optional<ColumnView> view;
-            std::optional<ColumnView> carried_view;
+            dstd::Optional<ColumnView> view;
+            dstd::Optional<ColumnView> carried_view;
             Series carried;
             std::vector<std::int64_t> out;
             std::int64_t best = -1;  // the row of the best, -1 the carried
@@ -2447,8 +2453,8 @@ class WindowStreamCursor : public Cursor {
     std::vector<std::size_t> order_;
     std::string name_;
     const dftu_op_desc* op_;
-    std::shared_ptr<const OwnedFrameOpArgs> args_;
-    std::shared_ptr<PartitionStats> stats_;
+    dstd::SharedPtr<const OwnedFrameOpArgs> args_;
+    dstd::SharedPtr<PartitionStats> stats_;
     std::uint64_t budget_;
     std::uint64_t chunk_bytes_;
     Governor gov_{"window"};
@@ -2484,7 +2490,7 @@ class WindowStreamCursor : public Cursor {
     bool eof_ = false;
     bool need_more_ = false;
     std::uint64_t grow_to_ = 0;
-    std::optional<std::vector<std::string>> out_names_;
+    dstd::Optional<std::vector<std::string>> out_names_;
 };
 
 // ---- native group-wise transforms ------------------------------------------
@@ -2496,7 +2502,7 @@ namespace lazy_internal {
 std::unique_ptr<Cursor> make_window(
     std::unique_ptr<Cursor> in, const std::vector<std::string>& sch,
     const std::vector<Field>& in_fields, const std::string& name,
-    const dftu_op_desc* op, std::shared_ptr<const OwnedFrameOpArgs> args,
+    const dftu_op_desc* op, dstd::SharedPtr<const OwnedFrameOpArgs> args,
     std::uint64_t budget) {
     const std::vector<std::string>& part = args->strings_at(1);
     const std::vector<std::string>& order = args->strings_at(2);
@@ -2511,7 +2517,7 @@ std::unique_ptr<Cursor> make_window(
             static_cast<std::size_t>(require_col(sch, n, "window")));
     std::vector<WindowSpecInfo> specs = window_specs(*args, sch);
     std::unique_ptr<Cursor> source = std::move(in);
-    std::shared_ptr<PartitionStats> stats = std::make_shared<PartitionStats>();
+    dstd::SharedPtr<PartitionStats> stats = std::make_shared<PartitionStats>();
     if (window_needs_stats(specs, *stats, sch, in_fields)) {
         stats->part_cols = part_idx;
         if (stats->by_order) {

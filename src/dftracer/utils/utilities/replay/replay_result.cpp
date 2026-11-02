@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 
 #include <algorithm>
@@ -92,7 +94,7 @@ void ReplayResult::print_summary() const {
         // pool; sorting needs an indexable copy. Keep the views to avoid
         // re-allocating strings for the dictionary entries (read,
         // write, ...).
-        std::vector<std::pair<std::string_view, std::size_t>> sorted_funcs(
+        std::vector<dstd::Pair<dstd::StringView, std::size_t>> sorted_funcs(
             function_counts.begin(), function_counts.end());
         std::sort(
             sorted_funcs.begin(), sorted_funcs.end(),

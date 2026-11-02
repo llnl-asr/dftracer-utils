@@ -16,6 +16,8 @@
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -92,7 +94,7 @@ Totals decode(const char* p, std::size_t n) {
 
 void* state_init(void*) { return new Totals(); }
 
-std::string_view str_at(const dftu_series* col, std::int64_t r) {
+dstd::StringView str_at(const dftu_series* col, std::int64_t r) {
     const std::int32_t* off = dftu_series_offsets(col);
     const char* base = static_cast<const char*>(dftu_series_data(col));
     if (!off || !base) return {};
@@ -256,7 +258,7 @@ RunResult run_state(bool spillable, std::uint64_t budget, int n_slices) {
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
             pf->step(FoldBatch{
-                std::span<const FoldEvent>(evs.data() + at, n), unit, {}});
+                dstd::Span<const FoldEvent>(evs.data() + at, n), unit, {}});
         }
         master.merge(*pf);
     }
@@ -349,7 +351,7 @@ SliceRun run_slice(bool reclaimable, std::uint64_t budget, int n_slices) {
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
             pf->step(FoldBatch{
-                std::span<const FoldEvent>(evs.data() + at, n), unit, {}});
+                dstd::Span<const FoldEvent>(evs.data() + at, n), unit, {}});
         }
         master.merge(*pf);
     }

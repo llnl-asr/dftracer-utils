@@ -5,7 +5,11 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -52,9 +56,9 @@ struct Job {
     std::size_t units = 0;  ///< reservation held by this job
     bool ends_part = false;
 
-    std::string_view bytes() const {
-        return raw ? std::string_view(raw.get(), raw_size)
-                   : std::string_view(data);
+    dstd::StringView bytes() const {
+        return raw ? dstd::StringView(raw.get(), raw_size)
+                   : dstd::StringView(data);
     }
 };
 
@@ -161,7 +165,7 @@ struct GzipLineWriter::Impl {
     std::mutex mu;
     std::map<std::uint64_t, Done> ready;
     std::uint64_t next_write = 0;
-    std::optional<dstd::Error> error;
+    dstd::Optional<dstd::Error> error;
     std::vector<std::unique_ptr<cmp::GzipMemberCompressor>> pool;
 
     std::atomic<std::size_t> in_flight{0};
@@ -382,7 +386,7 @@ struct GzipLineWriter::Impl {
         pool.push_back(std::move(c));
     }
 
-    coro::CoroTask<void> run_job(std::shared_ptr<Job> job) {
+    coro::CoroTask<void> run_job(dstd::SharedPtr<Job> job) {
         co_await compute.acquire(1);
         std::size_t slot = 0;
         if (unordered()) {
@@ -393,7 +397,7 @@ struct GzipLineWriter::Impl {
         Done d;
         d.part = job->part;
         d.ends_part = job->ends_part;
-        const std::string_view bytes = job->bytes();
+        const dstd::StringView bytes = job->bytes();
         d.units = job->units;
         d.uc_size = bytes.size();
         d.lines = static_cast<std::uint64_t>(
@@ -550,7 +554,7 @@ coro::CoroTask<common::Result<GzipLineWriter>> GzipLineWriter::open(
 namespace {
 // Takes every complete member out of `buf` (caller holds any lock on it).
 std::vector<std::string> take_members(std::string& buf, std::size_t size) {
-    std::vector<std::pair<std::size_t, std::size_t>> spans;
+    std::vector<dstd::Pair<std::size_t, std::size_t>> spans;
     std::size_t pos = 0;
     while (buf.size() > pos + size) {
         const std::size_t nl = buf.find('\n', pos + size);
@@ -574,7 +578,7 @@ std::vector<std::string> take_members(std::string& buf, std::size_t size) {
 }  // namespace
 
 coro::CoroTask<common::Result<void>> GzipLineWriter::append(
-    std::string_view lines) {
+    dstd::StringView lines) {
     Impl& s = *impl_;
     if (s.failed()) {
         dstd::Error err = co_await s.fail();
@@ -704,7 +708,7 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::submit_full() {
 }
 
 coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::append(
-    std::string_view lines) {
+    dstd::StringView lines) {
     Impl& s = *impl_;
     if (s.failed()) {
         dstd::Error err = co_await s.fail();
@@ -775,11 +779,11 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::cut() {
 }
 
 coro::CoroTask<common::Result<WriteSummary>> GzipLineWriter::close() {
-    co_return co_await close(std::string_view{});
+    co_return co_await close(dstd::StringView{});
 }
 
 coro::CoroTask<common::Result<WriteSummary>> GzipLineWriter::close(
-    std::string_view tail) {
+    dstd::StringView tail) {
     Impl& s = *impl_;
     if (s.cleaned) co_return dstd::Unexpected(s.get_error());
     if (s.prod_held.load(std::memory_order_relaxed) != 0) {
@@ -820,7 +824,7 @@ GzipLineWriterBlocking::~GzipLineWriterBlocking() = default;
 namespace {
 template <typename T, typename F>
 common::Result<T> run_on_default(const char* name, F&& f) {
-    std::optional<common::Result<T>> out;
+    dstd::Optional<common::Result<T>> out;
     default_runtime().block_on(coro::named(name, [&]() -> coro::CoroTask<void> {
         out.emplace(co_await f());
         co_return;
@@ -838,7 +842,7 @@ common::Result<GzipLineWriterBlocking> GzipLineWriterBlocking::open(
     return GzipLineWriterBlocking(std::move(*r));
 }
 
-common::Result<void> GzipLineWriterBlocking::append(std::string_view lines) {
+common::Result<void> GzipLineWriterBlocking::append(dstd::StringView lines) {
     return run_on_default<void>("gzip_line_writer_append",
                                 [&] { return w_->append(lines); });
 }
@@ -857,11 +861,11 @@ common::Result<void> GzipLineWriterBlocking::cut() {
 }
 
 common::Result<WriteSummary> GzipLineWriterBlocking::close() {
-    return close(std::string_view{});
+    return close(dstd::StringView{});
 }
 
 common::Result<WriteSummary> GzipLineWriterBlocking::close(
-    std::string_view tail) {
+    dstd::StringView tail) {
     return run_on_default<WriteSummary>("gzip_line_writer_close",
                                         [&] { return w_->close(tail); });
 }

@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
@@ -105,7 +106,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     std::vector<std::unique_ptr<FoldSlice>> pool;
 
     auto fold_member = [&](const utilities::fileio::MemberRef& ref,
-                           std::string_view data) {
+                           dstd::StringView data) {
         std::unique_ptr<FoldSlice> sl;
         {
             std::lock_guard<std::mutex> lk(pool_mu);
@@ -121,7 +122,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         sl->events.clear();
         for (std::size_t ls = 0, i = 0; i < data.size(); ++i) {
             if (data[i] != '\n') continue;
-            std::string_view line = data.substr(ls, i - ls);
+            dstd::StringView line = data.substr(ls, i - ls);
             ls = i + 1;
             if (line.empty()) continue;
             sl->parse_buf.assign(line);

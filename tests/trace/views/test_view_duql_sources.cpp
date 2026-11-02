@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -49,7 +50,7 @@ df::DataFrame frame(const View& v) {
 }
 
 std::string cell(const df::DataFrame& f, std::int64_t r,
-                 std::string_view name) {
+                 dftracer::utils::dstd::StringView name) {
     const auto i = bcol(f, name);
     REQUIRE(i >= 0);
     const auto& c = f.columns[static_cast<std::size_t>(i)];
@@ -58,7 +59,8 @@ std::string cell(const df::DataFrame& f, std::int64_t r,
     return std::to_string(static_cast<long long>(bnum(f, r, name)));
 }
 
-std::vector<std::string> column(const df::DataFrame& f, std::string_view name) {
+std::vector<std::string> column(const df::DataFrame& f,
+                                dftracer::utils::dstd::StringView name) {
     std::vector<std::string> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out.push_back(cell(f, r, name));

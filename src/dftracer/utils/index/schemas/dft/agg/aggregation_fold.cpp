@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
@@ -15,7 +16,7 @@ namespace dftracer::utils::index::schemas::dft::agg {
 namespace {
 constexpr std::uint32_t MAX_CACHED_BUILD_ID = 1u << 20;
 
-std::string_view bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::StringView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 }  // namespace
@@ -27,8 +28,8 @@ std::uint32_t AggregationFold::root_id(dstd::Vector<std::uint32_t>& cache,
         if (build_id >= cache.size()) cache.resize(build_id + 1, NO_ID);
         if (cache[build_id] != NO_ID) return cache[build_id];
     }
-    std::string_view text = build_id == NO_ID
-                                ? std::string_view{}
+    dstd::StringView text = build_id == NO_ID
+                                ? dstd::StringView{}
                                 : build_intern_->resolve(build_id);
     std::string storage;
     if (lower) text = trace::internal::to_lower_ascii(text, storage);

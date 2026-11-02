@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/task_graph/reduction.h>
 #include <dftracer/utils/runtime/task_graph/task_graph.h>
@@ -107,7 +108,7 @@ TEST_CASE("TaskGroup - from single task") {
 }
 
 TEST_CASE("TaskGroup - from vector") {
-    std::vector<std::shared_ptr<Task>> tasks;
+    std::vector<dstd::SharedPtr<Task>> tasks;
     tasks.push_back(make_task(
         [](CoroScope&) -> coro::CoroTask<int> { co_return 1; }, "T1"));
     tasks.push_back(make_task(

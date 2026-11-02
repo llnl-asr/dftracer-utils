@@ -4,6 +4,9 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <doctest/doctest.h>
@@ -78,7 +81,7 @@ Written write_all(const std::string& path, GzipWriterOptions o,
 }
 
 std::vector<index::gzip::GzipMemberRecord> index_of(const std::string& path) {
-    std::optional<index::gzip::GzipBuildArtifacts> arts;
+    dstd::Optional<index::gzip::GzipBuildArtifacts> arts;
     run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         index::gzip::CheckpointIndexer::VisitorList none;
         arts = co_await index::gzip::build_gzip_index_artifacts(path, 32u << 20,
@@ -183,7 +186,7 @@ TEST_CASE("GzipLineWriter - order, bounded in flight, fold once") {
     GzipWriterOptions o;
     o.member_size = 4000;
     o.workers = WORKERS;
-    o.fold = [&](const MemberRef& ref, std::string_view pt) {
+    o.fold = [&](const MemberRef& ref, dstd::StringView pt) {
         const std::uint64_t idx = ref.index;
         int r = ++running;
         int m = max_running.load();
@@ -307,7 +310,7 @@ TEST_CASE("GzipLineWriter - errors") {
         GzipWriterOptions o;
         o.member_size = 200;
         o.workers = 2;
-        o.fold = [](const MemberRef& ref, std::string_view) {
+        o.fold = [](const MemberRef& ref, dstd::StringView) {
             const std::uint64_t idx = ref.index;
             if (idx == 3) throw std::runtime_error("boom");
         };
@@ -581,7 +584,7 @@ TEST_CASE("GzipLineWriter - fold sees each member's decoded bytes once") {
     o.member_size = 700;
     o.workers = 4;
     o.on_member = [&](const MemberInfo& m) { members.push_back(m); };
-    o.fold = [&](const MemberRef& ref, std::string_view pt) {
+    o.fold = [&](const MemberRef& ref, dstd::StringView pt) {
         const std::uint64_t idx = ref.index;
         std::lock_guard<std::mutex> lk(mu);
         if (!folded.emplace(idx, std::string(pt)).second) ++dup;
@@ -610,7 +613,7 @@ TEST_CASE(
     o.member_size = 700;
     o.part_size = 3000;
     o.workers = 4;
-    o.fold = [&](const MemberRef& ref, std::string_view) {
+    o.fold = [&](const MemberRef& ref, dstd::StringView) {
         std::lock_guard<std::mutex> lk(mu);
         refs.emplace(ref.index, ref);
     };
@@ -748,8 +751,8 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
     o.member_size = MEMBER;
     o.workers = 4;
     std::mutex mu;
-    std::vector<std::pair<char, std::size_t>> members;
-    o.fold = [&](const MemberRef&, std::string_view pt) {
+    std::vector<dstd::Pair<char, std::size_t>> members;
+    o.fold = [&](const MemberRef&, dstd::StringView pt) {
         std::lock_guard<std::mutex> lk(mu);
         members.emplace_back(pt[0], pt.size());
     };

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_TEXT_LINE_FILTER_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/utilities/text/shared.h>
 
 #include <functional>
@@ -68,7 +69,7 @@ class LineFilterUtility {
      * @param input Line with predicate function
      * @return Optional line (has_value if predicate returns true)
      */
-    coro::CoroTask<std::optional<Line>> operator()(
+    coro::CoroTask<dstd::Optional<Line>> operator()(
         const FilterableLine& input) const {
         if (!input.predicate) {
             // No predicate = pass through
@@ -79,7 +80,7 @@ class LineFilterUtility {
             co_return input.line;
         }
 
-        co_return std::nullopt;
+        co_return dstd::nullopt;
     }
 };
 

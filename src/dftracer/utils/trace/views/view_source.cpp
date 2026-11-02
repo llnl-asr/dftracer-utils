@@ -9,6 +9,11 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_fingerprint
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/index.h>
@@ -57,10 +62,10 @@ bool ViewCursor::has_nested_column() const {
     return *nested_;
 }
 
-coro::CoroTask<std::optional<dftracer::utils::dataframe::Morsel>>
+coro::CoroTask<dstd::Optional<dftracer::utils::dataframe::Morsel>>
 ViewCursor::next(std::int64_t max_rows) {
     const std::int64_t nrows = buf_->num_rows();
-    if (offset_ >= nrows) co_return std::nullopt;
+    if (offset_ >= nrows) co_return dstd::nullopt;
 
     if (has_nested_column() || max_rows <= 0) {
         dftracer::utils::dataframe::Morsel m;
@@ -100,13 +105,14 @@ struct Pushable {
 // The query field a predicate over LazyFrame column `ci` names, or nullopt
 // when it cannot be pushed: an out-of-range column, or ts/dur under a
 // time_scale (the streamed morsel is scaled, the query matches the raw field).
-std::optional<std::string> pushable_field(
+dstd::Optional<std::string> pushable_field(
     std::int32_t ci, const std::vector<std::string>& fnames,
     double time_scale) {
     if (ci < 0 || static_cast<std::size_t>(ci) >= fnames.size())
-        return std::nullopt;
+        return dstd::nullopt;
     const std::string& col = fnames[static_cast<std::size_t>(ci)];
-    if ((col == "ts" || col == "dur") && time_scale != 1.0) return std::nullopt;
+    if ((col == "ts" || col == "dur") && time_scale != 1.0)
+        return dstd::nullopt;
     // The query DSL names a nested arg field by its bare key; a top-level field
     // is unchanged.
     return std::string(dftracer::utils::common::strip_args_prefix(col));
@@ -118,16 +124,16 @@ std::optional<std::string> pushable_field(
 // EndsWith push as an escaped LIKE affix. Matches (whole-string) and Search
 // stay with the engine: the DSL regex searches, and rewriting anchors is not
 // worth a wrong answer.
-std::optional<Pushable> translate_str_pred(
+dstd::Optional<Pushable> translate_str_pred(
     const df::Expr& e, const std::vector<std::string>& fnames,
     double time_scale) {
     std::int32_t ci = -1;
     df::StrPredOp op{};
-    std::string_view pattern;
-    if (!df::expr_as_col_str_pred(e, &ci, &op, &pattern)) return std::nullopt;
-    std::optional<std::string> field = pushable_field(ci, fnames, time_scale);
-    if (!field) return std::nullopt;
-    auto escape_like = [](std::string_view s) {
+    dstd::StringView pattern;
+    if (!df::expr_as_col_str_pred(e, &ci, &op, &pattern)) return dstd::nullopt;
+    dstd::Optional<std::string> field = pushable_field(ci, fnames, time_scale);
+    if (!field) return dstd::nullopt;
+    auto escape_like = [](dstd::StringView s) {
         std::string out;
         out.reserve(s.size());
         for (char c : s) {
@@ -153,9 +159,9 @@ std::optional<Pushable> translate_str_pred(
                             true};
         case df::StrPredOp::Matches:
         case df::StrPredOp::Search:
-            return std::nullopt;
+            return dstd::nullopt;
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // The integer value set of `values` as int64, for any integer width; nullopt
@@ -178,7 +184,7 @@ dstd::Optional<dstd::Vector<std::int64_t>> int_values(
             for (std::int64_t i = 0; i < values.length(); ++i)
                 if (u[i] > static_cast<std::uint64_t>(
                                std::numeric_limits<std::int64_t>::max()))
-                    return std::nullopt;
+                    return dstd::nullopt;
             break;
         }
         case df::TypeId::Unknown:
@@ -204,26 +210,26 @@ dstd::Optional<dstd::Vector<std::int64_t>> int_values(
         case df::TypeId::Struct:
         case df::TypeId::FixedSizeList:
         case df::TypeId::Map:
-            return std::nullopt;
+            return dstd::nullopt;
     }
     df::Series as64 = values.type() == df::TypeId::Int64
                           ? values.share()
                           : values.cast(df::TypeId::Int64);
-    if (!as64.valid() || as64.null_count() != 0) return std::nullopt;
+    if (!as64.valid() || as64.null_count() != 0) return dstd::nullopt;
     return dstd::Vector<std::int64_t>(
         as64.data<std::int64_t>(), as64.data<std::int64_t>() + as64.length());
 }
 
 // A `col is_in values` leaf: exact for an integer or String value set.
-std::optional<Pushable> translate_is_in(const df::Expr& e,
-                                        const std::vector<std::string>& fnames,
-                                        double time_scale) {
+dstd::Optional<Pushable> translate_is_in(const df::Expr& e,
+                                         const std::vector<std::string>& fnames,
+                                         double time_scale) {
     std::int32_t ci = -1;
     df::Series values;
-    if (!df::expr_as_col_is_in(e, &ci, &values)) return std::nullopt;
-    std::optional<std::string> field = pushable_field(ci, fnames, time_scale);
-    if (!field) return std::nullopt;
-    if (values.null_count() != 0) return std::nullopt;
+    if (!df::expr_as_col_is_in(e, &ci, &values)) return dstd::nullopt;
+    dstd::Optional<std::string> field = pushable_field(ci, fnames, time_scale);
+    if (!field) return dstd::nullopt;
+    if (values.null_count() != 0) return dstd::nullopt;
     if (dstd::Optional<dstd::Vector<std::int64_t>> v = int_values(values))
         return Pushable{q::field_in(*field, *v), true};
     if (values.type() == df::TypeId::String) {
@@ -233,21 +239,21 @@ std::optional<Pushable> translate_is_in(const df::Expr& e,
             v.emplace_back(values.string_at(i));
         return Pushable{q::field_in(*field, v), true};
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // Translate a `col <cmp> scalar` LazyFrame predicate into an index-pushable
 // query on the named event field. nullopt for anything else (col-vs-col,
 // arithmetic), which the engine applies itself.
-std::optional<q::Expr> translate_leaf(const df::Expr& e,
-                                      const std::vector<std::string>& fnames,
-                                      double time_scale) {
+dstd::Optional<q::Expr> translate_leaf(const df::Expr& e,
+                                       const std::vector<std::string>& fnames,
+                                       double time_scale) {
     std::int32_t ci = -1;
     df::CmpOp op{};
     df::Scalar rhs;
-    if (!df::expr_as_col_cmp(e, &ci, &op, &rhs)) return std::nullopt;
-    std::optional<std::string> pushed = pushable_field(ci, fnames, time_scale);
-    if (!pushed) return std::nullopt;
+    if (!df::expr_as_col_cmp(e, &ci, &op, &rhs)) return dstd::nullopt;
+    dstd::Optional<std::string> pushed = pushable_field(ci, fnames, time_scale);
+    if (!pushed) return dstd::nullopt;
     const std::string field = std::move(*pushed);
 
     q::CompareOp qop;
@@ -287,7 +293,7 @@ std::optional<q::Expr> translate_leaf(const df::Expr& e,
             lit = q::LiteralNode{rhs.f64()};
             break;
         default:
-            return std::nullopt;
+            return dstd::nullopt;
     }
 
     return q::field_cmp(field, qop, std::move(lit));
@@ -302,14 +308,14 @@ std::optional<q::Expr> translate_leaf(const df::Expr& e,
 //         other side keeps.
 //   NOT - the operand must translate EXACTLY. Negating a superset yields a
 //         subset, which drops rows.
-std::optional<Pushable> translate_pred(const df::Expr& e,
-                                       const std::vector<std::string>& fnames,
-                                       double time_scale) {
+dstd::Optional<Pushable> translate_pred(const df::Expr& e,
+                                        const std::vector<std::string>& fnames,
+                                        double time_scale) {
     df::LogicalOp lop{};
     df::Expr lhs, rhs;
     if (df::expr_as_logical(e, &lop, &lhs, &rhs)) {
-        std::optional<Pushable> a = translate_pred(lhs, fnames, time_scale);
-        std::optional<Pushable> b = translate_pred(rhs, fnames, time_scale);
+        dstd::Optional<Pushable> a = translate_pred(lhs, fnames, time_scale);
+        dstd::Optional<Pushable> b = translate_pred(rhs, fnames, time_scale);
         if (lop == df::LogicalOp::And) {
             if (a && b)
                 return Pushable{
@@ -317,29 +323,29 @@ std::optional<Pushable> translate_pred(const df::Expr& e,
                     a->exact && b->exact};
             if (a) return Pushable{std::move(a->expr), false};
             if (b) return Pushable{std::move(b->expr), false};
-            return std::nullopt;
+            return dstd::nullopt;
         }
-        if (!a || !b) return std::nullopt;
+        if (!a || !b) return dstd::nullopt;
         return Pushable{q::any_of(std::move(a->expr), std::move(b->expr)),
                         a->exact && b->exact};
     }
 
     df::Expr inner;
     if (df::expr_as_not(e, &inner)) {
-        std::optional<Pushable> a = translate_pred(inner, fnames, time_scale);
-        if (!a || !a->exact) return std::nullopt;
+        dstd::Optional<Pushable> a = translate_pred(inner, fnames, time_scale);
+        if (!a || !a->exact) return dstd::nullopt;
         return Pushable{q::negate(std::move(a->expr)), true};
     }
 
     if (auto sp = translate_str_pred(e, fnames, time_scale)) return sp;
     if (auto in = translate_is_in(e, fnames, time_scale)) return in;
-    std::optional<q::Expr> leaf = translate_leaf(e, fnames, time_scale);
-    if (!leaf) return std::nullopt;
+    dstd::Optional<q::Expr> leaf = translate_leaf(e, fnames, time_scale);
+    if (!leaf) return dstd::nullopt;
     return Pushable{std::move(*leaf), true};
 }
 
 coro::Coro run_detached(coro::CoroTask<void> task,
-                        std::shared_ptr<std::promise<void>> done) {
+                        dstd::SharedPtr<std::promise<void>> done) {
     try {
         co_await std::move(task);
         done->set_value();
@@ -352,13 +358,13 @@ coro::Coro run_detached(coro::CoroTask<void> task,
 // producer shares whatever is pulling the cursor - a real pool, or the ad hoc
 // coro::RunLoop a bare CoroTask::get() stands up, which cannot wait across
 // pools.
-std::shared_future<void> spawn_on_current_executor(coro::CoroTask<void> task) {
+dstd::SharedFuture<void> spawn_on_current_executor(coro::CoroTask<void> task) {
     dftracer::utils::coro::Executor* exec =
         dftracer::utils::coro::Executor::current();
     if (!exec) exec = dftracer::utils::default_runtime().executor();
     if (task.handle()) task.handle().promise().set_executor(exec);
     auto done = std::make_shared<std::promise<void>>();
-    std::shared_future<void> fut = done->get_future().share();
+    dstd::SharedFuture<void> fut = done->get_future().share();
     coro::Coro c = run_detached(std::move(task), std::move(done));
     exec->post(c.release());
     return fut;
@@ -392,15 +398,15 @@ dftracer::utils::dataframe::Morsel slice_morsel(
 class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
    public:
     StreamViewCursor(
-        std::shared_ptr<coro::Channel<dftracer::utils::dataframe::Morsel>>
+        dstd::SharedPtr<coro::Channel<dftracer::utils::dataframe::Morsel>>
             channel,
-        std::shared_ptr<coro::CoroSemaphore> budget,
-        std::shared_future<void> producer,
-        std::shared_ptr<std::atomic<bool>> stop,
-        std::shared_ptr<detail::DynamicPrune> dyn_prune,
+        dstd::SharedPtr<coro::CoroSemaphore> budget,
+        dstd::SharedFuture<void> producer,
+        dstd::SharedPtr<std::atomic<bool>> stop,
+        dstd::SharedPtr<detail::DynamicPrune> dyn_prune,
         std::vector<ViewFile> files, double time_scale,
         std::vector<std::string> fnames, bool metadata_rows,
-        std::shared_ptr<coro::CoroSemaphore> gate)
+        dstd::SharedPtr<coro::CoroSemaphore> gate)
         : channel_(std::move(channel)),
           budget_(std::move(budget)),
           producer_(std::move(producer)),
@@ -432,7 +438,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     // workers finish them. Without `gate_` they go out that way, Unordered;
     // with it they go out in unit order (see receive()), a Sequence.
     // batch_index is this cursor's own hand-out counter.
-    coro::CoroTask<std::optional<dftracer::utils::dataframe::Morsel>> next(
+    coro::CoroTask<dstd::Optional<dftracer::utils::dataframe::Morsel>> next(
         std::int64_t max_rows) override {
         const auto ordering =
             gate_ ? dftracer::utils::dataframe::Ordering::Sequence
@@ -454,7 +460,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
             auto item = co_await receive(pending_bytes_);
             if (!item) {
                 producer_.get();
-                co_return std::nullopt;
+                co_return dstd::nullopt;
             }
             pending_ = std::move(item);
             offset_ = 0;
@@ -483,7 +489,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     coro::CoroTask<bool> narrow(
         const dftracer::utils::dataframe::Expr& predicate) override {
         if (!dyn_prune_ || files_.empty()) co_return false;
-        std::optional<Pushable> pushed =
+        dstd::Optional<Pushable> pushed =
             translate_pred(predicate, fnames_, time_scale_);
         if (!pushed) co_return false;
         auto built = std::move(pushed->expr).build();
@@ -546,7 +552,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     // returned at once so no producer waits on budget the hold keeps; the
     // gate bounds how many units can be held. Units a stopped scan never
     // ended go out in seq order once the channel drains.
-    coro::CoroTask<std::optional<Morsel>> receive(std::uint64_t& owed) {
+    coro::CoroTask<dstd::Optional<Morsel>> receive(std::uint64_t& owed) {
         if (!gate_) {
             auto item = co_await channel_->receive();
             owed = item ? detail::morsel_bytes(*item) : 0;
@@ -567,7 +573,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
                 continue;
             }
             if (drained_) {
-                if (held_.empty()) co_return std::nullopt;
+                if (held_.empty()) co_return dstd::nullopt;
                 head_ = held_.begin()->first;
                 continue;
             }
@@ -587,21 +593,21 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         }
     }
 
-    std::shared_ptr<coro::Channel<dftracer::utils::dataframe::Morsel>> channel_;
-    std::shared_ptr<coro::CoroSemaphore> budget_;
-    std::shared_future<void> producer_;
-    std::shared_ptr<std::atomic<bool>> stop_;
-    std::shared_ptr<detail::DynamicPrune> dyn_prune_;
+    dstd::SharedPtr<coro::Channel<dftracer::utils::dataframe::Morsel>> channel_;
+    dstd::SharedPtr<coro::CoroSemaphore> budget_;
+    dstd::SharedFuture<void> producer_;
+    dstd::SharedPtr<std::atomic<bool>> stop_;
+    dstd::SharedPtr<detail::DynamicPrune> dyn_prune_;
     std::vector<ViewFile> files_;
     double time_scale_ = 1.0;
     std::vector<std::string> fnames_;
     // The rows are metadata records, which data evidence says nothing about.
     bool metadata_rows_ = false;
-    std::optional<dftracer::utils::dataframe::Morsel> pending_;
+    dstd::Optional<dftracer::utils::dataframe::Morsel> pending_;
     std::int64_t offset_ = 0;
     std::uint64_t pending_bytes_ = 0;
     std::int64_t next_index_ = 0;
-    std::shared_ptr<coro::CoroSemaphore> gate_;
+    dstd::SharedPtr<coro::CoroSemaphore> gate_;
     std::size_t head_ = 0;
     std::map<std::size_t, std::deque<Morsel>> held_;
     std::set<std::size_t> ended_;
@@ -610,13 +616,13 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
 
 // A group key the view folds natively with the raw value, named as its output
 // column. cat is left out: the view lowercases it, the engine does not.
-std::optional<GroupKey> fixed_group_key(const std::string& name) {
+dstd::Optional<GroupKey> fixed_group_key(const std::string& name) {
     if (name == "name") return GroupKey::name();
     if (name == "pid") return GroupKey::pid();
     if (name == "tid") return GroupKey::tid();
     if (name == "fhash") return GroupKey::fhash();
     if (name == "hhash") return GroupKey::hhash();
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // Numeric event fields every event carries, so the view's per-event fold and
@@ -625,7 +631,7 @@ bool is_fixed_numeric_field(const std::string& name) {
     return name == "ts" || name == "dur" || name == "pid" || name == "tid";
 }
 
-std::optional<AggOp> simple_agg_op(df::Agg op) {
+dstd::Optional<AggOp> simple_agg_op(df::Agg op) {
     switch (op) {
         case df::Agg::Count:
             return AggOp::Count;
@@ -638,33 +644,33 @@ std::optional<AggOp> simple_agg_op(df::Agg op) {
         case df::Agg::Mean:
             return AggOp::Mean;
         default:
-            return std::nullopt;
+            return dstd::nullopt;
     }
 }
 
 // The source column a bare column reference reads, or nullopt.
-std::optional<std::string> column_of(const df::Expr& e,
-                                     const std::vector<std::string>& names) {
+dstd::Optional<std::string> column_of(const df::Expr& e,
+                                      const std::vector<std::string>& names) {
     const std::int32_t ci = df::expr_col_index(e);
     if (ci < 0 || static_cast<std::size_t>(ci) >= names.size())
-        return std::nullopt;
+        return dstd::nullopt;
     return names[static_cast<std::size_t>(ci)];
 }
 
 }  // namespace
 
-std::optional<df::SourceApplication> ViewSource::apply_filter(
+dstd::Optional<df::SourceApplication> ViewSource::apply_filter(
     const df::Expr& predicate) const {
-    if (distinct_ || !can_stream_rows()) return std::nullopt;
+    if (distinct_ || !can_stream_rows()) return dstd::nullopt;
     const std::uint64_t fp = df::expr_fingerprint(predicate);
     if (std::find(applied_filters_.begin(), applied_filters_.end(), fp) !=
         applied_filters_.end())
-        return std::nullopt;
-    std::optional<Pushable> pushed =
+        return dstd::nullopt;
+    dstd::Optional<Pushable> pushed =
         translate_pred(predicate, names(), plan_->time_scale);
-    if (!pushed) return std::nullopt;
+    if (!pushed) return dstd::nullopt;
     auto built = std::move(pushed->expr).build();
-    if (!built.has_value()) return std::nullopt;
+    if (!built.has_value()) return dstd::nullopt;
     auto next = std::make_shared<ViewSource>(
         scan::filter(plan_, std::move(built.value())), emit_dyn_);
     next->applied_filters_ = applied_filters_;
@@ -675,23 +681,23 @@ std::optional<df::SourceApplication> ViewSource::apply_filter(
         pushed->exact ? df::ApplyStatus::Exact : df::ApplyStatus::Inexact};
 }
 
-std::optional<df::SourceApplication> ViewSource::apply_projection(
+dstd::Optional<df::SourceApplication> ViewSource::apply_projection(
     const std::vector<df::NamedExpr>& exprs) const {
-    if (distinct_ || !can_stream_rows()) return std::nullopt;
+    if (distinct_ || !can_stream_rows()) return dstd::nullopt;
     const std::vector<std::string> current = names();
     std::vector<std::string> cols;
     cols.reserve(exprs.size());
     for (const df::NamedExpr& e : exprs) {
-        std::optional<std::string> c = column_of(e.expr, current);
-        if (!c || *c != e.name) return std::nullopt;
+        dstd::Optional<std::string> c = column_of(e.expr, current);
+        if (!c || *c != e.name) return dstd::nullopt;
         cols.push_back(std::move(*c));
     }
-    if (cols == current) return std::nullopt;
+    if (cols == current) return dstd::nullopt;
     auto next =
         std::make_shared<ViewSource>(scan::select(plan_, cols), emit_dyn_);
     next->applied_filters_ = applied_filters_;
     next->absorb_aggregation_ = absorb_aggregation_;
-    if (next->names() != cols) return std::nullopt;
+    if (next->names() != cols) return dstd::nullopt;
     return df::SourceApplication{std::move(next), df::ApplyStatus::Exact};
 }
 
@@ -699,8 +705,8 @@ namespace {
 
 // `e`, positional against `current` (the scan's select tokens, so a list
 // column is rebuilt as a list), as a computed column over the columns it
-// reads, or std::nullopt when it reads none it can name.
-std::optional<detail::ComputedColumn> computed_from(
+// reads, or dstd::nullopt when it reads none it can name.
+dstd::Optional<detail::ComputedColumn> computed_from(
     std::string name, const df::Expr& e,
     const std::vector<std::string>& current) {
     detail::ComputedColumn c;
@@ -712,19 +718,19 @@ std::optional<detail::ComputedColumn> computed_from(
         c.inputs.push_back(current[i]);
     }
     if (df::expr_max_col(e) >= static_cast<std::int32_t>(current.size()))
-        return std::nullopt;
+        return dstd::nullopt;
     c.expr = df::expr_remap_cols(e, at);
     return c;
 }
 
 }  // namespace
 
-std::optional<df::SourceApplication> ViewSource::apply_aggregation(
+dstd::Optional<df::SourceApplication> ViewSource::apply_aggregation(
     const df::AggregateSpec& spec) const {
     const detail::ViewPlan& p = *plan_;
     if (distinct_ || output_ != TraceOutput::Events || !absorb_aggregation_ ||
         !detail::is_row_query(*plan_) || p.auto_numeric_metrics)
-        return std::nullopt;
+        return dstd::nullopt;
     const std::vector<std::string> current = names();
     const std::vector<std::string>& tokens =
         p.select.size() == current.size() ? p.select : current;
@@ -733,17 +739,17 @@ std::optional<df::SourceApplication> ViewSource::apply_aggregation(
     std::vector<std::string> raw_reads;
     std::vector<std::string> expected;
     for (const df::NamedExpr& k : spec.keys) {
-        std::optional<std::string> c = column_of(k.expr, current);
+        dstd::Optional<std::string> c = column_of(k.expr, current);
         if (c && *c == k.name)
-            if (std::optional<GroupKey> key = fixed_group_key(*c)) {
+            if (dstd::Optional<GroupKey> key = fixed_group_key(*c)) {
                 keys.push_back(std::move(*key));
                 raw_reads.push_back(*c);
                 expected.push_back(k.name);
                 continue;
             }
-        std::optional<detail::ComputedColumn> col =
+        dstd::Optional<detail::ComputedColumn> col =
             computed_from(k.name, k.expr, tokens);
-        if (!col) return std::nullopt;
+        if (!col) return dstd::nullopt;
         keys.push_back({GroupKey::Kind::Expr, k.name});
         computed.push_back(std::move(*col));
         expected.push_back(k.name);
@@ -751,19 +757,19 @@ std::optional<df::SourceApplication> ViewSource::apply_aggregation(
     std::vector<AggSpec> aggs;
     for (std::size_t i = 0; i < spec.aggs.size(); ++i) {
         const df::AggregateExpr& a = spec.aggs[i];
-        std::optional<AggOp> op = simple_agg_op(a.op);
-        if (!op || a.by.valid() || a.out.empty()) return std::nullopt;
+        dstd::Optional<AggOp> op = simple_agg_op(a.op);
+        if (!op || a.by.valid() || a.out.empty()) return dstd::nullopt;
         std::string field;
         if (*op != AggOp::Count) {
-            std::optional<std::string> c = column_of(a.input, current);
+            dstd::Optional<std::string> c = column_of(a.input, current);
             if (c && is_fixed_numeric_field(*c)) {
                 field = *c;
                 raw_reads.push_back(*c);
             } else {
                 field = "__view_agg_in_" + std::to_string(i);
-                std::optional<detail::ComputedColumn> col =
+                dstd::Optional<detail::ComputedColumn> col =
                     computed_from(field, a.input, tokens);
-                if (!col) return std::nullopt;
+                if (!col) return dstd::nullopt;
                 computed.push_back(std::move(*col));
             }
         }
@@ -773,13 +779,13 @@ std::optional<df::SourceApplication> ViewSource::apply_aggregation(
     if (!computed.empty()) {
         // The view reads ts/dur unscaled for some aggregates; a computed column
         // must see the values the row stream would.
-        if (p.time_scale != 1.0) return std::nullopt;
+        if (p.time_scale != 1.0) return dstd::nullopt;
         // A computed column replaces a same-named field for every reader, so
         // it may not shadow one the aggregation reads raw.
         for (const detail::ComputedColumn& c : computed)
             if (std::find(raw_reads.begin(), raw_reads.end(), c.name) !=
                 raw_reads.end())
-                return std::nullopt;
+                return dstd::nullopt;
     }
     // A row select here only narrowed the scan to what the aggregation reads;
     // on an aggregation the view would read it as an output projection.
@@ -793,18 +799,18 @@ std::optional<df::SourceApplication> ViewSource::apply_aggregation(
     if (!keys.empty()) grouped = scan::group_by(grouped, std::move(keys));
     grouped = scan::agg(grouped, std::move(aggs));
     auto next = std::make_shared<ViewSource>(std::move(grouped), emit_dyn_);
-    if (next->names() != expected) return std::nullopt;
+    if (next->names() != expected) return dstd::nullopt;
     return df::SourceApplication{std::move(next), df::ApplyStatus::Exact};
 }
 
-std::optional<df::SourceApplication> ViewSource::apply_distinct(
+dstd::Optional<df::SourceApplication> ViewSource::apply_distinct(
     const std::vector<std::string>& subset) const {
     const detail::ViewPlan& p = *plan_;
     if (distinct_ || emit_dyn_ || !absorb_aggregation_ ||
         output_ != TraceOutput::Events || !can_stream_rows() ||
         p.select.empty() || p.cancelled || p.materialize ||
         !p.sort_col.empty() || !p.topk_col.empty() || p.limit || p.offset)
-        return std::nullopt;
+        return dstd::nullopt;
     const std::vector<std::string> current = names();
     std::vector<std::int64_t> key_idx;
     if (subset.empty()) {
@@ -815,11 +821,11 @@ std::optional<df::SourceApplication> ViewSource::apply_distinct(
         key_idx.reserve(subset.size());
         for (const std::string& name : subset) {
             const auto it = std::find(current.begin(), current.end(), name);
-            if (it == current.end()) return std::nullopt;
+            if (it == current.end()) return dstd::nullopt;
             key_idx.push_back(static_cast<std::int64_t>(it - current.begin()));
         }
     }
-    if (!detail::distinct_keyable(p, key_idx)) return std::nullopt;
+    if (!detail::distinct_keyable(p, key_idx)) return dstd::nullopt;
     auto next = std::make_shared<ViewSource>(plan_, emit_dyn_);
     next->applied_filters_ = applied_filters_;
     next->absorb_aggregation_ = absorb_aggregation_;
@@ -833,18 +839,18 @@ bool ViewSource::static_schema() const {
            detail::is_row_query(*plan_) && !plan_->select.empty();
 }
 
-std::optional<std::string> ViewSource::batch_key() const {
+dstd::Optional<std::string> ViewSource::batch_key() const {
     const detail::ViewPlan& p = *plan_;
     if (distinct_ || emit_dyn_ || !absorb_aggregation_ || p.cancelled ||
         p.materialize || p.auto_numeric_metrics || !p.sort_col.empty() ||
         !p.topk_col.empty() || p.limit || p.offset)
-        return std::nullopt;
+        return dstd::nullopt;
     // The session's export branch writes whole events.
     if (output_ == TraceOutput::ExportJson && !p.select.empty())
-        return std::nullopt;
+        return dstd::nullopt;
     // A branch sees the whole shared scan, so only an unfiltered one shares.
     if (output_ == TraceOutput::Branch && (p.query || p.phase != Phase::Any))
-        return std::nullopt;
+        return dstd::nullopt;
     std::string key;
     for (const ViewFile& f : p.files) {
         key += f.file_path;
@@ -904,8 +910,8 @@ ViewSource::add_branches(ViewSession& session,
     struct Tree {
         detail::ScanPlan plan;
         const ContainmentArgs* args;
-        std::shared_ptr<df::DataFrame> call_tree, flamegraph;
-        std::shared_ptr<std::string> partial;
+        dstd::SharedPtr<df::DataFrame> call_tree, flamegraph;
+        dstd::SharedPtr<std::string> partial;
     };
     std::vector<Tree> trees;
     std::vector<std::size_t> tree_of(members.size(), 0);
@@ -977,7 +983,7 @@ ViewSource::add_branches(ViewSession& session,
                 break;
             }
             case TraceOutput::ExportJson: {
-                std::optional<Query> q = detail::effective_query(*m.plan_);
+                dstd::Optional<Query> q = detail::effective_query(*m.plan_);
                 Deferred<ExportStats> h =
                     q ? session.export_json(std::move(*q), *m.sink_)
                       : session.export_json(*m.sink_);
@@ -993,7 +999,7 @@ ViewSource::add_branches(ViewSession& session,
 }
 
 coro::CoroTask<ViewSource::Batch> ViewSource::run_batch(
-    std::vector<std::shared_ptr<const ViewSource>> members) {
+    std::vector<dstd::SharedPtr<const ViewSource>> members) {
     Batch out;
     if (members.empty()) co_return out;
     ViewSession session = base_session(*members.front()->plan_);
@@ -1045,11 +1051,11 @@ df::DataFrame declared(df::DataFrame f, const df::Schema& schema) {
 // producer slot until it ends means every channel closes, even when the scan
 // fails before its folds exist.
 coro::CoroTask<void> run_open_batch(
-    std::shared_ptr<ViewSession> session,
+    dstd::SharedPtr<ViewSession> session,
     std::vector<std::function<df::DataFrame(const ExportStats&)>> frames,
     std::vector<df::Schema> schemas,
-    std::vector<std::shared_ptr<coro::Channel<df::Morsel>>> channels,
-    std::vector<std::shared_ptr<coro::CoroSemaphore>> budgets) {
+    std::vector<dstd::SharedPtr<coro::Channel<df::Morsel>>> channels,
+    std::vector<dstd::SharedPtr<coro::CoroSemaphore>> budgets) {
     std::vector<std::unique_ptr<coro::Channel<df::Morsel>::ProducerGuard>>
         guards;
     guards.reserve(channels.size());
@@ -1072,8 +1078,8 @@ coro::CoroTask<void> run_open_batch(
 
 }  // namespace
 
-std::optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
-    std::vector<std::shared_ptr<const df::Source>> members,
+dstd::Optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
+    std::vector<dstd::SharedPtr<const df::Source>> members,
     std::uint64_t memory_budget) const {
     std::vector<const ViewSource*> views;
     views.reserve(members.size());
@@ -1084,20 +1090,20 @@ std::optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
         if (!v || v->plan_->ordered ||
             (v->output_ == TraceOutput::Events &&
              detail::is_row_query(*v->plan_) && !v->can_stream_rows()))
-            return std::nullopt;
+            return dstd::nullopt;
         views.push_back(v);
     }
     // Streaming only pays for members whose rows it bounds; finished frames
     // hand over directly through collect_batch().
     if (std::none_of(views.begin(), views.end(),
                      [](const ViewSource* v) { return v->can_stream_rows(); }))
-        return std::nullopt;
+        return dstd::nullopt;
 
     auto session =
         std::make_shared<ViewSession>(base_session(*views.front()->plan_));
-    std::vector<std::shared_ptr<coro::Channel<df::Morsel>>> channels;
-    std::vector<std::shared_ptr<coro::CoroSemaphore>> budgets;
-    std::vector<std::shared_ptr<std::atomic<bool>>> dropped;
+    std::vector<dstd::SharedPtr<coro::Channel<df::Morsel>>> channels;
+    std::vector<dstd::SharedPtr<coro::CoroSemaphore>> budgets;
+    std::vector<dstd::SharedPtr<std::atomic<bool>>> dropped;
     std::vector<bool> streamed(views.size(), false);
     for (std::size_t i = 0; i < views.size(); ++i) {
         channels.push_back(coro::make_channel<df::Morsel>(0));
@@ -1115,7 +1121,7 @@ std::optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
     std::vector<df::Schema> schemas;
     for (const ViewSource* v : views) schemas.push_back(v->schema());
 
-    std::shared_future<void> producer =
+    dstd::SharedFuture<void> producer =
         spawn_on_current_executor(run_open_batch(
             session, std::move(frames), std::move(schemas), channels, budgets));
     std::vector<std::unique_ptr<df::Cursor>> cursors;
@@ -1129,8 +1135,8 @@ std::optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
 }
 
 coro::CoroTask<std::vector<df::DataFrame>> ViewSource::collect_batch(
-    std::vector<std::shared_ptr<const df::Source>> members) const {
-    std::vector<std::shared_ptr<const ViewSource>> views;
+    std::vector<dstd::SharedPtr<const df::Source>> members) const {
+    std::vector<dstd::SharedPtr<const ViewSource>> views;
     views.reserve(members.size());
     for (auto& m : members)
         views.push_back(std::static_pointer_cast<const ViewSource>(m));
@@ -1198,7 +1204,7 @@ dftracer::utils::dataframe::Schema ViewSource::schema() const {
 namespace {
 
 df::Schema fixed_schema(
-    std::initializer_list<std::pair<const char*, df::TypeId>> cols) {
+    std::initializer_list<dstd::Pair<const char*, df::TypeId>> cols) {
     df::Schema s;
     for (const auto& [name, type] : cols)
         s.fields.push_back(df::Field{name, df::scalar(type), true});
@@ -1258,7 +1264,7 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
             const df::TypeId id = detail::row_column_type(name, by_path);
             if (id != df::TypeId::Unknown) return df::scalar(id);
             if (harvested.empty()) harvested = scan::column_types(plan_);
-            std::string_view key = detail::window_inner(name);
+            dstd::StringView key = detail::window_inner(name);
             if (!by_path &&
                 key.rfind(dftracer::utils::common::ARGS_PREFIX, 0) == 0)
                 key.remove_prefix(dftracer::utils::common::ARGS_PREFIX.size());
@@ -1299,7 +1305,7 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
     // the stream cannot serve, or a plan still carrying an output select read
     // them from the result instead.
     if (!detail::is_row_query(*plan_) && plan_->select.empty())
-        if (std::optional<df::Schema> planned =
+        if (dstd::Optional<df::Schema> planned =
                 detail::aggregated_output_schema(*plan_))
             return *planned;
     const df::DataFrame& buf = *buffer();
@@ -1393,12 +1399,12 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
             : nullptr;
     auto task =
         [](detail::ScanPlan vv, double ts,
-           std::shared_ptr<coro::Channel<dftracer::utils::dataframe::Morsel>>
+           dstd::SharedPtr<coro::Channel<dftracer::utils::dataframe::Morsel>>
                ch,
-           std::shared_ptr<coro::CoroSemaphore> sem,
-           std::shared_ptr<dftracer::utils::dstd::StringIntern> iv,
-           std::shared_ptr<detail::DynamicPrune> dp, bool emit_dyn,
-           std::shared_ptr<coro::CoroSemaphore> gt) -> coro::CoroTask<void> {
+           dstd::SharedPtr<coro::CoroSemaphore> sem,
+           dstd::SharedPtr<dftracer::utils::dstd::StringIntern> iv,
+           dstd::SharedPtr<detail::DynamicPrune> dp, bool emit_dyn,
+           dstd::SharedPtr<coro::CoroSemaphore> gt) -> coro::CoroTask<void> {
         detail::StreamRowFold fold(ch, sem, iv, vv->select, ts,
                                    detail::metadata_rows(*vv), emit_dyn,
                                    nullptr, nullptr, detail::plan_by_path(*vv),
@@ -1408,7 +1414,7 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     }(scan_view, time_scale, channel, budget, intern, dyn_prune, emit_dyn_,
                                                     gate);
 
-    std::shared_future<void> producer =
+    dstd::SharedFuture<void> producer =
         spawn_on_current_executor(std::move(task));
     return std::make_unique<StreamViewCursor>(
         std::move(channel), std::move(budget), std::move(producer),
@@ -1426,7 +1432,7 @@ dftracer::utils::dataframe::ScanResult ViewSource::scan(
     // as_frame()). No filter/query pushdown here; project the buffer to honor
     // the requested column set. The engine applies the residual filters.
     if (!can_stream_rows()) {
-        std::shared_ptr<const dftracer::utils::dataframe::DataFrame> buf =
+        dstd::SharedPtr<const dftracer::utils::dataframe::DataFrame> buf =
             buffer();
         if (!req.projection.empty())
             buf = std::make_shared<const dftracer::utils::dataframe::DataFrame>(
@@ -1443,7 +1449,7 @@ dftracer::utils::dataframe::ScanResult ViewSource::scan(
     const double time_scale = plan_->time_scale;
     detail::ScanPlan v = plan_;
     for (std::size_t i = 0; i < req.filters.size(); ++i) {
-        std::optional<Pushable> pushed =
+        dstd::Optional<Pushable> pushed =
             translate_pred(req.filters[i], fnames, time_scale);
         if (!pushed) continue;
         auto built = std::move(pushed->expr).build();
@@ -1465,7 +1471,7 @@ dftracer::utils::dataframe::ScanResult ViewSource::scan(
 
 namespace detail {
 
-df::DataFrame partial_frame(std::string_view partial) {
+df::DataFrame partial_frame(dstd::StringView partial) {
     const std::int32_t offsets[2] = {0,
                                      static_cast<std::int32_t>(partial.size())};
     df::DataFrame f;

@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/runtime/compose.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -72,7 +73,7 @@ TEST_SUITE("compose") {
     TEST_CASE("all (&&) fans out, yields a tuple") {
         Runtime rt;
         auto fan = u::op(Doubler{}) && u::op(stringify);
-        std::tuple<int, std::string> out;
+        dstd::Tuple<int, std::string> out;
         rt.block_on(coro::named("all", [&]() -> coro::CoroTask<void> {
             out = co_await fan(21);
         }()));
@@ -94,7 +95,7 @@ TEST_SUITE("compose") {
             co_return x;
         };
         auto both = u::op(first) && u::op(second);
-        std::tuple<bool, int> out;
+        dstd::Tuple<bool, int> out;
         rt.block_on(coro::named("all", [&]() -> coro::CoroTask<void> {
             out = co_await both(7);
         }()));

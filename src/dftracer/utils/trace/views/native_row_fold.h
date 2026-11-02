@@ -3,6 +3,9 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_NATIVE_ROW_FOLD_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -26,11 +29,11 @@ namespace dftracer::utils::trace::views::detail {
 /// for a Field key): null for a missing or JSON-null value, numbers and
 /// booleans (0/1) stringified, an empty array or object as [] or {}. Internal
 /// to the agg-engine <-> row-fold seam; never a user-facing select.
-inline constexpr std::string_view AGG_KEY_ARG_PREFIX = "__aggkey_arg:";
-inline constexpr std::string_view AGG_KEY_FIELD_PREFIX = "__aggkey_field:";
+inline constexpr dstd::StringView AGG_KEY_ARG_PREFIX = "__aggkey_arg:";
+inline constexpr dstd::StringView AGG_KEY_FIELD_PREFIX = "__aggkey_field:";
 /// A Field key of mixed JSON types: each value's canonical JSON text, so `3`
 /// and `"3"` are different keys.
-inline constexpr std::string_view AGG_KEY_JSON_PREFIX = "__aggkey_json:";
+inline constexpr dstd::StringView AGG_KEY_JSON_PREFIX = "__aggkey_json:";
 
 /// Sentinel select token the agg engine uses to ask build_row_frame for a
 /// numeric-only Float64 VALUE column for one auto-discovered numeric arg (the
@@ -40,14 +43,14 @@ inline constexpr std::string_view AGG_KEY_JSON_PREFIX = "__aggkey_json:";
 /// feeds only PodSource::for_each_numeric_arg values). The special name "size"
 /// resolves to the io-cat-derived byte size (derived_size_t), falling back to a
 /// literal numeric "size" arg. Internal to the agg-engine <-> row-fold seam.
-inline constexpr std::string_view AGG_NUM_ARG_PREFIX = "__aggnum_arg:";
+inline constexpr dstd::StringView AGG_NUM_ARG_PREFIX = "__aggnum_arg:";
 
 /// Sentinel select token the agg engine uses to ask build_row_frame for a
 /// fold-DERIVED typed VALUE column: "size" is the io-cat-derived byte size,
 /// "te" is ts+dur. Built with the U64 domain agg_field_typed_t assigns, so a
 /// Sum/Min/Max over it matches the engine agg path column-for-column. Internal
 /// to the agg-engine <-> row-fold seam; never a user-facing select.
-inline constexpr std::string_view AGG_DERIVED_PREFIX = "__aggderiv:";
+inline constexpr dstd::StringView AGG_DERIVED_PREFIX = "__aggderiv:";
 
 /// Select tokens for an aggregation over the window [lo, hi) of raw ts.
 /// window_token(lo, hi, sel) is `sel`'s column, null for events that do not
@@ -56,12 +59,12 @@ inline constexpr std::string_view AGG_DERIVED_PREFIX = "__aggderiv:";
 /// the window, as a Uint64 start or length. Internal to the agg-engine <->
 /// row-fold seam.
 std::string window_token(std::uint64_t lo, std::uint64_t hi,
-                         std::string_view sel);
+                         dstd::StringView sel);
 std::string clip_token(std::uint64_t lo, std::uint64_t hi,
-                       std::string_view part);
+                       dstd::StringView part);
 /// The record field a select token reads (an agg-engine token's field, a
 /// window token's inner field), or `sel` itself; empty for a clip token.
-std::string_view select_source_field(std::string_view sel);
+dstd::StringView select_source_field(dstd::StringView sel);
 
 /// A select token for the array at `path` as a List column named as `path`
 /// is: `spec` is the element type, `i` (Int64), `f` (Float64), `s`
@@ -70,18 +73,18 @@ std::string_view select_source_field(std::string_view sel);
 /// of those fields of object elements, each typed by its letter). A missing,
 /// null or non-array value is a null row; an element of another type is a null
 /// element.
-std::string list_token(std::string_view spec, std::string_view path);
+std::string list_token(dstd::StringView spec, dstd::StringView path);
 
 /// The `sel` a window_token wraps, or `sel` itself.
-std::string_view window_inner(std::string_view sel);
-bool is_clip_token(std::string_view sel);
+dstd::StringView window_inner(dstd::StringView sel);
+bool is_clip_token(dstd::StringView sel);
 
 /// A String column whose row r holds intern string `ids[r]` (NO_ID is null):
 /// a dictionary over a view child when at most a quarter as many distinct
 /// values as rows, else a view column. Values are views into intern chunks
 /// the column keeps alive, so it may outlive `intern`.
 dataframe::Series interned_column(
-    std::span<const std::uint32_t> ids,
+    dstd::Span<const std::uint32_t> ids,
     const dftracer::utils::dstd::StringIntern& intern);
 
 /// Build one native DataFrame from `events`: top-level columns plus every arg
@@ -103,7 +106,7 @@ dataframe::DataFrame build_row_frame(
 /// column layout is unchanged. Empty when the batch holds no numeric arg.
 /// With a window or clip token in `select`, only the events that start in its
 /// window contribute.
-std::vector<std::pair<std::string, dataframe::Series>>
+std::vector<dstd::Pair<std::string, dataframe::Series>>
 build_dyn_numeric_columns(EventRows events,
                           const dftracer::utils::dstd::StringIntern& intern,
                           const std::vector<std::string>& select);
@@ -124,7 +127,7 @@ std::vector<std::string> row_fold_extra_captures(
 /// (accepting `sel` bare or "args."-prefixed).
 /// ViewSource::names() uses this so a streamed morsel's schema always matches
 /// what build_row_frame actually emits for the same select.
-std::string canonical_row_column_name(std::string_view sel,
+std::string canonical_row_column_name(dstd::StringView sel,
                                       bool by_path = false);
 
 /// The statically known type of the column `canonical_row_column_name(sel)`
@@ -132,7 +135,7 @@ std::string canonical_row_column_name(std::string_view sel,
 /// value, whose type build_row_frame infers per batch). Uses the same field
 /// classification as canonical_row_column_name/build_row_frame, so it cannot
 /// drift from what the scan actually emits.
-dataframe::TypeId row_column_type(std::string_view sel, bool by_path = false);
+dataframe::TypeId row_column_type(dstd::StringView sel, bool by_path = false);
 
 /// How build_row_frame's select branch reads the value of `sel` from a
 /// FoldEvent, so a caller can key rows on exactly what the frame holds. REFUSED
@@ -157,7 +160,7 @@ struct RowKeySource {
     std::string arg_full;
     std::string arg_bare;
 };
-RowKeySource row_key_source(std::string_view sel, bool by_path = false);
+RowKeySource row_key_source(dstd::StringView sel, bool by_path = false);
 
 /// Collect matching raw events straight into a native DataFrame. The
 /// row-query terminal (collect() / stream() with no group_by/agg) folds every

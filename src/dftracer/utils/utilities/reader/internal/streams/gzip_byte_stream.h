@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_BYTE_STREAM_H
 
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 
 #include <cstddef>
@@ -38,7 +39,7 @@ class GzipByteStream : public GzipStream {
         }
     }
 
-    coro::CoroTask<std::span<const char>> read_async() override {
+    coro::CoroTask<dstd::Span<const char>> read_async() override {
         co_await ensure_initialized();
         if (!decompression_initialized_) {
             throw ReaderError(ReaderError::InitializationError,
@@ -87,7 +88,7 @@ class GzipByteStream : public GzipStream {
             "Streamed (zero-copy) %zu bytes (position: %zu / %zu)", bytes_read,
             current_position_, target_end_bytes_);
 
-        co_return std::span<const char>(buffer_.data(), bytes_read);
+        co_return dstd::Span<const char>(buffer_.data(), bytes_read);
     }
 };
 

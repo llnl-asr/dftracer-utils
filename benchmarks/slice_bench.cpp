@@ -48,6 +48,8 @@
 #include <dftracer/utils/dataframe/series.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/arrow.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #endif
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -473,10 +475,10 @@ struct ChildResult {
     double rss_mib;
 };
 
-std::optional<ChildResult> run_child(const std::string& binary,
-                                     const std::string& name) {
+dftracer::utils::dstd::Optional<ChildResult> run_child(
+    const std::string& binary, const std::string& name) {
     int fds[2];
-    if (::pipe(fds) != 0) return std::nullopt;
+    if (::pipe(fds) != 0) return dftracer::utils::dstd::nullopt;
     pid_t pid = ::fork();
     if (pid == 0) {
         ::close(fds[0]);
@@ -500,7 +502,7 @@ std::optional<ChildResult> run_child(const std::string& binary,
     double ns = 0;
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
         std::sscanf(out.c_str(), "RESULT %lf", &ns) != 1) {
-        return std::nullopt;
+        return dftracer::utils::dstd::nullopt;
     }
 #if defined(__APPLE__)
     double rss_bytes = static_cast<double>(usage.ru_maxrss);
@@ -605,14 +607,14 @@ int usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string_view first = argc > 1 ? argv[1] : "";
+    dftracer::utils::dstd::StringView first = argc > 1 ? argv[1] : "";
     if (first == "--smoke" && argc == 2) return smoke();
     if (first == "--case" && argc == 3) return run_one(argv[2]);
     int rounds = DEFAULT_ROUNDS;
     std::string label;
     std::string against;
     for (int i = 1; i < argc; i += 2) {
-        std::string_view flag = argv[i];
+        dftracer::utils::dstd::StringView flag = argv[i];
         if (i + 1 >= argc) return usage();
         if (flag == "--rounds") {
             rounds = std::atoi(argv[i + 1]);

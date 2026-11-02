@@ -3,6 +3,9 @@
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/budget.h>
 
 #include <array>
@@ -407,8 +410,8 @@ class GroupKeys {
         for (std::size_t r = 0; r < n; ++r) {
             const auto i = static_cast<std::int64_t>(r);
             const bool null = col.is_null(i);
-            const std::string_view v =
-                null ? std::string_view() : read_bytes(col, i);
+            const dstd::StringView v =
+                null ? dstd::StringView() : read_bytes(col, i);
             if (sorted_) {
                 const bool same = have_last_ && null == last_null_ &&
                                   (null || v == last_bytes_);
@@ -475,10 +478,11 @@ class TransformPassCursor : public Cursor {
           core_(std::move(core)),
           keys_state_(sorted) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         while (true) {
             auto m = co_await in_->next(max_rows);
-            if (!m) co_return std::nullopt;
+            if (!m) co_return dstd::nullopt;
             if (m->rows == 0) continue;
             const auto n = static_cast<std::size_t>(m->rows);
             std::vector<std::int32_t> gid(n, 0);
@@ -532,12 +536,13 @@ class NativeTransformCursor : public Cursor {
           out_names_(std::move(out_names)),
           budget_(budget) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         if (!tail_) co_await build(max_rows);
         co_return co_await tail_->next(max_rows);
     }
 
-    std::optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<std::vector<std::string>> out_names() const override {
         return out_names_;
     }
 
@@ -623,7 +628,7 @@ class NativeTransformCursor : public Cursor {
     std::vector<TypeId> declared_;
     std::vector<std::string> out_names_;
     std::uint64_t budget_;
-    std::shared_ptr<spill::Spool> spool_;
+    dstd::SharedPtr<spill::Spool> spool_;
     std::unique_ptr<Cursor> tail_;
 };
 

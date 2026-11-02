@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_TRACE_TIME_METRIC_H
 #define DFTRACER_UTILS_TRACE_TIME_METRIC_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/event.h>
 
 #include <cstdint>
@@ -15,14 +17,14 @@ namespace dftracer::utils::trace {
 /// Microseconds (US) is the canonical unit; an absent or unknown metric is US.
 enum class TimeMetric { Us, Ns, Ms, Sec };
 
-inline TimeMetric parse_time_metric(std::string_view value) {
+inline TimeMetric parse_time_metric(dstd::StringView value) {
     if (value == "NS") return TimeMetric::Ns;
     if (value == "MS") return TimeMetric::Ms;
     if (value == "SEC") return TimeMetric::Sec;
     return TimeMetric::Us;
 }
 
-inline std::string_view time_metric_to_string(TimeMetric metric) {
+inline dstd::StringView time_metric_to_string(TimeMetric metric) {
     switch (metric) {
         case TimeMetric::Ns:
             return "NS";
@@ -76,7 +78,7 @@ inline double time_metric_us_scale(TimeMetric metric) {
 /// scaling ts/dur from `metric` into that unit.
 struct TimeScaleState {
     TimeMetric metric = TimeMetric::Us;
-    std::optional<TimeMetric> target;
+    dstd::Optional<TimeMetric> target;
 };
 
 /// True when the event is the CM time_metric declaration; sets `out` to its
@@ -84,11 +86,11 @@ struct TimeScaleState {
 inline bool extract_time_metric(const DFTracerEvent& event, TimeMetric& out) {
     if (!event.is_metadata() || event.name != "CM") return false;
     auto name = event.args["name"];
-    if (!name.is_string() || name.get<std::string_view>() != "time_metric")
+    if (!name.is_string() || name.get<dstd::StringView>() != "time_metric")
         return false;
     auto value = event.args["value"];
     if (!value.is_string()) return false;
-    out = parse_time_metric(value.get<std::string_view>());
+    out = parse_time_metric(value.get<dstd::StringView>());
     return true;
 }
 

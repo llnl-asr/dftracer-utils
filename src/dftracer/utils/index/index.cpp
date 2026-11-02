@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/index/index_internal.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -28,7 +31,7 @@ using Ext = store::IndexExtension;
 namespace {
 
 /// A copy with no record would not publish, so it holds this one.
-constexpr std::string_view EMPTY_COPY_KEY = "\xFF";
+constexpr dstd::StringView EMPTY_COPY_KEY = "\xFF";
 
 bool copy_exists(kv::ScopeState state) {
     return state == kv::ScopeState::Ready || state == kv::ScopeState::Failed;
@@ -59,11 +62,11 @@ dstd::Expected<dstd::Vector<kv::Namespace>, dstd::Error> held_copies(
     kv::Store& store, const kv::Snapshot& taken, const kv::ScopeKey& scope) {
     auto declared = taken.namespaces();
     if (!declared) return dstd::Unexpected<dstd::Error>(declared.error());
-    const std::string_view prefix(store_layout::NAMESPACE_PREFIX);
-    const std::string_view meta(store_layout::AGG_META_NAMESPACE_PREFIX);
+    const dstd::StringView prefix(store_layout::NAMESPACE_PREFIX);
+    const dstd::StringView meta(store_layout::AGG_META_NAMESPACE_PREFIX);
     std::map<std::string, kv::NamespaceSpec> latest;
     for (const kv::NamespaceDecl& decl : *declared) {
-        const std::string_view name(decl.name.data(), decl.name.size());
+        const dstd::StringView name(decl.name.data(), decl.name.size());
         if (!name.starts_with(prefix) || name.starts_with(meta)) continue;
         kv::NamespaceSpec& known = latest[std::string(name)];
         if (known.name.empty() || decl.format_version > known.format_version) {
@@ -86,7 +89,7 @@ dstd::Expected<dstd::Vector<kv::Namespace>, dstd::Error> held_copies(
     return held;
 }
 
-dstd::Unexpected<dstd::Error> invalid(std::string_view message) {
+dstd::Unexpected<dstd::Error> invalid(dstd::StringView message) {
     return dstd::Unexpected<dstd::Error>(
         dstd::Error(dstd::Condition::InvalidArgument, message));
 }
@@ -293,7 +296,7 @@ FileBuild::Impl::Copy* FileBuild::Impl::copy_of(const kv::NamespaceSpec& spec) {
         error = registered.error();
         return nullptr;
     }
-    copies.push_back(Copy{*registered, std::nullopt, 0, 0, 0, false, false});
+    copies.push_back(Copy{*registered, dstd::nullopt, 0, 0, 0, false, false});
     return &copies.back();
 }
 
@@ -470,10 +473,10 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::commit() {
 
 dstd::Optional<FileRef> Snapshot::file(dstd::StringView path) const {
     const kv::Snapshot* snap = IndexAccess::store_snapshot(*this);
-    if (snap == nullptr) return std::nullopt;
+    if (snap == nullptr) return dstd::nullopt;
     kv::ScopeKey scope = kv::ScopeKey::file(path);
     const kv::CopyInfo info = snap->copy_info(read_ns(Ext::Members), scope);
-    if (!copy_exists(info.state)) return std::nullopt;
+    if (!copy_exists(info.state)) return dstd::nullopt;
     return IndexAccess::make_file(
         dstd::String(path.data(), path.size()), std::move(scope),
         info.sources.empty() ? SourceStat{} : info.sources[0]);
@@ -575,7 +578,7 @@ class RetainedRoots {
     }
 
    private:
-    using Held = std::list<std::pair<std::string, Index>>;
+    using Held = std::list<dstd::Pair<std::string, Index>>;
     std::mutex mutex_;
     Held roots_;
 };
@@ -619,7 +622,7 @@ dstd::Expected<Index, dstd::Error> Index::open(dstd::StringView root) {
 dstd::Expected<Snapshot, dstd::Error> Index::snapshot() const {
     auto found = impl_->find_store();
     if (!found) return dstd::Unexpected<dstd::Error>(found.error());
-    if (!*found) return IndexAccess::make_snapshot(std::nullopt);
+    if (!*found) return IndexAccess::make_snapshot(dstd::nullopt);
     auto taken = (*found)->snapshot();
     if (!taken) return dstd::Unexpected<dstd::Error>(taken.error());
     return IndexAccess::make_snapshot(std::move(*taken));

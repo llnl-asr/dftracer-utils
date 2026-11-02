@@ -3,6 +3,10 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_TRACE_READER_SHARED_H
 
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -25,7 +29,7 @@ namespace dftracer::utils::utilities::reader::internal {
 // Perfetto-viewable as JSON arrays, but break simdjson iterate_many which
 // expects whitespace-separated NDJSON. Safe to call on any chunk: if the
 // bookends are absent the range is returned unchanged.
-inline std::string_view strip_ndjson_bookends(std::string_view bytes) {
+inline dstd::StringView strip_ndjson_bookends(dstd::StringView bytes) {
     const char* s = bytes.data();
     const char* e = bytes.data() + bytes.size();
     auto is_ws = [](char c) {
@@ -41,12 +45,12 @@ inline std::string_view strip_ndjson_bookends(std::string_view bytes) {
         --e;
         while (e > s && is_ws(e[-1])) --e;
     }
-    return std::string_view(s, static_cast<std::size_t>(e - s));
+    return dstd::StringView(s, static_cast<std::size_t>(e - s));
 }
 
 // A field's value for the evaluator: JSON null as a null cell, an object or
 // array as its canonical JSON text.
-inline std::optional<duql::Cell> ondemand_to_cell(
+inline dstd::Optional<duql::Cell> ondemand_to_cell(
     simdjson::ondemand::value val) {
     switch (val.type().value_unsafe()) {
         case simdjson::ondemand::json_type::string: {
@@ -84,18 +88,18 @@ inline std::optional<duql::Cell> ondemand_to_cell(
         default:
             break;
     }
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // Whether the query reads `key` as any(key).
-inline bool query_reads_any(const duql::Query& query, std::string_view key) {
+inline bool query_reads_any(const duql::Query& query, dstd::StringView key) {
     const auto& paths = query.any_paths();
     return std::binary_search(paths.begin(), paths.end(), key);
 }
 
 // Stores the scalar elements of the array `val` under `<key>.<k>`, the keys
 // the evaluator reads for any(key).
-inline void store_positions(duql::ValueMap& fields, std::string_view key,
+inline void store_positions(duql::ValueMap& fields, dstd::StringView key,
                             simdjson::ondemand::value val) {
     auto arr = val.get_array();
     if (arr.error()) return;
@@ -124,7 +128,7 @@ inline void store_positions(duql::ValueMap& fields, std::string_view key,
 // by its positions, any other referenced field as one value (a null as a
 // null cell, so an args value of the same name cannot stand in for it).
 inline void store_referenced(duql::ValueMap& fields, const duql::Query& query,
-                             std::string_view key,
+                             dstd::StringView key,
                              simdjson::ondemand::value val,
                              simdjson::ondemand::json_type type) {
     if (type == simdjson::ondemand::json_type::array &&
@@ -140,7 +144,7 @@ inline void store_referenced(duql::ValueMap& fields, const duql::Query& query,
 // Cheap; compute once per read to gate the dotted-key work below.
 inline bool query_references_dotted(const duql::Query& query) {
     for (const auto& f : query.fields()) {
-        if (f.find('.') != std::string_view::npos) return true;
+        if (f.find('.') != dstd::StringView::npos) return true;
     }
     return false;
 }
@@ -151,8 +155,8 @@ inline bool query_references_dotted(const duql::Query& query) {
 // hoisted out of the per-event loop. Consumes `val` exactly once.
 inline void store_referenced_nested(duql::ValueMap& fields,
                                     const duql::Query& query, bool check_dotted,
-                                    std::string_view parent,
-                                    std::string_view child,
+                                    dstd::StringView parent,
+                                    dstd::StringView child,
                                     simdjson::ondemand::value val) {
     const bool want_bare = query.references(child);
     std::string dotted;
@@ -181,9 +185,9 @@ inline void store_referenced_nested(duql::ValueMap& fields,
 
 // Chunk generator with index-driven pruning. Defined in trace_reader.cpp;
 // shared by read_json (core) and read_arrow (Arrow export).
-coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
-    std::shared_ptr<Reader> reader, std::string index_path,
-    std::string file_path, ReadConfig config, std::optional<duql::Query> query,
+coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
+    dstd::SharedPtr<Reader> reader, std::string index_path,
+    std::string file_path, ReadConfig config, dstd::Optional<duql::Query> query,
     bool extend_to_line_boundary = false);
 
 }  // namespace dftracer::utils::utilities::reader::internal

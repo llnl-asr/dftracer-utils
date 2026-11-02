@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -82,7 +83,7 @@ DataFrame make_frame() {
         inner.push_back(i);
         offs.push_back(static_cast<std::int32_t>(inner.size()));
     }
-    std::vector<std::string_view> tv(text.begin(), text.end());
+    std::vector<dftracer::utils::dstd::StringView> tv(text.begin(), text.end());
     DataFrame df;
     df.names = {"i", "f", "b", "s", "j", "l"};
     df.columns.push_back(Series::flat_i64(i64.data(), N, valid.data()));

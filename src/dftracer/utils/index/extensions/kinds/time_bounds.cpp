@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/tables.h>
@@ -19,11 +22,11 @@ bool parse(const std::string& text, std::uint64_t& out) {
 
 // Per chunk, the [min, max] of the zonemap of `path`.
 ankerl::unordered_dense::map<std::uint64_t,
-                             std::pair<std::uint64_t, std::uint64_t>>
+                             dstd::Pair<std::uint64_t, std::uint64_t>>
 chunk_bounds(const index::Snapshot& snapshot, const index::FileRef& file,
-             std::string_view path) {
+             dstd::StringView path) {
     ankerl::unordered_dense::map<std::uint64_t,
-                                 std::pair<std::uint64_t, std::uint64_t>>
+                                 dstd::Pair<std::uint64_t, std::uint64_t>>
         out;
     if (!index::extension_current(snapshot, file,
                                   index::store::IndexExtension::Zonemap))
@@ -42,13 +45,13 @@ chunk_bounds(const index::Snapshot& snapshot, const index::FileRef& file,
 }  // namespace
 
 ankerl::unordered_dense::map<std::uint64_t,
-                             std::pair<std::uint64_t, std::uint64_t>>
+                             dstd::Pair<std::uint64_t, std::uint64_t>>
 chunk_time_bounds(const index::Snapshot& snapshot, const index::FileRef& file) {
     return chunk_bounds(snapshot, file, "te");
 }
 
 ankerl::unordered_dense::map<std::uint64_t,
-                             std::pair<std::uint64_t, std::uint64_t>>
+                             dstd::Pair<std::uint64_t, std::uint64_t>>
 chunk_start_bounds(const index::Snapshot& snapshot,
                    const index::FileRef& file) {
     return chunk_bounds(snapshot, file, "ts");
@@ -85,10 +88,10 @@ index::gzip::TimeBounds file_time_bounds(const index::Snapshot& snapshot,
     return bounds;
 }
 
-std::optional<std::pair<double, double>> file_value_range(
+dstd::Optional<dstd::Pair<double, double>> file_value_range(
     const index::Snapshot& snapshot, const index::FileRef& file,
-    std::string_view path) {
-    std::optional<std::pair<double, double>> out;
+    dstd::StringView path) {
+    dstd::Optional<dstd::Pair<double, double>> out;
     if (!index::extension_current(snapshot, file,
                                   index::store::IndexExtension::Zonemap))
         return out;

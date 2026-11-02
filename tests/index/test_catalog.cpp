@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/indexer.h>
@@ -142,7 +144,7 @@ std::map<std::uint64_t, index::extensions::kinds::Zone> zones_of(
     for (auto& [chunk, bytes] : dftu_utils_test::index_take(
              index::granules(snapshot, file, IndexExtension::Zonemap, path))) {
         auto zone = index::extensions::kinds::decode_zone(
-            std::string_view(bytes.data(), bytes.size()));
+            dstd::StringView(bytes.data(), bytes.size()));
         REQUIRE(zone);
         out.emplace(chunk, std::move(*zone));
     }
@@ -183,13 +185,13 @@ std::map<std::string, PathStat> catalog_of(const std::string& trace,
 // The column types of the file's catalog, without the "args." prefix.
 std::map<std::string, ColumnType> column_types(const std::string& trace,
                                                const std::string& index_path) {
-    constexpr std::string_view ARGS = "args.";
+    constexpr dstd::StringView ARGS = "args.";
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     std::map<std::string, ColumnType> out;
     for (auto& [name, t] : dftu_utils_test::index_take(
              index::file_column_types(snapshot, file))) {
-        std::string_view path(name.data(), name.size());
+        dstd::StringView path(name.data(), name.size());
         if (path.starts_with(ARGS)) path.remove_prefix(ARGS.size());
         out[std::string(path)] = t;
     }
@@ -488,7 +490,7 @@ TEST_SUITE("PathCatalog") {
             return std::make_pair(
                 -static_cast<std::int64_t>(cat.at("args." + p).count), p);
         };
-        std::pair<std::int64_t, std::string> worst_kept = rank(kept.front());
+        dstd::Pair<std::int64_t, std::string> worst_kept = rank(kept.front());
         for (const auto& p : kept) worst_kept = std::max(worst_kept, rank(p));
         for (const auto& p : dropped) CHECK(rank(p) > worst_kept);
 
@@ -571,7 +573,7 @@ TEST_SUITE("Absence") {
         for (const auto& [chunk, bytes] : blooms) {
             CAPTURE(chunk);
             auto bloom = index::extensions::kinds::decode_bloom(
-                std::string_view(bytes.data(), bytes.size()));
+                dstd::StringView(bytes.data(), bytes.size()));
             REQUIRE(bloom);
             CHECK(bloom->num_entries() <= 3);
             CHECK(bloom->num_levels() == 1);

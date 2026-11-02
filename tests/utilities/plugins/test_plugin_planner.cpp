@@ -8,6 +8,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugins_internal.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -268,7 +269,7 @@ TEST_SUITE("PluginAttachHandle") {
     using dftracer::utils::trace::views::ViewSession;
 
     static double col_sum(const dftracer::utils::dataframe::DataFrame& df,
-                          std::string_view name) {
+                          dstd::StringView name) {
         using T = dftracer::utils::dataframe::TypeId;
         auto s = df.column(name);
         double total = 0;

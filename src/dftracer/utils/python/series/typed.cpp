@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/series_detail.h>
 
 #include <cstdint>
@@ -154,7 +155,7 @@ PyObject* series_from_bytes(PyObject*, PyObject* obj) {
     Py_buffer view;
     if (PyObject_GetBuffer(obj, &view, PyBUF_SIMPLE) < 0) return nullptr;
     auto f = dataframe::frame_from_native(
-        std::string_view(static_cast<const char*>(view.buf),
+        dstd::StringView(static_cast<const char*>(view.buf),
                          static_cast<std::size_t>(view.len)));
     PyBuffer_Release(&view);
     if (!f || f->columns.size() != 1) {

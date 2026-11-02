@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/store.h>
 #include <doctest/doctest.h>
@@ -59,8 +60,8 @@ void write_scope(Store& store, const NamespaceSpec& spec,
     REQUIRE(run(store.close()).has_value());
 }
 
-std::optional<std::string> read_scope(Store& store, const NamespaceSpec& spec,
-                                      const std::string& path) {
+dstd::Optional<std::string> read_scope(Store& store, const NamespaceSpec& spec,
+                                       const std::string& path) {
     auto ns = store.ns(spec);
     REQUIRE(ns.has_value());
     auto snapshot = store.snapshot();
@@ -69,7 +70,7 @@ std::optional<std::string> read_scope(Store& store, const NamespaceSpec& spec,
         *ns, ScopeKey::file(dstd::StringView(path.data(), path.size())),
         view_of("k"));
     REQUIRE(found.has_value());
-    if (!found->has_value()) return std::nullopt;
+    if (!found->has_value()) return dstd::nullopt;
     const auto bytes = (*found)->bytes();
     return std::string(reinterpret_cast<const char*>(bytes.data()),
                        bytes.size());
@@ -88,7 +89,7 @@ TEST_SUITE("store adopt") {
         write_scope(target, spec, "/traces/own.pfw", "own");
         // The first snapshot arms the interval before the next look at the
         // folder.
-        CHECK(read_scope(target, spec, "/traces/moved.pfw") == std::nullopt);
+        CHECK(read_scope(target, spec, "/traces/moved.pfw") == dstd::nullopt);
 
         {
             Store source = open_store(from);
@@ -99,9 +100,9 @@ TEST_SUITE("store adopt") {
         CHECK(*moved == 1);
 
         CHECK(read_scope(target, spec, "/traces/moved.pfw") ==
-              std::optional<std::string>("moved"));
+              dstd::Optional<std::string>("moved"));
         CHECK(read_scope(target, spec, "/traces/own.pfw") ==
-              std::optional<std::string>("own"));
+              dstd::Optional<std::string>("own"));
 
         auto again = Store::adopt(sv(from), sv(to));
         REQUIRE(again.has_value());

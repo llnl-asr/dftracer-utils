@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 
@@ -19,7 +21,7 @@ namespace dftracer::utils::index::cache {
 /// Open (or reuse) the rollup store at `path` (see rollup_cache_path). A
 /// ReadWrite open creates the folder. Null when the store cannot be opened, or
 /// for a ReadOnly open of a folder with no store. Never throws.
-std::shared_ptr<CacheStore> open_rollup_db(const std::string& path,
+dstd::SharedPtr<CacheStore> open_rollup_db(const std::string& path,
                                            CacheStore::Mode mode);
 
 /// Persist the engine partial `state` as the rollup identified by `sig`, in
@@ -63,7 +65,7 @@ std::uint64_t rest_signature(const trace::views::detail::ViewPlan& plan);
 /// Q's group keys are a subset of R's - then Q is R rolled up over the dropped
 /// dimensions. Exact match is the identity case. This is the materialized-view
 /// query rewrite. Marks the rollup it serves as used when `db` is writable.
-std::optional<dftracer::utils::dataframe::DataFrame> find_subsuming_rollup(
+dstd::Optional<dftracer::utils::dataframe::DataFrame> find_subsuming_rollup(
     CacheStore& db, const trace::views::detail::ViewPlan& plan);
 
 /// The index root `plan`'s files share; empty when they share none, or for a

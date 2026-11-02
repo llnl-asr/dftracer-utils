@@ -11,6 +11,8 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -47,8 +49,8 @@ Series i64s(const std::vector<std::int64_t>& v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
-using I = std::optional<std::int64_t>;
-const I NI = std::nullopt;
+using I = dstd::Optional<std::int64_t>;
+const I NI = dstd::nullopt;
 
 std::vector<I> i64_col(const DataFrame& df, const std::string& name) {
     Series c = df.column(name);
@@ -57,7 +59,7 @@ std::vector<I> i64_col(const DataFrame& df, const std::string& name) {
     std::vector<I> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dstd::nullopt);
         else
             out.emplace_back(c.data<std::int64_t>()[i]);
     }
@@ -542,7 +544,7 @@ TEST_SUITE("lazy frame ops") {
             return df;
         };
         auto reference = [&](bool use_j, int keep) {
-            std::map<std::pair<std::int64_t, std::int64_t>, int> seen;
+            std::map<dstd::Pair<std::int64_t, std::int64_t>, int> seen;
             std::vector<I> out;
             for (int i = 0; i < N; ++i) {
                 const bool null = i % 11 == 0;
@@ -747,8 +749,8 @@ TEST_SUITE("lazy frame ops") {
         return df;
     }
 
-    using D = std::optional<double>;
-    const D ND = std::nullopt;
+    using D = dstd::Optional<double>;
+    const D ND = dstd::nullopt;
 
     static std::vector<D> f64_col(const DataFrame& df,
                                   const std::string& name) {
@@ -759,7 +761,7 @@ TEST_SUITE("lazy frame ops") {
         std::vector<D> out;
         for (std::int64_t i = 0; i < c.length(); ++i) {
             if (c.is_null(i))
-                out.emplace_back(std::nullopt);
+                out.emplace_back(dstd::nullopt);
             else
                 out.emplace_back(c.data<double>()[i]);
         }

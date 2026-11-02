@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/config.h>
 #include <simdjson.h>
 
@@ -29,7 +30,7 @@ ConfigTree::Node ConfigTree::build_node(const simdjson::dom::element& el) {
         }
         case simdjson::dom::element_type::STRING:
             n.kind = DFTU_VAL_STR;
-            n.str = std::string(std::string_view(el.get_string()));
+            n.str = std::string(dstd::StringView(el.get_string()));
             break;
         case simdjson::dom::element_type::INT64:
             n.kind = DFTU_VAL_I64;
@@ -91,14 +92,14 @@ ConfigTree ConfigTree::from_json_string(const std::string& json) {
     return tree;
 }
 
-ConfigTree::Node* ConfigTree::find_member(Node& obj, std::string_view key) {
+ConfigTree::Node* ConfigTree::find_member(Node& obj, dstd::StringView key) {
     for (auto& [k, v] : obj.members) {
         if (k == key) return &v;
     }
     return nullptr;
 }
 
-ConfigTree::Node ConfigTree::infer_leaf(std::string_view raw) {
+ConfigTree::Node ConfigTree::infer_leaf(dstd::StringView raw) {
     Node n;
     if (!raw.empty()) {
         std::int64_t iv = 0;
@@ -138,14 +139,14 @@ ConfigTree::Node ConfigTree::infer_leaf(std::string_view raw) {
     return n;
 }
 
-void ConfigTree::set(std::string_view dotted_key, std::string_view raw_value) {
+void ConfigTree::set(dstd::StringView dotted_key, dstd::StringView raw_value) {
     dirty_ = true;
 
-    std::vector<std::string_view> segs;
+    std::vector<dstd::StringView> segs;
     std::size_t start = 0;
     while (start <= dotted_key.size()) {
         const auto dot = dotted_key.find('.', start);
-        if (dot == std::string_view::npos) {
+        if (dot == dstd::StringView::npos) {
             segs.push_back(dotted_key.substr(start));
             break;
         }

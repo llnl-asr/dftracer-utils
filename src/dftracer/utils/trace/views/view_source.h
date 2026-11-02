@@ -3,6 +3,9 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_SOURCE_H
 
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstdint>
@@ -23,19 +26,19 @@ namespace dftracer::utils::trace::views {
 class ViewCursor : public dftracer::utils::dataframe::Cursor {
    public:
     explicit ViewCursor(
-        std::shared_ptr<const dftracer::utils::dataframe::DataFrame> buf)
+        dstd::SharedPtr<const dftracer::utils::dataframe::DataFrame> buf)
         : buf_(std::move(buf)) {}
 
-    coro::CoroTask<std::optional<dftracer::utils::dataframe::Morsel>> next(
+    coro::CoroTask<dstd::Optional<dftracer::utils::dataframe::Morsel>> next(
         std::int64_t max_rows) override;
 
    private:
     bool has_nested_column() const;
 
-    std::shared_ptr<const dftracer::utils::dataframe::DataFrame> buf_;
+    dstd::SharedPtr<const dftracer::utils::dataframe::DataFrame> buf_;
     std::int64_t offset_ = 0;
     std::int64_t next_index_ = 0;
-    mutable std::optional<bool> nested_;
+    mutable dstd::Optional<bool> nested_;
 };
 
 /// What a trace source yields: its view's events or aggregate, or one of the
@@ -81,7 +84,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// above them apply to the terminal's frame.
     ViewSource(detail::ScanPlan plan, TraceOutput output,
                ContainmentArgs tree = {},
-               std::shared_ptr<ExportSink> sink = nullptr)
+               dstd::SharedPtr<ExportSink> sink = nullptr)
         : plan_(std::move(plan)),
           output_(output),
           tree_(std::move(tree)),
@@ -96,7 +99,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// The raw row scan the view's own aggregation engine groups over. It
     /// never absorbs a group-by: that group-by is the view's execution, and
     /// absorbing it would recurse into the same engine.
-    static std::shared_ptr<ViewSource> engine_scan(detail::ScanPlan raw,
+    static dstd::SharedPtr<ViewSource> engine_scan(detail::ScanPlan raw,
                                                    bool emit_dyn) {
         auto s = std::make_shared<ViewSource>(std::move(raw), emit_dyn);
         s->absorb_aggregation_ = false;
@@ -114,12 +117,12 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// at plan time), a plain column projection, and a group-by on fixed
     /// event fields with simple numeric aggregates. Sort, top-k and limits
     /// stay with the engine above the scan.
-    std::optional<dftracer::utils::dataframe::SourceApplication> apply_filter(
+    dstd::Optional<dftracer::utils::dataframe::SourceApplication> apply_filter(
         const dftracer::utils::dataframe::Expr& predicate) const override;
-    std::optional<dftracer::utils::dataframe::SourceApplication>
+    dstd::Optional<dftracer::utils::dataframe::SourceApplication>
     apply_projection(const std::vector<dftracer::utils::dataframe::NamedExpr>&
                          exprs) const override;
-    std::optional<dftracer::utils::dataframe::SourceApplication>
+    dstd::Optional<dftracer::utils::dataframe::SourceApplication>
     apply_aggregation(
         const dftracer::utils::dataframe::AggregateSpec& spec) const override;
 
@@ -131,27 +134,27 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// column the event does not hold as a plain field or arg (io_cat,
     /// acc_pat, window, clip, list and agg-engine tokens); the host cursor
     /// then handles it.
-    std::optional<dftracer::utils::dataframe::SourceApplication> apply_distinct(
-        const std::vector<std::string>& subset) const override;
+    dstd::Optional<dftracer::utils::dataframe::SourceApplication>
+    apply_distinct(const std::vector<std::string>& subset) const override;
 
     /// Equal for sources that read the same files with the same scan
     /// settings (time range and scale, metadata, index roots, spill budget),
     /// so they can share one ViewSession scan. Branch-local shape (filters,
     /// phase, group-by, aggregates, select, time bucket) is not part of it.
     /// None for a plan the session cannot run as a branch.
-    std::optional<std::string> batch_key() const override;
+    dstd::Optional<std::string> batch_key() const override;
     coro::CoroTask<std::vector<dftracer::utils::dataframe::DataFrame>>
     collect_batch(
-        std::vector<std::shared_ptr<const dftracer::utils::dataframe::Source>>
+        std::vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
             members) const override;
 
     /// Row members stream as branches of one ViewSession scan; an aggregation
-    /// member arrives as one frame once the scan ends. std::nullopt when a
+    /// member arrives as one frame once the scan ends. dstd::nullopt when a
     /// member's rows cannot stream (a select that needs the name resolver).
-    std::optional<
+    dstd::Optional<
         std::vector<std::unique_ptr<dftracer::utils::dataframe::Cursor>>>
     open_batch(
-        std::vector<std::shared_ptr<const dftracer::utils::dataframe::Source>>
+        std::vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
             members,
         std::uint64_t memory_budget) const override;
 
@@ -163,7 +166,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// ViewSession: an aggregation as collect(), a row query as
     /// collect_events().
     static coro::CoroTask<Batch> run_batch(
-        std::vector<std::shared_ptr<const ViewSource>> members);
+        std::vector<dstd::SharedPtr<const ViewSource>> members);
 
     /// The plan this source scans.
     const detail::ScanPlan& plan() const { return plan_; }
@@ -211,7 +214,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
         const detail::ScanPlan& v, std::uint64_t memory_budget,
         std::vector<std::string> fnames) const;
 
-    std::shared_ptr<const dftracer::utils::dataframe::DataFrame> buffer()
+    dstd::SharedPtr<const dftracer::utils::dataframe::DataFrame> buffer()
         const {
         if (!buf_)
             buf_ =
@@ -226,7 +229,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     detail::ScanPlan plan_;
     TraceOutput output_ = TraceOutput::Events;
     ContainmentArgs tree_;
-    std::shared_ptr<ExportSink> sink_;
+    dstd::SharedPtr<ExportSink> sink_;
     SessionBranch branch_;
     bool emit_dyn_ = false;
     // Fingerprints of the predicates already absorbed, so offering one again
@@ -237,17 +240,17 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     // (empty when not a distinct scan). Set once by apply_distinct().
     bool distinct_ = false;
     std::vector<std::int64_t> distinct_key_idx_;
-    mutable std::shared_ptr<const dftracer::utils::dataframe::DataFrame> buf_;
+    mutable dstd::SharedPtr<const dftracer::utils::dataframe::DataFrame> buf_;
     // The source never changes, so its schema (index metadata reads for a row
     // query, the buffered result otherwise) is computed once.
     mutable std::mutex schema_mu_;
-    mutable std::optional<dftracer::utils::dataframe::Schema> schema_;
+    mutable dstd::Optional<dftracer::utils::dataframe::Schema> schema_;
 };
 
 namespace detail {
 
 /// A partial as the one-row frame a partial terminal yields, and back.
-dftracer::utils::dataframe::DataFrame partial_frame(std::string_view partial);
+dftracer::utils::dataframe::DataFrame partial_frame(dstd::StringView partial);
 std::string partial_of(const dftracer::utils::dataframe::DataFrame& frame);
 
 /// ExportStats as the one-row frame a sink terminal yields, and back.

@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
@@ -149,9 +150,9 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
     std::uint64_t off = 0;
 
     // Appends the whole lines of `text` and keeps the rest in `carry`.
-    auto feed = [&](std::string_view text) -> coro::CoroTask<void> {
+    auto feed = [&](dstd::StringView text) -> coro::CoroTask<void> {
         const auto nl = text.rfind('\n');
-        if (nl == std::string_view::npos) {
+        if (nl == dstd::StringView::npos) {
             carry.append(text);
             co_return;
         }
@@ -171,7 +172,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
             if (n <= 0) break;
             off += static_cast<std::uint64_t>(n);
             co_await feed(
-                std::string_view(reinterpret_cast<const char*>(in.data()),
+                dstd::StringView(reinterpret_cast<const char*>(in.data()),
                                  static_cast<std::size_t>(n)));
             continue;
         }
@@ -189,7 +190,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
         gz.set_output(out.data(), out.size());
         const InflateStatus rc = gz.inflate();
         co_await feed(
-            std::string_view(reinterpret_cast<const char*>(out.data()),
+            dstd::StringView(reinterpret_cast<const char*>(out.data()),
                              out.size() - gz.avail_out()));
 
         if (rc == InflateStatus::StreamEnd) {

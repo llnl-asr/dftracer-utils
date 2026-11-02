@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>  // spill::Dir
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/memory/budget.h>
 
 #include <algorithm>
@@ -90,7 +91,7 @@ class LiveSource : public GroupSource {
 
 struct AggSpiller::Impl {
     std::uint64_t budget = 0;
-    std::vector<std::shared_ptr<spill::Dir>> dirs;
+    std::vector<dstd::SharedPtr<spill::Dir>> dirs;
     std::vector<std::string> runs;
     int next_id = 0;
 

@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_LIBDEFLATE_GZIP_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_LIBDEFLATE_GZIP_H
 
+#include <dftracer/utils/dstd/optional.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -44,9 +46,9 @@ class GzipMemberDecompressor {
     GzipMemberDecompressor& operator=(GzipMemberDecompressor&& other) noexcept;
 
     /// out_cap must be >= the member's uncompressed size. nullopt on failure.
-    std::optional<DecompressResult> decompress(const void* comp,
-                                               std::size_t comp_len, void* out,
-                                               std::size_t out_cap) const;
+    dstd::Optional<DecompressResult> decompress(const void* comp,
+                                                std::size_t comp_len, void* out,
+                                                std::size_t out_cap) const;
 
     /// Reports the exact status so streaming callers can tell InsufficientSpace
     /// from BadData. `result` is filled on Ok.
@@ -54,7 +56,7 @@ class GzipMemberDecompressor {
                                  void* out, std::size_t out_cap,
                                  DecompressResult& result) const;
 
-    std::optional<std::vector<std::uint8_t>> decompress_member(
+    dstd::Optional<std::vector<std::uint8_t>> decompress_member(
         const void* comp, std::size_t comp_len,
         std::size_t uncompressed_size) const;
 
@@ -72,7 +74,7 @@ class GzipMemberDecompressor {
 /// last '\n' (0 when no line is complete). nullopt when the deflate data is
 /// invalid rather than short, so corruption is never recovered. The kept bytes
 /// are not checksum-verified.
-std::optional<std::size_t> decode_truncated_member(
+dstd::Optional<std::size_t> decode_truncated_member(
     const void* comp, std::size_t comp_len, std::vector<std::uint8_t>& out);
 
 /// Compresses a whole buffer into one gzip member. Reusable, not thread-safe,
@@ -90,8 +92,8 @@ class GzipMemberCompressor {
     std::size_t bound(std::size_t len) const;
 
     /// out_cap must be >= bound(len). nullopt if it did not fit.
-    std::optional<std::size_t> compress(const void* data, std::size_t len,
-                                        void* out, std::size_t out_cap) const;
+    dstd::Optional<std::size_t> compress(const void* data, std::size_t len,
+                                         void* out, std::size_t out_cap) const;
 
     /// Compress one gzip member into `out`, resized to the exact member length.
     /// `out`'s capacity is reused when large enough and the worst-case buffer
@@ -102,7 +104,7 @@ class GzipMemberCompressor {
 
     /// One-shot convenience: allocates a fresh buffer per call. Prefer
     /// compress_member_into() when compressing repeatedly.
-    std::optional<std::vector<std::uint8_t>> compress_member(
+    dstd::Optional<std::vector<std::uint8_t>> compress_member(
         const void* data, std::size_t len) const;
 
     bool valid() const { return c_ != nullptr; }

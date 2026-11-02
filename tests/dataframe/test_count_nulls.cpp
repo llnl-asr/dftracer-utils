@@ -3,6 +3,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -19,10 +21,12 @@ namespace {
 
 // g = a, a, a, b and x = 1.0, null, 3.0, 5.0: group a holds one null.
 struct Fixture {
-    std::vector<std::string_view> keys{"a", "a", "a", "b"};
+    std::vector<dftracer::utils::dstd::StringView> keys{"a", "a", "a", "b"};
     std::vector<double> xs{1.0, 0.0, 3.0, 5.0};
     std::vector<std::uint8_t> valid{0x0d};  // rows 0, 2, 3 are present
-    Series g = Series::strings(std::span<const std::string_view>(keys));
+    Series g = Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
+            keys));
     Series x = Series::flat_f64(xs.data(), 4, valid.data());
 
     DataFrame run(std::vector<df::AggExprSpec> specs) {
@@ -42,10 +46,12 @@ TEST_CASE("count of a column skips nulls per group") {
 }
 
 TEST_CASE("count of a column of nulls is 0") {
-    std::vector<std::string_view> keys{"a", "a"};
+    std::vector<dftracer::utils::dstd::StringView> keys{"a", "a"};
     std::vector<double> xs{0.0, 0.0};
     std::vector<std::uint8_t> valid{0x00};
-    Series g = Series::strings(std::span<const std::string_view>(keys));
+    Series g = Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
+            keys));
     Series x = Series::flat_f64(xs.data(), 2, valid.data());
     std::vector<const Series*> inputs = {&g, &x};
     DataFrame r = df::group_agg_expr(

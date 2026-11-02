@@ -3,6 +3,9 @@
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prefilter.h>
@@ -43,7 +46,7 @@ struct ArrowKeyHint {
 
 inline std::size_t resolve_col_idx(RecordBatchBuilder& builder,
                                    std::vector<ArrowKeyHint>& hints,
-                                   std::size_t pos, std::string_view key_sv,
+                                   std::size_t pos, dstd::StringView key_sv,
                                    ColumnType type) {
     if (pos < hints.size()) {
         auto& h = hints[pos];
@@ -87,7 +90,7 @@ inline std::size_t resolve_col_idx(RecordBatchBuilder& builder,
 // always round-tripped as JSON strings (flattening is one level only).
 void append_scalar_or_json(RecordBatchBuilder& builder,
                            std::vector<ArrowKeyHint>& hints, std::size_t& pos,
-                           std::string_view key_sv,
+                           dstd::StringView key_sv,
                            simdjson::ondemand::value val,
                            simdjson::ondemand::json_type type) {
     switch (type) {
@@ -195,7 +198,7 @@ bool arrow_row_from_doc(RecordBatchBuilder& builder,
                 key_buf[key_sv.size()] = '.';
                 std::memcpy(key_buf + key_sv.size() + 1, nk.data(), nk.size());
                 append_scalar_or_json(builder, hints, pos,
-                                      std::string_view(key_buf, needed), nv,
+                                      dstd::StringView(key_buf, needed), nv,
                                       nt_r.value());
             }
             continue;
@@ -214,7 +217,7 @@ void collect_query_fields(simdjson::ondemand::document_reference doc,
 // Build a simdjson-padded buffer containing only the lines in `chunk` that
 // pass the line-level prefilter. For queries with no useful prefilter, the
 // caller should skip this and feed the raw chunk directly.
-std::string collect_matching_lines(std::span<const char> chunk,
+std::string collect_matching_lines(dstd::Span<const char> chunk,
                                    const index::plan::Prefilter& prefilter) {
     std::string out;
     out.reserve(chunk.size());
@@ -225,7 +228,7 @@ std::string collect_matching_lines(std::span<const char> chunk,
         const void* nl = std::memchr(data + pos, '\n', len - pos);
         std::size_t end_pos = nl ? static_cast<const char*>(nl) - data : len;
         if (end_pos > pos) {
-            std::string_view line(data + pos, end_pos - pos);
+            dstd::StringView line(data + pos, end_pos - pos);
             if (prefilter.may_match(line)) {
                 out.append(line);
                 out.push_back('\n');
@@ -276,7 +279,7 @@ void collect_query_fields(simdjson::ondemand::document_reference doc,
 
 coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     ReadConfig config, std::size_t batch_size) {
-    std::optional<Query> query;
+    dstd::Optional<Query> query;
     if (!config.query.empty()) {
         auto parsed = Query::from_string(config.query);
         if (!parsed) throw duql::DuqlParseError(parsed.error());
@@ -359,9 +362,9 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     builder.reserve(batch_size);
 
     auto maybe_flush = [&builder, &arena, batch_size](
-                           bool final) -> std::optional<ArrowExportResult> {
-        if (builder.num_rows() == 0) return std::nullopt;
-        if (!final && builder.num_rows() < batch_size) return std::nullopt;
+                           bool final) -> dstd::Optional<ArrowExportResult> {
+        if (builder.num_rows() == 0) return dstd::nullopt;
+        if (!final && builder.num_rows() < batch_size) return dstd::nullopt;
         auto result = builder.finish();
         arena.clear();
         if (!builder.is_schema_locked()) builder.lock_schema();
@@ -405,7 +408,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
             padded = simdjson::padded_string(std::move(collected));
         } else {
             auto trimmed = strip_ndjson_bookends(
-                std::string_view(chunk.data(), chunk.size()));
+                dstd::StringView(chunk.data(), chunk.size()));
             if (trimmed.empty()) continue;
             padded = simdjson::padded_string(trimmed);
         }
@@ -424,7 +427,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
                 if (use_compiled) {
                     if (!eval_compiled_eq(compiled_probes, doc)) continue;
                 } else if (query->has_expressions()) {
-                    const std::string_view src(it.source().data(),
+                    const dstd::StringView src(it.source().data(),
                                                it.source().size());
                     simdjson::dom::element record;
                     if (expr_parser.parse(src.data(), src.size()).get(record) !=

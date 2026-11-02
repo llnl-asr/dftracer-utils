@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
@@ -25,7 +27,7 @@ namespace df = dftracer::utils::dataframe;
 namespace {
 
 struct NullSink : ExportSink {
-    void write(std::string_view) override {}
+    void write(dstd::StringView) override {}
 };
 
 // Sets an environment variable for one scope.
@@ -76,7 +78,7 @@ df::DataFrame frame(const View& v) {
 
 // Row `r` of column `name` as text: `null`, a string, or a number.
 std::string cell(const df::DataFrame& f, std::int64_t r,
-                 std::string_view name) {
+                 dstd::StringView name) {
     const auto i = bcol(f, name);
     REQUIRE(i >= 0);
     const auto& c = f.columns[static_cast<std::size_t>(i)];
@@ -88,7 +90,7 @@ std::string cell(const df::DataFrame& f, std::int64_t r,
     return std::to_string(d);
 }
 
-std::vector<std::string> column(const df::DataFrame& f, std::string_view name) {
+std::vector<std::string> column(const df::DataFrame& f, dstd::StringView name) {
     std::vector<std::string> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out.push_back(cell(f, r, name));
@@ -1308,7 +1310,7 @@ TEST_SUITE("View duql joins") {
     // Column `name` of `f` in the order of column `i`; `i` itself sorted.
     static std::vector<std::string> by_i(const df::DataFrame& f,
                                          const std::string& name) {
-        std::vector<std::pair<long, std::string>> rows;
+        std::vector<dstd::Pair<long, std::string>> rows;
         const auto ids = column(f, "i");
         const auto vals = column(f, name);
         for (std::size_t r = 0; r < ids.size(); ++r)

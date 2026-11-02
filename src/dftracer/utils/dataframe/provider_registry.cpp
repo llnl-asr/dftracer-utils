@@ -16,6 +16,8 @@
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/singleton.h>
 
 #include <cstdint>
@@ -42,17 +44,19 @@ struct Providers {
     std::unordered_map<std::string, ProviderEntry> by_name;
 };
 
-std::mutex& registry_mutex() { return dstd::Singleton<Providers>::get().mutex; }
-
-std::unordered_map<std::string, ProviderEntry>& providers() {
-    return dstd::Singleton<Providers>::get().by_name;
+std::mutex& registry_mutex() {
+    return dftracer::utils::dstd::Singleton<Providers>::get().mutex;
 }
 
-std::optional<ProviderEntry> find_provider(const char* name) {
-    if (!name) return std::nullopt;
+std::unordered_map<std::string, ProviderEntry>& providers() {
+    return dftracer::utils::dstd::Singleton<Providers>::get().by_name;
+}
+
+dftracer::utils::dstd::Optional<ProviderEntry> find_provider(const char* name) {
+    if (!name) return dftracer::utils::dstd::nullopt;
     std::lock_guard<std::mutex> lock(registry_mutex());
     auto it = providers().find(name);
-    if (it == providers().end()) return std::nullopt;
+    if (it == providers().end()) return dftracer::utils::dstd::nullopt;
     return it->second;
 }
 
@@ -149,14 +153,15 @@ bool is_well_formed(const DataType& dt) {
 // names exactly `names`, in order, and every field is well-formed; otherwise
 // returns nullopt so the caller falls back to Unknown for every column, the
 // same as a provider that declared nothing.
-std::optional<Schema> to_schema(const ::dftu_schema& built,
-                                const std::vector<std::string>& names) {
-    if (built.top.size() != names.size()) return std::nullopt;
+dftracer::utils::dstd::Optional<Schema> to_schema(
+    const ::dftu_schema& built, const std::vector<std::string>& names) {
+    if (built.top.size() != names.size()) return dftracer::utils::dstd::nullopt;
     Schema s;
     s.fields.reserve(built.top.size());
     for (std::size_t i = 0; i < built.top.size(); ++i) {
         const Field& f = built.top[i];
-        if (f.name != names[i] || !is_well_formed(f.type)) return std::nullopt;
+        if (f.name != names[i] || !is_well_formed(f.type))
+            return dftracer::utils::dstd::nullopt;
         s.fields.push_back(f);
     }
     return s;
@@ -170,7 +175,7 @@ class ProviderCursor final : public Cursor {
    public:
     ProviderCursor(const ::dftu_cursor_vt* vt, void* self,
                    std::vector<std::string> expected_projection,
-                   std::shared_ptr<const Source> source)
+                   dftracer::utils::dstd::SharedPtr<const Source> source)
         : source_(std::move(source)),
           vt_(vt),
           self_(self),
@@ -184,8 +189,9 @@ class ProviderCursor final : public Cursor {
     ProviderCursor(const ProviderCursor&) = delete;
     ProviderCursor& operator=(const ProviderCursor&) = delete;
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        std::optional<Morsel> out;
+    coro::CoroTask<dftracer::utils::dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
+        dftracer::utils::dstd::Optional<Morsel> out;
         if (try_next(max_rows, out)) co_return out;
         auto* task = reinterpret_cast<coro::CoroTask<void>*>(pending_task_);
         pending_task_ = nullptr;
@@ -203,7 +209,8 @@ class ProviderCursor final : public Cursor {
     // for next() to await and finish. Callers must fall back to next()
     // immediately on a false return rather than calling try_next again,
     // exactly as the Cursor::try_next contract requires.
-    bool try_next(std::int64_t max_rows, std::optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows,
+                  dftracer::utils::dstd::Optional<Morsel>& out) override {
         pending_result_ = ::dftu_result_frame{};
         if (::dftu_task* t = vt_->next(self_, max_rows, &pending_result_)) {
             pending_task_ = t;
@@ -235,12 +242,13 @@ class ProviderCursor final : public Cursor {
     }
 
    private:
-    std::optional<Morsel> finish(const ::dftu_result_frame& out) {
+    dftracer::utils::dstd::Optional<Morsel> finish(
+        const ::dftu_result_frame& out) {
         if (!DFTU_RESULT_OK(out))
             throw std::runtime_error(describe(DFTU_RESULT_ERROR(out)));
 
         ::dftu_dataframe* frame = DFTU_RESULT_VALUE(out);
-        if (!frame) return std::nullopt;
+        if (!frame) return dftracer::utils::dstd::nullopt;
 
         DataFrame df = dataframe_handle_take(frame);
         // Checked on every morsel, not just the first: the check is
@@ -262,7 +270,7 @@ class ProviderCursor final : public Cursor {
 
     // Released after the cursor itself: a derived source's destroy() runs
     // only once every cursor it opened is gone.
-    std::shared_ptr<const Source> source_;
+    dftracer::utils::dstd::SharedPtr<const Source> source_;
     const ::dftu_cursor_vt* vt_;
     void* self_;
     PluginGovernor gov_;
@@ -272,14 +280,14 @@ class ProviderCursor final : public Cursor {
 };
 
 // A value outside dftu_apply_status reads as NO_CHANGE, like to_pushed.
-std::optional<ApplyStatus> to_apply_status(std::int32_t v) {
+dftracer::utils::dstd::Optional<ApplyStatus> to_apply_status(std::int32_t v) {
     switch (v) {
         case DFTU_APPLY_EXACT:
             return ApplyStatus::Exact;
         case DFTU_APPLY_INEXACT:
             return ApplyStatus::Inexact;
         default:
-            return std::nullopt;
+            return dftracer::utils::dstd::nullopt;
     }
 }
 
@@ -311,8 +319,9 @@ class ProviderSource final
     // A source a plugin derived through apply(): owned here, destroyed once,
     // and holding the sources it was derived from (its parent, and a join's
     // right side) so the plugin's state behind them outlives it.
-    ProviderSource(ProviderEntry entry,
-                   std::vector<std::shared_ptr<const Source>> inputs)
+    ProviderSource(
+        ProviderEntry entry,
+        std::vector<dftracer::utils::dstd::SharedPtr<const Source>> inputs)
         : entry_(entry), inputs_(std::move(inputs)), owned_(true) {}
 
     ~ProviderSource() override {
@@ -322,7 +331,7 @@ class ProviderSource final
     ProviderSource(const ProviderSource&) = delete;
     ProviderSource& operator=(const ProviderSource&) = delete;
 
-    std::optional<SourceApplication> apply_filter(
+    dftracer::utils::dstd::Optional<SourceApplication> apply_filter(
         const Expr& predicate) const override {
         ExprLoans loans;
         ::dftu_apply_request req{};
@@ -331,7 +340,7 @@ class ProviderSource final
         return offer(req, false);
     }
 
-    std::optional<SourceApplication> apply_projection(
+    dftracer::utils::dstd::Optional<SourceApplication> apply_projection(
         const std::vector<NamedExpr>& exprs) const override {
         ExprLoans loans;
         std::vector<::dftu_named_expr> cexprs;
@@ -345,7 +354,7 @@ class ProviderSource final
         return offer(req, true);
     }
 
-    std::optional<SourceApplication> apply_aggregation(
+    dftracer::utils::dstd::Optional<SourceApplication> apply_aggregation(
         const AggregateSpec& spec) const override {
         ExprLoans loans;
         std::vector<::dftu_named_expr> keys;
@@ -366,17 +375,17 @@ class ProviderSource final
         return offer(req, true);
     }
 
-    std::optional<SourceApplication> apply_sort(
+    dftracer::utils::dstd::Optional<SourceApplication> apply_sort(
         const SortSpec& spec) const override {
         return offer_sort(DFTU_APPLY_SORT, spec, 0);
     }
 
-    std::optional<SourceApplication> apply_topn(const SortSpec& spec,
-                                                std::int64_t k) const override {
+    dftracer::utils::dstd::Optional<SourceApplication> apply_topn(
+        const SortSpec& spec, std::int64_t k) const override {
         return offer_sort(DFTU_APPLY_TOPN, spec, k);
     }
 
-    std::optional<SourceApplication> apply_limit(
+    dftracer::utils::dstd::Optional<SourceApplication> apply_limit(
         std::int64_t offset, std::int64_t n) const override {
         ::dftu_apply_request req{};
         req.kind = DFTU_APPLY_LIMIT;
@@ -385,7 +394,8 @@ class ProviderSource final
         return offer(req, false);
     }
 
-    std::optional<SourceApplication> apply_tail(std::int64_t n) const override {
+    dftracer::utils::dstd::Optional<SourceApplication> apply_tail(
+        std::int64_t n) const override {
         ::dftu_apply_request req{};
         req.kind = DFTU_APPLY_TAIL;
         req.u.tail.n = n;
@@ -394,11 +404,11 @@ class ProviderSource final
 
     // Only a right side from a provider can cross the C ABI; a plugin tells
     // whether it is its own by comparing other_vt.
-    std::optional<SourceApplication> apply_join(
+    dftracer::utils::dstd::Optional<SourceApplication> apply_join(
         const JoinSpec& spec) const override {
         const auto* other =
             dynamic_cast<const ProviderSource*>(spec.other.get());
-        if (!other) return std::nullopt;
+        if (!other) return dftracer::utils::dstd::nullopt;
         std::vector<const char*> left_on;
         left_on.reserve(spec.left_on.size());
         for (const std::string& k : spec.left_on) left_on.push_back(k.c_str());
@@ -432,7 +442,8 @@ class ProviderSource final
         if (entry_.vt.schema_types) {
             ::dftu_schema built;
             entry_.vt.schema_types(entry_.self, &built);
-            if (std::optional<Schema> typed = to_schema(built, name_strs))
+            if (dftracer::utils::dstd::Optional<Schema> typed =
+                    to_schema(built, name_strs))
                 return *typed;
         }
 
@@ -491,9 +502,8 @@ class ProviderSource final
     }
 
    private:
-    std::optional<SourceApplication> offer_sort(::dftu_apply_kind kind,
-                                                const SortSpec& spec,
-                                                std::int64_t k) const {
+    dftracer::utils::dstd::Optional<SourceApplication> offer_sort(
+        ::dftu_apply_kind kind, const SortSpec& spec, std::int64_t k) const {
         std::vector<const char*> by;
         by.reserve(spec.by.size());
         for (const std::string& b : spec.by) by.push_back(b.c_str());
@@ -511,35 +521,38 @@ class ProviderSource final
         return offer(req, false);
     }
 
-    std::optional<SourceApplication> offer(
+    dftracer::utils::dstd::Optional<SourceApplication> offer(
         const ::dftu_apply_request& req, bool schema_changing,
-        std::shared_ptr<const Source> other = nullptr) const {
-        if (!entry_.vt.apply) return std::nullopt;
+        dftracer::utils::dstd::SharedPtr<const Source> other = nullptr) const {
+        if (!entry_.vt.apply) return dftracer::utils::dstd::nullopt;
         ::dftu_apply_result out{};
         out.status = DFTU_APPLY_NO_CHANGE;
         entry_.vt.apply(entry_.self, &req, &out);
-        if (out.status == DFTU_APPLY_NO_CHANGE) return std::nullopt;
-        std::optional<ApplyStatus> status = to_apply_status(out.status);
-        if (!out.vt) return std::nullopt;
-        std::vector<std::shared_ptr<const Source>> inputs{shared_from_this()};
+        if (out.status == DFTU_APPLY_NO_CHANGE)
+            return dftracer::utils::dstd::nullopt;
+        dftracer::utils::dstd::Optional<ApplyStatus> status =
+            to_apply_status(out.status);
+        if (!out.vt) return dftracer::utils::dstd::nullopt;
+        std::vector<dftracer::utils::dstd::SharedPtr<const Source>> inputs{
+            shared_from_this()};
         if (other) inputs.push_back(std::move(other));
         auto derived = std::make_shared<ProviderSource>(
             ProviderEntry{*out.vt, out.self}, std::move(inputs));
         // Constructed first so an answer refused below is still destroyed.
         if (!status || (schema_changing && *status != ApplyStatus::Exact))
-            return std::nullopt;
+            return dftracer::utils::dstd::nullopt;
         return SourceApplication{std::move(derived), *status};
     }
 
     ProviderEntry entry_;
-    std::vector<std::shared_ptr<const Source>> inputs_;
+    std::vector<dftracer::utils::dstd::SharedPtr<const Source>> inputs_;
     bool owned_ = false;
 };
 
 }  // namespace
 
-std::shared_ptr<Source> make_provider_source(const ::dftu_source_vt& vt,
-                                             void* self) {
+dftracer::utils::dstd::SharedPtr<Source> make_provider_source(
+    const ::dftu_source_vt& vt, void* self) {
     return std::make_shared<ProviderSource>(ProviderEntry{vt, self});
 }
 
@@ -636,11 +649,12 @@ int dftu_provider_unregister(const char* name) {
 }
 
 dftu_lazyframe* dftu_lazyframe_from_provider(const char* name) {
-    std::optional<dftracer::utils::dataframe::ProviderEntry> entry =
-        dftracer::utils::dataframe::find_provider(name);
+    dftracer::utils::dstd::Optional<dftracer::utils::dataframe::ProviderEntry>
+        entry = dftracer::utils::dataframe::find_provider(name);
     if (!entry) return nullptr;
-    std::shared_ptr<dftracer::utils::dataframe::Source> source =
-        std::make_shared<dftracer::utils::dataframe::ProviderSource>(*entry);
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::dataframe::Source>
+        source = std::make_shared<dftracer::utils::dataframe::ProviderSource>(
+            *entry);
     return dftracer::utils::dataframe::lazyframe_handle_wrap(
         dftracer::utils::dataframe::LazyFrame::scan(std::move(source)));
 }

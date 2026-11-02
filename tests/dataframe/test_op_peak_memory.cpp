@@ -98,8 +98,8 @@ class GenCursor : public Cursor {
               std::size_t pad)
         : rows_(rows), keys_(keys), seed_(seed), pad_(pad) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-        if (at_ >= rows_) co_return std::nullopt;
+    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
+        if (at_ >= rows_) co_return dstd::nullopt;
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
         std::vector<std::int64_t> k(n), t(n), v(n), g(n);
         std::vector<std::string> s(n);
@@ -191,8 +191,8 @@ class ListCursor : public Cursor {
    public:
     explicit ListCursor(std::int64_t rows) : rows_(rows) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-        if (at_ >= rows_) co_return std::nullopt;
+    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
+        if (at_ >= rows_) co_return dstd::nullopt;
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
         std::vector<std::int64_t> pid(static_cast<std::size_t>(n));
         for (std::int64_t i = 0; i < n; ++i)
@@ -653,6 +653,8 @@ std::set<std::string> registry_ops() {
     std::set<std::string> names;
 #define DFTU_LAZY_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6) \
     names.insert(#name);
+#include <dftracer/utils/dstd/optional.h>
+
 #include <dftracer/utils/dataframe/exported_lazy_ops.def>
 
     return names;

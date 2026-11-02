@@ -49,6 +49,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
@@ -552,7 +553,7 @@ int main(int argc, char **argv) {
     const char *record = nullptr;
     const char *check = nullptr;
     for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
+        dstd::StringView arg = argv[i];
         bool has_value = i + 1 < argc;
         if (arg == "--smoke") {
             smoke = true;
@@ -565,7 +566,7 @@ int main(int argc, char **argv) {
         } else if (arg == "--check" && has_value) {
             check = argv[++i];
         } else if (arg == "--format" && has_value) {
-            std::string_view fmt = argv[++i];
+            dstd::StringView fmt = argv[++i];
             if (fmt != "csv" && fmt != "table") return usage();
             csv = fmt == "csv";
         } else {

@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_TRACE_TRACE_CONFIG_H
 #define DFTRACER_UTILS_TRACE_TRACE_CONFIG_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/args_map.h>
 #include <dftracer/utils/trace/time_metric.h>
 
@@ -33,7 +35,7 @@ TimeMetric read_time_metric(const std::string& trace_path);
 
 /// Parse one NDJSON line into a @ref TraceConfig if it is an end event; nullopt
 /// otherwise. Shared by the tail probe and the index-assisted scan fallback.
-std::optional<TraceConfig> parse_end_event(std::string_view line);
+dstd::Optional<TraceConfig> parse_end_event(dstd::StringView line);
 
 }  // namespace dftracer::utils::trace
 

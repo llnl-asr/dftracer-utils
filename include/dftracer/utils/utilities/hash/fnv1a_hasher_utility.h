@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_HASH_FNV1A_HASHER_UTILITY_H
 
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/hash/types.h>
 
 #include <cstddef>
@@ -31,7 +32,7 @@ struct Fnv1aHashBuilder {
         }
     }
 
-    void update(std::string_view data) { update(data.data(), data.size()); }
+    void update(dstd::StringView data) { update(data.data(), data.size()); }
 
     template <typename T>
     void update_value(const T& val) {
@@ -62,7 +63,7 @@ class Fnv1aHasherUtility {
         current_hash_ = Hash{0};
     }
 
-    void update(std::string_view data) {
+    void update(dstd::StringView data) {
         for (unsigned char c : data) {
             state_ ^= c;
             state_ *= FNV1A_PRIME;
@@ -71,7 +72,7 @@ class Fnv1aHasherUtility {
     }
 
     /// Hash a C-string as bytes, not as a pointer address.
-    void update(const char* str) { update(std::string_view(str)); }
+    void update(const char* str) { update(dstd::StringView(str)); }
 
     /// Hash a trivially-copyable value as its raw bytes. Pointer types are
     /// excluded so a string literal is never hashed as an address.
@@ -82,11 +83,11 @@ class Fnv1aHasherUtility {
         void>::type
     update(const T& value) {
         update(
-            std::string_view(reinterpret_cast<const char*>(&value), sizeof(T)));
+            dstd::StringView(reinterpret_cast<const char*>(&value), sizeof(T)));
     }
 
     void update(const std::vector<unsigned char>& data) {
-        update(std::string_view(reinterpret_cast<const char*>(data.data()),
+        update(dstd::StringView(reinterpret_cast<const char*>(data.data()),
                                 data.size()));
     }
 

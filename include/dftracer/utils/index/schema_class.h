@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMA_CLASS_H
 #define DFTRACER_UTILS_INDEX_SCHEMA_CLASS_H
 
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/record_schema.h>
 
@@ -22,7 +23,7 @@ template <std::size_t N>
 struct FixedString {
     char value[N]{};
     constexpr FixedString(const char (&s)[N]) { std::copy_n(s, N, value); }
-    constexpr std::string_view view() const { return {value, N - 1}; }
+    constexpr dstd::StringView view() const { return {value, N - 1}; }
 };
 
 /// Field options: index past the path budget, or play a trace
@@ -56,10 +57,10 @@ struct Field {
 namespace schemas {
 /// The built-in schemas, for `using extends = ...`.
 struct DFTracer {
-    static constexpr std::string_view id = "dftracer";
+    static constexpr dstd::StringView id = "dftracer";
 };
 struct Generic {
-    static constexpr std::string_view id = "generic";
+    static constexpr dstd::StringView id = "generic";
 };
 }  // namespace schemas
 
@@ -76,7 +77,7 @@ struct Unwrap {
     static constexpr bool OPTIONAL = false;
 };
 template <typename T>
-struct Unwrap<std::optional<T>> {
+struct Unwrap<dstd::Optional<T>> {
     using type = T;
     static constexpr bool OPTIONAL = true;
 };
@@ -191,9 +192,9 @@ void record_fields(std::vector<index::FieldSpec>& out,
 }  // namespace detail
 
 /// The spec of schema class `T`: an aggregate whose members are all
-/// index::Field, with a `static constexpr std::string_view id`, optionally
+/// index::Field, with a `static constexpr dstd::StringView id`, optionally
 /// `using extends =` another schema class (schemas::Generic when absent)
-/// and optionally a `static constexpr std::string_view SOURCE` holding its
+/// and optionally a `static constexpr dstd::StringView SOURCE` holding its
 /// duql source members. A member of another type does not compile.
 template <typename T>
 SchemaSpec schema_spec() {
@@ -209,9 +210,9 @@ SchemaSpec schema_spec() {
 }
 
 /// Registers schema class `T` (see schema_spec) under `source`; throws as
-/// register_schema(const SchemaSpec&, std::string_view).
+/// register_schema(const SchemaSpec&, dstd::StringView).
 template <typename T>
-const RecordSchema& register_schema(std::string_view source) {
+const RecordSchema& register_schema(dstd::StringView source) {
     return register_schema(schema_spec<T>(), source);
 }
 

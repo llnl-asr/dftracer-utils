@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
@@ -242,7 +243,7 @@ TEST_CASE("Scheduler - Threading with multiple workers") {
         "RootTask");
 
     // Create child tasks
-    std::shared_ptr<Task> last_child;
+    dstd::SharedPtr<Task> last_child;
     for (int i = 1; i < 20; ++i) {
         auto child = make_task(
             [&]() {
@@ -297,7 +298,7 @@ TEST_CASE("Scheduler - Single threaded execution") {
         },
         "RootTask");
 
-    std::shared_ptr<Task> last_child;
+    dstd::SharedPtr<Task> last_child;
     for (int i = 1; i < 10; ++i) {
         auto child = make_task(
             [&]() {
@@ -469,7 +470,7 @@ TEST_CASE("Scheduler - Graceful shutdown") {
         "RootTask");
 
     // Store children to prevent them from being destroyed
-    std::vector<std::shared_ptr<Task>> children;
+    std::vector<dstd::SharedPtr<Task>> children;
     for (int i = 1; i < 20; ++i) {  // Reduced from 100 to 20
         auto child = make_task(
             [&]() {
@@ -579,7 +580,7 @@ TEST_CASE("Integration - Scheduler with Watchdog and Timeout") {
 
     // Create children with varying execution times (reduced to avoid flakiness
     // in CI)
-    std::shared_ptr<Task> last_child;
+    dstd::SharedPtr<Task> last_child;
     for (int i = 1; i < 10; ++i) {
         auto child = make_task(
             [&, i]() {
@@ -1602,7 +1603,7 @@ TEST_CASE("DAG - Multiple branches converging") {
     auto root = make_task([]() {}, "Root");
 
     // Create 5 parallel branches
-    std::vector<std::shared_ptr<Task>> branches;
+    std::vector<dstd::SharedPtr<Task>> branches;
     for (int i = 0; i < 5; ++i) {
         auto task = make_task(
             []() {
@@ -1634,7 +1635,7 @@ TEST_CASE("DAG - Wide and deep structure") {
     auto root = make_task([]() {}, "Root");
 
     // Create 3 levels with branching
-    std::vector<std::shared_ptr<Task>> level1, level2, level3;
+    std::vector<dstd::SharedPtr<Task>> level1, level2, level3;
 
     // Level 1: 4 tasks from root
     for (int i = 0; i < 4; ++i) {
@@ -2188,7 +2189,7 @@ TEST_CASE("Error Handler - Custom error handling") {
     std::atomic<bool> error_handler_called{false};
     std::atomic<bool> handler_done{false};
 
-    scheduler.set_error_handler([&](std::shared_ptr<Task>, std::exception_ptr) {
+    scheduler.set_error_handler([&](dstd::SharedPtr<Task>, std::exception_ptr) {
         error_handler_called = true;
         handler_done = true;
     });
@@ -2223,7 +2224,7 @@ TEST_CASE("Error Handler - Multiple errors with CONTINUE policy") {
     std::atomic<int> error_count{0};
 
     scheduler.set_error_handler(
-        [&](std::shared_ptr<Task>, std::exception_ptr) { ++error_count; });
+        [&](dstd::SharedPtr<Task>, std::exception_ptr) { ++error_count; });
 
     scheduler.set_error_policy(ErrorPolicy::Continue);
 
@@ -2371,7 +2372,7 @@ TEST_CASE("ErrorPolicy - CUSTOM handler is called on error") {
     std::string failed_task_name;
 
     auto config = PipelineConfig().with_compute_threads(4).with_error_handler(
-        [&](std::shared_ptr<Task> task, std::exception_ptr ex) {
+        [&](dstd::SharedPtr<Task> task, std::exception_ptr ex) {
             error_handler_calls++;
             failed_task_name = task->get_name();
 
@@ -2479,7 +2480,7 @@ TEST_CASE("Scheduler - Multiple scheduling threads") {
 
     // Create a wide DAG with many independent tasks
     std::atomic<int> completed{0};
-    std::vector<std::shared_ptr<Task>> tasks;
+    std::vector<dstd::SharedPtr<Task>> tasks;
 
     auto root = make_task([](int x) -> int { return x; }, "Root");
 
@@ -2521,7 +2522,7 @@ TEST_CASE("Scheduler - Single scheduling thread handles complex DAG") {
 
     auto root = make_task([](int x) -> int { return x; }, "Root");
 
-    std::vector<std::shared_ptr<Task>> level1;
+    std::vector<dstd::SharedPtr<Task>> level1;
     for (int i = 0; i < 4; ++i) {
         auto task = make_task(
             [&completed](int x) -> int {
@@ -2533,7 +2534,7 @@ TEST_CASE("Scheduler - Single scheduling thread handles complex DAG") {
         level1.push_back(task);
     }
 
-    std::vector<std::shared_ptr<Task>> level2;
+    std::vector<dstd::SharedPtr<Task>> level2;
     for (int i = 0; i < 4; ++i) {
         auto task = make_task(
             [&completed](int x) -> int {
@@ -2592,7 +2593,7 @@ namespace {
 
 // A source that returns `value` and a child that waits and returns ten times
 // its input.
-std::shared_ptr<Task> chain_of(int value, std::shared_ptr<Task>& sink) {
+dstd::SharedPtr<Task> chain_of(int value, dstd::SharedPtr<Task>& sink) {
     auto source = make_task([value]() -> int { return value; }, "Source");
     sink = make_task(
         [](int x) -> int {
@@ -2604,7 +2605,7 @@ std::shared_ptr<Task> chain_of(int value, std::shared_ptr<Task>& sink) {
     return source;
 }
 
-int result_of(const std::shared_ptr<Task>& task) {
+int result_of(const dstd::SharedPtr<Task>& task) {
     return std::any_cast<int>(task->result().get_ready());
 }
 
@@ -2614,8 +2615,8 @@ TEST_CASE("Schedulers sharing one executor each get their own results") {
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
     Scheduler first(&executor);
     Scheduler second(&executor);
-    std::shared_ptr<Task> first_sink;
-    std::shared_ptr<Task> second_sink;
+    dstd::SharedPtr<Task> first_sink;
+    dstd::SharedPtr<Task> second_sink;
     auto first_source = chain_of(1, first_sink);
     auto second_source = chain_of(2, second_sink);
 
@@ -2660,7 +2661,7 @@ TEST_CASE("A stopped scheduler leaves another on the same executor running") {
     one.join();
     CHECK(interrupted);
 
-    std::shared_ptr<Task> sink;
+    dstd::SharedPtr<Task> sink;
     auto source = chain_of(3, sink);
     CHECK_NOTHROW(other.schedule(source));
     CHECK(result_of(sink) == 30);
@@ -2673,14 +2674,14 @@ TEST_CASE("A scheduler that goes away leaves its executor running") {
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
     {
         Scheduler gone(&executor);
-        std::shared_ptr<Task> sink;
+        dstd::SharedPtr<Task> sink;
         auto source = chain_of(4, sink);
         gone.schedule(source);
         CHECK(result_of(sink) == 40);
     }
     CHECK(executor.is_running());
     Scheduler next(&executor);
-    std::shared_ptr<Task> sink;
+    dstd::SharedPtr<Task> sink;
     auto source = chain_of(5, sink);
     next.schedule(source);
     CHECK(result_of(sink) == 50);

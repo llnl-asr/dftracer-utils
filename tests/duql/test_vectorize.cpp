@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/parser.h>
@@ -23,11 +24,11 @@ constexpr std::int64_t N = 8;
 constexpr std::int64_t I64_MAX = std::numeric_limits<std::int64_t>::max();
 constexpr std::uint64_t U64_MAX = std::numeric_limits<std::uint64_t>::max();
 
-using OptI = std::optional<std::int64_t>;
-using OptU = std::optional<std::uint64_t>;
-using OptD = std::optional<double>;
-using OptS = std::optional<dftracer::utils::dstd::String>;
-using OptB = std::optional<bool>;
+using OptI = dftracer::utils::dstd::Optional<std::int64_t>;
+using OptU = dftracer::utils::dstd::Optional<std::uint64_t>;
+using OptD = dftracer::utils::dstd::Optional<double>;
+using OptS = dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>;
+using OptB = dftracer::utils::dstd::Optional<bool>;
 
 const std::vector<OptI> I = {1, -7, 0, I64_MAX, {}, 9, -3, 6};
 const std::vector<OptI> J = {2, 3, 0, 1, 5, {}, -2, 4};
@@ -38,7 +39,8 @@ const std::vector<OptS> T = {"a", "B", "", "q", "bc", " x", "b", {}};
 const std::vector<OptB> B = {true, false, {}, true, false, true, false, true};
 
 template <class T>
-std::vector<std::uint8_t> validity(const std::vector<std::optional<T>>& v) {
+std::vector<std::uint8_t> validity(
+    const std::vector<dftracer::utils::dstd::Optional<T>>& v) {
     std::vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t r = 0; r < v.size(); ++r)
         if (v[r]) bits[r / 8] |= static_cast<std::uint8_t>(1U << (r % 8));
@@ -46,7 +48,8 @@ std::vector<std::uint8_t> validity(const std::vector<std::optional<T>>& v) {
 }
 
 template <class T>
-df::Series numbers(df::TypeId type, const std::vector<std::optional<T>>& v) {
+df::Series numbers(df::TypeId type,
+                   const std::vector<dftracer::utils::dstd::Optional<T>>& v) {
     std::vector<T> data;
     for (const auto& x : v) data.push_back(x.value_or(T{}));
     const auto bits = validity(v);
@@ -82,7 +85,7 @@ df::DataFrame frame() {
 }
 
 template <class T>
-Cell cell(const std::optional<T>& v) {
+Cell cell(const dftracer::utils::dstd::Optional<T>& v) {
     return v ? Cell(*v) : Cell::null();
 }
 

@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
@@ -465,12 +466,12 @@ class ReaderInflater {
     /// and the compressed size it consumed. nullopt on read/decode failure.
     /// Self-contained (own decompressor and buffers) so it is safe to run as a
     /// cache producer independent of any reader's state.
-    static coro::CoroTask<std::optional<DecodedMember>> decode_member_at(
+    static coro::CoroTask<dstd::Optional<DecodedMember>> decode_member_at(
         int fd, std::uint64_t off, std::uint64_t file_size, std::size_t max_out,
         bool& too_big) {
         too_big = false;
         compress::GzipMemberDecompressor dec;
-        if (!dec.valid()) co_return std::nullopt;
+        if (!dec.valid()) co_return dstd::nullopt;
         std::vector<unsigned char> comp;
         std::vector<std::uint8_t> out(INIT_OUT);
         std::uint64_t next_read = off;
@@ -484,7 +485,7 @@ class ReaderInflater {
                 if (status == compress::GzipDecode::InsufficientSpace) {
                     if (out.size() >= max_out) {
                         too_big = true;
-                        co_return std::nullopt;
+                        co_return dstd::nullopt;
                     }
                     out.resize(std::min(out.size() * 2, max_out));
                     continue;
@@ -494,7 +495,7 @@ class ReaderInflater {
                 // The last member was cut short: keep its complete lines.
                 auto keep = compress::decode_truncated_member(comp.data(),
                                                               comp.size(), out);
-                if (!keep) co_return std::nullopt;
+                if (!keep) co_return dstd::nullopt;
                 out.resize(*keep);
                 co_return DecodedMember{std::move(out), comp.size()};
             }
@@ -505,7 +506,7 @@ class ReaderInflater {
             comp.resize(old + want);
             const ssize_t n = co_await dftracer::utils::io::pread(
                 fd, comp.data() + old, want, static_cast<off_t>(next_read));
-            if (n <= 0) co_return std::nullopt;
+            if (n <= 0) co_return dstd::nullopt;
             comp.resize(old + static_cast<std::size_t>(n));
             next_read += static_cast<std::uint64_t>(n);
         }

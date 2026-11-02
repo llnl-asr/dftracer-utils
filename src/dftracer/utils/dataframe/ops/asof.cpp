@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
+#include <dftracer/utils/dstd/optional.h>
 
 #include <algorithm>
 #include <stdexcept>
@@ -20,7 +21,7 @@ struct RightPartition {
 
 DataFrame asof(const DataFrame& left, const DataFrame& right,
                const std::string& on, const std::vector<std::string>& by,
-               AsofDirection direction, std::optional<double> tolerance) {
+               AsofDirection direction, dstd::Optional<double> tolerance) {
     const std::size_t lt_at = ops::column_named(left, on, "asof");
     const std::size_t rt_at = ops::column_named(right, on, "asof");
     if (left.columns[lt_at].type() != right.columns[rt_at].type())

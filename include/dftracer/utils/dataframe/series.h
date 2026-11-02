@@ -6,6 +6,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 #include <limits>
@@ -140,7 +142,7 @@ class Series {
     /// Build a FLAT String column from `values`. Copies the bytes once into the
     /// contiguous Arrow buffer, without the intermediate std::string vector the
     /// overload above builds.
-    static Series strings(std::span<const std::string_view> values) {
+    static Series strings(dstd::Span<const dstd::StringView> values) {
         std::vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
         for (const auto& v : values) total += v.size();
@@ -158,7 +160,7 @@ class Series {
 
     /// Build a FLAT String column with a validity bitmap (Arrow layout, 1 =
     /// valid). A null slot contributes no bytes (its offset repeats the prior).
-    static Series strings(std::span<const std::string_view> values,
+    static Series strings(dstd::Span<const dstd::StringView> values,
                           const std::uint8_t* validity) {
         std::vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
@@ -251,36 +253,36 @@ class Series {
 
     /// FLAT value buffer as a span of `length()` elements; empty unless FLAT.
     template <class T>
-    std::span<const T> values() const noexcept {
+    dstd::Span<const T> values() const noexcept {
         const T* p = data<T>();
         return p != nullptr
-                   ? std::span<const T>(p, static_cast<std::size_t>(length()))
-                   : std::span<const T>();
+                   ? dstd::Span<const T>(p, static_cast<std::size_t>(length()))
+                   : dstd::Span<const T>();
     }
 
     /// Value of a String/Binary/LargeString/LargeBinary column at `i`, valid
     /// while this column lives. Reads FLAT, DICTIONARY, SELECTION and VIEW
     /// columns;
     /// empty for a null or out-of-range row or a non-string column.
-    std::string_view string_at(std::int64_t i) const noexcept {
+    dstd::StringView string_at(std::int64_t i) const noexcept {
         if (!is_flat()) {
             std::int64_t n = 0;
             const char* p = dftu_series_string_at(handle_, i, &n);
             return p != nullptr
-                       ? std::string_view(p, static_cast<std::size_t>(n))
-                       : std::string_view();
+                       ? dstd::StringView(p, static_cast<std::size_t>(n))
+                       : dstd::StringView();
         }
         const char* d = static_cast<const char*>(dftu_series_data(handle_));
         if (d == nullptr) return {};
         if (is_wide_offset_type(type())) {
             const std::int64_t* off = dftu_series_offsets64(handle_);
             if (off == nullptr) return {};
-            return std::string_view(
+            return dstd::StringView(
                 d + off[i], static_cast<std::size_t>(off[i + 1] - off[i]));
         }
         const std::int32_t* off = dftu_series_offsets(handle_);
         if (off == nullptr) return {};
-        return std::string_view(d + off[i],
+        return dstd::StringView(d + off[i],
                                 static_cast<std::size_t>(off[i + 1] - off[i]));
     }
 
@@ -298,11 +300,11 @@ class Series {
 
     /// int32 offset buffer as a span of `length()+1` entries; empty for
     /// fixed-width types and for a Large* column.
-    std::span<const std::int32_t> offsets_span() const noexcept {
+    dstd::Span<const std::int32_t> offsets_span() const noexcept {
         const std::int32_t* off = offsets();
-        return off != nullptr ? std::span<const std::int32_t>(
+        return off != nullptr ? dstd::Span<const std::int32_t>(
                                     off, static_cast<std::size_t>(length()) + 1)
-                              : std::span<const std::int32_t>();
+                              : dstd::Span<const std::int32_t>();
     }
 
     /// int64 offset buffer (length+1 entries) of a LargeString/LargeBinary/
@@ -313,11 +315,11 @@ class Series {
 
     /// int64 offset buffer as a span of `length()+1` entries; empty unless
     /// this is a Large* column.
-    std::span<const std::int64_t> offsets64_span() const noexcept {
+    dstd::Span<const std::int64_t> offsets64_span() const noexcept {
         const std::int64_t* off = offsets64();
-        return off != nullptr ? std::span<const std::int64_t>(
+        return off != nullptr ? dstd::Span<const std::int64_t>(
                                     off, static_cast<std::size_t>(length()) + 1)
-                              : std::span<const std::int64_t>();
+                              : dstd::Span<const std::int64_t>();
     }
 
     /// Child count: 1 for a List, the field count for a Struct, else 0.
@@ -531,7 +533,7 @@ class Series {
 
     Series argsort(bool descending = false) const;
     Series take(const std::vector<std::int64_t>& indices) const;
-    Series take(std::span<const std::int64_t> indices) const;
+    Series take(dstd::Span<const std::int64_t> indices) const;
     Series materialize() const;
     /// Keep the rows where the bit-packed Bool `mask` (same length) is true.
     Series filter(const Series& mask) const;
@@ -539,23 +541,23 @@ class Series {
     /// (`mask ? this : other`); both must share a type and length.
     Series where(const Series& mask, const Series& other) const;
 
-    Series str_eq(std::string_view rhs) const;
-    Series str_contains(std::string_view needle) const;
-    Series str_starts_with(std::string_view prefix) const;
-    Series str_ends_with(std::string_view suffix) const;
+    Series str_eq(dstd::StringView rhs) const;
+    Series str_contains(dstd::StringView needle) const;
+    Series str_starts_with(dstd::StringView prefix) const;
+    Series str_ends_with(dstd::StringView suffix) const;
     /// Bool mask: the whole string matches the duql regex `pattern`.
-    Series str_matches(std::string_view pattern) const;
+    Series str_matches(dstd::StringView pattern) const;
     /// Bool mask: the duql regex `pattern` matches anywhere in the
     /// string.
-    Series str_search(std::string_view pattern) const;
+    Series str_search(dstd::StringView pattern) const;
     /// Bool mask: the string matches the SQL LIKE / glob `pattern` (`%` any
     /// run,
     /// `_` one char, `\` escapes a literal `%`/`_`/`\`).
-    Series str_like(std::string_view pattern) const;
+    Series str_like(dstd::StringView pattern) const;
     Series str_len_bytes() const;  ///< Int64 per-row byte length.
     Series str_len_chars() const;  ///< Int64 per-row UTF-8 codepoint count.
     /// Int64 byte index of the first `needle`, or -1.
-    Series str_find(std::string_view needle) const;
+    Series str_find(dstd::StringView needle) const;
     Series fnv1a() const;  ///< UInt64 FNV-1a 64 of each row's bytes.
     /// UInt64 parse of each row as dftracer's 16-hex-digit hash form;
     /// a row not in that form is null.
@@ -569,8 +571,8 @@ class Series {
     Series str_lstrip() const;    ///< Trim ASCII whitespace left.
     Series str_rstrip() const;    ///< Trim ASCII whitespace right.
     /// Replace the first / all literal `pat` with `repl` (empty `pat` = no-op).
-    Series str_replace(std::string_view pat, std::string_view repl) const;
-    Series str_replace_all(std::string_view pat, std::string_view repl) const;
+    Series str_replace(dstd::StringView pat, dstd::StringView repl) const;
+    Series str_replace_all(dstd::StringView pat, dstd::StringView repl) const;
     /// Substring by byte offset (negative `start` from end; negative `length`
     /// to end; clamped).
     Series str_slice(std::int64_t start, std::int64_t length) const;
@@ -580,35 +582,35 @@ class Series {
     /// Left-pad with '0' to `width` after an optional sign (Python zfill).
     Series str_zfill(std::int64_t width) const;
     /// Split each row on literal `sep` -> List<String> column.
-    Series str_split(std::string_view sep) const;
+    Series str_split(dstd::StringView sep) const;
     /// The capture `group` of the first regex `pattern` match per row; null
     /// where there is no match.
-    Series str_extract(std::string_view pattern, std::int64_t group = 1) const;
+    Series str_extract(dstd::StringView pattern, std::int64_t group = 1) const;
     /// Replace every non-overlapping regex `pattern` match per row with `to`
     /// (`$n`, `${n}`, `${name}` insert a group, `$$` a dollar sign). Null rows
     /// stay null. An invalid pattern or `to` yields an invalid Series.
-    Series str_regex_replace(std::string_view pattern,
-                             std::string_view to) const;
+    Series str_regex_replace(dstd::StringView pattern,
+                             dstd::StringView to) const;
     /// Per-row element count of a List column (Int64).
     Series list_len() const;
     /// The element at `index` (negative from the end) of each row's list,
     /// null where the list is too short.
     Series list_get(std::int64_t index) const;
     /// Each row's List<String> joined with `sep`.
-    Series list_join(std::string_view sep) const;
+    Series list_join(dstd::StringView sep) const;
     /// The pandas .str batch over ASCII (dataframe/abi.h documents each):
     /// case forms by dftu_str_case, character classes by dftu_str_class.
     Series str_case(std::int32_t op) const;
     Series str_is(std::int32_t cls) const;
-    Series str_count(std::string_view pat) const;
-    Series str_rfind(std::string_view needle) const;
-    Series str_remove_prefix(std::string_view prefix) const;
-    Series str_remove_suffix(std::string_view suffix) const;
+    Series str_count(dstd::StringView pat) const;
+    Series str_rfind(dstd::StringView needle) const;
+    Series str_remove_prefix(dstd::StringView prefix) const;
+    Series str_remove_suffix(dstd::StringView suffix) const;
     Series str_repeat(std::int64_t n) const;
     Series str_center(std::int64_t width, char fill = ' ') const;
     Series str_cat(const Series& other) const;
-    Series str_findall(std::string_view pattern) const;
-    Series str_partition(std::string_view sep, bool from_right = false) const;
+    Series str_findall(dstd::StringView pattern) const;
+    Series str_partition(dstd::StringView sep, bool from_right = false) const;
     /// Unicode normalization (dftu_norm_form), the codepoint table of
     /// `from` -> `to` (see dftu_series_str_translate) and textwrap by
     /// `width` codepoints with dftu_wrap_flag bits; a row that is not valid
@@ -626,11 +628,11 @@ class Series {
     /// %M %S %f %j %a %A %b %B %p %F %T %s %z %Z %%); `unit` is the unit of an
     /// Int64 input. Invalid (not valid()) for an unknown directive, a
     /// trailing '%' or an input that is not a time or Int64 column.
-    Series dt_format(std::string_view fmt,
+    Series dt_format(dstd::StringView fmt,
                      TimeUnit unit = TimeUnit::Micro) const;
     /// dftu_series_with_timezone: this Timestamp column under zone `tz`
     /// (empty for naive), buffers shared.
-    Series with_timezone(std::string_view tz) const;
+    Series with_timezone(dstd::StringView tz) const;
 
     Series logical_and(const Series& other) const;
     Series logical_or(const Series& other) const;

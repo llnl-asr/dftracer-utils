@@ -4,6 +4,8 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/arg_type.h>
@@ -66,7 +68,7 @@ struct Built {
 };
 
 coro::CoroTask<Built> run_step(StringIntern& intern_ref,
-                               std::shared_ptr<StringIntern> intern,
+                               dstd::SharedPtr<StringIntern> intern,
                                std::vector<FoldEvent> events) {
     (void)intern_ref;
     auto channel = std::make_shared<coro::Channel<df::Morsel>>(4);
@@ -74,7 +76,7 @@ coro::CoroTask<Built> run_step(StringIntern& intern_ref,
     StreamRowFold fold(channel, budget, intern, {}, 1.0, false, false, nullptr,
                        nullptr, true);
     ScanUnit unit;
-    FoldBatch batch{std::span<const FoldEvent>(events), unit};
+    FoldBatch batch{dstd::Span<const FoldEvent>(events), unit};
     fold.step(batch);
     if (auto* t = fold.take_pending())
         co_await *reinterpret_cast<coro::CoroTask<void>*>(t);
@@ -87,7 +89,7 @@ coro::CoroTask<Built> run_step(StringIntern& intern_ref,
     co_return out;
 }
 
-Built stepped(const std::shared_ptr<StringIntern>& intern,
+Built stepped(const dstd::SharedPtr<StringIntern>& intern,
               std::vector<FoldEvent> events) {
     return dftracer::utils::default_runtime()
         .submit(run_step(*intern, intern, std::move(events)))

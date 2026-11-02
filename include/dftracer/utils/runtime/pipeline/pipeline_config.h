@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_RUNTIME_PIPELINE_PIPELINE_CONFIG_H
 #define DFTRACER_UTILS_RUNTIME_PIPELINE_PIPELINE_CONFIG_H
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 
 #include <chrono>
@@ -30,7 +32,7 @@ enum class ErrorPolicy {
  * Parameters: (failed_task, exception_ptr)
  */
 using ErrorHandler =
-    std::function<void(std::shared_ptr<Task>, std::exception_ptr)>;
+    std::function<void(dstd::SharedPtr<Task>, std::exception_ptr)>;
 
 /**
  * Configuration for Pipeline execution.
@@ -57,7 +59,7 @@ struct PipelineConfig {
     /// up front), any other value = elastic (one worker, growing toward
     /// executor_threads). Unset keeps the runtime's mode, which
     /// DFTRACER_UTILS_ELASTIC picks when the runtime is made.
-    std::optional<std::size_t> min_workers;
+    dstd::Optional<std::size_t> min_workers;
     std::chrono::milliseconds elastic_keepalive{250};
     ErrorPolicy error_policy = ErrorPolicy::FailFast;
     ErrorHandler error_handler =

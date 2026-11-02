@@ -7,7 +7,9 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_admission.h>
@@ -65,7 +67,7 @@ struct ParsedBloomJob {
     std::unique_ptr<index::extensions::RowSetFold> rowset_fold;
     std::unique_ptr<index::schemas::dft::agg::AggregationFold> agg_fold;
     std::unique_ptr<index::extensions::PluginBuilders> plugin_builders;
-    std::optional<index::schemas::dft::agg::AggFoldOutput> agg_output;
+    dstd::Optional<index::schemas::dft::agg::AggFoldOutput> agg_output;
     const index::RecordSchema* schema = nullptr;
 };
 
@@ -97,10 +99,10 @@ struct Admission {
 };
 
 struct BatchWriteState {
-    std::shared_ptr<std::vector<IndexBuildResult>> results;
-    std::shared_ptr<std::vector<std::optional<ParsedBloomJob>>> parsed_jobs;
-    std::shared_ptr<std::vector<PreparedFile>> prepared;
-    std::shared_ptr<std::vector<std::string>> bloom_dims;
+    dstd::SharedPtr<std::vector<IndexBuildResult>> results;
+    dstd::SharedPtr<std::vector<dstd::Optional<ParsedBloomJob>>> parsed_jobs;
+    dstd::SharedPtr<std::vector<PreparedFile>> prepared;
+    dstd::SharedPtr<std::vector<std::string>> bloom_dims;
     std::string index_path;
     IndexBuildBatchMetrics metrics;
     index::build::ChunkIndexerConfig bloom_config;
@@ -159,7 +161,7 @@ static coro::CoroTask<void> parse_and_write_worker(
     const dstd::Vector<std::size_t>* block_starts,
     std::atomic<std::size_t>* done_ptr,
     std::vector<IndexBuildResult>* results_ptr,
-    std::vector<std::optional<ParsedBloomJob>>* parsed_jobs_ptr,
+    std::vector<dstd::Optional<ParsedBloomJob>>* parsed_jobs_ptr,
     std::vector<PreparedFile>* prepared_ptr, std::size_t checkpoint_size,
     index::build::ChunkIndexerConfig bloom_config,
     std::atomic<std::uint64_t>* parse_ns_ptr,
@@ -250,7 +252,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                         index::build::for_schema(bloom_config, schema);
 
                     std::vector<views::Fold*> fold_ptrs;
-                    std::optional<index::build::IndexFoldDriver> driver;
+                    dstd::Optional<index::build::IndexFoldDriver> driver;
                     {
                         job.intern = std::make_unique<
                             dftracer::utils::dstd::StringIntern>();
@@ -433,7 +435,7 @@ static coro::CoroTask<void> parse_and_write_worker(
 }
 
 dstd::Vector<std::size_t> cut_blocks(std::size_t files,
-                                     std::span<const std::uint64_t> costs,
+                                     dstd::Span<const std::uint64_t> costs,
                                      std::size_t workers) {
     dstd::Vector<std::size_t> starts{0};
     if (files == 0) return starts;
@@ -609,7 +611,7 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
     state->prepared =
         std::make_shared<std::vector<PreparedFile>>(std::move(prepared));
     state->parsed_jobs =
-        std::make_shared<std::vector<std::optional<ParsedBloomJob>>>(
+        std::make_shared<std::vector<dstd::Optional<ParsedBloomJob>>>(
             state->num_files);
     if (config.agg_fold_factory) {
         state->agg_fold_factory = std::move(config.agg_fold_factory);
@@ -652,7 +654,7 @@ static coro::CoroTask<IndexBuildBatchResult> run_single_batch(
 }
 
 static coro::CoroTask<IndexBuildBatchResult> run_batch_write_pipeline(
-    std::shared_ptr<IndexBuildBatchConfig> config_ptr) {
+    dstd::SharedPtr<IndexBuildBatchConfig> config_ptr) {
     IndexBuildBatchConfig config = std::move(*config_ptr);
     config_ptr.reset();
     auto result = co_await run_single_batch(std::move(config));
@@ -660,7 +662,7 @@ static coro::CoroTask<IndexBuildBatchResult> run_batch_write_pipeline(
 }
 
 coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
-    std::shared_ptr<IndexBuildBatchConfig> config_ptr) {
+    dstd::SharedPtr<IndexBuildBatchConfig> config_ptr) {
     DFTRACER_UTILS_TRACE_SCOPE("build index batch");
     if (!config_ptr || config_ptr->file_paths.empty()) {
         co_return IndexBuildBatchResult{};

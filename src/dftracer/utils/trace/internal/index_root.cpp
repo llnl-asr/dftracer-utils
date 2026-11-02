@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/trace/internal/index_root.h>
@@ -12,13 +13,13 @@ namespace {
 
 struct IndexRoots {
     std::mutex guard;
-    dstd::StringViewMap<std::shared_ptr<IndexRoot>> roots;
-    dstd::StringViewMap<std::shared_ptr<IndexRoot>> by_spelling;
+    dstd::StringViewMap<dstd::SharedPtr<IndexRoot>> roots;
+    dstd::StringViewMap<dstd::SharedPtr<IndexRoot>> by_spelling;
 };
 
 }  // namespace
 
-std::shared_ptr<IndexRoot> index_root(const std::string& index_path) {
+dstd::SharedPtr<IndexRoot> index_root(const std::string& index_path) {
     IndexRoots& known = dstd::Singleton<IndexRoots>::get();
     {
         const std::lock_guard<std::mutex> lock(known.guard);

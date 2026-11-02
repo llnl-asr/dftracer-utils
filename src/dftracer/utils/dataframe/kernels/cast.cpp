@@ -7,6 +7,8 @@
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/cast.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <simdjson.h>
 
@@ -240,8 +242,8 @@ dftu_series* to_text(const dftu_series& v) {
     } else {
         DF_NUMERIC_DISPATCH(v.type, number_texts, v.data.data(), v, owned)
     }
-    std::vector<std::string_view> views(owned.begin(), owned.end());
-    return Series::strings(std::span<const std::string_view>(views),
+    std::vector<dstd::StringView> views(owned.begin(), owned.end());
+    return Series::strings(dstd::Span<const dstd::StringView>(views),
                            v.validity.block() ? v.validity.data() : nullptr)
         .release();
 }

@@ -774,7 +774,7 @@ dftracer::utils::dstd::Optional<Number> parse_number_with_strtod_only(
     char* end = nullptr;
     const double d = std::strtod(copy.c_str(), &end);
     if (!copy.empty() && end == copy.c_str() + copy.size()) return Number{d};
-    return std::nullopt;
+    return dftracer::utils::dstd::nullopt;
 }
 
 }  // namespace

@@ -3,6 +3,7 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
@@ -1128,8 +1129,8 @@ TEST_CASE("Channel - Multiple producers, multiple consumers (blocking)") {
     std::atomic<int> total_produced{0};
     std::atomic<int> total_consumed{0};
 
-    std::vector<std::shared_ptr<Task>> producers;
-    std::vector<std::shared_ptr<Task>> consumers;
+    std::vector<dstd::SharedPtr<Task>> producers;
+    std::vector<dstd::SharedPtr<Task>> consumers;
 
     // Create multiple producers
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
@@ -1176,7 +1177,7 @@ TEST_CASE("Channel - Multiple producers, multiple consumers (blocking)") {
     Pipeline pipeline(config);
 
     // Combine all producers and consumers as source tasks
-    std::vector<std::shared_ptr<Task>> all_tasks;
+    std::vector<dstd::SharedPtr<Task>> all_tasks;
     all_tasks.insert(all_tasks.end(), producers.begin(), producers.end());
     all_tasks.insert(all_tasks.end(), consumers.begin(), consumers.end());
 
@@ -1206,8 +1207,8 @@ TEST_CASE(
     std::atomic<int> total_produced{0};
     std::atomic<int> total_consumed{0};
 
-    std::vector<std::shared_ptr<Task>> producers;
-    std::vector<std::shared_ptr<Task>> consumers;
+    std::vector<dstd::SharedPtr<Task>> producers;
+    std::vector<dstd::SharedPtr<Task>> consumers;
 
     // Create multiple producers
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
@@ -1253,7 +1254,7 @@ TEST_CASE(
     Pipeline pipeline(config);
 
     // Combine all producers and consumers as source tasks
-    std::vector<std::shared_ptr<Task>> all_tasks;
+    std::vector<dstd::SharedPtr<Task>> all_tasks;
     all_tasks.insert(all_tasks.end(), producers.begin(), producers.end());
     all_tasks.insert(all_tasks.end(), consumers.begin(), consumers.end());
 

@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 #include <cstring>
@@ -172,7 +173,8 @@ dftu_series* dftu_series_dt_format(const dftu_series* in, const char* fmt,
     if (!in || fmt_len < 0 || (fmt_len > 0 && !fmt)) return nullptr;
     if (unit < DFTU_TIME_UNIT_SECOND || unit > DFTU_TIME_UNIT_NANO)
         return nullptr;
-    const std::string_view f(fmt ? fmt : "", static_cast<std::size_t>(fmt_len));
+    const dftracer::utils::dstd::StringView f(
+        fmt ? fmt : "", static_cast<std::size_t>(fmt_len));
     if (!common::invalid_time_format(f).empty()) return nullptr;
     dftu_series* v = dftu_series_materialize(in);
     if (!v) return nullptr;
@@ -261,7 +263,8 @@ dftu_series* dftu_series_with_timezone(const dftu_series* v, const char* tz,
     if (!v || v->type != TypeId::Timestamp || tz_len < 0 || (tz_len > 0 && !tz))
         return nullptr;
     auto* out = new dftu_series(*v);
-    out->set_timezone(std::string_view(tz, static_cast<std::size_t>(tz_len)));
+    out->set_timezone(dftracer::utils::dstd::StringView(
+        tz, static_cast<std::size_t>(tz_len)));
     return out;
 }
 

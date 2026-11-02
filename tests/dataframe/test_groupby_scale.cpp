@@ -3,6 +3,8 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -55,7 +57,7 @@ struct Input {
     std::int64_t rows;
     std::int64_t groups;
     std::vector<std::string> key_text;
-    std::vector<std::string_view> key_views;
+    std::vector<dftracer::utils::dstd::StringView> key_views;
     std::vector<std::uint8_t> key_valid;
     std::vector<std::int64_t> time;
     std::vector<std::int64_t> bigkey;
@@ -63,9 +65,9 @@ struct Input {
     std::vector<std::uint8_t> x_valid;
     std::vector<std::int64_t> y;
     std::vector<std::string> sval;
-    std::vector<std::string_view> sval_views;
+    std::vector<dftracer::utils::dstd::StringView> sval_views;
     std::vector<std::string> short_text;
-    std::vector<std::string_view> short_views;
+    std::vector<dftracer::utils::dstd::StringView> short_views;
     Series skey, nkey, tkey, bkey, xs, ys, ss, us, shortkey;
 
     // A string key longer than 16 bytes (the packed driver's limit) once with
@@ -105,16 +107,23 @@ struct Input {
         for (const auto& s : key_text) key_views.push_back(s);
         for (const auto& s : short_text) short_views.push_back(s);
         for (const auto& s : sval) sval_views.push_back(s);
-        skey = Series::strings(std::span<const std::string_view>(key_views));
-        nkey = Series::strings(std::span<const std::string_view>(key_views),
-                               key_valid.data());
-        shortkey =
-            Series::strings(std::span<const std::string_view>(short_views));
+        skey = Series::strings(
+            dftracer::utils::dstd::Span<
+                const dftracer::utils::dstd::StringView>(key_views));
+        nkey = Series::strings(
+            dftracer::utils::dstd::Span<
+                const dftracer::utils::dstd::StringView>(key_views),
+            key_valid.data());
+        shortkey = Series::strings(
+            dftracer::utils::dstd::Span<
+                const dftracer::utils::dstd::StringView>(short_views));
         tkey = Series::flat(TypeId::Int64, time.data(), rows);
         bkey = Series::flat(TypeId::Int64, bigkey.data(), rows);
         xs = Series::flat_f64(x.data(), rows, x_valid.data());
         ys = Series::flat_i64(y.data(), rows);
-        ss = Series::strings(std::span<const std::string_view>(sval_views));
+        ss = Series::strings(
+            dftracer::utils::dstd::Span<
+                const dftracer::utils::dstd::StringView>(sval_views));
         us = Series::flat_f64(u.data(), rows);
     }
 

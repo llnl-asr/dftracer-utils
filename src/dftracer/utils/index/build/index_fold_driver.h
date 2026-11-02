@@ -7,6 +7,10 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/index_visitor.h>
@@ -152,7 +156,7 @@ class FoldBufferPool final : public memory::Reclaimer {
 class IndexFoldDriver : public index::build::IndexVisitor {
    public:
     IndexFoldDriver(dftracer::utils::dstd::StringIntern& intern,
-                    std::span<trace::views::detail::Fold* const> folds,
+                    dstd::Span<trace::views::detail::Fold* const> folds,
                     std::string file_path, std::string index_path,
                     std::vector<std::string> extra_fields = {})
         : intern_(&intern),
@@ -223,8 +227,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         plain_offset_ += len;
         // A line straddling this chunk's end is carried into the next chunk, so
         // it is parsed once and attributed to the chunk where it completes.
-        const std::size_t cut = std::string_view(data, len).rfind('\n');
-        if (cut == std::string_view::npos) {
+        const std::size_t cut = dstd::StringView(data, len).rfind('\n');
+        if (cut == dstd::StringView::npos) {
             partial_.append(data, len);
             co_return;
         }
@@ -330,12 +334,12 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             if (alive) alive->fetch_sub(1, std::memory_order_release);
         }
 
-        std::shared_ptr<std::string> buf;
+        dstd::SharedPtr<std::string> buf;
         std::size_t checkpoint_idx = 0;
         std::size_t chunk_begin = 0;
         std::size_t chunk_end = 0;
         std::unique_ptr<EventBuffer> batch;
-        std::vector<std::string_view> lines;
+        std::vector<dstd::StringView> lines;
         // The strings of a piece parsed ahead, interned here with ids of their
         // own, and given the file's ids in piece order when the folds see it.
         std::unique_ptr<dftracer::utils::dstd::StringIntern> local;
@@ -375,7 +379,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         return end;
     }
 
-    std::shared_ptr<const ParseConfig> config() {
+    dstd::SharedPtr<const ParseConfig> config() {
         if (!config_)
             config_ = std::make_shared<const ParseConfig>(
                 intern_, decoder_, record_schema_, needs_args_, capture_schema_,
@@ -472,7 +476,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             const std::uint32_t id = intern_->entry_id(n);
             digest = digest * dstd::hash::FNV1A_PRIME + id;
             digest = digest * dstd::hash::FNV1A_PRIME +
-                     std::hash<std::string_view>{}(intern_->resolve(id));
+                     std::hash<dstd::StringView>{}(intern_->resolve(id));
         }
         g_intern_order_digest.fetch_xor(digest);
     }
@@ -496,7 +500,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         if (cfg.decoder == index::Decoder::Path) {
             trace::parse_lines(
                 parser, c.buf->data(), total,
-                [&](simdjson::dom::element root, std::string_view line) {
+                [&](simdjson::dom::element root, dstd::StringView line) {
                     if (!root.is_object()) return;
                     if (cfg.keep_lines) c.lines.push_back(line);
                     trace::views::detail::decode_record_into(
@@ -510,7 +514,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             dftracer::utils::dstd::InternCache cache(intern);
             trace::parse_lines(
                 parser, c.buf->data(), total,
-                [&](simdjson::dom::element root, std::string_view line) {
+                [&](simdjson::dom::element root, dstd::StringView line) {
                     if (!trace::views::detail::append_dftracer_record(
                             *c.batch, root, intern, cfg.needs_args,
                             cfg.capture_schema, hints, &cache))
@@ -526,7 +530,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // A named coroutine with by-value parameters, not a capturing lambda
     // (CP.51): the task owns its configuration, parser and chunk.
     static coro::CoroTask<std::unique_ptr<Parsed>> parse_task(
-        std::shared_ptr<const ParseConfig> cfg, std::unique_ptr<Parsed> chunk,
+        dstd::SharedPtr<const ParseConfig> cfg, std::unique_ptr<Parsed> chunk,
         ParseGate* gate) {
         SlotGuard slot{gate};
         parse_into(*cfg, *chunk);
@@ -581,11 +585,11 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             tails_.resize(folds_.size());
         }
         co_await permits_->acquire(1);
-        std::shared_ptr<const Parsed> piece(
+        dstd::SharedPtr<const Parsed> piece(
             done.release(), PieceRelease{permits_.get(), buffers_});
         for (std::size_t i = 0; i < folds_.size(); ++i) {
             if (folds_[i] == bloom_) continue;
-            std::optional<coro::SpawnFuture<void>> prev = std::move(tails_[i]);
+            dstd::Optional<coro::SpawnFuture<void>> prev = std::move(tails_[i]);
             tails_[i].reset();
             tails_[i].emplace(scope_->spawn_future(
                 [fold = folds_[i], agg = folds_[i] == agg_ ? agg_ : nullptr,
@@ -606,8 +610,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     static coro::CoroTask<void> fold_task(
         trace::views::detail::Fold* fold,
         index::schemas::dft::agg::AggregationFold* agg,
-        std::shared_ptr<const Parsed> c, trace::views::detail::ScanUnit unit,
-        std::optional<coro::SpawnFuture<void>> prev) {
+        dstd::SharedPtr<const Parsed> c, trace::views::detail::ScanUnit unit,
+        dstd::Optional<coro::SpawnFuture<void>> prev) {
         std::exception_ptr error;
         try {
             if (prev) co_await std::move(*prev);
@@ -624,7 +628,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // checkpoints are observed at once; a batch waits for the batch of its
     // checkpoint before it. With spilling, the chunks a spill writes are
     // observed first.
-    coro::CoroTask<void> step_bloom(std::shared_ptr<const Parsed> c) {
+    coro::CoroTask<void> step_bloom(dstd::SharedPtr<const Parsed> c) {
         const std::size_t cp = c->checkpoint_idx;
         while (!bloom_steps_.empty() &&
                (bloom_steps_.size() >= MAX_PIECES_HELD ||
@@ -635,7 +639,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             co_await await_bloom_front();
         const auto unit = unit_of(*c);
         const auto lane = bloom_->open({c->batch->events(), unit});
-        std::optional<coro::SpawnFuture<void>> prev;
+        dstd::Optional<coro::SpawnFuture<void>> prev;
         if (!bloom_steps_.empty() && bloom_steps_.back().checkpoint_idx == cp) {
             prev.emplace(std::move(bloom_steps_.back().done));
             bloom_steps_.pop_back();
@@ -651,8 +655,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     static coro::CoroTask<void> observe_task(
         index::extensions::BloomFold* bloom,
         index::extensions::BloomFold::Lane lane,
-        std::shared_ptr<const Parsed> c,
-        std::optional<coro::SpawnFuture<void>> prev) {
+        dstd::SharedPtr<const Parsed> c,
+        dstd::Optional<coro::SpawnFuture<void>> prev) {
         std::exception_ptr error;
         try {
             if (prev) co_await std::move(*prev);
@@ -812,7 +816,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         }
     }
 
-    std::shared_ptr<const ParseConfig> config_;
+    dstd::SharedPtr<const ParseConfig> config_;
     coro::Scope* scope_ = nullptr;
     ParseGate* gate_ = nullptr;
     // Once a piece goes to the fold chains every later piece follows it, so a
@@ -829,10 +833,10 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     index::extensions::BloomFold* bloom_ = nullptr;
     index::schemas::dft::agg::AggregationFold* agg_ = nullptr;
     std::unique_ptr<coro::CoroSemaphore> permits_;
-    std::vector<std::optional<coro::SpawnFuture<void>>> tails_;
+    std::vector<dstd::Optional<coro::SpawnFuture<void>>> tails_;
     // Shared by every file of a build, so a slot keeps its capacity from file
     // to file.
-    std::optional<FoldBufferPool> own_buffers_{std::in_place};
+    dstd::Optional<FoldBufferPool> own_buffers_{std::in_place};
     FoldBufferPool* buffers_ = &*own_buffers_;
     dftracer::utils::dstd::StringIntern* intern_;
     std::vector<trace::views::detail::Fold*> folds_;

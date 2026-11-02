@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_PIPELINE_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_definition.h>
@@ -39,7 +40,7 @@ struct Pipeline {
 /// one pass, no streaming ops. Executing it is exactly
 /// `fuse(plan, vdef, sinks, ...)`. `sinks` is borrowed, not copied.
 Pipeline lower_fused_folds(const ViewPlan& plan, const ViewDefinition& vdef,
-                           std::span<Fold* const> sinks);
+                           dstd::Span<Fold* const> sinks);
 
 /// Run a lowered pipeline. A Source feeding fold Sinks with no streaming ops is
 /// lowering (a): one direct `fuse` call. Throws std::logic_error on a shape no

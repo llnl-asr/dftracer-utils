@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/completion_latch.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -464,7 +465,7 @@ struct ExtentWriter::IdleWait {
 };
 
 void ExtentWriter::release_in_flight() {
-    dstd::Vector<std::pair<coro::Executor*, std::coroutine_handle<>>> waiters;
+    dstd::Vector<dstd::Pair<coro::Executor*, std::coroutine_handle<>>> waiters;
     {
         std::lock_guard<std::mutex> lock(idle_mutex_);
         --in_flight_;

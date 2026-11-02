@@ -3,6 +3,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -36,7 +37,7 @@ static CoroTask<std::size_t> count_lines(
 }
 
 static CoroTask<std::size_t> count_raw_bytes(
-    AsyncGenerator<std::span<const char>> gen) {
+    AsyncGenerator<dftracer::utils::dstd::Span<const char>> gen) {
     std::size_t total = 0;
     while (auto chunk = co_await gen.next()) {
         total += chunk->size();
@@ -45,7 +46,7 @@ static CoroTask<std::size_t> count_raw_bytes(
 }
 
 static CoroTask<std::size_t> count_raw_chunks(
-    AsyncGenerator<std::span<const char>> gen) {
+    AsyncGenerator<dftracer::utils::dstd::Span<const char>> gen) {
     std::size_t n = 0;
     while (auto chunk = co_await gen.next()) {
         ++n;

@@ -3,6 +3,9 @@
 #define DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <charconv>
@@ -38,23 +41,23 @@ enum class TimeUnit : std::uint8_t { Ns, Us, Ms, S };
 double micros_per(TimeUnit unit);
 
 /// `d` as an int field reads it: an int64 when `d` is a whole number in range.
-inline std::optional<std::int64_t> whole_int64(double d) {
+inline dstd::Optional<std::int64_t> whole_int64(double d) {
     // -min is 2^63 exactly, the first double past int64.
     constexpr double LIMIT =
         -static_cast<double>(std::numeric_limits<std::int64_t>::min());
-    if (std::trunc(d) != d || std::abs(d) >= LIMIT) return std::nullopt;
+    if (std::trunc(d) != d || std::abs(d) >= LIMIT) return dstd::nullopt;
     return static_cast<std::int64_t>(d);
 }
 
 /// Microseconds since the Unix epoch of an ISO-8601 time such as
 /// "2024-01-02T03:04:05.123456Z" or "2024-01-02 03:04:05+02:00"; nullopt when
 /// `text` is not one.
-std::optional<std::int64_t> iso8601_micros(std::string_view text);
+dstd::Optional<std::int64_t> iso8601_micros(dstd::StringView text);
 
 /// The integer id a trace lane shows for an entity or lane value written as
 /// `text`: the integer itself, else a stable non-negative 31-bit hash of the
 /// text, exact as a JavaScript number.
-inline std::int64_t entity_id(std::string_view text) {
+inline std::int64_t entity_id(dstd::StringView text) {
     std::int64_t v = 0;
     const char* end = text.data() + text.size();
     if (auto [ptr, ec] = std::from_chars(text.data(), end, v);
@@ -65,7 +68,7 @@ inline std::int64_t entity_id(std::string_view text) {
 }
 
 /// "bool", "int", "float", "string" or "json".
-std::string_view field_type_name(FieldType type);
+dstd::StringView field_type_name(FieldType type);
 
 /// One declared field of a record schema.
 struct FieldSpec {
@@ -80,7 +83,7 @@ struct FieldSpec {
     bool optional = false;
     Role role = Role::None;
     /// Only for the TIME and DURATION roles; microseconds when unset.
-    std::optional<TimeUnit> unit;
+    dstd::Optional<TimeUnit> unit;
     /// Indexed even past the path budget.
     bool always_index = false;
 
@@ -109,8 +112,8 @@ struct SchemaSpec {
     std::string id;
     std::string extends = "generic";
     std::vector<FieldSpec> fields;
-    std::optional<std::size_t> path_budget;
-    std::optional<double> stats_share;
+    dstd::Optional<std::size_t> path_budget;
+    dstd::Optional<double> stats_share;
     /// Added to the parent's `never_index` paths.
     std::vector<std::string> never_index;
     /// duql source members (`name = pipeline`, `def ...`), `;` separated.
@@ -134,10 +137,10 @@ struct RecordSchema {
     /// lack reads the field of that name under `args`.
     bool args_fallback = false;
     /// The path budget for files of this schema; the build's when unset.
-    std::optional<std::size_t> path_budget;
+    dstd::Optional<std::size_t> path_budget;
     /// The share of a file's size its evidence may use, in (0, 1]; the
     /// build's when unset.
-    std::optional<double> stats_share;
+    dstd::Optional<double> stats_share;
     /// Paths of the required fields; more paths make a more specific schema.
     std::vector<std::string> require;
     Roles roles;
@@ -153,10 +156,10 @@ struct RecordSchema {
     /// Whether a field has the JSON type.
     bool has_json = false;
     /// (path, index into `fields`), sorted by path, for field_at.
-    std::vector<std::pair<std::string, std::size_t>> fields_by_path;
+    std::vector<dstd::Pair<std::string, std::size_t>> fields_by_path;
 
     /// The field at `path`, or null.
-    const FieldSpec* field_at(std::string_view path) const;
+    const FieldSpec* field_at(dstd::StringView path) const;
 
     /// Hash of the definition, recorded with each file indexed under it.
     std::uint64_t params_hash() const;
@@ -169,13 +172,13 @@ struct RecordSchema {
 std::vector<const RecordSchema*> registered_schemas();
 
 /// The registered schema `id`, or null.
-const RecordSchema* find_schema(std::string_view id);
+const RecordSchema* find_schema(dstd::StringView id);
 
 /// The registered schema `id`. Throws @ref
 /// dftracer::utils::common::DFTUtilsException "DFTUtilsException"
 /// INVALID_ARGUMENT, listing the registered ids and where schemas load from,
 /// for any other.
-const RecordSchema& get_schema(std::string_view id);
+const RecordSchema& get_schema(dstd::StringView id);
 
 /// Resolves `spec` against its parent and registers it; `source` names it in
 /// errors. Throws @ref dftracer::utils::common::DFTUtilsException
@@ -185,15 +188,15 @@ const RecordSchema& get_schema(std::string_view id);
 /// definition; registering the same definition again returns the registered
 /// schema.
 const RecordSchema& register_schema(const SchemaSpec& spec,
-                                    std::string_view source);
+                                    dstd::StringView source);
 
 /// Registers the schema the YAML or JSON spec `text` describes. Keys: id,
 /// extends, fields (name -> type, path, optional, role, unit, always_index),
 /// index.path_budget, index.never_index (a list of paths) and source (duql
 /// source members). Throws as the @ref SchemaSpec overload, and for an unknown
 /// key or a value of the wrong type.
-const RecordSchema& register_schema(std::string_view text,
-                                    std::string_view source);
+const RecordSchema& register_schema(dstd::StringView text,
+                                    dstd::StringView source);
 
 /// Registers every spec at `path`: a file, or the *.yaml, *.yml and *.json
 /// files of a directory in name order. A path is loaded once per process.
@@ -246,7 +249,7 @@ struct SchemaDetection {
 /// the higher share, then the lower id. With only metadata sampled it is the
 /// schema with the fewest required paths whose `data` leaves out every
 /// object. Otherwise "generic"; a schema declaring no field is never chosen.
-SchemaDetection explain_schema(std::span<const std::string_view> lines);
+SchemaDetection explain_schema(dstd::Span<const dstd::StringView> lines);
 
 /// explain_schema over the lines at the start of `file_path` (gzip or
 /// plain), up to SCHEMA_SAMPLE_LINES records; the last line needs no
@@ -266,7 +269,7 @@ SchemaDetection explain_file_schema(const std::string& file_path, int fd,
 std::string to_json(const SchemaDetection& d);
 
 /// explain_schema(lines).chosen.
-const RecordSchema& detect_schema(std::span<const std::string_view> lines);
+const RecordSchema& detect_schema(dstd::Span<const dstd::StringView> lines);
 
 /// explain_file_schema(file_path).chosen.
 const RecordSchema& detect_file_schema(const std::string& file_path);

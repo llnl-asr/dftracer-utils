@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_CHUNK_DIMENSION_STATS_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_CHUNK_DIMENSION_STATS_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <cmath>
@@ -28,8 +30,8 @@ inline std::string canonical_number_text(double v) {
 
 /// Orders two value texts of a dimension by its value_type: numerically for
 /// "uint"/"int"/"double", bytewise otherwise.
-bool dimension_value_less(std::string_view a, std::string_view b,
-                          std::string_view value_type);
+bool dimension_value_less(dstd::StringView a, dstd::StringView b,
+                          dstd::StringView value_type);
 
 struct ChunkDimensionStats {
     std::string dimension;  ///< Dimension name (e.g., "cat", "name").
@@ -42,7 +44,7 @@ struct ChunkDimensionStats {
     std::string value_type =
         "string";           ///< "string", "uint", "int", or "double".
 
-    std::optional<dftracer::utils::dstd::StringViewMap<std::uint64_t>>
+    dstd::Optional<dftracer::utils::dstd::StringViewMap<std::uint64_t>>
         value_counts;
 
     /// Skips the hash lookup when the same value is observed back-to-back.
@@ -105,12 +107,12 @@ struct ChunkDimensionStats {
 
     /// Record a value observation. Updates min/max, distinct_count,
     /// value_counts.
-    void observe(std::string_view value);
+    void observe(dstd::StringView value);
 
     /// As observe. `slot` is where `value` sits in value_counts. NO_SLOT finds
     /// it by the string and sets it. Keep a slot for one dimension and one
     /// value.
-    void observe(std::string_view value, std::uint32_t& slot);
+    void observe(dstd::StringView value, std::uint32_t& slot);
     void observe_range_only(std::uint64_t value);
 
     /// Serialize value_counts to binary format:
@@ -119,7 +121,7 @@ struct ChunkDimensionStats {
 
     /// Compress serialized value_counts with zlib.
     /// Returns nullopt if compressed size exceeds cap_bytes.
-    std::optional<std::vector<std::uint8_t>> compress_value_counts(
+    dstd::Optional<std::vector<std::uint8_t>> compress_value_counts(
         std::size_t cap_bytes = 4096) const;
 
     static dftracer::utils::dstd::StringViewMap<std::uint64_t>

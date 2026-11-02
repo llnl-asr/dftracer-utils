@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/trace/statistics/statistics_query_utility.h>
 
 #include <algorithm>
@@ -12,16 +13,16 @@ namespace dftracer::utils::trace::statistics {
 
 namespace {
 template <typename Map>
-std::vector<std::pair<std::string, std::uint64_t>> sorted_desc(const Map& m) {
-    std::vector<std::pair<std::string, std::uint64_t>> v(m.begin(), m.end());
+std::vector<dstd::Pair<std::string, std::uint64_t>> sorted_desc(const Map& m) {
+    std::vector<dstd::Pair<std::string, std::uint64_t>> v(m.begin(), m.end());
     std::sort(v.begin(), v.end(),
               [](const auto& a, const auto& b) { return a.second > b.second; });
     return v;
 }
 
 template <typename Map>
-std::vector<std::pair<std::string, std::uint64_t>> top_n(const Map& m,
-                                                         std::uint64_t n) {
+std::vector<dstd::Pair<std::string, std::uint64_t>> top_n(const Map& m,
+                                                          std::uint64_t n) {
     auto v = sorted_desc(m);
     if (n == 0) {
         return v;

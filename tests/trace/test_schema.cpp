@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/schema.h>
@@ -122,7 +123,8 @@ TEST_SUITE("event-format") {
         CHECK(ev.args["num_events"].get<std::uint64_t>() == 9);
         CHECK(ev.args["used.MPI"].get<std::uint64_t>() == 1);
         CHECK(ev.args["used.LIBC_IO"].get<std::uint64_t>() == 1);
-        CHECK(ev.args["app.model"].get<std::string_view>() == "resnet50");
+        CHECK(ev.args["app.model"].get<dftracer::utils::dstd::StringView>() ==
+              "resnet50");
         CHECK(ev.args["app.batch"].get<std::uint64_t>() == 32);
         // Array index then object descent: unbounded depth.
         CHECK(ev.args["tags.0.model.size"].get<std::uint64_t>() == 42);

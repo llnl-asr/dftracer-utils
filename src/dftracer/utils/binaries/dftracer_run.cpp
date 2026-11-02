@@ -2,6 +2,7 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
@@ -29,13 +30,13 @@ using dftracer::utils::plugins::Plugins;
 struct PluginBlock {
     std::string path;
     std::string pconfig;
-    std::vector<std::pair<std::string, std::string>> pargs;
+    std::vector<dstd::Pair<std::string, std::string>> pargs;
 };
 
 // Config applied under every plugin block.
 struct SharedConfig {
     std::string pconfig;
-    std::vector<std::pair<std::string, std::string>> pargs;
+    std::vector<dstd::Pair<std::string, std::string>> pargs;
 };
 
 struct PluginArgs {
@@ -43,7 +44,7 @@ struct PluginArgs {
     SharedConfig shared;
 };
 
-static std::pair<std::string, std::string> split_kv(const std::string& kv) {
+static dstd::Pair<std::string, std::string> split_kv(const std::string& kv) {
     const auto eq = kv.find('=');
     if (eq == std::string::npos) return {kv, std::string()};
     return {kv.substr(0, eq), kv.substr(eq + 1)};

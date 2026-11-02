@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <instrumentation.h>
@@ -250,7 +251,7 @@ std::uint64_t counted_events(const std::string& binary,
     auto doc = parser.parse(content);
     REQUIRE(!doc.error());
     for (auto m : doc["nodes"].at(0)["summary"]["metrics"]) {
-        std::string_view name;
+        dftracer::utils::dstd::StringView name;
         if (m["name"].get(name) == simdjson::SUCCESS && name == "count") {
             double v = 0;
             REQUIRE(m["baseline"].get(v) == simdjson::SUCCESS);
@@ -713,7 +714,7 @@ TEST_SUITE("DFTracerComparator") {
         std::uint64_t var_count = 0;
         double dur_delta = 0;
         for (auto m : doc["nodes"].at(0)["summary"]["metrics"]) {
-            std::string_view name;
+            dftracer::utils::dstd::StringView name;
             if (m["name"].get(name) != simdjson::SUCCESS) continue;
             if (name == "count") {
                 base_count = static_cast<std::uint64_t>(

@@ -10,6 +10,8 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -371,13 +373,13 @@ PyObject* cell(const Node& n, std::int64_t i) {
             return PyFloat_FromDouble(n.col.data<double>()[at]);
         case TypeId::String:
         case TypeId::LargeString: {
-            const std::string_view v = n.col.string_at(i);
+            const dstd::StringView v = n.col.string_at(i);
             return PyUnicode_DecodeUTF8(
                 v.data(), static_cast<Py_ssize_t>(v.size()), "strict");
         }
         case TypeId::Binary:
         case TypeId::LargeBinary: {
-            const std::string_view v = n.col.string_at(i);
+            const dstd::StringView v = n.col.string_at(i);
             return PyBytes_FromStringAndSize(v.data(),
                                              static_cast<Py_ssize_t>(v.size()));
         }
@@ -777,7 +779,7 @@ class StringFiller {
 
    private:
     struct Slot {
-        std::string_view text;
+        dstd::StringView text;
         PyObject* obj = nullptr;  // borrowed: the destination holds a reference
     };
     static constexpr std::size_t SLOTS = 1U << 16;
@@ -837,7 +839,7 @@ class StringFiller {
             } else {
                 std::int64_t n = 0;
                 const char* p = dftu_series_string_at(c, i, &n);
-                const std::string_view t(p ? p : "",
+                const dstd::StringView t(p ? p : "",
                                          static_cast<std::size_t>(n));
                 Slot& slot =
                     cache_[quick_hash(t.data(), t.size()) & (SLOTS - 1)];
@@ -1169,7 +1171,7 @@ PyObject* bad_value(const char* what) {
     return nullptr;
 }
 
-std::optional<Kind> kind_of(PyObject* v, bool& other) {
+dstd::Optional<Kind> kind_of(PyObject* v, bool& other) {
     if (PyBool_Check(v)) return Kind::Bool;
     if (PyLong_Check(v)) return Kind::Int;
     if (PyFloat_Check(v)) return Kind::Float;
@@ -1182,25 +1184,25 @@ std::optional<Kind> kind_of(PyObject* v, bool& other) {
     if (PyList_Check(v) || PyTuple_Check(v)) return Kind::List;
     if (PyDict_Check(v)) return Kind::Dict;
     PyObject* cls = decimal_class();
-    if (!cls) return std::nullopt;
+    if (!cls) return dstd::nullopt;
     const int is = PyObject_IsInstance(v, cls);
-    if (is < 0) return std::nullopt;
+    if (is < 0) return dstd::nullopt;
     if (is) return Kind::Decimal;
     other = true;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // The offset of an aware datetime as microseconds, or nullopt for a naive
 // one; -1 in `error` on a Python error.
-std::optional<std::int64_t> utc_offset(PyObject* v, bool& error) {
+dstd::Optional<std::int64_t> utc_offset(PyObject* v, bool& error) {
     PyObject* off = PyObject_CallMethod(v, "utcoffset", nullptr);
     if (!off) {
         error = true;
-        return std::nullopt;
+        return dstd::nullopt;
     }
     if (off == Py_None) {
         Py_DECREF(off);
-        return std::nullopt;
+        return dstd::nullopt;
     }
     const std::int64_t us =
         (static_cast<std::int64_t>(PyDateTime_DELTA_GET_DAYS(off)) * 86400 +
@@ -1241,7 +1243,7 @@ std::string zone_name(PyObject* v, std::int64_t offset_us) {
 
 PyObject* build_datetimes(PyObject** items, Py_ssize_t n, Bits& bits) {
     std::vector<std::int64_t> micros(static_cast<std::size_t>(n), 0);
-    std::optional<bool> aware;
+    dstd::Optional<bool> aware;
     std::string zone;
     bool mixed_zones = false;
     for (Py_ssize_t i = 0; i < n; ++i) {

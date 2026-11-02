@@ -10,6 +10,9 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 #endif
@@ -35,7 +38,7 @@ struct ViewScannerInput {
     std::size_t batch_size = 4 * 1024 * 1024;  // IO buffer size
     std::size_t event_batch_size = 10000;      // events per batch
     ViewDefinition view;
-    std::optional<duql::Query> query;
+    dstd::Optional<duql::Query> query;
 
     /// Fold mode: when set, the scanner parses each matching event once and
     /// emits an owned interned FoldEvent (in ViewScannerBatch::fold_events)
@@ -92,14 +95,14 @@ struct ViewScannerBatch {
     /// Event lines. In stream mode these are string_view into the
     /// decompressed chunk (zero copy, valid until next generator resume).
     /// Metadata events use owned strings stored in owned_events.
-    std::vector<std::string_view> events;
+    std::vector<dstd::StringView> events;
     /// Owned storage for metadata events that outlive their source chunk.
     /// Uses deque so push_back doesn't invalidate string_view refs.
     std::deque<std::string> owned_events;
     /// Fold mode (ViewScannerInput::fold_intern set): each matching event
     /// parsed once into an owned FoldEvent, so `events` stays empty. Borrowed
     /// from the scan's buffer; valid until the next generator resume.
-    std::span<const detail::FoldEvent> fold_events;
+    dstd::Span<const detail::FoldEvent> fold_events;
     std::uint64_t events_matched = 0;
     std::uint64_t events_scanned = 0;
     std::uint64_t lines_invalid = 0;

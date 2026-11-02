@@ -2,6 +2,7 @@
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/comparator/comparison_aggregation.h>
@@ -131,13 +132,13 @@ dstd::String fold_category(const duql::QueryNode& n) {
 }
 
 struct Translator {
-    dstd::Optional<ComparisonFilter> fail() { return std::nullopt; }
+    dstd::Optional<ComparisonFilter> fail() { return dstd::nullopt; }
 
     static dstd::Optional<std::uint64_t> as_uint(const duql::LiteralValue& v) {
         if (const auto* u = std::get_if<std::uint64_t>(&v)) return *u;
         if (const auto* i = std::get_if<std::int64_t>(&v))
             if (*i >= 0) return static_cast<std::uint64_t>(*i);
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     // Restricts `field` to the literals, or fails when the field or a
@@ -221,9 +222,9 @@ struct Translator {
 
     dstd::Optional<ComparisonFilter> conj(const duql::AndNode& a) {
         auto l = node(*a.left);
-        if (!l) return std::nullopt;
+        if (!l) return dstd::nullopt;
         auto r = node(*a.right);
-        if (!r) return std::nullopt;
+        if (!r) return dstd::nullopt;
         intersect_set(l->has_categories, l->categories, r->categories,
                       r->has_categories);
         intersect_set(l->has_names, l->names, r->names, r->has_names);
@@ -235,9 +236,9 @@ struct Translator {
 
     dstd::Optional<ComparisonFilter> disj(const duql::OrNode& o) {
         auto l = node(*o.left);
-        if (!l) return std::nullopt;
+        if (!l) return dstd::nullopt;
         auto r = node(*o.right);
-        if (!r) return std::nullopt;
+        if (!r) return dstd::nullopt;
         const int shape = shape_of(*l);
         const bool one_field = shape == SHAPE_CATEGORIES ||
                                shape == SHAPE_NAMES || shape == SHAPE_PIDS;
@@ -341,7 +342,7 @@ double safe_div(double a, double b) { return b > 0.0 ? a / b : 0.0; }
 
 // Sorts `v` first, so the result does not depend on the order the values
 // came in.
-std::pair<double, double> mean_stdev(dstd::Vector<double>& v) {
+dstd::Pair<double, double> mean_stdev(dstd::Vector<double>& v) {
     if (v.empty()) return {0.0, 0.0};
     std::sort(v.begin(), v.end());
     double sum = 0.0;

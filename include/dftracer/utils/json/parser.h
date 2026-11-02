@@ -195,31 +195,31 @@ struct JsonValueHelper {
     static dstd::Optional<std::int64_t> get_int64(
         simdjson::ondemand::value& val) {
         auto r = val.get_int64();
-        return r.error() ? std::nullopt
+        return r.error() ? dstd::nullopt
                          : dstd::Optional<std::int64_t>(r.value());
     }
 
     static dstd::Optional<std::uint64_t> get_uint64(
         simdjson::ondemand::value& val) {
         auto r = val.get_uint64();
-        return r.error() ? std::nullopt
+        return r.error() ? dstd::nullopt
                          : dstd::Optional<std::uint64_t>(r.value());
     }
 
     static dstd::Optional<double> get_double(simdjson::ondemand::value& val) {
         auto r = val.get_double();
-        return r.error() ? std::nullopt : dstd::Optional<double>(r.value());
+        return r.error() ? dstd::nullopt : dstd::Optional<double>(r.value());
     }
 
     static dstd::Optional<bool> get_bool(simdjson::ondemand::value& val) {
         auto r = val.get_bool();
-        return r.error() ? std::nullopt : dstd::Optional<bool>(r.value());
+        return r.error() ? dstd::nullopt : dstd::Optional<bool>(r.value());
     }
 
     static dstd::Optional<dstd::StringView> get_string(
         simdjson::ondemand::value& val) {
         auto r = val.get_string();
-        return r.error() ? std::nullopt
+        return r.error() ? dstd::nullopt
                          : dstd::Optional<dstd::StringView>(r.value());
     }
 
@@ -232,7 +232,7 @@ struct JsonValueHelper {
         simdjson::ondemand::value& val) {
         auto r = val.type();
         return r.error()
-                   ? std::nullopt
+                   ? dstd::nullopt
                    : dstd::Optional<simdjson::ondemand::json_type>(r.value());
     }
 
@@ -240,7 +240,7 @@ struct JsonValueHelper {
         simdjson::ondemand::value& val) {
         auto r = simdjson::to_json_string(val);
         return r.error()
-                   ? std::nullopt
+                   ? dstd::nullopt
                    : dstd::Optional<dstd::String>(dstd::StringView(r.value()));
     }
 };

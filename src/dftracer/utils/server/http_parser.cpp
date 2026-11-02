@@ -9,6 +9,7 @@
 // responses or chunked encoding). It copies nothing, since every string_view
 // points into the caller's buffer.
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/server/http_parser.h>
 
 #include <cctype>
@@ -206,8 +207,8 @@ int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
     if (!consume_eol(c)) return -1;
 
     // Headers
-    out.method = std::string_view(method_start, method_len);
-    out.path = std::string_view(path_start, path_len);
+    out.method = dstd::StringView(method_start, method_len);
+    out.path = dstd::StringView(path_start, path_len);
     out.minor_version = minor_ver;
     out.headers.clear();
 
@@ -236,8 +237,8 @@ int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
         std::size_t val_len = 0;
         if (!read_header_value(c, val_start, val_len)) return -1;
 
-        out.headers.push_back({std::string_view(name_start, name_len),
-                               std::string_view(val_start, val_len)});
+        out.headers.push_back({dstd::StringView(name_start, name_len),
+                               dstd::StringView(val_start, val_len)});
     }
 
     return static_cast<int>(c.buf - buf);

@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_AGGFOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_AGGFOLD_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/event_source.h>
@@ -21,7 +22,7 @@ namespace dftracer::utils::trace::views::detail {
 /// always-present top-level scalars on a phase-filtered data event. A query
 /// touching anything else (args, te, fhash/hhash, resolved columns) cannot be
 /// filtered here and must take the indexed path.
-inline bool fold_query_field_supported(std::string_view f) {
+inline bool fold_query_field_supported(dstd::StringView f) {
     return f == "cat" || f == "name" || f == "pid" || f == "tid" || f == "ts" ||
            f == "dur";
 }
@@ -29,7 +30,7 @@ inline bool fold_query_field_supported(std::string_view f) {
 /// True when every field a query references is POD-evaluable, so the raw-gzip
 /// bootstrap can apply the predicate itself instead of deferring to the scan.
 inline bool query_evaluable_by_fold(const duql::Query& q) {
-    for (std::string_view f : q.fields())
+    for (dstd::StringView f : q.fields())
         if (!fold_query_field_supported(f)) return false;
     return true;
 }

@@ -31,6 +31,7 @@
 #endif
 
 #include <dftracer/utils/binaries/common_cli.h>
+#include <dftracer/utils/dstd/pair.h>
 
 #include <charconv>
 #include <chrono>
@@ -270,7 +271,7 @@ class ReplayArgParse : public binaries::ArgParse {
                          "Error: --sample-rate must be between 0.0 and 1.0\n");
             return false;
         }
-        const std::pair<const char*, const std::string*> id_lists[] = {
+        const dstd::Pair<const char*, const std::string*> id_lists[] = {
             {"--filter-pid", &filter_pid_csv},
             {"--exclude-pid", &exclude_pid_csv},
             {"--filter-tid", &filter_tid_csv},

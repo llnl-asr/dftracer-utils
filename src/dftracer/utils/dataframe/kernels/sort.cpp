@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/string.h>
 #include <hwy/contrib/sort/vqsort.h>
 
 #include <algorithm>
@@ -109,7 +110,7 @@ Series argsort_string(const Series& v, bool descending) {
     std::iota(idx.begin(), idx.end(), 0);
     std::stable_sort(idx.begin(), idx.end(),
                      [&](std::int64_t a, std::int64_t b) {
-                         std::string_view x, y;
+                         dstd::StringView x, y;
                          const bool va = str_at(h, a, x);
                          const bool vb = str_at(h, b, y);
                          if (!va || !vb) return va && !vb;

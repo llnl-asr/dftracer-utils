@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_INDEXED_FILE_READER_UTILITY_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/utilities/fileio/file_process_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 
@@ -39,7 +40,7 @@ class IndexedFileReaderUtility {
      * @param input Index configuration
      * @return Shared pointer to Reader ready for use
      */
-    coro::CoroTask<std::shared_ptr<reader::internal::Reader>> operator()(
+    coro::CoroTask<dstd::SharedPtr<reader::internal::Reader>> operator()(
         const IndexedReadInput& input) const;
 };
 

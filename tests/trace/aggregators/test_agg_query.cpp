@@ -6,6 +6,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
@@ -74,7 +78,7 @@ struct Ev {
     std::uint64_t dur = 0;
     bool has_dur = true;
     std::string fhash;
-    std::vector<std::pair<std::string, std::uint64_t>> args;
+    std::vector<dstd::Pair<std::string, std::uint64_t>> args;
 };
 
 class Acc {
@@ -86,19 +90,19 @@ class Acc {
     bool is_counter() const { return e_.counter; }
     bool is_profile() const { return e_.counter && e_.cat != "sys"; }
     bool is_system() const { return e_.counter && e_.cat == "sys"; }
-    std::string_view name() const { return e_.name; }
-    std::string_view cat() const { return e_.cat; }
+    dstd::StringView name() const { return e_.name; }
+    dstd::StringView cat() const { return e_.cat; }
     std::uint64_t pid() const { return e_.pid; }
     std::uint64_t tid() const { return e_.tid; }
     std::uint64_t ts() const { return e_.ts; }
     std::uint64_t dur() const { return e_.dur; }
     bool has_dur() const { return e_.has_dur; }
 
-    bool arg_is_number(std::string_view k) const {
+    bool arg_is_number(dstd::StringView k) const {
         return k != "fhash" && find(k) != nullptr;
     }
-    std::string_view arg_string(std::string_view k) const {
-        return k == "fhash" ? std::string_view(e_.fhash) : std::string_view{};
+    dstd::StringView arg_string(dstd::StringView k) const {
+        return k == "fhash" ? dstd::StringView(e_.fhash) : dstd::StringView{};
     }
     void metric_args(agg::MetricArgs& m) const {
         for (const auto& [name, v] : e_.args) {
@@ -111,7 +115,7 @@ class Acc {
     }
 
    private:
-    const std::uint64_t* find(std::string_view k) const {
+    const std::uint64_t* find(dstd::StringView k) const {
         for (const auto& [name, v] : e_.args)
             if (name == k) return &v;
         return nullptr;
@@ -280,8 +284,8 @@ struct Ask {
     std::uint64_t ts_end = UINT64_MAX;
 };
 
-using Key = std::tuple<std::string, std::string, std::uint64_t, std::uint64_t,
-                       std::uint64_t, std::uint64_t>;
+using Key = dstd::Tuple<std::string, std::string, std::uint64_t, std::uint64_t,
+                        std::uint64_t, std::uint64_t>;
 
 bool kept(const Ev& e, const Ask& a) {
     if (!a.categories.empty() && !a.categories.count(lower(e.cat)))
@@ -306,7 +310,7 @@ Key key_of(const Ev& e, const Ask& a) {
 
 struct Truth {
     std::set<std::uint64_t> pids, tids, files, pid_tids, pid_files;
-    std::map<std::uint64_t, std::pair<std::uint64_t, std::uint64_t>> spans;
+    std::map<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>> spans;
     std::vector<double> dur, size, off;
     agg::AggregationMetrics metrics{0.01};
 };
@@ -556,7 +560,7 @@ std::size_t partial_count(const Fixture& fx) {
             snapshot, *file,
             [&](std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
                 std::uint32_t, agg::PartialKind,
-                std::span<const std::uint8_t>) {
+                dstd::Span<const std::uint8_t>) {
                 ++n;
                 return true;
             }));

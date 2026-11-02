@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FILTER_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FILTER_H
 
+#include <dftracer/utils/dstd/string.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -50,11 +52,11 @@ class BloomFilter {
         std::uint64_t block;
         std::uint64_t mask;
     };
-    static Hashes hash(std::string_view value);
+    static Hashes hash(dstd::StringView value);
 
-    void add(std::string_view value) { add(hash(value)); }
+    void add(dstd::StringView value) { add(hash(value)); }
     void add(const Hashes& hashes);
-    bool possibly_contains(std::string_view value) const {
+    bool possibly_contains(dstd::StringView value) const {
         return possibly_contains(hash(value));
     }
     bool possibly_contains(const Hashes& hashes) const;

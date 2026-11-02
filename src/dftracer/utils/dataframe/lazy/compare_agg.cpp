@@ -2,6 +2,8 @@
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/memory/budget.h>
 
 namespace dftracer::utils::dataframe {
@@ -71,7 +73,7 @@ namespace {
 
 class SpoolSource : public Source {
    public:
-    SpoolSource(std::shared_ptr<spill::Spool> spool, Schema schema)
+    SpoolSource(dstd::SharedPtr<spill::Spool> spool, Schema schema)
         : spool_(std::move(spool)), schema_(std::move(schema)) {}
 
     Schema schema() const override { return schema_; }
@@ -100,7 +102,7 @@ class SpoolSource : public Source {
     }
 
    private:
-    std::shared_ptr<spill::Spool> spool_;
+    dstd::SharedPtr<spill::Spool> spool_;
     Schema schema_;
 };
 
@@ -120,15 +122,16 @@ class CompareAggCursor : public Cursor {
 
     std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
         auto df = co_await gen_->next();
-        if (!df) co_return std::nullopt;
+        if (!df) co_return dstd::nullopt;
         out_names_ = df->names;
         co_return morsel_of(std::move(*df));
     }
 
-    std::optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<std::vector<std::string>> out_names() const override {
         return out_names_;
     }
 
@@ -224,9 +227,9 @@ class CompareAggCursor : public Cursor {
     std::int64_t n_key_;
     std::uint64_t budget_;
     Governor gov_{"compare_agg"};
-    std::optional<LazyFrame> plan_;
-    std::optional<coro::AsyncGenerator<DataFrame>> gen_;
-    std::optional<std::vector<std::string>> out_names_;
+    dstd::Optional<LazyFrame> plan_;
+    dstd::Optional<coro::AsyncGenerator<DataFrame>> gen_;
+    dstd::Optional<std::vector<std::string>> out_names_;
     bool built_ = false;
 };
 

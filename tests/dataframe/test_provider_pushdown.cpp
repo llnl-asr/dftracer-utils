@@ -13,6 +13,8 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -199,7 +201,7 @@ void* fixture_scan(void* self, const dftu_scan_request* req,
 
 void fixture_destroy(void*) {}
 
-std::shared_ptr<Source> make_fixture_source(FixtureConfig& cfg) {
+dstd::SharedPtr<Source> make_fixture_source(FixtureConfig& cfg) {
     static const dftu_source_vt vt = {fixture_schema, fixture_scan,
                                       fixture_destroy, nullptr, nullptr};
     return make_provider_source(vt, &cfg);
@@ -366,8 +368,8 @@ class LimitRecordingSource : public dftracer::utils::dataframe::Source {
    private:
     struct OneShot : Cursor {
         bool done = false;
-        coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-            if (done) co_return std::nullopt;
+        coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
+            if (done) co_return dstd::nullopt;
             done = true;
             std::vector<std::int64_t> v{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
             dftracer::utils::dataframe::Morsel m;

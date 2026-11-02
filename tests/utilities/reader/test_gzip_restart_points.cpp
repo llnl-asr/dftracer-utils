@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
@@ -59,7 +60,7 @@ struct Fixture {
     std::string dir;
     std::string gz_path;
     std::string index_path;
-    std::shared_ptr<GzipIndexer> indexer;
+    dstd::SharedPtr<GzipIndexer> indexer;
 
     explicit Fixture(const std::vector<std::uint8_t>& bytes) {
         char tmpl[] = "/tmp/dftu_restart_XXXXXX";

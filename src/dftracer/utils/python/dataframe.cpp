@@ -21,6 +21,9 @@
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/plan.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/python/columnar_eval.h>
@@ -209,7 +212,8 @@ PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
     try {
         DataFrame bat = to_dataframe(b);
         dataframe::QueryPlan plan;
-        std::optional<duql::Query> q;  // keep root() alive across execute
+        dftracer::utils::dstd::Optional<duql::Query>
+            q;  // keep root() alive across execute
         if (dsl && *dsl) {
             auto parsed = duql::Query::from_string(dsl);
             if (!parsed)
@@ -975,7 +979,9 @@ PyObject* DataFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
                           pcols) ||
         !parse_string_seq(values, "gap_fill: values must be names", vcols))
         return nullptr;
-    std::optional<std::pair<std::int64_t, std::int64_t>> range;
+    dftracer::utils::dstd::Optional<
+        dftracer::utils::dstd::Pair<std::int64_t, std::int64_t>>
+        range;
     if (start_obj != Py_None) {
         const long long s = PyLong_AsLongLong(start_obj);
         const long long e = PyLong_AsLongLong(end_obj);
@@ -1012,7 +1018,7 @@ PyObject* DataFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
     const auto dir = static_cast<dataframe::AsofDirection>(dir_code);
     std::vector<std::string> equi;
     if (!parse_string_seq(by, "asof: by must be names", equi)) return nullptr;
-    std::optional<double> tol;
+    dftracer::utils::dstd::Optional<double> tol;
     if (tol_obj != Py_None) {
         const double t = PyFloat_AsDouble(tol_obj);
         if (PyErr_Occurred()) return nullptr;
@@ -1346,8 +1352,8 @@ PyObject* dataframe_from_bytes(PyObject* /*self*/, PyObject* obj) {
     Py_buffer view;
     if (PyObject_GetBuffer(obj, &view, PyBUF_SIMPLE) < 0) return nullptr;
     auto f = dataframe::frame_from_native(
-        std::string_view(static_cast<const char*>(view.buf),
-                         static_cast<std::size_t>(view.len)));
+        dftracer::utils::dstd::StringView(static_cast<const char*>(view.buf),
+                                          static_cast<std::size_t>(view.len)));
     PyBuffer_Release(&view);
     if (!f) {
         PyErr_SetString(PyExc_ValueError,

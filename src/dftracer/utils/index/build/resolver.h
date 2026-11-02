@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -56,7 +57,7 @@ struct ResolverInput {
     /// or when bloom and zonemap together lack one of its extra_dimensions
     /// (normalized by extra_dimension_name). Unset checks only that the tier
     /// is current. Checked only with require_bloom.
-    std::optional<ChunkIndexerConfig> bloom_config;
+    dstd::Optional<ChunkIndexerConfig> bloom_config;
 
     /// The schema a build would use; empty accepts the recorded one. A file
     /// with no current schema record, or another schema, is rebuilt whole.

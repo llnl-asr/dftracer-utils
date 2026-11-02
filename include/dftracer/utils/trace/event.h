@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_TRACE_EVENT_H
 #define DFTRACER_UTILS_TRACE_EVENT_H
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/args_map.h>
@@ -29,10 +31,10 @@ inline void append_index(std::string& out, std::size_t v) {
     out.append(p, static_cast<std::size_t>(buf + sizeof(buf) - p));
 }
 
-inline void insert_scalar_arg(ArgsMap& args, std::string_view key,
+inline void insert_scalar_arg(ArgsMap& args, dstd::StringView key,
                               const JsonValue& v) {
     if (v.is_string())
-        args.insert(key, std::string(v.get<std::string_view>()));
+        args.insert(key, std::string(v.get<dstd::StringView>()));
     else if (v.is_uint())
         args.insert(key, v.get<std::uint64_t>());
     else if (v.is_int())
@@ -50,7 +52,7 @@ inline void insert_scalar_arg(ArgsMap& args, std::string_view key,
 inline void flatten_arg(std::string& prefix, const JsonValue& v,
                         ArgsMap& args) {
     if (v.is_object()) {
-        v.for_each_member([&](std::string_view k, JsonValue cv) {
+        v.for_each_member([&](dstd::StringView k, JsonValue cv) {
             std::size_t base = prefix.size();
             prefix += '.';
             prefix += k;
@@ -74,7 +76,7 @@ inline void flatten_arg(std::string& prefix, const JsonValue& v,
     }
 }
 
-inline void insert_arg_member(ArgsMap& args, std::string_view key,
+inline void insert_arg_member(ArgsMap& args, dstd::StringView key,
                               const JsonValue& av) {
     if (av.is_object() || av.is_array()) {
         std::string prefix(key);
@@ -155,8 +157,8 @@ inline void flatten_arg_ondemand(std::string& prefix,
 
 struct DFTracerEvent {
     std::uint64_t id = 0;
-    std::string_view name;
-    std::string_view cat;
+    dstd::StringView name;
+    dstd::StringView cat;
     RecordPhase phase = RecordPhase::Unknown;
     EventType type = EventType::Unknown;
     std::uint64_t pid = 0;
@@ -197,7 +199,7 @@ struct DFTracerEvent {
         if (!json.is_object()) return false;
 
         bool has_ph = false;
-        json.for_each_member([&](std::string_view key, JsonValue v) {
+        json.for_each_member([&](dstd::StringView key, JsonValue v) {
             switch (key.size()) {
                 case 2:
                     if (key == "ph") {
@@ -215,7 +217,7 @@ struct DFTracerEvent {
                     } else if (key == "tid") {
                         out.tid = v.get<std::uint64_t>();
                     } else if (key == "cat") {
-                        out.cat = v.get<std::string_view>();
+                        out.cat = v.get<dstd::StringView>();
                     } else if (key == "dur") {
                         out.dur = v.get<std::uint64_t>();
                         out.has_dur = true;
@@ -223,14 +225,14 @@ struct DFTracerEvent {
                     break;
                 case 4:
                     if (key == "name") {
-                        out.name = v.get<std::string_view>();
+                        out.name = v.get<dstd::StringView>();
                     } else if (key == "type") {
                         out.type = read_event_type(v);
                     } else if (key == "args") {
                         if (v.is_object()) {
                             out.args.set_valid(true);
                             v.for_each_member(
-                                [&](std::string_view k, JsonValue av) {
+                                [&](dstd::StringView k, JsonValue av) {
                                     detail::insert_arg_member(out.args, k, av);
                                 });
                             out_args = v.raw();
@@ -254,7 +256,7 @@ struct DFTracerEvent {
 
         bool has_ph = false;
         for (auto field : root.get_object()) {
-            std::string_view key = field.key;
+            dstd::StringView key = field.key;
             simdjson::dom::element val = field.value;
             switch (key.size()) {
                 case 2:
@@ -308,7 +310,7 @@ struct DFTracerEvent {
 
     static bool parse_ondemand(json::JsonParser& parser, DFTracerEvent& out) {
         bool has_ph = false;
-        parser.for_each_field([&](std::string_view key,
+        parser.for_each_field([&](dstd::StringView key,
                                   simdjson::ondemand::value val) {
             if (key == "ph") {
                 out.phase = read_phase(val);
@@ -411,8 +413,8 @@ struct DFTracerEvent {
 struct EventRecord {
     const DFTracerEvent& ev;
     const json::JsonValue& json;
-    std::string_view line;
-    std::shared_ptr<std::string> line_buffer;
+    dstd::StringView line;
+    dstd::SharedPtr<std::string> line_buffer;
     std::size_t checkpoint_idx;
     std::size_t line_number;
     simdjson::dom::element args_dom{};

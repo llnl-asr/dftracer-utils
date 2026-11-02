@@ -6,6 +6,8 @@
 #include <dftracer/utils/dataframe/kernels/elementwise.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cmath>
 #include <cstddef>
@@ -557,20 +559,20 @@ dftu_series* fillna_bool(const dftu_series* a, dftu_scalar fill) {
 dftu_series* fillna_string(const dftu_series* a, dftu_scalar fill) {
     if (fill.kind != DFTU_SCALAR_TAG_STR || a->type != TypeId::String)
         return nullptr;
-    const std::string_view fv(fill.value.s, fill.len);
+    const dstd::StringView fv(fill.value.s, fill.len);
     const auto* off = reinterpret_cast<const std::int32_t*>(
         offsets_of<std::int32_t>(*a).data());
     const char* text = reinterpret_cast<const char*>(a->data.data());
     const std::uint8_t* valid =
         a->validity.block() ? a->validity.data() : nullptr;
-    std::vector<std::string_view> views(static_cast<std::size_t>(a->length));
+    std::vector<dstd::StringView> views(static_cast<std::size_t>(a->length));
     for (std::int64_t i = 0; i < a->length; ++i)
         views[static_cast<std::size_t>(i)] =
             (!valid || ((valid[i >> 3] >> (i & 7)) & 1))
-                ? std::string_view(text + off[i], static_cast<std::size_t>(
+                ? dstd::StringView(text + off[i], static_cast<std::size_t>(
                                                       off[i + 1] - off[i]))
                 : fv;
-    return Series::strings(std::span<const std::string_view>(views), nullptr)
+    return Series::strings(dstd::Span<const dstd::StringView>(views), nullptr)
         .release();
 }
 

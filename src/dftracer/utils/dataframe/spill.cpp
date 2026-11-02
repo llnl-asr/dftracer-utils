@@ -14,8 +14,11 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/heap.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -137,17 +140,18 @@ class SpoolReader : public Cursor {
         : mem_(mem) {
         if (!spill_path.empty()) disk_ = std::make_unique<Reader>(spill_path);
     }
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        std::optional<Morsel> mem;
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
+        dstd::Optional<Morsel> mem;
         if (try_next(max_rows, mem)) co_return mem;
         if (disk_) co_return co_await disk_->next(max_rows);
-        co_return std::nullopt;
+        co_return dstd::nullopt;
     }
 
     // True only while replaying the in-memory prefix, which shares buffers and
     // never suspends. Once that is drained the run continues on disk, where
     // next() must do the awaiting.
-    bool try_next(std::int64_t, std::optional<Morsel>& out) override {
+    bool try_next(std::int64_t, dstd::Optional<Morsel>& out) override {
         if (pos_ >= mem_->size()) return false;
         const Morsel& m = (*mem_)[pos_++];
         Morsel o;
@@ -173,13 +177,14 @@ class SpoolReverseReader : public Cursor {
         : mem_(mem), offsets_(std::move(offsets)), left_(mem->size()) {
         if (!spill_path.empty()) disk_ = std::make_unique<Reader>(spill_path);
     }
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<dstd::Optional<Morsel>> next(
+        std::int64_t max_rows) override {
         if (!offsets_.empty()) {
             disk_->seek(offsets_.back());
             offsets_.pop_back();
             co_return co_await disk_->next(max_rows);
         }
-        if (left_ == 0) co_return std::nullopt;
+        if (left_ == 0) co_return dstd::nullopt;
         const Morsel& m = (*mem_)[--left_];
         Morsel o;
         o.rows = m.rows;
@@ -326,7 +331,7 @@ Series get_series(const std::uint8_t*& p, const std::uint8_t* end) {
     h->set_json(json);
     h->set_time_unit(unit);
     h->set_timezone(
-        std::string_view(reinterpret_cast<const char*>(zone), zone_bytes));
+        dstd::StringView(reinterpret_cast<const char*>(zone), zone_bytes));
     return s;
 }
 
@@ -348,7 +353,7 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->encoding = Encoding::Flat;
         col->length = n;
         col->set_fixed_size(width);
-        col->set_child(std::shared_ptr<dftu_series>(child.release()));
+        col->set_child(dstd::SharedPtr<dftu_series>(child.release()));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
             col->validity = new_buffer(vbytes);
@@ -372,7 +377,7 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         auto buffer = new_buffer(off_bytes);
         if (off_bytes != 0) std::memcpy(writable(buffer), offs, off_bytes);
         col->offsets = std::move(buffer);
-        col->set_child(std::shared_ptr<dftu_series>(child.release()));
+        col->set_child(dstd::SharedPtr<dftu_series>(child.release()));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
             col->validity = new_buffer(vbytes);
@@ -393,7 +398,7 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
             std::string field(reinterpret_cast<const char*>(name), name_bytes);
             Series child = get_series(p, end);
             col->nested.push_back(
-                {std::shared_ptr<dftu_series>(child.release()),
+                {dstd::SharedPtr<dftu_series>(child.release()),
                  std::move(field)});
         }
         if (validity != nullptr) {
@@ -654,8 +659,8 @@ const ZSTD_customMem TRACKED_MEM = {
 
 bool spill_compression_on(const std::string& path) {
     const auto v = common::Env::get(common::constants::SPILL_COMPRESS_ENV);
-    const auto is = [&](std::string_view a, std::string_view b = {},
-                        std::string_view c = {}) {
+    const auto is = [&](dstd::StringView a, dstd::StringView b = {},
+                        dstd::StringView c = {}) {
         return v && (::dftracer::utils::common::detail::iequals(*v, a) ||
                      (!b.empty() &&
                       ::dftracer::utils::common::detail::iequals(*v, b)) ||
@@ -782,10 +787,10 @@ void Reader::seek(std::uint64_t pos) {
     is_.seekg(static_cast<std::streamoff>(pos));
 }
 
-coro::CoroTask<std::optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
+coro::CoroTask<dstd::Optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
     std::int64_t sizes[2] = {0, 0};
     is_.read(reinterpret_cast<char*>(sizes), sizeof(sizes));
-    if (is_.gcount() == 0) co_return std::nullopt;
+    if (is_.gcount() == 0) co_return dstd::nullopt;
     if (is_.gcount() != static_cast<std::streamsize>(sizeof(sizes)))
         throw std::runtime_error("spill: short run read");
     const auto at = static_cast<std::uint64_t>(is_.tellg());
@@ -830,7 +835,7 @@ coro::CoroTask<std::optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
     co_return m;
 }
 
-Spool::Spool(std::uint64_t budget, std::shared_ptr<Dir> dir)
+Spool::Spool(std::uint64_t budget, dstd::SharedPtr<Dir> dir)
     : budget_(budget), dir_(std::move(dir)) {}
 
 Spool::~Spool() {
@@ -900,7 +905,7 @@ void write_agg_run(AggState& state, const std::string& path) {
     agg_sort_groups(state);
     std::ofstream os(path, std::ios::binary);
     if (!os) throw std::runtime_error("agg spill: cannot open run " + path);
-    const std::shared_ptr<common::SpillCharge> charge =
+    const dstd::SharedPtr<common::SpillCharge> charge =
         common::ScopedSpillSubdir::charge_for(dstd::PathView(path));
     const std::int64_t ng = agg_num_groups(state);
     for (std::int64_t g = 0; g < ng; ++g) {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/index/key.h>
 #include <doctest/doctest.h>
 
@@ -117,7 +118,8 @@ void encode_string(KeyBuilder& builder, const std::string& value) {
     builder.str({value.data(), value.size()});
 }
 
-using Composite = std::tuple<std::uint32_t, std::string, std::int64_t>;
+using Composite =
+    dftracer::utils::dstd::Tuple<std::uint32_t, std::string, std::int64_t>;
 
 void encode_composite(KeyBuilder& builder, const Composite& value) {
     builder.u32(std::get<0>(value));

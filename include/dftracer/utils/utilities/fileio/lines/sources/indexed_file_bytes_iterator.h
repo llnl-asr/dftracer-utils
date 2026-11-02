@@ -4,6 +4,8 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -38,7 +40,7 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  */
 class IndexedFileBytesIterator {
    private:
-    std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+    dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
         reader_;
     std::unique_ptr<dftracer::utils::utilities::reader::internal::ReaderStream>
         stream_;
@@ -66,7 +68,7 @@ class IndexedFileBytesIterator {
      * @param buffer_size Size of buffer for reading (default 1MB)
      */
     IndexedFileBytesIterator(
-        std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+        dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
             reader,
         std::size_t start_byte, std::size_t end_byte,
         std::size_t buffer_size = 1024 * 1024)
@@ -180,7 +182,7 @@ class IndexedFileBytesIterator {
         }
 
         // Return the buffered line
-        Line result(std::string_view(line_buffer_), current_line_num_);
+        Line result(dstd::StringView(line_buffer_), current_line_num_);
         current_line_num_++;
 
         // Mark that we need to read the next line on the next has_next() call
@@ -200,7 +202,7 @@ class IndexedFileBytesIterator {
     /**
      * @brief Get the underlying Reader.
      */
-    std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+    dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
     get_reader() const {
         return reader_;
     }

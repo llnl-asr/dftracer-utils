@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <dftracer/utils/utilities/fileio/parallel/pwrite_fully.h>
@@ -70,15 +72,15 @@ class StripedWriter final : public ParallelWriter {
 
     std::vector<std::string> output_paths() const override { return {path_}; }
 
-    std::optional<MemberSpan> last_member(
+    dstd::Optional<MemberSpan> last_member(
         std::size_t worker_idx) const override {
-        if (worker_idx >= per_worker_layout_.size()) return std::nullopt;
+        if (worker_idx >= per_worker_layout_.size()) return dstd::nullopt;
         const auto& v = per_worker_layout_[worker_idx];
-        if (v.empty()) return std::nullopt;
+        if (v.empty()) return dstd::nullopt;
         return v.back();
     }
 
-    std::span<const MemberSpan> member_layout() const override {
+    dstd::Span<const MemberSpan> member_layout() const override {
         // Lazy merge after close: per-worker vectors -> single offset-sorted
         // vector. Caller contract: only invoked after `close()`, no concurrent
         // writers.
@@ -96,7 +98,7 @@ class StripedWriter final : public ParallelWriter {
                       });
             merged_layout_built_ = true;
         }
-        return std::span<const MemberSpan>(merged_layout_);
+        return dstd::Span<const MemberSpan>(merged_layout_);
     }
 
    private:

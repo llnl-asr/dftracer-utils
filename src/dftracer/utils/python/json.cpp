@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_str_helpers.h>
@@ -12,7 +15,7 @@ PyObject *dftracer::utils::python::args_value_to_pyobject(const ArgsValue &v) {
     return std::visit(
         [](const auto &val) -> PyObject * {
             using T = std::decay_t<decltype(val)>;
-            if constexpr (std::is_same_v<T, std::monostate>) {
+            if constexpr (std::is_same_v<T, dftracer::utils::dstd::Monostate>) {
                 Py_RETURN_NONE;
             } else if constexpr (std::is_same_v<T, std::string>) {
                 return PyUnicode_FromStringAndSize(val.data(), val.size());
@@ -44,7 +47,8 @@ static void JsonDictValue_dealloc(JsonDictValueObject *self) {
 static Py_ssize_t JsonDictValue_length(JsonDictValueObject *self) {
     const auto &map = get_map(self);
     Py_ssize_t count = 0;
-    map.for_each_member([&](std::string_view, ArgsValueProxy) { ++count; });
+    map.for_each_member(
+        [&](dftracer::utils::dstd::StringView, ArgsValueProxy) { ++count; });
     if (!self->is_args && get_map(self).exists()) {
         auto &ev = self->batch->events[self->event_index];
         if (ev.args.exists()) ++count;
@@ -57,7 +61,7 @@ static PyObject *JsonDictValue_subscript(JsonDictValueObject *self,
     const char *key_str = as_utf8(key);
     if (!key_str) return NULL;
 
-    std::string_view k(key_str);
+    dftracer::utils::dstd::StringView k(key_str);
 
     if (!self->is_args && k == "args") {
         auto &ev = self->batch->events[self->event_index];
@@ -68,7 +72,8 @@ static PyObject *JsonDictValue_subscript(JsonDictValueObject *self,
             (JsonDictValueObject *)JsonDictValueType.tp_alloc(
                 &JsonDictValueType, 0);
         if (!obj) return NULL;
-        new (&obj->batch) std::shared_ptr<JsonDictBatch>(self->batch);
+        new (&obj->batch)
+            dftracer::utils::dstd::SharedPtr<JsonDictBatch>(self->batch);
         obj->event_index = self->event_index;
         obj->is_args = true;
         return (PyObject *)obj;
@@ -96,13 +101,14 @@ static PyObject *JsonDictValue_keys(JsonDictValueObject *self,
     if (!list) return NULL;
 
     const auto &map = get_map(self);
-    map.for_each_member([&](std::string_view k, ArgsValueProxy) {
-        PyObject *key = PyUnicode_FromStringAndSize(k.data(), k.size());
-        if (key) {
-            PyList_Append(list, key);
-            Py_DECREF(key);
-        }
-    });
+    map.for_each_member(
+        [&](dftracer::utils::dstd::StringView k, ArgsValueProxy) {
+            PyObject *key = PyUnicode_FromStringAndSize(k.data(), k.size());
+            if (key) {
+                PyList_Append(list, key);
+                Py_DECREF(key);
+            }
+        });
 
     if (!self->is_args) {
         auto &ev = self->batch->events[self->event_index];
@@ -140,7 +146,8 @@ static PyObject *JsonDictValue_values(JsonDictValueObject *self,
                     &JsonDictValueType, 0);
             if (args_obj) {
                 new (&args_obj->batch)
-                    std::shared_ptr<JsonDictBatch>(self->batch);
+                    dftracer::utils::dstd::SharedPtr<JsonDictBatch>(
+                        self->batch);
                 args_obj->event_index = self->event_index;
                 args_obj->is_args = true;
                 PyList_Append(list, (PyObject *)args_obj);
@@ -181,7 +188,8 @@ static PyObject *JsonDictValue_items(JsonDictValueObject *self,
                     &JsonDictValueType, 0);
             if (args_key && args_obj) {
                 new (&args_obj->batch)
-                    std::shared_ptr<JsonDictBatch>(self->batch);
+                    dftracer::utils::dstd::SharedPtr<JsonDictBatch>(
+                        self->batch);
                 args_obj->event_index = self->event_index;
                 args_obj->is_args = true;
                 PyObject *tuple =
@@ -207,7 +215,7 @@ static PyObject *JsonDictValue_get(JsonDictValueObject *self, PyObject *args) {
     const char *key_str = as_utf8(key);
     if (!key_str) return NULL;
 
-    std::string_view k(key_str);
+    dftracer::utils::dstd::StringView k(key_str);
 
     if (!self->is_args && k == "args") {
         auto &ev = self->batch->events[self->event_index];
@@ -219,7 +227,8 @@ static PyObject *JsonDictValue_get(JsonDictValueObject *self, PyObject *args) {
             (JsonDictValueObject *)JsonDictValueType.tp_alloc(
                 &JsonDictValueType, 0);
         if (!obj) return NULL;
-        new (&obj->batch) std::shared_ptr<JsonDictBatch>(self->batch);
+        new (&obj->batch)
+            dftracer::utils::dstd::SharedPtr<JsonDictBatch>(self->batch);
         obj->event_index = self->event_index;
         obj->is_args = true;
         return (PyObject *)obj;
@@ -238,7 +247,7 @@ static int JsonDictValue_contains(JsonDictValueObject *self, PyObject *key) {
     const char *key_str = as_utf8(key);
     if (!key_str) return -1;
 
-    std::string_view k(key_str);
+    dftracer::utils::dstd::StringView k(key_str);
 
     if (!self->is_args && k == "args") {
         auto &ev = self->batch->events[self->event_index];

@@ -15,6 +15,9 @@
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
@@ -88,7 +91,7 @@ struct AggAccum {
 using GroupMap = ankerl::unordered_dense::map<std::string, AggAccum>;
 
 // The key text of a missing or JSON-null Arg/Field value: a null output cell.
-inline constexpr std::string_view NULL_KEY{"\0", 1};
+inline constexpr dftracer::utils::dstd::StringView NULL_KEY{"\0", 1};
 
 template <class Src, class Out>
 void append_group_dim(Out& out, const Src& src, const GroupKey& gk) {
@@ -160,15 +163,16 @@ std::string group_dim_str(const Src& src, const GroupKey& gk) {
 template <class Src>
 void fold_numeric_args_t(AggAccum& a, const Src& src, bool want_sketch) {
     namespace agg = dftracer::utils::index::schemas::dft::agg;
-    auto feed = [&](std::string_view key, double num) {
+    auto feed = [&](dftracer::utils::dstd::StringView key, double num) {
         a.dyn[std::string(key)].add(num);
         if (want_sketch) a.dyn_sketches[std::string(key)].add(num);
     };
     if (auto sz = detail::derived_size_t(src)) feed("size", *sz);
-    src.for_each_numeric_arg([&](std::string_view key, double num) {
-        if (agg::is_reserved_arg(key) || agg::is_preagg_suffix(key)) return;
-        feed(key, num);
-    });
+    src.for_each_numeric_arg(
+        [&](dftracer::utils::dstd::StringView key, double num) {
+            if (agg::is_reserved_arg(key) || agg::is_preagg_suffix(key)) return;
+            feed(key, num);
+        });
 }
 
 template <class Src>
@@ -387,7 +391,7 @@ inline OccSummary occupancy_summary(const AggAccum& a) {
     o.total = a.occ_total;
     o.span = a.occ_te > a.occ_ts ? a.occ_te - a.occ_ts : 0;
     if (a.occ_deltas.empty()) return o;
-    std::vector<std::pair<std::uint64_t, std::int64_t>> pts(
+    std::vector<dftracer::utils::dstd::Pair<std::uint64_t, std::int64_t>> pts(
         a.occ_deltas.begin(), a.occ_deltas.end());
     std::sort(pts.begin(), pts.end(),
               [](const auto& x, const auto& y) { return x.first < y.first; });
@@ -660,7 +664,8 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
     const std::int64_t nrows = static_cast<std::int64_t>(ng);
     for (std::size_t i = 0; i < group_cols.size(); ++i) {
         batch.names.push_back(group_cols[i]);
-        std::vector<std::string_view> views(gk[i].begin(), gk[i].end());
+        std::vector<dftracer::utils::dstd::StringView> views(gk[i].begin(),
+                                                             gk[i].end());
         std::vector<std::uint8_t> vbits((views.size() + 7) / 8, 0);
         for (std::size_t r = 0; r < views.size(); ++r)
             if (views[r] == NULL_KEY)
@@ -668,7 +673,9 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
             else
                 vbits[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
         batch.columns.push_back(dataframe::Series::strings(
-            std::span<const std::string_view>(views), vbits.data()));
+            dftracer::utils::dstd::Span<
+                const dftracer::utils::dstd::StringView>(views),
+            vbits.data()));
     }
     auto build_value_column = [&](const std::vector<FieldNum>& cells) {
         FieldStatDomain dom =
@@ -743,12 +750,12 @@ inline void harvest_pr_rank(
     if (ev.name_id == dftracer::utils::dstd::StringIntern::NO_ID ||
         intern.resolve(ev.name_id) != "PR")
         return;
-    std::string_view rank;
+    dftracer::utils::dstd::StringView rank;
     bool is_rank = false;
     for (const auto& [kid, v] : ev.args) {
         const auto* sid = std::get_if<std::uint32_t>(&v);
         if (!sid) continue;
-        const std::string_view key = intern.resolve(kid);
+        const dftracer::utils::dstd::StringView key = intern.resolve(kid);
         if (key == "name")
             is_rank = intern.resolve(*sid) == "rank";
         else if (key == "value")
@@ -818,7 +825,8 @@ class OracleAggFold : public detail::Fold {
     // the trace itself so the oracle needs no built index name table.
     void harvest_name(const detail::FoldEvent& ev) {
         if (ev.name_id == StringIntern::NO_ID) return;
-        const std::string_view rec = intern_->resolve(ev.name_id);
+        const dftracer::utils::dstd::StringView rec =
+            intern_->resolve(ev.name_id);
         std::map<std::string, std::string>* dst = nullptr;
         if (rec == "FH")
             dst = &maps_.fpath;
@@ -826,11 +834,11 @@ class OracleAggFold : public detail::Fold {
             dst = &maps_.host;
         else
             return;
-        std::string_view name, value;
+        dftracer::utils::dstd::StringView name, value;
         for (const auto& [kid, val] : ev.args) {
             const auto* sid = std::get_if<std::uint32_t>(&val);
             if (!sid) continue;
-            const std::string_view key = intern_->resolve(kid);
+            const dftracer::utils::dstd::StringView key = intern_->resolve(kid);
             if (key == "name")
                 name = intern_->resolve(*sid);
             else if (key == "value")

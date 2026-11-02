@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
@@ -100,10 +101,10 @@ std::string write_trace(TestEnvironment& env) {
     return gz;
 }
 
-std::string name_of(std::string_view line) {
+std::string name_of(dstd::StringView line) {
     simdjson::dom::parser p;
     simdjson::padded_string s(line);
-    std::string_view name;
+    dstd::StringView name;
     REQUIRE(p.parse(s)["name"].get(name) == simdjson::SUCCESS);
     return std::string(name);
 }
@@ -140,9 +141,9 @@ coro::CoroTask<Names> reader_json(coro::AsyncGenerator<reader::JsonLine> gen) {
 // other value becomes null, which gives the same result by the spec rule. `sh`
 // has no column form and no filter selects it, so it is left out.
 DataFrame frame_of(bool numeric_x) {
-    const std::vector<std::string_view> name{"a1", "a2", "a3", "e", "s",
+    const std::vector<dstd::StringView> name{"a1", "a2", "a3", "e", "s",
                                              "n",  "m",  "mp", "np"};
-    const std::vector<std::string_view> cat{"POSIX", "STDIO", "STDIO",
+    const std::vector<dstd::StringView> cat{"POSIX", "STDIO", "STDIO",
                                             "STDIO", "STDIO", "STDIO",
                                             "STDIO", "POSIX", "POSIX"};
     DataFrame df;
@@ -154,12 +155,12 @@ DataFrame frame_of(bool numeric_x) {
         const std::uint8_t valid[] = {0b00000111, 0};
         df.columns.push_back(Series::flat_i64(x, 9, valid));
     } else {
-        const std::vector<std::string_view> x{"", "", "", "", "a",
+        const std::vector<dstd::StringView> x{"", "", "", "", "a",
                                               "", "", "", ""};
         const std::uint8_t valid[] = {0b00011000, 0};
         df.columns.push_back(Series::strings(x, valid));
     }
-    const std::vector<std::string_view> lvl{"hi", "", "", "", "",
+    const std::vector<dstd::StringView> lvl{"hi", "", "", "", "",
                                             "",   "", "", ""};
     const std::uint8_t lvl_valid[] = {0b00000011, 0};
     df.columns.push_back(Series::strings(lvl, lvl_valid));
@@ -274,7 +275,7 @@ TEST_SUITE("duql paths") {
 
         DataFrame frame;
         {
-            const std::vector<std::string_view> name{"t1", "t2", "t3", "t4",
+            const std::vector<dstd::StringView> name{"t1", "t2", "t3", "t4",
                                                      "t5"};
             const std::int64_t x[] = {4, 5, 6, 7, 0};
             const std::uint8_t valid[] = {0b00001111};
@@ -327,8 +328,8 @@ TEST_SUITE("duql paths") {
 
     TEST_CASE("a DataFrame without the column selects as if it were missing") {
         DataFrame df;
-        const std::vector<std::string_view> name{"p", "s"};
-        const std::vector<std::string_view> cat{"POSIX", "STDIO"};
+        const std::vector<dstd::StringView> name{"p", "s"};
+        const std::vector<dstd::StringView> cat{"POSIX", "STDIO"};
         df.names = {"name", "cat"};
         df.columns.push_back(Series::strings(name));
         df.columns.push_back(Series::strings(cat));

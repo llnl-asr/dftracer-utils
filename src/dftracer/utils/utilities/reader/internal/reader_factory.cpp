@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/format_detector.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
@@ -10,7 +11,7 @@
 
 namespace dftracer::utils::utilities::reader::internal {
 
-std::shared_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
+dstd::SharedPtr<Reader> ReaderFactory::create(const std::string &archive_path,
                                               const std::string &index_path,
                                               std::size_t index_ckpt_size) {
     common::ArchiveFormat format = common::FormatDetector::detect(archive_path);
@@ -31,8 +32,8 @@ std::shared_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
     }
 }
 
-std::shared_ptr<Reader> ReaderFactory::create(
-    std::shared_ptr<dftracer::utils::index::gzip::CheckpointIndexer> indexer) {
+dstd::SharedPtr<Reader> ReaderFactory::create(
+    dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer> indexer) {
     if (!indexer) {
         throw ReaderError(ReaderError::InvalidArgument,
                           "Indexer cannot be null");

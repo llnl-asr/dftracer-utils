@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -79,7 +80,7 @@ class Recorder : public index::build::IndexVisitor {
 };
 
 GzipBuildArtifacts build(const std::string& path, Recorder* rec) {
-    std::optional<GzipBuildArtifacts> arts;
+    dstd::Optional<GzipBuildArtifacts> arts;
     run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         index::gzip::CheckpointIndexer::VisitorList visitors;
         if (rec) visitors.emplace_back(*rec);

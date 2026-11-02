@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 
 #include <cstddef>
@@ -79,7 +80,7 @@ const char* to_string(Agg agg) noexcept;
 
 /// Parse a canonical aggregate name (as `to_string` produces) into an Agg.
 /// Throws std::out_of_range on an unknown name.
-Agg agg_from_string(std::string_view name);
+Agg agg_from_string(dstd::StringView name);
 
 /// Map the public Agg selector to the engine AggOp code. Same op; the two enums
 /// carry the same op under different stable values.
@@ -118,9 +119,9 @@ struct DataFrame {
     }
 
     /// Index of the column named `name`, or -1 if absent.
-    std::int64_t column_index(std::string_view name) const;
+    std::int64_t column_index(dstd::StringView name) const;
     /// A column by name, sharing its buffers zero-copy; invalid if absent.
-    Series column(std::string_view name) const;
+    Series column(dstd::StringView name) const;
 
     /// Begin a deferred query over this frame; include dataframe/lazyframe.h.
     LazyFrame lazy() const;

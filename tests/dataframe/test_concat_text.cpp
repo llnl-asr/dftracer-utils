@@ -8,6 +8,9 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -23,11 +26,11 @@ namespace dfops = dftracer::utils::dataframe;
 
 namespace {
 
-using Row = std::optional<std::string>;
+using Row = dftracer::utils::dstd::Optional<std::string>;
 using Rows = std::vector<Row>;
 
 Series build(const Rows& rows) {
-    std::vector<std::string_view> views;
+    std::vector<dftracer::utils::dstd::StringView> views;
     std::vector<std::uint8_t> validity((rows.size() + 7) / 8, 0xFF);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
@@ -39,8 +42,10 @@ Series build(const Rows& rows) {
             any_null = true;
         }
     }
-    return Series::strings(std::span<const std::string_view>(views),
-                           any_null ? validity.data() : nullptr);
+    return Series::strings(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
+            views),
+        any_null ? validity.data() : nullptr);
 }
 
 Rows read(const Series& s) {

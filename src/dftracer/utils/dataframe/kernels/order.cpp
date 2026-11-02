@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <cmath>
@@ -13,7 +15,7 @@ namespace dftracer::utils::dataframe {
 
 namespace {
 
-std::optional<ColumnView::Kind> kind_of(TypeId t) {
+dstd::Optional<ColumnView::Kind> kind_of(TypeId t) {
     switch (physical_type(t)) {
         case TypeId::Bool:
         case TypeId::Int8:
@@ -35,7 +37,7 @@ std::optional<ColumnView::Kind> kind_of(TypeId t) {
         case TypeId::LargeBinary:
             return ColumnView::Kind::Bytes;
         default:
-            return std::nullopt;
+            return dstd::nullopt;
     }
 }
 
@@ -131,14 +133,14 @@ double ColumnView::get_double(std::int64_t i) const noexcept {
     }
 }
 
-std::string_view ColumnView::get_bytes(std::int64_t i) const noexcept {
+dstd::StringView ColumnView::get_bytes(std::int64_t i) const noexcept {
     const auto at = static_cast<std::size_t>(i);
     const char* d = reinterpret_cast<const char*>(data_);
     if (off64_ != nullptr)
-        return std::string_view(
+        return dstd::StringView(
             d + off64_[at],
             static_cast<std::size_t>(off64_[at + 1] - off64_[at]));
-    return std::string_view(
+    return dstd::StringView(
         d + off32_[at], static_cast<std::size_t>(off32_[at + 1] - off32_[at]));
 }
 
@@ -152,8 +154,8 @@ int ColumnView::compare(std::int64_t a, const ColumnView& other,
         case Kind::Float:
             return compare_doubles(get_double(a), other.get_double(b));
         default: {
-            const std::string_view x = get_bytes(a);
-            const std::string_view y = other.get_bytes(b);
+            const dstd::StringView x = get_bytes(a);
+            const dstd::StringView y = other.get_bytes(b);
             const int c = x.compare(y);
             return c < 0 ? -1 : (c > 0 ? 1 : 0);
         }

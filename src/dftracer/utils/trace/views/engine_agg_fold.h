@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/aggfold.h>
@@ -65,7 +66,7 @@ class EngineAggFold : public Fold {
         // A predicated collect filters per event, so the scan must carry any
         // arg field the predicate reads (cat/name/pid/... are arg-free).
         if (apply_query_ && plan_->query)
-            for (std::string_view f : plan_->query->fields())
+            for (dstd::StringView f : plan_->query->fields())
                 if (!arg_free_field(std::string(f))) return true;
         return false;
     }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/debug.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
@@ -25,7 +26,7 @@ namespace {
 
 std::string g_reports;
 
-void capture(std::string_view text) noexcept {
+void capture(dftracer::utils::dstd::StringView text) noexcept {
     g_reports.append(text.data(), text.size());
 }
 

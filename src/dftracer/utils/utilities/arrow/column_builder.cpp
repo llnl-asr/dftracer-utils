@@ -3,6 +3,8 @@
 #include <dftracer/utils/common/error.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <nanoarrow/nanoarrow.h>
 
@@ -111,7 +113,7 @@ constexpr StorageKind storage_kind(ColumnType t) noexcept {
 }  // namespace
 
 void RecordBatchBuilder::init_column(ColumnData& col, ColumnType type,
-                                     std::string_view name) {
+                                     dstd::StringView name) {
     col.name = std::string(name);
     col.type = type;
     col.count = 0;
@@ -203,7 +205,7 @@ void RecordBatchBuilder::declare_schema(const std::vector<ColumnSpec>& specs) {
     schema_declared_ = true;
 }
 
-std::size_t RecordBatchBuilder::add_or_get_column(std::string_view name,
+std::size_t RecordBatchBuilder::add_or_get_column(dstd::StringView name,
                                                   ColumnType type) {
     auto it = name_to_index_.find(name);
     if (it != name_to_index_.end()) {
@@ -223,11 +225,11 @@ std::size_t RecordBatchBuilder::add_or_get_column(std::string_view name,
     return idx;
 }
 
-std::optional<std::size_t> RecordBatchBuilder::find_column(
-    std::string_view name) const {
+dstd::Optional<std::size_t> RecordBatchBuilder::find_column(
+    dstd::StringView name) const {
     auto it = name_to_index_.find(name);
     if (it != name_to_index_.end()) return it->second;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 ColumnType RecordBatchBuilder::column_type(std::size_t col_idx) const noexcept {
@@ -267,7 +269,7 @@ void RecordBatchBuilder::append_double(std::size_t col_idx, double value) {
 }
 
 void RecordBatchBuilder::append_string(std::size_t col_idx,
-                                       std::string_view value) {
+                                       dstd::StringView value) {
     auto& col = columns_[col_idx];
     col.string_data.insert(col.string_data.end(), value.begin(), value.end());
     col.string_offsets.push_back(
@@ -278,14 +280,14 @@ void RecordBatchBuilder::append_string(std::size_t col_idx,
 }
 
 void RecordBatchBuilder::append_binary(std::size_t col_idx,
-                                       std::string_view value) {
+                                       dstd::StringView value) {
     // BINARY shares STRING's storage and append_string does no UTF-8
     // validation, so the two paths are identical.
     append_string(col_idx, value);
 }
 
 void RecordBatchBuilder::append_dict_string(std::size_t col_idx,
-                                            std::string_view value) {
+                                            dstd::StringView value) {
     auto& col = columns_[col_idx];
     auto it = col.dict_map.find(value);
     std::int32_t idx;
@@ -322,9 +324,9 @@ void RecordBatchBuilder::append_hist(
 }
 
 void RecordBatchBuilder::append_string_list(
-    std::size_t col_idx, const std::vector<std::string_view>& values) {
+    std::size_t col_idx, const std::vector<dstd::StringView>& values) {
     auto& col = columns_[col_idx];
-    for (std::string_view v : values) {
+    for (dstd::StringView v : values) {
         col.string_data.insert(col.string_data.end(), v.begin(), v.end());
         col.string_offsets.push_back(
             static_cast<std::int32_t>(col.string_data.size()));

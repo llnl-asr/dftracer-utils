@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -108,7 +110,7 @@ Occ window_occ(const std::string& gz, double b, double e) {
 
 // The length of the union of `events` clamped to [b, e).
 double union_in(const std::vector<Event>& events, double b, double e) {
-    std::vector<std::pair<double, double>> iv;
+    std::vector<dstd::Pair<double, double>> iv;
     for (const auto& ev : events) {
         const double s = std::max(static_cast<double>(ev.ts), b);
         const double t = std::min(static_cast<double>(ev.ts + ev.dur), e);
@@ -194,11 +196,11 @@ TEST_SUITE("TimeWindow") {
             return n;
         };
         for (auto [b, e] :
-             std::vector<std::pair<double, double>>{{1010000, 1060000},
-                                                    {1000000, 1000050},
-                                                    {1199950, 1300000},
-                                                    {0, 1000000},
-                                                    {1100025, 1100075}}) {
+             std::vector<dstd::Pair<double, double>>{{1010000, 1060000},
+                                                     {1000000, 1000050},
+                                                     {1199950, 1300000},
+                                                     {0, 1000000},
+                                                     {1100025, 1100075}}) {
             CAPTURE(b);
             CAPTURE(e);
             CHECK(rows_in(gz, b, e) == expect(b, e));
@@ -234,7 +236,7 @@ TEST_SUITE("TimeWindow") {
                          : 0;
             return n;
         };
-        for (auto [b, e] : std::vector<std::pair<double, double>>{
+        for (auto [b, e] : std::vector<dstd::Pair<double, double>>{
                  {11000000, 12000000}, {0, 1}, {0, 2000000}, {19000000, 0}}) {
             CAPTURE(b);
             CAPTURE(e);
@@ -244,7 +246,7 @@ TEST_SUITE("TimeWindow") {
             run(view_of(gz)
                     .time_range(11000000, 12000000)
                     .map_batches<int>(
-                        [](int&, const std::vector<std::string_view>&) {},
+                        [](int&, const std::vector<dstd::StringView>&) {},
                         [](int&& a, int&&) { return a; }, 1))
                 .stats;
         CHECK(stats.chunks_scanned < 10);

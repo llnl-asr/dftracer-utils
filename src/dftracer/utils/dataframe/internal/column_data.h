@@ -6,6 +6,8 @@
 #include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -41,7 +43,7 @@ inline bool offsets_from_lengths(Off* off, std::int64_t n) noexcept {
 /// A nested column of a dftu_series: a Struct field with its name, or the
 /// one child of a list-like, SELECTION or DICTIONARY column (no name).
 struct dftu_nested {
-    std::shared_ptr<dftu_series> series;
+    dftracer::utils::dstd::SharedPtr<dftu_series> series;
     std::string name;
 };
 
@@ -67,7 +69,8 @@ struct dftu_series {
     dftracer::utils::dataframe::BufferView validity;
     /// VIEW: the data buffers the 16-byte views in `data` point into, shared
     /// by every column made from this one. Null for any other encoding.
-    std::shared_ptr<const std::vector<dftracer::utils::dataframe::BufferView>>
+    dftracer::utils::dstd::SharedPtr<
+        const std::vector<dftracer::utils::dataframe::BufferView>>
         blobs;
     /// A flat Struct's fields, in order; a CHUNKED column's chunks, in order;
     /// otherwise at most one entry, the base of a SELECTION or DICTIONARY or
@@ -82,8 +85,9 @@ struct dftu_series {
     }
     /// The one child, null for a Struct's fields, a CHUNKED column's chunks or
     /// none.
-    const std::shared_ptr<dftu_series>& child() const noexcept {
-        static const std::shared_ptr<dftu_series> NONE;
+    const dftracer::utils::dstd::SharedPtr<dftu_series>& child()
+        const noexcept {
+        static const dftracer::utils::dstd::SharedPtr<dftu_series> NONE;
         return nested.empty() || has_fields() || is_chunked()
                    ? NONE
                    : nested.front().series;
@@ -100,7 +104,7 @@ struct dftu_series {
         local = i - starts[k];
         return *nested[k].series;
     }
-    void set_child(std::shared_ptr<dftu_series> c) {
+    void set_child(dftracer::utils::dstd::SharedPtr<dftu_series> c) {
         nested.clear();
         if (c) nested.push_back({std::move(c), {}});
     }
@@ -111,7 +115,9 @@ struct dftu_series {
     dftracer::utils::dataframe::TimeUnit time_unit() const noexcept {
         return params.time_unit(type);
     }
-    std::string_view timezone() const { return params.timezone(type); }
+    dftracer::utils::dstd::StringView timezone() const {
+        return params.timezone(type);
+    }
     std::int32_t decimal_precision() const noexcept {
         return params.decimal_precision(type);
     }
@@ -133,7 +139,7 @@ struct dftu_series {
     void set_time_unit(dftracer::utils::dataframe::TimeUnit unit) noexcept {
         params.set_time_unit(type, unit);
     }
-    void set_timezone(std::string_view zone) {
+    void set_timezone(dftracer::utils::dstd::StringView zone) {
         params.set_timezone(type, zone);
     }
     void set_decimal(std::int32_t precision, std::int32_t scale) noexcept {
@@ -176,7 +182,7 @@ inline void adopt_type_params_as(dftu_series& out, const dftu_series& src,
 
 /// A CHUNKED column over `chunks` (at least two, same type, none CHUNKED).
 inline dftu_series* make_chunked(
-    std::vector<std::shared_ptr<dftu_series>> chunks) {
+    std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> chunks) {
     auto* out = new dftu_series();
     adopt_type_from(*out, *chunks.front());
     out->encoding = Encoding::Chunked;

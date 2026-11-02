@@ -4,7 +4,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -79,7 +81,7 @@ IndexedCounts count_from_index(const std::string& index_path,
             const auto stats =
                 file ? common::unwrap(dftracer::utils::index::scalar_stats(
                            snapshot, *file))
-                     : std::nullopt;
+                     : dstd::nullopt;
             if (stats && stats->num_chunks > 0) {
                 counts.total_events +=
                     static_cast<std::size_t>(stats->stats.total_events);
@@ -108,9 +110,9 @@ class StreamCounter {
     // Whole lines go into work_ because parse_lines needs SIMDJSON_PADDING
     // after them and strip_array_delimiters writes in place.
     // A last line with no newline is never parsed, as in the index build.
-    void feed(std::string_view chunk) {
+    void feed(dstd::StringView chunk) {
         const std::size_t cut = chunk.rfind('\n');
-        if (cut == std::string_view::npos) {
+        if (cut == dstd::StringView::npos) {
             carry_.append(chunk);
             return;
         }
@@ -123,7 +125,7 @@ class StreamCounter {
         work_.resize(total + simdjson::SIMDJSON_PADDING, '\0');
         trace::parse_lines(
             parser_, work_.data(), total,
-            [&](simdjson::dom::element root, std::string_view) {
+            [&](simdjson::dom::element root, dstd::StringView) {
                 if (path_decoder_ ? root.is_object()
                                   : trace::views::detail::counts_as_event(root))
                     ++count_;
@@ -173,7 +175,7 @@ coro::CoroTask<std::size_t> stream_count(std::string path) {
                                                      "cannot read ", path);
             if (got == 0) break;
             counter.feed(
-                std::string_view(buf.data(), static_cast<std::size_t>(got)));
+                dstd::StringView(buf.data(), static_cast<std::size_t>(got)));
             offset += static_cast<std::uint64_t>(got);
         }
     }

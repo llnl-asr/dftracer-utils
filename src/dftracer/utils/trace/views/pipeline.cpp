@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/trace/views/pipeline.h>
 
 #include <stdexcept>
@@ -7,7 +8,7 @@
 namespace dftracer::utils::trace::views::detail {
 
 Pipeline lower_fused_folds(const ViewPlan& plan, const ViewDefinition& vdef,
-                           std::span<Fold* const> sinks) {
+                           dstd::Span<Fold* const> sinks) {
     Pipeline p;
     p.source.kind = NodeKind::Source;
     p.source.plan = &plan;

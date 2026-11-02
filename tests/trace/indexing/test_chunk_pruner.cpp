@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -139,7 +140,7 @@ static void populate_test_idx(const std::string& index_path,
         auto blob = bloom.serialize();
         dftu_utils_test::put_file_bloom(
             writer, "name",
-            std::span<const unsigned char>(blob.data(), blob.size()),
+            dstd::Span<const unsigned char>(blob.data(), blob.size()),
             bloom.num_entries());
     }
 

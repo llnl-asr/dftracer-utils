@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_DLIO_WORKER_QUEUE_H
 #define DFTRACER_UTILS_UTILITIES_DLIO_WORKER_QUEUE_H
 
+#include <dftracer/utils/dstd/pair.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -18,7 +20,7 @@ struct WorkInterval {
 
 /// Sampler returns {batch_time, preprocess_time} where batch_time is the wall
 /// clock the worker spends on the batch (preprocess + I/O, scaled).
-using BatchTimeSampler = std::function<std::pair<double, double>()>;
+using BatchTimeSampler = std::function<dstd::Pair<double, double>()>;
 
 class WorkerQueue {
    public:

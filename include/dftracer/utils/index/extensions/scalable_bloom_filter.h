@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_SCALABLE_BLOOM_FILTER_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_SCALABLE_BLOOM_FILTER_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 
 #include <cstddef>
@@ -52,8 +53,8 @@ class ScalableBloomFilter {
     static ScalableBloomFilter from_blob(const unsigned char* data,
                                          std::size_t size);
 
-    void add(std::string_view value);
-    bool possibly_contains(std::string_view value) const;
+    void add(dstd::StringView value);
+    bool possibly_contains(dstd::StringView value) const;
     /// One per add() call, whatever the chain's length.
     std::size_t hash_computations() const { return hashed_; }
     void merge_from(const ScalableBloomFilter& other);

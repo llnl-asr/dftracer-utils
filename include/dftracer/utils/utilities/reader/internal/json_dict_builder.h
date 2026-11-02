@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_JSON_DICT_BUILDER_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_JSON_DICT_BUILDER_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/args_map.h>
 #include <dftracer/utils/trace/time_metric.h>
@@ -27,7 +28,7 @@ struct JsonDictBatch {
 
 // Coerce a simdjson value into `map` under `key`. Errored or non-scalar
 // values are skipped.
-void insert_simdjson_value(ArgsMap &map, std::string_view key,
+void insert_simdjson_value(ArgsMap &map, dstd::StringView key,
                            simdjson::ondemand::value val);
 
 // Parse one JSON row from `parser` into `ev`, routing the top-level "args"

@@ -11,6 +11,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <cstring>
@@ -165,7 +167,8 @@ TEST_SUITE("dataframe_arrow_public") {
         col->data = new_buffer(16);
         const std::int32_t codes[4] = {2, 1, 1, 0};
         std::memcpy(writable(col->data), codes, 16);
-        col->set_child(std::shared_ptr<dftu_series>(values.release()));
+        col->set_child(
+            dftracer::utils::dstd::SharedPtr<dftu_series>(values.release()));
         {
             Series dict{col};
             OwnedArrow a = dict.to_arrow();
@@ -323,7 +326,7 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Importing a sliced string array keeps the slice's rows") {
-        std::vector<std::string_view> v = {"a", "", "c", "d"};
+        std::vector<dftracer::utils::dstd::StringView> v = {"a", "", "c", "d"};
         const std::uint8_t valid = 0b1101;
         Series s = Series::strings(v, &valid);
         OwnedArrow a = s.to_arrow();

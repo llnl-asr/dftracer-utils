@@ -8,9 +8,13 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -26,12 +30,12 @@ namespace kv = dftracer::utils::store;
 namespace {
 
 constexpr std::uint64_t DEFAULT_CACHE_MAX_BYTES = std::uint64_t{2} << 30;
-constexpr std::string_view DATA_NAMESPACE = "cache";
-constexpr std::string_view USAGE_NAMESPACE = "cache.usage";
+constexpr dstd::StringView DATA_NAMESPACE = "cache";
+constexpr dstd::StringView USAGE_NAMESPACE = "cache.usage";
 constexpr std::uint32_t NAMESPACE_VERSION = 1;
-constexpr std::string_view USAGE_KEY = "u";
+constexpr dstd::StringView USAGE_KEY = "u";
 
-kv::NamespaceSpec spec_of(std::string_view name) {
+kv::NamespaceSpec spec_of(dstd::StringView name) {
     kv::NamespaceSpec spec;
     spec.name.assign(name.data(), name.size());
     spec.format_version = NAMESPACE_VERSION;
@@ -54,19 +58,19 @@ kv::ScopeKey scope_of(std::uint64_t sig) {
     return kv::ScopeKey::file(dstd::StringView(hex, sizeof(hex)));
 }
 
-std::optional<std::uint64_t> sig_of(const kv::ScopeKey& scope) {
+dstd::Optional<std::uint64_t> sig_of(const kv::ScopeKey& scope) {
     if (scope.kind != kv::ScopeKind::File || scope.paths.size() != 1)
-        return std::nullopt;
+        return dstd::nullopt;
     const dstd::String& path = scope.paths[0];
-    return dstd::hash::parse_hex64(std::string_view(path.data(), path.size()));
+    return dstd::hash::parse_hex64(dstd::StringView(path.data(), path.size()));
 }
 
-dstd::ByteView view_of(std::string_view s) {
+dstd::ByteView view_of(dstd::StringView s) {
     return dstd::ByteView(s.data(), s.size());
 }
 
-std::string_view text_of(dstd::ByteView b) {
-    return std::string_view(reinterpret_cast<const char*>(b.data()), b.size());
+dstd::StringView text_of(dstd::ByteView b) {
+    return dstd::StringView(reinterpret_cast<const char*>(b.data()), b.size());
 }
 
 std::uint64_t u64_at(dstd::ByteView b, std::size_t at) {
@@ -74,14 +78,14 @@ std::uint64_t u64_at(dstd::ByteView b, std::size_t at) {
                              at);
 }
 
-[[noreturn]] void throw_io(std::string_view what, const dstd::Error& error) {
+[[noreturn]] void throw_io(dstd::StringView what, const dstd::Error& error) {
     const dstd::String text = error.format();
     throw common::DFTUtilsException(
         common::ErrorCode::Io,
         std::string(what) + ": " + std::string(text.data(), text.size()));
 }
 
-void check(std::string_view what,
+void check(dstd::StringView what,
            const dstd::Expected<void, dstd::Error>& result) {
     if (!result) throw_io(what, result.error());
 }
@@ -102,7 +106,7 @@ std::uint64_t now_micros() {
 
 dstd::Expected<void, dstd::Error> wait(
     coro::CoroTask<dstd::Expected<void, dstd::Error>> task) {
-    const std::shared_ptr<Runtime> runtime = default_runtime_shared();
+    const dstd::SharedPtr<Runtime> runtime = default_runtime_shared();
     const bool reentrant = coro::Executor::current() == runtime->executor();
     coro::BlockingRegion block(reentrant ? runtime->executor() : nullptr);
     return runtime->submit(std::move(task)).get();
@@ -141,7 +145,7 @@ CacheRoots& cache_roots() {
 void clear_cache_roots() { cache_roots().clear(); }
 
 std::uint64_t cache_max_bytes() {
-    const auto text = dftracer::utils::common::Env::get<std::string_view>(
+    const auto text = dftracer::utils::common::Env::get<dstd::StringView>(
         "DFTRACER_UTILS_CACHE_MAX_BYTES");
     if (!text) return DEFAULT_CACHE_MAX_BYTES;
     return dftracer::utils::common::parse_bytes(*text).value_or(
@@ -153,7 +157,7 @@ bool CacheStore::exists(const std::string& path) {
     return found && *found;
 }
 
-std::shared_ptr<CacheStore> CacheStore::open(const std::string& path,
+dstd::SharedPtr<CacheStore> CacheStore::open(const std::string& path,
                                              Mode mode) {
     try {
         const bool writable = mode == Mode::ReadWrite;
@@ -162,7 +166,7 @@ std::shared_ptr<CacheStore> CacheStore::open(const std::string& path,
         } else if (!exists(path)) {
             return nullptr;
         }
-        std::optional<kv::Store> store;
+        dstd::Optional<kv::Store> store;
         {
             CacheRoots& all = cache_roots();
             std::lock_guard<std::mutex> lock(all.mutex);
@@ -211,18 +215,18 @@ kv::Snapshot CacheStore::snapshot() const {
     return std::move(*taken);
 }
 
-std::optional<std::string> CacheStore::get(std::uint64_t sig,
-                                           std::string_view key) const {
+dstd::Optional<std::string> CacheStore::get(std::uint64_t sig,
+                                            dstd::StringView key) const {
     const kv::Snapshot held = snapshot();
     auto found = held.get(data_, scope_of(sig), view_of(key));
     if (!found) throw_io("cache read", found.error());
-    if (!*found) return std::nullopt;
+    if (!*found) return dstd::nullopt;
     return std::string(text_of((**found).bytes()));
 }
 
 void CacheStore::scan(
-    std::uint64_t sig, std::string_view prefix,
-    const std::function<void(std::string_view, std::string_view)>& fn) const {
+    std::uint64_t sig, dstd::StringView prefix,
+    const std::function<void(dstd::StringView, dstd::StringView)>& fn) const {
     const kv::Snapshot held = snapshot();
     auto cursor = held.scan(data_, scope_of(sig), view_of(prefix));
     for (; !cursor.at_end(); cursor.next()) {
@@ -234,9 +238,9 @@ void CacheStore::scan(
 }
 
 void CacheStore::scan_all(
-    std::string_view begin, std::string_view end,
-    const std::function<bool(std::uint64_t, std::string_view,
-                             std::string_view)>& fn) const {
+    dstd::StringView begin, dstd::StringView end,
+    const std::function<bool(std::uint64_t, dstd::StringView,
+                             dstd::StringView)>& fn) const {
     const kv::Snapshot held = snapshot();
     auto cursor = held.scan_all(data_, view_of(begin), view_of(end));
     for (; !cursor.at_end(); cursor.next()) {
@@ -267,7 +271,7 @@ std::vector<CacheStore::Usage> CacheStore::usage() const {
 
 void CacheStore::put(
     std::uint64_t sig,
-    const std::vector<std::pair<std::string, std::string>>& entries,
+    const std::vector<dstd::Pair<std::string, std::string>>& entries,
     std::uint64_t bytes) {
     if (!writable_)
         throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,

@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -469,7 +470,7 @@ const std::uint8_t* event_bytes(const io_fault::Event& event,
 /// One write of an image: `keep` bytes of it, at its offset. `keep` is the
 /// event's length except for a torn write and for a write that did not happen.
 std::string render_image(
-    const std::vector<std::pair<std::size_t, std::uint64_t>>& applied,
+    const std::vector<dstd::Pair<std::size_t, std::uint64_t>>& applied,
     const dstd::Vector<io_fault::Event>& log, const std::string& final_bytes) {
     std::uint64_t end = 0;
     for (const auto& one : applied) {
@@ -569,9 +570,9 @@ store::ScopeKey scope_key_of(const store::engine::ScopeItem& item) {
 /// checkpoint that lists it again does not change which sequence a loss hits.
 struct CrashModel {
     std::vector<std::map<std::uint32_t, std::uint64_t>> copies;
-    std::map<std::uint64_t, std::vector<std::pair<std::size_t, std::uint32_t>>>
+    std::map<std::uint64_t, std::vector<dstd::Pair<std::size_t, std::uint32_t>>>
         extents;
-    std::map<std::uint64_t, std::vector<std::pair<std::size_t, std::uint32_t>>>
+    std::map<std::uint64_t, std::vector<dstd::Pair<std::size_t, std::uint32_t>>>
         bigs;
     std::map<std::uint64_t, std::vector<std::size_t>> big_blocks;
     std::map<std::uint32_t, std::string> group_of_copy;
@@ -594,7 +595,7 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
 
     std::map<std::uint32_t, store::engine::NamespaceItem> namespaces;
     std::map<std::uint32_t, store::engine::ScopeItem> scopes;
-    std::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>>
+    std::map<std::uint32_t, dstd::Pair<std::uint32_t, std::uint32_t>>
         ids_of_copy;
 
     model.copies.resize(record_at.size());
@@ -688,7 +689,7 @@ LostOracle lost_oracle(const CrashModel& model, const std::vector<Dump>& refs,
                        std::size_t lo, std::size_t hi) {
     LostOracle oracle;
     std::set<std::uint32_t> lost_copies;
-    std::map<std::string, std::pair<std::uint32_t, std::uint64_t>> current;
+    std::map<std::string, dstd::Pair<std::uint32_t, std::uint64_t>> current;
     for (std::size_t m = 0; m <= hi; ++m) {
         if (m > 0) {
             for (const auto& entry : model.copies[m - 1]) {
@@ -913,7 +914,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     std::vector<std::string> texts;
     std::vector<Dump> refs;
     for (std::size_t m = 0; m <= record_at.size(); ++m) {
-        std::vector<std::pair<std::size_t, std::uint64_t>> applied;
+        std::vector<dstd::Pair<std::size_t, std::uint64_t>> applied;
         if (m >= 1) {
             const std::size_t at = header_at[m - 1];
             applied.emplace_back(at, whole_length(log[at]));
@@ -1078,7 +1079,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
         const std::size_t m_hi = records_below(record_at, k);
 
         // a. every write of the prefix, in order, whole.
-        std::vector<std::pair<std::size_t, std::uint64_t>> applied;
+        std::vector<dstd::Pair<std::size_t, std::uint64_t>> applied;
         applied.reserve(k);
         for (std::size_t i = 0; i < k; ++i) {
             applied.emplace_back(i, whole_length(log[i]));
@@ -1123,7 +1124,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             std::mt19937_64 rng(seed_of(k, 2, seed));
             std::vector<char> dropped(log.size(), 0);
             bool dropped_extent = false;
-            std::vector<std::pair<std::size_t, std::uint64_t>> kept;
+            std::vector<dstd::Pair<std::size_t, std::uint64_t>> kept;
             kept.reserve(k);
             for (std::size_t i = 0; i < k; ++i) {
                 const io_fault::Event& event = log[i];
@@ -1171,7 +1172,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             std::shuffle(shuffled.begin(), shuffled.end(), rng);
             if (seed != 0) std::reverse(shuffled.begin(), shuffled.end());
             order.insert(order.end(), shuffled.begin(), shuffled.end());
-            std::vector<std::pair<std::size_t, std::uint64_t>> reordered;
+            std::vector<dstd::Pair<std::size_t, std::uint64_t>> reordered;
             reordered.reserve(order.size());
             std::size_t highest_header = 0;
             bool inverted = false;

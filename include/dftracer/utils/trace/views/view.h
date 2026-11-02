@@ -10,8 +10,10 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -269,7 +271,7 @@ struct TraceWriteOptions {
 class ExportSink {
    public:
     virtual ~ExportSink() = default;
-    virtual void write(std::string_view data) = 0;
+    virtual void write(dstd::StringView data) = 0;
     /// Called once an export into this sink has written everything, so a
     /// buffering sink can make the output visible. A sink may be written by
     /// several exports, so this is not an end of stream.
@@ -307,7 +309,7 @@ namespace detail {
 struct ViewPlan;
 /// A trace scan's immutable plan, shared by the View, its source and the
 /// session that runs it. Internal: users hold a View.
-using ScanPlan = std::shared_ptr<const ViewPlan>;
+using ScanPlan = dstd::SharedPtr<const ViewPlan>;
 class Fold;
 class DynamicPrune;
 struct ViewSessionState;
@@ -332,7 +334,7 @@ template <class T>
 class Deferred {
    public:
     Deferred() = default;
-    Deferred(std::shared_ptr<T> value, std::shared_ptr<const bool> executed)
+    Deferred(dstd::SharedPtr<T> value, dstd::SharedPtr<const bool> executed)
         : value_(std::move(value)), executed_(std::move(executed)) {}
 
     explicit operator bool() const { return static_cast<bool>(value_); }
@@ -348,8 +350,8 @@ class Deferred {
 
    private:
     friend class ViewSession;
-    std::shared_ptr<T> value_;
-    std::shared_ptr<const bool> executed_;
+    dstd::SharedPtr<T> value_;
+    dstd::SharedPtr<const bool> executed_;
 };
 
 class ViewSource;
@@ -417,7 +419,7 @@ class ViewSession {
     template <class P>
     Deferred<P> fold(
         Query predicate,
-        std::function<void(P&, const json::JsonValue&, std::string_view)> f,
+        std::function<void(P&, const json::JsonValue&, dstd::StringView)> f,
         std::function<P(P&&, P&&)> combine) {
         return fold_into<P>(std::move(predicate), std::move(f),
                             std::move(combine));
@@ -427,9 +429,9 @@ class ViewSession {
     /// filters and phase (data events unless phase() selects metadata).
     template <class P>
     Deferred<P> fold(
-        std::function<void(P&, const json::JsonValue&, std::string_view)> f,
+        std::function<void(P&, const json::JsonValue&, dstd::StringView)> f,
         std::function<P(P&&, P&&)> combine) {
-        return fold_into<P>(std::nullopt, std::move(f), std::move(combine));
+        return fold_into<P>(dstd::nullopt, std::move(f), std::move(combine));
     }
 
     /// fold() overload taking a unified field predicate (F("dur") > 1000).
@@ -437,7 +439,7 @@ class ViewSession {
     template <class P>
     Deferred<P> fold(
         const FieldExpr& predicate,
-        std::function<void(P&, const json::JsonValue&, std::string_view)> f,
+        std::function<void(P&, const json::JsonValue&, dstd::StringView)> f,
         std::function<P(P&&, P&&)> combine) {
         return fold<P>(predicate.to_duql(), std::move(f), std::move(combine));
     }
@@ -512,17 +514,17 @@ class ViewSession {
 
     template <class P>
     Deferred<P> fold_into(
-        std::optional<Query> predicate,
-        std::function<void(P&, const json::JsonValue&, std::string_view)> f,
+        dstd::Optional<Query> predicate,
+        std::function<void(P&, const json::JsonValue&, dstd::StringView)> f,
         std::function<P(P&&, P&&)> combine) {
         auto out = std::make_shared<P>();
-        auto partials = std::make_shared<std::vector<std::shared_ptr<P>>>();
+        auto partials = std::make_shared<std::vector<dstd::SharedPtr<P>>>();
         attach_fold(
             std::move(predicate),
             [f = std::move(f), partials]() {
                 auto p = std::make_shared<P>();
                 partials->push_back(p);
-                return [f, p](const json::JsonValue& jv, std::string_view raw) {
+                return [f, p](const json::JsonValue& jv, dstd::StringView raw) {
                     f(*p, jv, raw);
                 };
             },
@@ -540,9 +542,9 @@ class ViewSession {
     /// is called once per scan worker, serially, before the scan starts. With
     /// no predicate the branch takes the base view's selection.
     void attach_fold(
-        std::optional<Query> predicate,
+        dstd::Optional<Query> predicate,
         std::function<
-            std::function<void(const json::JsonValue&, std::string_view)>()>
+            std::function<void(const json::JsonValue&, dstd::StringView)>()>
             make_consumer,
         std::function<void()> finalize);
     /// Look up the leading key-column count recorded for a collect branch's
@@ -553,15 +555,15 @@ class ViewSession {
         const std::vector<std::string>& partition, const std::string& ts,
         const std::string& dur, const std::string& name,
         const std::vector<std::string>& group,
-        std::shared_ptr<dftracer::utils::dataframe::DataFrame> out_ct,
-        std::shared_ptr<dftracer::utils::dataframe::DataFrame> out_fg,
-        std::shared_ptr<std::string> out_partial = nullptr);
-    std::shared_ptr<detail::ViewSessionState> state_;
-    std::shared_ptr<bool> executed_ = std::make_shared<bool>(false);
+        dstd::SharedPtr<dftracer::utils::dataframe::DataFrame> out_ct,
+        dstd::SharedPtr<dftracer::utils::dataframe::DataFrame> out_fg,
+        dstd::SharedPtr<std::string> out_partial = nullptr);
+    dstd::SharedPtr<detail::ViewSessionState> state_;
+    dstd::SharedPtr<bool> executed_ = std::make_shared<bool>(false);
     /// Leading key-column count per collect branch, keyed by its output
     /// pointer, so join()/compare() can infer n_key without the caller passing
     /// it.
-    std::vector<std::pair<const void*, std::int64_t>> key_counts_;
+    std::vector<dstd::Pair<const void*, std::int64_t>> key_counts_;
     /// Post-scan combines (join/compare), run after every branch finalize in
     /// execute() since they read two already-resolved branch outputs.
     std::vector<std::function<void()>> combines_;
@@ -584,7 +586,7 @@ struct SchemaLeaf {
     std::string type;
     /// Records holding the path non-null, summed over the files; unset for a
     /// json field at an object or array, which the index does not count.
-    std::optional<std::uint64_t> count;
+    dstd::Optional<std::uint64_t> count;
     /// The declared field's name and type; empty when undeclared.
     std::string field;
     std::string declared_type;
@@ -621,7 +623,7 @@ inline constexpr Lazy LAZY{};
 namespace detail {
 template <class T>
 coro::CoroTask<void> resolve_into(
-    std::shared_ptr<T> out, typename dataframe::LazyResult<T>::Finish finish,
+    dstd::SharedPtr<T> out, typename dataframe::LazyResult<T>::Finish finish,
     std::vector<dataframe::DataFrame> frames) {
     *out = co_await finish(std::move(frames));
 }
@@ -665,7 +667,7 @@ class TraceSession {
 
     std::vector<dataframe::LazyFrame> plans_;
     std::vector<Pending> pending_;
-    std::shared_ptr<bool> executed_ = std::make_shared<bool>(false);
+    dstd::SharedPtr<bool> executed_ = std::make_shared<bool>(false);
 };
 
 /// A lazy, composable view over trace files: a @ref
@@ -773,7 +775,7 @@ class View : public dataframe::LazyOps<View> {
     View memory_budget(std::uint64_t bytes) const;
     /// Add the counts of every scan this View, and each View derived from it,
     /// runs to `counter`, which must outlive those scans.
-    View count_scans(std::shared_ptr<ScanCounter> counter) const;
+    View count_scans(dstd::SharedPtr<ScanCounter> counter) const;
 
     /// Index metadata only; no trace event is decoded.
     std::vector<std::string> columns() const;
@@ -823,9 +825,9 @@ class View : public dataframe::LazyOps<View> {
         std::string name = "name", std::vector<std::string> group = {}) const;
     dataframe::LazyResult<std::string> aggregate_partial() const;
     static dataframe::DataFrame merge_flamegraph_partials(
-        const std::vector<std::string_view>& partials);
+        const std::vector<dstd::StringView>& partials);
     dataframe::DataFrame merge_partials(
-        const std::vector<std::string_view>& partials) const;
+        const std::vector<dstd::StringView>& partials) const;
 
     /// The aggregation index's record families.
     dataframe::LazyResult<TypedResult> typed(int shard_begin = 0,
@@ -843,7 +845,7 @@ class View : public dataframe::LazyOps<View> {
     dataframe::LazyResult<ExportStats> sink_json(ExportSink& sink, Lazy) const;
     /// As sink_json(sink, LAZY), with the plan sharing ownership of `sink`.
     dataframe::LazyResult<ExportStats> sink_json(
-        std::shared_ptr<ExportSink> sink, Lazy) const;
+        dstd::SharedPtr<ExportSink> sink, Lazy) const;
     /// Writes the selected events as a new indexed trace
     /// (multi-member, re-indexable).
     coro::CoroTask<ExportStats> sink_trace(TraceWriteOptions opts) const;
@@ -874,22 +876,22 @@ class View : public dataframe::LazyOps<View> {
     /// map_batches folds each batch into a per-slot partial and reduces them
     /// with `combine`; a default `P` must be the identity of combine.
     coro::CoroTask<ExportStats> for_each_batch(
-        std::function<void(std::size_t, const std::vector<std::string_view>&)>
+        std::function<void(std::size_t, const std::vector<dstd::StringView>&)>
             on_batch,
         std::size_t num_slots, std::uint64_t limit = 0) const;
     template <class P>
     coro::CoroTask<BatchResult<P>> map_batches(
-        std::function<void(P&, const std::vector<std::string_view>&)> fold,
+        std::function<void(P&, const std::vector<dstd::StringView>&)> fold,
         std::function<P(P&&, P&&)> combine, std::size_t num_slots,
         std::uint64_t limit = 0) const {
         if (num_slots == 0) num_slots = 1;
         std::vector<P> partials(num_slots);
         // A named callback, not a temporary in the co_await: GCC 11-12 destroy
         // such temporaries twice.
-        std::function<void(std::size_t, const std::vector<std::string_view>&)>
+        std::function<void(std::size_t, const std::vector<dstd::StringView>&)>
             on_batch = [&partials, &fold](
                            std::size_t slot,
-                           const std::vector<std::string_view>& events) {
+                           const std::vector<dstd::StringView>& events) {
                 fold(partials[slot], events);
             };
         ExportStats stats =
@@ -902,7 +904,7 @@ class View : public dataframe::LazyOps<View> {
     /// Run caller-owned folds over one scan of this view's events, sharing
     /// `intern` so their ids agree and per-worker slices merge.
     coro::CoroTask<ExportStats> run_folds(
-        std::span<detail::Fold* const> folds,
+        dstd::Span<detail::Fold* const> folds,
         dftracer::utils::dstd::StringIntern& intern) const;
 
     /// The trace self-description, one entry per process, from each file's
@@ -916,7 +918,7 @@ class View : public dataframe::LazyOps<View> {
     /// Write merged aggregate_partial() output as counter events, with this
     /// view's aggregation.
     ExportStats merge_counter_partials(
-        const std::vector<std::string_view>& partials, ExportSink& sink) const;
+        const std::vector<dstd::StringView>& partials, ExportSink& sink) const;
 
     /// A caller branch of the scan over this viewer's events, as a plan that
     /// yields no columns; `attach` runs once per collect of the plan. It
@@ -947,8 +949,8 @@ class View : public dataframe::LazyOps<View> {
     /// The distributed rollup terminals, over this viewer's
     /// aggregation. The bytes behind `partials` must outlive the task.
     coro::CoroTask<void> materialize_partials(
-        const std::vector<std::string_view>& partials) const;
-    std::optional<dataframe::DataFrame> reconstruct_if_cached() const;
+        const std::vector<dstd::StringView>& partials) const;
+    dstd::Optional<dataframe::DataFrame> reconstruct_if_cached() const;
 
     /// Materialized-view bookkeeping over this viewer's events.
     std::vector<std::string> mv_source() const;
@@ -986,7 +988,7 @@ class View : public dataframe::LazyOps<View> {
     friend View detail::with_named_columns(
         const View& v, std::vector<dataframe::Field> columns);
     friend std::vector<SchemaLeaf> detail::catalog_leaves(const View& v);
-    std::pair<View, std::vector<std::string>> duql_plan(
+    dstd::Pair<View, std::vector<std::string>> duql_plan(
         dstd::StringView text, const duql::Params& params) const;
 
     detail::ScanPlan plan_;

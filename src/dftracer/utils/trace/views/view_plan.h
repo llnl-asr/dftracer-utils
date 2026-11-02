@@ -3,6 +3,9 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_H
 
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/view.h>
 
@@ -46,7 +49,7 @@ struct ComputedColumn {
 /// gives the one to use with the lookups' key sets. It is thread-safe and
 /// runs the sides once; a call after a failed one runs them again.
 struct BuildStep {
-    std::function<std::optional<duql::Query>(std::optional<duql::Query>)> run;
+    std::function<dstd::Optional<duql::Query>(dstd::Optional<duql::Query>)> run;
 };
 
 struct ViewPlan;
@@ -58,8 +61,8 @@ ExportStats counted(const ViewPlan& plan, ExportStats st);
 struct ViewPlan {
     std::vector<ViewFile> files;
 
-    std::optional<duql::Query> query;
-    std::optional<std::pair<double, double>> time_range;
+    dstd::Optional<duql::Query> query;
+    dstd::Optional<dstd::Pair<double, double>> time_range;
     // Default spans every phase of the source's data; callers that want only
     // ph="X" events (or only ph="C") say so with .phase().
     Phase phase = Phase::Any;
@@ -112,7 +115,7 @@ struct ViewPlan {
     /// intermediate memory only.
     std::uint64_t memory_budget = 0;
     /// Where the scans of this plan add their counts; null counts nothing.
-    std::shared_ptr<ScanCounter> scan_counter;
+    dstd::SharedPtr<ScanCounter> scan_counter;
     std::vector<std::string> select;
     /// Paths a row scan with an empty select names as schema columns after
     /// its own; the scan still returns every path.
@@ -167,12 +170,12 @@ struct ViewPlan {
     /// Memoized fold schema (ensure_schema builds it once before the parallel
     /// fold; workers read it race-free). Mutable so a const plan can cache it;
     /// shared_ptr so plan copies share one build.
-    mutable std::shared_ptr<const AggSchema> schema;
+    mutable dstd::SharedPtr<const AggSchema> schema;
 
     /// Index-backed name maps, built lazily by ensure_resolver when the plan
     /// has a FilePath/HostName group key; used by the post-aggregation re-key
     /// pass.
-    mutable std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
+    mutable dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
         resolver;
 
     /// The first step of executing a plan that reads duql lookups, shared by
@@ -180,10 +183,10 @@ struct ViewPlan {
     /// the lookups to their rows and puts their key sets in the scan filter.
     /// Nothing runs when the plan is built; effective_query runs it when a
     /// terminal executes the plan.
-    std::shared_ptr<const BuildStep> build_step;
+    dstd::SharedPtr<const BuildStep> build_step;
 
     /// The files' record_schema, memoized by plan_record_schema.
-    mutable std::shared_ptr<const dftracer::utils::index::RecordSchema>
+    mutable dstd::SharedPtr<const dftracer::utils::index::RecordSchema>
         record_schema;
 };
 

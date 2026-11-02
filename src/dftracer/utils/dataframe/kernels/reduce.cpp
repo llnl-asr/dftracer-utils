@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/internal/type_promotion.h>
 #include <dftracer/utils/dataframe/kernels/reduce.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -306,13 +307,13 @@ dftu_scalar reduce_string(const dftu_series& v, std::int32_t op) {
 
     const bool is_min = op == DFTU_REDUCE_MIN;
     bool found = false;
-    std::string_view best;
+    dftracer::utils::dstd::StringView best;
     for (std::int64_t i = 0; i < v.length; ++i) {
         if (!is_valid(v, i)) continue;
         const std::int64_t lo = wide ? off64[i] : off32[i];
         const std::int64_t hi = wide ? off64[i + 1] : off32[i + 1];
-        const std::string_view cur(base + lo,
-                                   static_cast<std::size_t>(hi - lo));
+        const dftracer::utils::dstd::StringView cur(
+            base + lo, static_cast<std::size_t>(hi - lo));
         if (!found || (is_min ? cur < best : cur > best)) {
             best = cur;
             found = true;

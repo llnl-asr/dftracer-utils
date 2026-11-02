@@ -30,6 +30,7 @@
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
 #endif
 
 #include <testing_utilities.h>
@@ -242,9 +243,10 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
                 static_cast<const std::uint64_t*>(dftu_series_data(ts_col));
             std::int64_t len = 0;
             const char* p = dftu_series_string_at(name_col, 0, &len);
-            const std::string_view nm =
-                p ? std::string_view(p, static_cast<std::size_t>(len))
-                  : std::string_view();
+            const dftracer::utils::dstd::StringView nm =
+                p ? dftracer::utils::dstd::StringView(
+                        p, static_cast<std::size_t>(len))
+                  : dftracer::utils::dstd::StringView();
             s->first_ok = ts_data[0] == 1000000 && nm == "write";
         }
         s->count += static_cast<std::uint64_t>(n);

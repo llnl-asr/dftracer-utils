@@ -18,7 +18,7 @@ dstd::Optional<double> as_number(const LiteralValue& v) {
     if (auto p = std::get_if<std::int64_t>(&v)) return static_cast<double>(*p);
     if (auto p = std::get_if<std::uint64_t>(&v)) return static_cast<double>(*p);
     if (auto p = std::get_if<double>(&v)) return *p;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // Canonical token for one literal, used as a set-membership key.
@@ -84,7 +84,7 @@ dstd::Optional<double> as_point(const Interval& iv) {
     if (iv.lo && iv.hi && !iv.lo->strict && !iv.hi->strict &&
         iv.lo->val == iv.hi->val)
         return iv.lo->val;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // A conjunction split into numeric intervals, value sets, and opaque

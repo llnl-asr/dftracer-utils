@@ -13,6 +13,8 @@
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/trace/schema.h>
@@ -117,7 +119,7 @@ void run_wrappers(StringIntern& intern, NamedResultRegistry& named) {
         auto slice = master.slice();
         auto* pf = static_cast<PluginFold*>(slice.get());
         ScanUnit unit;
-        pf->step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+        pf->step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
         master.merge(*pf);
     }
     Runtime rt(1);
@@ -393,7 +395,7 @@ struct PortConsumer {
     void step(const dftracer::utils::plugins::Batch&,
               dftracer::utils::plugins::Host h) {
         auto in = h.consume_port<Edge>(PORT_CAP);
-        std::optional<Edge> v = in.recv();
+        dstd::Optional<Edge> v = in.recv();
         g_present = v.has_value();
         g_count = g_present ? v->count : 0;
         g_sum = g_present ? v->sum : 0.0;
@@ -431,7 +433,7 @@ TEST_SUITE("PluginCxxPorts") {
         std::vector<FoldEvent> evs = {evt(intern, 1, 10), evt(intern, 1, 20),
                                       evt(intern, 2, 30)};
         ScanUnit unit;
-        FoldBatch fb{std::span<const FoldEvent>(evs), unit};
+        FoldBatch fb{dstd::Span<const FoldEvent>(evs), unit};
 
         g_present = false;
         g_count = 0;

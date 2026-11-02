@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H
 #define DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -26,7 +27,7 @@ inline dftracer::utils::trace::views::ViewFile index_trace(
 
     const std::string idx = determine_index_path(gz, "");
     struct Sink : ExportSink {
-        void write(std::string_view) override {}
+        void write(dftracer::utils::dstd::StringView) override {}
     } sink;
     View::from_file(gz, idx).sink_json(sink).get();
     return ViewFile{gz, idx};

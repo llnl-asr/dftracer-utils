@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_STATISTICS_DETAIL_STATS_VIEW_H
 #define DFTRACER_UTILS_TRACE_STATISTICS_DETAIL_STATS_VIEW_H
 
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/trace/statistics/detailed_statistics.h>
 #include <dftracer/utils/trace/views/view.h>
 

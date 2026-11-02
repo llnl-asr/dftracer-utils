@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -48,7 +48,7 @@ struct ResumeFromThread {
 
     bool await_ready() const noexcept { return false; }
     void await_suspend(std::coroutine_handle<> h) {
-        Executor* exec = Executor::current();
+        coro::Executor* exec = coro::Executor::current();
         if (exec == nullptr) std::terminate();
         std::lock_guard<std::mutex> lock(hops.mutex);
         hops.threads.emplace_back([exec, h, pool = hops.enqueuer_pool] {
@@ -104,7 +104,7 @@ CoroTask<void> hop_then_allocate(Blocks* out, Hops* hops) {
 }
 
 CoroTask<void> parent_with_children(Blocks* direct, Blocks* spawned, Hops* hops,
-                                    Executor* exec) {
+                                    coro::Executor* exec) {
     co_await hop_then_allocate(direct, hops);
     co_await run_coro_scope(exec, [spawned, hops](CoroScope& s) {
         s.spawn([spawned, hops](CoroScope&) -> CoroTask<void> {

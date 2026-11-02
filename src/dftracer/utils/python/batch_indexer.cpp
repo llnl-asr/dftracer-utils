@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -26,8 +28,6 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -41,9 +41,10 @@
 #include <string_view>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::coro::CoroTask;
 using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::schemas::dft::agg;
 

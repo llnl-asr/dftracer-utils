@@ -289,7 +289,7 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
         }
 
         // Atomic decrement returns previous value.  The child becomes
-        // ready exactly when prev == 1 (transition from 1 → 0).
+        // ready exactly when prev == 1 (transition from 1 -> 0).
         int prev = child->decrement_pending_parents();
 
         if (prev == 1) {

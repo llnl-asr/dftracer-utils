@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/cancelled.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/resumption_helper.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/dataframe/containment.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/json/parser.h>
-#include <dftracer/utils/runtime/coro/cancelled.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
-#include <dftracer/utils/runtime/coro/when_any.h>
-#include <dftracer/utils/runtime/executor/executor.h>
-#include <dftracer/utils/runtime/executor/resumption_helper.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
@@ -46,7 +46,7 @@ std::string_view intern_sv(std::string_view sv) {
 constexpr std::chrono::microseconds TIMER_WAIT_MIN{1000};
 
 coro::CoroTask<void> wait_for(std::chrono::microseconds wait) {
-    Executor* executor = resume_executor_for(nullptr);
+    coro::Executor* executor = coro::resume_executor_for(nullptr);
     if (wait < TIMER_WAIT_MIN || executor == nullptr) {
         std::this_thread::sleep_for(wait);
         co_return;
@@ -151,7 +151,7 @@ coro::CoroTask<void> ReplayEngine::run_pipelined(
     ReplayResult& result, std::size_t channel_capacity) {
     admitted_.store(0, std::memory_order_relaxed);
     std::vector<Lane> lanes(files.size());
-    Executor* executor = resume_executor_for(nullptr);
+    coro::Executor* executor = coro::resume_executor_for(nullptr);
     const std::size_t threads =
         executor != nullptr ? executor->get_num_threads() : 1;
     const std::size_t workers =

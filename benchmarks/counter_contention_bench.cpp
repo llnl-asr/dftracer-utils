@@ -33,10 +33,10 @@
 // allocated bytes and that both equal the bytes the size tables imply.
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
@@ -62,7 +62,6 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using dftracer::utils::coro::CoroTask;
 namespace df = dftracer::utils::dataframe;
 namespace mp = dftu::memory_probe;
 using namespace dftu::memory_workloads;

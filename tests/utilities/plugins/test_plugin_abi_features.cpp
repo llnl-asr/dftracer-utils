@@ -30,12 +30,13 @@
 #include <string_view>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::ConfigTree;
 using dftracer::utils::plugins::PluginFold;
-namespace coro = dftracer::utils::coro;
 namespace views = dftracer::utils::trace::views;
 using dftracer::utils::trace::RecordPhase;
 using views::detail::FoldBatch;

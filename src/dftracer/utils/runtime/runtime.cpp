@@ -116,7 +116,8 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
     auto tid = std::make_shared<std::atomic<common::TaskIndex>>(-1);
 
     auto wrapper = [](coro::CoroTask<void> t,
-                      std::shared_ptr<std::promise<void>> p, Executor* exec,
+                      std::shared_ptr<std::promise<void>> p,
+                      coro::Executor* exec,
                       std::shared_ptr<std::atomic<common::TaskIndex>> task_id)
         -> coro::Coro {
         try {

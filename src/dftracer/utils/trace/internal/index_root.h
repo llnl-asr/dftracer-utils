@@ -2,8 +2,8 @@
 #ifndef DFTRACER_UTILS_TRACE_INTERNAL_INDEX_ROOT_H
 #define DFTRACER_UTILS_TRACE_INTERNAL_INDEX_ROOT_H
 
+#include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
 
 #include <cstddef>
 #include <cstdint>

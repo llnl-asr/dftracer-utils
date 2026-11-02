@@ -3,6 +3,8 @@
 // must hand it on in morsels that fit the memory budget, and the rows must be
 // the ones an unlimited run gives.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/grace_join.h>
@@ -10,8 +12,6 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazy/frame_op.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/runtime/coro/async_generator.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -20,15 +20,16 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using namespace dftracer::utils::dataframe;
-using dftracer::utils::coro::CoroTask;
 
 namespace {
 
 constexpr std::int64_t MAX_ROWS = 1'000'000;
 
-CoroTask<std::vector<DataFrame>> stream_all(LazyFrame lf,
-                                            std::int64_t max_rows) {
+coro::CoroTask<std::vector<DataFrame>> stream_all(LazyFrame lf,
+                                                  std::int64_t max_rows) {
     std::vector<DataFrame> out;
     auto g = lf.stream(max_rows);
     while (auto df = co_await g.next()) out.push_back(std::move(*df));
@@ -134,7 +135,7 @@ class CountedTimes : public Source {
         Rows(std::int64_t morsels, std::int64_t rows,
              std::shared_ptr<std::int64_t> pulled)
             : morsels_(morsels), rows_(rows), pulled_(std::move(pulled)) {}
-        CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+        coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
             if (*pulled_ >= morsels_) co_return std::nullopt;
             std::vector<std::int64_t> t(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_), 1);
@@ -158,8 +159,8 @@ class CountedTimes : public Source {
 };
 
 // The morsels pulled from the source when the plan's first morsel came out.
-CoroTask<std::int64_t> pulled_at_first(LazyFrame lf,
-                                       std::shared_ptr<std::int64_t> pulled) {
+coro::CoroTask<std::int64_t> pulled_at_first(
+    LazyFrame lf, std::shared_ptr<std::int64_t> pulled) {
     auto g = lf.stream(1000);
     auto first = co_await g.next();
     REQUIRE(first.has_value());

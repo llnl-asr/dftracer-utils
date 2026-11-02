@@ -3,7 +3,7 @@
     defined(__NetBSD__) || defined(__DragonFly__)
 
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/runtime/io/kqueue_thread_pool_backend.h>
 #include <sys/event.h>
 #include <sys/time.h>
@@ -15,7 +15,7 @@
 
 namespace dftracer::utils::io {
 
-KqueueThreadPoolBackend::KqueueThreadPoolBackend(Executor& executor,
+KqueueThreadPoolBackend::KqueueThreadPoolBackend(coro::Executor& executor,
                                                  std::size_t pool_size,
                                                  unsigned batch_threshold,
                                                  IoPoolOptions pool_options)

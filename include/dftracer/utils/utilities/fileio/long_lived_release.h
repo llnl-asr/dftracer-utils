@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LONG_LIVED_RELEASE_H
 
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
@@ -35,7 +35,7 @@ template <typename Impl>
 void release_long_lived(std::unique_ptr<Impl> impl, const char* name) {
     if (!impl || impl->settled()) return;
     impl->abandon();
-    if (!Executor::current()) {
+    if (!coro::Executor::current()) {
         try {
             default_runtime().run_blocking(
                 name, [&](CoroScope&) -> coro::CoroTask<void> {
@@ -45,7 +45,7 @@ void release_long_lived(std::unique_ptr<Impl> impl, const char* name) {
         } catch (...) {
         }
     }
-    Executor* exec = Executor::current();
+    coro::Executor* exec = coro::Executor::current();
     if (!exec) {
         if (auto rt = peek_default_runtime()) exec = rt->executor();
     }

@@ -5,8 +5,8 @@
 // measured alone; the transform run may exceed the same aggregation without a
 // transform by a small margin only.
 #define DOCTEST_CONFIG_IMPLEMENT
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_scan.h>

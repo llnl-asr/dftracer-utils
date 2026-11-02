@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_TRACE_GENESIS_GENESIS_H
 
 #include <dftracer/utils/common/timer.h>
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <atomic>

@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_INDEX_H
 #define DFTRACER_UTILS_INDEX_INDEX_H
 
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -9,7 +10,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/file.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/store/store.h>
 
 #include <cstdint>

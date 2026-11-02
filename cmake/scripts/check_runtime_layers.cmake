@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Check the layering of runtime: a file includes only its own part or a part
 # of lower rank. Equal ranks do not include each other. There is no exception
-# and no allow list. Ranks: executor, mpi, distributed 0; coro 1; io, tasks 2;
-# task_graph, scheduler 3; top level 4; pipeline 5.
+# and no allow list. Ranks: mpi, distributed 0; io, tasks 2; task_graph,
+# scheduler 3; top level 4; pipeline 5.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -P check_runtime_layers.cmake
 #
@@ -13,10 +13,8 @@ if(NOT DEFINED SOURCE_DIR)
   message(FATAL_ERROR "check_runtime_layers.cmake requires -DSOURCE_DIR=...")
 endif()
 
-set(RANK_executor 0)
 set(RANK_mpi 0)
 set(RANK_distributed 0)
-set(RANK_coro 1)
 set(RANK_io 2)
 set(RANK_tasks 2)
 set(RANK_task_graph 3)
@@ -25,7 +23,7 @@ set(RANK_top 4)
 set(RANK_pipeline 5)
 
 if(DEFINED PLANT_DIR)
-  set(planted_edge "runtime/executor/executor.h|runtime/pipeline/pipeline.h")
+  set(planted_edge "runtime/tasks/coro_scope.h|runtime/pipeline/pipeline.h")
   file(REMOVE_RECURSE "${PLANT_DIR}")
   file(MAKE_DIRECTORY "${PLANT_DIR}/include/dftracer/utils"
        "${PLANT_DIR}/src/dftracer/utils")
@@ -33,7 +31,7 @@ if(DEFINED PLANT_DIR)
        DESTINATION "${PLANT_DIR}/include/dftracer/utils")
   file(COPY "${SOURCE_DIR}/src/dftracer/utils/runtime"
        DESTINATION "${PLANT_DIR}/src/dftracer/utils")
-  file(APPEND "${PLANT_DIR}/include/dftracer/utils/runtime/executor/executor.h"
+  file(APPEND "${PLANT_DIR}/include/dftracer/utils/runtime/tasks/coro_scope.h"
        "#include <dftracer/utils/runtime/pipeline/pipeline.h>\n")
   execute_process(
     COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PLANT_DIR} -P

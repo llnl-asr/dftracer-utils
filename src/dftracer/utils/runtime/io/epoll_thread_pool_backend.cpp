@@ -2,7 +2,7 @@
 #ifdef __linux__
 
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/runtime/io/epoll_thread_pool_backend.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -13,7 +13,7 @@
 
 namespace dftracer::utils::io {
 
-EpollThreadPoolBackend::EpollThreadPoolBackend(Executor& executor,
+EpollThreadPoolBackend::EpollThreadPoolBackend(coro::Executor& executor,
                                                std::size_t pool_size,
                                                unsigned batch_threshold,
                                                IoPoolOptions pool_options)

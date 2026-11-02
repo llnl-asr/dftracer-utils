@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/coro/completion_latch.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dstd/scope_exit.h>
-#include <dftracer/utils/runtime/coro/completion_latch.h>
-#include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/io_fault.h>
 #include <unistd.h>
@@ -63,12 +63,12 @@ struct Committer::WakeState {
     /// coroutine would run twice on one frame.
     std::atomic<bool> claimed{false};
     std::coroutine_handle<> handle;
-    Executor* executor = nullptr;
-    TimerService* timers = nullptr;
-    std::atomic<TimerService::TimerId> timer{0};
+    coro::Executor* executor = nullptr;
+    coro::TimerService* timers = nullptr;
+    std::atomic<coro::TimerService::TimerId> timer{0};
 
     void cancel_timer() {
-        const TimerService::TimerId id =
+        const coro::TimerService::TimerId id =
             timer.exchange(0, std::memory_order_acq_rel);
         if (id != 0 && timers != nullptr) timers->cancel_timeout(id);
     }
@@ -99,7 +99,7 @@ struct Committer::WaitForWork {
         Committer& self = committer;
         state->handle = handle;
         state->executor = &self.executor_;
-        TimerService& timers = self.executor_.get_timer_service();
+        coro::TimerService& timers = self.executor_.get_timer_service();
         state->timers = &timers;
         state->timer.store(
             timers.register_timeout(self.commit_interval_,
@@ -124,12 +124,12 @@ struct Committer::WaitForWork {
     }
 };
 
-/// Parks on the executor it waits on, so a RunLoop driving the close knows the
-/// loop's end still resumes it, and is resumed through that executor.
+/// Parks on the executor it waits on, so a coro::RunLoop driving the close
+/// knows the loop's end still resumes it, and is resumed through that executor.
 struct Committer::StopWait {
     Committer& committer;
-    Executor* executor = nullptr;
-    ParkNode* park = nullptr;
+    coro::Executor* executor = nullptr;
+    coro::ParkNode* park = nullptr;
 
     bool await_ready() const {
         std::lock_guard<std::mutex> lock(committer.queue_mutex_);
@@ -139,7 +139,7 @@ struct Committer::StopWait {
     bool await_suspend(std::coroutine_handle<> handle) {
         std::lock_guard<std::mutex> lock(committer.queue_mutex_);
         if (committer.loop_done_) return false;
-        executor = Executor::current();
+        executor = coro::Executor::current();
         if (executor == nullptr) executor = &committer.executor_;
         committer.stop_waiter_ = handle;
         committer.stop_executor_ = executor;
@@ -158,7 +158,7 @@ struct Committer::StopWait {
     }
 };
 
-Committer::Committer(DataFileWriter& file, Executor& executor,
+Committer::Committer(DataFileWriter& file, coro::Executor& executor,
                      std::uint64_t commit_bytes,
                      std::chrono::milliseconds commit_interval)
     : file_(file),
@@ -179,7 +179,7 @@ Committer::~Committer() {
     }
     if (wait) {
         wake();
-        BlockingRegion block;
+        coro::BlockingRegion block;
         std::unique_lock<std::mutex> lock(queue_mutex_);
         done_cv_.wait(lock, [this] { return loop_done_; });
     }
@@ -221,7 +221,7 @@ coro::Coro Committer::run() {
 
 void Committer::finish_loop() {
     std::coroutine_handle<> waiter;
-    Executor* resume_on = &executor_;
+    coro::Executor* resume_on = &executor_;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         loop_done_ = true;

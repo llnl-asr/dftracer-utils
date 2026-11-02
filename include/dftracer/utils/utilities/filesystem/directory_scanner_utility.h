@@ -4,6 +4,9 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/coro/adaptive_gate.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -11,9 +14,6 @@
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/coro/adaptive_gate.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
@@ -149,7 +149,7 @@ class DirectoryScannerUtility {
         }
 
         if (input.recursive) {
-            Executor* exec = ctx.get_executor();
+            coro::Executor* exec = ctx.get_executor();
             auto gate = std::make_shared<coro::AdaptiveGate>(
                 exec ? exec->get_num_threads() : 1);
             co_return co_await scan_parallel(ctx, std::move(gate), input.path,

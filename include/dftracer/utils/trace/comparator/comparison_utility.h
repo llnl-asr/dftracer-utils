@@ -3,8 +3,8 @@
 #define DFTRACER_UTILS_TRACE_COMPARATOR_COMPARISON_UTILITY_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/comparator/comparison_config.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -15,7 +15,8 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::coro::CoroTask;
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::ConcatHow;
 using dftracer::utils::dataframe::ConcatPlan;
 using dftracer::utils::dataframe::Cursor;
@@ -49,7 +50,7 @@ class PartsCursor : public Cursor {
     explicit PartsCursor(std::shared_ptr<const std::vector<DataFrame>> parts)
         : parts_(std::move(parts)) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
         if (next_ >= parts_->size()) co_return std::nullopt;
         const DataFrame& df = (*parts_)[next_++];
         Morsel m;

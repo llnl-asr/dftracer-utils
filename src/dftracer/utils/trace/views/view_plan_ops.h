@@ -2,8 +2,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_OPS_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_OPS_H
 
+#include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>

@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_SERVER_VIZ_API_H
 #define DFTRACER_UTILS_SERVER_VIZ_API_H
 
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 
 namespace dftracer::utils::server {
 

@@ -103,8 +103,8 @@ std::uint64_t now_micros() {
 dstd::Expected<void, dstd::Error> wait(
     coro::CoroTask<dstd::Expected<void, dstd::Error>> task) {
     const std::shared_ptr<Runtime> runtime = default_runtime_shared();
-    const bool reentrant = Executor::current() == runtime->executor();
-    BlockingRegion block(reentrant ? runtime->executor() : nullptr);
+    const bool reentrant = coro::Executor::current() == runtime->executor();
+    coro::BlockingRegion block(reentrant ? runtime->executor() : nullptr);
     return runtime->submit(std::move(task)).get();
 }
 

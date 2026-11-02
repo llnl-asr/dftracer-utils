@@ -27,6 +27,8 @@
 #include <utility>
 #include <vector>
 
+using namespace dftracer::utils;
+
 namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
@@ -41,7 +43,6 @@ struct DataFileWriterTestHook {
 
 namespace {
 
-namespace coro = dftracer::utils::coro;
 namespace memory = dftracer::utils::memory;
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;

@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_INTERNAL_CHUNK_LINE_SCANNER_H
 #define DFTRACER_UTILS_TRACE_INTERNAL_CHUNK_LINE_SCANNER_H
 
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 
 #include <cstddef>
 #include <cstdint>

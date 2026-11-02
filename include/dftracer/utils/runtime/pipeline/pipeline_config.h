@@ -36,7 +36,7 @@ using ErrorHandler =
  * Configuration for Pipeline execution.
  *
  * Thread Architecture:
- * - Executor threads: Worker pool that executes task functions (compute
+ * - coro::Executor threads: Worker pool that executes task functions (compute
  * threads)
  * - Watchdog: Optional monitoring thread for hang detection
  *

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/intern_table.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/coro/yield.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -14,7 +14,6 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using dftracer::utils::coro::CoroTask;
 namespace memory = dftracer::utils::memory;
 
 namespace {
@@ -25,8 +24,8 @@ constexpr int STRINGS = 300;
 
 std::string name_of(int i) { return "string_" + std::to_string(i); }
 
-CoroTask<void> hop_and_check(common::InternTable* expected,
-                             std::atomic<int>* bad) {
+coro::CoroTask<void> hop_and_check(common::InternTable* expected,
+                                   std::atomic<int>* bad) {
     if (common::current_intern() != expected) ++*bad;
     const common::InternId id = expected->intern("seen from a task");
     for (int i = 0; i < HOPS; ++i) {
@@ -36,8 +35,8 @@ CoroTask<void> hop_and_check(common::InternTable* expected,
     }
 }
 
-CoroTask<void> intern_and_read(common::InternTable* table, int seed,
-                               std::atomic<int>* bad) {
+coro::CoroTask<void> intern_and_read(common::InternTable* table, int seed,
+                                     std::atomic<int>* bad) {
     for (int round = 0; round < STRINGS; ++round) {
         const int k = (round * 7 + seed) % STRINGS;
         const std::string text = name_of(k);
@@ -50,7 +49,7 @@ CoroTask<void> intern_and_read(common::InternTable* table, int seed,
     }
 }
 
-CoroTask<void> sees_no_table(std::atomic<int>* bad) {
+coro::CoroTask<void> sees_no_table(std::atomic<int>* bad) {
     if (common::current_intern() != nullptr) ++*bad;
     co_await coro::yield();
     if (common::current_intern() != nullptr) ++*bad;

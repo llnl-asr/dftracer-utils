@@ -2,9 +2,9 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_FILE_GROUP_H
 #define DFTRACER_UTILS_INDEX_BUILD_FILE_GROUP_H
 
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
-#include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstddef>
 #include <string>

@@ -32,6 +32,8 @@
 #include <variant>
 #include <vector>
 
+using namespace dftracer::utils;
+
 namespace views = dftracer::utils::trace::views;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
@@ -47,7 +49,6 @@ using views::detail::FoldEvent;
 using views::detail::FoldPortBus;
 using views::detail::ScanUnit;
 namespace agg = dftracer::utils::plugins::agg;
-namespace coro = dftracer::utils::coro;
 
 namespace {
 

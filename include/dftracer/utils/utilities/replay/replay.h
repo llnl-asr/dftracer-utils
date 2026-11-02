@@ -2,9 +2,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_REPLAY_REPLAY_H
 #define DFTRACER_UTILS_UTILITIES_REPLAY_REPLAY_H
 
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/json/parser.h>
-#include <dftracer/utils/runtime/coro/async_generator.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/replay/trace.h>
 
@@ -168,7 +168,7 @@ class TraceExecutor {
 };
 
 /**
- * Executor for POSIX file operations (read, write, open, close, etc.)
+ * coro::Executor for POSIX file operations (read, write, open, close, etc.)
  */
 class PosixExecutor : public TraceExecutor {
    public:

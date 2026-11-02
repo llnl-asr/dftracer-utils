@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/runtime/coro/generator.h>
+#include <dftracer/utils/coro/generator.h>
 #include <doctest/doctest.h>
 
 #include <string>

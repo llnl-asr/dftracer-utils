@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_COMPARATOR_COMPARISON_AGGREGATION_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -10,7 +11,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 
 #include <cstddef>

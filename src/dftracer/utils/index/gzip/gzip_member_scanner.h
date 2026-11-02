@@ -3,9 +3,9 @@
 #define DFTRACER_UTILS_INDEX_GZIP_GZIP_MEMBER_SCANNER_H
 
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/little_endian.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <sys/stat.h>
 

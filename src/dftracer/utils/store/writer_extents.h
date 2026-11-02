@@ -10,12 +10,12 @@
 #include <cstdint>
 #include <mutex>
 
-namespace dftracer::utils {
+namespace dftracer::utils::coro {
 
 class Executor;
 struct ParkNode;
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::store::engine {
 
@@ -76,7 +76,7 @@ class WriterExtents {
     /// Suspends the calling coroutine until the bytes it waits for are written
     /// (a release after @p epoch, nothing held, or latched). It reports no
     /// result, so retry the commit. Parks on the executor it waits on, so a
-    /// RunLoop driving it knows a release still wakes it.
+    /// coro::RunLoop driving it knows a release still wakes it.
     class SpaceWait {
        public:
         SpaceWait(WriterExtents& extents, std::uint64_t epoch) noexcept
@@ -98,8 +98,8 @@ class WriterExtents {
         WriterExtents* extents_;
         std::uint64_t epoch_;
         std::coroutine_handle<> parked_;
-        Executor* executor_ = nullptr;
-        ParkNode* park_ = nullptr;
+        coro::Executor* executor_ = nullptr;
+        coro::ParkNode* park_ = nullptr;
     };
 
     SpaceWait wait_release(std::uint64_t epoch) noexcept {
@@ -132,7 +132,7 @@ class WriterExtents {
    private:
     struct Waiter {
         std::coroutine_handle<> handle;
-        Executor* executor = nullptr;
+        coro::Executor* executor = nullptr;
     };
 
     /// The caller holds the mutex.

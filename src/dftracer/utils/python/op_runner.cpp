@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/python/op_runner.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dlfcn.h>
@@ -11,10 +11,11 @@
 #include <cstddef>
 #include <vector>
 
+using namespace dftracer::utils;
+
 namespace dftracer::utils::python {
 namespace {
 
-namespace coro = dftracer::utils::coro;
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;

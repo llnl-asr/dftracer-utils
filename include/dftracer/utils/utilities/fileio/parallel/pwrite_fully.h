@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_PARALLEL_PWRITE_FULLY_H
 
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/io/io.h>
 
 #include <cstddef>

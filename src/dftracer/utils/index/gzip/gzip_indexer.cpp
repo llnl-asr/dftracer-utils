@@ -3,6 +3,10 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
@@ -16,10 +20,6 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
-#include <dftracer/utils/runtime/coro/channel.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -892,8 +892,8 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
     std::uint64_t& recovered_bytes) {
     // Fanning out past the thread count only adds channel and scheduling
-    // overhead; on a single-threaded drive (RunLoop, the no-executor .get()
-    // path) it collapses to one worker.
+    // overhead; on a single-threaded drive (coro::RunLoop, the no-executor
+    // .get() path) it collapses to one worker.
     constexpr std::size_t DEFAULT_MAX_WORKERS = 16;
     std::vector<InflateRange> ranges =
         plan_ranges(scanned_members, slice_c_end,

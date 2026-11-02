@@ -3,8 +3,8 @@
 #define DFTRACER_UTILS_RUNTIME_RUNTIME_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/runtime/coro/coro.h>
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/task_handle.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -122,8 +122,8 @@ class Runtime {
     template <typename Func>
         requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&>
     void run_blocking(std::string name, Func&& func) {
-        const bool reentrant = Executor::current() == executor_.get();
-        BlockingRegion block(reentrant ? executor_.get() : nullptr);
+        const bool reentrant = coro::Executor::current() == executor_.get();
+        coro::BlockingRegion block(reentrant ? executor_.get() : nullptr);
         scope(std::move(name), std::forward<Func>(func)).wait();
     }
 
@@ -276,7 +276,8 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
 
     auto wrapper = [](coro::CoroTask<T> t,
                       std::shared_ptr<std::promise<std::shared_ptr<T>>> tp,
-                      std::shared_ptr<std::promise<void>> vp, Executor* exec,
+                      std::shared_ptr<std::promise<void>> vp,
+                      coro::Executor* exec,
                       std::shared_ptr<std::atomic<common::TaskIndex>> task_id)
         -> coro::Coro {
         try {

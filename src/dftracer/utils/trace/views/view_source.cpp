@@ -2,6 +2,10 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_fingerprint
 #include <dftracer/utils/dataframe/scalar.h>
@@ -9,10 +13,6 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
-#include <dftracer/utils/runtime/coro/channel.h>
-#include <dftracer/utils/runtime/coro/coro.h>
-#include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
@@ -350,9 +350,11 @@ coro::Coro run_detached(coro::CoroTask<void> task,
 
 // Enqueues onto Executor::current() rather than default_runtime(), so the
 // producer shares whatever is pulling the cursor - a real pool, or the ad hoc
-// RunLoop a bare CoroTask::get() stands up, which cannot wait across pools.
+// coro::RunLoop a bare CoroTask::get() stands up, which cannot wait across
+// pools.
 std::shared_future<void> spawn_on_current_executor(coro::CoroTask<void> task) {
-    dftracer::utils::Executor* exec = dftracer::utils::Executor::current();
+    dftracer::utils::coro::Executor* exec =
+        dftracer::utils::coro::Executor::current();
     if (!exec) exec = dftracer::utils::default_runtime().executor();
     if (task.handle()) task.handle().promise().set_executor(exec);
     auto done = std::make_shared<std::promise<void>>();

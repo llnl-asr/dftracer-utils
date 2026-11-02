@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/server/http_request.h>

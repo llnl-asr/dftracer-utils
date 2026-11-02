@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/runtime/io/io_sendfile.h>
 #include <dftracer/utils/runtime/io/thread_pool_file_ops.h>
 #include <fcntl.h>
@@ -83,16 +83,15 @@ bool wait_ready(int fd, short events, const IoThreadPool& pool) {
 }
 }  // namespace
 
-ThreadPoolFileOps::ThreadPoolFileOps(Executor& executor, std::size_t pool_size,
+ThreadPoolFileOps::ThreadPoolFileOps(coro::Executor& executor,
+                                     std::size_t pool_size,
                                      unsigned batch_threshold,
                                      IoPoolOptions pool_options)
     : executor_(executor), pool_(pool_size, batch_threshold, pool_options) {}
 
-IoAwaitable ThreadPoolFileOps::make_request(IoOp op, int fd, void* buf,
-                                            std::size_t len, off_t offset,
-                                            const char* path, int flags,
-                                            mode_t mode, Executor* executor,
-                                            IoThreadPool* pool) {
+IoAwaitable ThreadPoolFileOps::make_request(
+    IoOp op, int fd, void* buf, std::size_t len, off_t offset, const char* path,
+    int flags, mode_t mode, coro::Executor* executor, IoThreadPool* pool) {
     auto* req = new IoRequest{};
     req->submit = &ThreadPoolFileOps::submit_to_pool;
     req->op = op;

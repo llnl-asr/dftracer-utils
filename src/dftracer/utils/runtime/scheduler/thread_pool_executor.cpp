@@ -2,10 +2,10 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/coro/monitor.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/coro/monitor.h>
-#include <dftracer/utils/runtime/coro/yield.h>
 #include <dftracer/utils/runtime/io/io_backend_factory.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -37,8 +37,8 @@ ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
     std::size_t io_threads =
         config.io_pool_size == 0 ? threads : config.io_pool_size;
 #ifdef DFTRACER_UTILS_VALGRIND_MODE
-    // Per-Executor thread churn dominates runtime when Valgrind serializes and
-    // instruments every thread, so cap the pools.
+    // Per-Executor thread churn dominates runtime when Valgrind
+    // serializes and instruments every thread, so cap the pools.
     if (threads > 2) threads = 2;
     if (io_threads > 2) io_threads = 2;
 #endif
@@ -183,7 +183,7 @@ void ThreadPoolExecutor::shutdown() {
 
     // Drain the main thread's thread-local destroy list (for
     // coroutines whose FinalAwaiter ran on the main thread).
-    drain_thread_local_destroys();
+    coro::drain_thread_local_destroys();
 
     DFTRACER_UTILS_LOG_DEBUG("%s", "Executor shutdown complete");
 }
@@ -518,7 +518,8 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     DFTRACER_UTILS_LOG_DEBUG("Worker %zu started", context->worker_id);
 
     set_current_worker_context(context);
-    Executor::set_current(this);
+    coro::Executor::set_current(this);
+    set_current_backend(this);
     coro::reset_timeslice();
 
     // Grows while idle so the pool is not polling, resets on work found.
@@ -527,9 +528,9 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     memory::Pool& general = memory::Manager::get().general();
 
     // Fixed for the process lifetime; read once to keep the resume loop cheap.
-    const bool monitor = utilities::monitoring_enabled();
+    const bool monitor = coro::monitoring_enabled();
     if (monitor) {
-        utilities::monitor_set_worker(static_cast<int>(context->worker_id));
+        coro::monitor_set_worker(static_cast<int>(context->worker_id));
     }
 
     while (running_ && !context->retire.load(std::memory_order_acquire)) {
@@ -580,7 +581,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                 }
                 DFTRACER_UTILS_TSAN_ACQUIRE(pending_resume.address());
                 if (monitor) {
-                    utilities::monitor_resume_begin(pending_entry.monitor_id);
+                    coro::monitor_resume_begin(pending_entry.monitor_id);
                 }
                 {
                     // Our coroutines enter their own pool. Anything else
@@ -589,8 +590,8 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                     pending_resume.resume();
                 }
                 if (monitor) {
-                    utilities::monitor_resume_end(pending_resume.address(),
-                                                  pending_resume.done());
+                    coro::monitor_resume_end(pending_resume.address(),
+                                             pending_resume.done());
                 }
             }
             // A batch held until this worker idles would wait behind a later
@@ -599,7 +600,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
             // Destroy coroutine frames that FinalAwaiter deferred to this
             // thread.  Safe: resume() has fully returned, so the frame
             // is suspended at final_suspend and no code references it.
-            drain_thread_local_destroys();
+            coro::drain_thread_local_destroys();
             drain_destroy_queue();
         }
         // No work available -- sleep until signaled.
@@ -658,9 +659,10 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     release_permit(context);
 
     // Final drain: destroy any frames deferred during the last resume().
-    drain_thread_local_destroys();
+    coro::drain_thread_local_destroys();
 
-    Executor::set_current(nullptr);
+    set_current_backend(nullptr);
+    coro::Executor::set_current(nullptr);
     set_current_worker_context(nullptr);
 
     DFTRACER_UTILS_LOG_DEBUG("Worker %zu terminated", context->worker_id);
@@ -684,7 +686,7 @@ void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
                 memory::Scope scope{general, nullptr};
                 entry.handle.resume();
             }
-            drain_thread_local_destroys();
+            coro::drain_thread_local_destroys();
             drain_destroy_queue();
             park = IDLE_PARK_MIN;
             continue;
@@ -717,7 +719,7 @@ void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
             &wait, park);
         park = woke ? IDLE_PARK_MIN : std::min(park * 2, IDLE_PARK_MAX);
     }
-    drain_thread_local_destroys();
+    coro::drain_thread_local_destroys();
 }
 
 void ThreadPoolExecutor::schedule_coroutine_resumption(
@@ -770,14 +772,14 @@ void ThreadPoolExecutor::enqueue(std::coroutine_handle<> handle,
     }
 
     long long monitor_id = -1;
-    if (utilities::monitoring_enabled()) {
+    if (coro::monitoring_enabled()) {
         // task_id >= 0 marks a tracked submitted task; otherwise it is spawn
         // fan-out (or a re-enqueue of an already-seen coroutine).
-        monitor_id = utilities::monitor_enqueue(
-            handle.address(), task_id >= 0 ? utilities::CoroKind::Task
-                                           : utilities::CoroKind::Spawn);
+        monitor_id = coro::monitor_enqueue(
+            handle.address(),
+            task_id >= 0 ? coro::CoroKind::Task : coro::CoroKind::Spawn);
     }
-    const bool foreign = Executor::current() != this;
+    const bool foreign = coro::Executor::current() != this;
     if (foreign) foreign_enqueues_.fetch_add(1, std::memory_order_acq_rel);
     DFTRACER_UTILS_TSAN_RELEASE(handle.address());
     run_queue_.enqueue(RunQueueEntry{handle, task_id, monitor_id});

@@ -3,12 +3,12 @@
 #define DFTRACER_UTILS_INDEX_BUILD_BATCH_BUILDER_H
 
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
-#include <dftracer/utils/runtime/coro/task.h>
 
 #include <array>
 #include <atomic>

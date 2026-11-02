@@ -19,11 +19,12 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
-namespace coro = dftracer::utils::coro;
 
 extern "C" {
 ::dftu_task* dftu_test_compose_pipe(const ::dftu_plugin_host*,

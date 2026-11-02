@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -15,7 +15,8 @@
 #include <string>
 #include <vector>
 
-using dftracer::utils::coro::CoroTask;
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::Cursor;
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::Field;
@@ -41,7 +42,7 @@ class DynCursor : public Cursor {
    public:
     explicit DynCursor(std::vector<std::string> dyn) : dyn_(std::move(dyn)) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
         if (next_ >= MORSELS) co_return std::nullopt;
         Morsel m;
         m.rows = ROWS;

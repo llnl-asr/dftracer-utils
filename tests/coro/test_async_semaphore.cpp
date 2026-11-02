@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
-#include <dftracer/utils/runtime/coro/coro.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
-#include <dftracer/utils/runtime/coro/yield.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
@@ -96,8 +96,9 @@ TEST_SUITE("CoroSemaphore") {
     }
 
     // A waiter parked on acquire() must resume when release() is called from a
-    // thread with no Executor::current() (a plain std::thread). Bounded wait: a
-    // regression manifests as a hang, so time out and fail rather than block.
+    // thread with no Executor::current() (a plain std::thread). Bounded
+    // wait: a regression manifests as a hang, so time out and fail rather than
+    // block.
     TEST_CASE("release() from an off-executor thread wakes a parked waiter") {
         coro::CoroSemaphore sem(10);
         std::atomic<bool> waiter_done{false};

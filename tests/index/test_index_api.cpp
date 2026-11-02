@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/file_group.h>
@@ -12,7 +13,6 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/store_layout.h>
 #include <dftracer/utils/index/tables.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
@@ -31,10 +31,11 @@
 #include <utility>
 #include <vector>
 
+using namespace dftracer::utils;
+
 namespace {
 
 namespace dstd = dftracer::utils::dstd;
-namespace coro = dftracer::utils::coro;
 namespace index = dftracer::utils::index;
 namespace index_store = dftracer::utils::index::store;
 namespace agg = dftracer::utils::index::schemas::dft::agg;

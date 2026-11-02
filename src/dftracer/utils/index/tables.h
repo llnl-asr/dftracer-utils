@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_INDEX_TABLES_H
 #define DFTRACER_UTILS_INDEX_TABLES_H
 
+#include <dftracer/utils/coro/async_mutex.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/function.h>
@@ -21,8 +23,6 @@
 #include <dftracer/utils/index/schemas/dft/statistics.h>
 #include <dftracer/utils/index/store/file.h>
 #include <dftracer/utils/index/store/types.h>
-#include <dftracer/utils/runtime/coro/async_mutex.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/store/store.h>
 
 #include <cstdint>

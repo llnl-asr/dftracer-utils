@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_FOLD_DRIVER_H
 
 #include <dftracer/utils/common/test_probes.h>
+#include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -16,7 +17,6 @@
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/parse_inflated.h>
 #include <dftracer/utils/trace/views/fold.h>

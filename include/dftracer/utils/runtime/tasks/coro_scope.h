@@ -5,14 +5,14 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/runtime/coro/async_generator.h>
-#include <dftracer/utils/runtime/coro/channel.h>
-#include <dftracer/utils/runtime/coro/coro.h>
-#include <dftracer/utils/runtime/coro/generator.h>
-#include <dftracer/utils/runtime/coro/join_handle.h>
-#include <dftracer/utils/runtime/coro/spawn_future.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/generator.h>
+#include <dftracer/utils/coro/join_handle.h>
+#include <dftracer/utils/coro/spawn_future.h>
+#include <dftracer/utils/coro/task.h>
 
 #include <atomic>
 #include <cstddef>
@@ -70,7 +70,7 @@ struct CoroScopeAccess;
 /// @endcode
 class CoroScope {
    private:
-    Executor* executor_;
+    coro::Executor* executor_;
     coro::JoinHandle join_handle_;
     std::atomic<bool> spawned_{false};
     std::atomic<bool> joined_{false};
@@ -117,9 +117,9 @@ class CoroScope {
         executor_->enqueue(handle);
     }
 
-    explicit CoroScope(Executor* executor) : executor_(executor) {}
+    explicit CoroScope(coro::Executor* executor) : executor_(executor) {}
 
-    CoroScope(Executor* executor, std::shared_ptr<CancelChain> chain)
+    CoroScope(coro::Executor* executor, std::shared_ptr<CancelChain> chain)
         : executor_(executor), cancel_chain_(std::move(chain)) {}
 
     // A friend struct, not the constrained run_coro_scope template:
@@ -133,7 +133,7 @@ class CoroScope {
     /// heap state the owner holds by pointer. The owner's destructor must join
     /// the scope off the executor thread or hand it to a joiner task.
     static std::unique_ptr<CoroScope> long_lived(
-        Executor* executor = Executor::current()) {
+        coro::Executor* executor = coro::Executor::current()) {
         return std::unique_ptr<CoroScope>(new CoroScope(executor));
     }
 
@@ -193,7 +193,8 @@ class CoroScope {
             std::shared_ptr<std::atomic<bool>>(chain, &chain->flag);
 
         auto make_coro =
-            [](auto f, Executor* exec, std::shared_ptr<CancelChain> own_chain,
+            [](auto f, coro::Executor* exec,
+               std::shared_ptr<CancelChain> own_chain,
                std::shared_ptr<coro::SharedState<void>> st) -> coro::Coro {
             // Own cancel flag, so cancelling one child leaves its siblings.
             CoroScope child_scope(exec, std::move(own_chain));
@@ -249,7 +250,8 @@ class CoroScope {
             std::shared_ptr<std::atomic<bool>>(chain, &chain->flag);
 
         auto make_coro =
-            [](auto f, Executor* exec, std::shared_ptr<CancelChain> own_chain,
+            [](auto f, coro::Executor* exec,
+               std::shared_ptr<CancelChain> own_chain,
                std::shared_ptr<coro::SharedState<R>> st) -> coro::Coro {
             CoroScope child_scope(exec, std::move(own_chain));
             std::exception_ptr error;
@@ -514,7 +516,7 @@ class CoroScope {
     // Accessor / Utility
     // ====================================================================
 
-    Executor* get_executor() const { return executor_; }
+    coro::Executor* get_executor() const { return executor_; }
 
     /// Create a child scope, run the lambda, and auto-join.
     /// Compatibility bridge for code using ctx.coro_scope(...).
@@ -576,15 +578,17 @@ class CoroScope {
 
 namespace detail {
 struct CoroScopeAccess {
-    static CoroScope root(Executor* executor) { return CoroScope(executor); }
+    static CoroScope root(coro::Executor* executor) {
+        return CoroScope(executor);
+    }
 };
 }  // namespace detail
 
 template <typename Func, typename... Args>
     requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&,
                                    Args...>
-inline coro::CoroTask<void> run_coro_scope(Executor* executor, Func scope_func,
-                                           Args... args) {
+inline coro::CoroTask<void> run_coro_scope(coro::Executor* executor,
+                                           Func scope_func, Args... args) {
     co_await coro::detail::OWNS_SCOPE;
     CoroScope scope = detail::CoroScopeAccess::root(executor);
     std::exception_ptr error;
@@ -602,9 +606,11 @@ inline coro::CoroTask<void> run_coro_scope(Executor* executor, Func scope_func,
 
 /// Runs `task` as a detached coroutine on `executor`. False, and `task` never
 /// runs, when the executor is null or not running.
-inline bool spawn_detached(Executor* executor, coro::CoroTask<void> task) {
+inline bool spawn_detached(coro::Executor* executor,
+                           coro::CoroTask<void> task) {
     if (!executor || !executor->is_running()) return false;
-    auto make_coro = [](coro::CoroTask<void> t, Executor* exec) -> coro::Coro {
+    auto make_coro = [](coro::CoroTask<void> t,
+                        coro::Executor* exec) -> coro::Coro {
         try {
             t.handle().promise().set_executor(exec);
             co_await std::move(t);
@@ -625,7 +631,7 @@ template <typename Func, typename... Args>
     requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&,
                                    Args...>
 inline coro::CoroTask<void> run_coro_scope(Func scope_func, Args... args) {
-    return run_coro_scope(Executor::current(), std::move(scope_func),
+    return run_coro_scope(coro::Executor::current(), std::move(scope_func),
                           std::move(args)...);
 }
 
@@ -661,7 +667,7 @@ with_scope(const Op& op, In in) {
     typename detail::with_scope_value<
         std::invoke_result_t<const Op&, CoroScope&, const In&>>::type result;
     co_await run_coro_scope(
-        Executor::current(),
+        coro::Executor::current(),
         [&op, &in, &result](CoroScope& s) -> coro::CoroTask<void> {
             result = co_await op(s, in);
         });

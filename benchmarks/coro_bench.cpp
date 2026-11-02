@@ -43,12 +43,12 @@
 
 #define DFTRACER_UTILS_BENCH_COUNT_NEW
 #include <bench_counters.h>
-#include <dftracer/utils/runtime/coro/async_mutex.h>
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
-#include <dftracer/utils/runtime/coro/when_any.h>
-#include <dftracer/utils/runtime/coro/yield.h>
+#include <dftracer/utils/coro/async_mutex.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
@@ -539,8 +539,8 @@ int usage() {
 
 int main(int argc, char **argv) {
 #ifdef __APPLE__
-    // Executor threads inherit this class, so they stay on performance cores
-    // and the timings do not depend on where the scheduler put a thread.
+    // Executor threads inherit this class, so they stay on performance
+    // cores and the timings do not depend on where the scheduler put a thread.
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 #endif
     dftu::bench::init_counters();

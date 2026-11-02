@@ -26,6 +26,8 @@
 #include <variant>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
@@ -35,7 +37,6 @@ using dftracer::utils::plugins::OwnedDataFrame;
 using dftracer::utils::plugins::PluginFold;
 using dftracer::utils::trace::RecordPhase;
 namespace agg = dftracer::utils::plugins::agg;
-namespace coro = dftracer::utils::coro;
 namespace views = dftracer::utils::trace::views;
 using views::detail::FoldBatch;
 using views::detail::FoldEvent;

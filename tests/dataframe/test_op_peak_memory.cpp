@@ -11,6 +11,8 @@
 // baseline) instead of asserting.
 
 #define DOCTEST_CONFIG_IMPLEMENT
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -18,8 +20,6 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
-#include <dftracer/utils/runtime/coro/async_generator.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
@@ -49,7 +49,7 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::coro::CoroTask;
+using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
 
 namespace {
@@ -98,7 +98,7 @@ class GenCursor : public Cursor {
               std::size_t pad)
         : rows_(rows), keys_(keys), seed_(seed), pad_(pad) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
         if (at_ >= rows_) co_return std::nullopt;
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
         std::vector<std::int64_t> k(n), t(n), v(n), g(n);
@@ -191,7 +191,7 @@ class ListCursor : public Cursor {
    public:
     explicit ListCursor(std::int64_t rows) : rows_(rows) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
         if (at_ >= rows_) co_return std::nullopt;
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
         std::vector<std::int64_t> pid(static_cast<std::size_t>(n));
@@ -654,10 +654,11 @@ std::set<std::string> registry_ops() {
 #define DFTU_LAZY_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6) \
     names.insert(#name);
 #include <dftracer/utils/dataframe/exported_lazy_ops.def>
+
     return names;
 }
 
-CoroTask<std::int64_t> drain_count(LazyFrame lf) {
+coro::CoroTask<std::int64_t> drain_count(LazyFrame lf) {
     std::int64_t n = 0;
     auto g = lf.stream(MORSEL_ROWS);
     while (auto df = co_await g.next()) n += df->num_rows();

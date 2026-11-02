@@ -5,6 +5,7 @@
 // hand-written vtable exercises the C marshaling and derived-source ownership.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -12,7 +13,6 @@
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -25,7 +25,8 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::coro::CoroTask;
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::Agg;
 using dftracer::utils::dataframe::AggregateSpec;
 using dftracer::utils::dataframe::ApplyStatus;
@@ -57,7 +58,7 @@ using dftracer::utils::dataframe::detail::PlanRule;
 namespace {
 
 template <class T>
-T run(CoroTask<T> t) {
+T run(coro::CoroTask<T> t) {
     T out = dftracer::utils::default_runtime().submit(std::move(t)).get();
     if constexpr (std::is_same_v<T, DataFrame>)
         for (Series& c : out.columns) c = c.materialize();
@@ -744,7 +745,7 @@ class KeyedSource final : public Source {
                               .cursor);
         return out;
     }
-    CoroTask<std::vector<DataFrame>> collect_batch(
+    coro::CoroTask<std::vector<DataFrame>> collect_batch(
         std::vector<std::shared_ptr<const Source>> members) const override {
         ++log_->batches;
         log_->last_members = members.size();

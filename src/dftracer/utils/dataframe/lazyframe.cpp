@@ -2,6 +2,8 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/coro/task_abi.h>        // task_to_abi
+#include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
 #include <dftracer/utils/dataframe/batch_ops.h>  // concat_columns, take, concat
 #include <dftracer/utils/dataframe/field_stat.h>  // FieldStat (describe)
@@ -37,8 +39,6 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/runtime/coro/task_abi.h>         // task_to_abi
-#include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <algorithm>
@@ -86,7 +86,7 @@ coro::CoroTask<void> column_task(const std::function<void(std::size_t)>* fn,
 // Runs fn(c) for every column c, in parallel on the current executor if any.
 coro::CoroTask<void> each_column(std::size_t n,
                                  std::function<void(std::size_t)> fn) {
-    if (n < 2 || Executor::current() == nullptr) {
+    if (n < 2 || coro::Executor::current() == nullptr) {
         for (std::size_t c = 0; c < n; ++c) fn(c);
         co_return;
     }

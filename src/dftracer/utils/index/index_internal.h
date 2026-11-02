@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_INDEX_INTERNAL_H
 #define DFTRACER_UTILS_INDEX_INDEX_INTERNAL_H
 
+#include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
@@ -10,7 +11,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
-#include <dftracer/utils/runtime/coro/async_mutex.h>
 #include <dftracer/utils/store/store.h>
 
 #include <array>

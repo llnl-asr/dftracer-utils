@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/map.h>
@@ -36,7 +37,6 @@
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/index_root.h>

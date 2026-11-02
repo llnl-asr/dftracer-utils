@@ -3,8 +3,8 @@
 #define DFTRACER_UTILS_INDEX_PLAN_CHUNK_PRUNER_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstdint>
 #include <string>

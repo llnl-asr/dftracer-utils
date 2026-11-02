@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_TASKS_TASK_H
 
 #include <dftracer/utils/common/typedefs.h>
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/tasks/task_result.h>
 #include <dftracer/utils/runtime/tasks/task_traits.h>
 
@@ -429,12 +429,12 @@ class Task : public std::enable_shared_from_this<Task> {
      * Validate type compatibility between tasks
      */
     /**
-     * Set result value (called by Executor on completion)
+     * Set result value (called by coro::Executor on completion)
      */
     void set_result(std::any result);
 
     /**
-     * Set exception (called by Executor on failure)
+     * Set exception (called by coro::Executor on failure)
      */
     void set_exception(std::exception_ptr ex);
 

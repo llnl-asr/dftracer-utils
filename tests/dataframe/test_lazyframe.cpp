@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -11,8 +13,6 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/runtime/coro/async_generator.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -25,7 +25,8 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::coro::CoroTask;
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::Agg;
 using dftracer::utils::dataframe::agg_argmax;
 using dftracer::utils::dataframe::agg_mean;
@@ -48,7 +49,7 @@ using dftracer::utils::dstd::StringIntern;
 
 namespace {
 
-DataFrame run(CoroTask<DataFrame> t) {
+DataFrame run(coro::CoroTask<DataFrame> t) {
     DataFrame out =
         dftracer::utils::default_runtime().submit(std::move(t)).get();
     for (Series& c : out.columns) c = c.materialize();
@@ -133,7 +134,7 @@ void expect_frames_equal(const DataFrame& a, const DataFrame& b) {
 
 // Drains a Cursor to one positional DataFrame (columns keep no names). A large
 // max_rows pulls the whole in-memory source as a single morsel.
-CoroTask<DataFrame> drain_cursor(std::unique_ptr<Cursor> cur) {
+coro::CoroTask<DataFrame> drain_cursor(std::unique_ptr<Cursor> cur) {
     DataFrame out;
     while (auto m = co_await cur->next(1 << 20)) {
         out.columns = std::move(m->columns);
@@ -142,7 +143,7 @@ CoroTask<DataFrame> drain_cursor(std::unique_ptr<Cursor> cur) {
     co_return out;
 }
 
-CoroTask<std::pair<std::vector<std::int64_t>, DataFrame>> probe_stream(
+coro::CoroTask<std::pair<std::vector<std::int64_t>, DataFrame>> probe_stream(
     dftracer::utils::coro::AsyncGenerator<DataFrame> gen) {
     std::vector<std::int64_t> chunk_rows;
     std::vector<DataFrame> chunks;
@@ -164,7 +165,7 @@ std::pair<std::vector<std::int64_t>, DataFrame> run_stream_probe(
         .get();
 }
 
-CoroTask<std::vector<DataFrame>> stream_parts(
+coro::CoroTask<std::vector<DataFrame>> stream_parts(
     dftracer::utils::coro::AsyncGenerator<DataFrame> gen) {
     std::vector<DataFrame> parts;
     while (auto df = co_await gen.next()) parts.push_back(std::move(*df));
@@ -200,7 +201,7 @@ class RaggedCursor : public Cursor {
     explicit RaggedCursor(std::shared_ptr<StringIntern> intern)
         : intern_(std::move(intern)) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
         if (step_ == 0) {
             ++step_;
             std::vector<std::int64_t> a{1, 2};

@@ -14,9 +14,9 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/mpi/mpi_utils.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -429,7 +429,7 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, CoroScope* scope) {
     ReplayEngine engine(ctx->config);
 
     if (ctx->config.use_call_tree) {
-        // Call tree path stays sync — replay_with_call_tree builds the
+        // Call tree path stays sync, replay_with_call_tree builds the
         // full tree in memory first, so there's nothing to hide behind a
         // channel. We just call it from inside this task.
         if (ctx->cli->inputs.size() != 1 ||

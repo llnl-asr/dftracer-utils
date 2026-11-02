@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/runtime/coro/when_any.h>
+#include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
@@ -2004,7 +2004,7 @@ TEST_CASE("Cancellation - when_any with cancellation of remaining tasks") {
 }
 
 // ============================================================================
-// Timeout Tests with TimerService Integration
+// Timeout Tests with coro::TimerService Integration
 // ============================================================================
 
 // gcc11_bandaid: Helper function to avoid ICE with nested make_task in

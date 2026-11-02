@@ -11,6 +11,8 @@
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scope_exit.h>
@@ -20,8 +22,6 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/runtime/coro/channel.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -530,9 +530,9 @@ struct WatchdogArgs : CliSchema {
     }
 };
 
-// A CLI's run coroutine runs on main's one-thread RunLoop, so work awaited
-// outside a Pipeline is serial. A heavy step runs here instead, on the process
-// runtime, and blocks until done.
+// A CLI's run coroutine runs on main's one-thread coro::RunLoop, so work
+// awaited outside a Pipeline is serial. A heavy step runs here instead, on the
+// process runtime, and blocks until done.
 template <typename Func>
 void run_on_pool(const PipelineArgs& pipeline, const char* name, Func&& func) {
     RuntimeSettings settings;

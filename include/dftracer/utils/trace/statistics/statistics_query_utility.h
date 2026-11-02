@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_STATISTICS_QUERY_UTILITY_H
 #define DFTRACER_UTILS_TRACE_STATISTICS_QUERY_UTILITY_H
 
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/trace/statistics/trace_statistics.h>
 
 #include <cstdint>

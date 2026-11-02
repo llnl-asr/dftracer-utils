@@ -31,9 +31,10 @@
 #include <utility>
 #include <vector>
 
+using namespace dftracer::utils;
+
 namespace {
 
-namespace coro = dftracer::utils::coro;
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 namespace io_fault = store::engine::io_fault;

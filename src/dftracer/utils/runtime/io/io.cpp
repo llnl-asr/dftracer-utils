@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/io/io_sendfile.h>
 #include <dftracer/utils/runtime/io/ops.h>
@@ -17,6 +17,15 @@
 namespace dftracer::utils::io {
 
 namespace {
+
+// Set on the threads an executor starts. The owner is read with the backend
+// so a suppressed executor falls back without a second lookup.
+struct BackendSlot {
+    const coro::Executor* owner = nullptr;
+    IoBackend* backend = nullptr;
+};
+
+thread_local BackendSlot tls_backend;
 
 // Max iovec entries writev(2) accepts. glibc only exposes IOV_MAX under XOPEN
 // feature macros and spells it UIO_MAXIOV; sysconf is the portable query.
@@ -36,15 +45,14 @@ int iov_max_entries() noexcept {
     return value;
 }
 
-// Every free op has the same shape: if the current executor has an I/O backend,
-// forward to its submit_* member (async); otherwise run the blocking syscall,
-// fold a failure to -errno, and hand back a ready awaitable. Submit is the
-// backend member selected as a template argument; sync is the syscall wrapper.
+// Every free op has the same shape: if the executor driving this thread has a
+// backend, forward to its submit_* member (async); else run the blocking
+// syscall, fold a failure to -errno, and hand back a ready awaitable. Submit is
+// the backend member; sync is the syscall wrapper.
 template <auto Submit, class Sync, class... Args>
 IoAwaitable io_dispatch(Sync sync, Args... args) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return (exec->io_backend().*Submit)(args...);
+    if (auto* backend = current_backend()) {
+        return (backend->*Submit)(args...);
     }
     auto result = sync(args...);
     if (result < 0) result = -errno;
@@ -52,6 +60,17 @@ IoAwaitable io_dispatch(Sync sync, Args... args) noexcept {
 }
 
 }  // namespace
+
+IoBackend* current_backend() noexcept {
+    return coro::Executor::current() == tls_backend.owner ? tls_backend.backend
+                                                          : nullptr;
+}
+
+void set_current_backend(const coro::Executor* owner,
+                         IoBackend* backend) noexcept {
+    tls_backend.owner = owner;
+    tls_backend.backend = backend;
+}
 
 IoAwaitable read(int fd, void* buf, std::size_t len) noexcept {
     return io_dispatch<&IoBackend::submit_read>(

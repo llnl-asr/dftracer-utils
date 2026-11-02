@@ -2,9 +2,9 @@
 #ifndef DFTRACER_UTILS_RUNTIME_COMPOSE_H
 #define DFTRACER_UTILS_RUNTIME_COMPOSE_H
 
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
-#include <dftracer/utils/runtime/coro/when_any.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/when_any.h>
 
 #include <tuple>
 #include <type_traits>

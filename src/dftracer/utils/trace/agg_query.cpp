@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -19,8 +21,6 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
-#include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/agg_event_fold.h>
 #include <dftracer/utils/trace/agg_query.h>
@@ -423,7 +423,7 @@ void Runner::take_stats(const AggQueryStats& t) {
 coro::CoroTask<void> Runner::run() {
     std::size_t workers = rules.q.workers;
     if (workers == 0) {
-        const Executor* ex = Executor::current();
+        const coro::Executor* ex = coro::Executor::current();
         workers =
             ex != nullptr ? std::max<std::size_t>(1, ex->get_num_threads()) : 1;
     }

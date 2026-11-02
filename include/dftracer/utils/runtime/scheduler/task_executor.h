@@ -3,8 +3,8 @@
 #define DFTRACER_UTILS_RUNTIME_SCHEDULER_TASK_EXECUTOR_H
 
 #include <dftracer/utils/common/typedefs.h>
-#include <dftracer/utils/runtime/coro/coro.h>
-#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 
 #include <any>
@@ -125,12 +125,13 @@ struct ExecutorProgress {
 };
 
 /**
- * TaskExecutor - an Executor that also runs DAG tasks and owns its lifecycle.
+ * TaskExecutor - a @ref coro::Executor that also runs DAG tasks and owns its
+ * lifecycle, and the one executor shape that names an I/O backend.
  *
  * What Pipeline, Scheduler and Watchdog require. Implement this to run the
  * pipeline on something other than the bundled thread pool.
  */
-class TaskExecutor : public Executor {
+class TaskExecutor : public coro::Executor {
    public:
     virtual void start() = 0;
     virtual void shutdown() = 0;
@@ -162,6 +163,20 @@ class TaskExecutor : public Executor {
 
     virtual bool is_responsive() const = 0;
     virtual ExecutorProgress get_progress() const = 0;
+
+    /// Without a backend the io layer falls back to blocking syscalls.
+    virtual bool has_io_backend() const noexcept = 0;
+    /// Must check @ref has_io_backend first.
+    virtual io::IoBackend& io_backend() = 0;
+    virtual std::size_t get_io_pool_size() const = 0;
+
+    /// Records `executor` as the I/O backend owner of the calling thread, or
+    /// clears it with null. A worker calls it where it sets
+    /// @ref Executor::current, so a scope that suppresses that executor
+    /// falls back to blocking calls too. Reads back through
+    /// @ref io::current_backend. Not inherited by threads the executor did not
+    /// start.
+    static void set_current_backend(TaskExecutor* executor) noexcept;
 };
 
 /// Build the executor described by `config`. The implementation is chosen

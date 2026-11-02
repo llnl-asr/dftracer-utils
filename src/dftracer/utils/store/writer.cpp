@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/varint.h>
-#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/store/extent_size.h>
 #include <dftracer/utils/store/writer.h>
 #include <unistd.h>
@@ -36,7 +37,7 @@ dstd::Unexpected<dstd::Error> invalid_error() {
 /// The bytes one writer may hold in extents when the caller names no quota: the
 /// commits of four executor threads, counted in extents of the default size at
 /// least, so a shrunk test extent size does not shrink the bound.
-std::uint64_t default_extent_quota(Executor& executor,
+std::uint64_t default_extent_quota(coro::Executor& executor,
                                    std::uint32_t extent_size) {
     const std::uint64_t threads =
         std::max<std::uint64_t>(executor.get_num_threads(), 1);
@@ -207,7 +208,8 @@ dstd::Optional<dstd::Error> Writer::latched() const {
 }
 
 dstd::Expected<std::unique_ptr<Writer>, dstd::Error> Writer::create(
-    dstd::StringView dir, Executor& executor, const WriterOptions& options) {
+    dstd::StringView dir, TaskExecutor& executor,
+    const WriterOptions& options) {
     if (!executor.has_io_backend()) {
         return dstd::Unexpected<dstd::Error>(
             dstd::Error(dstd::Condition::InvalidArgument,
@@ -282,7 +284,7 @@ dstd::Expected<std::unique_ptr<Writer>, dstd::Error> Writer::create(
 Writer::Writer(dstd::String name, dstd::String path, std::uint32_t extent_size,
                dstd::Vector<ScopeGeneration> generations, DataFileWriter file,
                memory::PoolHandle extent_pool, std::uint64_t extent_quota,
-               Executor& executor, const WriterOptions& options)
+               TaskExecutor& executor, const WriterOptions& options)
     : file_(std::move(file)),
       committer_(file_, executor, options.commit_bytes,
                  options.commit_interval),

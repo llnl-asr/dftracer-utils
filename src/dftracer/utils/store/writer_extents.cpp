@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/runtime/coro/completion_latch.h>
-#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/coro/completion_latch.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/store/writer_extents.h>
 
 #include <algorithm>
@@ -112,7 +112,7 @@ bool WriterExtents::SpaceWait::await_ready() const {
 
 bool WriterExtents::SpaceWait::await_suspend(std::coroutine_handle<> handle) {
     // Read before the lock: a handle parked with no executor can never resume.
-    Executor* executor = Executor::current();
+    coro::Executor* executor = coro::Executor::current();
     std::lock_guard<std::mutex> lock(extents_->mutex_);
     if (extents_->ready_locked(epoch_)) return false;
     extents_->waiters_.push_back(Waiter{handle, executor});

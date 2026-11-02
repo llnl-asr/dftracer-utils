@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_AGG_QUERY_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -13,7 +14,6 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstddef>
 #include <cstdint>

@@ -31,6 +31,8 @@
 #include <variant>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::NamedResultRegistry;
@@ -38,7 +40,6 @@ using dftracer::utils::plugins::PluginFold;
 using dftracer::utils::plugins::RegisteredState;
 using dftracer::utils::plugins::StateRegistry;
 using dftracer::utils::trace::RecordPhase;
-namespace coro = dftracer::utils::coro;
 namespace views = dftracer::utils::trace::views;
 using views::detail::FoldBatch;
 using views::detail::FoldEvent;

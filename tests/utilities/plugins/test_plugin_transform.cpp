@@ -29,13 +29,14 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::plugins::build_injected_plugins;
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
 using test_plugin_common::index_trace;
-namespace coro = dftracer::utils::coro;
 
 namespace {
 

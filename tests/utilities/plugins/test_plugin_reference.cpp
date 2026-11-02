@@ -20,6 +20,8 @@
 #include <fstream>
 #include <string>
 
+using namespace dftracer::utils;
+
 #ifdef REFERENCE_PLUGIN_PATH
 
 using dftracer::utils::CoroScope;
@@ -29,7 +31,6 @@ using dftracer::utils::plugins::PluginRun;
 using dftracer::utils::plugins::Plugins;
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
-namespace coro = dftracer::utils::coro;
 using test_plugin_common::index_trace;
 using test_plugin_common::result_text;
 

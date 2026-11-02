@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_SERVER_VIZ_SUMMARY_BUILD_H
 #define DFTRACER_UTILS_SERVER_VIZ_SUMMARY_BUILD_H
 
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/server/viz_summary.h>
 

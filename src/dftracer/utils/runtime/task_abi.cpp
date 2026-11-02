@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/runtime/coro/abi.h>
-#include <dftracer/utils/runtime/coro/task_abi.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
-#include <dftracer/utils/runtime/coro/when_any.h>
+#include <dftracer/utils/coro/abi.h>
+#include <dftracer/utils/coro/task_abi.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <memory>
 #include <utility>
 #include <vector>
+
+using namespace dftracer::utils;
 
 namespace dftracer::utils {
 
@@ -61,7 +63,6 @@ using dftracer::utils::default_runtime;
 using dftracer::utils::Runtime;
 using dftracer::utils::RuntimeSettings;
 using dftracer::utils::task_to_abi;
-using dftracer::utils::coro::CoroTask;
 
 extern "C" {
 
@@ -83,11 +84,11 @@ void dftu_runtime_free(dftu_runtime* rt) { (void)rt; }
 int dftu_task_run(dftu_runtime* rt, dftu_task* t) {
     if (!t) return -1;
     auto* runtime = rt ? reinterpret_cast<Runtime*>(rt) : &default_runtime();
-    auto* task = reinterpret_cast<CoroTask<void>*>(t);
+    auto* task = reinterpret_cast<coro::CoroTask<void>*>(t);
     int rc = 0;
     try {
         runtime->run_blocking("dftu_task_run",
-                              [&](CoroScope&) -> CoroTask<void> {
+                              [&](CoroScope&) -> coro::CoroTask<void> {
                                   return dftracer::utils::await_one(task);
                               });
     } catch (...) {

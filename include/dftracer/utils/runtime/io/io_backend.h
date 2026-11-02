@@ -12,6 +12,14 @@
 #include <cstddef>
 #include <string>
 
+namespace dftracer::utils {
+
+namespace coro {
+class Executor;
+}  // namespace coro
+
+}  // namespace dftracer::utils
+
 namespace dftracer::utils::io {
 
 using IoCompletionFn = void (*)(void *context, ssize_t result) noexcept;
@@ -173,6 +181,18 @@ class IoBackend {
     /// Human-readable name for logging.
     virtual std::string name() const = 0;
 };
+
+/// I/O backend of the executor driving the calling thread, or null when that
+/// thread drives none or the one it drives has no backend. The io layer asks
+/// this instead of @ref Executor::current, which names no I/O type.
+IoBackend *current_backend() noexcept;
+
+/// Records `owner` as the executor driving the calling thread with `backend`.
+/// The record holds only while @ref Executor::current is `owner`, so a
+/// scope that suppresses that executor falls back to blocking calls too. A
+/// null `backend` clears it. Not inherited by threads the owner did not start.
+void set_current_backend(const coro::Executor *owner,
+                         IoBackend *backend) noexcept;
 
 }  // namespace dftracer::utils::io
 

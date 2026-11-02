@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/runtime/executor/timer_service.h>
+#include <dftracer/utils/coro/timer_service.h>
 #include <doctest/doctest.h>
 
 #include <chrono>
@@ -36,7 +36,7 @@ TEST_CASE("each timer registered on an idle timer thread fires") {
     int rounds = 0;
     int fired_rounds = 0;
     run_with_deadline("timer rounds", [&] {
-        TimerService timers;
+        coro::TimerService timers;
         timers.start();
         std::mutex m;
         std::condition_variable cv;
@@ -66,7 +66,7 @@ TEST_CASE("stop wakes an idle timer thread") {
     run_with_deadline("start and stop", [] {
         const auto until = std::chrono::steady_clock::now() + RUN_FOR;
         while (std::chrono::steady_clock::now() < until) {
-            TimerService timers;
+            coro::TimerService timers;
             timers.start();
             timers.stop();
         }

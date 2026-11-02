@@ -10,9 +10,9 @@
 #include <cstddef>
 #include <string>
 
-namespace dftracer::utils {
+namespace dftracer::utils::coro {
 class Executor;
-}
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::io {
 
@@ -23,7 +23,7 @@ namespace dftracer::utils::io {
 /// currently only watching an eventfd used for clean shutdown.
 class EpollThreadPoolBackend : public ThreadPoolFileOps {
    public:
-    explicit EpollThreadPoolBackend(Executor& executor,
+    explicit EpollThreadPoolBackend(coro::Executor& executor,
                                     std::size_t pool_size = 4,
                                     unsigned batch_threshold = 0,
                                     IoPoolOptions pool_options = {});

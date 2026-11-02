@@ -28,6 +28,8 @@
 #include <utility>
 #include <vector>
 
+using namespace dftracer::utils;
+
 namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
@@ -46,7 +48,6 @@ namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 namespace io = dftracer::utils::io;
 
-using dftracer::utils::Executor;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::ByteView;
 using store::engine::DataFileWriter;
@@ -116,7 +117,7 @@ class FaultBackend : public io::ThreadPoolBackend {
    public:
     enum class Fault { None, ShortWrite, EintrOnce, ZeroOnce };
 
-    FaultBackend(Executor& executor, Fault fault)
+    FaultBackend(coro::Executor& executor, Fault fault)
         : io::ThreadPoolBackend(executor, 1, 0),
           fault_(fault),
           eintr_pending_(fault == Fault::EintrOnce),

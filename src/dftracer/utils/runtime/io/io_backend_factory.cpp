@@ -82,7 +82,7 @@ IoBackendType backend_from_env(bool& forced) {
 
 }  // namespace
 
-std::unique_ptr<IoBackend> create_io_backend(Executor& executor,
+std::unique_ptr<IoBackend> create_io_backend(coro::Executor& executor,
                                              std::size_t pool_size,
                                              IoBackendType backend_type,
                                              unsigned batch_threshold,

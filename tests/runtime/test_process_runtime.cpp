@@ -14,12 +14,13 @@
 #include <thread>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::configure_default_runtime;
 using dftracer::utils::default_runtime;
 using dftracer::utils::default_runtime_shared;
 using dftracer::utils::Runtime;
 using dftracer::utils::TaskHandle;
-using dftracer::utils::coro::CoroTask;
 
 namespace {
 
@@ -28,7 +29,7 @@ struct Concurrency {
     std::atomic<int> most{0};
 };
 
-CoroTask<void> busy(Concurrency* c, std::chrono::milliseconds hold) {
+coro::CoroTask<void> busy(Concurrency* c, std::chrono::milliseconds hold) {
     const int running = c->now.fetch_add(1) + 1;
     int seen = c->most.load();
     while (running > seen && !c->most.compare_exchange_weak(seen, running)) {
@@ -48,7 +49,7 @@ int most_at_once(int tasks) {
     return c.most.load();
 }
 
-CoroTask<void> tiny() { co_return; }
+coro::CoroTask<void> tiny() { co_return; }
 
 std::chrono::microseconds cpu_time() {
     rusage usage{};
@@ -61,7 +62,7 @@ std::chrono::microseconds cpu_time() {
         us(usage.ru_utime) + us(usage.ru_stime));
 }
 
-CoroTask<void> wait_for(std::atomic<bool>* go, std::atomic<bool>* done) {
+coro::CoroTask<void> wait_for(std::atomic<bool>* go, std::atomic<bool>* done) {
     while (!go->load())
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     done->store(true);

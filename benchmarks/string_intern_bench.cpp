@@ -339,8 +339,8 @@ int usage() {
 
 int main(int argc, char** argv) {
 #ifdef __APPLE__
-    // Executor threads inherit this class, so they stay on performance cores
-    // and the timings do not depend on where the scheduler put a thread.
+    // Executor threads inherit this class, so they stay on performance
+    // cores and the timings do not depend on where the scheduler put a thread.
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 #endif
     int reps = DEFAULT_REPS;

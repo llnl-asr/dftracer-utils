@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/async_mutex.h>
+#include <dftracer/utils/coro/async_once.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/cancelled.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/completion_latch.h>
+#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/join_handle.h>
+#include <dftracer/utils/coro/reserve_async.h>
+#include <dftracer/utils/coro/spawn_future.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/coro/async_generator.h>
-#include <dftracer/utils/runtime/coro/async_mutex.h>
-#include <dftracer/utils/runtime/coro/async_once.h>
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
-#include <dftracer/utils/runtime/coro/cancelled.h>
-#include <dftracer/utils/runtime/coro/channel.h>
-#include <dftracer/utils/runtime/coro/completion_latch.h>
-#include <dftracer/utils/runtime/coro/coro.h>
-#include <dftracer/utils/runtime/coro/join_handle.h>
-#include <dftracer/utils/runtime/coro/reserve_async.h>
-#include <dftracer/utils/runtime/coro/spawn_future.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
-#include <dftracer/utils/runtime/coro/when_any.h>
-#include <dftracer/utils/runtime/coro/yield.h>
-#include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
@@ -449,14 +449,14 @@ namespace {
 
 struct ForeignHandoff {
     std::atomic<void*> handle{nullptr};
-    Executor* executor = nullptr;
+    coro::Executor* executor = nullptr;
 };
 
 struct ParkForForeign {
     ForeignHandoff* handoff;
     bool await_ready() const noexcept { return false; }
     void await_suspend(std::coroutine_handle<> handle) noexcept {
-        handoff->executor = Executor::current();
+        handoff->executor = coro::Executor::current();
         handoff->handle.store(handle.address(), std::memory_order_release);
     }
     void await_resume() const noexcept {}

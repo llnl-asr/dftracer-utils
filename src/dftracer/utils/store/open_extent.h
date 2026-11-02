@@ -2,13 +2,13 @@
 #ifndef DFTRACER_UTILS_STORE_OPEN_EXTENT_H
 #define DFTRACER_UTILS_STORE_OPEN_EXTENT_H
 
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -21,11 +21,11 @@
 #include <cstdint>
 #include <mutex>
 
-namespace dftracer::utils {
+namespace dftracer::utils::coro {
 
 class Executor;
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::store::engine {
 
@@ -70,7 +70,7 @@ using IdleFn = void (*)(void* context);
 class ExtentWriter {
    public:
     ExtentWriter(DataFileWriter& file, io::IoBackend& backend,
-                 Executor& executor, std::uint32_t extent_size,
+                 coro::Executor& executor, std::uint32_t extent_size,
                  WrittenExtentFn on_written, void* context,
                  DiscardedContextFn on_discarded = nullptr,
                  IdleFn on_idle = nullptr);
@@ -170,7 +170,7 @@ class ExtentWriter {
 
     DataFileWriter& file_;
     io::IoBackend& backend_;
-    Executor& executor_;
+    coro::Executor& executor_;
     std::uint32_t extent_size_ = 0;
     WrittenExtentFn on_written_ = nullptr;
     void* on_written_context_ = nullptr;

@@ -20,7 +20,6 @@
 namespace dftracer::utils {
 
 class Task;
-class Executor;
 class Scheduler;
 class Watchdog;
 

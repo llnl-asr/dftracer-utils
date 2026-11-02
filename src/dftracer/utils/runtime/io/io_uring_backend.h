@@ -17,9 +17,9 @@
 #include <mutex>
 #include <string>
 
-namespace dftracer::utils {
+namespace dftracer::utils::coro {
 class Executor;
-}
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::io {
 
@@ -43,7 +43,8 @@ struct IoUringRequest {
 /// enqueues completed coroutine handles back to the executor.
 class IoUringBackend : public IoBackend {
    public:
-    explicit IoUringBackend(Executor& executor, unsigned ring_entries = 256,
+    explicit IoUringBackend(coro::Executor& executor,
+                            unsigned ring_entries = 256,
                             unsigned batch_threshold = 16);
 
     /// Probe whether io_uring actually works on this kernel at runtime.
@@ -114,7 +115,7 @@ class IoUringBackend : public IoBackend {
     /// Flush pending SQEs if threshold reached. Called under submit_mutex_.
     void maybe_flush_locked();
 
-    Executor& executor_;
+    coro::Executor& executor_;
     unsigned ring_entries_;
     unsigned batch_threshold_;
     uring::Ring ring_;

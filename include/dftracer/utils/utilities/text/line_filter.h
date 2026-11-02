@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_TEXT_LINE_FILTER_H
 #define DFTRACER_UTILS_UTILITIES_TEXT_LINE_FILTER_H
 
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/utilities/text/shared.h>
 
 #include <functional>

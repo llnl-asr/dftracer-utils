@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <doctest/doctest.h>
 #include <sys/stat.h>
@@ -842,7 +842,7 @@ TEST_CASE("GzipLineWriter - a drop without close on an executor joins") {
               REQUIRE(wr.has_value());
               for (std::size_t i = 0; i < 100; ++i)
                   REQUIRE(co_await wr->append(line(i, 40)));
-              on_executor = Executor::current() != nullptr;
+              on_executor = coro::Executor::current() != nullptr;
           }
           co_return;
       }).wait();

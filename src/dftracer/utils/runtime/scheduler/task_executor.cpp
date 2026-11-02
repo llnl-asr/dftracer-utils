@@ -14,6 +14,12 @@ void set_current_worker_context(void* context) {
     tls_current_worker_context = context;
 }
 
+void TaskExecutor::set_current_backend(TaskExecutor* executor) noexcept {
+    const bool has_backend = executor != nullptr && executor->has_io_backend();
+    io::set_current_backend(executor,
+                            has_backend ? &executor->io_backend() : nullptr);
+}
+
 std::unique_ptr<TaskExecutor> make_task_executor(const ExecutorConfig& config) {
     return std::make_unique<ThreadPoolExecutor>(config);
 }

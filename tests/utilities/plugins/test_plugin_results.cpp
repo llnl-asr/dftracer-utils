@@ -23,6 +23,8 @@
 #include <variant>
 #include <vector>
 
+using namespace dftracer::utils;
+
 namespace views = dftracer::utils::trace::views;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
@@ -36,7 +38,6 @@ using views::detail::CoverageSet;
 using views::detail::FoldBatch;
 using views::detail::FoldEvent;
 using views::detail::ScanUnit;
-namespace coro = dftracer::utils::coro;
 
 namespace {
 

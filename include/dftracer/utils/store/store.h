@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_STORE_STORE_H
 #define DFTRACER_UTILS_STORE_STORE_H
 
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
@@ -11,7 +12,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstddef>
 #include <cstdint>

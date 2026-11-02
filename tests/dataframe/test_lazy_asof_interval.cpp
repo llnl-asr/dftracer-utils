@@ -4,12 +4,12 @@
 // output leaves in several morsels cut by the budget, which a collect of both
 // sides followed by the eager op never does.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/runtime/coro/async_generator.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -24,13 +24,14 @@
 #include <string_view>
 #include <vector>
 
+using namespace dftracer::utils;
+
 namespace df = dftracer::utils::dataframe;
 using df::AsofDirection;
 using df::DataFrame;
 using df::LazyFrame;
 using df::Series;
 using df::TypeId;
-using dftracer::utils::coro::CoroTask;
 
 namespace {
 
@@ -91,8 +92,8 @@ DataFrame frame(std::vector<std::string> names, Cols&&... cols) {
     return out;
 }
 
-CoroTask<std::vector<DataFrame>> stream_all(LazyFrame lf,
-                                            std::int64_t max_rows) {
+coro::CoroTask<std::vector<DataFrame>> stream_all(LazyFrame lf,
+                                                  std::int64_t max_rows) {
     std::vector<DataFrame> out;
     auto g = lf.stream(max_rows);
     while (auto df = co_await g.next()) out.push_back(std::move(*df));

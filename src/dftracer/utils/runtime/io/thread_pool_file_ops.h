@@ -12,9 +12,9 @@
 #include <cstddef>
 #include <string>
 
-namespace dftracer::utils {
+namespace dftracer::utils::coro {
 class Executor;
-}
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::io {
 
@@ -47,7 +47,7 @@ struct IoRequest : SubmitContext {
     IoAwaitable* awaitable = nullptr;
     IoCompletionFn completion = nullptr;
     void* completion_ctx = nullptr;
-    Executor* executor = nullptr;
+    coro::Executor* executor = nullptr;
     IoThreadPool* pool = nullptr;
 };
 
@@ -58,7 +58,8 @@ struct IoRequest : SubmitContext {
 /// (start/stop, name, event loop). io_uring uses a separate SQE-based path.
 class ThreadPoolFileOps : public IoBackend {
    public:
-    explicit ThreadPoolFileOps(Executor& executor, std::size_t pool_size = 4,
+    explicit ThreadPoolFileOps(coro::Executor& executor,
+                               std::size_t pool_size = 4,
                                unsigned batch_threshold = 0,
                                IoPoolOptions pool_options = {});
 
@@ -127,11 +128,11 @@ class ThreadPoolFileOps : public IoBackend {
     /// Op-specific fields are post-configured by the caller.
     static IoAwaitable make_request(IoOp op, int fd, void* buf, std::size_t len,
                                     off_t offset, const char* path, int flags,
-                                    mode_t mode, Executor* executor,
+                                    mode_t mode, coro::Executor* executor,
                                     IoThreadPool* pool);
 
    protected:
-    Executor& executor_;
+    coro::Executor& executor_;
     IoThreadPool pool_;
 };
 

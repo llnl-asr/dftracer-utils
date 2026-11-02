@@ -48,11 +48,12 @@
 #include <variant>
 #include <vector>
 
+using namespace dftracer::utils;
+
 namespace {
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::coro::CoroTask;
 using dftracer::utils::plugins::ConfigTree;
 using dftracer::utils::plugins::NamedResult;
 using dftracer::utils::plugins::NamedResultRegistry;
@@ -104,9 +105,11 @@ const Plugins* built_set(PluginHostObject* self) {
 
 // Expand any directory in `inputs` to its trace files, index (unless
 // disabled), then drive every loaded plugin as a fold over one fused scan.
-CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
-                             std::string index_dir, const Plugins* plugins,
-                             bool auto_index, PluginRun* out) {
+coro::CoroTask<void> run_host_scan(CoroScope& scope,
+                                   std::vector<std::string> inputs,
+                                   std::string index_dir,
+                                   const Plugins* plugins, bool auto_index,
+                                   PluginRun* out) {
     std::vector<std::string> files;
     for (const auto& p : inputs) {
         const auto is_dir = dftracer::utils::dstd::fs::is_directory(

@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/index_batch_writer.h>
@@ -23,7 +24,6 @@
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/json_value.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>

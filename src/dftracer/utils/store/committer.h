@@ -2,13 +2,13 @@
 #ifndef DFTRACER_UTILS_STORE_COMMITTER_H
 #define DFTRACER_UTILS_STORE_COMMITTER_H
 
+#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/coro/coro.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/open_extent.h>
 #include <dftracer/utils/store/record.h>
@@ -22,11 +22,11 @@
 #include <mutex>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::coro {
 
 class Executor;
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::store::engine {
 
@@ -77,7 +77,7 @@ class Committer {
     /// A group commit starts as soon as `commit_bytes` of segment bytes, raw,
     /// are pending, and at the latest `commit_interval` after the first pending
     /// item arrived.
-    Committer(DataFileWriter& file, Executor& executor,
+    Committer(DataFileWriter& file, coro::Executor& executor,
               std::uint64_t commit_bytes,
               std::chrono::milliseconds commit_interval);
     Committer(const Committer&) = delete;
@@ -156,7 +156,7 @@ class Committer {
     bool work_pending() const;
 
     DataFileWriter& file_;
-    Executor& executor_;
+    coro::Executor& executor_;
     std::uint64_t commit_bytes_ = 0;
     std::chrono::milliseconds commit_interval_{0};
 
@@ -165,7 +165,7 @@ class Committer {
     std::uint64_t pending_bytes_ = 0;
     std::shared_ptr<WakeState> wake_state_;
     std::coroutine_handle<> stop_waiter_{};
-    Executor* stop_executor_ = nullptr;
+    coro::Executor* stop_executor_ = nullptr;
     std::condition_variable done_cv_;
     bool stopping_ = false;
     bool started_ = false;

@@ -8,9 +8,9 @@
 #include <cstddef>
 #include <memory>
 
-namespace dftracer::utils {
+namespace dftracer::utils::coro {
 class Executor;
-}
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::io {
 
@@ -22,7 +22,7 @@ namespace dftracer::utils::io {
 /// @param pool_options      Whether the pool starts full and how long an idle
 ///                          thread lives, for the thread-pool backends.
 std::unique_ptr<IoBackend> create_io_backend(
-    Executor& executor, std::size_t pool_size = 4,
+    coro::Executor& executor, std::size_t pool_size = 4,
     IoBackendType backend_type = IoBackendType::Auto,
     unsigned batch_threshold = 16, IoPoolOptions pool_options = {});
 

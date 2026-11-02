@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_PARALLEL_MERGE_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_PARALLEL_MERGE_H
 
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 
 #include <string>
 #include <vector>

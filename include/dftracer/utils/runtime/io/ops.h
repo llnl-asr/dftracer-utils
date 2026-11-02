@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_RUNTIME_IO_OPS_H
 #define DFTRACER_UTILS_RUNTIME_IO_OPS_H
 
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/io/awaitable.h>
 #include <fcntl.h>
 #include <sys/socket.h>

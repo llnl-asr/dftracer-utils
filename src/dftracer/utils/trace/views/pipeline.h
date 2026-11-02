@@ -2,8 +2,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_PIPELINE_H
 #define DFTRACER_UTILS_TRACE_VIEWS_PIPELINE_H
 
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_plan.h>

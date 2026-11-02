@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/runtime/coro/channel.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
-#include <dftracer/utils/runtime/coro/yield.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -22,18 +22,18 @@ using namespace dftracer::utils;
 // ============================================================================
 
 TEST_CASE("Yield - Executor::current() is nullptr outside worker") {
-    CHECK(Executor::current() == nullptr);
+    CHECK(coro::Executor::current() == nullptr);
 }
 
 TEST_CASE("Yield - Executor::current() is set inside worker task") {
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 1});
     Scheduler scheduler(&executor);
 
-    std::atomic<Executor*> observed{nullptr};
+    std::atomic<coro::Executor*> observed{nullptr};
 
     auto task = make_task(
         [&](CoroScope&) -> coro::CoroTask<void> {
-            observed.store(Executor::current());
+            observed.store(coro::Executor::current());
             co_return;
         },
         "CheckCurrent");

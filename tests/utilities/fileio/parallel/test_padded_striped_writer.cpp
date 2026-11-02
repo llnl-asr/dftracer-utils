@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
@@ -377,7 +377,7 @@ TEST_CASE("PaddedStripedWriter - a drop without close on an executor joins") {
                    }
                    result =
                        co_await w->write_chunk(0, as_bv(member)) == 0 ? 0 : 2;
-                   on_executor = Executor::current() != nullptr;
+                   on_executor = coro::Executor::current() != nullptr;
                    w.reset();
                })
         .get();

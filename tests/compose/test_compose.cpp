@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/runtime/compose.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/coro/yield.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/task_graph/task_graph.h>
@@ -16,38 +16,40 @@
 #include <utility>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::CoroScope;
 using dftracer::utils::make_task;
 using dftracer::utils::Pipeline;
 using dftracer::utils::PipelineConfig;
 using dftracer::utils::Runtime;
-using dftracer::utils::coro::CoroTask;
 namespace tg = dftracer::utils::task_graph;
 namespace u = dftracer::utils::utilities;
 
 namespace {
 
-// Plain async ops: callables of shape I -> CoroTask<O>. One is a struct, one
-// is a lambda, to show either satisfies the contract.
+// Plain async ops: callables of shape I -> coro::CoroTask<O>. One is a struct,
+// one is a lambda, to show either satisfies the contract.
 struct Doubler {
-    CoroTask<int> operator()(int x) const { co_return x * 2; }
+    coro::CoroTask<int> operator()(int x) const { co_return x * 2; }
 };
 
 // A context-taking op offering both contracts: inject a scope (DI), or call
 // scope-less and let it provide one via with_scope. It fans two spawns out.
 struct ScopedSum {
-    CoroTask<int> operator()(CoroScope& scope, int x) const {
-        auto a = scope.spawn([x](CoroScope&) -> CoroTask<int> { co_return x; });
-        auto b =
-            scope.spawn([x](CoroScope&) -> CoroTask<int> { co_return x * 10; });
+    coro::CoroTask<int> operator()(CoroScope& scope, int x) const {
+        auto a = scope.spawn(
+            [x](CoroScope&) -> coro::CoroTask<int> { co_return x; });
+        auto b = scope.spawn(
+            [x](CoroScope&) -> coro::CoroTask<int> { co_return x * 10; });
         co_return (co_await a) + (co_await b);
     }
-    CoroTask<int> operator()(int x) const {
+    coro::CoroTask<int> operator()(int x) const {
         return dftracer::utils::with_scope(*this, x);
     }
 };
 
-auto stringify = [](int x) -> CoroTask<std::string> {
+auto stringify = [](int x) -> coro::CoroTask<std::string> {
     co_return std::to_string(x);
 };
 
@@ -58,7 +60,7 @@ TEST_SUITE("compose") {
         Runtime rt;
         auto pipeline = u::op(Doubler{}) | u::op(stringify);
         std::string out;
-        rt.run_blocking("pipe", [&](auto&) -> CoroTask<void> {
+        rt.run_blocking("pipe", [&](auto&) -> coro::CoroTask<void> {
             out = co_await pipeline(21);
         });
         CHECK(out == "42");
@@ -68,8 +70,9 @@ TEST_SUITE("compose") {
         Runtime rt;
         auto fan = u::op(Doubler{}) && u::op(stringify);
         std::tuple<int, std::string> out;
-        rt.run_blocking(
-            "all", [&](auto&) -> CoroTask<void> { out = co_await fan(21); });
+        rt.run_blocking("all", [&](auto&) -> coro::CoroTask<void> {
+            out = co_await fan(21);
+        });
         CHECK(std::get<0>(out) == 42);
         CHECK(std::get<1>(out) == "21");
     }
@@ -77,32 +80,34 @@ TEST_SUITE("compose") {
     TEST_CASE("all (&&) runs both ops at the same time") {
         Runtime rt(2);
         std::atomic<bool> second_started{false};
-        auto first = [&second_started](int) -> CoroTask<bool> {
+        auto first = [&second_started](int) -> coro::CoroTask<bool> {
             for (int i = 0; i < 100000 && !second_started.load(); ++i) {
                 co_await dftracer::utils::coro::yield();
             }
             co_return second_started.load();
         };
-        auto second = [&second_started](int x) -> CoroTask<int> {
+        auto second = [&second_started](int x) -> coro::CoroTask<int> {
             second_started.store(true);
             co_return x;
         };
         auto both = u::op(first) && u::op(second);
         std::tuple<bool, int> out;
-        rt.run_blocking(
-            "all", [&](auto&) -> CoroTask<void> { out = co_await both(7); });
+        rt.run_blocking("all", [&](auto&) -> coro::CoroTask<void> {
+            out = co_await both(7);
+        });
         CHECK(std::get<0>(out));
         CHECK(std::get<1>(out) == 7);
     }
 
     TEST_CASE("any (||) races, yields the first to finish") {
         Runtime rt;
-        auto fast = [](int x) -> CoroTask<int> { co_return x + 1; };
-        auto slow = [](int x) -> CoroTask<int> { co_return x + 1000; };
+        auto fast = [](int x) -> coro::CoroTask<int> { co_return x + 1; };
+        auto slow = [](int x) -> coro::CoroTask<int> { co_return x + 1000; };
         auto race = u::op(fast) || u::op(slow);
         int out = -1;
-        rt.run_blocking(
-            "any", [&](auto&) -> CoroTask<void> { out = co_await race(41); });
+        rt.run_blocking("any", [&](auto&) -> coro::CoroTask<void> {
+            out = co_await race(41);
+        });
         CHECK((out == 42 || out == 1041));
     }
 
@@ -111,7 +116,7 @@ TEST_SUITE("compose") {
         ScopedSum sum;
         // Contract 1: caller injects its scope.
         int injected = -1;
-        rt.run_blocking("inject", [&](CoroScope& s) -> CoroTask<void> {
+        rt.run_blocking("inject", [&](CoroScope& s) -> coro::CoroTask<void> {
             injected = co_await sum(s, 3);
         });
         CHECK(injected == 33);  // 3 + 30
@@ -131,7 +136,7 @@ TEST_SUITE("compose") {
         Runtime rt;
         auto doubled = u::map(Doubler{});
         std::vector<int> out;
-        rt.run_blocking("map", [&](auto&) -> CoroTask<void> {
+        rt.run_blocking("map", [&](auto&) -> coro::CoroTask<void> {
             // GCC 12.1 rejects a braced list inside co_await.
             std::vector<int> in{1, 2, 3, 4};
             out = co_await doubled(std::move(in));
@@ -145,7 +150,7 @@ TEST_SUITE("compose") {
             u::map(Doubler{}) |
             u::fold(0, [](int acc, int x) { return acc + x; });
         int out = -1;
-        rt.run_blocking("mapreduce", [&](auto&) -> CoroTask<void> {
+        rt.run_blocking("mapreduce", [&](auto&) -> coro::CoroTask<void> {
             std::vector<int> in{1, 2, 3, 4};
             out = co_await sum_of_doubles(std::move(in));
         });
@@ -155,16 +160,17 @@ TEST_SUITE("compose") {
     TEST_CASE("a compose op drops straight into the real task_graph DAG") {
         // A plain compose pipeline used as a graph node, run through the
         // actual scheduler.
-        auto pipe = u::op(Doubler{}) |
-                    u::op([](int x) -> CoroTask<int> { co_return x + 1; });
+        auto pipe = u::op(Doubler{}) | u::op([](int x) -> coro::CoroTask<int> {
+                        co_return x + 1;
+                    });
 
-        auto source =
-            make_task([](CoroScope&) -> CoroTask<int> { co_return 20; }, "src");
+        auto source = make_task(
+            [](CoroScope&) -> coro::CoroTask<int> { co_return 20; }, "src");
         auto graph = tg::TaskGraph::builder({.name = "compose_in_dag"});
         auto wrapped = graph.wrap<int>(source);
         auto mapped =
             graph.map<int>(wrapped,
-                           [pipe](CoroScope&, int v) -> CoroTask<int> {
+                           [pipe](CoroScope&, int v) -> coro::CoroTask<int> {
                                co_return co_await pipe(v);
                            },
                            {.name = "compose"});

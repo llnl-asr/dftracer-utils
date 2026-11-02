@@ -2,12 +2,12 @@
 #ifndef DFTRACER_UTILS_BENCHMARKS_MEMORY_WORKLOADS_H
 #define DFTRACER_UTILS_BENCHMARKS_MEMORY_WORKLOADS_H
 
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/path.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -45,8 +45,6 @@ inline void require_ok(const dftracer::utils::dstd::Expected<
     std::exit(1);
 }
 
-using dftracer::utils::coro::CoroTask;
-
 constexpr std::int64_t MORSEL_ROWS = 8192;
 constexpr std::uint64_t PLAN_BUDGET = 1ULL << 36;
 constexpr std::uint64_t GENESIS_SHARE = 256ULL * 1024 * 1024;
@@ -61,8 +59,9 @@ class GenCursor : public dftracer::utils::dataframe::Cursor {
     GenCursor(std::int64_t rows, std::int64_t keys, std::uint64_t seed)
         : rows_(rows), keys_(keys), seed_(seed) {}
 
-    CoroTask<std::optional<dftracer::utils::dataframe::Morsel>> next(
-        std::int64_t) override {
+    dftracer::utils::coro::CoroTask<
+        std::optional<dftracer::utils::dataframe::Morsel>>
+    next(std::int64_t) override {
         if (at_ >= rows_) co_return std::nullopt;
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
         std::vector<std::int64_t> k(static_cast<std::size_t>(n));
@@ -134,7 +133,7 @@ inline dftracer::utils::dataframe::LazyFrame gen(std::int64_t rows,
         std::make_shared<GenSource>(rows, keys, seed));
 }
 
-inline CoroTask<std::int64_t> drain_count(
+inline dftracer::utils::coro::CoroTask<std::int64_t> drain_count(
     dftracer::utils::dataframe::LazyFrame lf) {
     std::int64_t n = 0;
     auto g = lf.stream(MORSEL_ROWS);
@@ -142,8 +141,8 @@ inline CoroTask<std::int64_t> drain_count(
     co_return n;
 }
 
-inline CoroTask<void> genesis_run(dftracer::utils::CoroScope& ctx,
-                                  std::string root) {
+inline dftracer::utils::coro::CoroTask<void> genesis_run(
+    dftracer::utils::CoroScope& ctx, std::string root) {
     std::vector<std::string> roots{std::move(root)};
     auto discovery = co_await dftracer::utils::trace::genesis::discover(
         ctx, std::move(roots));

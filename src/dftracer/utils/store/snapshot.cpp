@@ -29,7 +29,6 @@
 namespace dftracer::utils::store::engine {
 namespace {
 
-using dftracer::utils::Executor;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::ByteView;
 using dftracer::utils::dstd::read_u32_le;
@@ -104,7 +103,7 @@ Runtime* fork_join_runtime() {
         INHERITED_POOLS.store(false, std::memory_order_relaxed);
     }
     if (INHERITED_POOLS.load(std::memory_order_relaxed) ||
-        Executor::current() == runtime.executor() ||
+        coro::Executor::current() == runtime.executor() ||
         dftracer::utils::detail::in_parallel_region()) {
         return nullptr;
     }

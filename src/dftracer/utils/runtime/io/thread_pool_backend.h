@@ -7,9 +7,9 @@
 #include <cstddef>
 #include <string>
 
-namespace dftracer::utils {
+namespace dftracer::utils::coro {
 class Executor;
-}
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::io {
 
@@ -19,7 +19,8 @@ namespace dftracer::utils::io {
 /// and the backend name (there is no reactor).
 class ThreadPoolBackend : public ThreadPoolFileOps {
    public:
-    explicit ThreadPoolBackend(Executor& executor, std::size_t pool_size = 4,
+    explicit ThreadPoolBackend(coro::Executor& executor,
+                               std::size_t pool_size = 4,
                                unsigned batch_threshold = 0,
                                IoPoolOptions pool_options = {});
 

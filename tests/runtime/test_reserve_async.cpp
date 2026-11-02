@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/reserve_async.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/coro/reserve_async.h>
-#include <dftracer/utils/runtime/coro/yield.h>
-#include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -59,7 +59,7 @@ auto under(memory::Pool& pool, Make make) {
 struct Outcome {
     memory::Status status = memory::Status::Pending;
     std::size_t bytes = 0;
-    Executor* resumed_on = nullptr;
+    coro::Executor* resumed_on = nullptr;
     std::thread::id thread;
     Clock::duration waited{};
     void* block = nullptr;
@@ -74,7 +74,7 @@ CoroTask<void> wait_for(memory::Pool* pool, std::size_t bytes,
     const Clock::time_point start = Clock::now();
     ReserveAsync::Result r = co_await reserve_async(*pool, bytes, deadline);
     out->waited = Clock::now() - start;
-    out->resumed_on = Executor::current();
+    out->resumed_on = coro::Executor::current();
     out->thread = std::this_thread::get_id();
     if (r) {
         out->status = memory::Status::Ok;
@@ -320,7 +320,7 @@ TEST_CASE("many waiters on several workers end exact") {
                     : Clock::now() + std::chrono::milliseconds(1 + rng() % 5);
             ReserveAsync::Result r =
                 co_await reserve_async(*pool, size, deadline);
-            if (Executor::current() == nullptr) {
+            if (coro::Executor::current() == nullptr) {
                 bad.fetch_add(1, std::memory_order_relaxed);
             }
             if (r) {

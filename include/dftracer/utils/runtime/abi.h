@@ -2,6 +2,6 @@
 #ifndef DFTRACER_UTILS_RUNTIME_ABI_H
 #define DFTRACER_UTILS_RUNTIME_ABI_H
 
-#include <dftracer/utils/runtime/coro/abi.h>
+#include <dftracer/utils/coro/abi.h>
 
 #endif /* DFTRACER_UTILS_RUNTIME_ABI_H */

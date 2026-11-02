@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_TASK_GRAPH_TASK_GRAPH_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/task_graph/reduction.h>
 #include <dftracer/utils/runtime/task_graph/task_graph_config.h>
 #include <dftracer/utils/runtime/task_graph/task_group.h>

@@ -8,11 +8,11 @@
 // exercised without the plugin/dlopen machinery.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -24,7 +24,8 @@
 #include <string>
 #include <vector>
 
-using dftracer::utils::coro::CoroTask;
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::col;
 using dftracer::utils::dataframe::Cursor;
 using dftracer::utils::dataframe::DataFrame;
@@ -38,11 +39,11 @@ using dftracer::utils::dataframe::Source;
 
 namespace {
 
-DataFrame run(CoroTask<DataFrame> t) {
+DataFrame run(coro::CoroTask<DataFrame> t) {
     return dftracer::utils::default_runtime().submit(std::move(t)).get();
 }
 
-CoroTask<DataFrame> drain_cursor(std::unique_ptr<Cursor> cur) {
+coro::CoroTask<DataFrame> drain_cursor(std::unique_ptr<Cursor> cur) {
     DataFrame out;
     while (auto m = co_await cur->next(1 << 20)) {
         out.columns = std::move(m->columns);
@@ -365,7 +366,7 @@ class LimitRecordingSource : public dftracer::utils::dataframe::Source {
    private:
     struct OneShot : Cursor {
         bool done = false;
-        CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+        coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
             if (done) co_return std::nullopt;
             done = true;
             std::vector<std::int64_t> v{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};

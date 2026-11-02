@@ -6,13 +6,13 @@
 // same style test_provider_schema_types.cpp uses for dftu_source_vt.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/task_abi.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/coro/task_abi.h>
-#include <dftracer/utils/runtime/coro/yield.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -25,7 +25,8 @@
 #include <string>
 #include <vector>
 
-using dftracer::utils::coro::CoroTask;
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::col;
 using dftracer::utils::dataframe::Cursor;
 using dftracer::utils::dataframe::DataFrame;
@@ -42,7 +43,7 @@ using dftracer::utils::dataframe::TypeId;
 
 namespace {
 
-DataFrame run(CoroTask<DataFrame> t) {
+DataFrame run(coro::CoroTask<DataFrame> t) {
     DataFrame out =
         dftracer::utils::default_runtime().submit(std::move(t)).get();
     for (Series& c : out.columns) c = c.materialize();
@@ -128,11 +129,12 @@ std::shared_ptr<Source> make_int_source(IntSource& fx, bool typed) {
 
 // ---- "test.double": a streaming node doubling column 0. --------------------
 
-CoroTask<void> pull_and_double(void* in_self, const dftu_cursor_vt* in_vt,
-                               std::int64_t max_rows, dftu_result_frame* out) {
+coro::CoroTask<void> pull_and_double(void* in_self, const dftu_cursor_vt* in_vt,
+                                     std::int64_t max_rows,
+                                     dftu_result_frame* out) {
     dftu_result_frame in_out{};
     if (dftu_task* t = in_vt->next(in_self, max_rows, &in_out)) {
-        auto* task = reinterpret_cast<CoroTask<void>*>(t);
+        auto* task = reinterpret_cast<coro::CoroTask<void>*>(t);
         co_await *task;
         delete task;
     }
@@ -506,7 +508,7 @@ class ThrowingSyncCursor : public Cursor {
     explicit ThrowingSyncCursor(int throw_on_call = -1)
         : throw_on_call_(throw_on_call) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         std::optional<Morsel> out;
         fill(max_rows, out);
         co_return out;
@@ -543,7 +545,7 @@ class ThrowingAsyncCursor : public Cursor {
     explicit ThrowingAsyncCursor(int throw_on_call = -1)
         : throw_on_call_(throw_on_call) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
         co_await dftracer::utils::coro::yield();
         ++calls_;
         if (calls_ == throw_on_call_) throw std::runtime_error("async boom");
@@ -573,7 +575,7 @@ class MultiSyncCursor : public Cursor {
    public:
     MultiSyncCursor(std::vector<std::int64_t> data, std::int64_t chunk)
         : data_(std::move(data)), chunk_(chunk) {}
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
         std::optional<Morsel> out;
         fill(out);
         co_return out;
@@ -608,7 +610,7 @@ class MultiAsyncCursor : public Cursor {
    public:
     MultiAsyncCursor(std::vector<std::int64_t> data, std::int64_t chunk)
         : data_(std::move(data)), chunk_(chunk) {}
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
         co_await dftracer::utils::coro::yield();
         std::optional<Morsel> out;
         const auto n64 = static_cast<std::int64_t>(data_.size());
@@ -638,7 +640,7 @@ class SyncThenAsyncCursor : public Cursor {
                         std::int64_t sync_rows)
         : data_(std::move(data)), chunk_(chunk), sync_rows_(sync_rows) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         std::optional<Morsel> out;
         if (try_next(max_rows, out)) co_return out;
         co_await dftracer::utils::coro::yield();
@@ -881,14 +883,14 @@ TEST_SUITE("lazyframe plugin node") {
         };
 
         struct Impl {
-            static CoroTask<void> drain_and_count(CountState* st,
-                                                  dftu_result_frame* out) {
+            static coro::CoroTask<void> drain_and_count(
+                CountState* st, dftu_result_frame* out) {
                 std::int64_t total = 0;
                 for (;;) {
                     dftu_result_frame in_out{};
                     if (dftu_task* t =
                             st->in_vt->next(st->in_self, 1 << 20, &in_out)) {
-                        auto* task = reinterpret_cast<CoroTask<void>*>(t);
+                        auto* task = reinterpret_cast<coro::CoroTask<void>*>(t);
                         co_await *task;
                         delete task;
                     }

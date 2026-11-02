@@ -6,8 +6,9 @@
 # object files. The shared library may define more: symbols of the static
 # libraries it bundles. Also check the libraries of ours that each shared
 # library needs: memory needs none, dstd needs only memory, common needs only
-# memory and dstd, and json and duql do not need runtime. Library names come
-# from the create_library NAME arguments in src/CMakeLists.txt.
+# memory and dstd, coro needs only memory, dstd and common, and json and duql do
+# not need runtime. Library names come from the create_library NAME arguments
+# in src/CMakeLists.txt.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -DLIB_DIR=<build>/lib
 #              [-DVERSION_FILE=<file>] -P check_library_versions.cmake
@@ -206,12 +207,24 @@ foreach(_name ${_names})
       set(_failed TRUE)
     endif()
   endif()
+  if(_name STREQUAL "dftracer_utils_coro")
+    set(_above_common ${_needed})
+    list(REMOVE_ITEM _above_common "dftracer_utils_memory" "dftracer_utils_dstd"
+         "dftracer_utils_common")
+    if(_above_common)
+      message(
+        SEND_ERROR
+          "${_name}: needs ${_above_common}, but coro needs only memory, dstd and common"
+      )
+      set(_failed TRUE)
+    endif()
+  endif()
   if(_name STREQUAL "dftracer_utils_store")
     set(_above_runtime ${_needed})
     list(REMOVE_ITEM _above_runtime "dftracer_utils_memory" "dftracer_utils_dstd"
-         "dftracer_utils_common" "dftracer_utils_runtime")
+         "dftracer_utils_common" "dftracer_utils_coro" "dftracer_utils_runtime")
     if(_above_runtime)
-      message(SEND_ERROR "${_name}: needs ${_above_runtime}, but store needs only memory, dstd, common and runtime")
+      message(SEND_ERROR "${_name}: needs ${_above_runtime}, but store needs only memory, dstd, common, coro and runtime")
       set(_failed TRUE)
     endif()
   endif()

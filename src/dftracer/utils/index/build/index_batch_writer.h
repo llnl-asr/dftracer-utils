@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_BATCH_WRITER_H
 
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/index/build/file_admission.h>
@@ -14,7 +15,6 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/tables.h>
-#include <dftracer/utils/runtime/coro/task.h>
 
 #include <atomic>
 #include <cstddef>

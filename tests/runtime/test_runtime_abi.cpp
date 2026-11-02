@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/runtime/coro/abi.h>
-#include <dftracer/utils/runtime/coro/task_abi.h>
+#include <dftracer/utils/coro/abi.h>
+#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::Runtime;
 using dftracer::utils::task_to_abi;
-using dftracer::utils::coro::CoroTask;
 
 namespace {
 
-CoroTask<void> set_flag(std::atomic<int>* n) {
+coro::CoroTask<void> set_flag(std::atomic<int>* n) {
     n->fetch_add(1);
     co_return;
 }

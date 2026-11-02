@@ -4,10 +4,10 @@
 // keys, the refusals, the lazy and the spilled join, and the C ABI.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -21,7 +21,8 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::coro::CoroTask;
+using namespace dftracer::utils;
+
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::InMemorySource;
 using dftracer::utils::dataframe::JoinHow;
@@ -30,7 +31,7 @@ using dftracer::utils::dataframe::Series;
 
 namespace {
 
-DataFrame run(CoroTask<DataFrame> t) {
+DataFrame run(coro::CoroTask<DataFrame> t) {
     return dftracer::utils::default_runtime().submit(std::move(t)).get();
 }
 

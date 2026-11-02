@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/long_lived_release.h>

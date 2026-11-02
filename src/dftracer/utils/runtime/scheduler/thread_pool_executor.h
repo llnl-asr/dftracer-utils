@@ -5,10 +5,10 @@
 #include <concurrentqueue.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/typedefs.h>
-#include <dftracer/utils/runtime/coro/coro.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/executor/parked.h>
-#include <dftracer/utils/runtime/executor/timer_service.h>
+#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/parked.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/timer_service.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 
@@ -142,7 +142,7 @@ class ThreadPoolExecutor : public TaskExecutor {
     std::atomic<std::chrono::seconds::rep> deadlock_timeout_s_;
     // Elastic idle-retire delay (monitor_loop). Longer = warmer pool.
     std::chrono::milliseconds keepalive_;
-    TimerService timer_service_;
+    coro::TimerService timer_service_;
 
     // Task registry for progress tracking
     std::unordered_map<common::TaskIndex, TaskInfo> task_registry_;
@@ -191,7 +191,7 @@ class ThreadPoolExecutor : public TaskExecutor {
     std::unique_ptr<io::IoBackend> io_backend_;
 
     // Waiters that only another party can finish, and the token scopes watch.
-    ParkRegistry park_registry_;
+    coro::ParkRegistry park_registry_;
     std::shared_ptr<std::atomic<bool>> shutdown_token_ =
         std::make_shared<std::atomic<bool>>(false);
 
@@ -231,15 +231,18 @@ class ThreadPoolExecutor : public TaskExecutor {
     void enter_blocking() override;
     void exit_blocking() override;
 
-    TimerService& get_timer_service() override { return timer_service_; }
+    coro::TimerService& get_timer_service() override { return timer_service_; }
 
     bool is_running() const override { return running_.load(); }
     void quiesce();
 
-    ParkNode* park(void* waiter, ParkCancelFn cancel) noexcept override {
+    coro::ParkNode* park(void* waiter,
+                         coro::ParkCancelFn cancel) noexcept override {
         return park_registry_.park(waiter, cancel);
     }
-    void unpark(ParkNode* n) noexcept override { park_registry_.unpark(n); }
+    void unpark(coro::ParkNode* n) noexcept override {
+        park_registry_.unpark(n);
+    }
     std::shared_ptr<std::atomic<bool>> shutdown_token() const override {
         return shutdown_token_;
     }

@@ -3,6 +3,8 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -15,8 +17,6 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <algorithm>
@@ -101,7 +101,7 @@ coro::CoroTask<void> index_loop_helper(dstd::SharedPtr<IndexLoop> loop) {
 // with its worker slot handed off. `fn` must not throw.
 template <typename Fn>
 void for_each_index(std::size_t n, Fn&& fn) {
-    Executor* exec = Executor::current();
+    coro::Executor* exec = coro::Executor::current();
     const std::size_t workers =
         exec ? std::min(n, exec->get_num_threads()) : std::size_t{1};
     if (workers <= 1) {
@@ -117,7 +117,7 @@ void for_each_index(std::size_t n, Fn&& fn) {
         if (!spawn_detached(exec, index_loop_helper(loop)))
             loop->done.count_down();
     loop->drain();
-    BlockingRegion blocking(exec);
+    coro::BlockingRegion blocking(exec);
     loop->done.wait();
 }
 

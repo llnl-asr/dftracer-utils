@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/runtime/coro/completion_latch.h>
-#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/coro/completion_latch.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -152,7 +152,7 @@ struct ExtentWriter::PendingWrite {
 };
 
 ExtentWriter::ExtentWriter(DataFileWriter& file, io::IoBackend& backend,
-                           Executor& executor, std::uint32_t extent_size,
+                           coro::Executor& executor, std::uint32_t extent_size,
                            WrittenExtentFn on_written, void* context,
                            DiscardedContextFn on_discarded, IdleFn on_idle)
     : file_(file),
@@ -282,7 +282,7 @@ dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
         // The namespace outran its training: finish it here. A job no thread
         // claimed is trained on this one, and a claimed one runs elsewhere.
         run_training(*job);
-        BlockingRegion blocking;
+        coro::BlockingRegion blocking;
         std::unique_lock<std::mutex> lock(job->mutex);
         job->done_cv.wait(lock, [&job] { return job->done; });
     }
@@ -421,13 +421,14 @@ void ExtentWriter::begin_write() {
 
 /// Suspends the calling coroutine while an extent write is in flight. The last
 /// completion resumes it through the executor it waits on, which it parks on
-/// so that a RunLoop driving it knows a wake-up is still to come. Queued under
-/// the lock the check takes, so a completion that lands first is not lost.
+/// so that a coro::RunLoop driving it knows a wake-up is still to come. Queued
+/// under the lock the check takes, so a completion that lands first is not
+/// lost.
 struct ExtentWriter::IdleWait {
     ExtentWriter& writer;
     std::coroutine_handle<> handle;
-    Executor* executor = nullptr;
-    ParkNode* park = nullptr;
+    coro::Executor* executor = nullptr;
+    coro::ParkNode* park = nullptr;
 
     bool await_ready() const {
         std::lock_guard<std::mutex> lock(writer.idle_mutex_);
@@ -438,7 +439,7 @@ struct ExtentWriter::IdleWait {
         std::lock_guard<std::mutex> lock(writer.idle_mutex_);
         if (writer.in_flight_ == 0) return false;
         handle = awaiting;
-        executor = Executor::current();
+        executor = coro::Executor::current();
         if (executor == nullptr) executor = &writer.executor_;
         writer.idle_waiters_.push_back(this);
         park = executor->park(this, &IdleWait::ignore_cancel);
@@ -463,7 +464,7 @@ struct ExtentWriter::IdleWait {
 };
 
 void ExtentWriter::release_in_flight() {
-    dstd::Vector<std::pair<Executor*, std::coroutine_handle<>>> waiters;
+    dstd::Vector<std::pair<coro::Executor*, std::coroutine_handle<>>> waiters;
     {
         std::lock_guard<std::mutex> lock(idle_mutex_);
         --in_flight_;

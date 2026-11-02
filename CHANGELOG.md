@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Move the coroutine headers from `dftracer/utils/runtime/coro/` and the executor headers from `dftracer/utils/runtime/executor/` to `dftracer/utils/coro/`, in a new `dftracer_utils_coro` library that the runtime library links.
+  The types are now in namespace `dftracer::utils::coro` (for example `coro::Executor`, `coro::TimerService`), and the I/O backend accessors moved from `coro::Executor` to the runtime's `TaskExecutor`.
 - Build each `distributed_index` worker's files as a shard on node-local disk, then merge the shards into the index root by moving their data files.
   Shard sets live in `.dftindex/shards/` with `.dftindex/shards.json`, where they lived in `.dftindex-shards`.
 - Make `consolidate_shard_set` merge the shards' data files instead of building the index again.
@@ -272,7 +274,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   `memory::PoolTag` and `memory::enter_pool` carry the pool, and a task made with no pool charges the root's general pool.
 - Make `memory::Pool::reserve` ask the holders of the pool to give bytes back when a request does not fit, and return `Status::Pending` while they do.
   `memory::Pool::try_reserve` asks nobody and fails at once, for a holder that spills by itself.
-- Add `reserve_async(pool, bytes, deadline)` in `dftracer/utils/runtime/coro/reserve_async.h`, which a coroutine awaits until its bytes fit or the deadline passes.
+- Add `reserve_async(pool, bytes, deadline)` in `dftracer/utils/coro/reserve_async.h`, which a coroutine awaits until its bytes fit or the deadline passes.
   Waiters get their bytes first in, first out, and a request larger than the pool limit or the budget fails at once with `Status::OverBudget`.
 - Add `memory::Pool::raise_limit` to raise the limit of an open pool.
 - Add `memory::ExternalSlot::add` with the kinds `Counted`, which counts toward the budget, and `Reported`, which only shows in `memory::Stats::external`.

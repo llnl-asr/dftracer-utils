@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/runtime/coro/async_mutex.h>
-#include <dftracer/utils/runtime/coro/channel.h>
-#include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/runtime/executor/run_loop.h>
+#include <dftracer/utils/coro/async_mutex.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/run_loop.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
@@ -134,7 +134,7 @@ TEST_SUITE("RunLoop") {
     }
 
     TEST_CASE("A stalled loop reports instead of hanging") {
-        RunLoop loop;
+        coro::RunLoop loop;
         bool done = false;
         CHECK_THROWS(loop.drive_until([&] { return done; }));
     }

@@ -33,6 +33,7 @@ REQUIRED_PATTERNS = (
     "dftracer/lib/libdftracer_utils_memory",
     "dftracer/lib/libdftracer_utils_dstd",
     "dftracer/lib/libdftracer_utils_common",
+    "dftracer/lib/libdftracer_utils_coro",
     "dftracer/lib/libdftracer_utils_runtime",
     "dftracer/lib/libdftracer_utils_store",
     "dftracer/lib/libdftracer_utils_json",
@@ -52,7 +53,7 @@ REQUIRED_PATTERNS = (
     # any public C/C++ ABI header compiles standalone from the wheel: spot
     # check headers from directories that were NOT part of the old subset.
     "dftracer/include/dftracer/utils/runtime/abi.h",
-    "dftracer/include/dftracer/utils/runtime/coro/abi.h",
+    "dftracer/include/dftracer/utils/coro/abi.h",
     "dftracer/include/dftracer/utils/dataframe/abi.h",
     "dftracer/include/dftracer/utils/duql/abi.h",
     "dftracer/include/dftracer/utils/index/indexer.h",

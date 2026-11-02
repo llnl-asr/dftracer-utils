@@ -18,7 +18,6 @@
 #include <thread>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::trace;
 // Test data structures
 struct TestChunk {

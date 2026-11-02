@@ -32,9 +32,9 @@ file(
 
 # task_abi.h is a C++ bridge (dftracer::utils::task_to_abi takes a
 # coro::CoroTask<void>&&) that hands C++ coroutines off to the C ABI in
-# runtime/coro/abi.h; it is not itself a C ABI header, so exclude it here.
+# coro/abi.h; it is not itself a C ABI header, so exclude it here.
 list(FILTER DFTRACER_UTILS_C_ABI_HEADERS EXCLUDE REGEX
-     "runtime/coro/task_abi\\.h$")
+     "coro/task_abi\\.h$")
 list(SORT DFTRACER_UTILS_C_ABI_HEADERS)
 
 set(C_ABI_GUARD_SRC ${CMAKE_CURRENT_BINARY_DIR}/generated/c_abi_guard.c)
@@ -139,6 +139,12 @@ add_test(
     "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/include/dftracer/utils/common\" \"$0/src/dftracer/utils/common\" | grep -vE '<dftracer/utils/(common|dstd|memory)/'); if [ -n \"$bad\" ]; then echo \"include from common/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
+  NAME coro_no_upward
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/include/dftracer/utils/coro\" \"$0/src/dftracer/utils/coro\" | grep -vE '<dftracer/utils/(coro|common|dstd|memory)/'); if [ -n \"$bad\" ]; then echo \"include from coro/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(
   NAME spdx_headers
   COMMAND
     sh -c
@@ -172,7 +178,7 @@ add_test(
   NAME store_no_upward
   COMMAND
     sh -c
-    "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/src/dftracer/utils/store\" | grep -vE '<dftracer/utils/(store|runtime|common|dstd|memory)/'); if [ -n \"$bad\" ]; then echo \"include from store/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
+    "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/src/dftracer/utils/store\" | grep -vE '<dftracer/utils/(store|runtime|coro|common|dstd|memory)/'); if [ -n \"$bad\" ]; then echo \"include from store/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME memory_no_upward
@@ -833,6 +839,16 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         -DTEST_TYPE=pkgconfig -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
+    # Test coro library
+    add_test(
+      NAME test_pkgconfig_discovery_coro
+      COMMAND
+        ${CMAKE_COMMAND}
+        -DPKG_CONFIG_PATH=${TEST_INSTALL_PREFIX}/lib/pkgconfig:${TEST_INSTALL_PREFIX}/lib64/pkgconfig:${TEST_INSTALL_PREFIX}/lib/${CMAKE_LIBRARY_ARCHITECTURE}/pkgconfig
+        -DLIBRARY_NAME=dftracer_utils_coro
+        -DTEST_TYPE=pkgconfig -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
+
     # Test runtime library
     add_test(
       NAME test_pkgconfig_discovery_runtime
@@ -906,6 +922,15 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         -DTEST_TYPE=cmake -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
+    # Test coro library
+    add_test(
+      NAME test_cmake_discovery_coro
+      COMMAND
+        ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
+        -DLIBRARY_NAME=dftracer_utils_coro
+        -DTEST_TYPE=cmake -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
+
     # Test runtime library
     add_test(
       NAME test_cmake_discovery_runtime
@@ -966,10 +991,12 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       test_pkgconfig_discovery_dstd
       test_cmake_discovery_dstd
       test_pkgconfig_discovery_common
+      test_pkgconfig_discovery_coro
       test_pkgconfig_discovery_runtime
       test_pkgconfig_discovery_store
       test_pkgconfig_discovery_utilities
       test_cmake_discovery_common
+      test_cmake_discovery_coro
       test_cmake_discovery_runtime
       test_cmake_discovery_store
       test_cmake_discovery_utilities)
@@ -989,8 +1016,8 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
 
   foreach(VARIANT IN LISTS PACKAGE_TEST_VARIANTS)
     if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
-      foreach(LIBRARY dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_runtime
-                      dftracer_utils_store dftracer_utils_utilities)
+      foreach(LIBRARY dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_coro
+                      dftracer_utils_runtime dftracer_utils_store dftracer_utils_utilities)
         add_target_alias_test(test_target_${LIBRARY}_${VARIANT}
                               "${LIBRARY}::${VARIANT}")
         list(APPEND PACKAGE_DISCOVERY_TESTS test_target_${LIBRARY}_${VARIANT})

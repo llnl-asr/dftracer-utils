@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_STORE_WRITER_H
 #define DFTRACER_UTILS_STORE_WRITER_H
 
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
@@ -15,7 +16,6 @@
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/fold.h>
@@ -32,7 +32,7 @@
 
 namespace dftracer::utils {
 
-class Executor;
+class TaskExecutor;
 
 }  // namespace dftracer::utils
 
@@ -107,7 +107,7 @@ class Writer {
     /// InvalidArgument when the executor has no I/O backend, and when
     /// `options.extent_size` is set but out of range.
     static dstd::Expected<std::unique_ptr<Writer>, dstd::Error> create(
-        dstd::StringView dir, Executor& executor,
+        dstd::StringView dir, TaskExecutor& executor,
         const WriterOptions& options = WriterOptions{});
 
     Writer(const Writer&) = delete;
@@ -246,7 +246,7 @@ class Writer {
     Writer(dstd::String name, dstd::String path, std::uint32_t extent_size,
            dstd::Vector<ScopeGeneration> generations, DataFileWriter file,
            memory::PoolHandle extent_pool, std::uint64_t extent_quota,
-           Executor& executor, const WriterOptions& options);
+           TaskExecutor& executor, const WriterOptions& options);
 
     NamespaceEntry* find_namespace(std::uint32_t id);
     NamespaceEntry* find_namespace(dstd::StringView name);

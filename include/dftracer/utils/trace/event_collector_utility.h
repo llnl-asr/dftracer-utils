@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_EVENT_COLLECTOR_H
 #define DFTRACER_UTILS_TRACE_EVENT_COLLECTOR_H
 
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/trace/event_id.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/reader/internal/line_processor.h>

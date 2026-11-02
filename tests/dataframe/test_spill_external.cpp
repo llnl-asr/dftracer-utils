@@ -5,13 +5,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
 #include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <stdlib.h>
@@ -26,8 +26,9 @@
 #include <utility>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using namespace dftracer::utils::dataframe;
-using dftracer::utils::coro::CoroTask;
 namespace memory = dftracer::utils::memory;
 
 namespace {
@@ -85,7 +86,7 @@ class Hooked : public Source {
        public:
         Rows(std::int64_t morsels, std::int64_t rows, Hook hook)
             : morsels_(morsels), rows_(rows), hook_(std::move(hook)) {}
-        CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+        coro::CoroTask<std::optional<Morsel>> next(std::int64_t) override {
             if (at_ >= morsels_) co_return std::nullopt;
             if (hook_) hook_(at_);
             std::vector<std::int64_t> k(static_cast<std::size_t>(rows_)),

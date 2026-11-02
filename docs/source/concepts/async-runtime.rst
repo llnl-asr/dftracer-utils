@@ -35,13 +35,13 @@ sees a callback; it sees a function that looks like it blocked.
 ``CoroTask``: the unit of async work
 ---------------------------------------
 
-``coro::CoroTask<T>`` (``runtime/coro/task.h``) is the coroutine return type used
+``coro::CoroTask<T>`` (``coro/task.h``) is the coroutine return type used
 throughout the codebase. It is lazy: a ``CoroTask`` does not start running
 until it is awaited or spawned, which is what lets composition operators
 (``&&`` for concurrent ``when_all``, ``||`` for ``when_any``) build a graph of
-work before anything executes. ``runtime/coro/channel.h`` adds a
+work before anything executes. ``coro/channel.h`` adds a
 producer/consumer channel for streaming values between coroutines,
-and ``runtime/coro/async_mutex.h`` / ``async_generator.h`` round out the
+and ``coro/async_mutex.h`` / ``async_generator.h`` round out the
 primitives a coroutine-based pipeline needs that a plain thread-based one
 would reach for a blocking mutex or an iterator to get.
 
@@ -103,7 +103,7 @@ Three levels of "run this coroutine" exist, for different callers:
   with a ``min_workers`` floor below the ``num_threads`` cap, so a
   mostly-idle process does not pin a full thread pool on a shared HPC login
   node.
-- ``Executor`` (``runtime/executor/executor.h``) is the thread pool and run
+- ``Executor`` (``coro/executor.h``) is the thread pool and run
   queue that actually resumes coroutine frames.
 - ``Pipeline`` and **task graphs** (``runtime/pipeline/pipeline.h``,
   ``runtime/task_graph/``) sit above the executor for callers that need a DAG:

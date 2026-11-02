@@ -2,7 +2,7 @@
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/runtime/io/io_uring_backend.h>
 #include <fcntl.h>
 #include <sys/eventfd.h>
@@ -200,7 +200,7 @@ void Ring::cqe_seen(struct io_uring_cqe* /*cqe*/) {
 // IoUringBackend implementation
 // ============================================================================
 
-IoUringBackend::IoUringBackend(Executor& executor, unsigned ring_entries,
+IoUringBackend::IoUringBackend(coro::Executor& executor, unsigned ring_entries,
                                unsigned batch_threshold)
     : executor_(executor),
       ring_entries_(ring_entries),

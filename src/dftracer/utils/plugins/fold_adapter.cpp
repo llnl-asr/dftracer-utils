@@ -3,6 +3,9 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -17,9 +20,6 @@
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/fold_adapter/state.h>
 #include <dftracer/utils/plugins/plugin/map.h>
-#include <dftracer/utils/runtime/coro/when_all.h>
-#include <dftracer/utils/runtime/coro/when_any.h>
-#include <dftracer/utils/runtime/coro/yield.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/schema.h>
@@ -372,7 +372,7 @@ const dftu_io g_io = {io_open,   io_close,  io_read,      io_write, io_pread,
 
 void host_run_blocking(void* /*h*/, dftu_work_fn fn, void* arg) {
     if (!fn) return;
-    BlockingRegion block;
+    coro::BlockingRegion block;
     fn(arg);
 }
 

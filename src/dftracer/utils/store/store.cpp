@@ -4,13 +4,13 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/no_destructor.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/fold.h>
 #include <dftracer/utils/store/open_count.h>
@@ -554,8 +554,9 @@ void Store::State::bump_version() {
 dstd::Expected<void, dstd::Error> Store::State::close_blocking() {
     Taken taken = take_writer();
     if (!taken.writer) return {};
-    const bool reentrant = Executor::current() == taken.runtime->executor();
-    BlockingRegion block(reentrant ? taken.runtime->executor() : nullptr);
+    const bool reentrant =
+        coro::Executor::current() == taken.runtime->executor();
+    coro::BlockingRegion block(reentrant ? taken.runtime->executor() : nullptr);
     auto closed = taken.runtime->submit(taken.writer->close()).get();
     bump_version();
     return closed;

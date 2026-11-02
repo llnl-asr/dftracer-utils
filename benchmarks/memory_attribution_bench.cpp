@@ -20,12 +20,12 @@
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
@@ -52,7 +52,6 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using dftracer::utils::coro::CoroTask;
 namespace df = dftracer::utils::dataframe;
 namespace mp = dftu::memory_probe;
 using namespace dftu::memory_workloads;
@@ -270,12 +269,12 @@ void index_build(const Paths& p) {
     options.index_dir = p.index_dir;
     options.bloom->required = false;
     auto indexer = index::Indexer::open({p.trace}, options);
-    run_scoped([&](CoroScope& scope) -> CoroTask<void> {
+    run_scoped([&](CoroScope& scope) -> coro::CoroTask<void> {
         co_await indexer.rebuild(scope);
     });
 }
 
-CoroTask<void> read_lines(std::string file) {
+coro::CoroTask<void> read_lines(std::string file) {
     simdjson::dom::parser parser;
     auto gen =
         utilities::fileio::lines::sources::async_streaming_gz_lines(file);

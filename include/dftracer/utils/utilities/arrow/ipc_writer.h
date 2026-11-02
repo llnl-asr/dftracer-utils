@@ -5,7 +5,7 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 #include <atomic>
@@ -98,9 +98,9 @@ class BufferPool {
 /**
  * Async Arrow IPC file writer (.arrow).
  *
- * Uses Executor::current() for async I/O - must be called from within executor.
- * Supports buffer-level compression (zstd) compatible with pyarrow, polars,
- * nanoarrow, and other Arrow IPC readers.
+ * Uses coro::Executor::current() for async I/O - must be called from within
+ * executor. Supports buffer-level compression (zstd) compatible with pyarrow,
+ * polars, nanoarrow, and other Arrow IPC readers.
  *
  * Usage: open() -> write_batch() [1..N] -> close()
  *

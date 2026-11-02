@@ -2,7 +2,7 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/ipc_writer.h>

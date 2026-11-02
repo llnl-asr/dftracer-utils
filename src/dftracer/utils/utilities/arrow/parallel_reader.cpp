@@ -2,19 +2,18 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/arrow/ipc_reader.h>
 #include <dftracer/utils/utilities/arrow/parallel_reader.h>
 
 #include <exception>
 
+using namespace dftracer::utils;
+
 namespace dftracer::utils::utilities::arrow {
 
-using dftracer::utils::coro::CoroTask;
-using dftracer::utils::coro::when_all;
-
-CoroTask<ArrowFileReadResult> read_arrow_file_async(std::string path) {
+coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(std::string path) {
     ArrowFileReadResult result;
     result.path = path;
 
@@ -41,7 +40,7 @@ CoroTask<ArrowFileReadResult> read_arrow_file_async(std::string path) {
     co_return result;
 }
 
-CoroTask<ParallelReadResult> read_arrow_files_parallel(
+coro::CoroTask<ParallelReadResult> read_arrow_files_parallel(
     std::vector<std::string> paths) {
     ParallelReadResult result;
 
@@ -49,14 +48,14 @@ CoroTask<ParallelReadResult> read_arrow_files_parallel(
         co_return result;
     }
 
-    std::vector<CoroTask<ArrowFileReadResult>> tasks;
+    std::vector<coro::CoroTask<ArrowFileReadResult>> tasks;
     tasks.reserve(paths.size());
 
     for (auto& path : paths) {
         tasks.push_back(read_arrow_file_async(std::move(path)));
     }
 
-    result.file_results = co_await when_all(std::move(tasks));
+    result.file_results = co_await coro::when_all(std::move(tasks));
 
     for (const auto& fr : result.file_results) {
         if (fr.success) {
@@ -71,21 +70,21 @@ CoroTask<ParallelReadResult> read_arrow_files_parallel(
     co_return result;
 }
 
-CoroTask<ParallelReadResult> read_arrow_files_streaming(
+coro::CoroTask<ParallelReadResult> read_arrow_files_streaming(
     CoroScope& /*scope*/, std::vector<std::string> paths,
     FileResultCallback callback) {
     if (paths.empty()) {
         co_return ParallelReadResult{};
     }
 
-    std::vector<CoroTask<ArrowFileReadResult>> tasks;
+    std::vector<coro::CoroTask<ArrowFileReadResult>> tasks;
     tasks.reserve(paths.size());
 
     for (auto& path : paths) {
         tasks.push_back(read_arrow_file_async(std::move(path)));
     }
 
-    auto results = co_await when_all(std::move(tasks));
+    auto results = co_await coro::when_all(std::move(tasks));
 
     ParallelReadResult summary;
     bool cancelled = false;

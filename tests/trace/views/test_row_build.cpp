@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/runtime/coro/async_semaphore.h>
-#include <dftracer/utils/runtime/coro/channel.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/arg_type.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -21,9 +21,8 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::coro::Channel;
-using dftracer::utils::coro::CoroSemaphore;
-using dftracer::utils::coro::CoroTask;
+using namespace dftracer::utils;
+
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::trace::RecordPhase;
 using dftracer::utils::trace::views::detail::ArgKinds;
@@ -66,19 +65,19 @@ struct Built {
     std::vector<df::Series> columns;
 };
 
-CoroTask<Built> run_step(StringIntern& intern_ref,
-                         std::shared_ptr<StringIntern> intern,
-                         std::vector<FoldEvent> events) {
+coro::CoroTask<Built> run_step(StringIntern& intern_ref,
+                               std::shared_ptr<StringIntern> intern,
+                               std::vector<FoldEvent> events) {
     (void)intern_ref;
-    auto channel = std::make_shared<Channel<df::Morsel>>(4);
-    auto budget = std::make_shared<CoroSemaphore>(1ull << 30);
+    auto channel = std::make_shared<coro::Channel<df::Morsel>>(4);
+    auto budget = std::make_shared<coro::CoroSemaphore>(1ull << 30);
     StreamRowFold fold(channel, budget, intern, {}, 1.0, false, false, nullptr,
                        nullptr, true);
     ScanUnit unit;
     FoldBatch batch{std::span<const FoldEvent>(events), unit};
     fold.step(batch);
     if (auto* t = fold.take_pending())
-        co_await *reinterpret_cast<CoroTask<void>*>(t);
+        co_await *reinterpret_cast<coro::CoroTask<void>*>(t);
     df::Morsel m;
     Built out;
     if (!channel->try_receive(m)) co_return out;

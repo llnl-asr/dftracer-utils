@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
@@ -652,10 +652,10 @@ TEST_CASE("AsyncIO - IoBackend::name() reports backend type") {
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            auto* exec = Executor::current();
-            REQUIRE(exec != nullptr);
-            REQUIRE(exec->has_io_backend());
-            backend_name = exec->io_backend().name();
+            REQUIRE(coro::Executor::current() != nullptr);
+            auto* backend = io::current_backend();
+            REQUIRE(backend != nullptr);
+            backend_name = backend->name();
             co_return;
         },
         "BackendNameTest");
@@ -752,10 +752,10 @@ static void run_lifecycle_on_backend(io::IoBackendType type,
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            auto* exec = Executor::current();
-            REQUIRE(exec != nullptr);
-            REQUIRE(exec->has_io_backend());
-            backend_name = exec->io_backend().name();
+            REQUIRE(coro::Executor::current() != nullptr);
+            auto* backend = io::current_backend();
+            REQUIRE(backend != nullptr);
+            backend_name = backend->name();
 
             ssize_t fd_result = co_await aio::open(path.c_str(), O_RDONLY);
             REQUIRE(fd_result >= 0);

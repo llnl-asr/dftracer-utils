@@ -39,12 +39,12 @@ inline dftracer::utils::plugins::PluginRun run_set(
     const char* tag = "plugin-run") {
     using dftracer::utils::CoroScope;
     using dftracer::utils::Runtime;
-    namespace coro = dftracer::utils::coro;
+    using dftracer::utils::coro::CoroTask;
 
     dftracer::utils::plugins::PluginRun out;
     Runtime rt(2);
     auto task = dftracer::utils::run_coro_scope(
-        rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
+        rt.executor(), [&](CoroScope&) -> CoroTask<void> {
             auto run = co_await set.run(view);
             REQUIRE(run.has_value());
             out = std::move(*run);

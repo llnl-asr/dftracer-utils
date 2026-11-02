@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <signal.h>
@@ -15,16 +15,15 @@
 #include <string>
 
 using namespace dftracer::utils;
-using dftracer::utils::coro::CoroTask;
 namespace memory = dftracer::utils::memory;
 
 namespace {
 
-CoroTask<void> idle() { co_return; }
+coro::CoroTask<void> idle() { co_return; }
 
 // Called through a pointer the compiler cannot see through, so it cannot put
 // the frame on the stack.
-CoroTask<void> (*volatile MAKE_IDLE)() = idle;
+coro::CoroTask<void> (*volatile MAKE_IDLE)() = idle;
 
 // Writes `label` and `value` in hex to stderr without allocating.
 void write_hex(const char* label, std::uint64_t value) {
@@ -54,7 +53,7 @@ TEST_CASE("frames are charged to the task's pool") {
     REQUIRE(pool);
     {
         memory::Scope scope{*pool};
-        CoroTask<void> task = MAKE_IDLE();
+        coro::CoroTask<void> task = MAKE_IDLE();
         CHECK(pool->blocks() == 1);
         CHECK(pool->live() > 0);
     }
@@ -71,7 +70,7 @@ TEST_CASE("a resumed destroyed frame child" * doctest::skip()) {
     ::sigaction(SIGBUS, &action, nullptr);
     std::coroutine_handle<> handle;
     {
-        CoroTask<void> task = MAKE_IDLE();
+        coro::CoroTask<void> task = MAKE_IDLE();
         handle = task.handle();
     }
     std::uint64_t resume_word = 0;

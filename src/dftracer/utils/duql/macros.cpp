@@ -1,5 +1,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -214,7 +216,19 @@ struct PathRegistry {
 };
 
 PathRegistry& registry() {
-    static PathRegistry r;
+    PathRegistry& r = dstd::Singleton<PathRegistry>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+            PathRegistry& held = dstd::Singleton<PathRegistry>::get();
+            std::set<std::string> dropped_loaded;
+            std::vector<Macro> dropped_macros;
+            std::lock_guard<std::mutex> lock(held.mu);
+            dropped_loaded.swap(held.loaded);
+            dropped_macros.swap(held.macros);
+            held.env_loaded = false;
+        });
+        return true;
+    }();
     return r;
 }
 

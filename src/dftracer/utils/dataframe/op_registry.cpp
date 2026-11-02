@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/op_dispatch.h>
+#include <dftracer/utils/dstd/singleton.h>
 
 #include <cstring>
 #include <memory>
@@ -73,11 +74,6 @@ constexpr uint32_t BUILTIN_COUNT =
         #name ": operand 6 did not survive packing");
 #include <dftracer/utils/dataframe/exported_lazy_ops.def>
 
-std::mutex& reg_mutex() {
-    static std::mutex m;
-    return m;
-}
-
 // A user op's name must outlive the plugin that supplied it: the registry, not
 // the plugin, owns it. `desc.name` points at `name`, so the two must stay
 // together and `name` must not move once inserted (hence unique_ptr storage,
@@ -88,9 +84,17 @@ struct UserOp {
     dftu_op_desc desc;
 };
 
+struct UserOps {
+    std::mutex mutex;
+    std::vector<std::unique_ptr<UserOp>> ops;
+};
+
+std::mutex& reg_mutex() {
+    return dftracer::utils::dstd::Singleton<UserOps>::get().mutex;
+}
+
 std::vector<std::unique_ptr<UserOp>>& user_ops() {
-    static std::vector<std::unique_ptr<UserOp>> v;
-    return v;
+    return dftracer::utils::dstd::Singleton<UserOps>::get().ops;
 }
 
 const dftu_op_desc* find_locked(const char* name) {

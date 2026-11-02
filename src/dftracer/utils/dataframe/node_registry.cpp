@@ -6,6 +6,7 @@
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>
+#include <dftracer/utils/dstd/singleton.h>
 
 #include <mutex>
 #include <string>
@@ -14,14 +15,15 @@
 namespace dftracer::utils::dataframe {
 namespace {
 
-std::mutex& registry_mutex() {
-    static std::mutex m;
-    return m;
-}
+struct Nodes {
+    std::mutex mutex;
+    std::unordered_map<std::string, NodeEntry> by_name;
+};
+
+std::mutex& registry_mutex() { return dstd::Singleton<Nodes>::get().mutex; }
 
 std::unordered_map<std::string, NodeEntry>& nodes() {
-    static std::unordered_map<std::string, NodeEntry> m;
-    return m;
+    return dstd::Singleton<Nodes>::get().by_name;
 }
 
 }  // namespace

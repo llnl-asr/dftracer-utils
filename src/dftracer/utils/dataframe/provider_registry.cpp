@@ -15,6 +15,7 @@
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/singleton.h>
 
 #include <cstdint>
 #include <memory>
@@ -35,14 +36,15 @@ struct ProviderEntry {
     void* self;
 };
 
-std::mutex& registry_mutex() {
-    static std::mutex m;
-    return m;
-}
+struct Providers {
+    std::mutex mutex;
+    std::unordered_map<std::string, ProviderEntry> by_name;
+};
+
+std::mutex& registry_mutex() { return dstd::Singleton<Providers>::get().mutex; }
 
 std::unordered_map<std::string, ProviderEntry>& providers() {
-    static std::unordered_map<std::string, ProviderEntry> m;
-    return m;
+    return dstd::Singleton<Providers>::get().by_name;
 }
 
 std::optional<ProviderEntry> find_provider(const char* name) {

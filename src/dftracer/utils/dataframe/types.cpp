@@ -1,4 +1,5 @@
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <deque>
@@ -14,10 +15,7 @@ struct Zones {
     dstd::StringViewMap<std::uint32_t> ids;
 };
 
-Zones& zones() {
-    static auto* z = new Zones();
-    return *z;
-}
+Zones& zones() { return dstd::Singleton<Zones>::get(); }
 
 }  // namespace
 

@@ -103,7 +103,7 @@ template <typename Fn>
 void for_each_index(std::size_t n, Fn&& fn) {
     coro::Executor* exec = coro::Executor::current();
     const std::size_t workers =
-        exec ? std::min(n, exec->get_num_threads()) : std::size_t{1};
+        exec ? std::min(n, exec->concurrency()) : std::size_t{1};
     if (workers <= 1) {
         for (std::size_t i = 0; i < n; ++i) fn(i);
         return;

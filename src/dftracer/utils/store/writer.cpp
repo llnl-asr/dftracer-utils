@@ -40,7 +40,7 @@ dstd::Unexpected<dstd::Error> invalid_error() {
 std::uint64_t default_extent_quota(coro::Executor& executor,
                                    std::uint32_t extent_size) {
     const std::uint64_t threads =
-        std::max<std::uint64_t>(executor.get_num_threads(), 1);
+        std::max<std::uint64_t>(executor.concurrency(), 1);
     const std::uint64_t unit = std::max<std::uint64_t>(
         extent_size, common::constants::store::STORE_DEFAULT_EXTENT_BYTES);
     return std::max<std::uint64_t>(16, 4 * threads) * unit;

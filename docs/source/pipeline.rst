@@ -860,11 +860,11 @@ Control execution duration and cooperative cancellation using ``PipelineConfig``
 
         // Race: cache (fast) vs. disk (slow), with 100ms timeout
         auto timeout_duration = std::chrono::milliseconds(100);
-        auto& timer_service = scope.get_executor()->get_timer_service();
+        auto* timer_service = scope.get_executor()->timers();
         auto result = co_await when_any({
             std::move(cache_future),
             std::move(disk_future),
-            timeout(timeout_duration, &timer_service),
+            timeout(timeout_duration, timer_service),
         });
 
         if (result.index == 0) {

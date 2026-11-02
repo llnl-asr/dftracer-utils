@@ -668,8 +668,8 @@ auto when_any(A1&& a1, A2&& a2, Rest&&... rest) {
  * Can be used with when_any to implement timeouts:
  *
  * @code
- * auto& timers = Executor::current()->get_timer_service();
- * auto result = co_await when_any(read_task(), timeout(5s, &timers));
+ * auto* timers = Executor::current()->timers();
+ * auto result = co_await when_any(read_task(), timeout(5s, timers));
  * if (result.index == 1) {
  *     // Timeout occurred
  * }
@@ -752,20 +752,17 @@ class TimeoutAwaitable {
     bool await_ready() const noexcept { return false; }
 
     bool await_suspend(std::coroutine_handle<> h) {
-        if (!timer_service_) {
-            throw common::DFTUtilsException(
-                common::ErrorCode::Pipeline,
-                "TimeoutAwaitable: TimerService not available");
-        }
+        TimerService* timers =
+            timer_service_ != nullptr ? timer_service_ : &process_timers();
 
         State& st = *state_;
         st.handle = h;
         st.executor = resume_executor_for(nullptr);
-        st.timers = timer_service_;
+        st.timers = timers;
         if (st.executor) {
             st.park = st.executor->park(&st, &State::cancel_thunk);
         }
-        st.timer.store(timer_service_->register_timeout(
+        st.timer.store(timers->register_timeout(
                            duration_, [state = state_] { state->on_fire(); }),
                        std::memory_order_release);
         // From here on the fire or a cancel may resume the frame.
@@ -806,9 +803,11 @@ class TimeoutAwaitable {
  * Usage:
  * @code
  * using namespace std::chrono_literals;
- * auto& timers = Executor::current()->get_timer_service();
- * auto result = co_await when_any(some_operation(), timeout(5s, &timers));
+ * auto* timers = Executor::current()->timers();
+ * auto result = co_await when_any(some_operation(), timeout(5s, timers));
  * @endcode
+ *
+ * A null @p timer_service uses @ref process_timers, the process-wide one.
  */
 template <typename Rep, typename Period>
 TimeoutAwaitable<std::chrono::duration<Rep, Period>> timeout(

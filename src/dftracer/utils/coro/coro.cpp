@@ -16,12 +16,12 @@ std::coroutine_handle<> CoroPromise::FinalAwaiter::await_suspend(
     const bool was_released = p.released;
     auto* const jc = p.join_counter;
     auto* const jcont = p.join_continuation;
-    const common::TaskIndex tracked_id = p.task_id;
-    Executor* const tracked_executor = p.executor;
+    TaskTracking* const tracker = p.tracking;
 
-    // Mark tracked coro as completed regardless of join-group path.
-    if (tracked_id != -1 && tracked_executor) {
-        tracked_executor->mark_coro_completed(tracked_id);
+    // Report a tracked task as completed whatever the join-group path does.
+    if (tracker != nullptr) {
+        p.tracking = nullptr;
+        tracker->on_complete(tracker->owner, tracker->id);
     }
 
     // Handle join group (JoinHandle integration).

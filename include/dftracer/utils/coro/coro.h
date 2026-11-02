@@ -60,13 +60,22 @@ class Coro {
 
     /// Release ownership of the coroutine handle.
     /// After this call, the Coro no longer owns the handle.
-    /// FinalAwaiter will schedule deferred destruction for
-    /// released handles (via Executor::schedule_destroy).
+    /// FinalAwaiter hands a released frame to the thread-local destroy
+    /// list, drained once the resume that finished it returned.
     /// Used when handing the handle to the Executor's run queue.
     inline std::coroutine_handle<CoroPromise> release();
 
    private:
     std::coroutine_handle<CoroPromise> handle_;
+};
+
+/// What a task the runtime tracks reports to, filled in when that task is
+/// spawned. @ref CoroPromise calls it once at the task's final suspend, and a
+/// promise with no tracker reports nothing.
+struct TaskTracking {
+    void (*on_complete)(void* owner, common::TaskIndex id) noexcept;
+    void* owner;
+    common::TaskIndex id;
 };
 
 struct CoroPromise : FrameAllocation {
@@ -83,7 +92,8 @@ struct CoroPromise : FrameAllocation {
     /// Executor for global scheduling (set before enqueue).
     Executor* executor{nullptr};
 
-    common::TaskIndex task_id{-1};
+    /// Tracker of this task, null when it is untracked (set before enqueue).
+    TaskTracking* tracking{nullptr};
 
     detail::RunContext context;
 

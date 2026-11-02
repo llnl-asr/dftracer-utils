@@ -7,7 +7,9 @@
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <pthread.h>
 
 #include <algorithm>
@@ -116,8 +118,7 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
     auto tid = std::make_shared<std::atomic<common::TaskIndex>>(-1);
 
     auto wrapper = [](coro::CoroTask<void> t,
-                      std::shared_ptr<std::promise<void>> p,
-                      coro::Executor* exec,
+                      std::shared_ptr<std::promise<void>> p, TaskExecutor* exec,
                       std::shared_ptr<std::atomic<common::TaskIndex>> task_id)
         -> coro::Coro {
         try {
@@ -349,5 +350,18 @@ std::shared_ptr<Runtime> peek_default_runtime() {
     std::lock_guard<std::mutex> lock(g_default_mtx);
     return g_default_runtime;
 }
+
+namespace detail {
+
+bool executor_stopping(coro::Executor* executor) noexcept {
+    if (!executor) return true;
+    if (auto* runtime_executor = dynamic_cast<TaskExecutor*>(executor)) {
+        if (!runtime_executor->is_running()) return true;
+    }
+    auto token = executor->shutdown_token();
+    return token && token->load(std::memory_order_acquire);
+}
+
+}  // namespace detail
 
 }  // namespace dftracer::utils

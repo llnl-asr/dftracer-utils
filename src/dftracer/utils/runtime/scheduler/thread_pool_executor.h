@@ -34,7 +34,7 @@ class Task;
 /// Executes queued coroutine work on a pool of worker threads, notifying the
 /// scheduler that submitted each task when it ends. Pool size defaults to
 /// hardware_concurrency.
-class ThreadPoolExecutor : public TaskExecutor {
+class ThreadPoolExecutor final : public TaskExecutor {
    private:
     // Aligned to avoid false sharing between adjacent workers.
     struct alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) WorkerContext {
@@ -148,6 +148,10 @@ class ThreadPoolExecutor : public TaskExecutor {
     std::unordered_map<common::TaskIndex, TaskInfo> task_registry_;
     mutable std::shared_mutex registry_mutex_;
 
+    // Completion hooks of tracked coros, one per tracked id and never erased,
+    // so a promise can hold a pointer to one for its whole life.
+    std::unordered_map<common::TaskIndex, coro::TaskTracking> trackings_;
+
     // Counter for tracked-coro IDs (negative to avoid collision with DAG IDs).
     std::atomic<common::TaskIndex> next_coro_task_id_{-1000000};
 
@@ -182,10 +186,6 @@ class ThreadPoolExecutor : public TaskExecutor {
     std::atomic<bool> idle_poller_{false};
     static constexpr std::chrono::milliseconds IDLE_PARK_MIN{1};
     static constexpr std::chrono::milliseconds IDLE_PARK_MAX{256};
-
-    // Deferred destruction queue for released Coro handles.
-    // FinalAwaiter pushes here; worker loop drains periodically.
-    moodycamel::ConcurrentQueue<std::coroutine_handle<>> destroy_queue_;
 
     // I/O backend (owned by executor, created by factory)
     std::unique_ptr<io::IoBackend> io_backend_;
@@ -231,7 +231,7 @@ class ThreadPoolExecutor : public TaskExecutor {
     void enter_blocking() override;
     void exit_blocking() override;
 
-    coro::TimerService& get_timer_service() override { return timer_service_; }
+    coro::TimerService* timers() noexcept override { return &timer_service_; }
 
     bool is_running() const override { return running_.load(); }
     void quiesce();
@@ -289,15 +289,16 @@ class ThreadPoolExecutor : public TaskExecutor {
 
     ExecutorProgress get_progress() const override;
 
-    /// Resume a coroutine handle on the pool. For combinators (when_all etc.)
-    /// that must resume from a completion callback without calling .resume().
-    void schedule_coroutine_resumption(std::coroutine_handle<> handle) override;
-
-    /// Primary submission path; all lightweight work funnels through here.
+    /// Primary submission path; all lightweight work funnels through here,
+    /// the resume of a combinator included.
     /// Work: a lock-free queue push and an atomic signal. task_id is a
     /// tracked-task id for registry progress, or -1 if untracked.
     void enqueue(std::coroutine_handle<> handle,
                  common::TaskIndex task_id = -1) override;
+
+    void post(std::coroutine_handle<> handle) noexcept override {
+        enqueue(handle, -1);
+    }
 
     /// Enqueue a Coro with progress tracking in task_registry_.
     common::TaskIndex enqueue_tracked(
@@ -315,11 +316,7 @@ class ThreadPoolExecutor : public TaskExecutor {
 
     common::TaskIndex current_worker_task_id() const override;
 
-    void drive_until(const std::function<bool()>& done) override;
-
-    /// Schedule a completed Coro handle for deferred destruction. Called from
-    /// CoroPromise::FinalAwaiter for released handles.
-    void schedule_destroy(std::coroutine_handle<> handle) override;
+    bool drive_until(dstd::FunctionRef<bool()> done) override;
 
    private:
     void worker_thread(WorkerContext* context);
@@ -367,7 +364,9 @@ class ThreadPoolExecutor : public TaskExecutor {
     coro::Coro run_task(std::shared_ptr<Task> task,
                         std::shared_ptr<std::any> input, TaskOwner* owner);
 
-    void drain_destroy_queue();
+    /// The completion hook a tracked coro's promise calls.
+    static void on_tracked_task_complete(void* owner,
+                                         common::TaskIndex id) noexcept;
 
     friend struct coro::CoroPromise;
 };

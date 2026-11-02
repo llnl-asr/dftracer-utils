@@ -26,6 +26,11 @@ namespace dftracer::utils {
 
 namespace detail {
 struct CoroScopeAccess;
+
+/// Whether work spawned on @p executor could not finish: it is null, a
+/// runtime executor that is not running, or its shutdown token is set.
+/// Defined with the runtime executors, which this layer cannot include.
+bool executor_stopping(coro::Executor* executor) noexcept;
 }  // namespace detail
 
 /// Lightweight structured concurrency scope using Coro + @ref
@@ -96,10 +101,10 @@ class CoroScope {
     std::shared_ptr<CancelChain> cancel_chain_{
         make_chain(executor_ ? executor_->shutdown_token() : nullptr, nullptr)};
 
-    /// Internal: create a Coro wrapper, track it, and enqueue it.
+    /// Internal: create a Coro wrapper, track it, and post it.
     /// Returns the Coro's coroutine_handle for callers that need it.
     void enqueue_coro(coro::Coro& c) {
-        if (!executor_->is_running()) {
+        if (detail::executor_stopping(executor_)) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Pipeline,
                 "Cannot spawn coroutine: executor is not running");
@@ -114,7 +119,7 @@ class CoroScope {
         // where another worker frees the frame while the coroutine-
         // suspend machinery still needs it.
         (void)c.release();
-        executor_->enqueue(handle);
+        executor_->post(handle);
     }
 
     explicit CoroScope(coro::Executor* executor) : executor_(executor) {}
@@ -605,10 +610,10 @@ inline coro::CoroTask<void> run_coro_scope(coro::Executor* executor,
 }
 
 /// Runs `task` as a detached coroutine on `executor`. False, and `task` never
-/// runs, when the executor is null or not running.
+/// runs, when the executor is null, not running or has begun to shut down.
 inline bool spawn_detached(coro::Executor* executor,
                            coro::CoroTask<void> task) {
-    if (!executor || !executor->is_running()) return false;
+    if (detail::executor_stopping(executor)) return false;
     auto make_coro = [](coro::CoroTask<void> t,
                         coro::Executor* exec) -> coro::Coro {
         try {
@@ -621,7 +626,7 @@ inline bool spawn_detached(coro::Executor* executor,
     auto c = make_coro(std::move(task), executor);
     c.handle().promise().executor = executor;
     auto handle = c.release();
-    executor->enqueue(handle);
+    executor->post(handle);
     return true;
 }
 

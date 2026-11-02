@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/run_loop.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
@@ -137,5 +138,31 @@ TEST_SUITE("RunLoop") {
         coro::RunLoop loop;
         bool done = false;
         CHECK_THROWS(loop.drive_until([&] { return done; }));
+    }
+
+    TEST_CASE("A timeout on a RunLoop fires") {
+        // Static, and the thread detached, so a loop that never fires its
+        // timers fails the check below instead of hanging the test.
+        static std::atomic<bool> timed_out{false};
+        static std::atomic<bool> finished{false};
+        std::thread([] {
+            auto task = []() -> coro::CoroTask<void> {
+                try {
+                    co_await coro::timeout(std::chrono::milliseconds(20),
+                                           coro::Executor::current()->timers());
+                } catch (const common::DFTUtilsException&) {
+                    timed_out.store(true);
+                }
+            };
+            task().get();
+            finished.store(true);
+        }).detach();
+
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!finished.load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(finished.load());
+        CHECK(timed_out.load());
     }
 }

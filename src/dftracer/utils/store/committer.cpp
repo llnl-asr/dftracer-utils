@@ -99,11 +99,13 @@ struct Committer::WaitForWork {
         Committer& self = committer;
         state->handle = handle;
         state->executor = &self.executor_;
-        coro::TimerService& timers = self.executor_.get_timer_service();
-        state->timers = &timers;
+        coro::TimerService* timers = self.executor_.timers() != nullptr
+                                         ? self.executor_.timers()
+                                         : &coro::process_timers();
+        state->timers = timers;
         state->timer.store(
-            timers.register_timeout(self.commit_interval_,
-                                    [state = state] { state->on_fire(); }),
+            timers->register_timeout(self.commit_interval_,
+                                     [state = state] { state->on_fire(); }),
             std::memory_order_release);
         {
             std::lock_guard<std::mutex> lock(self.queue_mutex_);

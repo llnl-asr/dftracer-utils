@@ -64,7 +64,7 @@ class CompletionLatch {
 inline void resume_continuation(Executor* executor,
                                 std::coroutine_handle<> continuation) {
     if (continuation && !continuation.done()) {
-        schedule_coroutine_resumption_helper(executor, continuation);
+        post_resumption(executor, continuation);
     }
 }
 

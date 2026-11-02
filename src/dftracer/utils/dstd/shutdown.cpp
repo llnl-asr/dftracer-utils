@@ -73,4 +73,10 @@ void shutdown() {
     }
 }
 
+bool shutdown_started() noexcept {
+    Table& t = table();
+    std::lock_guard<std::mutex> lock(t.mutex);
+    return t.ran;
+}
+
 }  // namespace dftracer::utils::dstd

@@ -8,8 +8,10 @@ namespace dftracer::utils::coro {
 
 class Executor;
 
-void schedule_coroutine_resumption_helper(Executor* executor,
-                                          std::coroutine_handle<> handle);
+/// Posts `handle` to `executor`, or to whichever executor drives this thread
+/// when it names none. Logs and drops the resume when there is neither, which
+/// would otherwise strand the coroutine.
+void post_resumption(Executor* executor, std::coroutine_handle<> handle);
 
 /// Executor a coroutine suspending right now must be resumed through:
 /// `preferred` when it has one, else whichever is driving this thread.

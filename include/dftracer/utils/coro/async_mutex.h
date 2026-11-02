@@ -191,7 +191,7 @@ class AsyncMutexLockOperation {
             mutex_.remove_locked(this);
             park_->cancelled = true;
         }
-        schedule_coroutine_resumption_helper(executor_, awaiter_);
+        post_resumption(executor_, awaiter_);
     }
 
    private:
@@ -271,7 +271,7 @@ void AsyncMutex::unlock_contended() {
     // The waiter may belong to a RunLoop on another thread, which only that
     // thread can drive.
     if (next->executor_ != nullptr && next->executor_ != Executor::current()) {
-        schedule_coroutine_resumption_helper(next->executor_, next->awaiter_);
+        post_resumption(next->executor_, next->awaiter_);
         return;
     }
     // `next` is off the queue, so its links are free to chain the hand-offs.

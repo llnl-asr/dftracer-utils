@@ -22,6 +22,9 @@ class TimerService {
     using Callback = std::function<void()>;
     using TimerId = uint64_t;
 
+    /// The id of a timeout that was not registered, so nothing fires it.
+    static constexpr TimerId NO_TIMER = 0;
+
    private:
     struct Timer {
         TimerId id;
@@ -51,6 +54,7 @@ class TimerService {
     std::mutex wake_mutex_;
     std::condition_variable wake_cv_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> retired_{false};
     std::atomic<bool> has_new_timers_{false};
     std::atomic<TimerId> next_id_{1};
 
@@ -64,6 +68,7 @@ class TimerService {
     TimerService& operator=(TimerService&&) = delete;
 
     void start() {
+        if (retired_.load(std::memory_order_acquire)) return;
         bool expected = false;
         if (!running_.compare_exchange_strong(expected, true)) {
             return;
@@ -87,8 +92,21 @@ class TimerService {
         }
     }
 
+    /// Stops the timer thread for good. A later start() does nothing.
+    void retire() {
+        retired_.store(true, std::memory_order_release);
+        stop();
+    }
+
+    /// Whether the timer thread is running.
+    bool running() const noexcept {
+        return running_.load(std::memory_order_acquire);
+    }
+
     template <typename Duration>
     TimerId register_timeout(Duration duration, Callback callback) {
+        // Nothing would fire it, so the caller waits without a timeout.
+        if (retired_.load(std::memory_order_acquire)) return NO_TIMER;
         auto expiry = std::chrono::steady_clock::now() + duration;
         TimerId id = next_id_.fetch_add(1, std::memory_order_relaxed);
 
@@ -172,6 +190,12 @@ class TimerService {
         }
     }
 };
+
+/// The process-wide timers, made and started on first use, and stopped at
+/// shutdown after the runtime. An executor that names no timers of its own
+/// uses these. They stay stopped once shutdown began, and a timeout registered
+/// then returns TimerService::NO_TIMER.
+TimerService& process_timers();
 
 }  // namespace dftracer::utils::coro
 

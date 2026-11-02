@@ -151,7 +151,7 @@ class DirectoryScannerUtility {
         if (input.recursive) {
             coro::Executor* exec = ctx.get_executor();
             auto gate = std::make_shared<coro::AdaptiveGate>(
-                exec ? exec->get_num_threads() : 1);
+                exec ? exec->concurrency() : 1);
             co_return co_await scan_parallel(ctx, std::move(gate), input.path,
                                              input.populate_size);
         }

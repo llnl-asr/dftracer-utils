@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/run_loop.h>
 #include <dftracer/utils/coro/yield.h>
@@ -122,18 +123,28 @@ void drive_to_completion(std::coroutine_handle<> h,
     // so waiting here costs it no capacity and work this task depends on can
     // still run - including on this thread.
     if (auto* exec = Executor::current()) {
-        exec->enqueue(h);
-        exec->drive_until(is_finished);
-        return;
+        // Posted from the first check, so an executor that will not lend this
+        // thread is refused before the task is queued and never runs it.
+        bool posted = false;
+        auto posted_done = [&] {
+            if (is_finished()) return true;
+            if (!posted) {
+                posted = true;
+                exec->post(h);
+            }
+            return false;
+        };
+        if (exec->drive_until(posted_done)) return;
+        throw common::DFTUtilsException(
+            common::ErrorCode::Pipeline,
+            "cannot block on a thread of an executor that cannot lend it; use "
+            "co_await or a thread outside the executor");
     }
 
     RunLoop loop;
-    struct Bind {
-        Executor* prev;
-        ~Bind() { Executor::set_current(prev); }
-    } bind{Executor::set_current(&loop)};
+    CurrentScope bind{loop};
 
-    loop.enqueue(h);
+    loop.post(h);
     loop.drive_until(is_finished);
 }
 
@@ -141,7 +152,7 @@ void yield_to_executor(std::coroutine_handle<> h) noexcept {
     auto* exec = Executor::current();
     if (exec) {
         reset_timeslice();
-        exec->enqueue(h);
+        exec->post(h);
     }
 }
 
@@ -159,7 +170,7 @@ std::coroutine_handle<> YieldAwaitable::await_suspend(
     auto* exec = Executor::current();
     if (exec) {
         reset_timeslice();
-        exec->enqueue(h);
+        exec->post(h);
         return std::noop_coroutine();
     }
     // Not on a worker thread.

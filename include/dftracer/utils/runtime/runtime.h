@@ -277,7 +277,7 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
     auto wrapper = [](coro::CoroTask<T> t,
                       std::shared_ptr<std::promise<std::shared_ptr<T>>> tp,
                       std::shared_ptr<std::promise<void>> vp,
-                      coro::Executor* exec,
+                      TaskExecutor* exec,
                       std::shared_ptr<std::atomic<common::TaskIndex>> task_id)
         -> coro::Coro {
         try {

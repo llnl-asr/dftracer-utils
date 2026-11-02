@@ -192,7 +192,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         auto frame = [&]() -> coro::CoroTask<void> {
             probe.entered.store(true);
             try {
-                co_await coro::timeout(1h, &rt.executor()->get_timer_service());
+                co_await coro::timeout(1h, rt.executor()->timers());
             } catch (const common::DFTUtilsException& e) {
                 probe.cancelled.store(coro::is_cancelled(e));
             }

@@ -342,8 +342,7 @@ TEST_CASE("when_any with a timeout loser returns when the winner does") {
             };
             const auto start = Clock::now();
             auto result = co_await coro::when_any(
-                winner(),
-                coro::timeout(TIMEOUT, &executor.get_timer_service()));
+                winner(), coro::timeout(TIMEOUT, executor.timers()));
             elapsed_ms.store(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     Clock::now() - start)

@@ -93,7 +93,7 @@ class CoroSemaphore {
                 sem_.waiters_.erase(it);
                 park_->cancelled = true;
             }
-            schedule_coroutine_resumption_helper(executor_, handle_);
+            post_resumption(executor_, handle_);
         }
 
        private:
@@ -138,10 +138,9 @@ class CoroSemaphore {
             }
         }
         for (std::size_t i = 0; i < wake_n; ++i)
-            schedule_coroutine_resumption_helper(wake_local[i].executor,
-                                                 wake_local[i].handle);
+            post_resumption(wake_local[i].executor, wake_local[i].handle);
         for (const Waiter& w : wake_overflow)
-            schedule_coroutine_resumption_helper(w.executor, w.handle);
+            post_resumption(w.executor, w.handle);
     }
 
    private:

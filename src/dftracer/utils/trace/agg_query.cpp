@@ -425,7 +425,7 @@ coro::CoroTask<void> Runner::run() {
     if (workers == 0) {
         const coro::Executor* ex = coro::Executor::current();
         workers =
-            ex != nullptr ? std::max<std::size_t>(1, ex->get_num_threads()) : 1;
+            ex != nullptr ? std::max<std::size_t>(1, ex->concurrency()) : 1;
     }
     permits = std::make_unique<coro::CoroSemaphore>(workers);
     const std::uint64_t default_params_hash = rules.q.config.params_hash();

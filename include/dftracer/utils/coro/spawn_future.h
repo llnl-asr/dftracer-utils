@@ -88,7 +88,7 @@ struct SharedState {
             // prev is a waiting coroutine handle address.
             auto waiter = std::coroutine_handle<>::from_address(
                 reinterpret_cast<void*>(prev));
-            schedule_coroutine_resumption_helper(executor, waiter);
+            post_resumption(executor, waiter);
         }
     }
 };
@@ -167,7 +167,7 @@ class SpawnFuture {
                 expected, SharedState<T>::CANCELLED, std::memory_order_acq_rel,
                 std::memory_order_acquire)) {
             cancelled_ = true;
-            schedule_coroutine_resumption_helper(executor_, handle_);
+            post_resumption(executor_, handle_);
         }
     }
 

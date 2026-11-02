@@ -260,8 +260,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             }
 
             if (sender_handle) {
-                schedule_coroutine_resumption_helper(sender_executor,
-                                                     sender_handle);
+                post_resumption(sender_executor, sender_handle);
                 if (!consumed) {
                     result_ = std::nullopt;
                 }
@@ -320,8 +319,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                     return;
                 cancelled_ = true;
             }
-            schedule_coroutine_resumption_helper(waiter_.executor,
-                                                 waiter_.handle);
+            post_resumption(waiter_.executor, waiter_.handle);
         }
 
         ~ReceiveAwaitable() {
@@ -473,8 +471,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             }
 
             if (receive_handle) {
-                schedule_coroutine_resumption_helper(receive_executor,
-                                                     receive_handle);
+                post_resumption(receive_executor, receive_handle);
             } else if (notify_readable) {
                 channel_->cv_readable_.notify_one();
             }
@@ -504,8 +501,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                     return;
                 cancelled_ = true;
             }
-            schedule_coroutine_resumption_helper(waiter_.executor,
-                                                 waiter_.handle);
+            post_resumption(waiter_.executor, waiter_.handle);
         }
 
         ~SendAwaitable() {
@@ -679,7 +675,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             }
 
             if (handle) {
-                schedule_coroutine_resumption_helper(executor, handle);
+                post_resumption(executor, handle);
             }
         }
     }
@@ -703,7 +699,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             }
 
             if (handle) {
-                schedule_coroutine_resumption_helper(executor, handle);
+                post_resumption(executor, handle);
             }
         }
     }
@@ -768,15 +764,13 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
 
         if (receiver_handle) {
-            schedule_coroutine_resumption_helper(receiver_executor,
-                                                 receiver_handle);
+            post_resumption(receiver_executor, receiver_handle);
         } else if (notify_readable) {
             cv_readable_.notify_one();
         }
 
         if (sender_handle) {
-            schedule_coroutine_resumption_helper(sender_executor,
-                                                 sender_handle);
+            post_resumption(sender_executor, sender_handle);
         }
 
         return true;
@@ -991,8 +985,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         active_sends_.fetch_sub(1, std::memory_order_acq_rel);
 
         if (resume_handle) {
-            schedule_coroutine_resumption_helper(resume_executor,
-                                                 resume_handle);
+            post_resumption(resume_executor, resume_handle);
         } else if (enqueued) {
             cv_readable_.notify_one();
         }

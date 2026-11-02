@@ -29,6 +29,9 @@ void add_shutdown_hook(ShutdownStage stage, void (*hook)());
 /// may block and may call this function again.
 void shutdown();
 
+/// Whether shutdown() has begun running the hooks.
+bool shutdown_started() noexcept;
+
 }  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_SHUTDOWN_H

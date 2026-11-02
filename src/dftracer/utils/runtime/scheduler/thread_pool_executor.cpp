@@ -59,7 +59,6 @@ ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
 
 ThreadPoolExecutor::~ThreadPoolExecutor() {
     shutdown();
-    drain_destroy_queue();
     while (foreign_enqueues_.load(std::memory_order_acquire) != 0)
         std::this_thread::yield();
 }
@@ -120,6 +119,9 @@ void ThreadPoolExecutor::start() {
 }
 
 void ThreadPoolExecutor::shutdown() {
+    // Everything spawned from here on must not run, an executor that never
+    // started included: it has no thread to run it.
+    shutdown_token_->store(true, std::memory_order_release);
     if (!running_) {
         return;
     }
@@ -164,7 +166,6 @@ void ThreadPoolExecutor::shutdown() {
         }
     }
 
-    drain_destroy_queue();
     {
         RunQueueEntry orphan;
         while (run_queue_.try_dequeue(orphan)) {
@@ -192,7 +193,6 @@ void ThreadPoolExecutor::cancel_in_flight() {
     using Clock = std::chrono::steady_clock;
     constexpr auto NO_PROGRESS_GRACE = std::chrono::seconds(2);
 
-    shutdown_token_->store(true, std::memory_order_release);
     if (io_backend_) io_backend_->cancel_pending();
 
     std::size_t last_left = park_registry_.size();
@@ -518,7 +518,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     DFTRACER_UTILS_LOG_DEBUG("Worker %zu started", context->worker_id);
 
     set_current_worker_context(context);
-    coro::Executor::set_current(this);
+    coro::CurrentScope current_scope{*this};
     set_current_backend(this);
     coro::reset_timeslice();
 
@@ -551,8 +551,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
         const std::uint64_t observed_signal =
             work_signal_.load(std::memory_order_acquire);
 
-        // Run queue: coroutine handles from enqueue() and
-        // schedule_coroutine_resumption().
+        // Run queue: coroutine handles from enqueue() and post().
         // Busy before the dequeue, so quiesce() never sees an empty queue
         // and an idle worker while this worker holds an entry.
         context->is_idle.store(false, std::memory_order_seq_cst);
@@ -587,7 +586,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                     // Our coroutines enter their own pool. Anything else
                     // charges the general pool.
                     memory::Scope scope{general, nullptr};
-                    pending_resume.resume();
+                    coro::resume_on(*this, pending_resume);
                 }
                 if (monitor) {
                     coro::monitor_resume_end(pending_resume.address(),
@@ -601,7 +600,6 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
             // thread.  Safe: resume() has fully returned, so the frame
             // is suspended at final_suspend and no code references it.
             coro::drain_thread_local_destroys();
-            drain_destroy_queue();
         }
         // No work available -- sleep until signaled.
         else {
@@ -614,11 +612,9 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
             if (io_backend_) {
                 auto reaped = io_backend_->poll(0);
                 if (reaped > 0) {
-                    drain_destroy_queue();
                     continue;
                 }
             }
-            drain_destroy_queue();
             if (!running_.load(std::memory_order_acquire) ||
                 context->retire.load(std::memory_order_acquire)) {
                 break;
@@ -662,13 +658,13 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     coro::drain_thread_local_destroys();
 
     set_current_backend(nullptr);
-    coro::Executor::set_current(nullptr);
     set_current_worker_context(nullptr);
 
     DFTRACER_UTILS_LOG_DEBUG("Worker %zu terminated", context->worker_id);
 }
 
-void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
+bool ThreadPoolExecutor::drive_until(
+    dftracer::utils::dstd::FunctionRef<bool()> done) {
     memory::Pool& general = memory::Manager::get().general();
     // The timeout re-checks the queue for the enqueue that worker_thread's
     // park comment describes.
@@ -684,15 +680,13 @@ void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
             if (entry.handle && !entry.handle.done()) {
                 DFTRACER_UTILS_TSAN_ACQUIRE(entry.handle.address());
                 memory::Scope scope{general, nullptr};
-                entry.handle.resume();
+                coro::resume_on(*this, entry.handle);
             }
             coro::drain_thread_local_destroys();
-            drain_destroy_queue();
             park = IDLE_PARK_MIN;
             continue;
         }
 
-        drain_destroy_queue();
         if (done()) break;
         if (!running_.load(std::memory_order_acquire)) break;
 
@@ -704,7 +698,7 @@ void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
             }
         }
         struct Wait {
-            const std::function<bool()>& done;
+            dftracer::utils::dstd::FunctionRef<bool()> done;
             const ThreadPoolExecutor& self;
             std::uint64_t observed_signal;
         } wait{done, *this, observed_signal};
@@ -720,12 +714,7 @@ void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
         park = woke ? IDLE_PARK_MIN : std::min(park * 2, IDLE_PARK_MAX);
     }
     coro::drain_thread_local_destroys();
-}
-
-void ThreadPoolExecutor::schedule_coroutine_resumption(
-    std::coroutine_handle<> handle) {
-    // Delegate to enqueue() -- unified path for all coroutine handles.
-    enqueue(handle);
+    return true;
 }
 
 void ThreadPoolExecutor::signal_global_work() {
@@ -1225,7 +1214,7 @@ void ThreadPoolExecutor::submit_task(std::shared_ptr<Task> task,
     // Create Coro, set executor on promise, enqueue released handle
     auto coro = run_task(std::move(task), std::move(input), owner);
     coro.handle().promise().executor = this;
-    enqueue(coro.release());
+    post(coro.release());
 }
 
 common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
@@ -1233,7 +1222,6 @@ common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
     std::shared_ptr<std::atomic<common::TaskIndex>> tid_out) {
     common::TaskIndex id =
         next_coro_task_id_.fetch_sub(1, std::memory_order_relaxed);
-    coro.handle().promise().task_id = id;
     coro.handle().promise().executor = this;
 
     {
@@ -1251,6 +1239,13 @@ common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
             it->second.location = TaskInfo::SharedQueue;
             it->second.worker_id = static_cast<std::size_t>(-1);
         }
+        coro.handle().promise().tracking =
+            &trackings_
+                 .emplace(id,
+                          coro::TaskTracking{
+                              &ThreadPoolExecutor::on_tracked_task_complete,
+                              this, id})
+                 .first->second;
     }
     ++total_tasks_submitted_;
 
@@ -1288,19 +1283,9 @@ void ThreadPoolExecutor::mark_coro_completed(common::TaskIndex id) {
     if (was_new) ++tasks_completed_;
 }
 
-void ThreadPoolExecutor::schedule_destroy(std::coroutine_handle<> handle) {
-    if (handle) {
-        destroy_queue_.enqueue(handle);
-    }
-}
-
-void ThreadPoolExecutor::drain_destroy_queue() {
-    std::coroutine_handle<> to_destroy;
-    while (destroy_queue_.try_dequeue(to_destroy)) {
-        if (to_destroy) {
-            to_destroy.destroy();
-        }
-    }
+void ThreadPoolExecutor::on_tracked_task_complete(
+    void* owner, common::TaskIndex id) noexcept {
+    static_cast<ThreadPoolExecutor*>(owner)->mark_coro_completed(id);
 }
 
 }  // namespace dftracer::utils

@@ -399,7 +399,7 @@ void ThreadPoolFileOps::execute_request(IoRequest* req) {
     const bool tracked = is_file_op(req->op);
     if (req->awaitable != nullptr) {
         req->awaitable->result_ = result;
-        req->executor->enqueue(req->awaitable->handle_);
+        req->executor->post(req->awaitable->handle_);
     } else if (req->completion != nullptr) {
         req->completion(req->completion_ctx, result);
     }

@@ -54,7 +54,7 @@ struct ResumeFromThread {
         hops.threads.emplace_back([exec, h, pool = hops.enqueuer_pool] {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             memory::Scope scope{*pool};
-            exec->enqueue(h);
+            exec->post(h);
         });
     }
     void await_resume() const noexcept {}

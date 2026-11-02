@@ -41,10 +41,9 @@ Executor* resume_executor_for(Executor* preferred) noexcept {
     return preferred ? preferred : Executor::current();
 }
 
-void schedule_coroutine_resumption_helper(Executor* executor,
-                                          std::coroutine_handle<> handle) {
+void post_resumption(Executor* executor, std::coroutine_handle<> handle) {
     if (auto* target = resume_executor_for(executor)) {
-        target->schedule_coroutine_resumption(handle);
+        target->post(handle);
         return;
     }
     // Returning quietly here strands the coroutine forever, which surfaces
@@ -59,7 +58,7 @@ namespace dftracer::utils {
 
 std::size_t common::available_parallelism() noexcept {
     auto* exec = coro::Executor::current();
-    return exec ? exec->get_num_threads() : 1;
+    return exec ? exec->concurrency() : 1;
 }
 
 }  // namespace dftracer::utils

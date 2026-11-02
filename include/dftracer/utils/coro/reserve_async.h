@@ -38,7 +38,10 @@ struct ReserveWaitState {
     std::atomic<bool> cancelled{false};
 
     ReserveWaitState(std::coroutine_handle<> h, Executor* exec) noexcept
-        : handle(h), executor(exec), timers(&exec->get_timer_service()) {}
+        : handle(h),
+          executor(exec),
+          timers(exec->timers() != nullptr ? exec->timers()
+                                           : &process_timers()) {}
     ReserveWaitState(const ReserveWaitState&) = delete;
     ReserveWaitState& operator=(const ReserveWaitState&) = delete;
     ~ReserveWaitState() {
@@ -48,20 +51,20 @@ struct ReserveWaitState {
     static void on_grant(void* context) noexcept {
         auto* state = static_cast<ReserveWaitState*>(context);
         std::shared_ptr<ReserveWaitState> keep = std::move(state->self);
-        state->executor->enqueue(state->handle);
+        state->executor->post(state->handle);
     }
 
     void on_timeout() {
         if (!node->cancel()) return;
         std::shared_ptr<ReserveWaitState> keep = std::move(self);
-        executor->enqueue(handle);
+        executor->post(handle);
     }
 
     void on_cancel() {
         if (!node->cancel()) return;
         cancelled.store(true, std::memory_order_release);
         std::shared_ptr<ReserveWaitState> keep = std::move(self);
-        executor->enqueue(handle);
+        executor->post(handle);
     }
 
     void cancel_timer() {

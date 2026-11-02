@@ -360,7 +360,7 @@ std::shared_future<void> spawn_on_current_executor(coro::CoroTask<void> task) {
     auto done = std::make_shared<std::promise<void>>();
     std::shared_future<void> fut = done->get_future().share();
     coro::Coro c = run_detached(std::move(task), std::move(done));
-    exec->enqueue(c.release());
+    exec->post(c.release());
     return fut;
 }
 

@@ -290,7 +290,7 @@ void IoUringBackend::completion_loop() {
             DFTRACER_UTILS_TSAN_ACQUIRE(req);
             if (req->awaitable) {
                 req->awaitable->result_ = cqe->res;
-                executor_.enqueue(req->awaitable->handle_);
+                executor_.post(req->awaitable->handle_);
             } else if (req->completion != nullptr) {
                 req->completion(req->completion_ctx, cqe->res);
             }
@@ -344,7 +344,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
             }
             delete uring_ctx;
             if (awaitable != nullptr) {
-                backend->executor_.enqueue(awaitable->handle_);
+                backend->executor_.post(awaitable->handle_);
             }
             return;
         }
@@ -358,7 +358,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
             }
             delete uring_ctx;
             if (awaitable != nullptr) {
-                backend->executor_.enqueue(awaitable->handle_);
+                backend->executor_.post(awaitable->handle_);
             }
             return;
         }
@@ -373,7 +373,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
             }
             delete uring_ctx;
             if (awaitable != nullptr) {
-                backend->executor_.enqueue(awaitable->handle_);
+                backend->executor_.post(awaitable->handle_);
             }
             return;
         }
@@ -389,7 +389,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
             }
             delete uring_ctx;
             if (awaitable != nullptr) {
-                backend->executor_.enqueue(awaitable->handle_);
+                backend->executor_.post(awaitable->handle_);
             }
             return;
         }
@@ -425,7 +425,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
                 }
                 delete uring_ctx;
                 if (awaitable != nullptr) {
-                    backend->executor_.enqueue(awaitable->handle_);
+                    backend->executor_.post(awaitable->handle_);
                 }
                 return;
             }
@@ -511,7 +511,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
         }
         delete req;
         if (awaitable != nullptr) {
-            backend->executor_.enqueue(awaitable->handle_);
+            backend->executor_.post(awaitable->handle_);
         } else if (completion != nullptr) {
             completion(completion_ctx, result);
         }

@@ -52,7 +52,7 @@ coro::CoroTask<void> wait_for(std::chrono::microseconds wait) {
         co_return;
     }
     try {
-        co_await coro::timeout(wait, &executor->get_timer_service());
+        co_await coro::timeout(wait, executor->timers());
     } catch (const common::DFTUtilsException& e) {
         if (coro::is_cancelled(e)) throw;
     }
@@ -153,7 +153,7 @@ coro::CoroTask<void> ReplayEngine::run_pipelined(
     std::vector<Lane> lanes(files.size());
     coro::Executor* executor = coro::resume_executor_for(nullptr);
     const std::size_t threads =
-        executor != nullptr ? executor->get_num_threads() : 1;
+        executor != nullptr ? executor->concurrency() : 1;
     const std::size_t workers =
         std::min(files.size(), std::max<std::size_t>(threads, 1));
     std::atomic<std::size_t> next{0};

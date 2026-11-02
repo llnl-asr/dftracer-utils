@@ -4,7 +4,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
@@ -118,7 +118,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
         throw common::DFTUtilsException(common::ErrorCode::Io,
                                         "Cannot open file: " + in_path);
     }
-    common::ScopedFd in_fd(static_cast<int>(in_fd_res));
+    dstd::ScopedFd in_fd(static_cast<int>(in_fd_res));
 
     struct stat st;
     if (::fstat(in_fd.get(), &st) != 0) {

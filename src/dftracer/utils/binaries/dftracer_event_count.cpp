@@ -2,7 +2,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -138,7 +138,7 @@ class StreamCounter {
 };
 
 coro::CoroTask<std::size_t> stream_count(std::string path) {
-    common::ScopedFd fd(::open(path.c_str(), O_RDONLY));
+    dstd::ScopedFd fd(::open(path.c_str(), O_RDONLY));
     if (fd.get() < 0)
         throw common::DFTUtilsException::cat(common::ErrorCode::Io,
                                              "cannot open ", path);

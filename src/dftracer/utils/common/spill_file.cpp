@@ -18,7 +18,7 @@ Result<std::unique_ptr<SpillFile>> SpillFile::create() {
     if (!dir) return dstd::Unexpected(dir.error());
     std::string path = (fs::path(*dir) / "dftu_spill_XXXXXX").string();
     std::unique_ptr<SpillFile> f(new SpillFile(spill_dir_in_memory(*dir)));
-    f->fd_ = ScopedFd(::mkostemp(path.data(), O_CLOEXEC));
+    f->fd_ = dstd::ScopedFd(::mkostemp(path.data(), O_CLOEXEC));
     if (f->fd_.get() < 0)
         return make_error(
             ErrorCode::Io,

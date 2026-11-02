@@ -1,10 +1,10 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -142,7 +142,7 @@ class FileSink : public views::ExportSink {
     void flush() override { std::fflush(f_.get()); }
 
    private:
-    dftracer::utils::common::ScopedFile f_;
+    dftracer::utils::dstd::ScopedFile f_;
 };
 
 // "fn(key)" or "fn(key, 'a', 'b')" -> transform + inner key text; false when

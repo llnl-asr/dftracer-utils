@@ -6,7 +6,6 @@
 #include <dftracer/utils/common/filesystem.h>  // fs:: portability alias
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
@@ -14,6 +13,7 @@
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/memory/heap.h>
 #include <fcntl.h>
 #include <sys/mman.h>

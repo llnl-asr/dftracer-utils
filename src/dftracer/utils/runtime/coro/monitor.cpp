@@ -1,9 +1,9 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/env.h>
-#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/common/sharded_mutex.h>
 #include <dftracer/utils/common/symbolize.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/runtime/coro/monitor.h>
@@ -65,7 +65,7 @@ struct Registry {
     common::ShardedMutex<ShardData, 64> shards;
     std::atomic<long long> next_id{0};
     Mode mode = Mode::Off;
-    common::ScopedFile csv;
+    dstd::ScopedFile csv;
     long long min_us = 0;  // hide coroutines shorter than this in the report
 };
 

@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_H
 
-#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field.h>
 #include <dftracer/utils/dataframe/lazy_ops.h>
@@ -9,6 +8,7 @@
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -195,7 +195,7 @@ struct ViewFile {
     /// An open read-only descriptor of the file, if the caller holds one. The
     /// first build or schema probe reads through it instead of opening the
     /// file again; the view shares it, and it closes with the last copy.
-    dstd::SharedPtr<common::ScopedFd> fd = nullptr;
+    dstd::SharedPtr<dstd::ScopedFd> fd = nullptr;
 };
 
 struct ExportStats {

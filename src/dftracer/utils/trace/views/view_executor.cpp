@@ -182,7 +182,7 @@ coro::CoroTask<void> build_bootstrap_artifacts(
     CoroScope& scope, std::string file,
     dftracer::utils::index::gzip::CheckpointIndexer::VisitorList visitors,
     dftracer::utils::index::gzip::GzipBuildArtifacts* arts, bool* ok,
-    std::size_t ways, dstd::SharedPtr<common::ScopedFd> source) {
+    std::size_t ways, dstd::SharedPtr<dstd::ScopedFd> source) {
     const int fd = source->get();
     if (fd < 0) co_return;
     auto built =
@@ -200,17 +200,17 @@ coro::CoroTask<void> build_bootstrap_artifacts(
 // The file's descriptor, its size and its hash: the build needs them before
 // the folds run, and the artifacts read the same descriptor.
 struct BootstrapSource {
-    dstd::SharedPtr<common::ScopedFd> fd;
+    dstd::SharedPtr<dstd::ScopedFd> fd;
     std::uint64_t size = 0;
     std::uint64_t hash = 0;
     bool ok = false;
 };
 
-BootstrapSource open_bootstrap_source(
-    std::string_view file, dstd::SharedPtr<common::ScopedFd> shared) {
+BootstrapSource open_bootstrap_source(std::string_view file,
+                                      dstd::SharedPtr<dstd::ScopedFd> shared) {
     BootstrapSource out;
     if (!shared)
-        shared = dstd::make_shared<common::ScopedFd>(
+        shared = dstd::make_shared<dstd::ScopedFd>(
             ::open(std::string(file).c_str(), O_RDONLY));
     const int fd = shared->get();
     if (fd < 0) return out;
@@ -717,7 +717,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     if (f.uncompressed_size == 0) {
         // A file never indexed has no size in the index.
         if (!f.fd)
-            f.fd = dstd::make_shared<common::ScopedFd>(
+            f.fd = dstd::make_shared<dstd::ScopedFd>(
                 ::open(f.file_path.c_str(), O_RDONLY));
         struct stat st{};
         if (f.fd->get() >= 0 && ::fstat(f.fd->get(), &st) == 0)

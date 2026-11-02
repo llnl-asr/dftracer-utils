@@ -3,8 +3,8 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -897,7 +897,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             co_return 1;
         }
     }
-    common::ScopedFile out_owner(
+    dstd::ScopedFile out_owner(
         out_file);  // closes out_file on any exit; not stdout
     FILE* out_target = out_file ? out_file : stdout;
     FileSink sink(out_target);

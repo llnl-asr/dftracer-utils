@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_FILE_SOURCE_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/io/io.h>
 
@@ -12,7 +12,7 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
 
 /// Open a file read-only via async I/O, throwing DFTUtilsException(IO) on
 /// failure. Returns an owning ScopedFd.
-inline coro::CoroTask<common::ScopedFd> async_open_read(
+inline coro::CoroTask<dstd::ScopedFd> async_open_read(
     const std::string& file_path) {
     ssize_t fd =
         co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
@@ -20,7 +20,7 @@ inline coro::CoroTask<common::ScopedFd> async_open_read(
         throw common::DFTUtilsException(common::ErrorCode::Io,
                                         "Cannot open file: " + file_path);
     }
-    co_return common::ScopedFd(static_cast<int>(fd));
+    co_return dstd::ScopedFd(static_cast<int>(fd));
 }
 
 /// Build the IO read-error for a failed pread. neg_errno is the negated errno

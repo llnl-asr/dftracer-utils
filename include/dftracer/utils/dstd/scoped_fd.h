@@ -1,11 +1,11 @@
-#ifndef DFTRACER_UTILS_COMMON_SCOPED_FD_H
-#define DFTRACER_UTILS_COMMON_SCOPED_FD_H
+#ifndef DFTRACER_UTILS_DSTD_SCOPED_FD_H
+#define DFTRACER_UTILS_DSTD_SCOPED_FD_H
 
 #include <unistd.h>
 
 #include <cstdio>
 
-namespace dftracer::utils::common {
+namespace dftracer::utils::dstd {
 
 /// Move-only owner of a raw file descriptor that closes it on destruction.
 /// reset() closes any current fd before taking the new one, so a descriptor is
@@ -90,6 +90,6 @@ class ScopedFile {
     std::FILE* f_ = nullptr;
 };
 
-}  // namespace dftracer::utils::common
+}  // namespace dftracer::utils::dstd
 
-#endif
+#endif  // DFTRACER_UTILS_DSTD_SCOPED_FD_H

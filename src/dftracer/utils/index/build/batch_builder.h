@@ -2,8 +2,8 @@
 #define DFTRACER_UTILS_INDEX_BUILD_BATCH_BUILDER_H
 
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
@@ -115,7 +115,7 @@ struct IndexBuildBatchConfig {
     /// each file, used instead of opening it. The build takes each one out of
     /// this vector and closes it once the file is parsed. A null entry opens
     /// the file as usual.
-    std::vector<dstd::SharedPtr<common::ScopedFd>> input_fds;
+    std::vector<dstd::SharedPtr<dstd::ScopedFd>> input_fds;
 
     /// If non-empty, parallel to `file_paths`: the relative work of each file,
     /// such as its size in bytes. Runs of consecutive files are cut to equal

@@ -2,7 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
-#include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
@@ -1074,7 +1074,7 @@ SchemaDetection explain_file_schema(const std::string& file_path) {
                                              file_path);
     if (const auto hit = cached_detection(file_path, st.size, st.mtime_ns))
         return *hit;
-    common::ScopedFd fd(::open(file_path.c_str(), O_RDONLY));
+    dstd::ScopedFd fd(::open(file_path.c_str(), O_RDONLY));
     if (fd.get() < 0)
         throw common::DFTUtilsException::cat(common::ErrorCode::Io,
                                              "cannot read trace for schema "

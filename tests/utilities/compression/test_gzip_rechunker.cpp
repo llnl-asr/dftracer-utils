@@ -42,7 +42,7 @@ std::pair<std::string, std::vector<char>> decode_members(
     const std::string& path) {
     int fd = ::open(path.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
-    dftracer::utils::common::ScopedFd sfd(fd);
+    dftracer::utils::dstd::ScopedFd sfd(fd);
     struct stat st;
     REQUIRE(::fstat(sfd.get(), &st) == 0);
     const auto size = static_cast<std::uint64_t>(st.st_size);
@@ -68,7 +68,7 @@ std::pair<std::string, int> decode_all(const std::string& path) {
 bool needs_rechunk(const std::string& path, std::size_t cap) {
     int fd = ::open(path.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
-    dftracer::utils::common::ScopedFd sfd(fd);
+    dftracer::utils::dstd::ScopedFd sfd(fd);
     struct stat st;
     REQUIRE(::fstat(sfd.get(), &st) == 0);
     return gzc::gzip_first_member(sfd.get(),
@@ -113,7 +113,7 @@ TEST_SUITE("gzip_rechunker") {
 
         int fd = ::open(gz.c_str(), O_RDONLY);
         REQUIRE(fd >= 0);
-        dftracer::utils::common::ScopedFd sfd(fd);
+        dftracer::utils::dstd::ScopedFd sfd(fd);
         struct stat st;
         REQUIRE(::fstat(sfd.get(), &st) == 0);
         const auto size = static_cast<std::uint64_t>(st.st_size);

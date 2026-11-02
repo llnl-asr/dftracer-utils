@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/duql/term.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -46,6 +47,8 @@ constexpr std::size_t RESULT_VOID_BUDGET = 24;
 // A store data file writer keeps every item of a file until its footer, so the
 // largest item that is not the once-per-file tail sets the size.
 constexpr std::size_t RECORD_ITEM_BUDGET = 72;
+// Four counts, a mode and a kind, laid out by decreasing alignment.
+constexpr std::size_t FILE_STAT_BUDGET = 40;
 
 static_assert(within<dftu_series, SERIES_BUDGET, 8>());
 static_assert(within<df::DataType, DATA_TYPE_BUDGET, 8>());
@@ -62,6 +65,8 @@ static_assert(within<dftracer::utils::common::Result<void>, RESULT_VOID_BUDGET,
                      alignof(void*)>());
 static_assert(within<dftracer::utils::store::engine::RecordItem,
                      RECORD_ITEM_BUDGET, 8>());
+static_assert(
+    within<dftracer::utils::dstd::fs::FileStat, FILE_STAT_BUDGET, 8>());
 
 }  // namespace
 
@@ -79,4 +84,5 @@ TEST_CASE("the layout budgets hold") {
     CHECK(sizeof(dftracer::utils::common::Result<void>) <= RESULT_VOID_BUDGET);
     CHECK(sizeof(dftracer::utils::store::engine::RecordItem) <=
           RECORD_ITEM_BUDGET);
+    CHECK(sizeof(dftracer::utils::dstd::fs::FileStat) <= FILE_STAT_BUDGET);
 }

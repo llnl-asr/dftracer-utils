@@ -1,7 +1,7 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -114,12 +114,12 @@ struct FileProbe {
     bool ok = false;
     /// The probe's open descriptor of `path`, kept for the extraction when the
     /// open-file budget allows, else null.
-    dstd::SharedPtr<common::ScopedFd> fd;
+    dstd::SharedPtr<dstd::ScopedFd> fd;
 };
 
 struct FileGroup {
     std::vector<std::string> files;
-    std::vector<dstd::SharedPtr<common::ScopedFd>> open_files;
+    std::vector<dstd::SharedPtr<dstd::ScopedFd>> open_files;
     double ratio = 1.0;
 };
 
@@ -328,7 +328,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
                 DFTRACER_UTILS_LOG_ERROR("Cannot open %s", probe.path.c_str());
                 co_return probe;
             }
-            common::ScopedFd sfd(static_cast<int>(fd));
+            dstd::ScopedFd sfd(static_cast<int>(fd));
             struct stat st;
             if (::fstat(sfd.get(), &st) != 0 || st.st_size == 0) {
                 co_return probe;
@@ -346,7 +346,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
             if (!first.exceeds_cap &&
                 open_count_ptr->fetch_add(1, std::memory_order_relaxed) <
                     open_budget) {
-                probe.fd = dstd::make_shared<common::ScopedFd>(std::move(sfd));
+                probe.fd = dstd::make_shared<dstd::ScopedFd>(std::move(sfd));
             } else {
                 sfd.reset();
             }

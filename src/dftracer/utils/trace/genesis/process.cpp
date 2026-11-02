@@ -1,11 +1,11 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/external_sort.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/common/spill_file.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
@@ -1284,7 +1284,7 @@ coro::CoroTask<ReaderSize> reader_size(const std::string& file) {
     SlotGuard probe(probe_slots(), 1);
     const ssize_t fd = co_await io::open(file.c_str(), O_RDONLY);
     if (fd < 0) co_return out;
-    common::ScopedFd guard(static_cast<int>(fd));
+    dstd::ScopedFd guard(static_cast<int>(fd));
     struct stat st{};
     if (::fstat(guard.get(), &st) != 0) co_return out;
     out.file_bytes = static_cast<std::uint64_t>(st.st_size);

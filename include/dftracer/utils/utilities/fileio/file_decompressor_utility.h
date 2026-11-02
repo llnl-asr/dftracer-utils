@@ -3,8 +3,8 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
@@ -140,7 +140,7 @@ class FileDecompressorUtility {
                     common::ErrorCode::Io,
                     "Cannot open file: " + input.input_path);
             }
-            common::ScopedFd fd(static_cast<int>(fd_result));
+            dstd::ScopedFd fd(static_cast<int>(fd_result));
 
             struct stat st;
             if (::fstat(fd.get(), &st) != 0) {

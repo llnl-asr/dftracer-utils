@@ -233,6 +233,9 @@ set(TEST_CPP_SOURCES
     dstd/test_any.cpp
     dstd/test_cstring_view.cpp
     dstd/test_either.cpp
+    dstd/test_function_ref.cpp
+    dstd/test_path.cpp
+    dstd/test_fs.cpp
     dstd/test_raw_buffer.cpp
     dstd/test_expected.cpp
     dstd/test_error.cpp

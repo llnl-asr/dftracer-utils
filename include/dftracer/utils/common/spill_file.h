@@ -2,8 +2,8 @@
 #define DFTRACER_UTILS_COMMON_SPILL_FILE_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 
 #include <atomic>
 #include <cstddef>
@@ -51,7 +51,7 @@ class SpillFile {
    private:
     explicit SpillFile(bool in_memory) : charge_(in_memory) {}
 
-    ScopedFd fd_;
+    dstd::ScopedFd fd_;
     std::atomic<std::uint64_t> end_{0};
     SpillCharge charge_;
 };

@@ -3,8 +3,8 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
@@ -996,7 +996,7 @@ build_gzip_index_artifacts(const std::string& gz_path, std::uint64_t ckpt_size,
     if (fd < 0) {
         co_return std::nullopt;
     }
-    common::ScopedFd owner(fd);
+    dstd::ScopedFd owner(fd);
     co_return co_await build_gzip_index_artifacts(fd, gz_path, ckpt_size,
                                                   visitors, scope, slice, ways);
 }

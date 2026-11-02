@@ -11,8 +11,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include <thread>
 
 namespace dftracer::utils::dstd {
+
+unsigned Thread::hardware_concurrency() noexcept {
+    return std::thread::hardware_concurrency();
+}
 
 namespace {
 

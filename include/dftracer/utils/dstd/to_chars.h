@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <system_error>
 #include <type_traits>
@@ -58,7 +59,9 @@ inline char* to_chars_double(char* first, char* last, double v) noexcept {
 #endif
 }
 
-/// `v` in shortest round-trip form ("2.5", not "2.500000").
+/// `v` in shortest round-trip form ("2.5", not "2.500000"). A std::string
+/// twin of @ref double_string, deleted when its last callers (dataframe and
+/// trace) move to dstd::String.
 inline std::string double_text(double v) {
     char buf[32];
     char* end = to_chars_double(buf, buf + sizeof(buf), v);
@@ -72,40 +75,43 @@ inline String double_string(double v) {
     return end ? String(buf, end) : String();
 }
 
-/// `v` in shortest round-trip form for a float ("0.1", not "0.100000001").
-inline std::string float_text(float v) {
-    char buf[32];
+/// Format a float into [first, last), the shortest form that reads back as
+/// `v`. Returns past-the-end pointer on success, nullptr on overflow/error.
+/// Falls back to snprintf where libc++ gates the floating-point overload.
+inline char* to_chars_float(char* first, char* last, float v) noexcept {
+    if (last <= first) return nullptr;
 #ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
+    const std::size_t cap = static_cast<std::size_t>(last - first);
     for (int digits = 6; digits <= 9; ++digits) {
+        char buf[32];
         const int n = std::snprintf(buf, sizeof(buf), "%.*g", digits,
                                     static_cast<double>(v));
-        if (n <= 0) return std::string();
-        if (digits == 9 || std::strtof(buf, nullptr) == v)
-            return std::string(buf, static_cast<std::size_t>(n));
+        if (n <= 0 || static_cast<std::size_t>(n) >= cap) return nullptr;
+        if (digits == 9 || std::strtof(buf, nullptr) == v) {
+            std::memcpy(first, buf, static_cast<std::size_t>(n));
+            return first + n;
+        }
     }
-    return std::string();
+    return nullptr;
 #else
-    auto [p, ec] = std::to_chars(buf, buf + sizeof(buf), v);
-    return ec == std::errc{} ? std::string(buf, p) : std::string();
+    auto [p, ec] = std::to_chars(first, last, v);
+    return ec == std::errc{} ? p : nullptr;
 #endif
+}
+
+/// `v` in shortest round-trip form for a float ("0.1", not "0.100000001"). A
+/// std::string twin of @ref float_string, deleted with @ref double_text.
+inline std::string float_text(float v) {
+    char buf[32];
+    char* end = to_chars_float(buf, buf + sizeof(buf), v);
+    return end ? std::string(buf, end) : std::string();
 }
 
 /// float_text into a dstd::String.
 inline String float_string(float v) {
     char buf[32];
-#ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
-    for (int digits = 6; digits <= 9; ++digits) {
-        const int n = std::snprintf(buf, sizeof(buf), "%.*g", digits,
-                                    static_cast<double>(v));
-        if (n <= 0) return String();
-        if (digits == 9 || std::strtof(buf, nullptr) == v)
-            return String(buf, static_cast<std::size_t>(n));
-    }
-    return String();
-#else
-    auto [p, ec] = std::to_chars(buf, buf + sizeof(buf), v);
-    return ec == std::errc{} ? String(buf, p) : String();
-#endif
+    char* end = to_chars_float(buf, buf + sizeof(buf), v);
+    return end ? String(buf, end) : String();
 }
 
 /// Format an unsigned 64-bit integer into [first, last). Returns past-the-end
@@ -164,6 +170,54 @@ inline std::from_chars_result from_chars_double(const char* first,
 #endif
 }
 
+template <class T>
+inline constexpr bool IS_CHARS_NUMBER =
+    (std::is_integral_v<T> && !std::is_same_v<T, bool>) ||
+    std::is_same_v<T, float> || std::is_same_v<T, double>;
+
+using ToCharsResult = std::to_chars_result;
+using FromCharsResult = std::from_chars_result;
+
+/// std::to_chars for integers, and the shortest form that reads back for a
+/// float or double on every platform, where std::to_chars for floating point
+/// is gated on older macOS. On a short buffer `ec` is value_too_large.
+template <class T>
+    requires IS_CHARS_NUMBER<T>
+inline ToCharsResult to_chars(char* first, char* last, T v) noexcept {
+    if constexpr (std::is_integral_v<T>) {
+        return std::to_chars(first, last, v);
+    } else {
+        char* p = std::is_same_v<T, float>
+                      ? to_chars_float(first, last, static_cast<float>(v))
+                      : to_chars_double(first, last, static_cast<double>(v));
+        if (p == nullptr) return {last, std::errc::value_too_large};
+        return {p, std::errc{}};
+    }
+}
+
+/// std::from_chars for integers, float and double on every platform: no
+/// leading whitespace or '+', `ptr` at the first byte not consumed, `ec` set
+/// when no number starts there or the value is out of range for T.
+template <class T>
+    requires IS_CHARS_NUMBER<T>
+inline FromCharsResult from_chars(const char* first, const char* last,
+                                  T& out) noexcept {
+    if constexpr (std::is_integral_v<T>) {
+        return std::from_chars(first, last, out);
+    } else if constexpr (std::is_same_v<T, double>) {
+        return from_chars_double(first, last, out);
+    } else {
+        double d = 0;
+        const FromCharsResult r = from_chars_double(first, last, d);
+        if (r.ec != std::errc{}) return r;
+        if (d > static_cast<double>(std::numeric_limits<float>::max()) ||
+            d < -static_cast<double>(std::numeric_limits<float>::max()))
+            return {r.ptr, std::errc::result_out_of_range};
+        out = static_cast<float>(d);
+        return r;
+    }
+}
+
 /// The decimal text of `v`, as std::to_string gives it.
 template <class T>
     requires(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
@@ -179,19 +233,12 @@ inline String to_string(T v) {
 /// one number of type T. As in std::from_chars, leading whitespace, a leading
 /// '+' and trailing bytes make it nothing, and so does an out-of-range value.
 template <class T>
-    requires(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
+    requires IS_CHARS_NUMBER<T>
 inline Optional<T> from_chars(StringView text) {
     const char* first = text.data();
     const char* last = first + text.size();
     T value{};
-    std::from_chars_result r;
-    if constexpr (std::is_integral_v<T>) {
-        r = std::from_chars(first, last, value);
-    } else {
-        double d = 0;
-        r = from_chars_double(first, last, d);
-        value = static_cast<T>(d);
-    }
+    const FromCharsResult r = from_chars(first, last, value);
     if (r.ec != std::errc{} || r.ptr != last || first == last) return nullopt;
     return value;
 }

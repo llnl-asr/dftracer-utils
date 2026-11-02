@@ -90,6 +90,8 @@ class Thread {
 
     Id id() const noexcept { return joinable_ ? Id(handle_) : Id(); }
     static Id current_id() noexcept { return Id(pthread_self()); }
+    /// Hardware threads the machine reports, 0 when it cannot tell.
+    static unsigned hardware_concurrency() noexcept;
 
    private:
     template <class Body>

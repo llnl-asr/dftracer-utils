@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cstdint>
 #include <random>
+#include <system_error>
 
 using namespace dftracer::utils;
 
@@ -185,4 +186,42 @@ TEST_CASE("Thread takes a stack size at start") {
     t.join();
     CHECK(got >= WANT);
     CHECK(got < 2 * WANT);
+}
+
+TEST_CASE("to_chars writes integers and the shortest float that reads back") {
+    char buf[32];
+    auto r = dstd::to_chars(buf, buf + sizeof(buf), -1234);
+    REQUIRE(r.ec == std::errc{});
+    CHECK(dstd::StringView(buf, static_cast<std::size_t>(r.ptr - buf)) ==
+          "-1234");
+    r = dstd::to_chars(buf, buf + sizeof(buf), 2.5);
+    REQUIRE(r.ec == std::errc{});
+    CHECK(dstd::StringView(buf, static_cast<std::size_t>(r.ptr - buf)) ==
+          "2.5");
+    r = dstd::to_chars(buf, buf + sizeof(buf), 0.1f);
+    REQUIRE(r.ec == std::errc{});
+    CHECK(dstd::StringView(buf, static_cast<std::size_t>(r.ptr - buf)) ==
+          "0.1");
+    char tiny[2];
+    CHECK(dstd::to_chars(tiny, tiny + sizeof(tiny), 0.125).ec ==
+          std::errc::value_too_large);
+}
+
+TEST_CASE("from_chars stops at the first byte that is not part of a number") {
+    const dstd::StringView text = "42.5xyz";
+    double d = 0;
+    auto r = dstd::from_chars(text.data(), text.data() + text.size(), d);
+    REQUIRE(r.ec == std::errc{});
+    CHECK(d == 42.5);
+    CHECK(r.ptr == text.data() + 4);
+    int i = 0;
+    r = dstd::from_chars(text.data(), text.data() + text.size(), i);
+    REQUIRE(r.ec == std::errc{});
+    CHECK(i == 42);
+    float f = 0;
+    const dstd::StringView huge = "1e300";
+    CHECK(dstd::from_chars(huge.data(), huge.data() + huge.size(), f).ec ==
+          std::errc::result_out_of_range);
+    CHECK(dstd::from_chars<float>("0.25") == 0.25f);
+    CHECK_FALSE(dstd::from_chars<float>("1e300").has_value());
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """End-to-end tests for the `dftracer_plugin build module:Class` ship path.
 
 `build` routes a `module:Class` argument to the jit backend instead of

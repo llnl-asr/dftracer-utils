@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/trace/comparator/comparison_config.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <simdjson.h>

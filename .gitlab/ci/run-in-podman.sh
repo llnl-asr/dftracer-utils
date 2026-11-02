@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Usage: run-in-podman.sh <image> <phase-script> [args...]
 # Runs a CI phase inside podman on the allocated node, mirroring the images the
 # GitHub workflows use.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Loads reference_plugin.c - a real MODULE .so that touches every dftu.svc.*
 // service from C - through the real Plugins/View pipeline (dlopen, a real
 // scan, a real fold), and reads back its self-report. One worker: the

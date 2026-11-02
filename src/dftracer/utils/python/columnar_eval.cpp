@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Binding for the native columnar expression engine. Python serializes its
 // expression tree to a flat post-order AST; this rebuilds it as a
 // dataframe::Expr and evaluates it - all the compiler work (type inference,

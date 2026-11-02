@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Aggregate op table: one row per aggregate, the single source binding the
  * three parallel enums (dataframe::Agg, dataframe::AggOp, dftu_agg_op) to a
  * canonical name. APPEND ONLY - each name and enum value is stable ABI.

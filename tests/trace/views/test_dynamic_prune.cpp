@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Dynamic filter pushdown: once a scan is already open, nothing could
 // previously narrow what remains. dataframe::Cursor::narrow() is the advisory
 // hook; views::detail::DynamicPrune is the state ViewSource's streaming cursor

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The cases count walks, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/hash/constants.h>

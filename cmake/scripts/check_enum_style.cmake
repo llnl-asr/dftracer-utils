@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Fails when an enum value in include/ or src/ is not CapitalCase.
 # Usage: cmake -DSOURCE_DIR=<repo root> -P check_enum_style.cmake
 #

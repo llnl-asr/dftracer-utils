@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Record schemas: the record formats the index and ``TraceViewer`` understand.
 
 The built-in schemas are ``dftracer`` and ``generic``. A user schema declares

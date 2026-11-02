@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // DFTU_SVC_AGG: a columnar fold accumulates each batch's key + value columns
 // into the dataframe engine's cross-batch AggState, merged across worker slices
 // and finalized to a native dataframe result (no Arrow hop).

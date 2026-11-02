@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Checks Series/DataFrame/LazyFrame public methods against the op registry.
 
 Reads C++ method names from the Doxygen XML the docs build emits

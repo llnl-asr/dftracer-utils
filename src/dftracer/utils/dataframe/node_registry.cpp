@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // dftu_node_register/unregister: a process-lifetime, name-keyed registry of
 // plan-node vtables, mirroring provider_registry.cpp. LazyFrame::op
 // (lazyframe.cpp) is the only reader: it resolves and captures a node's

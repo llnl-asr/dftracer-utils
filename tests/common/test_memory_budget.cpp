@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/memory/budget.h>

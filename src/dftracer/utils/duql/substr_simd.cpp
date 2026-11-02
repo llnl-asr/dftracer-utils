@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/duql/substr_simd.h>
 
 #include <cstddef>

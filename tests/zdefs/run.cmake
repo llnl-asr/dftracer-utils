@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Configures and builds tests/zdefs, whose shared library calls an undefined
 # function. Passes only when configure succeeds and the link fails with an
 # undefined-symbol error.

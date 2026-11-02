@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/index_encoding.h>

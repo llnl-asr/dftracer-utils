@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H
 #define DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H
 #include <dftracer/utils/plugins/plugins.h>

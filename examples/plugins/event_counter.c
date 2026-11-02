@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example dftracer-utils plugin in pure C, implementing the vtable directly
  * against abi.h with no C++ wrapper: counts events and tracks max duration.
  *

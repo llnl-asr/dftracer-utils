@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // unique, nunique, value_counts, is_in and frame unique give the results of
 // the same column copied flat, for every column layout.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/python/py_errors.h>
 

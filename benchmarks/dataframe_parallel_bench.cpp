@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: parallel group-by via the dataframe parallel_for seam.
 //
 // group_agg already fans out per-chunk AggStates through parallel_for and

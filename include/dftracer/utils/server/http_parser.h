@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // HTTP/1.1 request parser.
 //
 // Inspired by picohttpparser by Kazuho Oku, Tokuhiro Matsuno,

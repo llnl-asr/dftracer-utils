@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/indexer.h>

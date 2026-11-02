@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Fail when a co_await sits inside the parentheses of an if, while, for or
 # switch header under src/ and include/. GCC 12 lays out a coroutine frame
 # differently in the ramp and the actor when a temporary lives in such a

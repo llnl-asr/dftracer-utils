@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin that records the columns dftu_plugin::reads projects into
  * on_batch. One Slice declares `static reads()`, the other does not; the
  * `declare_reads` config key picks which one the factory builds, so a single

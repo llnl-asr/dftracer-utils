@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/timestamp_histogram.h>
 #include <dftracer/utils/dstd/varint.h>
 

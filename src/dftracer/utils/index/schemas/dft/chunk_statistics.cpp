@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/event_cost.h>

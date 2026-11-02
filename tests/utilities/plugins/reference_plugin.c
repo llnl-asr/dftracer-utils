@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Conformance plugin: touches every dftu.svc.* service slot from real C,
  * plus the provider-schema-types and plan-node surfaces, and reports one
  * pass/fail line per service through dftu_svc_result. A single artifact

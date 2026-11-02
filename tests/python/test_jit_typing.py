@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Static-typing regression guard for the typed @jit.plugin DSL.
 
 Runs the type checker on two fixtures under tests/python/typing/: the sample

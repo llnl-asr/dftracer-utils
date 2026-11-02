@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A streamed collect past its memory budget keeps the later parts in a mapped,
 // unlinked spill file, and every spill file goes to DFTRACER_UTILS_SPILL_DIR.
 

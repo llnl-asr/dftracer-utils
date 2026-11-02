@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_svc_trace ABI: open a .pfw.gz, append events,
  * close, then scan it back - all through the raw vtable from C. */
 #include <dftracer/utils/dataframe/abi.h>

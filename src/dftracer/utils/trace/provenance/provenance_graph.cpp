@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/provenance/provenance_graph.h>
 #include <dftracer/utils/trace/views/view.h>

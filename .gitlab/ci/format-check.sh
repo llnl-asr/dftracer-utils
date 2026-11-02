@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # format-check.yaml -> clang-format 19 + ruff.
 set -eo pipefail
 cd "$CI_PROJECT_DIR"

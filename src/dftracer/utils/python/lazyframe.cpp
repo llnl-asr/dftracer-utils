@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A native LazyFrame exposed to Python: a deferred query over an in-memory
 // dataframe::DataFrame. Builder methods record ops and return a new LazyFrame;
 // nothing runs until collect(), which materializes a native _DataFrame. A

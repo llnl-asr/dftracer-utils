@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example dftracer-utils plugin in pure C: the bounded-size aggregates, whose
  * `param` carries k. Keyed by {pid}: TOPK and BOTTOMK keep the 3 event names
  * with the largest and smallest dur (ordered by the `by` column), APPROX_TOPK

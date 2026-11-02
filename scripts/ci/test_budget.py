@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check ctest durations and fresh line and branch coverage.
 
 Run --record before changing tests. Its .info.sha256.json sidecar binds coverage

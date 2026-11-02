@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_COMMON_EXPORT_H
 #define DFTRACER_UTILS_COMMON_EXPORT_H
 

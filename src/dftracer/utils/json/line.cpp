@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/json/line.h>
 
 namespace dftracer::utils::json {

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Generate Mermaid collaboration diagrams for the Python API reference.
 
 Parses the package's Python sources with ast and, for each api page, draws the

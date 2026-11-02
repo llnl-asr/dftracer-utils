@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Prune oracle: file verdicts and chunk sets of every pruning consumer over a
 // fixed, generated corpus and query list, compared with a recording. The View
 // consumer is `gather_units`, the path every View scan plans through. Dynamic

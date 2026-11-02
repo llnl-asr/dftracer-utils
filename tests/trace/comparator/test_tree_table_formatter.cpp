@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 #include <dftracer/utils/trace/comparator/tree_table_formatter.h>

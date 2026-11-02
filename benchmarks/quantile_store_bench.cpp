@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: adding 1M lognormal(sigma 2) values to a quantile sketch.
 //
 // Run one case per process so `perf stat` counts only that case:

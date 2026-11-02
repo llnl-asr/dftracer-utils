@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import atexit
 from importlib.metadata import PackageNotFoundError, version
 from typing import Optional

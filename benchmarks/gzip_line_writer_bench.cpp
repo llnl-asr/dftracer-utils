@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: NDJSON lines through GzipLineWriterBlocking (member size, level,
 // compress=false) against a replica of the dftracer_pgzip pipeline (fixed
 // 4 MiB raw chunks, N GzipMemberCompressor workers, ordered writer). The

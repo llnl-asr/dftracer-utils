@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Default library name to dftracer_utils if not specified
 if(NOT LIBRARY_NAME)
   set(LIBRARY_NAME "dftracer_utils")

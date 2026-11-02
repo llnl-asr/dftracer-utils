@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Delete the PyPI prereleases <version>.postN.devX of one release but the newest.
 
 PyPI has no API to delete a release, so this logs in to the website through

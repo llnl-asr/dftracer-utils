@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Lazy unnest, compare_agg and the generic frame_op plan step: schema, explain,
 // parity with the eager op under morsels, the C ABI and the registry rows.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every literal leaf of the golden filters, evaluated as that leaf and as the
 // same condition in expression form, gives the same result on each record.
 

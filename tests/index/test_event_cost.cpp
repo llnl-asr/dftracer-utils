@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The cases count work, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/build/batch_builder.h>

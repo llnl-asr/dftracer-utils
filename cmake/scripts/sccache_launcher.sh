@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # Vectorscan's build_wrapper.sh reruns the compile command with
 # --print-file-name; sccache takes that for a compile and fails on it.
 for arg in "$@"; do

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: the page heap against the C library malloc.
 //
 // Both sides run the same code through two small policies, so nothing differs

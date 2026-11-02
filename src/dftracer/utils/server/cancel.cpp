@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/server/cancel.h>
 #include <dftracer/utils/server/signal_handler.h>

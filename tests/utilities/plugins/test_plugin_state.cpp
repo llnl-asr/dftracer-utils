@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Tier 2: a plugin registers its own mergeable state type and the host drives
 // it like an accumulator without knowing its shape - one instance per worker
 // slice, merged at the fan-in, spilled past the memory budget, finalized once.

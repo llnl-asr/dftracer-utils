@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example producer plugin: a ZERO-KEY dft.ext.agg accumulator, the AggState
  * form of a scalar handle. Each batch arrives as a column dataframe and is
  * folded whole into one accumulator named com.example.dur_stats, computing the

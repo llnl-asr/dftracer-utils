@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """
 End-to-end Dask integration tests for  utilities
 Tests combining indexer and reader functionality with Dask distributed computing

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/value_ids.h>

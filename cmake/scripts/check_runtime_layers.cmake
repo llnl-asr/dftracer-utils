@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Check the layering of runtime: a file includes only its own part or a part
 # of lower rank. Equal ranks do not include each other. There is no exception
 # and no allow list. Ranks: executor, mpi, distributed 0; coro 1; io, tasks 2;

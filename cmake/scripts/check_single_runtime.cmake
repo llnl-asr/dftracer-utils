@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Check that the library makes no runtime of its own: every part runs on the
 # process runtime, which only runtime/runtime.cpp makes (default_runtime(),
 # configure_default_runtime()). Tests and benchmarks may build a Runtime to

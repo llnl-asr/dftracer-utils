@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: the coroutine runtime primitives on a 4 thread executor.
 //
 // Every case runs one top-level coroutine on a ThreadPoolExecutor. The clock

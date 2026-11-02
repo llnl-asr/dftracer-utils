@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Built-in dataframe column ops seeded into the op registry, one per line.
  * APPEND ONLY - a name is a stable public key; never rename or repurpose one.
  *

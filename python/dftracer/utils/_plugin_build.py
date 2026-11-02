@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Shared compile backend for DFTracer plugins: resolve the ABI include dir,
 select a compiler, and build a source file to a loadable shared object.
 

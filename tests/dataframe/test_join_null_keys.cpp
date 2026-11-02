@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A join does not match a null key with a null key unless `nulls_equal`: every
 // kind against hand-computed rows, several null rows, a null in one of two
 // keys, the refusals, the lazy and the spilled join, and the C ABI.

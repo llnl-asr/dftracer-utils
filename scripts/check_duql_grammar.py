@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Build scripts/duql.lark with Lark's LALR(1) generator and check samples.
 
 Run: uv run --no-project --python ">=3.8" --with lark python scripts/check_duql_grammar.py

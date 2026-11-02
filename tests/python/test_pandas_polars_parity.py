@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The pandas and polars spellings on DataFrame / Series / LazyFrame, and the
 ``dftracer.utils.pandas`` / ``dftracer.utils.polars`` shim modules. Every
 alias is checked against the engine op it forwards to, by value."""

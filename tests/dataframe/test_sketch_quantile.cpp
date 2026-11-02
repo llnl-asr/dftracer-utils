@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The SketchQuantile group-by op merges base64 DDSketch cells per group and
 // reads one quantile; DDSketch::deserialize refuses hostile bytes.
 

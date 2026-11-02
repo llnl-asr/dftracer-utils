@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Generate comprehensive C++ API reference pages from Doxygen XML output.
 
 Auto-discovers all public classes/structs from Doxygen XML, groups them

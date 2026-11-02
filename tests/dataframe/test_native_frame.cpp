@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A DataFrame round-trips through the native byte format, with or without
 // Arrow, and foreign bytes read as no frame.
 

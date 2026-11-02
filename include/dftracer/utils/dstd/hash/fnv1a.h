@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DSTD_HASH_FNV1A_H
 #define DFTRACER_UTILS_DSTD_HASH_FNV1A_H
 

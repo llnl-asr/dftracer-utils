@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // dftu_op_count()/dftu_op_at() must contain exactly the rows in
 // exported_series_ops.def and exported_frame_ops.def, plus the fixed set
 // host_ops.cpp registers at runtime - no more, no less.

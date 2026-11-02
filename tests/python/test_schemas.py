@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Record schemas: registration, classes, loading, detection and explain."""
 
 import gzip

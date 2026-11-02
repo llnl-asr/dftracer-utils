@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Time-unit selection for normalizing trace ``ts``/``dur``.
 
 DFTracer traces declare their native time unit via a leading ``CM`` time_metric

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The partial view aggregation, its meta and its merge agree: one column order,
 dtypes kept across the merge, and the same results through a Dask cluster."""
 

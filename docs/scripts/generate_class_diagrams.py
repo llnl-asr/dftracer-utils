@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Generate Mermaid diagrams for the C++ API reference from Doxygen XML.
 
 Two kinds of diagram are produced:

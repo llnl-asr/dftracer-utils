@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__) || defined(__DragonFly__)
 

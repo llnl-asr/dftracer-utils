@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The trace View C ABI (dftu_view_*): every builder/terminal run through the
 // C handle must agree with the equivalent dftracer::utils::trace::views::View
 // call, and a builder must never consume its input.

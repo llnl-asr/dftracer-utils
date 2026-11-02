@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every pipeline runs on the one process runtime. An explicit
 // with_elastic()/with_eager() sets the mode of its pool, a pipeline that sets
 // none keeps it, and DFTRACER_UTILS_ELASTIC decides the mode of a new runtime.

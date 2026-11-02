@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // dftu_source_vt::schema_types lets a provider declare each column's type
 // (dftu_schema_add_field/add_child_field), which ProviderSource::schema()
 // reports instead of the TypeId::Unknown every column got before. Exercises

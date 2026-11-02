@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // dftu_provider_register/unregister and dftu_lazyframe_from_provider: a
 // process-lifetime, name-keyed registry of Source vtables, mirroring the op
 // registry in op_registry.cpp. dftu.svc.providers@0 (plugins/abi/providers.h)

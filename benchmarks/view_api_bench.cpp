@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: each case runs one query two ways over the same generated trace
 // in one process: a baseline (the raw scan plan, the engine over its rows, or
 // one collect per plan) and the same query through View. 5 warmups, then 20

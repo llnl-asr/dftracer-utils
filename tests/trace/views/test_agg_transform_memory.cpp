@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A group-key transform must stream: the engine adds each transformed key
 // column to a morsel as it passes and never holds the scanned rows. Each run is
 // a child process (this binary started again with --child) so its peak RSS is

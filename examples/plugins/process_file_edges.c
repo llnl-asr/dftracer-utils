@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example dftracer-utils plugin in pure C: a weighted process<->file bipartite
  * graph, and the plain shape of a dft.ext.agg accumulator - a two-column key
  * plus several aggregates over the same batch. Each batch arrives as a column

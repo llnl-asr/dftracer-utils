@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Key shapes of a @jit.plugin: multi-key, integer, float and arg keys, two-key
 maps, moments, argmax, top-k and sampling."""
 

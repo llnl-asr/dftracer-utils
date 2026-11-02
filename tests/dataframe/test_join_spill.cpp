@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A join whose right side outgrows the memory budget runs partitioned on disk
 // and gives the rows of the in-memory join, checked against a nested loop.
 

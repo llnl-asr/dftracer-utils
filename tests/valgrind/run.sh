@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 #
 # Valgrind test runner for dftracer-utils, executed inside the Linux container
 # defined by tests/valgrind/Dockerfile. Invoked by the `valgrind*` Makefile

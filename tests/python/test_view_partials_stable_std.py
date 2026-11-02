@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The view aggregation's std and var do not lose their digits when the mean is
 large next to the spread: per-partition partials merged by the pairwise formula,
 and the View's own var/std through TraceViewer and across shards."""

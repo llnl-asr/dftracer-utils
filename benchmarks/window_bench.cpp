@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: window frame functions over a partitioned, ordered frame, rows
 // and range frames of width 100 and 10000, with FRAME_SUM as the baseline.
 //

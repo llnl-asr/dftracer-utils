@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DUQL_ABI_H
 #define DFTRACER_UTILS_DUQL_ABI_H
 

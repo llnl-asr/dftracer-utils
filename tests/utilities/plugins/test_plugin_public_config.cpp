@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Builder::add(path, ConfigTree) takes a type only reachable through the
 // private src/ header, so a caller with only <dftracer/utils/plugins/
 // plugins.h> could not build config for it. This file includes ONLY the

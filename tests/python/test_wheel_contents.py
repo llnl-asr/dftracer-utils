@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """
 Guard the wheel payload: C++ development artifacts belong to `make install`.
 

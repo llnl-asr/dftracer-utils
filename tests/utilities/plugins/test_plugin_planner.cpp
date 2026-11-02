@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Planner level 1: the plugin set feeds the UNION of every plugin's plan_duql
 // into the scan's index prune. Covers the union-query construction (dedup, bail
 // on a no-query or unparseable plugin, single-vs-multi) and the end-to-end

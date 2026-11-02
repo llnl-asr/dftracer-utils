@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Spill files show their live bytes in the "spill" external slot. On a disk
 // they are reported only, so they never take budget from a reservation.
 

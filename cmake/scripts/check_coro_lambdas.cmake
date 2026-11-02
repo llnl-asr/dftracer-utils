@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Fail when a lambda with a by-value capture sits inside a co_await expression
 # under src/ and include/. GCC 12.1 destroys such a lambda temporary twice, so
 # the lambda must be a named local that is awaited after it. A capture list may

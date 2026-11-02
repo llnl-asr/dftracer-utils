@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Check the index module's layering: a file in a lower layer must not include
 # a higher layer or the query engine (trace/views), except for the edges in
 # ALLOWED. Those edges are known debt that no plan stage removes yet. An

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Fidelity tests for ReplayEngine.
 //
 // "Fidelity" here means: when maintain_timing is on, each event is dispatched

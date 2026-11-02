@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DUQL_OVERLAP_H
 #define DFTRACER_UTILS_DUQL_OVERLAP_H
 

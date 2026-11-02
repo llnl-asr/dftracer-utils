@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/no_destructor.h>
 #include <dftracer/utils/dstd/shutdown.h>
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/trace/internal/index_root.h>

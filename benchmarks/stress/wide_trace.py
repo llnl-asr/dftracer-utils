@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Write a wide dftracer trace for the index build memory benchmark.
 
 Each event carries a few of PATHS distinct args keys (numbers and strings),

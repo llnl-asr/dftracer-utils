@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Gathers keep a string column's layout: a view stays a view over the same
 // blobs, a dictionary stays a dictionary over the same child, and the values
 // and nulls equal the flat path.

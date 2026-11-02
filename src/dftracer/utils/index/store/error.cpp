@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/index/store/error.h>
 
 namespace dftracer::utils::index::store {

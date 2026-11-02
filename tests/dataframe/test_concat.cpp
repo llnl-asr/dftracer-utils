@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Vertical concatenation and union, eager and lazy, through the C++ facade,
 // the C ABI and the op registry.
 

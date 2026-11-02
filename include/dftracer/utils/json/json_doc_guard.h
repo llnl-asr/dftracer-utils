@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/json/record_parser.h>
 #ifndef DFTRACER_UTILS_JSON_JSON_DOC_GUARD_H
 #define DFTRACER_UTILS_JSON_JSON_DOC_GUARD_H

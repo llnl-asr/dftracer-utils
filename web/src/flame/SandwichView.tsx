@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { FlameNode } from "../data/types";
 import { Flamegraph } from "./flamegraph";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The OwnedLazyFrame fluent facade: every method reaches the host through
 // DFTU_SVC_OPS::run_lazy (dftu.lazy.* in the op registry), never by linking
 // dftu_lazyframe_* directly, so this exercises the run_lazy dispatch path

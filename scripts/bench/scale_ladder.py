@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Run dftracer-utils CLI tools on large trace sets and write one TSV row per run.
 
 Run it with: uv run --no-project --python '>=3.8' scripts/bench/scale_ladder.py ...

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Human-readable byte and duration parsing for user-facing arguments.
 
 Mirrors the C++ helpers in ``common/str_format.h`` so a Python caller can

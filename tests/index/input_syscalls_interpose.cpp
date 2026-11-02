@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Counts the path-based stat and open calls of the process it is injected into
 // (DYLD_INSERT_LIBRARIES on macOS, LD_PRELOAD on Linux). At exit it writes
 // "<class>\t<count>\t<path>" lines to DFTRACER_UTILS_TEST_SYSCALL_LOG. fd-based

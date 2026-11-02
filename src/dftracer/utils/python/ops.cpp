@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The Python view of the dataframe op registry: op_list / op_info for
 // discovery, and one generic op_run that decodes an op's packed signature to
 // marshal the Python arguments into dftu_op_arg and hand columns to/from the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A plugin accumulator whose group cardinality dwarfs the scan's memory budget
 // must spill to disk instead of growing an unbounded group map, and must come
 // back with exactly the aggregate an unbudgeted run produces.

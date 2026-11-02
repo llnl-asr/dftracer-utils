@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Example dftracer-utils plugin: counts events matching a predicate built with
 // the ergonomic F/Field builder, e.g. `F("dur") > 300`. The plugin includes
 // only plugin.h and links nothing; the host parses the rendered DSL string.

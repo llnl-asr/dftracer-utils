@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """RTD/offline stub for the native ``dftracer_utils_ext`` module.
 
 Installs a lightweight pure-Python stand-in so the docs build (autodoc) works

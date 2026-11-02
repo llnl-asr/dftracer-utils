@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Tests for the distributed-build path producing a unified-shape index.
 
 Covers per-file AGG markers, ensure_indexed no-op after build, and end-to-end

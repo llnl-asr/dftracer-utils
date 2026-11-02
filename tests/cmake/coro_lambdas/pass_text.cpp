@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // co_await f([x] { return x; });
 /* co_await f([x]
    { return x; }); */

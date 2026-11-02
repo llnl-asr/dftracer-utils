@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin whose factory asks the build-phase host for a service the
  * load phase does not have. The host must answer NULL and refuse the load
  * naming the service, rather than handing over a half-built host.

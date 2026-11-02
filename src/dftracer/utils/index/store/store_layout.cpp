@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/index/store/store_layout.h>
 
 #include <string>

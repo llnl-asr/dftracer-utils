@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The polars frame spellings that the pandas surface does not already
 cover, each a thin name over an engine op or an Arrow export: the
 horizontal reductions, the stacks, `partition_by`, `gather_every`,

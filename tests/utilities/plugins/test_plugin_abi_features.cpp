@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // In-process coverage for the plugin ABI surface the host-service suite leaves
 // untested: the config tree, query compile/match and plan_duql event routing,
 // and the coroutine control ops (drive path).

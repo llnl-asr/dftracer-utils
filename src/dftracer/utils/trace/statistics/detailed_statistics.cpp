@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/trace/statistics/detailed_statistics.h>
 
 #include <cmath>

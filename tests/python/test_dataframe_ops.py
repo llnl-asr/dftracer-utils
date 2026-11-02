@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Tests for the native analytical / relational DataFrame methods.
 
 These primitives (``window``, ``gap_fill``, ``join``, ``asof``, ``interval``,

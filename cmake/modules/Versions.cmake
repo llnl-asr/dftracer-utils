@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Two kinds of version. The release version names a tagged state of the repo:
 # setuptools_scm hands it to scikit-build-core as SKBUILD_PROJECT_VERSION, and a
 # plain CMake build asks git. The interface versions (api, abi, index, duql) are

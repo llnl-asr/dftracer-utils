@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The query cache: rollups and materialized views inside the index root, in
 // its rollups/, lookups/ and views/, capped with LRU eviction, disposable, and
 // keyed by record schema.

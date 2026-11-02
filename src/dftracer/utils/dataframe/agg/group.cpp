@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <concurrentqueue.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/platform_compat.h>  // hardware_concurrency

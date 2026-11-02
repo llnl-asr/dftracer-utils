@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A native vec batch exposed to Python: a named set of dataframe::Columns (our
 // SIMD columnar format) held as a single STRUCT column. Series access,
 // filtering, and row ops stay in vec; Arrow/pandas/polars are produced only on

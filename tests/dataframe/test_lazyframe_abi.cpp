@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The dftu_lazyframe C ABI: wrap a materialized frame as a lazy plan, chain a
 // couple of builder ops, and collect back to the eager equivalent. Handles are
 // freed explicitly so asan flags any leak.

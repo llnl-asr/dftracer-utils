@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The pandas ``iloc`` / ``loc`` / ``at`` / ``iat`` accessors and ``resample``
 over the column model: the index is a named column (``set_index``) or the row
 position, so every read is ``slice`` / ``take`` / ``filter`` / ``select`` and

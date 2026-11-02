@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The unified expression DSL: one ``F`` for both column values and row filters.
 
 ``F.dur`` (or ``col("dur")`` / ``F("args.level")``) is an :class:`Expr` leaf.

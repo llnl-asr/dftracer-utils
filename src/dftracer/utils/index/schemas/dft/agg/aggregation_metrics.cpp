@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
 
 #include <algorithm>

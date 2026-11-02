@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Integer window sums and differences are exact, not wrapped."""
 
 import numpy as np

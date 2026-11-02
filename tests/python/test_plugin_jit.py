@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """End-to-end test for @jit.plugin authoring.
 
 A plugin authored in Python is AST-compiled to a native C plugin, built to a

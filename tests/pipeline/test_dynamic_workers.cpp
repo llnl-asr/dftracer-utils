@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Phase-1 mechanism test for the elastic runtime: add_worker/retire_worker on
 // ThreadPoolExecutor must be safe under a live stream of work - no stranded
 // task, no crash, no UB. Run under the asan/tsan presets for the real value:

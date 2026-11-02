@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Build and run compiled DFTracer analysis plugins from Python.
 
 A plugin is a compiled shared library exporting the ``dftracer_plugin`` ABI

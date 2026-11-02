@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 function(target_enable_coroutine target)
   # Enable C++20 coroutines support Modern C++20 compilers support coroutines
   # natively without special flags Only older GCC (< 11) needs -fcoroutines flag

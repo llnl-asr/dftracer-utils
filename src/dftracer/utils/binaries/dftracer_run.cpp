@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>

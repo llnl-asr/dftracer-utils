@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // HashArena and the lazy unique() cursor built on it: keys that share a hash
 // still dedup by their bytes, and unique() keeps the first row per key in
 // input order when keys are the same length.

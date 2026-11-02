@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: what one read of the OS memory pressure signals costs, and so how
 // often the memory manager can afford to read them.
 //

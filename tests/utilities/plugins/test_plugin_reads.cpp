@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // dftu_plugin::reads projects the batch down to the columns a plugin declares.
 // Declaring none still materializes every fixed column plus one Series per
 // distinct arg key in the batch - the cost this feature exists to avoid.

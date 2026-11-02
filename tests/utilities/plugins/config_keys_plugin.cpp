@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin that declares the config keys it reads, so the host can
  * validate a caller's config instead of silently ignoring what it does not
  * recognize.

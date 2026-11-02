@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/vector.h>
 

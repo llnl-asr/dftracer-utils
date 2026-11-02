@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A column or frame slice is a view with the values of a gather: same values,
 // nulls, null count, type and layout, sharing the value storage and valid after
 // the base is released.

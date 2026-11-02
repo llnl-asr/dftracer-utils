@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The index answers an unfiltered query the way a full scan of the traces
 // does. Every supported shape is first answered by the scan with the partials
 // bypassed, then the traces are deleted and the same shape is asked again.

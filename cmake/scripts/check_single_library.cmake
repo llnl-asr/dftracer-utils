@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Check that a build with DFTRACER_UTILS_SINGLE_LIBRARY links exactly one
 # library of ours, libdftracer_utils, into the Python extension and into a CLI
 # tool. A library per area in the list means the split libraries leaked in.

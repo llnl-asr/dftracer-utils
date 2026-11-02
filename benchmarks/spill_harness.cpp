@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Harness: peak memory, spilled bytes and wall time of every LazyFrame op that
 // can spill, at memory budgets of 4 MiB, 64 MiB, 1 GiB and 4 GiB.
 //

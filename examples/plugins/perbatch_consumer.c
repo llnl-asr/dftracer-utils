@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example consumer plugin: each batch it consumes the producer's per-batch
  * value on the port named com.example.perbatch_dur and accumulates it, logging
  * a total at finalize. It names the port in `consumes`, so the host runs the

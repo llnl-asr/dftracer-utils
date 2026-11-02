@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Indexer utilities for building and managing trace indexes."""
 
 import json

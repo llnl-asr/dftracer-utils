@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/store/crc.h>
 #include <libdeflate.h>
 

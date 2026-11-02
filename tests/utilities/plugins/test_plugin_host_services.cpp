@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Exercises the host services a plugin calls synchronously: Arrow batch export,
 // Arrow IPC write, the DDSketch handle, and the dftracer trace write/read
 // round-trip. Drives them through a real PluginFold-wired dftu_plugin_host, the

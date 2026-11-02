@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example dftracer-utils plugin in pure C: the co-moment aggregates, which
  * read `by` as x and `value` as y and stay exactly mergeable across workers.
  * Keyed by {pid}, it regresses dur on ts (slope, intercept, R2, Pearson

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: coalescing decoded gzip members across concurrent readers.
 //
 // Models a loaded server: R concurrent queries each touch the same M members

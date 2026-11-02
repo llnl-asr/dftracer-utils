@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // LazyFrame::asof and LazyFrame::interval under a memory budget must give the
 // rows of the eager ops, in the same order, from sorted and merged inputs: the
 // output leaves in several morsels cut by the budget, which a collect of both

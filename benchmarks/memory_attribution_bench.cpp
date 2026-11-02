@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: how much of a workload's memory the memory pools explain.
 // Each workload runs in its own child process (fork) so the peak of one does
 // not hide the next. A bench thread samples the memory probe and

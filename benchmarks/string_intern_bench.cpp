@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: StringIntern lookups and inserts on realistic short strings.
 //
 // Strings are file paths and function names, a few thousand distinct. The

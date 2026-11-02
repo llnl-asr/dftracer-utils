@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/store/page_cache.h>
 

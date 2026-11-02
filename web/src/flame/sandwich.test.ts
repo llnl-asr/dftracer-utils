@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 import type { FlameNode } from "../data/types";
 import { functionList, functionListAsync, type FnRow } from "./sandwich";

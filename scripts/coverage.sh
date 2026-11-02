@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Coverage script for dftracer-utils
 # Generates code coverage reports using gcov/lcov
 

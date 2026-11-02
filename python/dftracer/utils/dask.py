@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Dask distributed integration for dftracer-utils."""
 
 import os

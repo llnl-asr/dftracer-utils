@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Op parity between the two surfaces.
 
 Every op that exists on both the lazy ``TraceViewer`` (applied in the plan)

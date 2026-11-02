@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/varint.h>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every "dftu.lazy.*" registry entry, resolved by name and run through
 // dftu_op_run_lazy, must collect to the same result as calling the underlying
 // dftu_lazyframe_* ABI function directly - proving the .def row's tokens and

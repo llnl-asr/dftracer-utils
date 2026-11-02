@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Expressions read flat, view, dictionary and chunked inputs in place and give
 // the values of the same inputs joined into flat buffers.
 

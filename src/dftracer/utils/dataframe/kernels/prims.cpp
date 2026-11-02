@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Unary numeric primitives (ilog2/mix64/popcount/...) as a hand-written Highway
 // dataframe kernel over an Int64/Uint64 column, producing an Int64 column. The
 // scalar tail reuses the core bit/hash primitives so the SIMD body and the tail

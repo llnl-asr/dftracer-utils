@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The pandas ``DataFrame`` surface that is a composition of engine ops:
 column-wise arithmetic, comparisons and transforms (one Series kernel per
 column), the one-row reductions, and the small conveniences (``pipe``,

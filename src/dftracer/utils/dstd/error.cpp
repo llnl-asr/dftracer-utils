@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/memory/heap.h>
 

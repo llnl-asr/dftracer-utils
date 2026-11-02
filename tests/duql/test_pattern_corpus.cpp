@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every pattern of the golden filters, matched by the new engine and by the
 // std::regex translation it replaced, on ASCII strings without newlines: the
 // results agree. Newlines and multi-byte characters are the listed changes.

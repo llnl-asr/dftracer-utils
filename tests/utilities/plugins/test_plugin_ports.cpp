@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Batch-scoped port bus: the FoldPortBus mechanics plus the through-on_batch
 // producer -> consumer handoff wired through real PluginFolds sharing one bus,
 // covering the same-batch delivery, the ordering rule, and the per-batch reset.

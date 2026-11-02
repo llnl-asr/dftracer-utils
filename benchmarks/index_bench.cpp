@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: index build, index size, decode, pruning and a fixed query set
 // over real trace inputs, for comparing index changes against a recorded
 // baseline. Each input runs in its own child process so peak memory is per

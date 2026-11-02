@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/server/signal_handler.h>
 #include <sys/socket.h>
 #include <unistd.h>

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Check that each built shared library carries the interface versions in
 # VERSION: SONAME lib<name>.so.<abi> on Linux, compatibility version <abi> and
 # current version <api> on macOS. Also check that each shared library defines

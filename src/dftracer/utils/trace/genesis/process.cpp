@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/external_sort.h>
 #include <dftracer/utils/common/filesystem.h>

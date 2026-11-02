@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The ``DataFrame`` Python wrapper.
 
 ``DataFrame`` wraps the native ``_DataFrame`` handle: native frame ops plus

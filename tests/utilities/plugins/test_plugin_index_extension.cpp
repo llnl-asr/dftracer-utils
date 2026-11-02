@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A plugin index extension (plugins/abi/index.h) built and used for pruning
 // through a real .so: tests/utilities/plugins/index_minmax_plugin.c keeps the
 // min and max of "v" per chunk as "index_minmax.range".

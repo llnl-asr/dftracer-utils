@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Pipeline-driven replay binary.
 //
 // DAG:

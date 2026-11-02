@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/store/io_fault.h>
 

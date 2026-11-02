@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TESTS_MMIX_LCG_H
 #define DFTRACER_UTILS_TESTS_MMIX_LCG_H
 

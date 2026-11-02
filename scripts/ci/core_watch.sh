@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Print a backtrace for each core dump as soon as it appears, so a CI job shows
 # why a test crashed while the rest of the tests still run.
 #

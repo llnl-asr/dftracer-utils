@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/trace/views/pipeline.h>
 
 #include <stdexcept>

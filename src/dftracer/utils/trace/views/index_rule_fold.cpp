@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/index_rule_fold.h>
 #include <dftracer/utils/trace/views/view_agg_partials.h>

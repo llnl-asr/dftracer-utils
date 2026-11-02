@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Source planning hooks: the SourceAbsorption rule offers ops bottom up to
 // Source::apply_*, and ProviderSource mirrors the hooks over
 // dftu_source_vt::apply. A C++ fake exercises the planner contract; a

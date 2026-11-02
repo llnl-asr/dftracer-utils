@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every filter string from the tests and docs, recorded with the parser that
 // duql replaced: each must parse to the same printed tree, or fail as before.
 

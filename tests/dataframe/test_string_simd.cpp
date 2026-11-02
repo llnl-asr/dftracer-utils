@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The string kernels against a per-row reference: every length 0..130 (a
 // string ending the buffer, one crossing every vector block), random bytes
 // 0..255, nulls, an empty and an all-null column, a column cut from a larger

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The distinct pushdown into the trace scan.
 
 `TraceViewer.filter(...).select(...).unique()` dedups inside the scan workers:

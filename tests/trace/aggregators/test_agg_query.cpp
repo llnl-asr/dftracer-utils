@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The aggregation query over real indexes: every group-by, window and filter
 // gives the rows a per-event aggregator gives for the same events, and
 // the chunks that cannot be answered from the stored partials are re-read.

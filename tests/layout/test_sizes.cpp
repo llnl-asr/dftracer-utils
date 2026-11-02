@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The size and alignment budgets of the structs that carry type- or
 // function-specific parameters (openspec memory-layout). A change that grows
 // one past its budget raises the budget and says why in its design.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Rung 2 of the plugin ladder: a plugin can register itself as a named
 // LazyFrame source (dftu.svc.providers@0), not just consume rows. Drives the
 // real dlopen path through Plugins::Builder against provider_fixture_plugin,

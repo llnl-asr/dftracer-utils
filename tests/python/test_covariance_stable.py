@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """corr, cov and the regressions keep their digits for shifted data (the repro of
 the stable-covariance change), and degenerate input gives the pandas values."""
 

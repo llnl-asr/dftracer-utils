@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>

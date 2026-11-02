@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifdef __linux__
 
 #include <dftracer/utils/common/logging.h>

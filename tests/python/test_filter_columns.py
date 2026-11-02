@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import pytest
 
 from dftracer.utils import DataFrame, col

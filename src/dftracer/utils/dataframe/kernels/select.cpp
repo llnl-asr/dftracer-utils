@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Selection / reshape and hash-predicate Series ops that compose the existing
 // SIMD primitives (argsort, topk_indices, take, filter) or a single hash pass:
 // is_unique/is_duplicated/is_sorted/is_in, drop_nulls, sort, head/tail,

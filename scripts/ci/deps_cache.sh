@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 #
 # Keep dependency installs in the sccache bucket, because the GitHub cache
 # holds only 10 GB per repository.

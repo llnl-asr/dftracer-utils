@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // DFTU_SVC_OPS: exposes the dataframe engine's op registry to a plugin by
 // name, so it can run any registered column/aggregate/frame op on a
 // Series/DataFrame it already holds without linking the dataframe C ABI.

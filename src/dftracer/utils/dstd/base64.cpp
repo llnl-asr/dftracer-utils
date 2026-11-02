@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/base64.h>
 
 namespace dftracer::utils::dstd {

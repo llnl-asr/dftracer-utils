@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/utilities/reader/internal/json_dict_builder.h>
 

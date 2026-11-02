@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example consumer plugin: at finalize it asks dft.ext.agg for the producer's
  * cross-worker-merged accumulator by name; the host hands back the finalized
  * result as a one-row dataframe, which this plugin reads with the dataframe C

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Tests for TaskHandle and Runtime submit/wait_all functionality."""
 
 import time

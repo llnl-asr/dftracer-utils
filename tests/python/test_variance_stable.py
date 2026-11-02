@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """var, std, skew and kurt stay accurate when the mean is large next to the spread.
 
 Every check compares with a corrected two-pass reference (deviations from the

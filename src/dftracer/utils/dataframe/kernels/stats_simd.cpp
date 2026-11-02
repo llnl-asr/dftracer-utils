@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // SIMD companions to the stats kernels: is_between (two lane compares + And,
 // packed into a bool bitmap, mirroring compare_simd) and dot (a fused-multiply
 // accumulate then a horizontal ReduceSum, like the reduce_simd sum). The

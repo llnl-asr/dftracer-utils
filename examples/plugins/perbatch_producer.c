@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example producer plugin: each batch it computes a derived value (the count of
  * events carrying a duration) and publishes it on the batch-scoped port named
  * com.example.perbatch_dur, so a consumer running later in the same fuse order

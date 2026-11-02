@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native equi join over two aggregation-result Batches: builds two Batches with
 // a shared group-key schema and joins them via vec's take() (nulls for OUTER
 // rows). No Arrow. The join only compares the key columns and copies value

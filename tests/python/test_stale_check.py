@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Staleness detection: stat-only (mtime + size) checks and end-to-end refresh.
 
 Covers the Index.find_stale_files binding and verifies that a full

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_io ABI. Each call returns a dftu_task; since
  * C has no coroutines, the C++ harness co_awaits them in sequence (the fd from
  * open flows into write/pread/close). This proves even the async I/O vtable is

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A native vec column exposed to Python: the DSL and pipeline operate on our
 // own SIMD columnar format (dataframe::Series, Highway kernels) and only cross
 // to Arrow at the edges - construction from a pyarrow array and export via the

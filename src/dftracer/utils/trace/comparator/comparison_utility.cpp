@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/trace/comparator/comparison_utility.h>

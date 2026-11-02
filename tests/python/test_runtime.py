@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Test cases for Runtime Python bindings."""
 
 import pytest

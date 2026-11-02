@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Curated qualitative palette tuned for the dark timeline surface. Ordered for
 // separation between neighbours; assigned to names in first-seen order so a name
 // keeps its color across queries (color follows the entity, not its rank).

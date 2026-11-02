@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Concatenating String columns copies buffers and must give what appending the
 // rows one at a time gives: values, nulls, type; a null row holds no bytes even
 // when its own offset range is not empty; empty parts add nothing.

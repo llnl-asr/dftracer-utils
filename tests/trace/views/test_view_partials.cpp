@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The view's aggregate, events and profiles reads answer from the chunk
 // partials of the index: the traces are deleted once the indexes are built, and
 // every result still equals the raw scan taken before.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/agg_spill.h>
 #include <dftracer/utils/dataframe/batch_ops.h>

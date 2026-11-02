@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_svc_writer ABI: create a parallel writer, then
  * open/chunk/close it. Like io, the calls return tasks the C++ harness
  * sequences with co_await. */

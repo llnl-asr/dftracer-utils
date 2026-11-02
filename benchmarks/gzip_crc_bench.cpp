@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: streaming gzip inflate with zlib's own CRC32 versus raw inflate
 // plus libdeflate's CRC32 (GzipStreamInflater). Both verify every member CRC.
 // The zlib side is the system zlib.

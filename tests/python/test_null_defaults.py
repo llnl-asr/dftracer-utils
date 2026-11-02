@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """where and mask default to null, and None is an all-null String constant column."""
 
 from dftracer.utils import DataFrame, lit

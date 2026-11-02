@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_COMMON_ERROR_H
 #define DFTRACER_UTILS_COMMON_ERROR_H
 

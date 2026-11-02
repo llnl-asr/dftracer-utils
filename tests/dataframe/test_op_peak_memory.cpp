@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every lazy op must stay within a small multiple of its memory budget over an
 // input far larger than the budget, or be listed as known debt. The input is
 // generated on demand (it is never resident), the result is streamed and

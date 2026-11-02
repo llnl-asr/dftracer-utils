@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // IEEE-class predicate masks (is_nan / is_finite / is_infinite) as a Highway
 // dataframe kernel over a FLAT float column, producing a bit-packed Bool
 // column. Integer columns never carry NaN/Inf, so those are filled without a

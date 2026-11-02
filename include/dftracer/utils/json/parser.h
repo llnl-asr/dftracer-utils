@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_JSON_PARSER_H
 #define DFTRACER_UTILS_JSON_PARSER_H
 

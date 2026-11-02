@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // concat accepts string and large_string columns, alone or mixed: the result is
 // a string view column, nulls and order are kept, and a string next to an
 // integer still fails.

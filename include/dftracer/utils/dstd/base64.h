@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DSTD_BASE64_H
 #define DFTRACER_UTILS_DSTD_BASE64_H
 

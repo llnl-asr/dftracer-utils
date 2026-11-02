@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Sourced by every phase script. Runs inside a podman container, no LC modules.
 set -eo pipefail
 

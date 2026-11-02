@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Group-by over string keys held as DICTIONARY or VIEW columns folds in place
 // and gives what the flat keys give, one morsel at a time.
 

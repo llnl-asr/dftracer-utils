@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A corrupt index is named, and a repair that does not cure it says so.
 
 The copies of an index that cannot be repaired come from a developer machine, so

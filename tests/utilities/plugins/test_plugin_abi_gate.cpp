@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A plugin built against a different DFTRACER_UTILS_PLUGIN_ABI_VERSION must be
 // refused with a clear error at load, never crash. build_injected_plugins()
 // (used by the other plugin tests) skips dlopen and the ABI gate entirely, so

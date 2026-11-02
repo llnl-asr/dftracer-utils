@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """duql (Field/Expr) serialization and TraceViewer.filter(Expr) wiring."""
 
 import gzip

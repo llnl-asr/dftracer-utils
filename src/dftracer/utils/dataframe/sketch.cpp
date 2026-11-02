@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Adapted from the DDSketch reference implementations of Datadog, see
 // sketch.h. Modified from the originals (Apache-2.0, Copyright 2020-2021
 // Datadog, Inc.), see THIRD-PARTY-NOTICES.md.

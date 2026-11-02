@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Replaces the global operator new and delete with this heap. Link it into
 // executables only, since a shared library would interpose for the whole host
 // process.

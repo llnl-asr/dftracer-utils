@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A CHUNKED column reads, slices, joins and counts bytes as the one-buffer
 // column of the same rows does, and a streamed collect returns one.
 

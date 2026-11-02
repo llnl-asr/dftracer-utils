@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/sharded_mutex.h>

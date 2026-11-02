@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Type stubs for dftracer_utils_ext module."""
 
 from types import TracebackType

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # InstallHelpers.cmake - Utilities for creating pkg-config and CMake package
 # configs
 

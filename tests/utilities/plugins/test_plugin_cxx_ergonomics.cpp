@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Exercises the additive C++-ergonomics layer over the plugin C ABI: the
 // Sketch RAII owner, co_await-able Io ops, the StrId interning view, the
 // AggCol / agg:: aggregate builders, and the owning Arrow helpers.

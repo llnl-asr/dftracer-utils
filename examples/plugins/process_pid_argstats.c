@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example dftracer-utils plugin in pure C: the extremum-witness aggregates,
  * which take a second input column through `by`. Keyed by {pid}, ARGMAX and
  * ARGMIN report the event name at the row maximizing and minimizing dur, and

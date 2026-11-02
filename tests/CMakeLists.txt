@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # ##############################################################################
 # Dependencies
 # ##############################################################################
@@ -136,6 +137,12 @@ add_test(
   COMMAND
     sh -c
     "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/include/dftracer/utils/common\" \"$0/src/dftracer/utils/common\" | grep -vE '<dftracer/utils/(common|dstd|memory)/'); if [ -n \"$bad\" ]; then echo \"include from common/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(
+  NAME spdx_headers
+  COMMAND
+    sh -c
+    "cd \"$0\" && bad=$(find include src tests benchmarks examples python scripts cmake web/src docs/source docs/scripts .gitlab CMakeLists.txt setup.py bootstrap.sh jsonlines.sh -type f \\( -name '*.h' -o -name '*.hpp' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.inl' -o -name '*.def' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.py' -o -name '*.pyi' -o -name '*.sh' -o -name '*.cmake' -o -name CMakeLists.txt \\) ! -path 'cmake/vendor/*' ! -path 'cmake/modules/CPM.cmake' ! -path 'docs/source/cpp_api/_generated/*' ! -path '*/node_modules/*' ! -path '*/__pycache__/*' ! -path 'python/dftracer/utils/_version.py' -exec grep -L 'SPDX-License-Identifier: MIT' {} + 2>/dev/null); if [ -n \"$bad\" ]; then echo \"source files without an SPDX-License-Identifier line:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME dstd_no_upward

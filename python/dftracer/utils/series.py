@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The ``Series`` Python wrapper over the native columnar engine.
 
 The C extension exposes a low-level ``_Series`` handle carrying the SIMD ops and

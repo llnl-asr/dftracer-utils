@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Build the C and C++ install layout (bin, lib, include, CMake package files)
 # with Release dependencies and pack it.
 #

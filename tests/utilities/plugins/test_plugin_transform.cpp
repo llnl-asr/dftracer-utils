@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // dftu_plugin::transform: a plugin rewrites the batch, and every plugin after
 // it in fold order receives the rewrite instead of the scanned events - rows
 // dropped, values changed, a column added - while a plugin before it still

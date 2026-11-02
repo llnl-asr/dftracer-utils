@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # usage: run_baseline.sh <build-dir> <rounds> <output-file>
 # Runs view_api_bench, index_bench, duql_eval_bench, group_transform_bench and
 # the Python import once per round, in that order, for <rounds> rounds. Writes

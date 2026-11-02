@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: Prefilter::may_match per line for queries with 1, 3 and 16
 // needles, on synthetic trace lines where about a quarter pass, and for one
 // OR clause of 2 to 16 needles. With PREFILTER_PER_NEEDLE set in the

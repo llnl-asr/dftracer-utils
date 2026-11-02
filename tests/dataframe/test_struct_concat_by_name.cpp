@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Struct columns concatenate by field name, not by position.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN

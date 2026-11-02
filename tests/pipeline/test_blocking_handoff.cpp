@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Permit-based blocking handoff: re-entrant run_blocking() must release the
 // caller's run slot, keep the pool making progress, and conserve permits. Run
 // under asan/tsan for the real value: worker churn and permit park/unpark while

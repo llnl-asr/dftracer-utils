@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Generate a C++ source that embeds a text asset (a built web page) as a byte
 # array, exposing it through a dftracer::utils::server accessor function. A byte
 # array avoids the 65536-char portability ceiling on string literals that large

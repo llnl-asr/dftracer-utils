@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A scan whose morsels carry columns the plan schema does not declare: every
 // op that keeps rows keeps them, equal to a plan that declares them.
 

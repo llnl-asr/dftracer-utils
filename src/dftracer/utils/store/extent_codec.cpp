@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The _advanced create functions take the tracked allocator.
 #define ZSTD_STATIC_LINKING_ONLY
 #include <dftracer/utils/dstd/bits.h>

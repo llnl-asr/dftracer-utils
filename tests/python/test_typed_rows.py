@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """TraceViewer.rows(cls): records as schema class instances."""
 
 import gzip

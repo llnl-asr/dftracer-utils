@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Measures the index store writer and reader, as the indexer uses them, over
 // one payload, key and value set and one thread list: write GB/s at 1, 16 and
 // 96 threads with one shared file against one file per thread, the writes and

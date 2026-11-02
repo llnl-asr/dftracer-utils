@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Exercises the additive C++ wrappers layered over the plugin C ABI: the typed
 // Agg accumulator (Host::agg, the agg:: factories, Host::agg_result), the
 // Config array accessors, and the typed publish/consume ports. Each keeps the

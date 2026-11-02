@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Generic named result channel: a plugin emits an opaque blob at finalize and
 // the host collects it verbatim into the named-result registry; a second case
 // checks the registry moves and releases an emitted Arrow array.

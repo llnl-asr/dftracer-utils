@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Hash join, eager and lazy: every JoinHow against hand-computed rows, with
 // the lazy path checked for parity against the eager one under morsels small
 // enough that the right-preserving flush runs after several probes.

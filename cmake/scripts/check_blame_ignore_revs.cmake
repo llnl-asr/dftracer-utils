@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Check .git-blame-ignore-revs: every entry is a commit, and every file it
 # changes is a pure rename or equals its parent version once all whitespace is
 # removed. Skips on a shallow clone or a tree without .git, where parents are missing.

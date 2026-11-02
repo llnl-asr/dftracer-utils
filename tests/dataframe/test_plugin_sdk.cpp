@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The plugin SDK's C++ wrappers: a source (plugins/plugin/source.h) and a plan
 // node (plugins/plugin/node.h) written as classes, adapted to their C vtables
 // and driven by the host through the same adapters a loaded plugin gets.

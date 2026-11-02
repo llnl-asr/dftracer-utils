@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Filter Valgrind XML report(s) to records attributable to our own code.
 
 Usage: ours_only.py [--match dftracer] [--topk 4] <xml-file>...

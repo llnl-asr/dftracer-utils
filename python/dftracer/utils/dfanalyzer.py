@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Helpers bridging the C++ aggregation index to dfanalyzer.
 
 These were previously vendored inside dfanalyzer; they belong here since they

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # LibraryHelpers.cmake - Utilities for creating libraries with automatic
 # shared/static variants, exports, and package configs
 

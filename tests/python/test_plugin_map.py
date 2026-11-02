@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """End-to-end tests for keyed accumulators.
 
 A jit-authored plugin declares a keyed accumulator; the host folds each batch

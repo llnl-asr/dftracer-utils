@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # ci.yml -> valgrind-python.
 set -eo pipefail
 cd "$CI_PROJECT_DIR"

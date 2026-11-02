@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The factory is the plugin's init: it receives a host and may register with
 // it. What it may do there is enforced, not documented - the build-phase host
 // answers only the registration groups, and a factory that reaches past them

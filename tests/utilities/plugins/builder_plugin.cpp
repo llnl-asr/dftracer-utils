@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin authored through the fluent C++ builder: a fold, an op and
  * a mergeable state type registered from one factory, which is the shape a
  * single make_plugin<Slice> cannot express.

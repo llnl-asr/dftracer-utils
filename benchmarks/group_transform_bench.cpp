@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: a group-wise transform as the native plan step against the
 // window plan it replaces (a window, a sort by row number and a projection),
 // in memory, over an integer and a float column.

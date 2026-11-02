@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC

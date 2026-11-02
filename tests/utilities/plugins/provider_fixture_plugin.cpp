@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin exercising rung 2 of the plugin ladder: a plugin
  * registering itself as a named LazyFrame source (dftu.svc.providers@0)
  * rather than only consuming rows.

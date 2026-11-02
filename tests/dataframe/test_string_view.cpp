@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // VIEW columns: 16-byte Arrow views over buffers the column keeps alive,
 // their constructor, readers, kernels and the spill, native and IPC writers.
 

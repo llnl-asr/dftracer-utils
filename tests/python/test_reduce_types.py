@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Reductions over a bool or string column, and the error for a reduction the
 engine does not define (openspec change reduce-refuses-unsupported-types)."""
 

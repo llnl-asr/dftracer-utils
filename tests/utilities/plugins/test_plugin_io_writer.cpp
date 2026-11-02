@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Exercises the C++ SDK wrappers added over the plugin C ABI's fuller io
 // surface (vectored readv/writev/preadv/pwritev, lseek, sendfile), the
 // ergonomic Writer over the writer extension, and the coro spawn/then

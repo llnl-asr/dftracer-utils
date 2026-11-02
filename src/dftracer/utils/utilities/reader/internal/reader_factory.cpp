@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/format_detector.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>

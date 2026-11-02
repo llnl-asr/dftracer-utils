@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The string Expr nodes: each against hand-computed rows, infer_type against
 // eval, the C ABI builders, and the typed refusals.
 

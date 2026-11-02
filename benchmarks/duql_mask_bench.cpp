@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: DataFrame masks of duql expression leaves over one frame, the
 // median of several rounds per query.
 //

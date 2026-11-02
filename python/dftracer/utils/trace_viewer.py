@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """``TraceViewer``: a :class:`~dftracer.utils.LazyFrame` over trace files.
 
 A ``TraceViewer`` is a lazy plan whose source is a trace scan. Its trace

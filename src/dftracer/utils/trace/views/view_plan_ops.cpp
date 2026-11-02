@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/hash_map.h>

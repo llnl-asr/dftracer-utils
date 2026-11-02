@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A plugin that declares its config keys gets them validated before it runs:
 // an unknown key is a typo the caller must see, not a setting silently
 // dropped. A plugin that declares none keeps the old unchecked behaviour.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // dftu_node_register/dftu_lazyframe_op: a plugin plan node is a Cursor the
 // engine drives inside the same pull chain lower_cursor_chain builds for
 // every built-in op, not a second protocol. These tests drive hand-written

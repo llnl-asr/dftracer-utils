@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """``Series.apply`` / ``map`` and ``DataFrame.apply`` over a Python function:
 the trace tier runs in the engine with no warning, a ``@jit.series`` /
 ``@jit.op`` function runs through its own path, and anything else runs in

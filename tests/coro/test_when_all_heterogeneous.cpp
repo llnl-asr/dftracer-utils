@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin whose factory registers a dataframe op at load and then
  * runs that op during the scan. Proves registration from the factory happens
  * early enough to matter: the op is in the registry before the first batch,

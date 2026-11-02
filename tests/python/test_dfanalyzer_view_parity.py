@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Parity checks for the View-based dfanalyzer read path.
 
 _typed_read_to_ipc and view_typed_frames are both the View's typed read mapped to

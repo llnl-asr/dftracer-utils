@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """End-to-end tests for the compiled-plugin Plugins binding.
 
 These load a real compiled example plugin (event_counter.so, C ABI) and run it

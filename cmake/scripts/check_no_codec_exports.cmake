@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Fails when a shared library of ours exports a zlib, zlib-ng or zstd symbol.
 # The zlib-ng and zstd archives are linked with hidden visibility, so a process
 # that also loads another zlib or zstd binds none of its own calls to ours.

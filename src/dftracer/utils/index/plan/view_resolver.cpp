@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/index/plan/view_resolver.h>
 
 namespace dftracer::utils::index::plan {

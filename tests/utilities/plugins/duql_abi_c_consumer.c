@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_svc_duql ABI: compiled by the C compiler,
  * sees only abi.h. The C++ harness builds the host, interns the strings, and
  * constructs the events; this compiles the filter and matches through the raw

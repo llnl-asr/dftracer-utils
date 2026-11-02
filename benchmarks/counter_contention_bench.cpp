@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: what a byte counter costs at many threads, and what batching
 // remote frees saves.
 //

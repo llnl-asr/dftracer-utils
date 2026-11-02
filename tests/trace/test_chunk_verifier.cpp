@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Suppress GCC 14.3.0 false positive warnings
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic ignored "-Wnull-dereference"

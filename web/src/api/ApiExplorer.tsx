@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { createResource, createSignal, For, Show } from "solid-js";
 import { apiRequest } from "../data/api";
 

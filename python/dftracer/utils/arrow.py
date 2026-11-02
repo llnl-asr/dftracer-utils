@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Arrow data interchange and I/O for DFTracer.
 
 Provides:

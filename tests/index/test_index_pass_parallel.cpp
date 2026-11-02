@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>

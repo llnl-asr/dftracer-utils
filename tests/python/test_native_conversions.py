@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Conversions of every column type without pyarrow.
 
 The columns are built from Python values (or, for a few types with no Python

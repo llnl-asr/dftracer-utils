@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The counters of a typed collect, answered from the aggregation tier's chunk
 // column blocks: the rows, their per-second means and the shard splits.
 

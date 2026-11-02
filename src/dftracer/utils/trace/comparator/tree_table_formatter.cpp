@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/comparator/tree_table_formatter.h>

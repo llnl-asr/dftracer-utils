@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // GET /api/prov/graph -- the provenance graph of the loaded trace, built by
 // trace::provenance::extract_provenance_graph over the server's indexed
 // file set (bloom-cache chunk skipping, max_concurrent worker slots).

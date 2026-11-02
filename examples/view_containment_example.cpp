@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Containment over a trace with View: the call tree (per-event level/parent_id)
 // and the folded flamegraph (name-path node frame), both from one buffered fold
 // of one scan.

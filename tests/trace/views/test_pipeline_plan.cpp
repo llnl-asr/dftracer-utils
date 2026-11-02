@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/trace/views/pipeline.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>

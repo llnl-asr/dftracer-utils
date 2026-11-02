@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/schema.h>

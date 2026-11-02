@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: slice-heavy work on dataframe columns and the in-memory ops
 // that build and drop many column buffers.
 //

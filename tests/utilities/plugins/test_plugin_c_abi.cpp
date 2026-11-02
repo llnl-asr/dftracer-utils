@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Drives the C consumers (compose_abi_c_consumer.c, duql_abi_c_consumer.c):
 // the host is built here in C++, but every ABI call happens in a C translation
 // unit through the raw vtables, so this proves the plugin C ABIs work

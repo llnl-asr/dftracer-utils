@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // corr, covar and the regressions stay accurate when the means are large next
 // to the spread, and any partitioning of the rows merges to the one-pass value.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_STORE_RECORD_H
 #define DFTRACER_UTILS_STORE_RECORD_H
 

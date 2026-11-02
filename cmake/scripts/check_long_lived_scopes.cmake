@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Check that only reviewed owners make a long-lived CoroScope. Such a scope is
 # a member that outlives the call that made it, so its owner must hold
 # everything the children touch by pointer and join in its destructor (see

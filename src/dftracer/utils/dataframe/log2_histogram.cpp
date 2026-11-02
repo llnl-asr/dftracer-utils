@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/log2_histogram.h>
 #include <dftracer/utils/dstd/bits.h>
 #include <simdjson.h>

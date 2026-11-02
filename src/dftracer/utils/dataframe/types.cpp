@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Ops that make more rows than they read, or one result for the whole input,
 // must hand it on in morsels that fit the memory budget, and the rows must be
 // the ones an unlimited run gives.

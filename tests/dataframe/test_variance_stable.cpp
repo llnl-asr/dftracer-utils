@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // var/std/skew/kurt stay accurate when the mean is large next to the spread,
 // and any partitioning of a column merges to the one-pass value.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The aggregation tier as the dftracer.agg extension: manifest entries, a
 // rebuild of only the tier, and readers that use it only when it is current.
 

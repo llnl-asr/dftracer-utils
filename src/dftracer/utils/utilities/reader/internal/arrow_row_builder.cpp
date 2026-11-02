@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/utilities/reader/internal/arrow_row_builder.h>

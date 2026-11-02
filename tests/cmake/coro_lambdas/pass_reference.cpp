@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 Task<int> run(int c) {
     int x = 0;
     co_await f([&]() -> Task<int> { co_return 1; });

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_svc_ops ABI: call a host utility that is now a
  * named op (dftu.hash.fnv1a) on a column the consumer builds itself - the same
  * path a C plugin uses to reach the host's call-host registry. */

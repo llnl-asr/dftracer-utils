@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The expression forms of the eager Series.str methods: each gives the eager
 // result (values, nulls, type), infer_type agrees with eval, index / rindex
 // fail the plan run on a miss, and a bool cast then capitalize spells

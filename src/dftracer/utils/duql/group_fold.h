@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DUQL_GROUP_FOLD_H
 #define DFTRACER_UTILS_DUQL_GROUP_FOLD_H
 

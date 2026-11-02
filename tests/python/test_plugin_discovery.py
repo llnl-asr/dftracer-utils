@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Unit tests for find_example_plugin's build-tree selection.
 
 The plugin-host tests (test_plugin_host.py) rely on this to hand back a

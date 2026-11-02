@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The shared test helpers themselves. They are used by every other test, so a
 // defect here reads as a failure somewhere unrelated.
 

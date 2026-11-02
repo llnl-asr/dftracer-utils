@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 find_program(UV_EXECUTABLE uv)
 if(UV_EXECUTABLE)
   file(

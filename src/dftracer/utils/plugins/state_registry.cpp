@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/plugins/reserved_names.h>
 #include <dftracer/utils/plugins/state_registry.h>

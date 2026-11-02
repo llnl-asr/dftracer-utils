@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Build and test dftracer-utils inside a Linux toolchain container.
 #
 # Usage:

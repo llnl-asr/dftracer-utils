@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 #
 # Reproduce the ci.yml jobs in a container (podman/docker) so they can be run on
 # a Linux cluster. Builds a small ubuntu image with CI's apt deps, bind-mounts

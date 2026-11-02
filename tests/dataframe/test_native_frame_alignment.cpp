@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A native frame decodes the same whatever the length of its column names. The
 // blob puts a name of any length before each column, so the typed arrays after
 // it start at any byte, and the decoder may not read them in place.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Fold ordering from the plugins' declared provides/consumes: a consumer
 // registered before its producer still reads the producer's whole-scan
 // accumulator, and the three graph faults (missing provider, duplicate

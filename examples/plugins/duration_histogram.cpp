@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Example dftracer-utils plugin: a log2 histogram of event durations. Each
 // slice accumulates a local histogram over the events it folds, the host merges
 // the per-worker slices, and finalize prints one line per non-empty bucket.

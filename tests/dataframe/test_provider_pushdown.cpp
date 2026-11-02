@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Provider pushdown: the C-ABI adapter (provider_registry.cpp) marshals
 // ScanRequest/ScanResult across dftu_source_vt::scan as dftu_scan_request and
 // an out_pushed array. These tests drive a hand-written dftu_source_vt

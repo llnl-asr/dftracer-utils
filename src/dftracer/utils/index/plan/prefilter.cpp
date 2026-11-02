@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/ast.h>

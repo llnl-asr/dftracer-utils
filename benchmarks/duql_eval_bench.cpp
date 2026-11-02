@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: duql filter evaluation per record, on JSON records and on the
 // field maps the indexed reader builds, for literal-leaf and expression
 // filters. A filter the build cannot parse prints n/a.

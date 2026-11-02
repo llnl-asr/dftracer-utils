@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """``Series.replace`` and ``DataFrame.replace``: scalar, list and dict forms,
 null and NaN rules, dtype rules (openspec change series-replace-list)."""
 

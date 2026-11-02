@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The duql-semantics Expr nodes: every unknown result is a null cell, and
 // numbers compare exactly across integer and double columns.
 

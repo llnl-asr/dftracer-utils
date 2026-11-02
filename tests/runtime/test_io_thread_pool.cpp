@@ -139,7 +139,10 @@ TEST_CASE("a request submitted while threads retire still runs") {
     pool.start();
     std::atomic<std::size_t> done{0};
     std::size_t submitted = 0;
-    for (std::size_t round = 0; round < 60; ++round) {
+    // Rounds until enough retirements raced a submit, since a loaded machine
+    // retires fewer threads per round.
+    for (std::size_t round = 0;
+         round < 60 || (pool.retirements() < 20 && round < 6000); ++round) {
         for (std::size_t i = 0; i < CAP; ++i, ++submitted)
             pool.submit([&] {
                 std::this_thread::sleep_for(500us);

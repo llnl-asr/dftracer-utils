@@ -12,15 +12,29 @@
 
 namespace dftracer::utils::dstd {
 
-/// Destroys and frees with the size of T, so a UniquePtr<Derived> does not
-/// convert to a UniquePtr<Base>, since the sized free would get the wrong size.
+/// Destroys and frees with the size of T. A T with a virtual destructor is
+/// freed unsized at the start of the whole object instead, so a
+/// UniquePtr<Derived> converts to a UniquePtr<Base> of such a base.
 template <class T>
 struct Delete {
     static_assert(!std::is_array_v<T>, "UniquePtr has no array form");
 
+    Delete() noexcept = default;
+    template <class U>
+        requires(std::is_convertible_v<U*, T*> &&
+                 std::has_virtual_destructor_v<T>)
+    Delete(const Delete<U>& /*other*/) noexcept {}
+
     void operator()(T* p) const noexcept {
-        p->~T();
-        memory::deallocate(const_cast<std::remove_cv_t<T>*>(p), sizeof(T));
+        if constexpr (std::has_virtual_destructor_v<T>) {
+            void* block =
+                dynamic_cast<void*>(const_cast<std::remove_cv_t<T>*>(p));
+            p->~T();
+            memory::deallocate(block);
+        } else {
+            p->~T();
+            memory::deallocate(const_cast<std::remove_cv_t<T>*>(p), sizeof(T));
+        }
     }
 };
 

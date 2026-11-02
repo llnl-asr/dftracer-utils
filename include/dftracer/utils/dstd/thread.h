@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_DSTD_THREAD_H
 #define DFTRACER_UTILS_DSTD_THREAD_H
 
+#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <pthread.h>
@@ -16,9 +18,9 @@ namespace dftracer::utils::dstd {
  * memory::allocate, so it counts in the memory budget.
  *
  * The destructor joins a thread that is still joinable, so a Thread never
- * ends the process the way a joinable std::thread does. A thread that cannot
- * be created ends the process with a message, since no caller can go on
- * without it.
+ * ends the process the way a joinable std::thread does. The constructor ends
+ * the process when the thread cannot be created. A caller that can go on
+ * without the thread uses @ref try_start.
  */
 class Thread {
    public:
@@ -49,6 +51,19 @@ class Thread {
         auto start = dstd::make_unique<Start<Body>>(std::forward<Fn>(fn), name);
         launch(&Start<Body>::run, start.get());
         (void)start.release();
+    }
+
+    /// Like the constructor, but a thread that cannot be created is an error.
+    template <class Fn>
+        requires std::is_invocable_v<std::decay_t<Fn>&>
+    static Expected<Thread, Error> try_start(Fn&& fn, StringView name = {}) {
+        using Body = std::decay_t<Fn>;
+        auto start = dstd::make_unique<Start<Body>>(std::forward<Fn>(fn), name);
+        Thread t;
+        const int rc = t.create(&Start<Body>::run, start.get());
+        if (rc != 0) return Unexpected(create_error(rc));
+        (void)start.release();
+        return t;
     }
 
     Thread(Thread&& other) noexcept
@@ -88,7 +103,9 @@ class Thread {
     };
 
     static void set_current_name(const String& name) noexcept;
+    static Error create_error(int rc);
     void launch(void (*run)(void*), void* arg);
+    int create(void (*run)(void*), void* arg) noexcept;
 
     pthread_t handle_{};
     bool joinable_{false};

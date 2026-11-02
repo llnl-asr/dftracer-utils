@@ -47,6 +47,14 @@ struct Derived : Base {
     std::uint64_t extra = 0;
 };
 
+struct PlainBase {
+    std::uint64_t value = 0;
+};
+
+struct PlainDerived : PlainBase {
+    std::uint64_t extra = 0;
+};
+
 struct Throws {
     explicit Throws(bool fail) {
         if (fail) throw std::runtime_error("constructor failed");
@@ -61,7 +69,9 @@ static_assert(std::is_same_v<dstd::StringView, std::string_view>);
 static_assert(std::is_same_v<dstd::Span<const int>, std::span<const int>>);
 static_assert(sizeof(dstd::UniquePtr<int>) == sizeof(int*));
 static_assert(
-    !std::is_convertible_v<dstd::UniquePtr<Derived>, dstd::UniquePtr<Base>>);
+    std::is_convertible_v<dstd::UniquePtr<Derived>, dstd::UniquePtr<Base>>);
+static_assert(!std::is_convertible_v<dstd::UniquePtr<PlainDerived>,
+                                     dstd::UniquePtr<PlainBase>>);
 
 TEST_CASE("Vector copies, moves and grows like std::vector") {
     dstd::Vector<int> v{1, 2, 3};

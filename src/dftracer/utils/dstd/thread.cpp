@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/memory/heap.h>
 #include <pthread.h>
 
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -62,16 +64,33 @@ void Thread::set_current_name(const String& name) noexcept {
 #endif
 }
 
+int Thread::create(void (*run)(void*), void* arg) noexcept {
+    void* raw = memory::try_allocate(sizeof(Trampoline), alignof(Trampoline));
+    if (raw == nullptr) return ENOMEM;
+    auto* t = ::new (raw) Trampoline{run, arg};
+    const int rc = pthread_create(&handle_, nullptr, &trampoline, t);
+    if (rc != 0) {
+        t->~Trampoline();
+        memory::deallocate(t, sizeof(Trampoline));
+        return rc;
+    }
+    joinable_ = true;
+    return 0;
+}
+
+Error Thread::create_error(int rc) {
+    String message("cannot create a thread: ");
+    message.append(std::strerror(rc));
+    return Error(Condition::Internal, message);
+}
+
 void Thread::launch(void (*run)(void*), void* arg) {
-    auto t = dstd::make_unique<Trampoline>(Trampoline{run, arg});
-    const int rc = pthread_create(&handle_, nullptr, &trampoline, t.get());
+    const int rc = create(run, arg);
     if (rc != 0) {
         std::fprintf(stderr, "dftracer-utils: cannot create a thread: %s\n",
                      std::strerror(rc));
         std::abort();
     }
-    (void)t.release();
-    joinable_ = true;
 }
 
 }  // namespace dftracer::utils::dstd

@@ -3,10 +3,12 @@
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
 #include <pthread.h>
 #include <testing_utilities.h>
@@ -23,6 +25,24 @@ namespace {
 struct Keyed {
     int key;
     int order;
+};
+
+struct Base {
+    virtual ~Base() = default;
+    std::int64_t base_value = 1;
+};
+
+struct Other {
+    virtual ~Other() = default;
+    std::int64_t other_value = 2;
+};
+
+// Other is a second base, so an Other* points past the start of the object.
+struct Derived : Base, Other {
+    explicit Derived(std::atomic<int>* d) : destroyed(d) {}
+    ~Derived() override { destroyed->fetch_add(1); }
+    std::atomic<int>* destroyed;
+    char payload[200] = {};
 };
 
 }  // namespace
@@ -121,4 +141,27 @@ TEST_CASE("write_file replaces and append_file extends") {
     CHECK(*dstd::fs::read_file(file.view()) == "x");
     CHECK_FALSE(dstd::fs::write_file(
         (dir.path() / dstd::StringView("no/such/f")).view(), "x"));
+}
+
+TEST_CASE("UniquePtr of a derived type converts to its virtual bases") {
+    std::atomic<int> destroyed{0};
+    const std::size_t before = memory::Manager::get().general().blocks();
+    {
+        dstd::UniquePtr<Base> base = dstd::make_unique<Derived>(&destroyed);
+        CHECK(base->base_value == 1);
+        dstd::UniquePtr<Other> other = dstd::make_unique<Derived>(&destroyed);
+        CHECK(other->other_value == 2);
+        CHECK(static_cast<void*>(other.get()) !=
+              dynamic_cast<void*>(other.get()));
+    }
+    CHECK(destroyed.load() == 2);
+    CHECK(memory::Manager::get().general().blocks() == before);
+}
+
+TEST_CASE("Thread::try_start runs the body or reports an error") {
+    std::atomic<int> ran{0};
+    auto t = dstd::Thread::try_start([&] { ran.fetch_add(1); }, "dftu-try");
+    REQUIRE(t);
+    t->join();
+    CHECK(ran.load() == 1);
 }

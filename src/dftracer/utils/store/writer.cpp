@@ -945,7 +945,7 @@ dstd::Expected<void, dstd::Error> Writer::drop(NamespaceId namespace_id,
     return {};
 }
 
-dstd::Expected<void, dstd::Error> Writer::erase(NamespaceId namespace_id,
+dstd::Expected<bool, dstd::Error> Writer::erase(NamespaceId namespace_id,
                                                 const ScopeKey& scope,
                                                 ByteView begin, ByteView end) {
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
@@ -972,7 +972,7 @@ dstd::Expected<void, dstd::Error> Writer::erase(NamespaceId namespace_id,
                 : find_copy(namespace_id.value, scope_entry->id);
         if (copy_entry == nullptr || !copy_entry->live) {
             delete pending;
-            return {};
+            return false;
         }
         item.copy_id = copy_entry->copy_id;
         item.ordinal = next_ordinal_.fetch_add(1, std::memory_order_relaxed);
@@ -992,7 +992,7 @@ dstd::Expected<void, dstd::Error> Writer::erase(NamespaceId namespace_id,
         pending->durable = namespace_entry->spec.durable;
     }
     committer_.on_erase(pending, std::move(item));
-    return {};
+    return true;
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Writer::flush() {

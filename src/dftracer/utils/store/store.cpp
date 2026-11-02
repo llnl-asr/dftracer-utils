@@ -744,10 +744,18 @@ dstd::Expected<void, dstd::Error> Store::erase(const Namespace& ns,
                                                dstd::ByteView end) {
     auto opened = state_->writer_for_use();
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
-    auto result =
+    auto erased =
         (*opened)->erase(engine::NamespaceId{ns.id}, scope, begin, end);
     state_->bump_version();
-    return result;
+    if (!erased) return dstd::Unexpected<dstd::Error>(erased.error());
+    if (*erased) return {};
+    auto view = snapshot();
+    if (!view) return dstd::Unexpected<dstd::Error>(view.error());
+    if (view->copy_info(ns, scope).state != ScopeState::Ready) return {};
+    return dstd::Unexpected<dstd::Error>(
+        dstd::Error(dstd::Condition::Unsupported,
+                    "erase needs the copy this writer wrote, and another data "
+                    "file holds the current copy of the scope"));
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::flush() {

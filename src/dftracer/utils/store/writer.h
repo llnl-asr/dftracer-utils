@@ -163,9 +163,9 @@ class Writer {
                                            dstd::ByteView end);
     /// Hides the keys of [begin, end) that the current copy holds from earlier
     /// batches (an empty `end` means the last key). The copy stays current and
-    /// a batch committed after it shows its keys again. Without a current copy
-    /// of the scope in this writer the call does nothing.
-    dstd::Expected<void, dstd::Error> erase(NamespaceId namespace_id,
+    /// a batch committed after it shows its keys again. False, with nothing
+    /// queued, when this writer holds no current copy of the scope.
+    dstd::Expected<bool, dstd::Error> erase(NamespaceId namespace_id,
                                             const ScopeKey& scope,
                                             dstd::ByteView begin,
                                             dstd::ByteView end);

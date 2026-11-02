@@ -293,6 +293,9 @@ class Store {
                                            std::uint64_t params_hash);
     dstd::Expected<void, dstd::Error> drop(const Namespace& ns,
                                            const ScopeKey& scope);
+    /// Hides the keys of [begin, end) in the copy of `scope` that this
+    /// process's writer wrote. Unsupported when another data file holds the
+    /// current copy, such as one from another process or an earlier writer.
     dstd::Expected<void, dstd::Error> erase(const Namespace& ns,
                                             const ScopeKey& scope,
                                             dstd::ByteView begin,

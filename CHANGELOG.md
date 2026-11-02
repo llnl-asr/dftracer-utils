@@ -348,6 +348,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Make `Store::erase` return an `Unsupported` error when another data file holds the current copy of the scope, where it reported success and erased nothing.
 - Close cache stores before the runtime stops at process exit, where a cache writer could wait on a stopped runtime.
   Every store, the runtime and the process caches now close from one `dstd::shutdown` that CLI tools and Python call while the runtime still runs, and the first hook registers it at exit.
 - Fix index and store writes that could stall for minutes when many threads append to one store extent at once, because the appenders spun on a lock while the thread that held it waited to run.

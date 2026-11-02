@@ -452,6 +452,30 @@ TEST_SUITE("store api") {
         CHECK(info.params_hash == 11);
     }
 
+    TEST_CASE("erase refuses a copy another writer wrote") {
+        dftu_utils_test::ScopedTestDir dir("store_api_erase_foreign");
+        Store store = open_store(dir);
+        const Namespace ns = register_ns(store, spec_of("dftu.test.erase"));
+        const ScopeKey written = scope_of("/traces/written.pfw");
+        const ScopeKey absent = scope_of("/traces/absent.pfw");
+        put_all(store, ns, written, {{"a", "1"}, {"b", "2"}});
+        REQUIRE(run(store.close()).has_value());
+
+        const Namespace again = register_ns(store, spec_of("dftu.test.erase"));
+        const std::string begin = "a", end = "c";
+        auto refused =
+            store.erase(again, written, view_of(begin), view_of(end));
+        REQUIRE_FALSE(refused.has_value());
+        CHECK(refused.error().condition() == dstd::Condition::Unsupported);
+        CHECK(store.erase(again, absent, view_of(begin), view_of(end))
+                  .has_value());
+        REQUIRE(run(store.flush()).has_value());
+        CHECK(get_value(store, again, written, "a") ==
+              std::optional<std::string>("1"));
+        CHECK(get_value(store, again, written, "b") ==
+              std::optional<std::string>("2"));
+    }
+
     TEST_CASE("a write after close opens a new writer") {
         dftu_utils_test::ScopedTestDir dir("store_api_close");
         Store store = open_store(dir);

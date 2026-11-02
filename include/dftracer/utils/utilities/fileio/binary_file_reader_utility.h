@@ -15,11 +15,12 @@
 namespace dftracer::utils::utilities::fileio {
 
 /**
- * @brief Streaming binary file reader yielding ByteView chunks.
+ * @brief Streaming binary file reader yielding @ref
+ * dftracer::utils::dstd::ByteView "ByteView" chunks.
  *
- * Reads a file in chunks and yields zero-copy ByteView references
- * into the internal read buffer. Each view is valid until the next
- * iteration.
+ * Reads a file in chunks and yields zero-copy @ref
+ * dftracer::utils::dstd::ByteView "ByteView" references into the internal read
+ * buffer. Each view is valid until the next iteration.
  *
  * Usage:
  * @code

@@ -12,7 +12,7 @@
 namespace dftracer::utils::utilities::fileio::lines::sources {
 
 /// Open a file read-only via async I/O, throwing DFTUtilsException(IO) on
-/// failure. Returns an owning ScopedFd.
+/// failure. Returns an owning @ref dftracer::utils::dstd::ScopedFd "ScopedFd".
 inline coro::CoroTask<dstd::ScopedFd> async_open_read(
     const std::string& file_path) {
     ssize_t fd =

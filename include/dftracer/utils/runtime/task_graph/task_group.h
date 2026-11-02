@@ -20,7 +20,7 @@ namespace dftracer::utils::task_graph {
 /**
  * TaskGroup<T> - Handle to a collection of tasks that produce type T
  *
- * Returned by TaskGraph methods to provide access to underlying tasks.
+ * Returned by @ref TaskGraph methods to provide access to underlying tasks.
  * Used for:
  * - Chaining operations (transform, reduce, fan_out, fan_in)
  * - Accessing individual tasks for external dependencies

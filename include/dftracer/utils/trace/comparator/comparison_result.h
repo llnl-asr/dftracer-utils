@@ -195,13 +195,13 @@ double compute_cohens_d(const dataframe::FieldStat& baseline,
 /// Classify a Cohen's d value into a Significance level.
 Significance classify_significance(double cohens_d);
 
-/// Build MetricComparison entries for trace-level metadata
+/// Build @ref MetricComparison entries for trace-level metadata
 /// (file_count, process_count, thread_count, makespan, total_bytes,
 /// total_io_time). Intended for injection into the root SUMMARY.
 std::vector<MetricComparison> build_metadata_metrics(
     const TraceMetadata& baseline, const TraceMetadata& variant);
 
-/// Build MetricComparison entries for a pair of CollapsedMetrics,
+/// Build @ref MetricComparison entries for a pair of @ref CollapsedMetrics,
 /// comparing the requested metrics and percentiles.
 std::vector<MetricComparison> compare_metrics(
     const CollapsedMetrics& baseline, const CollapsedMetrics& variant,

@@ -313,14 +313,14 @@ inline bool DataType::operator==(const DataType& other) const {
            params.same(id, other.params);
 }
 
-/// A scalar DataType with no nested fields.
+/// A scalar @ref DataType with no nested fields.
 inline DataType scalar(TypeId id) noexcept {
     DataType dt;
     dt.id = id;
     return dt;
 }
 
-/// A List<item_type> DataType, with the element named `item_name`.
+/// A List<item_type> @ref DataType, with the element named `item_name`.
 inline DataType list_of(DataType item_type, std::string item_name = "item") {
     DataType dt;
     dt.id = TypeId::List;
@@ -329,7 +329,7 @@ inline DataType list_of(DataType item_type, std::string item_name = "item") {
     return dt;
 }
 
-/// A LargeList<item_type> DataType, with the element named `item_name`.
+/// A LargeList<item_type> @ref DataType, with the element named `item_name`.
 inline DataType large_list_of(DataType item_type,
                               std::string item_name = "item") {
     DataType dt;
@@ -339,7 +339,7 @@ inline DataType large_list_of(DataType item_type,
     return dt;
 }
 
-/// A FixedSizeList<item_type> DataType of `size` elements per row.
+/// A FixedSizeList<item_type> @ref DataType of `size` elements per row.
 inline DataType fixed_size_list_of(DataType item_type, std::int32_t size,
                                    std::string item_name = "item") {
     DataType dt;
@@ -350,7 +350,7 @@ inline DataType fixed_size_list_of(DataType item_type, std::int32_t size,
     return dt;
 }
 
-/// A Struct DataType with the given fields, in order.
+/// A Struct @ref DataType with the given fields, in order.
 inline DataType struct_of(std::vector<Field> fields) {
     DataType dt;
     dt.id = TypeId::Struct;
@@ -358,11 +358,12 @@ inline DataType struct_of(std::vector<Field> fields) {
     return dt;
 }
 
-/// A Map<key_type, value_type> DataType, physically List<Struct{key, value}>.
-/// The single field in `fields` (named "item", matching List's convention) is
-/// that Struct type. Every field built here is marked nullable: Series::
-/// data_type() does not track per-field nullability through the C ABI (it
-/// always reports true), so a non-nullable field could never round-trip equal.
+/// A Map<key_type, value_type> @ref DataType, physically List<Struct{key,
+/// value}>. The single field in `fields` (named "item", matching List's
+/// convention) is that Struct type. Every field built here is marked nullable:
+/// Series:: data_type() does not track per-field nullability through the C ABI
+/// (it always reports true), so a non-nullable field could never round-trip
+/// equal.
 inline DataType map_of(DataType key_type, DataType value_type) {
     DataType entry = struct_of({Field{"key", std::move(key_type), true},
                                 Field{"value", std::move(value_type), true}});
@@ -372,7 +373,7 @@ inline DataType map_of(DataType key_type, DataType value_type) {
     return dt;
 }
 
-/// A Timestamp DataType at `unit` granularity, optionally with `tz`.
+/// A Timestamp @ref DataType at `unit` granularity, optionally with `tz`.
 inline DataType timestamp(TimeUnit unit, std::string tz = "") {
     DataType dt;
     dt.id = TypeId::Timestamp;
@@ -381,8 +382,8 @@ inline DataType timestamp(TimeUnit unit, std::string tz = "") {
     return dt;
 }
 
-/// A Time32/Time64 DataType at `unit` granularity (Second/Milli use Time32's
-/// Int32 storage, Micro/Nano use Time64's Int64 storage).
+/// A Time32/Time64 @ref DataType at `unit` granularity (Second/Milli use
+/// Time32's Int32 storage, Micro/Nano use Time64's Int64 storage).
 inline DataType time_of(TimeUnit unit) {
     DataType dt;
     dt.id = (unit == TimeUnit::Second || unit == TimeUnit::Milli)
@@ -392,7 +393,7 @@ inline DataType time_of(TimeUnit unit) {
     return dt;
 }
 
-/// A Duration DataType at `unit` granularity.
+/// A Duration @ref DataType at `unit` granularity.
 inline DataType duration_of(TimeUnit unit) {
     DataType dt;
     dt.id = TypeId::Duration;
@@ -400,7 +401,7 @@ inline DataType duration_of(TimeUnit unit) {
     return dt;
 }
 
-/// A Decimal128 DataType with the given precision and scale.
+/// A Decimal128 @ref DataType with the given precision and scale.
 inline DataType decimal128(std::int32_t precision, std::int32_t scale) {
     DataType dt;
     dt.id = TypeId::Decimal128;
@@ -408,7 +409,7 @@ inline DataType decimal128(std::int32_t precision, std::int32_t scale) {
     return dt;
 }
 
-/// A Decimal256 DataType with the given precision and scale.
+/// A Decimal256 @ref DataType with the given precision and scale.
 inline DataType decimal256(std::int32_t precision, std::int32_t scale) {
     DataType dt;
     dt.id = TypeId::Decimal256;
@@ -416,7 +417,7 @@ inline DataType decimal256(std::int32_t precision, std::int32_t scale) {
     return dt;
 }
 
-/// A FixedSizeBinary DataType of `size` bytes per row.
+/// A FixedSizeBinary @ref DataType of `size` bytes per row.
 inline DataType fixed_size_binary(std::int32_t size) {
     DataType dt;
     dt.id = TypeId::FixedSizeBinary;
@@ -733,7 +734,7 @@ enum class RankMethod : std::int32_t {
 };
 
 /// Mirrors dftu_groupwise_op: the group-wise transforms (one value per input
-/// row, in input order) a GroupBy / LazyGroupBy runs.
+/// row, in input order) a @ref GroupBy / @ref LazyGroupBy runs.
 enum class GroupwiseOp : std::int32_t {
     CumSum = 0,
     CumMax = 1,
@@ -943,16 +944,16 @@ enum class ScalarTag : std::int32_t {
 /// (ceil(n/8)); other fixed-width types are n * byte_width; String/Binary
 /// (variable-width) return 0 - their sizing is offset-driven, not by this.
 /// FixedSizeBinary, whose width is not a per-TypeId constant, also returns 0
-/// here; use the DataType or (TypeId, fixed_size) overload for it.
+/// here; use the @ref DataType or (TypeId, fixed_size) overload for it.
 constexpr std::size_t buffer_bytes(TypeId t, std::int64_t n) noexcept;
 
 /// Byte width of a fixed-width type. std::nullopt for a variable-width type
 /// (String/Binary/List/Struct/Map, their Large* counterparts) and for a type
-/// whose width is a DataType parameter rather than a per-TypeId constant
+/// whose width is a @ref DataType parameter rather than a per-TypeId constant
 /// (FixedSizeBinary, FixedSizeList): a TypeId alone cannot answer for those,
 /// and returning 0 for "cannot answer" is indistinguishable from 0 meaning
 /// "not fixed width", which is how this used to silently mis-size buffers and
-/// mis-key rows for FixedSizeBinary. Callers holding a DataType or a
+/// mis-key rows for FixedSizeBinary. Callers holding a @ref DataType or a
 /// dftu_series/Series (has `fixed_size`) should use one of the overloads
 /// below instead, which can always answer for FixedSizeBinary.
 constexpr std::optional<std::size_t> byte_width(TypeId t) noexcept {
@@ -999,11 +1000,11 @@ constexpr std::optional<std::size_t> byte_width(TypeId t) noexcept {
     return std::nullopt;
 }
 
-/// Byte width of `t`, given its own `fixed_size` DataType parameter. Answers
-/// correctly for FixedSizeBinary (width = `fixed_size`); every other type
-/// ignores `fixed_size` and defers to the TypeId-only overload. The shape
-/// most callers holding a dftu_series/Series/DataType want, since all three
-/// carry a `fixed_size` field alongside the type.
+/// Byte width of `t`, given its own `fixed_size` @ref DataType parameter.
+/// Answers correctly for FixedSizeBinary (width = `fixed_size`); every other
+/// type ignores `fixed_size` and defers to the TypeId-only overload. The shape
+/// most callers holding a dftu_series/Series/@ref DataType want, since all
+/// three carry a `fixed_size` field alongside the type.
 constexpr std::optional<std::size_t> byte_width(
     TypeId t, std::int32_t fixed_size) noexcept {
     if (t == TypeId::FixedSizeBinary)

@@ -44,7 +44,7 @@ enum class TimeNormalization {
     Seconds = 4,
 };
 
-/// File-level configuration for TraceReader.
+/// File-level configuration for @ref TraceReader.
 struct TraceReaderConfig {
     std::string file_path;  ///< Path to trace file (.pfw.gz or plain).
     std::string index_dir;  ///< Directory containing `.dftindex` roots.

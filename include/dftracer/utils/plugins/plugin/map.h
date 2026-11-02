@@ -72,8 +72,9 @@ class Host {
                            : nullptr};
     }
 
-    /// Spawn `fn(arg)` onto a pool worker and get an AsyncOp to co_await (or
-    /// feed to all()/any()); `arg` is plugin-owned and must outlive the await.
+    /// Spawn `fn(arg)` onto a pool worker and get an @ref AsyncOp to co_await
+    /// (or feed to all()/any()); `arg` is plugin-owned and must outlive the
+    /// await.
     AsyncOp spawn(dftu_work_fn fn, void* arg) const {
         const dftu_svc_coro* c = ext(DFTU_SVC_CORO, coro_ext_);
         return AsyncOp{c && c->spawn ? c->spawn(h_->h, fn, arg) : nullptr};
@@ -84,7 +85,7 @@ class Host {
     AsyncOp spawn(Fn& fn) const {
         return spawn([](void* p) { (*static_cast<Fn*>(p))(); }, &fn);
     }
-    /// Sequence: run `fn(arg)` after `t` completes; returns an AsyncOp to
+    /// Sequence: run `fn(arg)` after `t` completes; returns an @ref AsyncOp to
     /// co_await. `arg` is plugin-owned and must outlive the await.
     AsyncOp then(dftu_task* t, dftu_work_fn fn, void* arg) const {
         const dftu_svc_coro* c = ext(DFTU_SVC_CORO, coro_ext_);
@@ -225,7 +226,8 @@ class Host {
     /// empty result (`!writer`) means the host lacks the writer group.
     Writer writer(const char* path, std::uint32_t num_workers,
                   bool gzip = false) const;
-    /// Merge worker shard files into `target`; co_await the returned AsyncOp.
+    /// Merge worker shard files into `target`; co_await the returned @ref
+    /// AsyncOp.
     AsyncOp merge_shards(const char* target,
                          std::initializer_list<const char*> shards) const {
         const dftu_svc_writer* e = ext(DFTU_SVC_WRITER, writer_ext_);
@@ -379,8 +381,8 @@ class Host {
         v.u.lazyframe = lf;
         return emit(name, &v);
     }
-    /// OwnedLazyFrame overload of emit_result_lazyframe; -1 leaves `lf` intact
-    /// so it frees normally.
+    /// @ref OwnedLazyFrame overload of emit_result_lazyframe; -1 leaves `lf`
+    /// intact so it frees normally.
     int emit_result_lazyframe(const char* name, OwnedLazyFrame&& lf) const {
         int rc = emit_result_lazyframe(name, lf.handle);
         if (rc == 0) lf.release();
@@ -516,7 +518,7 @@ inline OwnedDataFrame Host::agg_result(const char* name) const {
 /// Typed, non-owning view over a host-owned parallel Writer (see Host::writer).
 /// The writer is host-owned and scan-lifetime, so there is nothing to free; the
 /// lifecycle is open() once, chunk() per worker lane, then close(), each a
-/// co_await-able AsyncOp. Worker lanes write concurrently, so chunks for
+/// co_await-able @ref AsyncOp. Worker lanes write concurrently, so chunks for
 /// distinct `worker` indices may be in flight at once.
 class Writer {
    public:

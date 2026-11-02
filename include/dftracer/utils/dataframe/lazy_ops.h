@@ -13,11 +13,12 @@
 
 namespace dftracer::utils::dataframe {
 
-/// The LazyFrame builder surface for a type that wraps a LazyFrame and wants
-/// its chain to keep its own type (a View stays a View through
+/// The @ref LazyFrame builder surface for a type that wraps a @ref LazyFrame
+/// and wants its chain to keep its own type (a View stays a View through
 /// filter/select/sort). `Derived` provides `const LazyFrame& lazy() const` and
 /// `Derived with_lazy(LazyFrame) const`. Builders whose result the wrapped
-/// source can still own return `Derived`; the rest return a plain LazyFrame.
+/// source can still own return `Derived`; the rest return a plain @ref
+/// LazyFrame.
 template <class Derived>
 class LazyOps {
    public:
@@ -191,7 +192,8 @@ class LazyOps {
         return lf().collect(morsel_rows);
     }
 
-    /// The wrapped plan, for passing this chain where a LazyFrame is taken.
+    /// The wrapped plan, for passing this chain where a @ref LazyFrame is
+    /// taken.
     operator LazyFrame() const { return lf(); }
 
    protected:

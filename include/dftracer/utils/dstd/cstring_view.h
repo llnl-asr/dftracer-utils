@@ -24,7 +24,7 @@ class CStringView {
     CStringView(const std::basic_string<char, std::char_traits<char>, Alloc>&
                     s) noexcept
         : data_(s.c_str()), size_(s.size()) {}
-    /// The ConstString must leave room for its terminator (len < N).
+    /// The @ref ConstString must leave room for its terminator (len < N).
     template <std::size_t N>
     constexpr CStringView(const ConstString<N>& s) noexcept
         : data_(s.data), size_(s.len) {

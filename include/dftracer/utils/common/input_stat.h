@@ -14,7 +14,8 @@
 namespace dftracer::utils::common {
 
 /// The stat results of the paths one run has read, so an input is stat'ed once
-/// however many layers ask. Owned by one run (see InputStatScope). Thread safe.
+/// however many layers ask. Owned by one run (see @ref InputStatScope). Thread
+/// safe.
 class InputStatCache {
    public:
     bool find(const std::string& path, InputFileStat& out) const;
@@ -28,10 +29,11 @@ class InputStatCache {
     dstd::UniquePtr<dstd::HashMap<dstd::String, InputFileStat>> map_;
 };
 
-/// Publishes a fresh InputStatCache for its lifetime, so every stat_input()
-/// uses it. Only a CLI tool makes one, on the stack of its main, and the work
-/// must have joined when it ends. A scope made while another is live shares
-/// that one. A running stat_input() keeps the cache alive until it returns.
+/// Publishes a fresh @ref InputStatCache for its lifetime, so every
+/// stat_input() uses it. Only a CLI tool makes one, on the stack of its main,
+/// and the work must have joined when it ends. A scope made while another is
+/// live shares that one. A running stat_input() keeps the cache alive until it
+/// returns.
 class InputStatScope {
    public:
     InputStatScope();

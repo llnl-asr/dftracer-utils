@@ -105,7 +105,7 @@ class Reader {
      * }
      * @endcode
      *
-     * @param config Stream configuration (use StreamConfig fluent API)
+     * @param config Stream configuration (use @ref StreamConfig fluent API)
      * @return Unique pointer to stream, or nullptr on error
      */
     virtual std::unique_ptr<ReaderStream> stream(

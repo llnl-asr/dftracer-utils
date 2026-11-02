@@ -28,7 +28,7 @@ namespace dftracer::utils::duql {
 
 namespace detail {
 
-/// Turn a scalar into a LiteralNode, mirroring the parser's typing rules:
+/// Turn a scalar into a @ref LiteralNode, mirroring the parser's typing rules:
 /// non-negative integers become uint64_t, negatives int64_t.
 inline LiteralNode literal(bool v) { return LiteralNode{v}; }
 inline LiteralNode literal(const char* v) {
@@ -75,7 +75,7 @@ class Expr {
     /// Relinquish ownership of the underlying node.
     QueryNodePtr release() { return std::move(node_); }
 
-    /// Build an executable Query (dstd::Expected<Query, DuqlError>).
+    /// Build an executable Query (dstd::Expected<Query, @ref DuqlError>).
     /// Defined in query.h, so include it to call this.
     auto build() const;
 

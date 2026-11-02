@@ -22,7 +22,7 @@ namespace dftracer::utils {
 
 class Task;
 
-/// Who submitted a task to a TaskExecutor and hears when it ends. Several
+/// Who submitted a task to a @ref TaskExecutor and hears when it ends. Several
 /// owners share one executor.
 class TaskOwner {
    public:

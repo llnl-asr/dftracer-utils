@@ -19,12 +19,12 @@ namespace dftracer::utils::common {
 
 /// Sorts fixed-size records that do not fit in memory. Records are buffered up
 /// to `budget_bytes`; a full buffer is sorted and written as a run to a
-/// SpillFile, and drain() merges the runs. Input that fits the budget never
-/// touches disk. The merge reads each run through a buffer sized so that all of
-/// them together stay within `budget_bytes` (down to 64 records per run).
-/// `Less` must be a strict total order for a deterministic result; equal
+/// @ref SpillFile, and drain() merges the runs. Input that fits the budget
+/// never touches disk. The merge reads each run through a buffer sized so that
+/// all of them together stay within `budget_bytes` (down to 64 records per
+/// run). `Less` must be a strict total order for a deterministic result; equal
 /// records come out run by run. A record has no padding bytes (checked at
-/// compile time). Not thread-safe. Errors are SpillFile's.
+/// compile time). Not thread-safe. Errors are @ref SpillFile's.
 template <class Rec, class Less>
 class ExternalSorter {
     static_assert(std::is_trivially_copyable_v<Rec>);

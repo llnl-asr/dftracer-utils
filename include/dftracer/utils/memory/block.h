@@ -21,8 +21,8 @@ class BlockRef;
 /**
  * @brief A reference-counted buffer, owned or borrowed from foreign memory.
  *
- * Reached only through BlockRef. An owned block is charged to the scope pool of
- * the allocating thread, a borrowed block only for its header. The last
+ * Reached only through @ref BlockRef. An owned block is charged to the scope
+ * pool of the allocating thread, a borrowed block only for its header. The last
  * reference frees it on the thread that drops it.
  */
 class Block {

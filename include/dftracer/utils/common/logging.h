@@ -63,17 +63,17 @@ __attribute__((__format__(__printf__, 4, 5))) void write(Level lvl,
                                                          int line,
                                                          const char* fmt, ...);
 
-/// Open/close a trace scope. The returned handle lives in the ScopeTracer
+/// Open/close a trace scope. The returned handle lives in the @ref ScopeTracer
 /// object so it follows a coroutine across thread migration (a thread-local
 /// stack would not).
 void* scope_open(const char* file, int line, const char* label);
 void scope_close(void* handle);
 
-/// Auto coroutine tracing, driven from the CoroTask awaiter. enter reads the
-/// coroutine's resume function from `handle`, logs "-> <name>" with the
-/// definition-site location (file/line captured at get_return_object), and
-/// returns an opaque handle (null when Trace is off); leave logs "<- <name>
-/// [ms]".
+/// Auto coroutine tracing, driven from the @ref dftracer::utils::coro::CoroTask
+/// "CoroTask" awaiter. enter reads the coroutine's resume function from
+/// `handle`, logs "-> <name>" with the definition-site location (file/line
+/// captured at get_return_object), and returns an opaque handle (null when
+/// Trace is off); leave logs "<- <name> [ms]".
 void* coro_trace_enter(const void* handle, const char* file, int line);
 void coro_trace_leave(void* handle);
 

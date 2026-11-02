@@ -63,9 +63,9 @@ class AdaptiveLimit {
 };
 
 /**
- * Admits blocking units of work at the concurrency an AdaptiveLimit sets, up to
- * `cap` at once. A waiting unit suspends its coroutine and holds no worker, so
- * an elastic pool does not grow for it. Thread safe.
+ * Admits blocking units of work at the concurrency an @ref AdaptiveLimit sets,
+ * up to `cap` at once. A waiting unit suspends its coroutine and holds no
+ * worker, so an elastic pool does not grow for it. Thread safe.
  */
 class AdaptiveGate {
    public:

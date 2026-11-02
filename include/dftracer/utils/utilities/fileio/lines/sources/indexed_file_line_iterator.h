@@ -21,7 +21,7 @@
 namespace dftracer::utils::utilities::fileio::lines::sources {
 
 /**
- * @brief Configuration for IndexedFileLineIterator.
+ * @brief Configuration for @ref IndexedFileLineIterator.
  *
  * The iterator automatically selects the appropriate stream type:
  * - LINE_RANGE: Uses StreamType::LINE

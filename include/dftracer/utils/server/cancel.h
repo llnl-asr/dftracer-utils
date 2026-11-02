@@ -11,8 +11,9 @@
 
 namespace dftracer::utils::server {
 
-/// Shared state behind a CancelToken: the cancel flag plus, optionally, the
-/// peer socket so a running handler can notice a client disconnect.
+/// Shared state behind a @ref dftracer::utils::server::CancelToken
+/// "CancelToken": the cancel flag plus, optionally, the peer socket so a
+/// running handler can notice a client disconnect.
 struct CancelState {
     std::atomic<bool> flag{false};
     int peer_fd = -1;

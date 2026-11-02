@@ -23,7 +23,7 @@ struct PartitionWriteStats {
 };
 
 /**
- * Async wrapper around IpcWriter with automatic file rotation.
+ * Async wrapper around @ref IpcWriter with automatic file rotation.
  * Writes part-NNNNN.arrow files, rotating when size threshold is exceeded.
  */
 class PartitionWriter {

@@ -90,7 +90,7 @@ struct ChunkVerificationUtilityOutput {
  *
  * @tparam ChunkType Type of chunks (e.g., ChunkResult)
  * @tparam MetadataType Type of metadata (e.g., FileMetadata)
- * @tparam EventType Type of events (e.g., EventId)
+ * @tparam EventType Type of events (e.g., @ref EventId)
  */
 template <typename ChunkType, typename MetadataType, typename EventType>
 class ChunkVerifierUtility {

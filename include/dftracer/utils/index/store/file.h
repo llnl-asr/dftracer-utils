@@ -105,7 +105,7 @@ struct ChunkMetadata {
 
 inline constexpr std::size_t METADATA_VALUES_CAP = 64;
 
-/// Adds `value` to a sorted ChunkMetadata list, which becomes nullopt past
+/// Adds `value` to a sorted @ref ChunkMetadata list, which becomes nullopt past
 /// METADATA_VALUES_CAP.
 void add_metadata_value(std::optional<std::vector<std::string>>& list,
                         std::string_view value);

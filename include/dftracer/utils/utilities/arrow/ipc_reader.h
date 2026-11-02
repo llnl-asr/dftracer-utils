@@ -33,7 +33,7 @@ namespace dftracer::utils::utilities::arrow {
  * - Buffer reuse for decompression
  *
  * Supports buffer-level ZSTD decompression compatible with
- * pyarrow, polars, and this library's IpcWriter.
+ * pyarrow, polars, and this library's @ref IpcWriter.
  *
  * Sequence: open() -> num_batches() -> read_batch(i) [or read_all()]
  *

@@ -39,7 +39,7 @@ struct Trace {
     /// Category and function identification.
     /// Short-lived enum-like strings (cat/func_name) and per-event hashes
     /// (fhash/hhash) are non-owning views into a program-lifetime
-    /// dstd::StringIntern pool.
+    /// @ref dstd::StringIntern pool.
     std::string_view cat;        ///< Category (e.g., "posix", "stdio", "h5py")
     std::string io_cat;          ///< I/O category (read, write, metadata)
     std::string acc_pat;         ///< Access pattern

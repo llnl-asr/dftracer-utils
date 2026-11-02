@@ -7,7 +7,7 @@
 namespace dftracer::utils::json {
 
 /// Append the JSON-escaped form of `s` (quotes, backslash, the standard
-/// control-character shorthands, and \uXXXX for every other control
+/// control-character shorthands, and `\uXXXX` for every other control
 /// character below 0x20, all required by the JSON spec) to `out`. No
 /// temporary allocation, so callers building a JSON line in a loop don't
 /// churn a string per field.

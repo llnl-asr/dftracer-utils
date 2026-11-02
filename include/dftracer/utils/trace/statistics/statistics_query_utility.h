@@ -49,9 +49,9 @@ struct StatisticsQueryOutput {
     std::string to_json() const;
 };
 
-/// Derives report rows from a TraceStatistics snapshot. A plain async op
-/// (StatisticsQueryInput -> CoroTask<StatisticsQueryOutput>); composes and
-/// runs anywhere a callable does.
+/// Derives report rows from a @ref TraceStatistics snapshot. A plain async op
+/// (@ref StatisticsQueryInput -> CoroTask<@ref StatisticsQueryOutput>);
+/// composes and runs anywhere a callable does.
 struct StatisticsQueryUtility {
     coro::CoroTask<StatisticsQueryOutput> operator()(
         const StatisticsQueryInput& input) const;

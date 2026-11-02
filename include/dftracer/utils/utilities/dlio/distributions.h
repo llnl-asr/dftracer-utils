@@ -53,7 +53,7 @@ double pdf(const FittedDistribution& fit, double x);
 double cdf(const FittedDistribution& fit, double x);
 double quantile(const FittedDistribution& fit, double p);
 
-/// Sampler signature. Matches dlio::Sampler so dlio::BarrierSimulator can
+/// Sampler signature. Matches dlio::Sampler so @ref dlio::BarrierSimulator can
 /// consume it directly without an explicit cast.
 using Sampler = std::function<double(std::mt19937_64&)>;
 

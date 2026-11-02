@@ -178,7 +178,7 @@ class DFTUtilsException : public std::runtime_error {
     dstd::Error error_;
 };
 
-/// The value of `r`, or throws DFTUtilsException with its error.
+/// The value of `r`, or throws @ref DFTUtilsException with its error.
 template <typename T>
 T unwrap(Result<T>&& r) {
     if (!r) throw DFTUtilsException(r.error());

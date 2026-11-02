@@ -16,7 +16,7 @@ class Query;
 
 namespace dftracer::utils::trace::statistics {
 
-/// What a DetailStatsView collection needs: the group-by dimensions, the
+/// What a @ref DetailStatsView collection needs: the group-by dimensions, the
 /// optional name/category event filters, and an optional query that prunes
 /// chunks in the scan. Pointers are borrowed and must outlive the collect()
 /// call.
@@ -52,7 +52,7 @@ class DetailStatsView {
                       : views::View::from_file(file_, index_);
     }
 
-    /// Fold the scan into a DetailedStatistics, honoring the group-by and
+    /// Fold the scan into a @ref DetailedStatistics, honoring the group-by and
     /// name/category filters. chunks_scanned/chunks_skipped/events_scanned are
     /// filled from the scan stats.
     coro::CoroTask<DetailedStatistics> collect(const DetailNeeds& needs) const;

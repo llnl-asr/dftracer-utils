@@ -361,8 +361,8 @@ struct FieldStat {
         cm3 += term1 * dn * (nn - 2.0) - 3.0 * dn * cm2;
         cm2 += term1;
     }
-    /// Chan/Pebay combination (see FieldStat) of the central moments of this
-    /// state and `o`; `n` is still the count before the merge.
+    /// Chan/Pebay combination (see @ref FieldStat) of the central moments of
+    /// this state and `o`; `n` is still the count before the merge.
     void merge_moments(const FieldStat& o) {
         const double na = static_cast<double>(n);
         const double nb = static_cast<double>(o.n);
@@ -402,11 +402,11 @@ struct FieldStat {
 
 /// Mergeable central co-moments of a pair (x, y): the accumulator behind corr,
 /// covar and the regressions. Each running mean is a pair `shift + cmean` (see
-/// FieldStat), and `cxx`, `cyy`, `cxy` are the sums of (x - mx)^2, (y - my)^2
-/// and (x - mx)(y - my). A row updates it with the Welford step; two states
-/// merge with the Chan combination (both as cited at FieldStat), which is
-/// associative, so any split of the rows into merged partitions gives the
-/// one-pass result.
+/// @ref FieldStat), and `cxx`, `cyy`, `cxy` are the sums of (x - mx)^2, (y -
+/// my)^2 and (x - mx)(y - my). A row updates it with the Welford step; two
+/// states merge with the Chan combination (both as cited at @ref FieldStat),
+/// which is associative, so any split of the rows into merged partitions gives
+/// the one-pass result.
 struct CoStat {
     std::uint64_t n = 0;
     double shx = 0, cmx = 0;

@@ -69,7 +69,7 @@ std::optional<ScratchSession> staged_build_scratch(
 
 /// Move `src` (a directory or file built on scratch) to `dst`, replacing any
 /// existing `dst`. Renames when both live on one filesystem, else recursively
-/// copies then removes `src`. Throws DFTUtilsException on failure.
+/// copies then removes `src`. Throws @ref DFTUtilsException on failure.
 void publish_path(const std::string& src, const std::string& dst);
 
 }  // namespace dftracer::utils::common

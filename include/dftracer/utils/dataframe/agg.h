@@ -126,8 +126,8 @@ inline bool agg_uses_raw_value(AggOp op) {
            op == AggOp::Sample || op == AggOp::SketchQuantile;
 }
 
-/// The DataType agg_finalize actually writes for `op` over a value column of
-/// `value_type`: Sum/Min/Max/First/Last widen through the same
+/// The @ref DataType agg_finalize actually writes for `op` over a value column
+/// of `value_type`: Sum/Min/Max/First/Last widen through the same
 /// integer/unsigned/float domain agg_finalize keys on (Int64/Uint64/Float64),
 /// String columns pass First/Last through unchanged, and every other op's
 /// type is fixed regardless of `value_type`. An Unknown `value_type` gives
@@ -161,9 +161,9 @@ struct AggSpec {
 /// One reduction applied to every auto-discovered dyn (per-argument) column.
 /// The finalized column for argument `name` is `out_prefix + name`;
 /// `op`/`param` select the reduction (Pct reads a per-name sketch, every other
-/// op the per-name FieldStat). Configured once at agg_new - the argument names
-/// themselves are discovered during accumulate, so a single pass can build the
-/// per-argument aggregates without a name pre-scan.
+/// op the per-name @ref FieldStat). Configured once at agg_new - the argument
+/// names themselves are discovered during accumulate, so a single pass can
+/// build the per-argument aggregates without a name pre-scan.
 struct AggDynSpec {
     AggOp op;
     double param = 0.0;      ///< Pct quantile q in [0, 1]
@@ -200,10 +200,10 @@ AggStatePtr agg_new(std::vector<AggSpec> specs,
 void agg_accumulate(AggState& state, const std::vector<const Series*>& keys,
                     const std::vector<const Series*>& values,
                     std::int64_t begin = 0, std::int64_t end = -1);
-/// As above plus the dyn inputs: each `AggDynInput` feeds a per-argument value
-/// column whose name is discovered here. Requires `state` to have been built
-/// with a non-empty `dyn` spec list; the column set may differ from batch to
-/// batch, and a group's dyn set grows to the union of names seen for it.
+/// As above plus the dyn inputs: each @ref AggDynInput feeds a per-argument
+/// value column whose name is discovered here. Requires `state` to have been
+/// built with a non-empty `dyn` spec list; the column set may differ from batch
+/// to batch, and a group's dyn set grows to the union of names seen for it.
 void agg_accumulate(AggState& state, const std::vector<const Series*>& keys,
                     const std::vector<const Series*>& values,
                     const std::vector<AggDynInput>& dyn, std::int64_t begin = 0,

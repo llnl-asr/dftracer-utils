@@ -21,10 +21,10 @@
 /// a literal `{}`. The format must not contain a newline or carriage return:
 /// the writer adds the line's '\n'. Integers and floats print in shortest
 /// round-trip form, bool as true/false, strings through the Escape policy
-/// (PlainEscape copies them; see json_line_format.h for JsonEscape), `raw(sv)`
-/// unescaped. Argument types are checked at compile time (concept LineArg) in
-/// both forms; the count is checked at compile time for FixedString and at run
-/// time for LineFormat.
+/// (@ref PlainEscape copies them; see json_line_format.h for @ref JsonEscape),
+/// `raw(sv)` unescaped. Argument types are checked at compile time (concept
+/// LineArg) in both forms; the count is checked at compile time for FixedString
+/// and at run time for LineFormat.
 namespace dftracer::utils::utilities::fileio::line_format {
 
 template <std::size_t N>

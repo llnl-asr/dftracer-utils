@@ -61,7 +61,7 @@ class Pipeline {
 
     void set_source(std::shared_ptr<Task> source);
 
-    /// Multiple sources auto-create a NoOpTask parent.
+    /// Multiple sources auto-create a @ref NoOpTask parent.
     void set_source(std::initializer_list<std::shared_ptr<Task>> sources);
 
     void set_source(const std::vector<std::shared_ptr<Task>>& sources);
@@ -76,7 +76,7 @@ class Pipeline {
     /// Optional. If unset, all terminal tasks are destinations.
     void set_destination(std::shared_ptr<Task> destination);
 
-    /// Multiple destinations auto-create a NoOpTask child.
+    /// Multiple destinations auto-create a @ref NoOpTask child.
     void set_destination(
         std::initializer_list<std::shared_ptr<Task>> destinations);
 

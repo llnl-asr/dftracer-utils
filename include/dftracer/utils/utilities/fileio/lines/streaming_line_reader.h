@@ -18,7 +18,7 @@
 namespace dftracer::utils::utilities::fileio::lines {
 
 /**
- * @brief Configuration for StreamingLineReader with fluent API.
+ * @brief Configuration for @ref StreamingLineReader with fluent API.
  *
  * Usage:
  * @code

@@ -846,12 +846,12 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     /**
      * Get a send-side handle with a pre-registered producer slot.
      * Use this when capturing a channel into a coroutine lambda:
-     *
+     * @code
      *   [ch = channel->producer()](...) mutable -> CoroTask<...> {
      *       auto guard = ch.guard();
      *       co_await ch.send(...);
      *   }
-     *
+     * @endcode
      * The producer count is incremented immediately (on the caller's
      * thread), not when the coroutine starts.
      */
@@ -868,7 +868,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
     /**
      * Get a receive-side handle for capturing into a coroutine lambda:
-     *
+     * @code
      *   [ch = channel->consumer()](...) -> CoroTask<...> {
      *       for (;;) {
      *           auto item = co_await ch.receive();
@@ -876,6 +876,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      *           ...
      *       }
      *   }
+     * @endcode
      */
     ChannelConsumer<T> consumer() {
         auto sp = this->weak_from_this().lock();
@@ -1122,9 +1123,10 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
  * so the channel never transiently sees zero producers while
  * coroutines are still being scheduled.
  *
- * Inside the coroutine, call guard() to get an RAII ProducerGuard
- * that decrements the count when the coroutine finishes.  If the
- * ChannelProducer is destroyed without calling guard() (e.g. the
+ * Inside the coroutine, call guard() to get an RAII @ref
+ * dftracer::utils::coro::Channel::ProducerGuard "ProducerGuard" that decrements
+ * the count when the coroutine finishes.  If the
+ * @ref ChannelProducer is destroyed without calling guard() (e.g. the
  * task was never scheduled), it decrements automatically.
  *
  * Usage:

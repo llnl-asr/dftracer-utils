@@ -104,8 +104,9 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
 
 /// Decodes `in_path` (single huge member or otherwise; plain text is read as
 /// is) with zlib in bounded memory and writes an equivalent multi-member gzip
-/// to `out_path`: identical uncompressed bytes, re-framed by GzipLineWriter
-/// into members of about `member_size` uncompressed bytes that end at newlines.
+/// to `out_path`: identical uncompressed bytes, re-framed by @ref
+/// GzipLineWriter into members of about `member_size` uncompressed bytes that
+/// end at newlines.
 inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
                                                     const std::string& out_path,
                                                     std::size_t member_size,

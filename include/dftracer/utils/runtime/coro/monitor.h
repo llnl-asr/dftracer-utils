@@ -8,7 +8,8 @@ namespace dftracer::utils::utilities {
 ///   Task  - a submitted task (Executor::enqueue with a task id)
 ///   Spawn - scope.spawn() fan-out work
 ///   Io    - first seen suspending on async I/O (reached by symmetric transfer)
-///   Sync  - a co_await'd CoroTask captured in deep mode
+///   Sync  - a co_await'd @ref dftracer::utils::coro::CoroTask "CoroTask"
+///   captured in deep mode
 enum class CoroKind : unsigned char { Task, Spawn, Io, Sync };
 
 namespace detail {
@@ -52,10 +53,11 @@ void monitor_set_worker(int worker_id);
 /// coroutine currently resuming on this thread), its resume-function pointer,
 /// `kind`, the spawning worker, and start its wall clock. On a re-enqueue the
 /// existing id is returned. Also called from awaiter suspension points (I/O,
-/// and in deep mode every co_await'd CoroTask) so coroutines reached by
-/// symmetric transfer - which never pass through the executor queue until they
-/// suspend - are captured with their real parent instead of orphaning. Returns
-/// the coroutine's monitor id (or -1 if monitoring is off).
+/// and in deep mode every co_await'd @ref dftracer::utils::coro::CoroTask
+/// "CoroTask") so coroutines reached by symmetric transfer - which never pass
+/// through the executor queue until they suspend - are captured with their real
+/// parent instead of orphaning. Returns the coroutine's monitor id (or -1 if
+/// monitoring is off).
 long long monitor_enqueue(const void* handle, CoroKind kind);
 
 /// Mark the start of resuming a coroutine whose monitor id is `id` (carried in

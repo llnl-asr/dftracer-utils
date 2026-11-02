@@ -59,7 +59,8 @@ struct GzipWriterOptions {
     /// Path of part `i`; empty uses gzip_part_path.
     std::function<std::string(std::size_t)> part_name;
     /// Each is a member of its own at the start / end of every part. Not
-    /// lines, not counted in part_size or MemberInfo, not sent to on_member.
+    /// lines, not counted in part_size or @ref MemberInfo, not sent to
+    /// on_member.
     std::string part_header;
     std::string part_footer;
     /// Once per part, after its file is closed. `uc_bytes` and `lines` count
@@ -90,8 +91,8 @@ struct WriteSummary {
 std::string gzip_part_path(const std::string& base, int idx, bool multi);
 
 /// Memory: the writer reserves bytes against `memory_budget` (see
-/// GzipWriterOptions) and waits instead of growing past it. Reserved are one
-/// shared buffer of member_size, each producer's pending bytes, each
+/// @ref GzipWriterOptions) and waits instead of growing past it. Reserved are
+/// one shared buffer of member_size, each producer's pending bytes, each
 /// unordered append_with call's `max_bytes`, and each in-flight member's
 /// plaintext plus compressed bound. In-flight members are at most
 /// min(workers + 2, budget / (member_size + compressed bound)), at least 1.

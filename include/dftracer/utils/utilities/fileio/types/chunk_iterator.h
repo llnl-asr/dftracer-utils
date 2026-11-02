@@ -16,8 +16,9 @@ namespace dftracer::utils::utilities::fileio {
  * @brief Iterator that lazily reads file chunks on demand.
  *
  * Reads chunks from a file only when dereferenced. Only one chunk
- * is kept in memory at a time. Exposes chunks as ByteView into
- * the internal read buffer -- zero copy on dereference.
+ * is kept in memory at a time. Exposes chunks as @ref
+ * dftracer::utils::dstd::ByteView "ByteView" into the internal read buffer --
+ * zero copy on dereference.
  */
 class ChunkIterator {
    private:

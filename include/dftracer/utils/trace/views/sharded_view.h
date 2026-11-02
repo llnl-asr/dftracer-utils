@@ -38,8 +38,9 @@ class ShardedView {
 
     /// Discover shards by reading `<root>/shards.json`; each shard's `path`
     /// resolves relative to `root`. Empty shards are dropped. Throws
-    /// DFTUtilsException when the manifest is absent, unreadable, or built with
-    /// a schema version this build cannot read.
+    /// @ref dftracer::utils::common::DFTUtilsException "DFTUtilsException" when
+    /// the manifest is absent, unreadable, or built with a schema version this
+    /// build cannot read.
     static ShardedView from_manifest(const std::string& root);
 
     /// Use an explicit set of shard index directories, bypassing the manifest.
@@ -82,10 +83,11 @@ void write_shard_set(const std::string& root,
 /// shards indexed. Removes the manifest and the emptied shard directories once
 /// every file moved, so a later query over `root` opens one index.
 ///
-/// Throws DFTUtilsException when the root has no manifest, and when a file
-/// cannot move: the files that did not move stay in their shard, with the
-/// manifest and the shard directories, so a later call retries the merge
-/// without a rebuild. Releases the handles of the root and of every shard.
+/// Throws @ref dftracer::utils::common::DFTUtilsException "DFTUtilsException"
+/// when the root has no manifest, and when a file cannot move: the files that
+/// did not move stay in their shard, with the manifest and the shard
+/// directories, so a later call retries the merge without a rebuild. Releases
+/// the handles of the root and of every shard.
 std::size_t consolidate_shard_set(const std::string& root);
 
 /// Merge a shard set's aggregation tiers into one consolidated tier index at

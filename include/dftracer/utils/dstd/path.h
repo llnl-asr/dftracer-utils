@@ -43,8 +43,8 @@ constexpr bool is_drive_letter(char c) noexcept {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
 }
 
-/// The length of the root: "/" on POSIX; "C:", "C:\", "\\server\share" on
-/// Windows. Zero for a relative path.
+/// The length of the root, such as `/` on POSIX, or `C:`, `C:\` or
+/// `\\server\share` on Windows. Zero for a relative path.
 constexpr std::size_t root_length(StringView path, PathStyle style) noexcept {
     const std::size_t size = path.size();
     if (size == 0) return 0;

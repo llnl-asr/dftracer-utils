@@ -12,8 +12,8 @@
 
 namespace dftracer::utils::common {
 
-/// The id of a string in an InternTable, or NONE. Ids of two tables must not
-/// mix.
+/// The id of a string in an @ref InternTable, or NONE. Ids of two tables must
+/// not mix.
 struct InternId {
     std::uint32_t value;
 
@@ -35,7 +35,7 @@ inline constexpr InternId InternId::NONE{dstd::StringIntern::NO_ID};
 class InternRef;
 
 /**
- * The last InternRef destroys the table and closes the pool. The pool is a
+ * The last @ref InternRef destroys the table and closes the pool. The pool is a
  * Results pool, so a chunk that a column still holds is adopted by the parent
  * instead of being reported as a leak. Thread safe.
  */
@@ -44,7 +44,7 @@ class InternTable {
     InternTable(const InternTable&) = delete;
     InternTable& operator=(const InternTable&) = delete;
 
-    /// Throws DFTUtilsException when the pool table is full.
+    /// Throws @ref DFTUtilsException when the pool table is full.
     static InternRef create();
 
     dstd::StringIntern& strings() noexcept { return strings_; }
@@ -122,7 +122,7 @@ InternTable* current_intern() noexcept;
 
 /// Make @p table the calling thread's table without restoring it. For a
 /// coroutine that enters its own table each time it resumes. Whoever resumed
-/// it restores its own with an InternScope.
+/// it restores its own with an @ref InternScope.
 void enter_intern(InternTable* table) noexcept;
 
 /**

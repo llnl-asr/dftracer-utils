@@ -15,8 +15,8 @@
 namespace dftracer::utils::trace::comparator {
 
 /**
- * @brief A comparison of two Views, expressed entirely on the View/DataFrame
- * engine.
+ * @brief A comparison of two Views, expressed entirely on the View/@ref
+ * dftracer::utils::dataframe::DataFrame "DataFrame" engine.
  *
  * collect() aggregates the baseline and variant with the same group_by + agg
  * (one shared scan when both read the same files), joins their result
@@ -44,8 +44,9 @@ class CompareView {
         return *this;
     }
 
-    /// The comparison DataFrame: the group key columns, `l_<m>`/`r_<m>` for
-    /// each aggregated metric, plus `delta_<m>` and `pct_<m>`.
+    /// The comparison @ref dftracer::utils::dataframe::DataFrame "DataFrame":
+    /// the group key columns, `l_<m>`/`r_<m>` for each aggregated metric, plus
+    /// `delta_<m>` and `pct_<m>`.
     coro::CoroTask<dataframe::DataFrame> collect() const {
         dataframe::LazyFrame plan =
             baseline_.group_by(group_by_).agg(agg_).compare(variant_);

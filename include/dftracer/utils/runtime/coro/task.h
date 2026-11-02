@@ -226,7 +226,7 @@ class CoroTask {
             return {};
         }
 
-        /// YieldAwaitable makes its own timeslice check.
+        /// @ref YieldAwaitable makes its own timeslice check.
         auto await_transform(coro::YieldAwaitable y) {
             return detail::InPool<coro::YieldAwaitable>{
                 y, &this->context_, false, this->cancel_requested()};
@@ -463,7 +463,7 @@ class CoroTask {
     /**
      * Chain operation using then() - transform result with a function
      * @param func Transformation function (T -> U)
-     * @return New CoroTask holding the transformed result
+     * @return New @ref CoroTask holding the transformed result
      *
      * Usage:
      * @code
@@ -531,7 +531,7 @@ class CoroTask {
     /**
      * Operator> for chaining (same as then())
      * @param func Transformation function
-     * @return Transformed CoroTask
+     * @return Transformed @ref CoroTask
      *
      * Usage:
      * @code
@@ -549,7 +549,7 @@ class CoroTask {
     /**
      * Operator< for reverse composition (func receives this task's result)
      * @param func Transformation function
-     * @return Transformed CoroTask
+     * @return Transformed @ref CoroTask
      *
      * Usage:
      * @code
@@ -567,7 +567,7 @@ class CoroTask {
      * Operator& for parallel composition (AND) - run both tasks, return tuple
      * @param lhs First task to run in parallel
      * @param rhs Second task to run in parallel
-     * @return CoroTask holding a tuple of both results
+     * @return @ref CoroTask holding a tuple of both results
      *
      * Note: In the current synchronous execution model, these run sequentially.
      * For true parallel execution, use CoroScope::spawn().

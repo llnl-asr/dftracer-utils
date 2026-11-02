@@ -13,7 +13,8 @@
 namespace dftracer::utils::utilities::fileio {
 
 /**
- * @brief Streaming file writer that accepts ByteView chunks.
+ * @brief Streaming file writer that accepts @ref
+ * dftracer::utils::dstd::ByteView "ByteView" chunks.
  *
  * Usage:
  * @code
@@ -103,7 +104,7 @@ class StreamingFileWriterUtility {
      * @brief Write a single chunk immediately.
      *
      * @param chunk Data chunk to write
-     * @return StreamWriteResult with current write status
+     * @return @ref StreamWriteResult with current write status
      */
     coro::CoroTask<StreamWriteResult> process(dstd::ByteView chunk) {
         if (!opened_) {

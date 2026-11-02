@@ -161,7 +161,7 @@ class RecordBatchBuilder {
     void append_int64_list(std::size_t col_idx,
                            const std::vector<std::int64_t>& values);
     /// Append one row's list of inner structs to a STRUCT_LIST column; each
-    /// inner row carries one StructCell per struct field, in field order.
+    /// inner row carries one @ref StructCell per struct field, in field order.
     void append_struct_list(std::size_t col_idx,
                             const std::vector<std::vector<StructCell>>& rows);
     void append_null(std::size_t col_idx);

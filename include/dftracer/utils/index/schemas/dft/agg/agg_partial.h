@@ -112,8 +112,8 @@ struct TimeBin {
 /// What the index keeps of the events of one (chunk, category, name), as a
 /// value that merges in place. The key is the caller's and is not stored. A
 /// merge is exact except central moments (to rounding). A metric is absent
-/// while its FieldStat has n == 0. Quantile stores fill only when percentiles
-/// are asked.
+/// while its @ref dftracer::utils::dataframe::FieldStat "FieldStat" has n == 0.
+/// Quantile stores fill only when percentiles are asked.
 struct AggPartial {
     std::uint64_t count = 0;
     std::uint64_t ts = UINT64_MAX;  ///< smallest ts; UINT64_MAX when empty

@@ -14,10 +14,10 @@
 
 namespace dftracer::utils::dstd {
 
-/// A thread-local front for one StringIntern that answers a short string it has
-/// seen before without touching the shared table. Not thread safe and bound to
-/// the table it was made for. A string longer than MAX_BYTES goes to the
-/// table.
+/// A thread-local front for one @ref StringIntern that answers a short string
+/// it has seen before without touching the shared table. Not thread safe and
+/// bound to the table it was made for. A string longer than MAX_BYTES goes to
+/// the table.
 class InternCache {
    public:
     static constexpr std::size_t MAX_BYTES = 24;

@@ -643,7 +643,8 @@ class PluginBuilder {
         return *this;
     }
 
-    /// Register `src` as the LazyFrame source `name`, which must be
+    /// Register `src` as the @ref dftracer::utils::dataframe::LazyFrame
+    /// "LazyFrame" source `name`, which must be
     /// `<plugin>.<name>`; see plugin/source.h for what S provides. The host
     /// owns it once registered and destroys it when the provider goes away.
     template <class S>
@@ -722,7 +723,7 @@ class PluginBuilder {
     bool ok_ = true;
 };
 
-/// Entry point for the builder; see PluginBuilder.
+/// Entry point for the builder; see @ref PluginBuilder.
 inline PluginBuilder plugin(dftu_plugin_host* host, const dftu_value* config) {
     return PluginBuilder{host, config};
 }

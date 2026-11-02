@@ -24,7 +24,7 @@ struct CoroPromise;
 ///
 /// Unlike CoroTask<T>, Coro has no return value (communicate
 /// through channels), no continuation chain (flat scheduling), and
-/// integrates with JoinHandle for structured concurrency.
+/// integrates with @ref JoinHandle for structured concurrency.
 ///
 /// Coro is the internal execution primitive. Users interact
 /// with Task (the DAG API); internally, each ready Task is wrapped
@@ -74,12 +74,12 @@ class Coro {
 struct CoroPromise : FrameAllocation {
     std::exception_ptr exception{nullptr};
 
-    /// Join group: points to JoinHandle's atomic counter.
+    /// Join group: points to @ref JoinHandle's atomic counter.
     /// FinalAwaiter decrements on completion.
     std::atomic<std::size_t>* join_counter{nullptr};
 
     /// Continuation to resume when join group reaches zero.
-    /// Points to JoinHandle's atomic<void*>.
+    /// Points to @ref JoinHandle's atomic<void*>.
     std::atomic<void*>* join_continuation{nullptr};
 
     /// Executor for global scheduling (set before enqueue).
@@ -118,7 +118,7 @@ struct CoroPromise : FrameAllocation {
     void unhandled_exception() { exception = std::current_exception(); }
 };
 
-/// Out-of-line: needs CoroPromise to be complete.
+/// Out-of-line: needs @ref CoroPromise to be complete.
 inline std::coroutine_handle<CoroPromise> Coro::release() {
     auto h = handle_;
     h.promise().released = true;

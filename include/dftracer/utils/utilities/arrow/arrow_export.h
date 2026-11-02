@@ -13,7 +13,7 @@ namespace dftracer::utils::utilities::arrow {
 /**
  * Move-only RAII container for a finished Arrow record batch.
  *
- * Holds ownership of both the ArrowArray and ArrowSchema produced by
+ * Holds ownership of both the @ref ArrowArray and @ref ArrowSchema produced by
  * RecordBatchBuilder::finish(). Safe to move across threads/channels.
  */
 class ArrowExportResult {

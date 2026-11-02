@@ -31,7 +31,7 @@ std::vector<TraceConfig> read_trace_config(const std::string& trace_path);
 /// target unit without decoding the whole trace.
 TimeMetric read_time_metric(const std::string& trace_path);
 
-/// Parse one NDJSON line into a TraceConfig if it is an end event; nullopt
+/// Parse one NDJSON line into a @ref TraceConfig if it is an end event; nullopt
 /// otherwise. Shared by the tail probe and the index-assisted scan fallback.
 std::optional<TraceConfig> parse_end_event(std::string_view line);
 

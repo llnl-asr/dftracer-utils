@@ -100,7 +100,8 @@ struct Roles {
     TimeUnit duration_unit = TimeUnit::Us;
 };
 
-/// What register_schema resolves into a RecordSchema: fields and source
+/// What register_schema resolves into a @ref
+/// dftracer::utils::index::RecordSchema "RecordSchema": fields and source
 /// members (by name), the path budget and the stats share override the
 /// parent's.
 struct SchemaSpec {
@@ -169,24 +170,27 @@ std::vector<const RecordSchema*> registered_schemas();
 /// The registered schema `id`, or null.
 const RecordSchema* find_schema(std::string_view id);
 
-/// The registered schema `id`. Throws DFTUtilsException INVALID_ARGUMENT,
-/// listing the registered ids and where schemas load from, for any other.
+/// The registered schema `id`. Throws @ref
+/// dftracer::utils::common::DFTUtilsException "DFTUtilsException"
+/// INVALID_ARGUMENT, listing the registered ids and where schemas load from,
+/// for any other.
 const RecordSchema& get_schema(std::string_view id);
 
 /// Resolves `spec` against its parent and registers it; `source` names it in
-/// errors. Throws DFTUtilsException INVALID_ARGUMENT for an empty id or field
-/// name, a built-in id, an unknown or self `extends`, a unit without a time
-/// or duration role, two fields with one role or one path, or an id
-/// registered with another definition; registering the same definition
-/// again returns the registered schema.
+/// errors. Throws @ref dftracer::utils::common::DFTUtilsException
+/// "DFTUtilsException" INVALID_ARGUMENT for an empty id or field name, a
+/// built-in id, an unknown or self `extends`, a unit without a time or duration
+/// role, two fields with one role or one path, or an id registered with another
+/// definition; registering the same definition again returns the registered
+/// schema.
 const RecordSchema& register_schema(const SchemaSpec& spec,
                                     std::string_view source);
 
 /// Registers the schema the YAML or JSON spec `text` describes. Keys: id,
 /// extends, fields (name -> type, path, optional, role, unit, always_index),
 /// index.path_budget, index.never_index (a list of paths) and source (duql
-/// source members). Throws as the SchemaSpec overload, and for an unknown key
-/// or a value of the wrong type.
+/// source members). Throws as the @ref SchemaSpec overload, and for an unknown
+/// key or a value of the wrong type.
 const RecordSchema& register_schema(std::string_view text,
                                     std::string_view source);
 
@@ -246,8 +250,8 @@ SchemaDetection explain_schema(std::span<const std::string_view> lines);
 /// explain_schema over the lines at the start of `file_path` (gzip or
 /// plain), up to SCHEMA_SAMPLE_LINES records; the last line needs no
 /// newline. Cached per process by path, modification time, size and the
-/// registered schemas. Throws DFTUtilsException IO when the file cannot be
-/// read.
+/// registered schemas. Throws @ref dftracer::utils::common::DFTUtilsException
+/// "DFTUtilsException" IO when the file cannot be read.
 SchemaDetection explain_file_schema(const std::string& file_path);
 
 /// The same over an open file of `size` bytes modified at `mtime_ns`

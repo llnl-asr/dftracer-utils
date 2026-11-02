@@ -25,7 +25,7 @@ struct DuqlError {
     dstd::String format() const;
 };
 
-/// Exception wrapping a DuqlError.
+/// Exception wrapping a @ref DuqlError.
 class DuqlParseError : public common::DFTUtilsException {
    public:
     explicit DuqlParseError(DuqlError err);

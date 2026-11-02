@@ -17,9 +17,11 @@ namespace dftracer::utils::index::schemas::dft::agg {
 
 using dataframe::DDSketch;
 
-/// One metric's aggregate: the shared FieldStat atom plus an optional DDSketch.
-/// The sketch stays beside the POD atom (never inside it) so FieldStat merges
-/// stay trivially-copyable/vectorizable. Read the atom via the accessors below;
+/// One metric's aggregate: the shared @ref
+/// dftracer::utils::dataframe::FieldStat "FieldStat" atom plus an optional
+/// DDSketch. The sketch stays beside the POD atom (never inside it) so @ref
+/// dftracer::utils::dataframe::FieldStat "FieldStat" merges stay
+/// trivially-copyable/vectorizable. Read the atom via the accessors below;
 /// write it through `stat` directly.
 struct MetricStats {
     dftracer::utils::dataframe::FieldStat stat;

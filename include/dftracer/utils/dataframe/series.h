@@ -338,8 +338,8 @@ class Series {
         return s ? std::string(s) : std::string();
     }
 
-    /// The full nested DataType, walking `num_children()`/`child()` and each
-    /// Struct field's name. A List's single child becomes its (unnamed)
+    /// The full nested @ref DataType, walking `num_children()`/`child()` and
+    /// each Struct field's name. A List's single child becomes its (unnamed)
     /// element Field; a Struct's children become named Fields in order.
     DataType data_type() const;
 
@@ -383,8 +383,10 @@ class Series {
     /// Reductions over the valid values. A bool column counts true as 1; min
     /// and max of a string column give a STR scalar borrowing the column. A
     /// reduction the engine does not define for the column type (sum of a
-    /// string, sum of a timestamp) throws DFTUtilsException (INVALID_ARGUMENT)
-    /// naming the operation and the type; it never returns 0 for a refusal.
+    /// string, sum of a timestamp) throws @ref
+    /// dftracer::utils::common::DFTUtilsException "DFTUtilsException"
+    /// (INVALID_ARGUMENT) naming the operation and the type; it never returns 0
+    /// for a refusal.
     Scalar sum() const;
     Scalar min() const;
     Scalar max() const;
@@ -404,9 +406,9 @@ class Series {
     double median() const;
     std::int64_t nunique() const;
 
-    /// The distinct values of this column and their counts, as a DataFrame with
-    /// columns `value` (this column's type) and `count` (Int64), most-frequent
-    /// first.
+    /// The distinct values of this column and their counts, as a @ref DataFrame
+    /// with columns `value` (this column's type) and `count` (Int64),
+    /// most-frequent first.
     DataFrame value_counts() const;
 
     /// Rank of each row (`method` selects the tie-break), ascending unless

@@ -667,7 +667,7 @@ struct WildcardField {
 /// Call-form field entry point: `F("dur") > 1000` builds a field leaf, exactly
 /// like `field("dur") > 1000`. The single, canonical F for the dataframe layer
 /// - a superset of the predicate-only duql::F. `F.any` is the numeric-args
-/// wildcard (see WildcardField).
+/// wildcard (see @ref WildcardField).
 struct FieldFactory {
     FieldExpr operator()(std::string_view name) const { return field(name); }
     WildcardField any{};

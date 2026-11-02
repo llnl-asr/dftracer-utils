@@ -18,8 +18,8 @@ namespace coro {
 
 /// Common suspension/completion coordination shared by when_all / when_any
 /// shared-state structs. Holds the awaiting coroutine, its executor, and the
-/// CompletionLatch that guards the suspend-vs-complete race. Shutdown resumes a
-/// suspended awaiter with a cancelled error.
+/// @ref CompletionLatch that guards the suspend-vs-complete race. Shutdown
+/// resumes a suspended awaiter with a cancelled error.
 struct CompletionState {
     std::coroutine_handle<> awaiting_coroutine_{};
     Executor* executor_{nullptr};

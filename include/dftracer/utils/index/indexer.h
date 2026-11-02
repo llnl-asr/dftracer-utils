@@ -56,7 +56,7 @@ struct IndexerOptions {
     /// keys and sketches but cannot turn it off.
     schemas::dft::agg::AggregationConfig aggregation =
         schemas::dft::agg::standard_aggregation_config();
-    /// RecordSchema every trace is decoded with ("dftracer" or "generic");
+    /// @ref RecordSchema every trace is decoded with ("dftracer" or "generic");
     /// empty detects each file's from its first lines.
     std::string schema;
     /// Bytes a build may hold at once, as View::memory_budget: 0 is about a
@@ -105,7 +105,7 @@ struct ExtensionEntry {
     /// False when the build of the extension failed.
     bool ready = false;
     /// Ready, at the current version, and built with the settings in
-    /// IndexerOptions.
+    /// @ref IndexerOptions.
     bool current = false;
 };
 
@@ -146,8 +146,9 @@ std::string to_json(const std::vector<FileExplain>& explain);
 ///
 /// Copies share one state. Use an Indexer from one thread at a time; separate
 /// Indexers over the same index root are serialized by the index write lock.
-/// Failures throw DFTUtilsException: INVALID_ARGUMENT or NOT_FOUND from open,
-/// and the engine's I/O or compression error, naming the trace, from build.
+/// Failures throw @ref dftracer::utils::common::DFTUtilsException
+/// "DFTUtilsException": INVALID_ARGUMENT or NOT_FOUND from open, and the
+/// engine's I/O or compression error, naming the trace, from build.
 class Indexer {
    public:
     /// `paths` holds trace files and directories; a directory contributes the
@@ -203,7 +204,8 @@ class Indexer {
     IndexStatus rebuild_extension(std::string extension);
     IndexStatus drop_extension(std::string extension);
     /// The rows the build stored for row set `name` of the files' source,
-    /// every indexed file's in open order. Throws DFTUtilsException
+    /// every indexed file's in open order. Throws @ref
+    /// dftracer::utils::common::DFTUtilsException "DFTUtilsException"
     /// INVALID_ARGUMENT when a file's index holds no rows for it (a row set
     /// the build does not evaluate, or an index built before it); read such
     /// a row set with View::duql("from <name>").

@@ -64,7 +64,8 @@ struct is_flat_map_fn<
 template <typename F, typename T>
 inline constexpr bool is_flat_map_fn_v = is_flat_map_fn<F, T>::value;
 
-/// F(T) -> U where U is NOT an AsyncGenerator (one-arg, returns plain value)
+/// F(T) -> U where U is NOT an @ref AsyncGenerator (one-arg, returns plain
+/// value)
 template <typename F, typename T, typename = void>
 struct is_map_fn : std::false_type {};
 
@@ -159,7 +160,7 @@ AsyncGenerator<T> concat(AsyncGenerator<T> first, F factory) {
  *
  * Operators:
  *   gen > func        map: T -> U
- *   gen >> func       flat_map: T -> AsyncGenerator of U
+ *   gen >> func       flat_map: T -> @ref AsyncGenerator of U
  *   gen | factory     lazy concat: append factory() after gen exhausted
  */
 template <typename T>
@@ -172,7 +173,8 @@ class AsyncGenerator {
         bool has_value_ = false;
         std::exception_ptr exception_;
         std::coroutine_handle<> continuation_{};
-        /// The CoroTask handoff, once per next(): see CoroTask::await_suspend.
+        /// The @ref CoroTask handoff, once per next(): see
+        /// CoroTask::await_suspend.
         std::atomic<bool> handoff_{false};
         detail::RunContext context_;
 
@@ -369,7 +371,7 @@ class AsyncGenerator {
 
     /**
      * operator>> : flat_map -- each element produces a sub-generator,
-     * results are flattened (T -> AsyncGenerator of U).
+     * results are flattened (T -> @ref AsyncGenerator of U).
      */
     template <typename F,
               std::enable_if_t<detail::is_flat_map_fn_v<F, T>, int> = 0>

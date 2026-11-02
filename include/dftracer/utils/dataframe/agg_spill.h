@@ -13,9 +13,9 @@
 namespace dftracer::utils::dataframe {
 
 /// Out-of-core accumulation for a long-lived AggState, with the budget the
-/// DataFrame breakers use (memory::resolve_spill_budget). Offer the state after
-/// each accumulate. Past the budget it goes to a sorted temp run and an empty
-/// state replaces it. drain() reads the runs back and finalizes.
+/// @ref DataFrame breakers use (memory::resolve_spill_budget). Offer the state
+/// after each accumulate. Past the budget it goes to a sorted temp run and an
+/// empty state replaces it. drain() reads the runs back and finalizes.
 class AggSpiller {
    public:
     /// `budget` in bytes. 0 means auto (memory::resolve_spill_budget) and

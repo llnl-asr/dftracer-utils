@@ -70,7 +70,7 @@ struct ChunkExplanation {
     bool indexed = false;
     bool file_may_match = true;
     std::uint64_t total_chunks = 0;
-    /// Chunks the query reads, ascending; the same chunks ChunkPruner
+    /// Chunks the query reads, ascending; the same chunks @ref ChunkPruner
     /// returns.
     std::vector<std::uint64_t> read;
     /// One entry per pruning extension current for the file.
@@ -78,7 +78,7 @@ struct ChunkExplanation {
 };
 
 /// Explains the pruning of `file_path` for `query`. Throws on an index read
-/// error, where ChunkPruner assumes a match.
+/// error, where @ref ChunkPruner assumes a match.
 ChunkExplanation explain_file_chunks(const index::Snapshot& snapshot,
                                      const std::string& file_path,
                                      const Query& query);

@@ -102,7 +102,8 @@ struct VizSummary {
 
     std::vector<std::string> names;  ///< name_id -> name
 
-    /// Precomputed Analyze aggregates, one per GroupBy dimension.
+    /// Precomputed Analyze aggregates, one per @ref
+    /// dftracer::utils::dataframe::GroupBy "GroupBy" dimension.
     std::vector<GroupRow> by_name;
     std::vector<GroupRow> by_cat;
     std::vector<GroupRow> by_pid;

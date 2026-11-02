@@ -41,7 +41,8 @@ template <>
 struct Hash<const char*> : StringHash {};
 
 /// Compares String, std::string_view and const char* by their text, as
-/// StringHash hashes them; std::equal_to<> compares two const char* by address.
+/// @ref StringHash hashes them; std::equal_to<> compares two const char* by
+/// address.
 struct StringEqual {
     using is_transparent = void;
 

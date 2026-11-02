@@ -56,7 +56,7 @@ AggExprSpec agg_kurt(Expr value, std::string out = "kurt");
 AggExprSpec agg_pct(Expr value, double q, std::string out = "pct");
 /// The DDSketch histogram of `value`, a list<struct{lo,hi,count}> per group.
 AggExprSpec agg_hist(Expr value, std::string out = "hist");
-/// Sum of squares of `value` (Float64), from the shared FieldStat.
+/// Sum of squares of `value` (Float64), from the shared @ref FieldStat.
 AggExprSpec agg_sumsq(Expr value, std::string out = "sumsq");
 /// The String repr of `value` at the row maximizing `by`, per group.
 AggExprSpec agg_argmax(Expr value, Expr by, std::string out = "argmax");

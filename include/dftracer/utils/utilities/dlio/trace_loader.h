@@ -22,7 +22,7 @@ using QuantileStore =
     ::dftracer::utils::index::schemas::dft::agg::QuantileStore;
 
 /// Default DLIO category / event names; overridable per-component via
-/// TraceLoaderOptions.
+/// @ref TraceLoaderOptions.
 inline constexpr std::string_view CATEGORY_DATALOADER = "dataloader";
 inline constexpr std::string_view CATEGORY_DATA = "data";
 inline constexpr std::string_view EVENT_FETCH_BLOCK = "fetch.block";
@@ -114,7 +114,8 @@ struct TraceLoaderOptions {
 /// Loads aggregated DLIO trace data with one aggregation query over `files`,
 /// grouped by (pid, `config.time_interval_us` window, cat, name). `index_path`
 /// is the index store of `files` and `config` the config it was built with.
-/// Blocks until the query ends and throws DFTUtilsException on failure.
+/// Blocks until the query ends and throws @ref
+/// dftracer::utils::common::DFTUtilsException "DFTUtilsException" on failure.
 AggregatedTraces load_aggregated_traces(
     const std::string& index_path, const dstd::Vector<dstd::String>& files,
     const index::schemas::dft::agg::AggregationConfig& config,
@@ -123,10 +124,11 @@ AggregatedTraces load_aggregated_traces(
 /// Overlays (cat, name) overrides from a YAML or JSON file onto the component
 /// selectors in `options`. Top-level keys fetch_block, fetch_iter, preprocess
 /// and item each take an optional `cat` and `name`; omitted keys and fields are
-/// left untouched. Throws DFTUtilsException on a missing file or parse error.
+/// left untouched. Throws @ref dftracer::utils::common::DFTUtilsException
+/// "DFTUtilsException" on a missing file or parse error.
 void load_event_map(const std::string& path, TraceLoaderOptions& options);
 
-/// Convenience: build a BarrierSimulatorContext from loaded traces.
+/// Convenience: build a @ref BarrierSimulatorContext from loaded traces.
 BarrierSimulatorContext make_simulator_context(const AggregatedTraces& traces,
                                                int num_workers = 8,
                                                int prefetch_factor = 2);

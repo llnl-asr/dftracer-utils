@@ -38,7 +38,7 @@ using EventCollectorUtilityOutput = std::vector<EventId>;
 /**
  * @brief Workflow for collecting event IDs from DFTracer metadata files.
  *
- * Reads files specified in metadata and extracts EventId (id, pid, tid)
+ * Reads files specified in metadata and extracts @ref EventId (id, pid, tid)
  * from each valid JSON event.
  */
 struct EventCollectorFromMetadataUtility {

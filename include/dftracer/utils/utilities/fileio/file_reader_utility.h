@@ -16,13 +16,16 @@ namespace dftracer::utils::utilities::fileio {
 /**
  * @brief Utility that reads a file and returns its text content.
  *
- * This utility takes a FileEntry (from DirectoryScanner or manually created)
- * and reads the file content as Text. It composes with existing types.
+ * This utility takes a @ref dftracer::utils::utilities::filesystem::FileEntry
+ * "FileEntry" (from DirectoryScanner or manually created) and reads the file
+ * content as Text. It composes with existing types.
  *
  * Composition examples:
  * - DirectoryScanner -> FileReader -> Text
- * - FileEntry -> FileReader -> Text -> LineSplitter -> Lines
- * - FileEntry -> FileReader -> Text -> TextHasher -> Hash
+ * - @ref dftracer::utils::utilities::filesystem::FileEntry "FileEntry" ->
+ * FileReader -> Text -> LineSplitter -> Lines
+ * - @ref dftracer::utils::utilities::filesystem::FileEntry "FileEntry" ->
+ * FileReader -> Text -> TextHasher -> Hash
  *
  * Features:
  * - Reads entire file into memory as text
@@ -58,7 +61,8 @@ class FileReaderUtility {
     /**
      * @brief Read file content as text.
      *
-     * @param input FileEntry representing the file to read
+     * @param input @ref dftracer::utils::utilities::filesystem::FileEntry
+     * "FileEntry" representing the file to read
      * @return Text containing file content
      * @throws std::runtime_error if file cannot be read
      */

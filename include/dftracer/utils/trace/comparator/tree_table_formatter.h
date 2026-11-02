@@ -31,7 +31,7 @@ struct ColumnWidths {
     int change = 6;    ///< Percentage change column.
 };
 
-/// Renders ComparisonOutput as an ASCII tree table or JSON.
+/// Renders @ref ComparisonOutput as an ASCII tree table or JSON.
 ///
 /// The tree table uses dynamic column alignment with UTF-8 display
 /// width awareness. Nodes are rendered hierarchically with tree

@@ -28,10 +28,10 @@ Result<std::string> spill_dir();
 /// and DFTRACER_UTILS_SPILL_DIR. Thread safe.
 bool spill_dir_in_memory(const std::string& dir);
 
-/// Live bytes of spill files, added to the process-wide memory::ExternalSlot
-/// named "spill" and taken back on destruction. They count toward the memory
-/// budget only when `in_memory` (see spill_dir_in_memory()). add() is thread
-/// safe and takes no lock.
+/// Live bytes of spill files, added to the process-wide @ref
+/// memory::ExternalSlot named "spill" and taken back on destruction. They count
+/// toward the memory budget only when `in_memory` (see spill_dir_in_memory()).
+/// add() is thread safe and takes no lock.
 class SpillCharge {
    public:
     explicit SpillCharge(bool in_memory) noexcept : in_memory_(in_memory) {}
@@ -71,9 +71,9 @@ class ScopedSpillSubdir {
 
     SpillCharge& charge() const noexcept { return *charge_; }
 
-    /// The charge of the live ScopedSpillSubdir that holds `file`, for a writer
-    /// that knows only the path. Null when no such directory is open. Takes a
-    /// lock, so call it once per file, not per write.
+    /// The charge of the live @ref ScopedSpillSubdir that holds `file`, for a
+    /// writer that knows only the path. Null when no such directory is open.
+    /// Takes a lock, so call it once per file, not per write.
     static std::shared_ptr<SpillCharge> charge_for(const std::string& file);
 
    private:

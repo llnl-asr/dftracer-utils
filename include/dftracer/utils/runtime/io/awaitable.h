@@ -31,11 +31,11 @@ struct IoAwaitable {
     /// Coroutine handle to resume on completion
     std::coroutine_handle<> handle_{};
 
-    /// Opaque pointer to a SubmitContext (backend-specific).
-    /// The backend creates a heap-allocated SubmitContext subclass in
+    /// Opaque pointer to a @ref SubmitContext (backend-specific).
+    /// The backend creates a heap-allocated @ref SubmitContext subclass in
     /// submit_*(), stores a pointer here. await_suspend calls
     /// ctx->submit(ctx, this) to trigger the I/O operation.
-    /// The backend is responsible for freeing the SubmitContext.
+    /// The backend is responsible for freeing the @ref SubmitContext.
     SubmitContext* submit_ctx_ = nullptr;
 
     /// True when result is already available (sync fallback path)

@@ -106,7 +106,8 @@ class Plugins {
 
     /// Attach every plugin to `session` as a fused fold branch, in fold order,
     /// so they co-scan with its other branches. Call before session.execute().
-    /// The returned handle resolves like every other ViewSession handle:
+    /// The returned handle resolves like every other @ref
+    /// dftracer::utils::trace::views::ViewSession "ViewSession" handle:
     /// `->results` and `->stats` throw if read before session.execute()
     /// completes.
     ///

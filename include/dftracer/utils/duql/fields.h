@@ -17,7 +17,7 @@ dftracer::utils::dstd::StringViewSet collect_fields(const QueryNode& node);
 /// The paths of the query's any() fields, sorted and unique.
 dstd::Vector<dstd::String> collect_any_paths(const QueryNode& node);
 
-/// Whether some leaf under `node` is an ExprLeaf.
+/// Whether some leaf under `node` is an @ref ExprLeaf.
 bool has_expression_leaf(const QueryNode& node);
 
 /// A copy of the tree under `node`; expression leaves share their terms.

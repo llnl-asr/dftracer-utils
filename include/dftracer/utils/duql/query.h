@@ -52,8 +52,8 @@ class Query {
     }
     /// The paths used as any(path), sorted.
     const dstd::Vector<dstd::String>& any_paths() const { return any_paths_; }
-    /// Whether some leaf is an expression (ExprLeaf), which may read a whole
-    /// array or object.
+    /// Whether some leaf is an expression (@ref ExprLeaf), which may read a
+    /// whole array or object.
     bool has_expressions() const { return has_expressions_; }
 
    private:
@@ -76,7 +76,7 @@ Query conjoin(const Query& a, const Query& b);
 
 inline auto Expr::build() const { return Query::from_string(to_string()); }
 
-/// Parse a query string, throwing DuqlParseError on failure.
+/// Parse a query string, throwing @ref DuqlParseError on failure.
 Query parse_or_throw(dstd::StringView input);
 
 /// Parse a query string into dstd::Optional (nullopt on failure).

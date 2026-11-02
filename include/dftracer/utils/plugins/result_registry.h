@@ -25,7 +25,8 @@ namespace dftracer::utils::plugins {
 /// A native columnar result carried across the ABI as a dftu_dataframe handle
 /// (the dataframe engine's own boundary type), freed via the dataframe C ABI.
 /// Lets an engine-backed result (the aggregation accumulator) cross as our own
-/// DataFrame with no Arrow round-trip.
+/// @ref dftracer::utils::dataframe::DataFrame "DataFrame" with no Arrow
+/// round-trip.
 struct OwnedDataFrame {
     dftu_dataframe* handle = nullptr;
     OwnedDataFrame() = default;
@@ -69,10 +70,11 @@ struct OwnedDataFrame {
 /// dftu_lazyframe_* ABI directly, the same indirection dftu_svc_ops already
 /// uses for column/frame ops. Every method BORROWS `*this` and returns a new
 /// plan, leaving this one usable - the same contract as the layers beneath,
-/// where dftu_lazyframe_* takes a const handle and LazyFrame's own methods are
-/// const. A method that fails for any reason (no ops extension wired up, an
-/// unregistered name, or a kind/arity/shape/argument rejection) returns an
-/// EMPTY OwnedLazyFrame (`!out.handle`); every method short-circuits on an
+/// where dftu_lazyframe_* takes a const handle and @ref
+/// dftracer::utils::dataframe::LazyFrame "LazyFrame"'s own methods are const. A
+/// method that fails for any reason (no ops extension wired up, an unregistered
+/// name, or a kind/arity/shape/argument rejection) returns an EMPTY
+/// OwnedLazyFrame (`!out.handle`); every method short-circuits on an
 /// already-empty OwnedLazyFrame, so a failure partway through a chain
 /// propagates to the end without corrupting or leaking anything, and the
 /// caller checks `handle` once at the end of the chain rather than after
@@ -392,7 +394,7 @@ class NamedResultRegistry {
 
     /// Take ownership of a native dftu_lazyframe (deferred) result; the host
     /// collects it at the Python edge. The plan must be self-contained (see
-    /// OwnedLazyFrame). A null handle is a no-op.
+    /// @ref OwnedLazyFrame). A null handle is a no-op.
     void emit_lazyframe(const char* name, dftu_lazyframe* handle) {
         if (!name || !handle) return;
         std::lock_guard<std::mutex> lock(mutex_);

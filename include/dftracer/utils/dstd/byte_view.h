@@ -61,7 +61,7 @@ class ByteView {
  * @brief Non-owning mutable view over a contiguous byte range.
  *
  * For buffers that need to be written into (e.g., inflate output buffers).
- * Implicitly converts to ByteView for reading.
+ * Implicitly converts to @ref ByteView for reading.
  */
 class MutableByteView {
    public:

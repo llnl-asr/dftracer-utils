@@ -51,7 +51,7 @@ struct ParallelReadResult {
  * Read a single Arrow IPC file as a coroutine.
  *
  * @param path Path to the Arrow IPC file.
- * @return ArrowFileReadResult with batches or error.
+ * @return @ref ArrowFileReadResult with batches or error.
  */
 coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(std::string path);
 
@@ -62,7 +62,7 @@ coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(std::string path);
  * complete, use read_arrow_files_streaming instead.
  *
  * @param paths List of file paths to read.
- * @return ParallelReadResult with all results.
+ * @return @ref ParallelReadResult with all results.
  */
 coro::CoroTask<ParallelReadResult> read_arrow_files_parallel(
     std::vector<std::string> paths);

@@ -143,7 +143,8 @@ inline std::optional<OpDesc> find_op(const char* name) noexcept {
 /// Number of registered ops (built-ins + user), for discovery/listing.
 inline std::uint32_t op_count() noexcept { return dftu_op_count(); }
 
-/// The op at index `i` in [0, op_count()); an empty OpDesc if out of range.
+/// The op at index `i` in [0, op_count()); an empty @ref OpDesc if out of
+/// range.
 inline OpDesc op_at(std::uint32_t i) noexcept { return OpDesc(dftu_op_at(i)); }
 
 /// Builder for a dftu_op_arg. Slots are indexed by operand-TOKEN position (a

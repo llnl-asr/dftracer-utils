@@ -13,7 +13,7 @@ namespace dftracer::utils::index::extensions {
 /**
  * @brief Cardinality-adaptive Bloom filter over a chain of BloomFilters.
  *
- * A plain BloomFilter fixes its bit count at construction, so a chunk
+ * A plain @ref BloomFilter fixes its bit count at construction, so a chunk
  * holding far more distinct values than the configured expectation
  * saturates and its false-positive rate approaches 1 - it stops pruning
  * anything. An indexer cannot know a chunk's distinct-value count before
@@ -34,9 +34,10 @@ namespace dftracer::utils::index::extensions {
  * Serialization format:
  *   ["SBF1" magic (4 bytes)]
  *   [4 bytes: level count (uint32_t LE)]
- *   [per level: 4 bytes blob length (uint32_t LE), then a BloomFilter blob]
+ *   [per level: 4 bytes blob length (uint32_t LE), then a @ref BloomFilter
+ * blob]
  *
- * `from_blob` accepts a bare BloomFilter blob too, reading it as a
+ * `from_blob` accepts a bare @ref BloomFilter blob too, reading it as a
  * single-level chain, so blooms written before this type existed still
  * load.
  */

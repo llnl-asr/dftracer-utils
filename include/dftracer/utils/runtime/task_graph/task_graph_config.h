@@ -8,7 +8,7 @@
 namespace dftracer::utils::task_graph {
 
 /**
- * Config for TaskGraph builder.
+ * Config for @ref TaskGraph builder.
  *
  * max_concurrency controls how many parallel/fan-out/map tasks can be
  * in-flight simultaneously.  0 = unlimited (all tasks start as soon as

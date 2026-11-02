@@ -36,7 +36,7 @@ void set_timeslice_duration(std::chrono::microseconds duration) noexcept;
 std::chrono::microseconds get_timeslice_duration() noexcept;
 
 /// Suppress (or restore) the current-thread executor context.
-/// Returns the previous value.  Used by SyncScope.
+/// Returns the previous value.  Used by @ref SyncScope.
 void* suppress_executor() noexcept;
 void restore_executor(void* saved) noexcept;
 

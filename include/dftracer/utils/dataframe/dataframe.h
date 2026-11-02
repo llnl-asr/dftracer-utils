@@ -209,8 +209,8 @@ struct DataFrame {
     DataFrame group_by(const std::vector<std::string>& keys,
                        const std::vector<GroupAgg>& aggs) const;
     /// The two-step form: the keys now, the aggregates on the returned
-    /// GroupBy (`df.group_by({"k"}).sum()`, `.agg(specs)`). Empty keys make
-    /// the whole frame one group.
+    /// @ref GroupBy (`df.group_by({"k"}).sum()`, `.agg(specs)`). Empty keys
+    /// make the whole frame one group.
     GroupBy group_by(std::vector<std::string> keys = {}) const;
     /// Group by an expression key and compute each expression aggregate in one
     /// CSE'd, pruned pass (see group_agg_expr). A bare column-ref key uses that
@@ -309,12 +309,12 @@ struct DataFrame {
     std::vector<std::uint8_t> to_ipc() const;
 #endif
 
-    /// Import a STRUCT Arrow array (viewed through `schema`) as a DataFrame:
-    /// one column per struct child, named by its child schema, wrapped zero
-    /// copy. ADOPTS `array` (ownership of its buffers moves into the frame and
-    /// the passed array is marked released, so the caller must not release it
-    /// again); `schema` is only read. An empty frame on a non-struct or
-    /// unsupported child type.
+    /// Import a STRUCT Arrow array (viewed through `schema`) as a @ref
+    /// dftracer::utils::dataframe::DataFrame "DataFrame": one column per struct
+    /// child, named by its child schema, wrapped zero copy. ADOPTS `array`
+    /// (ownership of its buffers moves into the frame and the passed array is
+    /// marked released, so the caller must not release it again); `schema` is
+    /// only read. An empty frame on a non-struct or unsupported child type.
     static DataFrame from_arrow(const ArrowSchema* schema,
                                 const ArrowArray* array);
 #endif

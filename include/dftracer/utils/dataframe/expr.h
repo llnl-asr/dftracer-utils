@@ -372,12 +372,12 @@ Series eval(const Expr& root, const std::vector<const Series*>& inputs);
 std::vector<Series> eval_many(const std::vector<Expr>& roots,
                               const std::vector<const Series*>& inputs);
 
-/// The DataType `root` would produce over columns typed `input_types`,
+/// The @ref DataType `root` would produce over columns typed `input_types`,
 /// without evaluating data. Shares eval()'s compiler, so the two can never
 /// disagree. A bare column reference reports the input column's full
-/// DataType (including timezone/decimal/fixed_size parameters); every other
-/// form reports a scalar DataType, since no transform here can target a
-/// parameterized type. Reports TypeId::Unknown where the input type is
+/// @ref DataType (including timezone/decimal/fixed_size parameters); every
+/// other form reports a scalar @ref DataType, since no transform here can
+/// target a parameterized type. Reports TypeId::Unknown where the input type is
 /// itself Unknown. Same throwing contract as eval().
 DataType infer_type(const Expr& root, const std::vector<DataType>& input_types);
 

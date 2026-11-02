@@ -32,7 +32,7 @@ class NoOpTask : public Task {
 };
 
 /**
- * Helper function to create a NoOpTask
+ * Helper function to create a @ref NoOpTask
  */
 inline std::shared_ptr<NoOpTask> make_noop_task(std::string name = "__noop__") {
     return std::make_shared<NoOpTask>(std::move(name));

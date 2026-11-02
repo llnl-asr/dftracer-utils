@@ -113,7 +113,7 @@ struct WhenAnyResult {
         remaining_cancellation_tokens;
 };
 
-/// Forward declaration for SharedState
+/// Forward declaration for @ref SharedState
 template <typename Awaitable>
 struct WhenAnySharedState;
 
@@ -319,7 +319,7 @@ class WhenAnyAwaitable {
  * when_any - Race multiple operations, return first to complete
  *
  * @param awaitables Vector of awaitables to race
- * @return WhenAnyResult with index and result of first completion
+ * @return @ref WhenAnyResult with index and result of first completion
  *
  * Usage:
  * @code
@@ -645,7 +645,7 @@ class WhenAnyTupleAwaitable {
  * Selected only when not all types are the same (the homogeneous variadic
  * overload handles the identical-type case).
  *
- * @return WhenAnyTupleResult with variant result and winner index.
+ * @return @ref WhenAnyTupleResult with variant result and winner index.
  */
 template <typename A1, typename A2, typename... Rest>
     requires(!std::conjunction_v<
@@ -801,7 +801,7 @@ class TimeoutAwaitable {
 };
 
 /**
- * timeout - Create a timeout awaitable using TimerService
+ * timeout - Create a timeout awaitable using @ref TimerService
  *
  * Usage:
  * @code

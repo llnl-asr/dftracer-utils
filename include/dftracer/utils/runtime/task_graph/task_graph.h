@@ -55,7 +55,7 @@ namespace dftracer::utils::task_graph {
 class TaskGraph {
    public:
     /**
-     * Create a TaskGraph builder with options
+     * Create a @ref TaskGraph builder with options
      */
     static TaskGraph builder(TaskGraphConfig opts = {}) {
         return TaskGraph(std::move(opts));
@@ -64,7 +64,7 @@ class TaskGraph {
     /**
      * Wrap an external task as entry point to the graph
      *
-     * Use this to connect TaskGraph operations to existing barebone tasks.
+     * Use this to connect @ref TaskGraph operations to existing barebone tasks.
      */
     template <typename T>
     TaskGroup<T> wrap(std::shared_ptr<Task> external_task) {

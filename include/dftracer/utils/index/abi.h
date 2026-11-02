@@ -91,8 +91,9 @@ DFTU_RESULT_DECL(dftu_indexer_files_result, dftu_indexer_file_list*);
 DFTU_RESULT_DECL(dftu_indexer_file_result, dftu_indexer_file);
 DFTU_RESULT_DECL(dftu_indexer_string_result, char*);
 
-/** The defaults of IndexerOptions: checkpoints and bloom on and required, and
- * the aggregation tier built with the standard config. */
+/** The defaults of @ref dftracer::utils::index::IndexerOptions
+ * "IndexerOptions": checkpoints and bloom on and required, and the aggregation
+ * tier built with the standard config. */
 DFTU_EXPORT void dftu_indexer_options_init(dftu_indexer_options* out);
 
 /** Open `n` trace files or directories (a directory contributes the trace

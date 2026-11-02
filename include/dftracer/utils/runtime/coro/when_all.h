@@ -51,7 +51,7 @@ struct FireAndForget {
 // ============================================================================
 
 /**
- * Shared state for WhenAllVectorAwaitable
+ * Shared state for @ref WhenAllVectorAwaitable
  * Heap-allocated to ensure lifetime extends beyond await_suspend
  */
 template <typename Awaitable>
@@ -322,7 +322,7 @@ using when_all_result_t =
 // ============================================================================
 
 /**
- * Shared state for WhenAllTupleAwaitable.
+ * Shared state for @ref WhenAllTupleAwaitable.
  * Heap-allocated so lifetime extends beyond await_suspend.
  */
 template <typename... Awaitables>

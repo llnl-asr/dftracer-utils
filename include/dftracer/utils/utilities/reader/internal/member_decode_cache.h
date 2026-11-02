@@ -58,7 +58,7 @@ namespace dftracer::utils::utilities::reader::internal {
 ///
 /// Concurrent requests for the same member run the decode exactly once
 /// (single-flight): callers share one Entry and serialize on its
-/// coro::AsyncMutex - the first decodes while holding it (thread freed via
+/// @ref coro::AsyncMutex - the first decodes while holding it (thread freed via
 /// async suspend, not blocked), the rest wake and read the shared immutable
 /// buffer. So N overlapping queries over one member cost one pread + one
 /// inflate instead of N.

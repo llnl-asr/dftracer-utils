@@ -156,10 +156,10 @@ class AggCol {
     const char* by_ = nullptr;
 };
 
-/// Per-op AggCol factories: each function's signature takes exactly the
+/// Per-op @ref AggCol factories: each function's signature takes exactly the
 /// fields its DFTU_AGG_* op consumes (see dftu_agg_col in abi.h), so a
 /// mismatched param combination (e.g. a quantile on sum()) fails to compile
-/// instead of silently building an AggCol with an unused or missing field.
+/// instead of silently building an @ref AggCol with an unused or missing field.
 namespace agg {
 
 /// Group row count; no value column.

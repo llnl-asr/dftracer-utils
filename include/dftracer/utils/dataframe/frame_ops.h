@@ -113,7 +113,7 @@ constexpr bool is_offset_func(WindowFunc f) {
            f == WindowFunc::Ntile || f == WindowFunc::NthValue;
 }
 
-/// The WindowColumn a C ABI window spec names; its strings are copied.
+/// The @ref WindowColumn a C ABI window spec names; its strings are copied.
 WindowColumn window_column(const dftu_window_spec& s);
 
 /// SQL window functions over `df`, PARTITION BY `partition_by` and ORDER BY

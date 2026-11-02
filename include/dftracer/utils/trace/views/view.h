@@ -50,7 +50,7 @@ using dftracer::utils::dataframe::field::FieldExpr;
 using duql::Query;
 
 /// `ph="X"` events, `ph="C"` counters, `ph="A"` aggregated (folded events),
-/// `ph="M"` metadata, or all (`Any`).
+/// `ph="M"` metadata, or all (@ref dftracer::utils::dstd::Any "Any").
 enum class Phase { Events, Counters, Aggregated, Metadata, Any };
 
 /// One column of a (possibly composite) group-by key. `Arg` groups on an
@@ -154,9 +154,9 @@ inline bool is_occupancy_op(AggOp op) {
 
 /// True for the reductions runnable over every discovered numeric arg
 /// (agg_numeric_args). Count/Sum/Min/Max/SumSq/Mean/Var/Std/Skew/Kurt come from
-/// the per-arg FieldStat; Pct additionally collects a per-arg DDSketch. Hist,
-/// ArgMax, SetUnion and occupancy need per-event or per-field state, so those
-/// stay on a named field.
+/// the per-arg @ref dftracer::utils::dataframe::FieldStat "FieldStat"; Pct
+/// additionally collects a per-arg DDSketch. Hist, ArgMax, SetUnion and
+/// occupancy need per-event or per-field state, so those stay on a named field.
 inline bool is_dyn_reduction(AggOp op) {
     return op == AggOp::Count || op == AggOp::Sum || op == AggOp::Min ||
            op == AggOp::Max || op == AggOp::SumSq || op == AggOp::Mean ||
@@ -302,7 +302,7 @@ namespace detail {
 /// Opaque internal types (view_plan.h / view_aggregate.h / fold.h /
 /// view_executor.h); they appear below only as pimpl-style handles or
 /// advanced-method parameters. The scan/session engine seams the inline
-/// templates below build on are private members of View/ViewSession,
+/// templates below build on are private members of View/@ref ViewSession,
 /// defined in the .cpp - no engine surface is exposed in this public header.
 struct ViewPlan;
 /// A trace scan's immutable plan, shared by the View, its source and the
@@ -314,7 +314,8 @@ struct ViewSessionState;
 
 /// Phase 1 of the scan -> dataframe engine aggregation convergence
 /// (view_agg_engine.h/.cpp); builds the
-/// raw row-query LazyFrame the streaming group_by runs over.
+/// raw row-query @ref dftracer::utils::dataframe::LazyFrame "LazyFrame" the
+/// streaming group_by runs over.
 coro::CoroTask<dftracer::utils::dataframe::DataFrame> run_collect_via_engine(
     const ViewPlan& plan);
 
@@ -323,10 +324,10 @@ struct EnginePrep;
 coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan);
 }  // namespace detail
 
-/// A result handle from a ViewSession op, resolved when execute() completes.
-/// Reading it (get / * / ->) before execute() throws, since the value does not
-/// exist yet. operator bool reports whether an op was registered; a
-/// default-constructed handle is empty.
+/// A result handle from a @ref ViewSession op, resolved when execute()
+/// completes. Reading it (get / * / ->) before execute() throws, since the
+/// value does not exist yet. operator bool reports whether an op was
+/// registered; a default-constructed handle is empty.
 template <class T>
 class Deferred {
    public:
@@ -367,14 +368,15 @@ struct ContainmentHandles {
 class ViewSession {
    public:
     /// Aggregate the branch's matching events (group_by + agg) into a
-    /// DataFrame.
+    /// @ref dftracer::utils::dataframe::DataFrame "DataFrame".
     Deferred<dftracer::utils::dataframe::DataFrame> collect(
         Query predicate, std::vector<GroupKey> group_by,
         std::vector<AggSpec> agg);
 
     /// Aggregate ALL of the base view's events (no per-branch predicate) into a
-    /// DataFrame. For a branch that wants every scanned event, so several
-    /// distinct group_by/agg aggregations share the one scan.
+    /// @ref dftracer::utils::dataframe::DataFrame "DataFrame". For a branch
+    /// that wants every scanned event, so several distinct group_by/agg
+    /// aggregations share the one scan.
     Deferred<dftracer::utils::dataframe::DataFrame> collect(
         std::vector<GroupKey> group_by, std::vector<AggSpec> agg);
 
@@ -441,9 +443,9 @@ class ViewSession {
     }
 
     /// Attach an externally-built Fold to the shared scan. `make` constructs it
-    /// with the scan's dstd::StringIntern so ids agree and per-worker slices
-    /// merge; `finalize` runs after the scan while the fold is still alive.
-    /// Forces a scan (a plugin cannot be served from a rollup).
+    /// with the scan's @ref dstd::StringIntern so ids agree and per-worker
+    /// slices merge; `finalize` runs after the scan while the fold is still
+    /// alive. Forces a scan (a plugin cannot be served from a rollup).
     void attach_fold_factory(std::function<std::unique_ptr<detail::Fold>(
                                  dftracer::utils::dstd::StringIntern&)>
                                  make,
@@ -476,9 +478,9 @@ class ViewSession {
     /// distributed merge, over the shared scan. Merge and resolve later.
     Deferred<std::string> aggregate_partial(const detail::ScanPlan& branch);
 
-    /// Materialize the branch's matching events into a DataFrame over the
-    /// shared scan. The whole matching set is held in memory, so filter to
-    /// bound it.
+    /// Materialize the branch's matching events into a @ref
+    /// dftracer::utils::dataframe::DataFrame "DataFrame" over the shared scan.
+    /// The whole matching set is held in memory, so filter to bound it.
     Deferred<dftracer::utils::dataframe::DataFrame> collect_events(
         const detail::ScanPlan& branch);
 
@@ -610,8 +612,9 @@ struct ContainmentResult {
     dataframe::DataFrame flamegraph;
 };
 
-/// Selects the deferred overload of a sink: it returns a LazyResult for
-/// collect_all() or a session instead of running at once.
+/// Selects the deferred overload of a sink: it returns a @ref
+/// dftracer::utils::dataframe::LazyResult "LazyResult" for collect_all() or a
+/// session instead of running at once.
 struct Lazy {};
 inline constexpr Lazy LAZY{};
 
@@ -665,17 +668,20 @@ class TraceSession {
     std::shared_ptr<bool> executed_ = std::make_shared<bool>(false);
 };
 
-/// A lazy, composable view over trace files: a LazyFrame whose source is a
-/// trace scan. Generic LazyFrame builders (inherited from LazyOps) record ops
-/// that the scan absorbs at plan time, so filters, projections and group-bys
-/// reach the index; the trace builders below (event filters, phase, time
-/// range, time buckets, group keys, trace aggregates) shape the scan itself.
-/// Nothing runs until collect(), which returns the DataFrame.
+/// A lazy, composable view over trace files: a @ref
+/// dftracer::utils::dataframe::LazyFrame "LazyFrame" whose source is a trace
+/// scan. Generic @ref dftracer::utils::dataframe::LazyFrame "LazyFrame"
+/// builders (inherited from @ref LazyOps) record ops that the scan absorbs at
+/// plan time, so filters, projections and group-bys reach the index; the trace
+/// builders below (event filters, phase, time range, time buckets, group keys,
+/// trace aggregates) shape the scan itself. Nothing runs until collect(), which
+/// returns the @ref dftracer::utils::dataframe::DataFrame "DataFrame".
 ///
 /// A trace builder shapes the events the scan reads, so it may only follow
 /// filters: calling one after any other op throws INVALID_ARGUMENT naming that
 /// op. Event filters (query / Query / FieldExpr) always select raw events, even
-/// after a trace group_by; an Expr filter follows LazyFrame order.
+/// after a trace group_by; an Expr filter follows @ref
+/// dftracer::utils::dataframe::LazyFrame "LazyFrame" order.
 class View : public dataframe::LazyOps<View> {
    public:
     /// An empty view (no files); collects to an empty result.
@@ -706,8 +712,9 @@ class View : public dataframe::LazyOps<View> {
     /// Apply the duql pipeline `text` with `params` bound: the leading
     /// `where` stages filter the scan, a leading field-only `select` is the
     /// scan projection, and the later stages run on the scanned columns.
-    /// Throws DFTUtilsException INVALID_ARGUMENT for a query that does not
-    /// compile against this view's columns and record schema.
+    /// Throws @ref dftracer::utils::common::DFTUtilsException
+    /// "DFTUtilsException" INVALID_ARGUMENT for a query that does not compile
+    /// against this view's columns and record schema.
     View duql(dstd::StringView text, const duql::Params& params = {}) const;
     /// Apply the builder pipeline `pipe` with its bound parameters.
     View duql(const duql::Pipe& pipe) const {
@@ -754,13 +761,15 @@ class View : public dataframe::LazyOps<View> {
     View agg_numeric_args() const;
     View agg_numeric_args(std::vector<AggSpec> reductions) const;
     /// Read the files as the registered record_schema `id` instead of their
-    /// recorded or detected one. Throws DFTUtilsException INVALID_ARGUMENT
-    /// for an unregistered id.
+    /// recorded or detected one. Throws @ref
+    /// dftracer::utils::common::DFTUtilsException "DFTUtilsException"
+    /// INVALID_ARGUMENT for an unregistered id.
     View record_schema(std::string id) const;
     View rollup_root(std::string dir) const;
     View views_root(std::string dir) const;
     View cancel_when(std::function<bool()> pred) const;
-    /// Spill budget for both the trace aggregation and the LazyFrame ops.
+    /// Spill budget for both the trace aggregation and the @ref
+    /// dftracer::utils::dataframe::LazyFrame "LazyFrame" ops.
     View memory_budget(std::uint64_t bytes) const;
     /// Add the counts of every scan this View, and each View derived from it,
     /// runs to `counter`, which must outlive those scans.
@@ -785,9 +794,10 @@ class View : public dataframe::LazyOps<View> {
     /// Containment terminals: a plan over the events this viewer selects:
     /// call_tree gives the events plus level/parent_id per lane of
     /// `partition`, flamegraph the events folded by name path. The returned
-    /// plan chains like any LazyFrame; the trace methods end here. Each throws
-    /// INVALID_ARGUMENT naming the first op of this viewer that the terminal
-    /// cannot take (anything but absorbed filters and projections).
+    /// plan chains like any @ref dftracer::utils::dataframe::LazyFrame
+    /// "LazyFrame"; the trace methods end here. Each throws INVALID_ARGUMENT
+    /// naming the first op of this viewer that the terminal cannot take
+    /// (anything but absorbed filters and projections).
     dataframe::LazyFrame call_tree(std::vector<std::string> partition = {"pid",
                                                                          "tid"},
                                    std::string ts = "ts",
@@ -896,7 +906,7 @@ class View : public dataframe::LazyOps<View> {
         dftracer::utils::dstd::StringIntern& intern) const;
 
     /// The trace self-description, one entry per process, from each file's
-    /// "end" event (TraceConfig). Ignores this view's filters.
+    /// "end" event (@ref TraceConfig). Ignores this view's filters.
     std::vector<TraceConfig> config() const;
     /// True when sink_json / collect() would take the first-touch pass that
     /// answers the query and builds the index at once, so a caller that would

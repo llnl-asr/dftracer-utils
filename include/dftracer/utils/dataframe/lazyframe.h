@@ -94,8 +94,8 @@ class Cursor {
     }
 
     /// Offer `predicate` (positional against this cursor's own schema, like a
-    /// ScanRequest filter) as a narrowing of the work this cursor has not yet
-    /// produced - a join build side or a plugin that learns a bound partway
+    /// @ref ScanRequest filter) as a narrowing of the work this cursor has not
+    /// yet produced - a join build side or a plugin that learns a bound partway
     /// through the scan. ADVISORY: a cursor may ignore this entirely, or
     /// narrow only part of what remains; the caller must still evaluate
     /// `predicate` itself over every row next()/try_next() yields afterward,
@@ -125,7 +125,7 @@ struct Schema {
     std::vector<Field> fields;
 };
 
-/// How completely a source applied a pushed-down filter, per ScanRequest
+/// How completely a source applied a pushed-down filter, per @ref ScanRequest
 /// filter. Guides whether the engine must re-apply it over the survivors.
 /// Mirrors dftu_pushed (dataframe/abi.h).
 enum class Pushed {
@@ -150,12 +150,12 @@ struct ScanRequest {
     /// can and reports the rest No.
     std::vector<Expr> filters;
     std::int64_t limit = -1;  ///< Slice pushdown hint; -1 means no limit.
-    /// The resolved LazyFrame budget (bytes); a streaming source may use it to
-    /// bound its own in-flight buffering. Most sources ignore it.
+    /// The resolved @ref LazyFrame budget (bytes); a streaming source may use
+    /// it to bound its own in-flight buffering. Most sources ignore it.
     std::uint64_t memory_budget = 0;
 };
 
-/// The result of Source::scan: a fresh async Cursor plus, per ScanRequest
+/// The result of Source::scan: a fresh async Cursor plus, per @ref ScanRequest
 /// filter, how completely the source applied it.
 struct ScanResult {
     std::unique_ptr<Cursor> cursor;
@@ -185,9 +185,9 @@ struct NamedExpr {
     Expr expr;
 };
 
-/// One aggregate of an AggregateSpec. `input` and `by` are positional against
-/// the offering source's schema(). `input` is unset for count; `by` is set
-/// only for the ops that read a second column (agg_uses_by_col). `param` is
+/// One aggregate of an @ref AggregateSpec. `input` and `by` are positional
+/// against the offering source's schema(). `input` is unset for count; `by` is
+/// set only for the ops that read a second column (agg_uses_by_col). `param` is
 /// the quantile or k where the op takes one.
 struct AggregateExpr {
     Agg op = Agg::Count;
@@ -226,7 +226,7 @@ struct JoinSpec {
 /// the columns without scanning and scan() hands out a fresh Cursor honoring
 /// the pushed projection/filters, so one Source can back many collect()s.
 /// Implement these two to plug any producer (a file, another engine, a trace
-/// scan) into LazyFrame.
+/// scan) into @ref LazyFrame.
 ///
 /// The apply_* planning hooks let a source absorb the op directly above it at
 /// plan time, before scan(). Each returns std::nullopt for "unsupported or no
@@ -343,8 +343,8 @@ class InMemorySource : public Source {
 };
 
 /// A deferred query over a Source. Builder methods record ops and return a new
-/// LazyFrame; nothing runs until collect(). A filter/with_column expr's col(i)
-/// refers to the i-th column of the frame at that point.
+/// @ref LazyFrame; nothing runs until collect(). A filter/with_column expr's
+/// col(i) refers to the i-th column of the frame at that point.
 class LazyOp;
 class LazyGroupBy;
 namespace detail {
@@ -436,7 +436,7 @@ class LazyFrame {
     /// group_by(keys).reduce(agg).
     LazyFrame reduce(Agg agg) const;
     /// The two-step form: the keys now, the aggregates on the returned
-    /// LazyGroupBy (`lf.group_by({"k"}).sum()`, `.agg(specs)`), each a
+    /// @ref LazyGroupBy (`lf.group_by({"k"}).sum()`, `.agg(specs)`), each a
     /// streaming group_by step. Empty keys make the whole plan one group.
     LazyGroupBy group_by(std::vector<std::string> keys) const;
     /// Group by an expression key and compute each expression aggregate.
@@ -603,7 +603,7 @@ class LazyFrame {
     /// projection is ever pushed through it, and the engine never reorders
     /// around it. `args` is copied by value; a pointer-bearing operand it
     /// carries must outlive every future execution of the returned
-    /// LazyFrame, not merely this call.
+    /// @ref LazyFrame, not merely this call.
     LazyFrame op(std::string name, OpArgs args) const;
 
     /// Output column names without running the query. Empty for a plan ending
@@ -622,8 +622,9 @@ class LazyFrame {
     std::string explain() const;
 
     /// Pull-based chunk generator: the streaming terminal. Each yielded
-    /// DataFrame is standalone, carrying its own schema. One-shot: re-run
-    /// from the LazyFrame to restart. `morsel_rows` is the scan chunk size;
+    /// @ref DataFrame is standalone, carrying its own schema. One-shot: re-run
+    /// from the @ref LazyFrame to restart. `morsel_rows` is the scan chunk
+    /// size;
     /// <= 0 means auto. collect() drains this.
     coro::AsyncGenerator<DataFrame> stream(std::int64_t morsel_rows = 0) const;
 
@@ -762,10 +763,10 @@ class LazyGroupBy {
 /// Free-function form of DataFrame::lazy(), for `lazy(df)` call sites.
 LazyFrame lazy(DataFrame frame);
 
-/// Collect every plan, one DataFrame per plan in input order. After each plan
-/// is optimized, plans whose sources share a Source::batch_key() read their
-/// data in one Source::collect_batch() call; the rest collect as collect()
-/// would.
+/// Collect every plan, one @ref DataFrame per plan in input order. After each
+/// plan is optimized, plans whose sources share a Source::batch_key() read
+/// their data in one Source::collect_batch() call; the rest collect as
+/// collect() would.
 coro::CoroTask<std::vector<DataFrame>> collect_all(
     std::vector<LazyFrame> plans);
 
@@ -837,9 +838,9 @@ coro::CoroTask<void> finish_roots(Results& results,
 
 }  // namespace detail
 
-/// Collect LazyFrame and LazyResult roots together, one value per root in
-/// argument order: a DataFrame for a LazyFrame, a `T` for a LazyResult<T>.
-/// Every root's plans batch as collect_all(plans) batches them.
+/// Collect @ref LazyFrame and @ref LazyResult roots together, one value per
+/// root in argument order: a @ref DataFrame for a @ref LazyFrame, a `T` for a
+/// LazyResult<T>. Every root's plans batch as collect_all(plans) batches them.
 template <class... R>
 coro::CoroTask<std::tuple<detail::result_of_root<R>...>> collect_all(
     R... roots) {
@@ -872,8 +873,8 @@ LoweredGroupAggs lower_group_aggs(const std::vector<GroupAgg>& aggs);
 /// Accumulate one already-built chunk `frame` into `state`: resolve `keys` and
 /// `value_names` (from lower_group_aggs) by name against `frame`, feeding every
 /// column whose name starts with `dyn_prefix` as a dyn input (prefix stripped).
-/// The per-morsel step collect_group_state runs, exposed for a non-LazyFrame
-/// chunk driver (a trace Fold accumulating over a shared scan).
+/// The per-morsel step collect_group_state runs, exposed for a non-@ref
+/// LazyFrame chunk driver (a trace Fold accumulating over a shared scan).
 void agg_accumulate_chunk(AggState& state, const DataFrame& frame,
                           const std::vector<std::string>& keys,
                           const std::vector<std::string>& value_names,

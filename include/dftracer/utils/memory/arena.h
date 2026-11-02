@@ -23,7 +23,8 @@ inline constexpr std::size_t ARENA_MAX_CHUNK = std::size_t{4} << 20;
  *
  * Chunks are 64 KiB, doubling to 4 MiB. Blocks are freed only all at once. A
  * chunk past the reservation that reserve() tops up is still taken. Single
- * owner, no call is thread safe. Not movable, so an ArenaAllocator can hold it.
+ * owner, no call is thread safe. Not movable, so an @ref ArenaAllocator can
+ * hold it.
  */
 class Arena {
    public:

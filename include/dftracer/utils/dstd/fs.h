@@ -74,8 +74,8 @@ Expected<std::uint64_t, Error> mtime_ns(PathView path);
 
 /// One entry of a listing, from readdir alone. name is a view of the entry name
 /// only, and it stays valid until the iterator that produced it is incremented
-/// or the DirEntries is destroyed. kind is Unknown when the platform reports no
-/// d_type for it, so a caller that needs the kind must fstatat it.
+/// or the @ref DirEntries is destroyed. kind is Unknown when the platform
+/// reports no d_type for it, so a caller that needs the kind must fstatat it.
 struct DirEntry {
     StringView name;
     FileKind kind;

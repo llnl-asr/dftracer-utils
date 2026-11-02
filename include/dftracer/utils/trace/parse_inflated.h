@@ -131,9 +131,9 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
 
 /// Iterate parsed dftracer events from one inflated buffer (NDJSON plus
 /// simdjson padding; the caller strips any "[" / "]" delimiter lines).
-/// `chunk_buffer` is held shared so an EventRecord's string_view can outlive
-/// the loop. Args stay in the record's DOM element. Returns the trailing
-/// incomplete line for the caller to carry into the next buffer.
+/// `chunk_buffer` is held shared so an @ref EventRecord's string_view can
+/// outlive the loop. Args stay in the record's DOM element. Returns the
+/// trailing incomplete line for the caller to carry into the next buffer.
 ///
 /// Parsed only through the last newline, not by parse_many's own truncation
 /// (which reads zero when a chunk is cut mid-string, leaving the next chunk to

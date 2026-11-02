@@ -91,7 +91,7 @@ struct NotInNode {
     ArrayNode values;
 };
 
-/// Compiled regex backing a MatchNode.
+/// Compiled regex backing a @ref MatchNode.
 struct CompiledPattern;
 
 /// field like/ilike/~/~* pattern (e.g., name like "%Send%").
@@ -143,7 +143,7 @@ struct QueryNode {
     explicit QueryNode(T&& val) : data(std::forward<T>(val)) {}
 };
 
-/// Create a heap-allocated QueryNode.
+/// Create a heap-allocated @ref QueryNode.
 template <typename T>
 QueryNodePtr make_node(T&& val) {
     return dstd::make_unique<QueryNode>(std::forward<T>(val));

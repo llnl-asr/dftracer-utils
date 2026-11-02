@@ -18,7 +18,7 @@ namespace dftracer::utils::dstd {
  * uninitialized.
  *
  * Storage is 64-byte aligned. Growth doubles the capacity from 64 bytes. A
- * moved-from RawBuffer is empty. Not copyable.
+ * moved-from @ref RawBuffer is empty. Not copyable.
  */
 template <class T>
 class RawBuffer {

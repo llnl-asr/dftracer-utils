@@ -28,7 +28,8 @@ namespace detail {
 struct CoroScopeAccess;
 }  // namespace detail
 
-/// Lightweight structured concurrency scope using Coro + JoinHandle.
+/// Lightweight structured concurrency scope using Coro + @ref
+/// dftracer::utils::coro::JoinHandle "JoinHandle".
 ///
 /// This is the single context type that task lambdas receive.
 /// It replaces both CoroScope and CoroScope with a unified API:

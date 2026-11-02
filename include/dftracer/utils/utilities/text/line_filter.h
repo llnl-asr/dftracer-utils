@@ -17,8 +17,8 @@ using fileio::lines::Lines;
 /**
  * @brief Utility that filters lines based on a predicate function.
  *
- * This utility takes a FilterableLine (line + predicate) and returns the line
- * only if it passes the predicate. Otherwise, returns empty optional.
+ * This utility takes a @ref FilterableLine (line + predicate) and returns the
+ * line only if it passes the predicate. Otherwise, returns empty optional.
  *
  * Features:
  * - Flexible predicate-based filtering

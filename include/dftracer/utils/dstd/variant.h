@@ -10,6 +10,9 @@ namespace dftracer::utils::dstd {
 template <class... Ts>
 using Variant = std::variant<Ts...>;
 
+/// The empty alternative, for a Variant that may hold nothing.
+using Monostate = std::monostate;
+
 }  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_VARIANT_H

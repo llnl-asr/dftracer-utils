@@ -259,6 +259,7 @@ set(TEST_CPP_SOURCES
     dstd/test_expected.cpp
     dstd/test_error.cpp
     dstd/test_shutdown.cpp
+    dstd/test_std_extras.cpp
     common/test_filesystem_info.cpp
     common/test_memory_budget.cpp
     common/test_memory_config.cpp

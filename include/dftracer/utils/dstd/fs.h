@@ -87,6 +87,11 @@ Expected<Path, Error> canonical(PathView path);
 /// The whole content of a file, read until end of file, so it also works on a
 /// file that reports no size such as one under /proc. A directory is an error.
 Expected<String, Error> read_file(PathView path);
+/// Replaces the content of a file with `data`, creating it with mode 0644
+/// (less the umask) when it does not exist.
+Expected<void, Error> write_file(PathView path, StringView data);
+/// Adds `data` at the end of a file, creating it as write_file does.
+Expected<void, Error> append_file(PathView path, StringView data);
 /// canonical of the longest existing prefix of path with the missing rest
 /// appended and normalized lexically. A relative path with no existing prefix
 /// resolves against the current directory. An empty path gives an empty path.

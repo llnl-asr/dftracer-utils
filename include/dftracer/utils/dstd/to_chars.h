@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DSTD_TO_CHARS_H
 #define DFTRACER_UTILS_DSTD_TO_CHARS_H
 
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <charconv>
@@ -12,6 +13,7 @@
 #include <cstring>
 #include <string>
 #include <system_error>
+#include <type_traits>
 
 #if defined(__APPLE__) && (!defined(__MAC_OS_X_VERSION_MIN_REQUIRED) || \
                            __MAC_OS_X_VERSION_MIN_REQUIRED < 130300)
@@ -160,6 +162,38 @@ inline std::from_chars_result from_chars_double(const char* first,
 #else
     return std::from_chars(first, last, out);
 #endif
+}
+
+/// The decimal text of `v`, as std::to_string gives it.
+template <class T>
+    requires(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
+inline String to_string(T v) {
+    if constexpr (std::is_integral_v<T>) {
+        return int_text(v);
+    } else {
+        return fixed_text(static_cast<double>(v));
+    }
+}
+
+/// The number that is all of `text`, or nothing when `text` is not exactly
+/// one number of type T. As in std::from_chars, leading whitespace, a leading
+/// '+' and trailing bytes make it nothing, and so does an out-of-range value.
+template <class T>
+    requires(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
+inline Optional<T> from_chars(StringView text) {
+    const char* first = text.data();
+    const char* last = first + text.size();
+    T value{};
+    std::from_chars_result r;
+    if constexpr (std::is_integral_v<T>) {
+        r = std::from_chars(first, last, value);
+    } else {
+        double d = 0;
+        r = from_chars_double(first, last, d);
+        value = static_cast<T>(d);
+    }
+    if (r.ec != std::errc{} || r.ptr != last || first == last) return nullopt;
+    return value;
 }
 
 }  // namespace dftracer::utils::dstd

@@ -42,6 +42,9 @@ UniquePtr<T> make_unique(Args&&... args) {
 template <class T>
 using SharedPtr = std::shared_ptr<T>;
 
+template <class T>
+using WeakPtr = std::weak_ptr<T>;
+
 /// One block for the object and its control block, from memory::allocate.
 template <class T, class... Args>
 SharedPtr<T> make_shared(Args&&... args) {

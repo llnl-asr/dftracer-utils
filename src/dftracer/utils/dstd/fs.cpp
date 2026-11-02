@@ -569,6 +569,38 @@ Expected<String, Error> read_file(PathView path) {
     return out;
 }
 
+namespace {
+
+Expected<void, Error> write_with_flags(PathView path, StringView data,
+                                       int flags) {
+    const PathCString name(path.str());
+    ScopedFd fd(
+        ::open(name.c_str(), flags | O_WRONLY | O_CREAT | O_CLOEXEC, 0644));
+    if (!fd.valid()) return Unexpected(errno_error(errno, path.str()));
+    const char* p = data.data();
+    std::size_t left = data.size();
+    while (left > 0) {
+        const ssize_t put = ::write(fd.get(), p, left);
+        if (put < 0) {
+            if (errno == EINTR) continue;
+            return Unexpected(errno_error(errno, path.str()));
+        }
+        p += put;
+        left -= static_cast<std::size_t>(put);
+    }
+    return {};
+}
+
+}  // namespace
+
+Expected<void, Error> write_file(PathView path, StringView data) {
+    return write_with_flags(path, data, O_TRUNC);
+}
+
+Expected<void, Error> append_file(PathView path, StringView data) {
+    return write_with_flags(path, data, O_APPEND);
+}
+
 Expected<Path, Error> weakly_canonical(PathView path) {
     if (path.empty()) return Path();
     StringView head = strip_trailing_separators(path.str());

@@ -19,6 +19,13 @@ using Map = std::map<K, V, Compare, memory::Allocator<std::pair<const K, V>>>;
 template <class T, class Compare = std::less<>>
 using Set = std::set<T, Compare, memory::Allocator<T>>;
 
+template <class K, class V, class Compare = std::less<>>
+using MultiMap =
+    std::multimap<K, V, Compare, memory::Allocator<std::pair<const K, V>>>;
+
+template <class T, class Compare = std::less<>>
+using MultiSet = std::multiset<T, Compare, memory::Allocator<T>>;
+
 }  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_MAP_H

@@ -56,7 +56,8 @@ set(DFTRACER_UTILS_DSTD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/fs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/path.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/shutdown.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/string_intern.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/string_intern.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/thread.cpp)
 
 # -----------------------------------------
 # Common library sources

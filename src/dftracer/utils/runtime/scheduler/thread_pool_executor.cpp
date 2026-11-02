@@ -26,6 +26,7 @@ ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
       idle_timeout_(config.idle_timeout),
       deadlock_timeout_s_(config.deadlock_timeout.count()),
       keepalive_(config.elastic_keepalive),
+      task_history_(config.task_history),
       io_backend_type_(config.io_backend_type),
       io_batch_threshold_(config.io_batch_threshold) {
     std::size_t threads = config.num_threads == 0
@@ -92,7 +93,7 @@ void ThreadPoolExecutor::start() {
     // rest on demand. Contexts first so workers_ is stable before any worker
     // thread can iterate it.
     for (std::size_t i = 0; i < floor; ++i) {
-        auto worker = std::make_unique<WorkerContext>(
+        auto worker = dstd::make_unique<WorkerContext>(
             next_worker_id_.fetch_add(1, std::memory_order_relaxed));
         worker->last_activity = std::chrono::steady_clock::now();
         workers_.push_back(std::move(worker));
@@ -102,17 +103,17 @@ void ThreadPoolExecutor::start() {
     // Start worker threads after all contexts are in place.
     for (auto& worker : workers_) {
         worker->thread =
-            std::thread(&ThreadPoolExecutor::worker_thread, this, worker.get());
+            dstd::Thread([this, ctx = worker.get()] { worker_thread(ctx); });
     }
 
     // Elastic mode only: a monitor drives grow/shrink between the floor and
     // cap.
     if (floor < threads) {
-        monitor_thread_ = std::thread(&ThreadPoolExecutor::monitor_loop, this);
+        monitor_thread_ = dstd::Thread([this] { monitor_loop(); });
     }
 
     // Reclaims permits from long blocks; blocking can occur in any mode.
-    sysmon_thread_ = std::thread(&ThreadPoolExecutor::sysmon_loop, this);
+    sysmon_thread_ = dstd::Thread([this] { sysmon_loop(); });
 
     DFTRACER_UTILS_LOG_DEBUG(
         "Executor started with %zu worker threads (cap %zu)", floor, threads);
@@ -256,13 +257,13 @@ bool ThreadPoolExecutor::spawn_worker(std::size_t cap, bool best_effort) {
     }
     if (!running_.load(std::memory_order_acquire)) return false;
     if (live_workers_.load(std::memory_order_relaxed) >= cap) return false;
-    auto worker = std::make_unique<WorkerContext>(
+    auto worker = dstd::make_unique<WorkerContext>(
         next_worker_id_.fetch_add(1, std::memory_order_relaxed));
     worker->last_activity = std::chrono::steady_clock::now();
     WorkerContext* ptr = worker.get();
     workers_.push_back(std::move(worker));
     live_workers_.fetch_add(1, std::memory_order_acq_rel);
-    ptr->thread = std::thread(&ThreadPoolExecutor::worker_thread, this, ptr);
+    ptr->thread = dstd::Thread([this, ptr] { worker_thread(ptr); });
     return true;
 }
 
@@ -272,7 +273,7 @@ void ThreadPoolExecutor::add_worker() {
 }
 
 void ThreadPoolExecutor::retire_worker() {
-    std::unique_ptr<WorkerContext> victim;
+    dstd::UniquePtr<WorkerContext> victim;
     {
         std::lock_guard<std::mutex> lock(workers_mutex_);
         if (workers_.empty()) return;
@@ -413,7 +414,7 @@ void ThreadPoolExecutor::sysmon_loop() {
 }
 
 void ThreadPoolExecutor::set_threads(std::size_t threads,
-                                     std::optional<bool> eager) {
+                                     dstd::Optional<bool> eager) {
     if (threads == 0) threads = common::hardware_concurrency();
     if (threads == 0) threads = 2;
 #ifdef DFTRACER_UTILS_VALGRIND_MODE
@@ -446,7 +447,7 @@ void ThreadPoolExecutor::set_threads(std::size_t threads,
     if (threads > old) permits_.notify_all();
     if (!running_.load(std::memory_order_acquire)) return;
     if (floor < threads && !monitor_thread_.joinable()) {
-        monitor_thread_ = std::thread(&ThreadPoolExecutor::monitor_loop, this);
+        monitor_thread_ = dstd::Thread([this] { monitor_loop(); });
     }
     while (live_workers_.load(std::memory_order_acquire) < floor &&
            spawn_worker(floor, /*best_effort=*/false)) {
@@ -570,12 +571,12 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                     std::unique_lock<std::shared_mutex> lock(registry_mutex_);
                     auto it = task_registry_.find(tid);
                     if (it != task_registry_.end() &&
-                        it->second.state == TaskInfo::Queued) {
-                        it->second.state = TaskInfo::Running;
+                        it->second.state == TaskState::Queued) {
+                        it->second.state = TaskState::Running;
                         it->second.started_at =
                             std::chrono::steady_clock::now();
                         it->second.worker_id = context->worker_id;
-                        it->second.location = TaskInfo::Executing;
+                        it->second.location = TaskLocation::Executing;
                     }
                 }
                 DFTRACER_UTILS_TSAN_ACQUIRE(pending_resume.address());
@@ -829,32 +830,31 @@ ExecutorProgress ThreadPoolExecutor::get_progress() const {
     // Count task states
     progress.tasks_queued = 0;
     progress.tasks_running = 0;
-    progress.tasks_failed = 0;
+    progress.tasks_failed = tasks_failed_.load();
 
     for (const auto& [task_id, info] : task_registry_) {
         switch (info.state) {
-            case TaskInfo::Queued:
+            case TaskState::Queued:
                 progress.tasks_queued++;
                 break;
-            case TaskInfo::Running:
-            case TaskInfo::Waiting:
+            case TaskState::Running:
+            case TaskState::Waiting:
                 progress.tasks_running++;
                 break;
-            case TaskInfo::Completed:
+            case TaskState::Completed:
                 // Already counted
                 break;
-            case TaskInfo::Failed:
-                progress.tasks_failed++;
+            case TaskState::Failed:
                 break;
         }
 
-        if (info.state == TaskInfo::Failed && !info.error_message.empty()) {
+        if (info.state == TaskState::Failed && !info.error_message.empty()) {
             progress.recent_errors.push_back({task_id, info.error_message});
         }
     }
 
     // Build task trees (find root tasks)
-    std::unordered_set<common::TaskIndex> processed;
+    dstd::HashSet<common::TaskIndex> processed;
     for (const auto& [task_id, info] : task_registry_) {
         if (info.parent_task_id == -1) {  // Root task
             auto task_progress = build_task_progress_tree(task_id, processed);
@@ -890,7 +890,7 @@ ExecutorProgress ThreadPoolExecutor::get_progress() const {
 
 TaskProgress ThreadPoolExecutor::build_task_progress_tree(
     common::TaskIndex task_id,
-    std::unordered_set<common::TaskIndex>& processed) const {
+    dstd::HashSet<common::TaskIndex>& processed) const {
     TaskProgress progress;
 
     if (processed.count(task_id)) {
@@ -913,33 +913,17 @@ TaskProgress ThreadPoolExecutor::build_task_progress_tree(
     progress.name = info.name;
 
     // State
-    switch (info.state) {
-        case TaskInfo::Queued:
-            progress.state = "queued";
-            break;
-        case TaskInfo::Running:
-            progress.state = "running";
-            break;
-        case TaskInfo::Waiting:
-            progress.state = "waiting";
-            break;
-        case TaskInfo::Completed:
-            progress.state = "completed";
-            break;
-        case TaskInfo::Failed:
-            progress.state = "failed";
-            break;
-    }
+    progress.state = info.state;
 
     // Timing
     auto now = std::chrono::steady_clock::now();
-    if (info.state == TaskInfo::Queued) {
+    if (info.state == TaskState::Queued) {
         progress.queued_duration_ms =
             std::chrono::duration<double, std::milli>(now - info.queued_at)
                 .count();
         progress.execution_duration_ms = 0;
-    } else if (info.state == TaskInfo::Running ||
-               info.state == TaskInfo::Waiting) {
+    } else if (info.state == TaskState::Running ||
+               info.state == TaskState::Waiting) {
         progress.queued_duration_ms = std::chrono::duration<double, std::milli>(
                                           info.started_at - info.queued_at)
                                           .count();
@@ -965,26 +949,14 @@ TaskProgress ThreadPoolExecutor::build_task_progress_tree(
             static_cast<double>(progress.total_subtasks);
     } else {
         progress.progress_percentage =
-            (info.state == TaskInfo::Completed) ? 100.0 : 0.0;
+            (info.state == TaskState::Completed) ? 100.0 : 0.0;
     }
 
-    // Location
-    switch (info.location) {
-        case TaskInfo::SharedQueue:
-            progress.location = "shared_queue";
-            break;
-        case TaskInfo::LocalQueue:
-            progress.location =
-                "worker_" + std::to_string(info.worker_id) + "_local";
-            break;
-        case TaskInfo::Executing:
-            progress.location =
-                "executing_on_worker_" + std::to_string(info.worker_id);
-            break;
-        case TaskInfo::Done:
-            progress.location = "done";
-            break;
-    }
+    progress.location = info.location;
+    progress.worker = (info.location == TaskLocation::LocalQueue ||
+                       info.location == TaskLocation::Executing)
+                          ? static_cast<std::int32_t>(info.worker_id)
+                          : -1;
 
     // Build children recursively
     for (common::TaskIndex child_id : info.child_task_ids) {
@@ -999,9 +971,10 @@ TaskProgress ThreadPoolExecutor::build_task_progress_tree(
 // Phase 3: Coro-based task execution
 // ============================================================================
 
-coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
-                                        std::shared_ptr<std::any> input,
-                                        TaskOwner* owner) {
+coro::Coro ThreadPoolExecutor::run_task(
+    dstd::SharedPtr<Task> task,
+    dstd::SharedPtr<std::any> input,  // keep std: as the Task API wants
+    TaskOwner* owner) {
     // Get worker context from TLS (set by worker_thread at start).
     auto* context = static_cast<WorkerContext*>(get_current_worker_context());
 
@@ -1012,7 +985,7 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
     // unrun at shutdown.
     struct FinishTask {
         TaskOwner* owner;
-        std::shared_ptr<Task> task;
+        dstd::SharedPtr<Task> task;
         bool ran = false;
         ~FinishTask() {
             if (!ran)
@@ -1040,10 +1013,10 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);
         auto it = task_registry_.find(task->get_id());
         if (it != task_registry_.end()) {
-            it->second.state = TaskInfo::Running;
+            it->second.state = TaskState::Running;
             it->second.started_at = std::chrono::steady_clock::now();
             it->second.worker_id = context->worker_id;
-            it->second.location = TaskInfo::Executing;
+            it->second.location = TaskLocation::Executing;
         }
     }
 
@@ -1067,6 +1040,7 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
                     // PromiseBase), so the normal PromiseBase propagation in
                     // CoroTask::await_suspend doesn't fire.
                     coro_task.handle().promise().set_executor(this);
+                    // keep std: Task API
                     std::any result = co_await std::move(coro_task);
 
                     task->set_result(std::move(result));
@@ -1093,9 +1067,9 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
                 std::unique_lock<std::shared_mutex> lock(registry_mutex_);
                 auto it = task_registry_.find(task->get_id());
                 if (it != task_registry_.end()) {
-                    it->second.state = TaskInfo::Completed;
+                    it->second.state = TaskState::Completed;
                     it->second.completed_at = std::chrono::steady_clock::now();
-                    it->second.location = TaskInfo::Done;
+                    it->second.location = TaskLocation::Done;
 
                     // Update parent's completed children count
                     if (it->second.parent_task_id != -1) {
@@ -1105,6 +1079,7 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
                             parent_it->second.completed_children++;
                         }
                     }
+                    retire_locked(task->get_id());
                 }
             }
 
@@ -1121,18 +1096,19 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
 
                 task->set_exception(task_error);
 
-                ++tasks_completed_;
+                ++tasks_failed_;
                 if (finishing) finishing->tasks_executed++;
 
                 {
                     std::unique_lock<std::shared_mutex> lock(registry_mutex_);
                     auto it = task_registry_.find(task->get_id());
                     if (it != task_registry_.end()) {
-                        it->second.state = TaskInfo::Failed;
+                        it->second.state = TaskState::Failed;
                         it->second.completed_at =
                             std::chrono::steady_clock::now();
                         it->second.error_message = e.what();
-                        it->second.location = TaskInfo::Done;
+                        it->second.location = TaskLocation::Done;
+                        retire_locked(task->get_id());
                     }
                 }
 
@@ -1145,18 +1121,19 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
 
                 task->set_exception(task_error);
 
-                ++tasks_completed_;
+                ++tasks_failed_;
                 if (finishing) finishing->tasks_executed++;
 
                 {
                     std::unique_lock<std::shared_mutex> lock(registry_mutex_);
                     auto it = task_registry_.find(task->get_id());
                     if (it != task_registry_.end()) {
-                        it->second.state = TaskInfo::Failed;
+                        it->second.state = TaskState::Failed;
                         it->second.completed_at =
                             std::chrono::steady_clock::now();
                         it->second.error_message = "Unknown exception";
-                        it->second.location = TaskInfo::Done;
+                        it->second.location = TaskLocation::Done;
+                        retire_locked(task->get_id());
                     }
                 }
 
@@ -1179,10 +1156,10 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
     co_return;
 }
 
-void ThreadPoolExecutor::submit_task(std::shared_ptr<Task> task,
-                                     std::shared_ptr<std::any> input,
-                                     TaskOwner* owner,
-                                     common::TaskIndex parent_task_id) {
+void ThreadPoolExecutor::submit_task(
+    dstd::SharedPtr<Task> task,
+    dstd::SharedPtr<std::any> input,  // keep std: as the Task API wants
+    TaskOwner* owner, common::TaskIndex parent_task_id) {
     // Register in task registry
     {
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);
@@ -1195,9 +1172,9 @@ void ThreadPoolExecutor::submit_task(std::shared_ptr<Task> task,
             it->second.task_id = task->get_id();
             it->second.parent_task_id = parent_task_id;
             it->second.name = task->get_name();
-            it->second.state = TaskInfo::Queued;
+            it->second.state = TaskState::Queued;
             it->second.queued_at = std::chrono::steady_clock::now();
-            it->second.location = TaskInfo::SharedQueue;
+            it->second.location = TaskLocation::SharedQueue;
             it->second.worker_id = static_cast<std::size_t>(-1);
 
             if (parent_task_id != -1) {
@@ -1218,12 +1195,15 @@ void ThreadPoolExecutor::submit_task(std::shared_ptr<Task> task,
 }
 
 common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
-    coro::Coro coro, std::string name,
-    std::shared_ptr<std::atomic<common::TaskIndex>> tid_out) {
+    coro::Coro coro, dstd::StringView name,
+    dstd::SharedPtr<std::atomic<common::TaskIndex>> tid_out) {
     common::TaskIndex id =
         next_coro_task_id_.fetch_sub(1, std::memory_order_relaxed);
     coro.handle().promise().executor = this;
 
+    // The registry and tracking nodes outlive the submitting thread's pool
+    // scope, so they charge the general pool.
+    memory::Scope bookkeeping_scope{memory::Manager::get().general(), nullptr};
     {
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);
         auto [it, inserted] = task_registry_.emplace(std::piecewise_construct,
@@ -1233,10 +1213,10 @@ common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
             auto now = std::chrono::steady_clock::now();
             it->second.task_id = id;
             it->second.parent_task_id = -1;
-            it->second.name = std::move(name);
-            it->second.state = TaskInfo::Queued;
+            it->second.name.assign(name.data(), name.size());
+            it->second.state = TaskState::Queued;
             it->second.queued_at = now;
-            it->second.location = TaskInfo::SharedQueue;
+            it->second.location = TaskLocation::SharedQueue;
             it->second.worker_id = static_cast<std::size_t>(-1);
         }
         coro.handle().promise().tracking =
@@ -1269,23 +1249,66 @@ void ThreadPoolExecutor::mark_coro_completed(common::TaskIndex id) {
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);
         auto it = task_registry_.find(id);
         if (it != task_registry_.end() &&
-            it->second.state != TaskInfo::Completed) {
+            it->second.state != TaskState::Completed &&
+            it->second.state != TaskState::Failed) {
             auto now = std::chrono::steady_clock::now();
             if (it->second.started_at.time_since_epoch().count() == 0) {
                 it->second.started_at = now;
             }
-            it->second.state = TaskInfo::Completed;
+            it->second.state = TaskState::Completed;
             it->second.completed_at = now;
-            it->second.location = TaskInfo::Done;
+            it->second.location = TaskLocation::Done;
             was_new = true;
+            retire_locked(id);
         }
     }
     if (was_new) ++tasks_completed_;
 }
 
+void ThreadPoolExecutor::mark_coro_failed(common::TaskIndex id,
+                                          dstd::StringView message) {
+    bool was_new = false;
+    {
+        std::unique_lock<std::shared_mutex> lock(registry_mutex_);
+        auto it = task_registry_.find(id);
+        if (it != task_registry_.end() &&
+            it->second.state != TaskState::Completed &&
+            it->second.state != TaskState::Failed) {
+            auto now = std::chrono::steady_clock::now();
+            if (it->second.started_at.time_since_epoch().count() == 0) {
+                it->second.started_at = now;
+            }
+            it->second.state = TaskState::Failed;
+            it->second.completed_at = now;
+            it->second.error_message.assign(message.data(), message.size());
+            it->second.location = TaskLocation::Done;
+            was_new = true;
+            retire_locked(id);
+        }
+    }
+    if (was_new) ++tasks_failed_;
+}
+
+void ThreadPoolExecutor::retire_locked(common::TaskIndex id) {
+    // The history outlives the task's pool scope, so it charges the general
+    // pool.
+    memory::Scope history_scope{memory::Manager::get().general()};
+    finished_.push_back(id);
+    while (finished_.size() > task_history_) {
+        task_registry_.erase(finished_.front());
+        finished_.pop_front();
+    }
+}
+
 void ThreadPoolExecutor::on_tracked_task_complete(
     void* owner, common::TaskIndex id) noexcept {
-    static_cast<ThreadPoolExecutor*>(owner)->mark_coro_completed(id);
+    auto* self = static_cast<ThreadPoolExecutor*>(owner);
+    self->mark_coro_completed(id);
+    // The caller copied the owner and id before this call and does not read
+    // the tracking again, so it can go. A wrapper that calls
+    // mark_coro_completed itself still needs it until its final suspend.
+    std::unique_lock<std::shared_mutex> lock(self->registry_mutex_);
+    self->trackings_.erase(id);
 }
 
 }  // namespace dftracer::utils

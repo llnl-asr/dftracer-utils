@@ -12,6 +12,6 @@ ThreadPoolBackend::ThreadPoolBackend(coro::Executor& executor,
 void ThreadPoolBackend::start() { pool_.start(); }
 void ThreadPoolBackend::stop() { pool_.stop(); }
 
-std::string ThreadPoolBackend::name() const { return "threadpool"; }
+dstd::String ThreadPoolBackend::name() const { return "threadpool"; }
 
 }  // namespace dftracer::utils::io

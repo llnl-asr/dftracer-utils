@@ -9,10 +9,10 @@ IoCompletionThread::~IoCompletionThread() {
     }
 }
 
-void IoCompletionThread::start(std::function<void()> poll_fn) {
+void IoCompletionThread::start(dstd::Function<void()> poll_fn) {
     poll_fn_ = std::move(poll_fn);
     running_.store(true, std::memory_order_release);
-    thread_ = std::thread([this] {
+    thread_ = dstd::Thread([this] {
         while (running_.load(std::memory_order_acquire)) {
             poll_fn_();
         }

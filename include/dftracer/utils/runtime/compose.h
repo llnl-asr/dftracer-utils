@@ -5,9 +5,9 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
 
-#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -66,7 +66,7 @@ coro::CoroTask<async_result_t<B, async_result_t<A, I>>> pipe_run(A a, B b,
 }
 
 template <typename A, typename B, typename I>
-coro::CoroTask<std::tuple<async_result_t<A, I>, async_result_t<B, I>>> all_run(
+coro::CoroTask<dstd::Tuple<async_result_t<A, I>, async_result_t<B, I>>> all_run(
     A a, B b, I in) {
     co_return co_await coro::when_all(a(in), b(in));
 }

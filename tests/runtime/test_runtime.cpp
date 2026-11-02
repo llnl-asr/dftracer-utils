@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <future>
-#include <set>
 #include <stdexcept>
-#include <string>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -28,7 +28,7 @@ static CoroTask<int> throw_async() {
     co_return 0;
 }
 
-static CoroTask<std::string> string_async() { co_return "hello"; }
+static CoroTask<dstd::String> string_async() { co_return "hello"; }
 
 static CoroTask<void> throw_void_async() {
     throw std::runtime_error("schedule error");
@@ -49,7 +49,7 @@ TEST_CASE("Runtime - an unsized I/O pool has one thread per worker") {
 TEST_CASE("Runtime - parallel_for covers the range exactly once") {
     Runtime rt(4);
     const std::int64_t n = 100000;
-    std::vector<std::int32_t> hits(n, 0);
+    dstd::Vector<std::int32_t> hits(n, 0);
     rt.parallel_for(n, 4096, [&](std::int64_t begin, std::int64_t end) {
         for (std::int64_t i = begin; i < end; ++i) hits[i]++;
     });
@@ -235,10 +235,43 @@ TEST_CASE("Runtime - progress task details") {
     auto p = rt.get_progress();
     REQUIRE(p.root_tasks.size() == 1);
     CHECK(p.root_tasks[0].name == "my_task");
-    CHECK(p.root_tasks[0].state == "completed");
+    CHECK(p.root_tasks[0].state == TaskState::Completed);
     CHECK(p.root_tasks[0].execution_duration_ms >= 0.0);
     CHECK(p.root_tasks[0].queued_duration_ms >= 0.0);
     CHECK(p.root_tasks[0].progress_percentage == 100.0);
+}
+
+TEST_CASE("Runtime - progress keeps only the task history limit") {
+    Runtime rt(ExecutorConfig{.num_threads = 2, .task_history = 2}, false);
+    rt.submit(noop_async(), "first").wait();
+    rt.submit(noop_async(), "second").wait();
+    rt.submit(noop_async(), "third").wait();
+    auto p = rt.get_progress();
+    CHECK(p.root_tasks.size() == 2);
+    CHECK(p.tasks_completed == 3);
+}
+
+TEST_CASE("Runtime - a task that raises counts as failed") {
+    Runtime rt(ExecutorConfig{.num_threads = 2, .task_history = 0}, false);
+    CHECK_THROWS_AS(rt.submit(throw_async(), "throw").get(),
+                    std::runtime_error);
+    CHECK_THROWS_AS(rt.submit(throw_void_async(), "throw_void").wait(),
+                    std::runtime_error);
+    auto p = rt.get_progress();
+    CHECK(p.tasks_failed == 2);
+    CHECK(p.tasks_completed == 0);
+}
+
+TEST_CASE("Runtime - a failed task keeps its message in the history") {
+    Runtime rt(ExecutorConfig{.num_threads = 2, .task_history = 2}, false);
+    CHECK_THROWS_AS(rt.submit(throw_async(), "throw").get(),
+                    std::runtime_error);
+    auto p = rt.get_progress();
+    REQUIRE(p.root_tasks.size() == 1);
+    CHECK(p.root_tasks[0].state == TaskState::Failed);
+    REQUIRE(p.recent_errors.size() == 1);
+    CHECK(p.recent_errors[0].second == "test error");
+    CHECK(p.tasks_failed == 1);
 }
 
 TEST_CASE("Runtime - progress multiple tasks have names") {
@@ -248,10 +281,10 @@ TEST_CASE("Runtime - progress multiple tasks have names") {
     rt.submit(string_async(), "third").wait();
     auto p = rt.get_progress();
     REQUIRE(p.root_tasks.size() == 3);
-    std::set<std::string> names;
+    dstd::Set<dstd::String> names;
     for (const auto &t : p.root_tasks) {
         names.insert(t.name);
-        CHECK(t.state == "completed");
+        CHECK(t.state == TaskState::Completed);
     }
     CHECK(names.count("first") == 1);
     CHECK(names.count("second") == 1);
@@ -332,7 +365,7 @@ TEST_CASE("Runtime - wait_all with no tasks is no-op") {
 TEST_CASE("Runtime - wait_all waits for multiple tasks") {
     Runtime rt(4);
     for (int i = 0; i < 20; ++i) {
-        rt.submit(add_async(i, i), "batch-" + std::to_string(i));
+        rt.submit(add_async(i, i), "batch-" + dstd::to_string(i));
     }
     rt.wait_all();
     auto p = rt.get_progress();
@@ -341,10 +374,10 @@ TEST_CASE("Runtime - wait_all waits for multiple tasks") {
 
 TEST_CASE("Runtime - concurrent submits complete correctly") {
     Runtime rt(4);
-    std::vector<TypedTaskHandle<int>> handles;
+    dstd::Vector<TypedTaskHandle<int>> handles;
     for (int i = 0; i < 10; ++i) {
         handles.push_back(
-            rt.submit(add_async(i, 100), "concurrent-" + std::to_string(i)));
+            rt.submit(add_async(i, 100), "concurrent-" + dstd::to_string(i)));
     }
     for (int i = 0; i < 10; ++i) {
         CHECK(handles[i].get() == i + 100);

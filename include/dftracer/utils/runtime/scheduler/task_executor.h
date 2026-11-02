@@ -2,21 +2,24 @@
 #ifndef DFTRACER_UTILS_RUNTIME_SCHEDULER_TASK_EXECUTOR_H
 #define DFTRACER_UTILS_RUNTIME_SCHEDULER_TASK_EXECUTOR_H
 
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 
 #include <any>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <functional>
+#include <cstdint>
+#include <exception>
 #include <memory>
-#include <optional>
-#include <string>
-#include <utility>
-#include <vector>
 
 namespace dftracer::utils {
 
@@ -28,7 +31,7 @@ class TaskOwner {
    public:
     /// Called once per submitted task, from the worker that ends it. The
     /// executor does not touch the owner after this returns.
-    virtual void finish_task(std::shared_ptr<Task> task) noexcept = 0;
+    virtual void finish_task(dstd::SharedPtr<Task> task) noexcept = 0;
     /// True once the owner stopped: a task of it that has not started does
     /// not run.
     virtual bool is_stopping() const noexcept = 0;
@@ -53,39 +56,52 @@ struct ExecutorConfig {
     std::size_t io_pool_size = 0;  ///< 0 = one per worker
     io::IoBackendType io_backend_type = io::IoBackendType::Auto;
     unsigned io_batch_threshold = 16;
+    /// Finished tasks kept for get_progress. The oldest are dropped first.
+    std::size_t task_history = common::constants::TASK_HISTORY_LIMIT;
 };
+
+enum class TaskState : std::uint8_t {
+    Queued,
+    Running,
+    Waiting,  ///< Waiting for child tasks
+    Completed,
+    Failed
+};
+
+enum class TaskLocation : std::uint8_t {
+    SharedQueue,
+    LocalQueue,
+    Executing,
+    Done
+};
+
+/// Lower-case name of @p state: "queued", "running", "waiting", "completed"
+/// or "failed".
+dstd::StringView task_state_name(TaskState state) noexcept;
 
 struct TaskInfo {
     common::TaskIndex task_id;
     common::TaskIndex parent_task_id;  ///< -1 for root tasks
-    std::string name;
+    dstd::String name;
     std::size_t worker_id;
 
-    enum State {
-        Queued,
-        Running,
-        Waiting,  ///< Waiting for child tasks
-        Completed,
-        Failed
-    } state;
+    TaskState state;
 
     std::chrono::steady_clock::time_point queued_at;
     std::chrono::steady_clock::time_point started_at;
     std::chrono::steady_clock::time_point completed_at;
 
-    std::vector<common::TaskIndex> child_task_ids;
+    dstd::Vector<common::TaskIndex> child_task_ids;
     std::atomic<std::size_t> completed_children{0};
 
-    std::string error_message;
+    dstd::String error_message;
 
-    enum Location { SharedQueue, LocalQueue, Executing, Done } location;
+    TaskLocation location;
 };
 
 struct TaskProgress {
     common::TaskIndex task_id;
-    std::string name;
-    std::string
-        state;  ///< "queued", "running", "waiting", "completed", "failed"
+    dstd::String name;
 
     double queued_duration_ms;
     double execution_duration_ms;
@@ -94,34 +110,37 @@ struct TaskProgress {
     std::size_t completed_subtasks;
     double progress_percentage;  ///< 0-100
 
-    /// "shared_queue", "worker_2_local", "executing_on_worker_3"
-    std::string location;
+    dstd::Vector<TaskProgress> children;
 
-    std::vector<TaskProgress> children;
+    std::int32_t worker;  ///< Worker of a LocalQueue or Executing task, else -1
+    TaskState state;
+    TaskLocation location;
 };
 
 struct ExecutorProgress {
     std::size_t total_tasks_submitted;
     std::size_t tasks_queued;
     std::size_t tasks_running;
+    /// Tasks that ended without an error. A failed task counts only in
+    /// @ref tasks_failed.
     std::size_t tasks_completed;
     std::size_t tasks_failed;
 
-    std::vector<std::size_t> worker_queue_depths;
+    dstd::Vector<std::size_t> worker_queue_depths;
 
-    std::vector<TaskProgress> root_tasks;
+    dstd::Vector<TaskProgress> root_tasks;
 
     struct WorkerStatus {
         std::size_t worker_id;
         bool is_idle;
-        std::optional<common::TaskIndex> current_task_id;
-        std::string current_task_name;
+        dstd::Optional<common::TaskIndex> current_task_id;
+        dstd::String current_task_name;
         std::size_t local_queue_depth;
     };
-    std::vector<WorkerStatus> workers;
+    dstd::Vector<WorkerStatus> workers;
 
     /// (task_id, error_msg)
-    std::vector<std::pair<common::TaskIndex, std::string>> recent_errors;
+    dstd::Vector<dstd::Pair<common::TaskIndex, dstd::String>> recent_errors;
 };
 
 /**
@@ -153,6 +172,10 @@ class TaskExecutor : public coro::Executor {
     /// Records tracked task @p id as finished. Called once, from the worker
     /// that ends it.
     virtual void mark_coro_completed(common::TaskIndex id) = 0;
+    /// Marks the tracked task @p id as failed with @p message. A later
+    /// mark_coro_completed for the same task leaves it failed.
+    virtual void mark_coro_failed(common::TaskIndex id,
+                                  dstd::StringView message) = 0;
 
     virtual bool is_running() const = 0;
     virtual std::size_t get_num_threads() const = 0;
@@ -169,12 +192,13 @@ class TaskExecutor : public coro::Executor {
     /// worker that ends it, so `owner` must outlive the task. A task whose
     /// owner is stopping before it starts does not run. It ends with an
     /// Interrupted error, as does a queued task that shutdown() destroys.
-    virtual void submit_task(std::shared_ptr<Task> task,
-                             std::shared_ptr<std::any> input, TaskOwner* owner,
-                             common::TaskIndex parent_task_id = -1) = 0;
+    virtual void submit_task(
+        dstd::SharedPtr<Task> task,
+        dstd::SharedPtr<std::any> input,  // keep std: as the Task API wants
+        TaskOwner* owner, common::TaskIndex parent_task_id = -1) = 0;
     virtual common::TaskIndex enqueue_tracked(
-        coro::Coro coro, std::string name,
-        std::shared_ptr<std::atomic<common::TaskIndex>> tid_out = nullptr) = 0;
+        coro::Coro coro, dstd::StringView name,
+        dstd::SharedPtr<std::atomic<common::TaskIndex>> tid_out = nullptr) = 0;
 
     /// Task the calling worker is running, -1 when not on a worker thread.
     virtual common::TaskIndex current_worker_task_id() const = 0;
@@ -184,7 +208,7 @@ class TaskExecutor : public coro::Executor {
     /// `eager` true spawns the full pool, false grows it on demand from one
     /// worker, unset keeps the mode. Thread safe.
     virtual void set_threads(std::size_t threads,
-                             std::optional<bool> eager) = 0;
+                             dstd::Optional<bool> eager) = 0;
     /// Raises the I/O threads to `threads`. A smaller count changes nothing.
     virtual void grow_io_threads(std::size_t threads) = 0;
     /// The stall after which is_responsive() reports a deadlock.
@@ -208,9 +232,14 @@ class TaskExecutor : public coro::Executor {
     static void set_current_backend(TaskExecutor* executor) noexcept;
 };
 
+/// Marks the tracked task @p id as failed with the what() of @p error, or
+/// "Unknown exception" for an error that is not a std::exception.
+void mark_coro_failed(TaskExecutor& executor, common::TaskIndex id,
+                      std::exception_ptr error) noexcept;
+
 /// Build the executor described by `config`. The implementation is chosen
 /// here so callers never name a concrete executor type.
-std::unique_ptr<TaskExecutor> make_task_executor(const ExecutorConfig& config);
+dstd::UniquePtr<TaskExecutor> make_task_executor(const ExecutorConfig& config);
 
 }  // namespace dftracer::utils
 

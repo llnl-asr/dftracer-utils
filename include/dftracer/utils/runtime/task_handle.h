@@ -3,11 +3,11 @@
 #define DFTRACER_UTILS_RUNTIME_TASK_HANDLE_H
 
 #include <dftracer/utils/common/typedefs.h>
+#include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <chrono>
-#include <future>
-#include <memory>
-#include <string>
 #include <utility>
 
 namespace dftracer::utils {
@@ -15,9 +15,9 @@ namespace dftracer::utils {
 /// Handle to a submitted void task. Non-blocking by default.
 /// Call .wait() to block (re-raises on error) or .done() to check.
 struct TaskHandle {
-    std::shared_future<void> future;
+    dstd::SharedFuture<void> future;
     common::TaskIndex id{-1};
-    std::string name;
+    dstd::String name;
 
     void get() { future.get(); }
     void wait() { future.get(); }
@@ -36,9 +36,9 @@ struct TaskHandle {
 /// value.
 template <typename T>
 struct TypedTaskHandle {
-    std::shared_future<std::shared_ptr<T>> future;
+    dstd::SharedFuture<dstd::SharedPtr<T>> future;
     common::TaskIndex id{-1};
-    std::string name;
+    dstd::String name;
 
     T get() { return std::move(*future.get()); }
     void wait() { static_cast<void>(future.get()); }

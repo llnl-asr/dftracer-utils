@@ -2,10 +2,10 @@
 #ifndef DFTRACER_UTILS_RUNTIME_IO_THREAD_POOL_BACKEND_H
 #define DFTRACER_UTILS_RUNTIME_IO_THREAD_POOL_BACKEND_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/thread_pool_file_ops.h>
 
 #include <cstddef>
-#include <string>
 
 namespace dftracer::utils::coro {
 class Executor;
@@ -26,7 +26,7 @@ class ThreadPoolBackend : public ThreadPoolFileOps {
 
     void start() override;
     void stop() override;
-    std::string name() const override;
+    dstd::String name() const override;
 };
 
 }  // namespace dftracer::utils::io

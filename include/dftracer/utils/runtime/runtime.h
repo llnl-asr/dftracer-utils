@@ -7,6 +7,13 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/task_handle.h>
 
@@ -15,14 +22,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <future>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <stdexcept>
-#include <string>
 #include <type_traits>
-#include <vector>
 
 namespace dftracer::utils {
 
@@ -60,9 +63,9 @@ struct RuntimeSettings {
     /// Spawn the full pool at once (true) or grow it on demand (false);
     /// unset keeps the mode (elastic for a new runtime, unless
     /// DFTRACER_UTILS_ELASTIC is off).
-    std::optional<bool> eager;
+    dstd::Optional<bool> eager;
     /// The stall after which the executor reports a deadlock.
-    std::optional<std::chrono::seconds> deadlock_timeout;
+    dstd::Optional<std::chrono::seconds> deadlock_timeout;
     /// Fixed when the runtime is made: a later different value keeps the
     /// runtime's and logs a warning.
     io::IoBackendType io_backend = io::IoBackendType::Auto;
@@ -81,7 +84,7 @@ class Runtime {
     /// debugging). 0/unset means hardware_concurrency.
     explicit Runtime(std::size_t threads = 0);
     explicit Runtime(const ExecutorConfig& config, bool enable_watchdog = true);
-    Runtime(const ExecutorConfig& config, std::unique_ptr<Watchdog> watchdog);
+    Runtime(const ExecutorConfig& config, dstd::UniquePtr<Watchdog> watchdog);
     ~Runtime();
 
     Runtime(const Runtime&) = delete;
@@ -90,11 +93,12 @@ class Runtime {
     Runtime& operator=(Runtime&&) = delete;
 
     /// Async submit returns immediately, task runs on executor.
-    TaskHandle submit(coro::CoroTask<void> task, std::string name = "");
+    TaskHandle submit(coro::CoroTask<void> task, dstd::StringView name = "");
 
     /// Async submit with typed result.
     template <typename T>
-    TypedTaskHandle<T> submit(coro::CoroTask<T> task, std::string name = "");
+    TypedTaskHandle<T> submit(coro::CoroTask<T> task,
+                              dstd::StringView name = "");
 
     /// Runs `task` as a tracked task and blocks until it ends, raising its
     /// error. Called from one of this runtime's own workers it hands off the
@@ -103,11 +107,10 @@ class Runtime {
     T block_on(coro::Named<coro::CoroTask<T>> task) {
         const bool reentrant = coro::Executor::current() == executor_.get();
         coro::BlockingRegion block(reentrant ? executor_.get() : nullptr);
-        std::string name(task.name.data(), task.name.size());
         if constexpr (std::is_void_v<T>) {
-            submit(std::move(task.value), std::move(name)).wait();
+            submit(std::move(task.value), task.name).wait();
         } else {
-            return submit(std::move(task.value), std::move(name)).get();
+            return submit(std::move(task.value), task.name).get();
         }
     }
 
@@ -166,7 +169,7 @@ class Runtime {
         const std::int64_t workers = std::min<std::int64_t>(
             chunks, static_cast<std::int64_t>(threads()));
         std::atomic<std::int64_t> next{0};
-        std::vector<T> partials(static_cast<std::size_t>(workers), identity);
+        dstd::Vector<T> partials(static_cast<std::size_t>(workers), identity);
         block_on(coro::named(
             "parallel_reduce",
             coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
@@ -213,20 +216,20 @@ class Runtime {
    private:
     void cleanup_completed_futures();
 
-    friend std::shared_ptr<Runtime> default_runtime_shared();
+    friend dstd::SharedPtr<Runtime> default_runtime_shared();
     friend Runtime& configure_default_runtime(const RuntimeSettings& settings);
     void become_process_runtime();
     void stop();
 
-    std::unique_ptr<TaskExecutor> executor_;
-    std::unique_ptr<Watchdog> watchdog_;
+    dstd::UniquePtr<TaskExecutor> executor_;
+    dstd::UniquePtr<Watchdog> watchdog_;
     std::atomic<std::size_t> threads_;
     io::IoBackendType io_backend_ = io::IoBackendType::Auto;
     unsigned io_batch_threshold_ = 0;
     bool process_runtime_ = false;
     std::atomic<bool> shutdown_called_{false};
     std::atomic<uint64_t> task_name_counter_{0};
-    std::vector<std::shared_future<void>> outstanding_futures_;
+    dstd::Vector<dstd::SharedFuture<void>> outstanding_futures_;
     std::mutex futures_mutex_;
 };
 
@@ -234,7 +237,7 @@ class Runtime {
 /// Safe from any thread. Only process exit stops it. A forked child makes its
 /// own on first use, since the inherited copy has no threads.
 Runtime& default_runtime();
-std::shared_ptr<Runtime> default_runtime_shared();
+dstd::SharedPtr<Runtime> default_runtime_shared();
 
 /// Makes the process runtime with `settings`, or applies them to it in place.
 /// Never makes a second runtime.
@@ -245,43 +248,55 @@ Runtime& configure_default_runtime(const RuntimeSettings& settings);
 /// force eager, deterministic pools.
 bool elastic_default_enabled();
 /// The process runtime, or null before its first use.
-std::shared_ptr<Runtime> peek_default_runtime();
+dstd::SharedPtr<Runtime> peek_default_runtime();
 
 template <typename T>
-TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
+TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task,
+                                   dstd::StringView name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
         throw common::DFTUtilsException(common::ErrorCode::Pipeline,
                                         "Runtime is shut down");
     }
-    if (name.empty()) {
-        name = "task-" + std::to_string(task_name_counter_++);
+    // The handle, its shared state and the futures list outlive the
+    // submitting thread's pool scope, so they charge the general pool.
+    dstd::String task_name;
+    dstd::SharedPtr<dstd::Promise<dstd::SharedPtr<T>>> typed_promise;
+    dstd::SharedFuture<dstd::SharedPtr<T>> typed_future;
+    dstd::SharedPtr<dstd::Promise<void>> void_promise;
+    dstd::SharedFuture<void> void_future;
+    dstd::SharedPtr<std::atomic<common::TaskIndex>> tid;
+    {
+        memory::Scope bookkeeping_scope{memory::Manager::get().general()};
+        if (name.empty()) {
+            task_name = "task-" + dstd::to_string(task_name_counter_++);
+        } else {
+            task_name.assign(name.data(), name.size());
+        }
+        typed_promise = dstd::make_shared<dstd::Promise<dstd::SharedPtr<T>>>();
+        typed_future = typed_promise->get_future().share();
+        // void future for outstanding_futures_ tracking
+        void_promise = dstd::make_shared<dstd::Promise<void>>();
+        void_future = void_promise->get_future().share();
+        tid = dstd::make_shared<std::atomic<common::TaskIndex>>(-1);
     }
 
-    auto typed_promise = std::make_shared<std::promise<std::shared_ptr<T>>>();
-    auto typed_future = typed_promise->get_future().share();
-
-    // void future for outstanding_futures_ tracking
-    auto void_promise = std::make_shared<std::promise<void>>();
-    auto void_future = void_promise->get_future().share();
-
-    auto tid = std::make_shared<std::atomic<common::TaskIndex>>(-1);
-
     auto wrapper = [](coro::CoroTask<T> t,
-                      std::shared_ptr<std::promise<std::shared_ptr<T>>> tp,
-                      std::shared_ptr<std::promise<void>> vp,
+                      dstd::SharedPtr<dstd::Promise<dstd::SharedPtr<T>>> tp,
+                      dstd::SharedPtr<dstd::Promise<void>> vp,
                       TaskExecutor* exec,
-                      std::shared_ptr<std::atomic<common::TaskIndex>> task_id)
+                      dstd::SharedPtr<std::atomic<common::TaskIndex>> task_id)
         -> coro::Coro {
         try {
             T val = co_await std::move(t);
             t = coro::CoroTask<T>{std::coroutine_handle<
                 typename coro::CoroTask<T>::promise_type>{}};
             exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
-            tp->set_value(std::make_shared<T>(std::move(val)));
+            tp->set_value(dstd::make_shared<T>(std::move(val)));
         } catch (...) {
             t = coro::CoroTask<T>{std::coroutine_handle<
                 typename coro::CoroTask<T>::promise_type>{}};
-            exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
+            mark_coro_failed(*exec, task_id->load(std::memory_order_acquire),
+                             std::current_exception());
             tp->set_exception(std::current_exception());
             vp->set_value();
             co_return;
@@ -300,15 +315,16 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
     auto coro = wrapper(std::move(task), typed_promise, void_promise,
                         executor_.get(), tid);
     common::TaskIndex id =
-        executor_->enqueue_tracked(std::move(coro), name, tid);
+        executor_->enqueue_tracked(std::move(coro), task_name, tid);
 
     {
+        memory::Scope bookkeeping_scope{memory::Manager::get().general()};
         std::lock_guard<std::mutex> lock(futures_mutex_);
         cleanup_completed_futures();
         outstanding_futures_.push_back(void_future);
     }
 
-    return TypedTaskHandle<T>{typed_future, id, std::move(name)};
+    return TypedTaskHandle<T>{typed_future, id, std::move(task_name)};
 }
 
 }  // namespace dftracer::utils

@@ -4,10 +4,11 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/io_backend_factory.h>
 #include <dftracer/utils/runtime/io/thread_pool_backend.h>
 
-#include <string_view>
 #ifdef __linux__
 #include <dftracer/utils/runtime/io/epoll_thread_pool_backend.h>
 #endif
@@ -46,8 +47,8 @@ constexpr bool HAVE_IO_URING =
     false;
 #endif
 
-[[noreturn]] void fail_backend_env(std::string_view value,
-                                   std::string_view why) {
+[[noreturn]] void fail_backend_env(dstd::StringView value,
+                                   dstd::StringView why) {
     throw common::DFTUtilsException(
         common::ErrorCode::InvalidArgument,
         common::str_cat(common::constants::io_settings::BACKEND_ENV, ": '",
@@ -58,7 +59,7 @@ constexpr bool HAVE_IO_URING =
 // names. One the platform lacks or an unknown name throws.
 IoBackendType backend_from_env(bool& forced) {
     forced = false;
-    auto raw = common::Env::get<std::string_view>(
+    auto raw = common::Env::get<dstd::StringView>(
         common::constants::io_settings::BACKEND_ENV);
     if (!raw || raw->empty() || *raw == "auto") return IoBackendType::Auto;
     forced = true;
@@ -82,7 +83,7 @@ IoBackendType backend_from_env(bool& forced) {
 
 }  // namespace
 
-std::unique_ptr<IoBackend> create_io_backend(coro::Executor& executor,
+dstd::UniquePtr<IoBackend> create_io_backend(coro::Executor& executor,
                                              std::size_t pool_size,
                                              IoBackendType backend_type,
                                              unsigned batch_threshold,
@@ -96,7 +97,7 @@ std::unique_ptr<IoBackend> create_io_backend(coro::Executor& executor,
     if (backend_type == IoBackendType::Threadpool) {
         DFTRACER_UTILS_LOG_INFO("I/O backend: using threadpool (%zu threads)",
                                 pool_size);
-        return std::make_unique<ThreadPoolBackend>(
+        return dstd::make_unique<ThreadPoolBackend>(
             executor, pool_size, batch_threshold, pool_options);
     }
 
@@ -104,7 +105,7 @@ std::unique_ptr<IoBackend> create_io_backend(coro::Executor& executor,
     if (backend_type == IoBackendType::EpollThreadpool) {
         DFTRACER_UTILS_LOG_INFO(
             "I/O backend: using epoll+threadpool (%zu threads)", pool_size);
-        return std::make_unique<EpollThreadPoolBackend>(
+        return dstd::make_unique<EpollThreadPoolBackend>(
             executor, pool_size, batch_threshold, pool_options);
     }
 #endif
@@ -114,7 +115,7 @@ std::unique_ptr<IoBackend> create_io_backend(coro::Executor& executor,
     if (backend_type == IoBackendType::KqueueThreadpool) {
         DFTRACER_UTILS_LOG_INFO(
             "I/O backend: using kqueue+threadpool (%zu threads)", pool_size);
-        return std::make_unique<KqueueThreadPoolBackend>(
+        return dstd::make_unique<KqueueThreadPoolBackend>(
             executor, pool_size, batch_threshold, pool_options);
     }
 #endif
@@ -122,7 +123,7 @@ std::unique_ptr<IoBackend> create_io_backend(coro::Executor& executor,
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
     if (backend_type == IoBackendType::IoUring) {
         auto uring =
-            std::make_unique<IoUringBackend>(executor, 256, batch_threshold);
+            dstd::make_unique<IoUringBackend>(executor, 256, batch_threshold);
         if (uring->probe()) {
             DFTRACER_UTILS_LOG_INFO("%s", "I/O backend: using io_uring");
             return uring;
@@ -145,7 +146,7 @@ std::unique_ptr<IoBackend> create_io_backend(coro::Executor& executor,
     !defined(DFTRACER_UTILS_VALGRIND_MODE)
     {
         auto uring =
-            std::make_unique<IoUringBackend>(executor, 256, batch_threshold);
+            dstd::make_unique<IoUringBackend>(executor, 256, batch_threshold);
         if (uring->probe()) {
             DFTRACER_UTILS_LOG_INFO("%s", "I/O backend: using io_uring");
             return uring;
@@ -165,24 +166,24 @@ std::unique_ptr<IoBackend> create_io_backend(coro::Executor& executor,
     DFTRACER_UTILS_LOG_INFO(
         "I/O backend: using threadpool (Valgrind mode, %zu threads)",
         pool_size);
-    return std::make_unique<ThreadPoolBackend>(executor, pool_size,
-                                               batch_threshold, pool_options);
+    return dstd::make_unique<ThreadPoolBackend>(executor, pool_size,
+                                                batch_threshold, pool_options);
 #elif defined(__linux__)
     DFTRACER_UTILS_LOG_INFO("I/O backend: using epoll+threadpool (%zu threads)",
                             pool_size);
-    return std::make_unique<EpollThreadPoolBackend>(
+    return dstd::make_unique<EpollThreadPoolBackend>(
         executor, pool_size, batch_threshold, pool_options);
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__) || defined(__DragonFly__)
     DFTRACER_UTILS_LOG_INFO(
         "I/O backend: using kqueue+threadpool (%zu threads)", pool_size);
-    return std::make_unique<KqueueThreadPoolBackend>(
+    return dstd::make_unique<KqueueThreadPoolBackend>(
         executor, pool_size, batch_threshold, pool_options);
 #else
     DFTRACER_UTILS_LOG_INFO("I/O backend: using threadpool (%zu threads)",
                             pool_size);
-    return std::make_unique<ThreadPoolBackend>(executor, pool_size,
-                                               batch_threshold, pool_options);
+    return dstd::make_unique<ThreadPoolBackend>(executor, pool_size,
+                                                batch_threshold, pool_options);
 #endif
 }
 

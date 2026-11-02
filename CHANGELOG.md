@@ -9,12 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Keep the most recent `task_history` finished tasks (1024 by default, `ExecutorConfig::task_history`) for `get_progress`, where the runtime kept all of them.
 - Move the coroutine headers from `dftracer/utils/runtime/coro/` and the executor headers from `dftracer/utils/runtime/executor/` to `dftracer/utils/coro/`, in a new `dftracer_utils_coro` library that the runtime library links.
   The types are now in namespace `dftracer::utils::coro` (for example `coro::Executor`, `coro::TimerService`), and the I/O backend accessors moved from `coro::Executor` to the runtime's `TaskExecutor`.
 - Replace `Runtime::run_blocking(name, fn)` and `Runtime::scope(name, fn)` with `Runtime::block_on(task)`, which returns the task's value.
   Name a blocking task with `coro::named("name", task)`, and spawn children in `coro::Scope` (`include/dftracer/utils/coro/scope.h`) or `coro::with_scope(fn)` in place of `CoroScope`.
   An error of a spawned child is now raised by the scope's join, where `CoroScope` dropped it.
 - Make `coro::when_all` and `coro::when_any` over a list take and return `dstd::Vector`, and make channels, spawn futures and generators use `dstd::Optional` and `dstd::SharedPtr`, so their memory counts in the memory budget.
+- Make `TaskProgress::state` a `TaskState` enum and `TaskProgress::location` a `TaskLocation` enum with a `worker` index, where both were strings.
+  Python's `Runtime.get_progress()` returns the same strings as before.
+- Report a task submitted with `Runtime::submit` that raises as failed in `get_progress()`, where it was reported as completed, and count a failed task only in `failed`.
 - Build each `distributed_index` worker's files as a shard on node-local disk, then merge the shards into the index root by moving their data files.
   Shard sets live in `.dftindex/shards/` with `.dftindex/shards.json`, where they lived in `.dftindex-shards`.
 - Make `consolidate_shard_set` merge the shards' data files instead of building the index again.

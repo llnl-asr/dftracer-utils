@@ -33,7 +33,7 @@ void Watchdog::start() {
 
     running_ = true;
     shutdown_requested_ = false;
-    watchdog_thread_ = std::thread(&Watchdog::watchdog_loop, this);
+    watchdog_thread_ = dstd::Thread([this] { watchdog_loop(); });
 
     DFTRACER_UTILS_LOG_DEBUG("%s", "Watchdog started");
 }
@@ -63,7 +63,7 @@ void Watchdog::mark_execution_start() {
 }
 
 void Watchdog::register_task_start(common::TaskIndex task_id,
-                                   std::shared_ptr<Task> task,
+                                   dstd::SharedPtr<Task> task,
                                    std::chrono::milliseconds timeout) {
     std::lock_guard<std::mutex> lock(active_tasks_mutex_);
 
@@ -179,8 +179,8 @@ bool Watchdog::check_global_timeout() {
             static_cast<long long>(global_timeout_.count()));
 
         trigger_timeout("Global pipeline timeout after " +
-                        std::to_string(elapsed_ms.count()) + " ms (limit: " +
-                        std::to_string(global_timeout_.count()) + " ms)");
+                        dstd::to_string(elapsed_ms.count()) + " ms (limit: " +
+                        dstd::to_string(global_timeout_.count()) + " ms)");
 
         return true;
     }
@@ -261,18 +261,19 @@ bool Watchdog::check_executor_responsiveness() {
     return false;
 }
 
-void Watchdog::trigger_timeout(const std::string& reason) {
+void Watchdog::trigger_timeout(dstd::StringView reason) {
     shutdown_requested_ = true;
 
     if (timeout_callback_) {
-        timeout_callback_(reason);
+        // The pipeline callback, deleted later, takes a std::string.
+        timeout_callback_(std::string(reason));  // keep std: pipeline edge
     }
 }
 
-void Watchdog::trigger_warning(const std::string& task_name,
-                               int64_t elapsed_ms) {
+void Watchdog::trigger_warning(dstd::StringView task_name, int64_t elapsed_ms) {
     if (warning_callback_) {
-        warning_callback_(task_name, elapsed_ms);
+        warning_callback_(std::string(task_name),  // keep std: pipeline edge
+                          elapsed_ms);
     }
 }
 

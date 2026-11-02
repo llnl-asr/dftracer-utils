@@ -2,15 +2,17 @@
 #ifndef DFTRACER_UTILS_RUNTIME_IO_IO_THREAD_POOL_H
 #define DFTRACER_UTILS_RUNTIME_IO_IO_THREAD_POOL_H
 
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/queue.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
-#include <functional>
 #include <mutex>
-#include <queue>
 #include <thread>
 
 namespace dftracer::utils::io {
@@ -64,7 +66,7 @@ class IoThreadPool {
     }
 
     /// Thread-safe.
-    void submit(std::function<void()> fn);
+    void submit(dstd::Function<void()> fn);
 
     /// Returns the number of items that were waiting for a wake.
     std::size_t flush();
@@ -104,14 +106,14 @@ class IoThreadPool {
     // eager_, idle_, retired_ and threads_ change under mutex_.
     bool eager_;
     std::size_t idle_ = 0;
-    dstd::Vector<std::thread::id> retired_;
+    dstd::Vector<dstd::Thread::Id> retired_;
     bool spawn_warned_ = false;
     std::atomic<std::size_t> live_{0};
     std::atomic<std::size_t> retirements_{0};
     // Written under mutex_; atomic so flush() can skip the lock when empty.
     std::atomic<unsigned> unflushed_count_{0};
-    dstd::Vector<std::thread> threads_;
-    std::queue<std::function<void()>> queue_;
+    dstd::Vector<dstd::Thread> threads_;
+    dstd::Queue<dstd::Function<void()>> queue_;
     std::mutex mutex_;
     std::condition_variable cv_;
     std::atomic<bool> running_{false};

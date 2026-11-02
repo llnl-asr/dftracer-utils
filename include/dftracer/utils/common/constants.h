@@ -7,6 +7,9 @@
 #include <cstdint>
 
 namespace dftracer::utils::common::constants {
+
+/// Finished tasks a runtime keeps for get_progress.
+inline constexpr std::size_t TASK_HISTORY_LIMIT = 1024;
 /// Directory that holds every spill file; when unset or empty, a writable
 /// node-local disk mount, else the system temp directory (spill_dir()).
 inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";

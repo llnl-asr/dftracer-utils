@@ -15,7 +15,18 @@ find_program(_awk awk REQUIRED)
 
 set(_dirs
     include/dftracer/utils/coro
-    src/dftracer/utils/coro)
+    src/dftracer/utils/coro
+    include/dftracer/utils/runtime
+    src/dftracer/utils/runtime)
+
+# The Task, TaskGraph and Pipeline trees move in a later step.
+set(_skip
+    include/dftracer/utils/runtime/tasks
+    include/dftracer/utils/runtime/task_graph
+    include/dftracer/utils/runtime/pipeline
+    src/dftracer/utils/runtime/tasks
+    src/dftracer/utils/runtime/task_graph
+    src/dftracer/utils/runtime/pipeline)
 
 set(_program [=[
 FNR == 1 { kept = 0 }
@@ -60,6 +71,13 @@ foreach(_dir IN LISTS _dirs)
   file(GLOB_RECURSE _found "${SOURCE_DIR}/${_dir}/*.h" "${SOURCE_DIR}/${_dir}/*.cpp"
        "${SOURCE_DIR}/${_dir}/*.inl")
   list(APPEND _files ${_found})
+endforeach()
+foreach(_dir IN LISTS _skip)
+  file(GLOB_RECURSE _found "${SOURCE_DIR}/${_dir}/*.h" "${SOURCE_DIR}/${_dir}/*.cpp"
+       "${SOURCE_DIR}/${_dir}/*.inl")
+  if(_found)
+    list(REMOVE_ITEM _files ${_found})
+  endif()
 endforeach()
 list(SORT _files)
 if(NOT _files)

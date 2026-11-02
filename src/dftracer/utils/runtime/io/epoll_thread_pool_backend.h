@@ -4,11 +4,11 @@
 #ifdef __linux__
 
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/io_completion_thread.h>
 #include <dftracer/utils/runtime/io/thread_pool_file_ops.h>
 
 #include <cstddef>
-#include <string>
 
 namespace dftracer::utils::coro {
 class Executor;
@@ -31,7 +31,7 @@ class EpollThreadPoolBackend : public ThreadPoolFileOps {
 
     void start() override;
     void stop() override;
-    std::string name() const override { return "epoll+threadpool"; }
+    dstd::String name() const override { return "epoll+threadpool"; }
 
    private:
     /// Epoll loop run by the completion thread. Currently only watches

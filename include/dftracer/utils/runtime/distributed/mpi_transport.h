@@ -9,6 +9,9 @@
 
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/distributed/transport.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_MPI
@@ -17,8 +20,6 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::distributed {
 
@@ -33,20 +34,20 @@ class MpiTransport : public Transport {
     int size() const override { return size_; }
     void barrier() override { MPI_Barrier(comm_); }
 
-    std::vector<std::string> all_gather(const std::string& payload) override {
+    dstd::Vector<dstd::String> all_gather(dstd::StringView payload) override {
         const int my_bytes = static_cast<int>(payload.size());
-        std::vector<int> sizes(size_, 0);
+        dstd::Vector<int> sizes(size_, 0);
         MPI_Allgather(&my_bytes, 1, MPI_INT, sizes.data(), 1, MPI_INT, comm_);
-        std::vector<int> displs(size_, 0);
+        dstd::Vector<int> displs(size_, 0);
         long total = 0;
         for (int r = 0; r < size_; ++r) {
             displs[r] = static_cast<int>(total);
             total += sizes[r];
         }
-        std::vector<char> buf(static_cast<std::size_t>(total));
+        dstd::Vector<char> buf(static_cast<std::size_t>(total));
         MPI_Allgatherv(payload.data(), my_bytes, MPI_CHAR, buf.data(),
                        sizes.data(), displs.data(), MPI_CHAR, comm_);
-        std::vector<std::string> out(size_);
+        dstd::Vector<dstd::String> out(size_);
         for (int r = 0; r < size_; ++r)
             out[r].assign(buf.data() + displs[r],
                           static_cast<std::size_t>(sizes[r]));
@@ -77,7 +78,7 @@ inline void set_local_thread_budget(MPI_Comm comm = MPI_COMM_WORLD) {
     const auto cores = static_cast<unsigned>(common::hardware_concurrency());
     unsigned per_rank =
         std::max(1u, cores / static_cast<unsigned>(std::max(1, local_size)));
-    const std::string n = std::to_string(per_rank);
+    const dstd::String n = dstd::to_string(per_rank);
     ::setenv("DFTRACER_UTILS_THREADS", n.c_str(), 1);
     ::setenv("DFTRACER_UTILS_IO_THREADS", n.c_str(), 1);
 }

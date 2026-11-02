@@ -2,8 +2,8 @@
 #ifndef DFTRACER_UTILS_RUNTIME_DISTRIBUTED_TRANSPORT_H
 #define DFTRACER_UTILS_RUNTIME_DISTRIBUTED_TRANSPORT_H
 
-#include <string>
-#include <vector>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 namespace dftracer::utils::distributed {
 
@@ -23,7 +23,7 @@ class Transport {
     /// Gather each rank's `payload`; every rank receives all payloads ordered
     /// by rank. The building block for distributed reductions (aggregate,
     /// etc.).
-    virtual std::vector<std::string> all_gather(const std::string& payload) = 0;
+    virtual dstd::Vector<dstd::String> all_gather(dstd::StringView payload) = 0;
 
     /// Synchronize all ranks. Default no-op (correct for a single rank).
     virtual void barrier() {}
@@ -35,8 +35,8 @@ class LocalTransport : public Transport {
    public:
     int rank() const override { return 0; }
     int size() const override { return 1; }
-    std::vector<std::string> all_gather(const std::string& payload) override {
-        return {payload};
+    dstd::Vector<dstd::String> all_gather(dstd::StringView payload) override {
+        return {dstd::String(payload)};
     }
 };
 

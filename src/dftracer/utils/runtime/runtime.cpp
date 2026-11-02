@@ -4,7 +4,12 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -13,13 +18,8 @@
 #include <pthread.h>
 
 #include <algorithm>
-#include <cstdlib>
-#include <memory>
 #include <mutex>
 #include <stdexcept>
-#include <string>
-#include <string_view>
-#include <thread>
 
 namespace dftracer::utils {
 
@@ -28,11 +28,11 @@ namespace {
 // (a debugging lever: force a fixed count, e.g. 1 for a single-threaded async
 // loop). Otherwise 0 means hardware_concurrency.
 std::size_t resolve_threads(std::size_t requested) {
-    if (auto env = common::Env::get<std::string_view>("DFTRACER_UTILS_THREADS");
+    if (auto env = common::Env::get<dstd::StringView>("DFTRACER_UTILS_THREADS");
         env.has_value()) {
-        const long long n =
-            std::strtoll(std::string(*env).c_str(), nullptr, 10);
-        if (n > 0) return static_cast<std::size_t>(n);
+        if (auto n = dstd::from_chars<long long>(*env); n && *n > 0) {
+            return static_cast<std::size_t>(*n);
+        }
     }
     return requested == 0 ? common::hardware_concurrency() : requested;
 }
@@ -43,11 +43,11 @@ std::size_t resolve_threads(std::size_t requested) {
 // Otherwise 0 means one I/O thread per worker.
 std::size_t resolve_io_threads(std::size_t requested, std::size_t workers) {
     if (auto env =
-            common::Env::get<std::string_view>("DFTRACER_UTILS_IO_THREADS");
+            common::Env::get<dstd::StringView>("DFTRACER_UTILS_IO_THREADS");
         env.has_value()) {
-        const long long n =
-            std::strtoll(std::string(*env).c_str(), nullptr, 10);
-        if (n > 0) return static_cast<std::size_t>(n);
+        if (auto n = dstd::from_chars<long long>(*env); n && *n > 0) {
+            return static_cast<std::size_t>(*n);
+        }
     }
     return requested == 0 ? workers : requested;
 }
@@ -62,7 +62,7 @@ Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
     executor_ = make_task_executor(config);
     executor_->start();
 
-    watchdog_ = std::make_unique<Watchdog>();
+    watchdog_ = dstd::make_unique<Watchdog>();
     watchdog_->set_executor(executor_.get());
 }
 
@@ -79,13 +79,13 @@ Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
     executor_->start();
 
     if (enable_watchdog) {
-        watchdog_ = std::make_unique<Watchdog>();
+        watchdog_ = dstd::make_unique<Watchdog>();
         watchdog_->set_executor(executor_.get());
     }
 }
 
 Runtime::Runtime(const ExecutorConfig& config,
-                 std::unique_ptr<Watchdog> watchdog)
+                 dstd::UniquePtr<Watchdog> watchdog)
     : threads_(resolve_threads(config.num_threads)),
       io_backend_(config.io_backend_type),
       io_batch_threshold_(config.io_batch_threshold) {
@@ -104,22 +104,33 @@ Runtime::Runtime(const ExecutorConfig& config,
 
 Runtime::~Runtime() { stop(); }
 
-TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
+TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
         throw common::DFTUtilsException(common::ErrorCode::Pipeline,
                                         "Runtime is shut down");
     }
-    if (name.empty()) {
-        name = "task-" + std::to_string(task_name_counter_++);
+    // The handle, its shared state and the futures list outlive the
+    // submitting thread's pool scope, so they charge the general pool.
+    dstd::String task_name;
+    dstd::SharedPtr<dstd::Promise<void>> promise;
+    dstd::SharedFuture<void> future;
+    dstd::SharedPtr<std::atomic<common::TaskIndex>> tid;
+    {
+        memory::Scope bookkeeping_scope{memory::Manager::get().general()};
+        if (name.empty()) {
+            task_name = "task-" + dstd::to_string(task_name_counter_++);
+        } else {
+            task_name.assign(name.data(), name.size());
+        }
+        promise = dstd::make_shared<dstd::Promise<void>>();
+        future = promise->get_future().share();
+        tid = dstd::make_shared<std::atomic<common::TaskIndex>>(-1);
     }
 
-    auto promise = std::make_shared<std::promise<void>>();
-    auto future = promise->get_future().share();
-    auto tid = std::make_shared<std::atomic<common::TaskIndex>>(-1);
-
     auto wrapper = [](coro::CoroTask<void> t,
-                      std::shared_ptr<std::promise<void>> p, TaskExecutor* exec,
-                      std::shared_ptr<std::atomic<common::TaskIndex>> task_id)
+                      dstd::SharedPtr<dstd::Promise<void>> p,
+                      TaskExecutor* exec,
+                      dstd::SharedPtr<std::atomic<common::TaskIndex>> task_id)
         -> coro::Coro {
         try {
             co_await std::move(t);
@@ -129,7 +140,8 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
         } catch (...) {
             t = coro::CoroTask<void>{
                 std::coroutine_handle<coro::CoroTask<void>::promise_type>{}};
-            exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
+            mark_coro_failed(*exec, task_id->load(std::memory_order_acquire),
+                             std::current_exception());
             p->set_exception(std::current_exception());
             co_return;
         }
@@ -146,19 +158,20 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
     }
     auto coro = wrapper(std::move(task), promise, executor_.get(), tid);
     common::TaskIndex id =
-        executor_->enqueue_tracked(std::move(coro), name, tid);
+        executor_->enqueue_tracked(std::move(coro), task_name, tid);
 
     {
+        memory::Scope bookkeeping_scope{memory::Manager::get().general()};
         std::lock_guard<std::mutex> lock(futures_mutex_);
         cleanup_completed_futures();
         outstanding_futures_.push_back(future);
     }
 
-    return TaskHandle{future, id, std::move(name)};
+    return TaskHandle{future, id, std::move(task_name)};
 }
 
 void Runtime::wait_all() {
-    std::vector<std::shared_future<void>> futures;
+    dstd::Vector<dstd::SharedFuture<void>> futures;
     {
         std::lock_guard<std::mutex> lock(futures_mutex_);
         futures = std::move(outstanding_futures_);
@@ -172,7 +185,7 @@ void Runtime::wait_all() {
 void Runtime::cleanup_completed_futures() {
     outstanding_futures_.erase(
         std::remove_if(outstanding_futures_.begin(), outstanding_futures_.end(),
-                       [](const std::shared_future<void>& f) {
+                       [](const dstd::SharedFuture<void>& f) {
                            return f.wait_for(std::chrono::seconds(0)) ==
                                   std::future_status::ready;
                        }),
@@ -260,7 +273,7 @@ std::size_t Runtime::io_threads() const {
 
 namespace {
 std::mutex g_default_mtx;
-std::shared_ptr<Runtime> g_default_runtime;
+dstd::SharedPtr<Runtime> g_default_runtime;
 
 // A fork copies the process runtime without its threads. The child drops the
 // copy unused, never touching its executor, and makes its own on first use.
@@ -272,7 +285,7 @@ DFTRACER_UTILS_NO_THREAD_SAFETY_ANALYSIS void unlock_default_after_fork() {
 }
 DFTRACER_UTILS_NO_THREAD_SAFETY_ANALYSIS void drop_inherited_default() {
     if (g_default_runtime) {
-        static auto* inherited = new std::vector<std::shared_ptr<Runtime>>();
+        static auto* inherited = new dstd::Vector<dstd::SharedPtr<Runtime>>();
         inherited->push_back(std::move(g_default_runtime));
     }
     g_default_mtx.unlock();
@@ -306,28 +319,34 @@ void Runtime::become_process_runtime() {
 }
 
 void Runtime::stop_at_exit() {
-    std::shared_ptr<Runtime> rt;
+    dstd::SharedPtr<Runtime> rt;
     {
         std::lock_guard<std::mutex> lock(g_default_mtx);
-        rt = g_default_runtime;
+        rt = std::move(g_default_runtime);
+        g_default_runtime = nullptr;
     }
     // Shutdown stops the runtime before the memory exit check reads the
-    // counters, which lets the workers free their last frames first.
-    if (rt) rt->stop();
+    // counters, which lets the workers free their last frames first. The
+    // static gives up its reference too, so the runtime and the executor it
+    // owns are freed before that check.
+    if (rt) {
+        rt->stop();
+        rt.reset();
+    }
 }
 
 bool elastic_default_enabled() {
-    if (auto e = common::Env::get<std::string_view>("DFTRACER_UTILS_ELASTIC");
+    if (auto e = common::Env::get<dstd::StringView>("DFTRACER_UTILS_ELASTIC");
         e.has_value()) {
         return !(*e == "0" || *e == "false" || *e == "off");
     }
     return true;
 }
 
-std::shared_ptr<Runtime> default_runtime_shared() {
+dstd::SharedPtr<Runtime> default_runtime_shared() {
     std::lock_guard<std::mutex> lock(g_default_mtx);
     if (!g_default_runtime) {
-        g_default_runtime = std::make_shared<Runtime>(config_of({}));
+        g_default_runtime = dstd::make_shared<Runtime>(config_of({}));
         g_default_runtime->become_process_runtime();
     }
     return g_default_runtime;
@@ -338,7 +357,7 @@ Runtime& default_runtime() { return *default_runtime_shared(); }
 Runtime& configure_default_runtime(const RuntimeSettings& settings) {
     std::lock_guard<std::mutex> lock(g_default_mtx);
     if (!g_default_runtime) {
-        g_default_runtime = std::make_shared<Runtime>(config_of(settings));
+        g_default_runtime = dstd::make_shared<Runtime>(config_of(settings));
         g_default_runtime->become_process_runtime();
         return *g_default_runtime;
     }
@@ -346,7 +365,7 @@ Runtime& configure_default_runtime(const RuntimeSettings& settings) {
     return *g_default_runtime;
 }
 
-std::shared_ptr<Runtime> peek_default_runtime() {
+dstd::SharedPtr<Runtime> peek_default_runtime() {
     std::lock_guard<std::mutex> lock(g_default_mtx);
     return g_default_runtime;
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/mpi/mpi_utils.h>
 
 namespace dftracer::utils::mpi {
@@ -8,10 +9,10 @@ namespace {
 
 // Single-rank fallback: the gathered result is just the local send buffer.
 template <typename T>
-void serial_gatherv_fallback(const std::vector<T>& send_data,
-                             std::vector<T>& recv_data,
-                             std::vector<int>& recv_counts,
-                             std::vector<int>& displacements) {
+void serial_gatherv_fallback(const dstd::Vector<T>& send_data,
+                             dstd::Vector<T>& recv_data,
+                             dstd::Vector<int>& recv_counts,
+                             dstd::Vector<int>& displacements) {
     recv_data = send_data;
     recv_counts.clear();
     recv_counts.push_back(static_cast<int>(send_data.size()));

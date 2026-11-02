@@ -9,6 +9,14 @@
 #include <dftracer/utils/coro/parked.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/timer_service.h>
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 
@@ -17,15 +25,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
-#include <string>
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
+#include <utility>
 
 namespace dftracer::utils {
 
@@ -50,7 +53,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
 
         // Current task info (for debugging/watchdog)
         std::atomic<common::TaskIndex> current_task_id{-1};
-        std::string current_task_name;
+        dstd::String current_task_name;
         std::mutex task_name_mutex;
 
         // Set to ask this worker to exit its loop (dynamic retire); checked
@@ -67,7 +70,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
         std::atomic<int> blk_state{0};
         std::atomic<std::int64_t> blocking_since_ns{0};
 
-        std::thread thread;
+        dstd::Thread thread;
 
         explicit WorkerContext(std::size_t id) : worker_id(id) {}
     };
@@ -75,7 +78,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     // Per-worker contexts. Mutated (add/retire) and iterated (progress,
     // shutdown) under workers_mutex_; the hot enqueue/wake path is futex-based
     // and never touches this vector.
-    std::vector<std::unique_ptr<WorkerContext>> workers_;
+    dstd::Vector<dstd::UniquePtr<WorkerContext>> workers_;
     mutable std::mutex workers_mutex_;
     std::atomic<std::size_t> live_workers_{0};    // current live worker threads
     std::atomic<std::size_t> idle_workers_{0};    // currently parked in wait()
@@ -115,12 +118,12 @@ class ThreadPoolExecutor final : public TaskExecutor {
     std::atomic<std::size_t> permit_waiters_{0};
     // Reclaims permits from long blocks; parks on sysmon_cv_ when none
     // blocking.
-    std::thread sysmon_thread_;
+    dstd::Thread sysmon_thread_;
     std::mutex sysmon_mutex_;
     std::condition_variable sysmon_cv_;
     // Elastic grow/shrink coordinator (started only when min_workers_ <
     // num_threads_).
-    std::thread monitor_thread_;
+    dstd::Thread monitor_thread_;
     std::mutex coord_mutex_;
     std::condition_variable coord_cv_;
     bool grow_pending_{false};
@@ -129,6 +132,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     // and with work_signal_ below.
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
         std::atomic<std::size_t> tasks_completed_{0};
+    std::atomic<std::size_t> tasks_failed_{0};
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
         std::atomic<std::size_t> total_tasks_submitted_{0};
 
@@ -144,13 +148,21 @@ class ThreadPoolExecutor final : public TaskExecutor {
     std::chrono::milliseconds keepalive_;
     coro::TimerService timer_service_;
 
-    // Task registry for progress tracking
-    std::unordered_map<common::TaskIndex, TaskInfo> task_registry_;
+    // Task registry for progress tracking. A Map, because a flat map relocates
+    // its elements and TaskInfo holds an atomic.
+    dstd::Map<common::TaskIndex, TaskInfo> task_registry_;
     mutable std::shared_mutex registry_mutex_;
 
-    // Completion hooks of tracked coros, one per tracked id and never erased,
-    // so a promise can hold a pointer to one for its whole life.
-    std::unordered_map<common::TaskIndex, coro::TaskTracking> trackings_;
+    // Finished tasks, oldest first, and how many stay in task_registry_.
+    // Both are guarded by registry_mutex_.
+    dstd::Deque<common::TaskIndex> finished_;
+    std::size_t task_history_;
+    void retire_locked(common::TaskIndex id);
+
+    // Completion hooks of tracked coros, one per live tracked id, erased when
+    // the task completes. A Map keeps an element's address stable across
+    // inserts.
+    dstd::Map<common::TaskIndex, coro::TaskTracking> trackings_;
 
     // Counter for tracked-coro IDs (negative to avoid collision with DAG IDs).
     std::atomic<common::TaskIndex> next_coro_task_id_{-1000000};
@@ -188,12 +200,12 @@ class ThreadPoolExecutor final : public TaskExecutor {
     static constexpr std::chrono::milliseconds IDLE_PARK_MAX{256};
 
     // I/O backend (owned by executor, created by factory)
-    std::unique_ptr<io::IoBackend> io_backend_;
+    dstd::UniquePtr<io::IoBackend> io_backend_;
 
     // Waiters that only another party can finish, and the token scopes watch.
     coro::ParkRegistry park_registry_;
-    std::shared_ptr<std::atomic<bool>> shutdown_token_ =
-        std::make_shared<std::atomic<bool>>(false);
+    dstd::SharedPtr<std::atomic<bool>> shutdown_token_ =
+        dstd::make_shared<std::atomic<bool>>(false);
 
     // Configuration (stored from ExecutorConfig)
     std::atomic<std::size_t> io_pool_size_{0};
@@ -243,7 +255,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     void unpark(coro::ParkNode* n) noexcept override {
         park_registry_.unpark(n);
     }
-    std::shared_ptr<std::atomic<bool>> shutdown_token() const override {
+    dstd::SharedPtr<std::atomic<bool>> shutdown_token() const override {
         return shutdown_token_;
     }
 
@@ -251,7 +263,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
         return num_threads_.load(std::memory_order_acquire);
     }
 
-    void set_threads(std::size_t threads, std::optional<bool> eager) override;
+    void set_threads(std::size_t threads, dstd::Optional<bool> eager) override;
     void grow_io_threads(std::size_t threads) override;
     void set_deadlock_timeout(std::chrono::seconds timeout) override;
 
@@ -302,16 +314,19 @@ class ThreadPoolExecutor final : public TaskExecutor {
 
     /// Enqueue a Coro with progress tracking in task_registry_.
     common::TaskIndex enqueue_tracked(
-        coro::Coro coro, std::string name,
-        std::shared_ptr<std::atomic<common::TaskIndex>> tid_out =
+        coro::Coro coro, dstd::StringView name,
+        dstd::SharedPtr<std::atomic<common::TaskIndex>> tid_out =
             nullptr) override;
 
     void mark_coro_completed(common::TaskIndex id) override;
+    void mark_coro_failed(common::TaskIndex id,
+                          dstd::StringView message) override;
 
     /// Submit a DAG task for execution. parent_task_id tracks the parent, or
     /// -1 for a root task.
-    void submit_task(std::shared_ptr<Task> task,
-                     std::shared_ptr<std::any> input, TaskOwner* owner,
+    void submit_task(dstd::SharedPtr<Task> task,
+                     dstd::SharedPtr<std::any> input,  // keep std: Task API
+                     TaskOwner* owner,
                      common::TaskIndex parent_task_id = -1) override;
 
     common::TaskIndex current_worker_task_id() const override;
@@ -335,7 +350,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
 
     TaskProgress build_task_progress_tree(
         common::TaskIndex task_id,
-        std::unordered_set<common::TaskIndex>& processed) const;
+        dstd::HashSet<common::TaskIndex>& processed) const;
 
     void signal_global_work();
 
@@ -361,8 +376,9 @@ class ThreadPoolExecutor final : public TaskExecutor {
     /// Create a Coro that executes a Task with full bookkeeping. The returned
     /// Coro is at initial_suspend: the caller must set the executor on the
     /// promise and enqueue via release().
-    coro::Coro run_task(std::shared_ptr<Task> task,
-                        std::shared_ptr<std::any> input, TaskOwner* owner);
+    coro::Coro run_task(dstd::SharedPtr<Task> task,
+                        dstd::SharedPtr<std::any> input,  // keep std: Task API
+                        TaskOwner* owner);
 
     /// The completion hook a tracked coro's promise calls.
     static void on_tracked_task_complete(void* owner,

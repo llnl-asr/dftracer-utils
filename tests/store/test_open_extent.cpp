@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/thread_pool_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/crc.h>
@@ -123,7 +124,7 @@ class FaultBackend : public io::ThreadPoolBackend {
           eintr_pending_(fault == Fault::EintrOnce),
           zero_pending_(fault == Fault::ZeroOnce) {}
 
-    std::string name() const override { return "fault"; }
+    dstd::String name() const override { return "fault"; }
 
     void submit_pwrite_callback(int fd, const void* buf, std::size_t len,
                                 off_t offset, io::IoCompletionFn completion,

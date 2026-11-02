@@ -12,10 +12,10 @@
 #include <sys/stat.h>
 #include <sys/uio.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <mutex>
-#include <string>
 
 namespace dftracer::utils::coro {
 class Executor;
@@ -91,7 +91,7 @@ class IoUringBackend : public IoBackend {
 
     std::size_t poll(int timeout_ms) override;
     int flush() override;
-    std::string name() const override { return "io_uring"; }
+    dstd::String name() const override { return "io_uring"; }
 
     /// Counts requests on the ring. Reads zero once cancel_pending() found
     /// the kernel cannot cancel them, so shutdown does not wait for a peer.

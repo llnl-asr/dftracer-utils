@@ -2,6 +2,8 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
@@ -73,7 +75,8 @@ static bool set_double(PyObject *d, const char *key, double val) {
     return dict_set_f64(d, key, val) == 0;
 }
 
-static bool set_str(PyObject *d, const char *key, const std::string &val) {
+static bool set_str(PyObject *d, const char *key,
+                    const dftracer::utils::dstd::String &val) {
     return dict_set_str(d, key, val.c_str()) == 0;
 }
 
@@ -81,17 +84,37 @@ static bool set_bool(PyObject *d, const char *key, bool val) {
     return dict_set_bool(d, key, val) == 0;
 }
 
+static dftracer::utils::dstd::String task_location_text(
+    const dftracer::utils::TaskProgress &tp) {
+    switch (tp.location) {
+        case dftracer::utils::TaskLocation::SharedQueue:
+            return dftracer::utils::dstd::String("shared_queue");
+        case dftracer::utils::TaskLocation::LocalQueue:
+            return "worker_" + dftracer::utils::dstd::to_string(tp.worker) +
+                   "_local";
+        case dftracer::utils::TaskLocation::Executing:
+            return "executing_on_worker_" +
+                   dftracer::utils::dstd::to_string(tp.worker);
+        case dftracer::utils::TaskLocation::Done:
+            return dftracer::utils::dstd::String("done");
+    }
+    return dftracer::utils::dstd::String();
+}
+
 static PyObject *build_task_progress(const dftracer::utils::TaskProgress &tp) {
     PyObject *td = PyDict_New();
     if (!td) return NULL;
 
-    if (!set_str(td, "name", tp.name) || !set_str(td, "state", tp.state) ||
+    const dftracer::utils::dstd::String state(
+        dftracer::utils::task_state_name(tp.state));
+    const dftracer::utils::dstd::String location = task_location_text(tp);
+    if (!set_str(td, "name", tp.name) || !set_str(td, "state", state) ||
         !set_double(td, "queued_duration_ms", tp.queued_duration_ms) ||
         !set_double(td, "execution_duration_ms", tp.execution_duration_ms) ||
         !set_size(td, "total_subtasks", tp.total_subtasks) ||
         !set_size(td, "completed_subtasks", tp.completed_subtasks) ||
         !set_double(td, "progress_pct", tp.progress_percentage) ||
-        !set_str(td, "location", tp.location)) {
+        !set_str(td, "location", location)) {
         Py_DECREF(td);
         return NULL;
     }

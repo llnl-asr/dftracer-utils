@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_RUNTIME_IO_IO_BACKEND_H
 #define DFTRACER_UTILS_RUNTIME_IO_IO_BACKEND_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/awaitable.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -10,7 +11,6 @@
 #include <sys/uio.h>
 
 #include <cstddef>
-#include <string>
 
 namespace dftracer::utils {
 
@@ -179,7 +179,7 @@ class IoBackend {
     int submit_fstat_sync(int fd, struct stat *buf);
 
     /// Human-readable name for logging.
-    virtual std::string name() const = 0;
+    virtual dstd::String name() const = 0;
 };
 
 /// I/O backend of the executor driving the calling thread, or null when that

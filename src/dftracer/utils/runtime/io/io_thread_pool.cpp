@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/runtime/io/io_thread_pool.h>
 
 #include <algorithm>
 #include <chrono>
-#include <system_error>
 
 namespace dftracer::utils::io {
 
@@ -50,11 +52,14 @@ void IoThreadPool::grow(std::size_t threads, bool eager) {
 
 bool IoThreadPool::spawn_locked() {
     reap_locked();
-    try {
-        threads_.emplace_back(&IoThreadPool::worker_loop, this);
-    } catch (const std::system_error&) {
+    auto started = dstd::Thread::try_start([this] { worker_loop(); });
+    if (!started) {
         // A pool with a thread still runs the queue, only slower.
-        if (live_.load(std::memory_order_relaxed) == 0) throw;
+        if (live_.load(std::memory_order_relaxed) == 0) {
+            const dstd::String message(started.error().message());
+            throw common::DFTUtilsException(common::ErrorCode::Internal,
+                                            message.c_str());
+        }
         if (!spawn_warned_) {
             spawn_warned_ = true;
             DFTRACER_UTILS_LOG_WARN(
@@ -63,15 +68,16 @@ bool IoThreadPool::spawn_locked() {
         }
         return false;
     }
+    threads_.push_back(std::move(*started));
     ++idle_;
     live_.fetch_add(1, std::memory_order_release);
     return true;
 }
 
 void IoThreadPool::reap_locked() {
-    for (const std::thread::id id : retired_) {
+    for (const dstd::Thread::Id id : retired_) {
         for (std::size_t i = 0; i < threads_.size(); ++i) {
-            if (threads_[i].get_id() != id) continue;
+            if (threads_[i].id() != id) continue;
             threads_[i].join();
             threads_.erase(threads_.begin() + static_cast<std::ptrdiff_t>(i));
             break;
@@ -81,7 +87,7 @@ void IoThreadPool::reap_locked() {
 }
 
 void IoThreadPool::stop() {
-    dstd::Vector<std::thread> joining;
+    dstd::Vector<dstd::Thread> joining;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!running_.load()) return;
@@ -95,7 +101,7 @@ void IoThreadPool::stop() {
     }
 }
 
-void IoThreadPool::submit(std::function<void()> fn) {
+void IoThreadPool::submit(dstd::Function<void()> fn) {
     std::size_t waking = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -143,7 +149,7 @@ void IoThreadPool::worker_loop() {
     // A thread counts as idle from its spawn until it takes its first job.
     bool counted_idle = true;
     while (true) {
-        std::function<void()> fn;
+        dstd::Function<void()> fn;
         {
             std::unique_lock<std::mutex> lock(mutex_);
             if (!counted_idle) ++idle_;
@@ -174,7 +180,7 @@ void IoThreadPool::worker_loop() {
                     // spawns.
                     --idle_;
                     live_.fetch_sub(1, std::memory_order_release);
-                    retired_.push_back(std::this_thread::get_id());
+                    retired_.push_back(dstd::Thread::current_id());
                     retirements_.fetch_add(1, std::memory_order_release);
                     return;
                 }

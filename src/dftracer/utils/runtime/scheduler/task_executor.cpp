@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
 
@@ -20,8 +21,35 @@ void TaskExecutor::set_current_backend(TaskExecutor* executor) noexcept {
                             has_backend ? &executor->io_backend() : nullptr);
 }
 
-std::unique_ptr<TaskExecutor> make_task_executor(const ExecutorConfig& config) {
-    return std::make_unique<ThreadPoolExecutor>(config);
+void mark_coro_failed(TaskExecutor& executor, common::TaskIndex id,
+                      std::exception_ptr error) noexcept {
+    try {
+        std::rethrow_exception(error);
+    } catch (const std::exception& e) {
+        executor.mark_coro_failed(id, e.what());
+    } catch (...) {
+        executor.mark_coro_failed(id, "Unknown exception");
+    }
+}
+
+dstd::StringView task_state_name(TaskState state) noexcept {
+    switch (state) {
+        case TaskState::Queued:
+            return "queued";
+        case TaskState::Running:
+            return "running";
+        case TaskState::Waiting:
+            return "waiting";
+        case TaskState::Completed:
+            return "completed";
+        case TaskState::Failed:
+            return "failed";
+    }
+    return {};
+}
+
+dstd::UniquePtr<TaskExecutor> make_task_executor(const ExecutorConfig& config) {
+    return dstd::make_unique<ThreadPoolExecutor>(config);
 }
 
 }  // namespace dftracer::utils

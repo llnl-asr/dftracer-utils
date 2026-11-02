@@ -3,15 +3,17 @@
 #define DFTRACER_UTILS_RUNTIME_SCHEDULER_WATCHDOG_H
 
 #include <dftracer/utils/common/typedefs.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <functional>
-#include <memory>
+#include <cstdint>
 #include <mutex>
-#include <thread>
-#include <unordered_map>
 
 namespace dftracer::utils {
 
@@ -37,20 +39,22 @@ class Watchdog {
      * Callback when timeout is detected
      * Parameters: reason (string describing what timed out)
      */
-    using TimeoutCallback = std::function<void(const std::string& reason)>;
+    using TimeoutCallback =
+        std::function<void(const std::string& reason)>;  // keep std: pipeline
 
     /**
      * Callback for warnings about long-running tasks
      * Parameters: task name, elapsed time in milliseconds
      */
     using WarningCallback =
-        std::function<void(const std::string& task_name, int64_t elapsed_ms)>;
+        std::function<void(const std::string& task_name,  // keep std: pipeline
+                           int64_t elapsed_ms)>;
 
     /**
      * Information about an active task execution
      */
     struct TaskExecution {
-        std::shared_ptr<Task> task;
+        dstd::SharedPtr<Task> task;
         std::chrono::steady_clock::time_point start_time;
         std::chrono::milliseconds timeout;  // 0 = no timeout
         bool warning_logged{false};         // Track if warning already logged
@@ -65,11 +69,11 @@ class Watchdog {
 
     // Execution tracking
     std::chrono::steady_clock::time_point execution_start_time_;
-    std::unordered_map<common::TaskIndex, TaskExecution> active_tasks_;
+    dstd::HashMap<common::TaskIndex, TaskExecution> active_tasks_;
     mutable std::mutex active_tasks_mutex_;
 
     // Thread management
-    std::thread watchdog_thread_;
+    dstd::Thread watchdog_thread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> shutdown_requested_{false};
 
@@ -131,7 +135,7 @@ class Watchdog {
      * @param timeout Task-specific timeout (0 = use default or no timeout)
      */
     void register_task_start(
-        common::TaskIndex task_id, std::shared_ptr<Task> task,
+        common::TaskIndex task_id, dstd::SharedPtr<Task> task,
         std::chrono::milliseconds timeout = std::chrono::milliseconds(0));
 
     /**
@@ -205,14 +209,15 @@ class Watchdog {
     bool check_executor_responsiveness();
 
     /**
-     * Trigger timeout callback
+     * Trigger timeout callback. The reason reaches a @ref TimeoutCallback as a
+     * string.
      */
-    void trigger_timeout(const std::string& reason);
+    void trigger_timeout(dstd::StringView reason);
 
     /**
      * Trigger warning callback
      */
-    void trigger_warning(const std::string& task_name, int64_t elapsed_ms);
+    void trigger_warning(dstd::StringView task_name, int64_t elapsed_ms);
 };
 
 }  // namespace dftracer::utils

@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_RUNTIME_IO_IO_BACKEND_FACTORY_H
 #define DFTRACER_UTILS_RUNTIME_IO_IO_BACKEND_FACTORY_H
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/io/io_thread_pool.h>
 
@@ -21,7 +22,7 @@ namespace dftracer::utils::io {
 /// @param batch_threshold   SQE batch threshold (io_uring), 16 default.
 /// @param pool_options      Whether the pool starts full and how long an idle
 ///                          thread lives, for the thread-pool backends.
-std::unique_ptr<IoBackend> create_io_backend(
+dstd::UniquePtr<IoBackend> create_io_backend(
     coro::Executor& executor, std::size_t pool_size = 4,
     IoBackendType backend_type = IoBackendType::Auto,
     unsigned batch_threshold = 16, IoPoolOptions pool_options = {});

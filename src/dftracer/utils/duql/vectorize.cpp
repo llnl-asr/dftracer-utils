@@ -1,4 +1,9 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/pattern_engine.h>
@@ -13,7 +18,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -120,12 +124,12 @@ class Vectorizer {
     const std::vector<VectorColumn>& columns_;
     bool args_fallback_;
 
-    [[noreturn]] static void fail(std::string msg, bool rows = false) {
+    [[noreturn]] static void fail(dstd::String msg, bool rows = false) {
         throw Failure{{std::move(msg), rows}};
     }
 
-    [[noreturn]] static void no_kernel(std::string_view what) {
-        fail(std::string(what) + " has no column kernel");
+    [[noreturn]] static void no_kernel(dstd::StringView what) {
+        fail(dstd::String(what) + " has no column kernel");
     }
 
     static V null() { return {}; }
@@ -137,7 +141,7 @@ class Vectorizer {
         return v.k == K::Bool ? v.e : df::expr_lit_null(TypeId::Bool);
     }
 
-    std::optional<std::size_t> column(std::string_view name) const {
+    dstd::Optional<std::size_t> column(dstd::StringView name) const {
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].name == name) return i;
         return std::nullopt;
@@ -146,19 +150,19 @@ class Vectorizer {
     // The column a path names: the path itself or, for a bare name, the
     // `args.` field; with an index step, the list column before it. An
     // element path names `.` or `.<field>`.
-    std::optional<std::size_t> field_column(const TField& f,
-                                            std::size_t& consumed) const {
+    dstd::Optional<std::size_t> field_column(const TField& f,
+                                             std::size_t& consumed) const {
         consumed = f.steps.size();
         const bool element = f.root == FieldRoot::Element;
-        std::string key = element ? "." : "";
-        std::optional<std::size_t> best;
+        dstd::String key = element ? "." : "";
+        dstd::Optional<std::size_t> best;
         if (element)
             if ((best = column(key))) consumed = 0;
         for (std::size_t i = 0; i < f.steps.size(); ++i) {
             const auto& s = f.steps[i];
             if (s.index) {
                 if (key.empty()) return std::nullopt;
-                key += '[' + std::to_string(*s.index) + ']';
+                key += '[' + dstd::int_text(*s.index) + ']';
             } else {
                 if (i > 0) key += '.';
                 key += s.key;
@@ -202,7 +206,8 @@ class Vectorizer {
         const auto c = field_column(f, consumed);
         if (!c) return null();
         const VectorColumn& col = columns_[*c];
-        if (col.json) fail("'" + col.name + "' is a json field", true);
+        if (col.json)
+            fail("'" + dstd::String(col.name) + "' is a json field", true);
         V v{df::expr_col(static_cast<std::int32_t>(*c)),
             column_kind(col.type.id)};
         const df::DataType* type = &col.type;
@@ -268,7 +273,7 @@ class Vectorizer {
         }
     }
 
-    static std::optional<CmpOp> cmp_op(TermOp op) {
+    static dstd::Optional<CmpOp> cmp_op(TermOp op) {
         switch (op) {
             case TermOp::Eq:
                 return CmpOp::Eq;
@@ -317,7 +322,7 @@ class Vectorizer {
     }
 
     // One kind for the operands of a value-choosing form, or a compile error.
-    static K common(const std::vector<V>& vs, std::string_view what) {
+    static K common(const std::vector<V>& vs, dstd::StringView what) {
         K out = K::Nul;
         for (const V& v : vs) {
             if (v.k == K::Nul) continue;
@@ -328,7 +333,7 @@ class Vectorizer {
             } else if (numeric(out) && numeric(v.k)) {
                 out = out == K::Float || v.k == K::Float ? K::Float : K::Int;
             } else {
-                fail(std::string(what) +
+                fail(dstd::String(what) +
                      " chooses between values of different "
                      "types; convert them with int(), "
                      "float() or string()");
@@ -357,7 +362,7 @@ class Vectorizer {
                                                : arith_kind(b.op, l.k, r.k)};
     }
 
-    static V coalesce(std::vector<V> vs, std::string_view what) {
+    static V coalesce(std::vector<V> vs, dstd::StringView what) {
         const K k = common(vs, what);
         std::vector<Expr> args;
         for (const V& v : vs)
@@ -436,7 +441,7 @@ class Vectorizer {
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].quant == &q)
                 return {df::expr_col(static_cast<std::int32_t>(i)), K::Bool};
-        fail(std::string(q.all ? "all" : "any") +
+        fail(dstd::String(q.all ? "all" : "any") +
                  "() runs on a list column only through quantify()",
              true);
     }
@@ -491,7 +496,7 @@ class Vectorizer {
     V column_call(const TCall& c) {
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].call == &c) return column_value(i);
-        fail(std::string(fn_name(c)) +
+        fail(dstd::String(fn_name(c)) +
                  "() runs on columns only through "
                  "call_column()",
              true);
@@ -528,17 +533,17 @@ class Vectorizer {
     V arg(const TCall& c, std::size_t i) {
         V v = (*this)(*c.args[i]);
         if (v.k == K::Any)
-            fail(std::string(fn_name(c)) + "() reads '" +
+            fail(dstd::String(fn_name(c)) + "() reads '" +
                  term_text(*c.args[i]) + "', whose type only each batch gives");
         return v;
     }
 
-    static const std::string* const_str(const V& v) {
-        return v.constant ? std::get_if<std::string>(&v.constant->value)
+    static const dstd::String* const_str(const V& v) {
+        return v.constant ? std::get_if<dstd::String>(&v.constant->value)
                           : nullptr;
     }
 
-    static std::optional<std::int64_t> const_int(const V& v) {
+    static dstd::Optional<std::int64_t> const_int(const V& v) {
         if (!v.constant) return std::nullopt;
         if (const auto* i = std::get_if<std::int64_t>(&v.constant->value))
             return *i;
@@ -549,7 +554,7 @@ class Vectorizer {
         return std::nullopt;
     }
 
-    static std::string_view fn_name(const TCall& c) {
+    static dstd::StringView fn_name(const TCall& c) {
         return fn_info(c.fn).name;
     }
 
@@ -743,7 +748,7 @@ class Vectorizer {
                 const V s = arg(c, 1);
                 if (v.k != K::Str || s.k == K::Nul) return null();
                 if (!numeric(s.k)) return null();
-                std::optional<V> l;
+                dstd::Optional<V> l;
                 if (c.args.size() > 2) {
                     l = arg(c, 2);
                     if (l->k == K::Nul || !numeric(l->k)) return null();
@@ -769,8 +774,8 @@ class Vectorizer {
                 const V to = arg(c, 2);
                 if (v.k != K::Str || from.k != K::Str || to.k != K::Str)
                     return null();
-                const std::string* f = const_str(from);
-                const std::string* t = const_str(to);
+                const dstd::String* f = const_str(from);
+                const dstd::String* t = const_str(to);
                 if (!f || !t)
                     return {df::expr_str_replace_col(v.e, from.e, to.e),
                             K::Str};
@@ -810,7 +815,7 @@ class Vectorizer {
             }
             case Fn::Type: {
                 const V v = arg(c, 0);
-                std::string_view name;
+                dstd::StringView name;
                 switch (v.k) {
                     case K::Int:
                     case K::Uint:
@@ -894,8 +899,8 @@ class Vectorizer {
                 if (!numeric(v.k)) return null();
                 const auto* fmt = std::get_if<TConst>(&c.args[1]->node);
                 return {
-                    df::expr_format_time(v.e, std::get<std::string>(fmt->value),
-                                         c.ns_per_unit),
+                    df::expr_format_time(
+                        v.e, std::get<dstd::String>(fmt->value), c.ns_per_unit),
                     K::Str};
             }
         }
@@ -1032,13 +1037,15 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
                     {"." + owned.front().field_name(i), field.data_type()});
                 owned.push_back(std::move(field));
             }
-        std::vector<std::string> read;
+        std::vector<dstd::String> read;
         for_each_term_field(*q.cond,
                             [&](const TField& f) { read.push_back(f.base); });
         auto reads = [&](const VectorColumn& c) {
             if (c.quant || c.lookup || c.call) return true;
             for (const auto& b : read)
-                if (b == c.name || (args_fallback && "args." + b == c.name) ||
+                if (b == dstd::StringView(c.name) ||
+                    (args_fallback && c.name.starts_with("args.") &&
+                     dstd::StringView(c.name).substr(5) == b) ||
                     (b.size() > c.name.size() && b.starts_with(c.name) &&
                      (b[c.name.size()] == '.' || b[c.name.size()] == '[')))
                     return true;
@@ -1117,7 +1124,7 @@ struct ListParts {
     std::vector<std::int64_t> off;
 };
 
-std::optional<ListParts> list_parts(const df::Series& s) {
+dstd::Optional<ListParts> list_parts(const df::Series& s) {
     ListParts p{s.is_flat() ? s.share() : s.materialize(), {}, {}};
     const std::int64_t n = p.list.length();
     if (const auto* o = p.list.offsets()) {
@@ -1149,7 +1156,7 @@ df::Series flat_of(const df::Series& s) {
     return s.is_flat() ? s.share() : s.materialize();
 }
 
-std::optional<std::int64_t> int_at(const df::Series& s, std::int64_t r) {
+dstd::Optional<std::int64_t> int_at(const df::Series& s, std::int64_t r) {
     if (s.is_null(r)) return std::nullopt;
     return s.data<std::int64_t>()[r];
 }
@@ -1214,9 +1221,9 @@ df::Series flatten_column(const df::Series& arg) {
 }
 
 // The object's fields as (key, column), in the byte order of the keys.
-std::vector<std::pair<std::string, df::Series>> object_fields(
+std::vector<dstd::Pair<dstd::String, df::Series>> object_fields(
     const std::vector<df::Series>& args, const std::vector<std::string>& keys) {
-    std::vector<std::pair<std::string, df::Series>> out;
+    std::vector<dstd::Pair<dstd::String, df::Series>> out;
     if (args.size() == 1 && args[0].type() == TypeId::Struct) {
         const df::Series st = flat_of(args[0]);
         for (std::int64_t i = 0; i < st.num_children(); ++i)
@@ -1253,9 +1260,13 @@ df::Series members_column(const std::vector<df::Series>& args,
         offsets.push_back(static_cast<std::int64_t>(take.size()));
     }
     if (names) {
-        std::vector<std::string> all;
+        std::vector<std::string_view> all;
         for (const auto& f : fields) all.push_back(f.first);
-        return make_list(offsets, df::Series::strings(all).take(take), valid);
+        return make_list(
+            offsets,
+            df::Series::strings(std::span<const std::string_view>(all))
+                .take(take),
+            valid);
     }
     const TypeId elem = type.fields.front().type.id;
     std::vector<df::DataFrame> frames(fields.size());
@@ -1275,11 +1286,11 @@ df::Series parse_column(const df::Series& arg) {
     const df::Series s = flat_of(arg);
     const std::int64_t n = s.length();
     dftracer::utils::json::RecordParser parser;
-    std::vector<std::string> text(static_cast<std::size_t>(n));
+    std::vector<dstd::String> text(static_cast<std::size_t>(n));
     std::vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
     for (std::int64_t r = 0; r < n; ++r) {
         if (s.is_null(r)) continue;
-        const std::string_view in = s.string_at(r);
+        const dstd::StringView in = s.string_at(r);
         simdjson::dom::element el;
         if (parser.parse(in.data(), in.size()).get(el) != simdjson::SUCCESS)
             continue;
@@ -1287,7 +1298,7 @@ df::Series parse_column(const df::Series& arg) {
         bits[static_cast<std::size_t>(r) >> 3] |=
             static_cast<std::uint8_t>(1u << (r & 7));
     }
-    const std::vector<std::string_view> views(text.begin(), text.end());
+    const std::vector<dstd::StringView> views(text.begin(), text.end());
     return df::Series::strings(views, bits.data());
 }
 
@@ -1296,17 +1307,17 @@ df::Series split_column(const df::Series& arg, const df::Series& sep_arg) {
     const df::Series sep = flat_of(sep_arg);
     const std::int64_t n = s.length();
     std::vector<std::int64_t> offsets{0};
-    std::vector<std::string_view> parts;
+    std::vector<dstd::StringView> parts;
     std::vector<bool> valid(static_cast<std::size_t>(n), false);
     for (std::int64_t r = 0; r < n; ++r) {
         if (!s.is_null(r) && !sep.is_null(r) && !sep.string_at(r).empty()) {
-            const std::string_view text = s.string_at(r);
-            const std::string_view p = sep.string_at(r);
+            const dstd::StringView text = s.string_at(r);
+            const dstd::StringView p = sep.string_at(r);
             std::size_t at = 0;
             for (;;) {
                 const std::size_t hit = text.find(p, at);
                 parts.push_back(text.substr(at, hit - at));
-                if (hit == std::string_view::npos) break;
+                if (hit == dstd::StringView::npos) break;
                 at = hit + p.size();
             }
             valid[static_cast<std::size_t>(r)] = true;
@@ -1316,16 +1327,16 @@ df::Series split_column(const df::Series& arg, const df::Series& sep_arg) {
     return make_list(offsets, df::Series::strings(parts), valid);
 }
 
-using Cell = std::variant<Number, bool, std::string_view>;
+using Cell = dstd::Variant<Number, bool, dstd::StringView>;
 
-std::optional<int> cmp_cell(const Cell& a, const Cell& b) {
+dstd::Optional<int> cmp_cell(const Cell& a, const Cell& b) {
     if (a.index() != b.index()) return std::nullopt;
     if (const auto* x = std::get_if<Number>(&a))
         return compare_numbers(*x, std::get<Number>(b));
     if (const auto* x = std::get_if<bool>(&a))
         return static_cast<int>(*x) - static_cast<int>(std::get<bool>(b));
     const int c =
-        std::get<std::string_view>(a).compare(std::get<std::string_view>(b));
+        std::get<dstd::StringView>(a).compare(std::get<dstd::StringView>(b));
     return c < 0 ? -1 : (c > 0 ? 1 : 0);
 }
 
@@ -1495,14 +1506,14 @@ df::Series join_column(const df::Series& arg, const df::Series& sep_arg) {
     const df::Series elems = flat_of(p->child);
     const bool strings = kind_of(elems.type()) == K::Str;
     const df::Series sep = flat_of(sep_arg);
-    std::string buf;
-    std::vector<std::pair<std::size_t, std::size_t>> spans(
+    dstd::String buf;
+    std::vector<dstd::Pair<std::size_t, std::size_t>> spans(
         static_cast<std::size_t>(n));
     std::vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
     for (std::int64_t r = 0; r < n; ++r) {
         if (p->list.is_null(r) || sep.is_null(r)) continue;
         const std::size_t begin = buf.size();
-        const std::string_view s = sep.string_at(r);
+        const dstd::StringView s = sep.string_at(r);
         bool first = true;
         bool ok = true;
         for (std::int64_t e = p->off[static_cast<std::size_t>(r)];
@@ -1524,7 +1535,7 @@ df::Series join_column(const df::Series& arg, const df::Series& sep_arg) {
         bits[static_cast<std::size_t>(r) >> 3] |=
             static_cast<std::uint8_t>(1u << (r & 7));
     }
-    std::vector<std::string_view> views;
+    std::vector<dstd::StringView> views;
     views.reserve(spans.size());
     for (const auto& [b, e] : spans) views.emplace_back(buf.data() + b, e - b);
     return df::Series::strings(views, bits.data());
@@ -1576,8 +1587,8 @@ bool is_column_term(const Term& t) {
            std::holds_alternative<TList>(t.node);
 }
 
-std::optional<df::DataType> call_type(const Term& t,
-                                      const std::vector<df::DataType>& args) {
+dstd::Optional<df::DataType> call_type(const Term& t,
+                                       const std::vector<df::DataType>& args) {
     auto integer = [](const df::DataType& d) {
         return kind_of(d.id) == K::Int || kind_of(d.id) == K::Uint;
     };
@@ -1668,8 +1679,9 @@ std::optional<df::DataType> call_type(const Term& t,
             if (!is_list_type(args[0])) return std::nullopt;
             if (!scalar_kind(kind_of(args[0].fields.front().type.id)))
                 throw std::invalid_argument(
-                    std::string(fn_info(c.fn).name) +
-                    "() reads an array of arrays or objects");
+                    (dstd::String(fn_info(c.fn).name) +
+                     "() reads an array of arrays or objects")
+                        .c_str());
             return df::list_of(args[0].fields.front().type);
         case Fn::Join:
             if (!is_list_type(args[0]) || kind_of(args[1].id) != K::Str)

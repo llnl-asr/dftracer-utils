@@ -1,5 +1,12 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/duql/substr_simd.h>
 #include <hwy/highway.h>
@@ -14,7 +21,6 @@
 #include <cstring>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -46,8 +52,8 @@ constexpr std::uint32_t MATCH_LIMIT = 1'000'000;
 constexpr std::uint32_t DEPTH_LIMIT = 10'000;
 constexpr std::size_t JIT_STACK_MAX = 1 << 20;
 
-std::string folded(std::string_view s) {
-    std::string out(s);
+dstd::String folded(dstd::StringView s) {
+    dstd::String out(s);
     for (char& c : out) c = fold(c);
     return out;
 }
@@ -60,16 +66,16 @@ namespace {
 // do not share, and collects literals every match contains.
 class DialectScan {
    public:
-    explicit DialectScan(std::string_view p) : p_(p) {}
+    explicit DialectScan(dstd::StringView p) : p_(p) {}
 
-    std::optional<PatternError> run() {
+    dstd::Optional<PatternError> run() {
         branches_ = alternation();
         if (error_) return error_;
         if (i_ < p_.size()) fail("unbalanced ')'");
         return error_;
     }
 
-    std::vector<std::string> literals() {
+    dstd::Vector<dstd::String> literals() {
         if (icase_ || branches_) return {};
         std::sort(
             found_.begin(), found_.end(),
@@ -79,15 +85,15 @@ class DialectScan {
     }
 
    private:
-    std::string_view p_;
+    dstd::StringView p_;
     std::size_t i_ = 0;
-    std::optional<PatternError> error_;
-    std::vector<std::string> found_;
-    std::string run_;
+    dstd::Optional<PatternError> error_;
+    dstd::Vector<dstd::String> found_;
+    dstd::String run_;
     bool icase_ = false;
     bool branches_ = false;
 
-    void fail(std::string msg) {
+    void fail(dstd::String msg) {
         if (!error_) error_ = PatternError{std::move(msg), i_};
     }
 
@@ -121,7 +127,7 @@ class DialectScan {
                 if (quantifier() == 0) found_.resize(before);
                 continue;
             }
-            std::string lit;
+            dstd::String lit;
             const bool literal = atom(lit);
             if (error_) return;
             const auto q = quantifier();
@@ -148,8 +154,8 @@ class DialectScan {
             ++i_;
         } else if (c == '{') {
             const auto close = p_.find('}', i_);
-            if (close == std::string_view::npos) return 1;
-            const std::string_view body = p_.substr(i_ + 1, close - i_ - 1);
+            if (close == dstd::StringView::npos) return 1;
+            const dstd::StringView body = p_.substr(i_ + 1, close - i_ - 1);
             if (body.empty() ||
                 !((body[0] >= '0' && body[0] <= '9') || body[0] == ','))
                 return 1;
@@ -167,7 +173,7 @@ class DialectScan {
     }
 
     // Consumes one atom; returns whether it is a literal (its text in `lit`).
-    bool atom(std::string& lit) {
+    bool atom(dstd::String& lit) {
         const char c = p_[i_];
         if (c == '[') {
             char_class();
@@ -188,7 +194,7 @@ class DialectScan {
         return true;
     }
 
-    bool escape(std::string& lit) {
+    bool escape(dstd::String& lit) {
         if (i_ + 1 >= p_.size()) {
             fail("trailing '\\'");
             return false;
@@ -215,9 +221,9 @@ class DialectScan {
             case 'Q': {
                 const auto end = p_.find("\\E", i_ + 2);
                 const std::size_t stop =
-                    end == std::string_view::npos ? p_.size() : end;
+                    end == dstd::StringView::npos ? p_.size() : end;
                 lit.assign(p_.substr(i_ + 2, stop - i_ - 2));
-                i_ = end == std::string_view::npos ? p_.size() : end + 2;
+                i_ = end == dstd::StringView::npos ? p_.size() : end + 2;
                 return !lit.empty();
             }
             case 'p':
@@ -227,7 +233,7 @@ class DialectScan {
                 if (i_ < p_.size() && p_[i_] == '{') {
                     const auto close = p_.find('}', i_);
                     i_ =
-                        close == std::string_view::npos ? p_.size() : close + 1;
+                        close == dstd::StringView::npos ? p_.size() : close + 1;
                 } else if (e == 'x') {
                     i_ = std::min(i_ + 2, p_.size());
                 } else if (i_ < p_.size()) {
@@ -255,7 +261,7 @@ class DialectScan {
                 i_ += 2;
             } else if (p_.substr(i_, 2) == "[:") {
                 const auto close = p_.find(":]", i_ + 2);
-                i_ = close == std::string_view::npos ? p_.size() : close + 2;
+                i_ = close == dstd::StringView::npos ? p_.size() : close + 2;
             } else {
                 ++i_;
             }
@@ -307,7 +313,7 @@ class DialectScan {
         if (p_[i_] == '<' && i_ + 1 < p_.size() && p_[i_ + 1] != '=' &&
             p_[i_ + 1] != '!') {
             const auto close = p_.find('>', i_);
-            if (close == std::string_view::npos) {
+            if (close == dstd::StringView::npos) {
                 fail("unterminated group name");
                 return false;
             }
@@ -344,7 +350,7 @@ class DialectScan {
             } else if (f == 'i' || f == 'm' || f == 's') {
                 if (f == 'i' && !off) icase_ = true;
             } else {
-                fail(std::string("inline option '") + f + "'");
+                fail(dstd::String("inline option '") + f + "'");
                 return false;
             }
             ++i_;
@@ -400,7 +406,7 @@ ThreadMatch& thread_match() {
 }
 
 // pcre2_match at `offset`; the ovector stays in the thread's match data.
-MatchResult run_regex(const RegexCode& code, std::string_view s,
+MatchResult run_regex(const RegexCode& code, dstd::StringView s,
                       std::size_t offset, pcre2_match_data*& md) {
     ThreadMatch& tm = thread_match();
     md = tm.for_groups(code.groups);
@@ -412,13 +418,13 @@ MatchResult run_regex(const RegexCode& code, std::string_view s,
     return MatchResult::Limit;
 }
 
-bool has_required(const CompiledPattern& p, std::string_view s) {
+bool has_required(const CompiledPattern& p, dstd::StringView s) {
     for (const auto& lit : p.required)
         if (find(s, lit, false) < 0) return false;
     return true;
 }
 
-bool scan_utf8(std::string_view s, bool& wide);
+bool scan_utf8(dstd::StringView s, bool& wide);
 
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
 struct ThreadScratch {
@@ -441,7 +447,7 @@ enum class HsUse { All, AsciiOnly, Never };
 // Whether `pattern` has an unbounded dot gap (`.*`, `.+`, `.{n,}`), the shape
 // on which Vectorscan beats the PCRE2 JIT on long values; on alternations and
 // classes the JIT stays ahead at every length measured (benchmarks.md).
-bool has_dot_gap(std::string_view pattern) {
+bool has_dot_gap(dstd::StringView pattern) {
     bool in_class = false;
     for (std::size_t i = 0; i < pattern.size(); ++i) {
         const char c = pattern[i];
@@ -460,7 +466,7 @@ bool has_dot_gap(std::string_view pattern) {
     return false;
 }
 
-HsUse hs_use(std::string_view pattern, bool icase) {
+HsUse hs_use(dstd::StringView pattern, bool icase) {
     bool wide_literal = false;
     bool props = false;
     bool inline_flags = false;
@@ -491,11 +497,11 @@ HsUse hs_use(std::string_view pattern, bool icase) {
     return HsUse::All;
 }
 
-hs_database_t* compile_hs(std::string_view pattern, bool icase, bool whole) {
-    if (pattern.find('\0') != std::string_view::npos) return nullptr;
+hs_database_t* compile_hs(dstd::StringView pattern, bool icase, bool whole) {
+    if (pattern.find('\0') != dstd::StringView::npos) return nullptr;
     unsigned flags = HS_FLAG_SINGLEMATCH | HS_FLAG_UTF8 | HS_FLAG_ALLOWEMPTY;
     if (icase) flags |= HS_FLAG_CASELESS;
-    std::string text(pattern);
+    dstd::String text(pattern);
     if (whole) text = "\\A(?:" + text + ")\\z";
     hs_database_t* db = nullptr;
     hs_compile_error_t* err = nullptr;
@@ -509,7 +515,7 @@ hs_database_t* compile_hs(std::string_view pattern, bool icase, bool whole) {
 
 // hs_alloc_scratch allocates and checks on every call, so scan first and
 // grow the scratch only when the scan reports it missing or too small.
-hs_error_t hs_scan_grow(const hs_database_t* db, std::string_view s,
+hs_error_t hs_scan_grow(const hs_database_t* db, dstd::StringView s,
                         match_event_handler fn, void* ctx) {
     thread_local ThreadScratch ts;
     const char* data = s.empty() ? "" : s.data();
@@ -520,7 +526,7 @@ hs_error_t hs_scan_grow(const hs_database_t* db, std::string_view s,
     return hs_scan(db, data, n, 0, ts.scratch, fn, ctx);
 }
 
-bool hs_match(const RegexCode& code, std::string_view s, MatchResult& out) {
+bool hs_match(const RegexCode& code, dstd::StringView s, MatchResult& out) {
     bool found = false;
     const hs_error_t rc = hs_scan_grow(code.hs, s, hit, &found);
     if (rc != HS_SUCCESS && rc != HS_SCAN_TERMINATED) return false;
@@ -528,7 +534,7 @@ bool hs_match(const RegexCode& code, std::string_view s, MatchResult& out) {
     return true;
 }
 
-bool hs_allowed(const RegexCode& code, std::string_view s) {
+bool hs_allowed(const RegexCode& code, dstd::StringView s) {
     bool wide;
     return s.size() <= UINT32_MAX && scan_utf8(s, wide) &&
            !(wide && code.ascii_only);
@@ -537,7 +543,7 @@ bool hs_allowed(const RegexCode& code, std::string_view s) {
 // A PCRE2 match that reached its work limit, again on Vectorscan for the
 // exact result when the value allows it.
 [[gnu::noinline]] MatchResult exact_after_limit(const RegexCode& rc,
-                                                std::string_view s) {
+                                                dstd::StringView s) {
     MatchResult r;
     if (rc.hs && hs_allowed(rc, s) && hs_match(rc, s, r)) return r;
     return MatchResult::Limit;
@@ -545,14 +551,14 @@ bool hs_allowed(const RegexCode& code, std::string_view s) {
 #endif
 
 PatternPtr make(CompiledPattern p) {
-    return std::make_shared<const CompiledPattern>(std::move(p));
+    return dstd::make_shared<const CompiledPattern>(std::move(p));
 }
 
 }  // namespace
 
-PatternResult compile_like(std::string_view pattern, bool icase,
-                           std::optional<char> escape) {
-    std::vector<GlobToken> toks;
+PatternResult compile_like(dstd::StringView pattern, bool icase,
+                           dstd::Optional<char> escape) {
+    dstd::Vector<GlobToken> toks;
     // An int, not the optional: GCC fuses the two tests of an optional into
     // a read of its unset payload, which Valgrind reports.
     const int esc = escape ? *escape : -1;
@@ -576,7 +582,7 @@ PatternResult compile_like(std::string_view pattern, bool icase,
     }
     CompiledPattern p;
     p.icase = icase;
-    std::vector<std::string> runs(1);
+    dstd::Vector<dstd::String> runs(1);
     bool any_one = false;
     for (const GlobToken& t : toks) {
         if (t.kind == GlobKind::Literal) {
@@ -625,16 +631,16 @@ PatternResult compile_like(std::string_view pattern, bool icase,
     return make(std::move(p));
 }
 
-PatternResult compile_contains(std::string_view text, bool icase) {
+PatternResult compile_contains(dstd::StringView text, bool icase) {
     CompiledPattern p;
     p.kind = Kind::Contains;
     p.icase = icase;
-    p.literal = icase ? folded(text) : std::string(text);
-    if (!icase && !text.empty()) p.required = {std::string(text)};
+    p.literal = icase ? folded(text) : dstd::String(text);
+    if (!icase && !text.empty()) p.required = {dstd::String(text)};
     return make(std::move(p));
 }
 
-PatternResult compile_regex(std::string_view pattern, bool icase, bool whole) {
+PatternResult compile_regex(dstd::StringView pattern, bool icase, bool whole) {
     DialectScan scan(pattern);
     if (auto err = scan.run())
         return dftracer::utils::dstd::Unexpected(PatternError{
@@ -645,7 +651,7 @@ PatternResult compile_regex(std::string_view pattern, bool icase, bool whole) {
     if (whole) options |= PCRE2_ANCHORED | PCRE2_ENDANCHORED;
     int err = 0;
     PCRE2_SIZE offset = 0;
-    auto code = std::make_shared<RegexCode>();
+    auto code = dstd::make_shared<RegexCode>();
     code->code = pcre2_compile(reinterpret_cast<PCRE2_SPTR>(pattern.data()),
                                pattern.size(), options, &err, &offset, nullptr);
     if (!code->code) {
@@ -697,7 +703,7 @@ std::size_t ascii_prefix(const unsigned char* d, std::size_t n) {
     return i;
 }
 
-bool scan_utf8(std::string_view s, bool& wide) {
+bool scan_utf8(dstd::StringView s, bool& wide) {
     wide = false;
     const auto* d = reinterpret_cast<const unsigned char*>(s.data());
     const std::size_t n = s.size();
@@ -742,19 +748,19 @@ bool scan_utf8(std::string_view s, bool& wide) {
 
 }  // namespace
 
-bool detail::valid_utf8(std::string_view s) {
+bool detail::valid_utf8(dstd::StringView s) {
     bool wide;
     return scan_utf8(s, wide);
 }
 
 MatchResult detail::match_regex_pcre2(const CompiledPattern& p,
-                                      std::string_view s) {
+                                      dstd::StringView s) {
     if (!has_required(p, s)) return MatchResult::No;
     pcre2_match_data* md = nullptr;
     return run_regex(*p.regex, s, 0, md);
 }
 
-MatchResult detail::match_regex(const CompiledPattern& p, std::string_view s) {
+MatchResult detail::match_regex(const CompiledPattern& p, dstd::StringView s) {
     if (!has_required(p, s)) return MatchResult::No;
     const RegexCode& rc = *p.regex;
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
@@ -772,8 +778,8 @@ MatchResult detail::match_regex(const CompiledPattern& p, std::string_view s) {
     return r;
 }
 
-MatchResult extract(const CompiledPattern& p, std::string_view s,
-                    std::size_t group, std::string_view& out) {
+MatchResult extract(const CompiledPattern& p, dstd::StringView s,
+                    std::size_t group, dstd::StringView& out) {
     if (p.kind != Kind::Regex || group > p.regex->groups || !has_required(p, s))
         return MatchResult::No;
     pcre2_match_data* md = nullptr;
@@ -785,8 +791,8 @@ MatchResult extract(const CompiledPattern& p, std::string_view s,
     return MatchResult::Yes;
 }
 
-MatchResult findall(const CompiledPattern& p, std::string_view s,
-                    const std::function<void(std::string_view)>& fn) {
+MatchResult findall(const CompiledPattern& p, dstd::StringView s,
+                    const dstd::Function<void(dstd::StringView)>& fn) {
     if (p.kind != Kind::Regex || !has_required(p, s)) return MatchResult::No;
     std::size_t offset = 0;
     bool any = false;
@@ -805,7 +811,7 @@ MatchResult findall(const CompiledPattern& p, std::string_view s,
     return any ? MatchResult::Yes : MatchResult::No;
 }
 
-std::optional<LiteralTest> literal_test(const CompiledPattern& p) {
+dstd::Optional<LiteralTest> literal_test(const CompiledPattern& p) {
     switch (p.kind) {
         case Kind::Exact:
             return LiteralTest{LiteralTest::Op::Equals, p.literal, p.icase};
@@ -827,9 +833,9 @@ std::size_t capture_count(const CompiledPattern& p) {
     return p.kind == Kind::Regex ? p.regex->groups : 0;
 }
 
-std::vector<std::pair<std::size_t, std::string>> capture_names(
+dstd::Vector<dstd::Pair<std::size_t, dstd::String>> capture_names(
     const CompiledPattern& p) {
-    std::vector<std::pair<std::size_t, std::string>> names;
+    dstd::Vector<dstd::Pair<std::size_t, dstd::String>> names;
     if (p.kind != Kind::Regex) return names;
     std::uint32_t count = 0, size = 0;
     PCRE2_SPTR table = nullptr;
@@ -846,8 +852,8 @@ std::vector<std::pair<std::size_t, std::string>> capture_names(
 }
 
 dftracer::utils::dstd::Expected<Substitution, PatternError>
-compile_substitution(const CompiledPattern& p, std::string_view to) {
-    auto fail = [](std::string msg, std::size_t at) {
+compile_substitution(const CompiledPattern& p, dstd::StringView to) {
+    auto fail = [](dstd::String msg, std::size_t at) {
         return dftracer::utils::dstd::Unexpected(
             PatternError{std::move(msg), at});
     };
@@ -855,22 +861,22 @@ compile_substitution(const CompiledPattern& p, std::string_view to) {
         return fail("a replacement needs a regex pattern", 0);
     const auto names = capture_names(p);
     Substitution sub;
-    std::string lit;
+    dstd::String lit;
     auto flush = [&] {
         if (lit.empty()) return;
         sub.pieces.push_back({std::move(lit), 0, false});
         lit.clear();
     };
     auto group = [&](std::size_t g,
-                     std::size_t at) -> std::optional<PatternError> {
+                     std::size_t at) -> dstd::Optional<PatternError> {
         if (g > p.regex->groups)
             return PatternError{"replacement refers to group " +
-                                    std::to_string(g) +
+                                    dstd::int_text(g) +
                                     " but the pattern has " +
-                                    std::to_string(p.regex->groups) + " groups",
+                                    dstd::int_text(p.regex->groups) + " groups",
                                 at};
         flush();
-        sub.pieces.push_back({std::string(), g, true});
+        sub.pieces.push_back({dstd::String(), g, true});
         return std::nullopt;
     };
     auto digit = [](char c) { return c >= '0' && c <= '9'; };
@@ -896,9 +902,9 @@ compile_substitution(const CompiledPattern& p, std::string_view to) {
             i = j - 1;
         } else if (c == '{') {
             const std::size_t close = to.find('}', i + 2);
-            if (close == std::string_view::npos || close == i + 2)
+            if (close == dstd::StringView::npos || close == i + 2)
                 return fail(BAD_DOLLAR, at);
-            const std::string_view ref = to.substr(i + 2, close - i - 2);
+            const dstd::StringView ref = to.substr(i + 2, close - i - 2);
             const bool numeric = std::all_of(ref.begin(), ref.end(), digit);
             std::size_t g = 0;
             if (numeric) {
@@ -909,8 +915,8 @@ compile_substitution(const CompiledPattern& p, std::string_view to) {
                     names.begin(), names.end(),
                     [&](const auto& n) { return n.second == ref; });
                 if (it == names.end())
-                    return fail("unknown group name '" + std::string(ref) + "'",
-                                at);
+                    return fail(
+                        "unknown group name '" + dstd::String(ref) + "'", at);
                 g = it->first;
             }
             if (auto e = group(g, at))
@@ -925,7 +931,7 @@ compile_substitution(const CompiledPattern& p, std::string_view to) {
 }
 
 MatchResult regex_replace(const CompiledPattern& p, const Substitution& sub,
-                          std::string_view s, std::string& out) {
+                          dstd::StringView s, dstd::String& out) {
     out.clear();
     if (p.kind != Kind::Regex || !has_required(p, s)) {
         out.assign(s);
@@ -970,7 +976,7 @@ MatchResult regex_replace(const CompiledPattern& p, const Substitution& sub,
     return MatchResult::Yes;
 }
 
-const std::vector<std::string>& required_literals(const CompiledPattern& p) {
+const dstd::Vector<dstd::String>& required_literals(const CompiledPattern& p) {
     return p.required;
 }
 

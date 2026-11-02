@@ -52,7 +52,8 @@ duql::ValueMap map_of(const duql::Query& q, JsonValue v) {
             x = v.at("args." + std::string(f));
         if (!x.exists()) continue;
         if (x.is_string())
-            m[std::string(f)] = std::string(x.get<std::string_view>());
+            m[std::string(f)] =
+                dftracer::utils::dstd::String(x.get<std::string_view>());
         else if (x.is_int())
             m[std::string(f)] = x.get<std::int64_t>();
         else if (x.is_uint())
@@ -244,7 +245,8 @@ int main(int argc, char** argv) {
         const std::size_t m = std::min<std::size_t>(n, (64u << 20) / len);
         std::vector<duql::ValueMap> maps(m);
         for (std::size_t i = 0; i < m; ++i)
-            maps[i]["fname"] = long_path(static_cast<std::uint32_t>(i), len);
+            maps[i]["fname"] = dftracer::utils::dstd::String(
+                long_path(static_cast<std::uint32_t>(i), len));
         for (const char* text : long_filters) {
             const auto q = duql::try_parse(text);
             if (!q) continue;

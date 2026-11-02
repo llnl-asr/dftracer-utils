@@ -1,12 +1,12 @@
 #ifndef DFTRACER_UTILS_DUQL_EVALUATOR_H
 #define DFTRACER_UTILS_DUQL_EVALUATOR_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/json/json_value.h>
 
 #include <cstdint>
-#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -38,7 +38,7 @@ struct Cell {
         return c;
     }
     /// `text` is canonical JSON (json::canonical_json_text).
-    static Cell json(std::string text, bool array) {
+    static Cell json(dstd::String text, bool array) {
         Cell c{std::move(text)};
         c.kind = array ? Kind::Array : Kind::Object;
         return c;

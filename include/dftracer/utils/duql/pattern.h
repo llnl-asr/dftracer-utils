@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_DUQL_PATTERN_H
 #define DFTRACER_UTILS_DUQL_PATTERN_H
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/ast.h>
 
 #include <cstddef>
-#include <memory>
 
 namespace dftracer::utils::duql {
 
@@ -21,7 +21,7 @@ inline constexpr std::size_t IN_SET_MIN = 16;
 
 /// The InSet of `values`: null below IN_SET_MIN or when a value is not a
 /// string. Rebuild it after changing the elements.
-std::shared_ptr<const InSet> make_in_set(const ArrayNode& values);
+dstd::SharedPtr<const InSet> make_in_set(const ArrayNode& values);
 
 }  // namespace dftracer::utils::duql
 

@@ -20,7 +20,9 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>       // string cell hashing
 #include <dftracer/utils/dstd/hash/splitmix64.h>  // row/cell hashing
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/json_escape.h>
 
 #include <algorithm>
@@ -956,7 +958,7 @@ namespace {
 
 // One row of a scalar (numeric/bool) column rendered as text, matching
 // build_row_frame's own stringification of numbers.
-std::string scalar_cell_to_string(const Series& s, std::int64_t i) {
+dstd::String scalar_cell_to_string(const Series& s, std::int64_t i) {
     switch (s.type()) {
         case TypeId::Bool:
             return s.data<std::uint8_t>()
@@ -965,38 +967,39 @@ std::string scalar_cell_to_string(const Series& s, std::int64_t i) {
                               : "false")
                        : "false";
         case TypeId::Int8:
-            return std::to_string(s.data<std::int8_t>()[i]);
+            return dstd::int_text(s.data<std::int8_t>()[i]);
         case TypeId::Int16:
-            return std::to_string(s.data<std::int16_t>()[i]);
+            return dstd::int_text(s.data<std::int16_t>()[i]);
         case TypeId::Int32:
-            return std::to_string(s.data<std::int32_t>()[i]);
+            return dstd::int_text(s.data<std::int32_t>()[i]);
         case TypeId::Int64:
-            return std::to_string(s.data<std::int64_t>()[i]);
+            return dstd::int_text(s.data<std::int64_t>()[i]);
         case TypeId::Uint8:
-            return std::to_string(s.data<std::uint8_t>()[i]);
+            return dstd::int_text(s.data<std::uint8_t>()[i]);
         case TypeId::Uint16:
-            return std::to_string(s.data<std::uint16_t>()[i]);
+            return dstd::int_text(s.data<std::uint16_t>()[i]);
         case TypeId::Uint32:
-            return std::to_string(s.data<std::uint32_t>()[i]);
+            return dstd::int_text(s.data<std::uint32_t>()[i]);
         case TypeId::Uint64:
-            return std::to_string(s.data<std::uint64_t>()[i]);
+            return dstd::int_text(s.data<std::uint64_t>()[i]);
         case TypeId::Float32:
-            return dftracer::utils::dstd::float_text(s.data<float>()[i]);
+            return dftracer::utils::dstd::float_string(s.data<float>()[i]);
         case TypeId::Float64:
-            return dftracer::utils::dstd::double_text(s.data<double>()[i]);
+            return dftracer::utils::dstd::double_string(s.data<double>()[i]);
         case TypeId::String:
         case TypeId::Binary:
-            return std::string(s.string_at(i));
+            return dstd::String(s.string_at(i));
         case TypeId::Float16:
-            return std::to_string(half_to_float(s.data<std::uint16_t>()[i]));
+            return dstd::fixed_text(
+                static_cast<double>(half_to_float(s.data<std::uint16_t>()[i])));
         case TypeId::Date32:
         case TypeId::Time32:
-            return std::to_string(s.data<std::int32_t>()[i]);
+            return dstd::int_text(s.data<std::int32_t>()[i]);
         case TypeId::Date64:
         case TypeId::Time64:
         case TypeId::Timestamp:
         case TypeId::Duration:
-            return std::to_string(s.data<std::int64_t>()[i]);
+            return dstd::int_text(s.data<std::int64_t>()[i]);
         case TypeId::List:
         case TypeId::LargeList:
         case TypeId::FixedSizeList:
@@ -1007,11 +1010,11 @@ std::string scalar_cell_to_string(const Series& s, std::int64_t i) {
         case TypeId::FixedSizeBinary:
         case TypeId::LargeString:
         case TypeId::LargeBinary:
-            return std::string();
+            return {};
         case TypeId::Unknown:
             break;  // schema-only marker, never a real Series' type
     }
-    return std::string();
+    return {};
 }
 
 // Render a scalar/bool column as a String column, preserving per-row validity.
@@ -1020,7 +1023,7 @@ std::string scalar_cell_to_string(const Series& s, std::int64_t i) {
 // parts are stringified here (numbers as text) to unify the column on String.
 Series to_string_series(const Series& s) {
     const std::int64_t n = s.length();
-    std::vector<std::string> owned(static_cast<std::size_t>(n));
+    dstd::Vector<dstd::String> owned(static_cast<std::size_t>(n));
     std::vector<std::string_view> vals(static_cast<std::size_t>(n));
     std::vector<std::uint8_t> vbits(static_cast<std::size_t>((n + 7) / 8), 0);
     bool any_null = false;
@@ -1051,12 +1054,12 @@ Series to_json_series(const Series& s) {
                         (t >= TypeId::Int8 && t <= TypeId::Float64) ||
                         t == TypeId::Float16;
     if (!scalar) return Series::nulls(TypeId::String, n).as_json();
-    std::vector<std::string> owned(static_cast<std::size_t>(n));
+    dstd::Vector<dstd::String> owned(static_cast<std::size_t>(n));
     std::vector<std::string_view> vals(static_cast<std::size_t>(n));
     std::vector<std::uint8_t> vbits(static_cast<std::size_t>((n + 7) / 8), 0);
     bool any_null = false;
     for (std::int64_t i = 0; i < n; ++i) {
-        std::string& cell = owned[static_cast<std::size_t>(i)];
+        dstd::String& cell = owned[static_cast<std::size_t>(i)];
         bool valid = !flat.is_null(i);
         if (valid && t == TypeId::String) {
             cell += '"';

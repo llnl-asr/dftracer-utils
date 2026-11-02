@@ -1,4 +1,8 @@
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/string_literal.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/duql/term.h>
@@ -8,7 +12,6 @@
 #include <cassert>
 #include <charconv>
 #include <cstdint>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -28,7 +31,7 @@ static bool eq(const PipelinePtr& a, const PipelinePtr& b) {
 }
 
 template <class T>
-static bool eq(const std::vector<T>& a, const std::vector<T>& b) {
+static bool eq(const dstd::Vector<T>& a, const dstd::Vector<T>& b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i) {
         if (!eq(a[i], b[i])) return false;
@@ -37,7 +40,7 @@ static bool eq(const std::vector<T>& a, const std::vector<T>& b) {
 }
 
 template <class... Ts>
-static bool eq(const std::variant<Ts...>& a, const std::variant<Ts...>& b) {
+static bool eq(const dstd::Variant<Ts...>& a, const dstd::Variant<Ts...>& b) {
     if (a.index() != b.index()) return false;
     return std::visit(
         [&](const auto& x) {
@@ -114,8 +117,8 @@ static bool eq(const SortKey& a, const SortKey& b) {
     return a.descending == b.descending && a.nulls == b.nulls &&
            eq(a.value, b.value);
 }
-static bool eq(const std::pair<ExprPtr, ExprPtr>& a,
-               const std::pair<ExprPtr, ExprPtr>& b) {
+static bool eq(const dstd::Pair<ExprPtr, ExprPtr>& a,
+               const dstd::Pair<ExprPtr, ExprPtr>& b) {
     return eq(a.first, b.first) && eq(a.second, b.second);
 }
 
@@ -247,11 +250,11 @@ enum Prec : int {
     Primary,
 };
 
-constexpr std::array<std::string_view, 12> RESERVED = {
+constexpr std::array<dstd::StringView, 12> RESERVED = {
     "and",     "or", "not",    "in",   "like", "ilike",
     "between", "is", "escape", "null", "true", "false"};
 
-bool is_ident(std::string_view s) {
+bool is_ident(dstd::StringView s) {
     if (s.empty()) return false;
     auto head = [](char c) {
         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
@@ -263,8 +266,8 @@ bool is_ident(std::string_view s) {
     return true;
 }
 
-bool is_reserved(std::string_view s) {
-    for (std::string_view r : RESERVED) {
+bool is_reserved(dstd::StringView s) {
+    for (dstd::StringView r : RESERVED) {
         if (r.size() != s.size()) continue;
         bool same = true;
         for (std::size_t i = 0; i < s.size() && same; ++i) {
@@ -277,17 +280,17 @@ bool is_reserved(std::string_view s) {
     return false;
 }
 
-void put_string(std::string& out, const std::string& raw) {
+void put_string(dstd::String& out, const dstd::String& raw) {
     out += quote_string(raw);
 }
 
-bool all_digits(std::string_view s) {
+bool all_digits(dstd::StringView s) {
     return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) {
         return c >= '0' && c <= '9';
     });
 }
 
-void put_key(std::string& out, const PathStep& step, bool first) {
+void put_key(dstd::String& out, const PathStep& step, bool first) {
     if (!step.quoted && ((is_ident(step.key) && !is_reserved(step.key)) ||
                          (!first && all_digits(step.key)))) {
         out += step.key;
@@ -298,7 +301,7 @@ void put_key(std::string& out, const PathStep& step, bool first) {
     }
 }
 
-void put_steps(std::string& out, const std::vector<PathStep>& steps) {
+void put_steps(dstd::String& out, const dstd::Vector<PathStep>& steps) {
     bool first = true;
     for (const PathStep& step : steps) {
         if (step.wildcard()) {
@@ -309,38 +312,38 @@ void put_steps(std::string& out, const std::vector<PathStep>& steps) {
         }
         if (step.index) {
             out += '[';
-            out += std::to_string(*step.index);
+            out += dstd::int_text(*step.index);
             out += ']';
         }
         first = false;
     }
 }
 
-void put_path(std::string& out, const Path& path) {
+void put_path(dstd::String& out, const Path& path) {
     if (path.root == PathRoot::Current) out += '.';
     if (path.root == PathRoot::Enclosing) out += "^.";
     put_steps(out, path.steps);
 }
 
-std::string number(const Literal& lit) {
+dstd::String number(const Literal& lit) {
     if (!lit.number_text.empty()) return lit.number_text;
     if (const auto* i = std::get_if<std::int64_t>(&lit.value)) {
-        return std::to_string(*i);
+        return dstd::int_text(*i);
     }
     if (const auto* u = std::get_if<std::uint64_t>(&lit.value)) {
-        return std::to_string(*u);
+        return dstd::int_text(*u);
     }
-    std::string s = dstd::double_text(std::get<double>(lit.value));
-    if (s.find_first_of(".eEn") == std::string::npos) s += ".0";
+    dstd::String s = dstd::double_string(std::get<double>(lit.value));
+    if (s.find_first_of(".eEn") == dstd::String::npos) s += ".0";
     return s;
 }
 
 class Printer {
    public:
-    std::string out;
+    dstd::String out;
 
     void expr(const Expr& e, int min_prec) {
-        std::string text;
+        dstd::String text;
         std::swap(text, out);
         int prec = node(e.node);
         std::swap(text, out);
@@ -358,7 +361,7 @@ class Printer {
         if (e) expr(*e, min_prec);
     }
 
-    void exprs(const std::vector<ExprPtr>& items) {
+    void exprs(const dstd::Vector<ExprPtr>& items) {
         for (std::size_t i = 0; i < items.size(); ++i) {
             if (i) out += ", ";
             expr(items[i], Or);
@@ -367,7 +370,7 @@ class Printer {
 
     void inline_pipeline(const Pipeline& p) { pipeline(p, " | "); }
 
-    void pipeline(const Pipeline& p, std::string_view sep) {
+    void pipeline(const Pipeline& p, dstd::StringView sep) {
         bool first = true;
         if (!p.sources.empty()) {
             out += "from ";
@@ -415,9 +418,9 @@ class Printer {
             out += '$';
             out += p->name;
         } else if (f.quoted) {
-            put_string(out, std::get<std::string>(f.name));
+            put_string(out, std::get<dstd::String>(f.name));
         } else {
-            out += std::get<std::string>(f.name);
+            out += std::get<dstd::String>(f.name);
         }
     }
 
@@ -431,10 +434,10 @@ class Printer {
             out += "null";
         } else if (const auto* b = std::get_if<bool>(&v)) {
             out += *b ? "true" : "false";
-        } else if (const auto* s = std::get_if<std::string>(&v)) {
+        } else if (const auto* s = std::get_if<dstd::String>(&v)) {
             put_string(out, *s);
         } else {
-            std::string text = number(lit);
+            dstd::String text = number(lit);
             out += text;
             if (!text.empty() && text[0] == '-') return Neg;
         }
@@ -471,7 +474,7 @@ class Printer {
 
     int print(const Binary& b) {
         struct Info {
-            std::string_view text;
+            dstd::StringView text;
             int prec;
             int left;
             int right;
@@ -650,7 +653,7 @@ class Printer {
         return Primary;
     }
 
-    void assigns(const std::vector<Assign>& fields) {
+    void assigns(const dstd::Vector<Assign>& fields) {
         for (std::size_t i = 0; i < fields.size(); ++i) {
             if (i) out += ", ";
             out += fields[i].name;
@@ -659,13 +662,13 @@ class Printer {
         }
     }
 
-    void block(const std::vector<Assign>& fields) {
+    void block(const dstd::Vector<Assign>& fields) {
         out += "{ ";
         assigns(fields);
         out += fields.empty() ? "}" : " }";
     }
 
-    void items(const std::vector<Item>& list) {
+    void items(const dstd::Vector<Item>& list) {
         for (std::size_t i = 0; i < list.size(); ++i) {
             if (i) out += ", ";
             if (!list[i].name.empty()) {
@@ -676,7 +679,7 @@ class Printer {
         }
     }
 
-    void keys(const std::vector<SortKey>& list) {
+    void keys(const dstd::Vector<SortKey>& list) {
         for (std::size_t i = 0; i < list.size(); ++i) {
             if (i) out += ", ";
             const SortKey& k = list[i];
@@ -696,7 +699,7 @@ class Printer {
         }
     }
 
-    void paths(const std::vector<Path>& list) {
+    void paths(const dstd::Vector<Path>& list) {
         for (std::size_t i = 0; i < list.size(); ++i) {
             if (i) out += ", ";
             put_path(out, list[i]);
@@ -859,7 +862,7 @@ class Printer {
         if (s.keep_empty) out += " keep_empty";
     }
 
-    void join_key(const std::pair<ExprPtr, ExprPtr>& k) {
+    void join_key(const dstd::Pair<ExprPtr, ExprPtr>& k) {
         expr(k.first, Add);
         if (k.second) {
             out += " == ";
@@ -867,8 +870,8 @@ class Printer {
         }
     }
 
-    void join_keys(const std::string& rowset, const PipelinePtr& side,
-                   const std::vector<std::pair<ExprPtr, ExprPtr>>& keys) {
+    void join_keys(const dstd::String& rowset, const PipelinePtr& side,
+                   const dstd::Vector<dstd::Pair<ExprPtr, ExprPtr>>& keys) {
         out += "lookup ";
         if (side)
             subquery(side);
@@ -995,19 +998,19 @@ class Printer {
 
 }  // namespace
 
-std::string to_text(const Expr& expr) {
+dstd::String to_text(const Expr& expr) {
     Printer p;
     p.expr(expr, Or);
     return std::move(p.out);
 }
 
-std::string to_text(const Pipeline& pipeline) {
+dstd::String to_text(const Pipeline& pipeline) {
     Printer p;
     p.inline_pipeline(pipeline);
     return std::move(p.out);
 }
 
-std::string to_text(const Program& query) {
+dstd::String to_text(const Program& query) {
     Printer p;
     p.out += "duql " DFTRACER_UTILS_DUQL_VERSION_STRING "\n";
     for (const Decl& decl : query.decls) {
@@ -1127,12 +1130,12 @@ const char* match_text(MatchOp op, bool negated) {
     return negated ? " not in " : " in ";
 }
 
-void put_term(std::string& out, const Term& t);
+void put_term(dstd::String& out, const Term& t);
 
-void put_keys(std::string& out, const std::vector<TermPtr>& keys,
+void put_keys(dstd::String& out, const dstd::Vector<TermPtr>& keys,
               std::size_t first = 0, std::size_t last = SIZE_MAX);
 
-void put_child(std::string& out, const Term& t) {
+void put_child(dstd::String& out, const Term& t) {
     if (atomic(t)) {
         put_term(out, t);
         return;
@@ -1143,7 +1146,7 @@ void put_child(std::string& out, const Term& t) {
 }
 
 // ` on keys, range op bound`: the enclosing row's keys from `first` on.
-void put_correlated(std::string& out, const TLookup& n, std::size_t first) {
+void put_correlated(dstd::String& out, const TLookup& n, std::size_t first) {
     const std::size_t bounds = (n.low ? 1 : 0) + (n.high ? 1 : 0);
     const std::size_t keys = n.keys.size() - bounds;
     if (first == n.keys.size()) return;
@@ -1159,7 +1162,7 @@ void put_correlated(std::string& out, const TLookup& n, std::size_t first) {
     }
 }
 
-void put_term(std::string& out, const Term& t) {
+void put_term(dstd::String& out, const Term& t) {
     std::visit(
         [&out](const auto& n) {
             using T = std::decay_t<decltype(n)>;
@@ -1171,13 +1174,13 @@ void put_term(std::string& out, const Term& t) {
                             out += "null";
                         } else if constexpr (std::is_same_v<V, bool>) {
                             out += v ? "true" : "false";
-                        } else if constexpr (std::is_same_v<V, std::string>) {
+                        } else if constexpr (std::is_same_v<V, dstd::String>) {
                             syntax::put_string(out, v);
                         } else if constexpr (std::is_same_v<V, double>) {
                             syntax::Literal lit{v, {}};
                             out += syntax::number(lit);
                         } else {
-                            out += std::to_string(v);
+                            out += dstd::int_text(v);
                         }
                     },
                     n.value);
@@ -1279,7 +1282,7 @@ void put_term(std::string& out, const Term& t) {
                     syntax::put_string(out, n.pattern);
                     if (n.escape) {
                         out += " escape ";
-                        syntax::put_string(out, std::string(1, *n.escape));
+                        syntax::put_string(out, dstd::String(1, *n.escape));
                     }
                 }
             }
@@ -1287,7 +1290,7 @@ void put_term(std::string& out, const Term& t) {
         t.node);
 }
 
-void put_keys(std::string& out, const std::vector<TermPtr>& keys,
+void put_keys(dstd::String& out, const dstd::Vector<TermPtr>& keys,
               std::size_t first, std::size_t last) {
     last = std::min(last, keys.size());
     if (last - first == 1) {
@@ -1304,8 +1307,8 @@ void put_keys(std::string& out, const std::vector<TermPtr>& keys,
 
 }  // namespace
 
-std::string term_text(const Term& t) {
-    std::string out;
+dstd::String term_text(const Term& t) {
+    dstd::String out;
     put_term(out, t);
     return out;
 }

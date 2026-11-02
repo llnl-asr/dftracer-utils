@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/pipeline.h>
@@ -24,7 +25,7 @@ constexpr std::uint64_t U64_MAX = std::numeric_limits<std::uint64_t>::max();
 using OptI = std::optional<std::int64_t>;
 using OptU = std::optional<std::uint64_t>;
 using OptD = std::optional<double>;
-using OptS = std::optional<std::string>;
+using OptS = std::optional<dftracer::utils::dstd::String>;
 using OptB = std::optional<bool>;
 
 const std::vector<OptI> I = {1, -7, 0, I64_MAX, {}, 9, -3, 6};
@@ -58,8 +59,9 @@ df::DataFrame frame() {
     f.columns.push_back(numbers(df::TypeId::Int64, J));
     f.columns.push_back(numbers(df::TypeId::Float64, F));
     f.columns.push_back(numbers(df::TypeId::Uint64, U));
-    std::vector<std::string_view> s;
-    for (const auto& x : S) s.push_back(x ? std::string_view(*x) : "");
+    std::vector<dftracer::utils::dstd::StringView> s;
+    for (const auto& x : S)
+        s.push_back(x ? dftracer::utils::dstd::StringView(*x) : "");
     const auto sbits = validity(S);
     f.columns.push_back(df::Series::strings(s, sbits.data()));
     std::vector<std::uint8_t> b;
@@ -70,8 +72,9 @@ df::DataFrame frame() {
     const auto bbits = validity(B);
     f.columns.push_back(
         df::Series::flat(df::TypeId::Bool, packed.data(), N, bbits.data()));
-    std::vector<std::string_view> t;
-    for (const auto& x : T) t.push_back(x ? std::string_view(*x) : "");
+    std::vector<dftracer::utils::dstd::StringView> t;
+    for (const auto& x : T)
+        t.push_back(x ? dftracer::utils::dstd::StringView(*x) : "");
     const auto tbits = validity(T);
     f.columns.push_back(df::Series::strings(t, tbits.data()));
     return f;
@@ -217,7 +220,7 @@ TEST_CASE("vectorized expressions agree with the row evaluator") {
     };
     const df::DataFrame f = frame();
     for (const char* text : FORMS) {
-        INFO("query: ", std::string(text));
+        INFO("query: ", dftracer::utils::dstd::String(text));
         auto q = parse(text);
         REQUIRE_MESSAGE(q.has_value(), (q ? "" : q.error().format()));
         const df::Series mask = df::evaluate_mask(**q, f);
@@ -226,8 +229,8 @@ TEST_CASE("vectorized expressions agree with the row evaluator") {
                 evaluate_truth(**q, row(static_cast<std::size_t>(r)));
             const Truth got = column_truth(mask, r);
             CHECK_MESSAGE(got == want, "row ", r, ": columns ",
-                          std::string(name(got)), ", rows ",
-                          std::string(name(want)));
+                          dftracer::utils::dstd::String(name(got)), ", rows ",
+                          dftracer::utils::dstd::String(name(want)));
         }
     }
 }
@@ -252,7 +255,7 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
     Roles roles;
     roles.fields.emplace("ts", 1000);
     roles.fields.emplace("secs", 1000000000);
-    std::vector<std::string> forms;
+    std::vector<dftracer::utils::dstd::String> forms;
     for (const char* col : {"ts", "secs"}) {
         for (const char* part :
              {"year", "month", "day", "hour", "minute", "second", "millisecond",
@@ -260,18 +263,18 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
               "quarter", "iso_week", "iso_year"})
             for (const char* k : {"-1", "0", "1", "3", "6", "12", "23", "59",
                                   "364", "999", "1969", "2022"})
-                forms.push_back(std::string("date_part(") + col + ", \"" +
-                                part + "\") > " + k);
+                forms.push_back(dftracer::utils::dstd::String("date_part(") +
+                                col + ", \"" + part + "\") > " + k);
         for (const char* fmt : {"%F %T.%f", "%Y-%m-%d %H:%M:%S %j",
                                 "%A %B %p %I %y", "%s %z %Z %%"})
             for (const char* k : {"\"0\"", "\"1969\"", "\"2000\"",
                                   "\"2023-11-14\"", "\"A\"", "\"Thu\""})
-                forms.push_back(std::string("format_time(") + col + ", \"" +
-                                fmt + "\") < " + k);
+                forms.push_back(dftracer::utils::dstd::String("format_time(") +
+                                col + ", \"" + fmt + "\") < " + k);
     }
     forms.push_back("date_part(as_time(s, \"us\"), \"hour\") > 0");
-    for (const std::string& form : forms) {
-        const std::string text = "where " + form;
+    for (const dftracer::utils::dstd::String& form : forms) {
+        const dftracer::utils::dstd::String text = "where " + form;
         INFO("query: ", text);
         auto p = compile_program(text, {}, &roles);
         REQUIRE_MESSAGE(p.has_value(), (p ? "" : p.error().format()));
@@ -281,12 +284,13 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
             ValueMap m;
             m["ts"] = cell(TS[static_cast<std::size_t>(r)]);
             m["secs"] = cell(SECS[static_cast<std::size_t>(r)]);
-            m["s"] = Cell(std::string(1, static_cast<char>('a' + r)));
+            m["s"] = Cell(
+                dftracer::utils::dstd::String(1, static_cast<char>('a' + r)));
             const Truth want = evaluate_truth(*p->main.filter, m);
             const Truth got = column_truth(mask, r);
             CHECK_MESSAGE(got == want, "row ", r, ": columns ",
-                          std::string(name(got)), ", rows ",
-                          std::string(name(want)));
+                          dftracer::utils::dstd::String(name(got)), ", rows ",
+                          dftracer::utils::dstd::String(name(want)));
         }
     }
 }
@@ -315,19 +319,19 @@ TEST_CASE("quantifiers over a list column agree with the row evaluator") {
         "all(l) > 0",
     };
     for (const char* text : FORMS) {
-        INFO("query: ", std::string(text));
+        INFO("query: ", dftracer::utils::dstd::String(text));
         auto q = parse(text);
         REQUIRE_MESSAGE(q.has_value(), (q ? "" : q.error().format()));
         const df::Series mask = df::evaluate_mask(**q, f);
         for (std::int64_t r = 0; r < 5; ++r) {
             ValueMap m;
             if (JSON[r]) m["l"] = Cell::json(JSON[r], true);
-            m["s"] = Cell(std::string(S5[r]));
+            m["s"] = Cell(dftracer::utils::dstd::String(S5[r]));
             const Truth want = evaluate_truth(**q, m);
             const Truth got = column_truth(mask, r);
             CHECK_MESSAGE(got == want, "row ", r, ": columns ",
-                          std::string(name(got)), ", rows ",
-                          std::string(name(want)));
+                          dftracer::utils::dstd::String(name(got)), ", rows ",
+                          dftracer::utils::dstd::String(name(want)));
         }
     }
 }

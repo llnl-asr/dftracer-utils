@@ -121,7 +121,8 @@ constexpr char to_lower_ascii(char c) {
 }
 
 // Lowers ASCII letters of s[from..] in place. Bytes >= 0x80 stay unchanged.
-inline void lower_ascii(std::string& s, std::size_t from = 0) {
+template <class String>
+inline void lower_ascii(String& s, std::size_t from = 0) {
     for (std::size_t i = from; i < s.size(); ++i) s[i] = to_lower_ascii(s[i]);
 }
 

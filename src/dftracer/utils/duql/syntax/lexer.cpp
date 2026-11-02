@@ -1,8 +1,9 @@
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 
 #include <cctype>
-#include <string>
 
 namespace dftracer::utils::duql::syntax {
 
@@ -18,13 +19,13 @@ bool name_char(char c) {
 
 bool digit(char c) { return std::isdigit(static_cast<unsigned char>(c)); }
 
-constexpr std::string_view DURATION_UNITS[] = {"ns", "us", "ms", "s",
+constexpr dstd::StringView DURATION_UNITS[] = {"ns", "us", "ms", "s",
                                                "m",  "h",  "d"};
 
 }  // namespace
 
-duql::DuqlError make_error(std::string_view source, std::size_t offset,
-                           std::size_t length, std::string message) {
+duql::DuqlError make_error(dstd::StringView source, std::size_t offset,
+                           std::size_t length, dstd::String message) {
     if (offset > source.size()) offset = source.size();
     std::size_t line = 1;
     std::size_t line_start = 0;
@@ -34,20 +35,20 @@ duql::DuqlError make_error(std::string_view source, std::size_t offset,
             line_start = i + 1;
         }
     std::size_t line_end = source.find('\n', line_start);
-    if (line_end == std::string_view::npos) line_end = source.size();
+    if (line_end == dstd::StringView::npos) line_end = source.size();
     const std::size_t column = offset - line_start;
-    std::string indicator(column, ' ');
+    dstd::String indicator(column, ' ');
     indicator += '^';
     for (std::size_t i = 1; i < length; ++i) indicator += '~';
     return duql::DuqlError{
         std::move(message), column,
-        std::string(source.substr(line_start, line_end - line_start)),
+        dstd::String(source.substr(line_start, line_end - line_start)),
         std::move(indicator), line};
 }
 
-dftracer::utils::dstd::Expected<std::vector<Token>, duql::DuqlError> lex(
-    std::string_view src) {
-    std::vector<Token> out;
+dftracer::utils::dstd::Expected<dstd::Vector<Token>, duql::DuqlError> lex(
+    dstd::StringView src) {
+    dstd::Vector<Token> out;
     std::size_t pos = 0;
     bool adjacent = false;
     auto push = [&](Tok kind, std::size_t start, std::size_t len) {
@@ -89,10 +90,10 @@ dftracer::utils::dstd::Expected<std::vector<Token>, duql::DuqlError> lex(
         }
         if (c == '`') {
             const std::size_t close = src.find('`', pos + 1);
-            if (close == std::string_view::npos || close == pos + 1)
+            if (close == dstd::StringView::npos || close == pos + 1)
                 return dftracer::utils::dstd::Unexpected(make_error(
                     src, start, 1,
-                    close == std::string_view::npos ? "Unterminated quoted key"
+                    close == dstd::StringView::npos ? "Unterminated quoted key"
                                                     : "Empty quoted key"));
             out.push_back({Tok::Qname, src.substr(start + 1, close - start - 1),
                            start, adjacent});
@@ -122,7 +123,7 @@ dftracer::utils::dstd::Expected<std::vector<Token>, duql::DuqlError> lex(
                 push(is_float ? Tok::Float : Tok::Int, start, i - start);
                 continue;
             }
-            const std::string_view suffix = src.substr(i, j - i);
+            const dstd::StringView suffix = src.substr(i, j - i);
             bool unit = false;
             for (auto u : DURATION_UNITS) unit |= suffix == u;
             if (!unit)
@@ -237,7 +238,7 @@ dftracer::utils::dstd::Expected<std::vector<Token>, duql::DuqlError> lex(
                 break;
         }
         return dftracer::utils::dstd::Unexpected(make_error(
-            src, start, 1, std::string("Unexpected character '") + c + "'"));
+            src, start, 1, dstd::String("Unexpected character '") + c + "'"));
     }
     out.push_back({Tok::End, src.substr(src.size(), 0), src.size(), adjacent});
     return out;

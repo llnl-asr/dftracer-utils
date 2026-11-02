@@ -162,7 +162,8 @@ TEST_SUITE("DuqlWildcards") {
         const std::string spelled =
             "args.counters.a.p50 > 92 or args.counters.b.p50 > 92 or "
             "args.counters.c.p50 > 92";
-        const std::string plan = view_of(gz).explain_duql(wild);
+        const dftracer::utils::dstd::String plan =
+            view_of(gz).explain_duql(wild);
         CHECK(plan.find("args.counters.a.p50") != std::string::npos);
         CHECK(plan.find("args.counters.c.p50") != std::string::npos);
         CHECK(plan.find("*") == std::string::npos);

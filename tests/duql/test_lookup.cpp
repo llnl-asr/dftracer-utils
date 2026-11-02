@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
@@ -31,9 +32,10 @@ std::shared_ptr<const df::DataFrame> runs() {
 }
 
 // `text`'s scan filter with every lookup bound to runs().
-Query bound(const std::string& text) {
+Query bound(const dftracer::utils::dstd::String& text) {
     auto p = compile_program(text, {}, nullptr);
-    REQUIRE_MESSAGE(p.has_value(), (p ? std::string() : p.error().format()));
+    REQUIRE_MESSAGE(p.has_value(),
+                    (p ? dftracer::utils::dstd::String() : p.error().format()));
     REQUIRE(p->main.filter);
     for_each_pipeline_term(p->main, [](const Term& t) {
         if (const auto* l = std::get_if<TLookup>(&t.node))
@@ -42,10 +44,11 @@ Query bound(const std::string& text) {
     return Query::from_node(clone(*p->main.filter));
 }
 
-bool on_json(const Query& q, const std::string& json) {
+bool on_json(const Query& q, const dftracer::utils::dstd::String& json) {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
-    REQUIRE(parser.parse(json).get(doc) == simdjson::SUCCESS);
+    REQUIRE(parser.parse(json.data(), json.size()).get(doc) ==
+            simdjson::SUCCESS);
     return q.evaluate(dftracer::utils::json::JsonValue(doc));
 }
 
@@ -58,7 +61,7 @@ bool on_map(const Query& q, std::int64_t run) {
 }  // namespace
 
 TEST_CASE("lookups evaluate on JSON and flattened records") {
-    const std::string lets = "let runs = where run > 0; ";
+    const dftracer::utils::dstd::String lets = "let runs = where run > 0; ";
     const Query arrow = bound(lets + "where run -> runs.app == \"laghos\"");
     CHECK(on_json(arrow, R"({"run":1})"));
     CHECK_FALSE(on_json(arrow, R"({"run":2})"));
@@ -93,9 +96,9 @@ TEST_CASE("an arrow's conflicting values fail in a value position") {
         (void)on_json(q, R"({"run":1})");
         FAIL("no conflict error");
     } catch (const dftracer::utils::common::DFTUtilsException& e) {
-        const std::string what = e.what();
-        CHECK(what.find("'runs'") != std::string::npos);
-        CHECK(what.find("key 1") != std::string::npos);
+        const dftracer::utils::dstd::String what = e.what();
+        CHECK(what.find("'runs'") != dftracer::utils::dstd::String::npos);
+        CHECK(what.find("key 1") != dftracer::utils::dstd::String::npos);
     }
     // In a comparison, any matching row may make it hold.
     auto any = compile_program(
@@ -135,13 +138,19 @@ TEST_CASE("a joined sub-query term leaves the scan filter") {
         "dur > (from data | where ts < ^.ts | agg { m = max(dur) }) and "
         "not (run in (from data | select run))",
         {}, nullptr);
-    REQUIRE_MESSAGE(p.has_value(), (p ? std::string() : p.error().format()));
+    REQUIRE_MESSAGE(p.has_value(),
+                    (p ? dftracer::utils::dstd::String() : p.error().format()));
     REQUIRE(p->main.filter);
-    CHECK(p->main.filter_text.find("name") != std::string::npos);
-    CHECK(p->main.filter_text.find("run in (") != std::string::npos);
-    CHECK(p->main.filter_text.find("range < ts") != std::string::npos);
-    CHECK(p->main.filter_text.find(" on run") == std::string::npos);
-    CHECK(p->main.filter_text.find("not") == std::string::npos);
+    CHECK(p->main.filter_text.find("name") !=
+          dftracer::utils::dstd::String::npos);
+    CHECK(p->main.filter_text.find("run in (") !=
+          dftracer::utils::dstd::String::npos);
+    CHECK(p->main.filter_text.find("range < ts") !=
+          dftracer::utils::dstd::String::npos);
+    CHECK(p->main.filter_text.find(" on run") ==
+          dftracer::utils::dstd::String::npos);
+    CHECK(p->main.filter_text.find("not") ==
+          dftracer::utils::dstd::String::npos);
     CHECK(p->main.stages.size() == 2);
     std::vector<const TLookup*> joins;
     std::vector<const TLookup*> sets;
@@ -171,10 +180,10 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     side->columns.push_back(df::Series::flat_i64(pid, 6));
     side->columns.push_back(df::Series::flat_i64(ts, 6, ts_valid));
 
-    auto lookup_of = [&](const std::string& text) {
+    auto lookup_of = [&](const dftracer::utils::dstd::String& text) {
         auto p = compile_program(text, {}, nullptr);
-        REQUIRE_MESSAGE(p.has_value(),
-                        (p ? std::string() : p.error().format()));
+        REQUIRE_MESSAGE(p.has_value(), (p ? dftracer::utils::dstd::String()
+                                          : p.error().format()));
         std::shared_ptr<Program> program =
             std::make_shared<Program>(std::move(*p));
         const TLookup* found = nullptr;
@@ -209,7 +218,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const df::Series a = df::Series::flat_i64(lo, 6);
     const df::Series b = df::Series::flat_i64(hi, 6, hi_valid);
     const std::vector<const df::Series*> keys = {&k, &a, &b};
-    auto band = [&](const std::string& agg) {
+    auto band = [&](const dftracer::utils::dstd::String& agg) {
         const auto [bp, bl] = lookup_of(
             "derive v = (from data | where pid == ^.pid and ts between ^.lo "
             "and ^.hi | agg { v = " +
@@ -246,7 +255,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const df::Series a2 = df::Series::flat_i64(one_lo, 2);
     const df::Series b2 = df::Series::flat_i64(one_hi, 1);
     CHECK(ints(lookup_column(*sl, {&k2, &a2, &b2}, 1)) == V{"5"});
-    std::string error;
+    dftracer::utils::dstd::String error;
     try {
         const df::Series b3 = df::Series::flat_i64(one_hi + 1, 1);
         const df::Series a3 = df::Series::flat_i64(one_lo + 1, 1);
@@ -254,5 +263,6 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     } catch (const dftracer::utils::common::DFTUtilsException& e) {
         error = e.what();
     }
-    CHECK(error.find("rows in the range") != std::string::npos);
+    CHECK(error.find("rows in the range") !=
+          dftracer::utils::dstd::String::npos);
 }

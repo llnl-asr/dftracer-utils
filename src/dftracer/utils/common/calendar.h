@@ -251,14 +251,16 @@ inline std::string_view invalid_time_format(std::string_view fmt) {
 
 namespace calendar_detail {
 
-inline void append_padded(std::string& out, std::int64_t v, int width) {
+template <class String>
+inline void append_padded(String& out, std::int64_t v, int width) {
     char buf[24];
     const auto r = std::to_chars(buf, buf + sizeof buf, v);
     for (std::ptrdiff_t n = r.ptr - buf; n < width; ++n) out.push_back('0');
     out.append(buf, r.ptr);
 }
 
-inline void append_year(std::string& out, std::int64_t y) {
+template <class String>
+inline void append_year(String& out, std::int64_t y) {
     if (y < 0) {
         out.push_back('-');
         y = -y;
@@ -266,7 +268,8 @@ inline void append_year(std::string& out, std::int64_t y) {
     append_padded(out, y, 4);
 }
 
-inline void append_wide(std::string& out, CalendarWide v) {
+template <class String>
+inline void append_wide(String& out, CalendarWide v) {
     if (v < 0) {
         out.push_back('-');
         v = -v;
@@ -293,8 +296,8 @@ constexpr std::string_view MONTHS[12] = {
 // least four digits (a sign for a negative year), %f is the six-digit
 // microseconds, %s the epoch seconds rounded toward minus infinity, %z is
 // +0000 and %Z is UTC.
-inline void format_time(std::string& out, const CivilTime& t,
-                        std::string_view fmt) {
+template <class String>
+inline void format_time(String& out, const CivilTime& t, std::string_view fmt) {
     using namespace calendar_detail;
     for (std::size_t i = 0; i < fmt.size(); ++i) {
         if (fmt[i] != '%') {

@@ -1,7 +1,13 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -12,7 +18,6 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
-#include <set>
 #include <sstream>
 #include <utility>
 
@@ -38,15 +43,16 @@ ExprPtr clone(const Expr& e) {
     if (!tree || !tree->pipeline || tree->pipeline->stages.empty())
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
-            "duql: a macro body does not print back: " + syntax::to_text(e));
+            ("duql: a macro body does not print back: " + syntax::to_text(e))
+                .c_str());
     return std::move(
         std::get<Where>(tree->pipeline->stages.front().node).condition);
 }
 
 class Expander {
    public:
-    Expander(const MacroScopes& scopes, std::string_view text,
-             const std::function<bool(std::string_view)>& builtin)
+    Expander(const MacroScopes& scopes, dstd::StringView text,
+             const dstd::Function<bool(dstd::StringView)>& builtin)
         : scopes_(scopes), text_(text), builtin_(builtin) {}
 
     void expand(ExprPtr& slot) {
@@ -59,7 +65,7 @@ class Expander {
         const Span span = slot->span;
         check(*call, *m, span);
         const auto* expr_body =
-            std::get_if<std::shared_ptr<const Expr>>(&m->body);
+            std::get_if<dstd::SharedPtr<const Expr>>(&m->body);
         if (!expr_body)
             fail(span,
                  "macro '" + m->name + "' is a pipeline; call it as a stage");
@@ -83,7 +89,7 @@ class Expander {
             const bool first = leading && p.sources.empty() && i == 0;
             const Macro* m = find(use->call.name);
             const auto* body =
-                m ? std::get_if<std::shared_ptr<const Pipeline>>(&m->body)
+                m ? std::get_if<dstd::SharedPtr<const Pipeline>>(&m->body)
                   : nullptr;
             if (!body) {
                 if (!first) {
@@ -94,7 +100,7 @@ class Expander {
                     fail(span, "Unknown stage or pipeline macro '" +
                                    use->call.name + "'");
                 }
-                auto e = std::make_unique<Expr>();
+                auto e = dstd::make_unique<Expr>();
                 e->node = std::move(use->call);
                 e->span = span;
                 p.stages[i].node = Where{std::move(e)};
@@ -106,10 +112,11 @@ class Expander {
             if (!tree || !tree->pipeline)
                 throw common::DFTUtilsException(
                     common::ErrorCode::InvalidArgument,
-                    "duql: a macro body does not print back: " +
-                        syntax::to_text(**body));
+                    ("duql: a macro body does not print back: " +
+                     syntax::to_text(**body))
+                        .c_str());
             PipelinePtr copy = std::move(tree->pipeline);
-            const std::vector<Arg> args = std::move(use->call.args);
+            const dstd::Vector<Arg> args = std::move(use->call.args);
             each_slot(*copy, [&](ExprPtr& e) { bind(e, *m, args); });
             stack_.push_back(m->name);
             splice(*copy, first);
@@ -161,31 +168,31 @@ class Expander {
                            "' has the name of a built-in function; rename it");
         if (call.args.size() != m.params.size())
             fail(span, "macro '" + m.name + "' takes " +
-                           std::to_string(m.params.size()) +
+                           dstd::int_text(m.params.size()) +
                            " argument(s), got " +
-                           std::to_string(call.args.size()));
+                           dstd::int_text(call.args.size()));
         for (const auto& a : call.args)
             if (!a.name.empty())
                 fail(span, "macro '" + m.name + "' takes no named argument '" +
                                a.name + "'");
         if (std::find(stack_.begin(), stack_.end(), m.name) != stack_.end()) {
-            std::string cycle;
+            dstd::String cycle;
             for (const auto& n : stack_) cycle += n + " -> ";
             fail(span, "macros call each other: " + cycle + m.name);
         }
     }
 
     const MacroScopes& scopes_;
-    std::string_view text_;
-    const std::function<bool(std::string_view)>& builtin_;
-    std::vector<std::string> stack_;
+    dstd::StringView text_;
+    const dstd::Function<bool(dstd::StringView)>& builtin_;
+    dstd::Vector<dstd::String> stack_;
 
-    [[noreturn]] void fail(Span span, std::string msg) const {
+    [[noreturn]] void fail(Span span, dstd::String msg) const {
         throw Failure{syntax::make_error(text_, span.offset, span.length,
                                          std::move(msg))};
     }
 
-    const Macro* find(std::string_view name) const {
+    const Macro* find(dstd::StringView name) const {
         for (const auto& scope : scopes_)
             for (const auto& m : scope)
                 if (m.name == name) return &m;
@@ -193,7 +200,8 @@ class Expander {
     }
 
     // Replaces each bare parameter name in `e` with a copy of its argument.
-    static void bind(ExprPtr& e, const Macro& m, const std::vector<Arg>& args) {
+    static void bind(ExprPtr& e, const Macro& m,
+                     const dstd::Vector<Arg>& args) {
         if (!e) return;
         if (const auto* p = std::get_if<Path>(&e->node);
             p && p->root == PathRoot::Record && p->steps.size() == 1 &&
@@ -211,8 +219,8 @@ class Expander {
 struct PathRegistry {
     std::mutex mu;
     bool env_loaded = false;
-    std::set<std::string> loaded;
-    std::vector<Macro> macros;
+    dstd::Set<dstd::String> loaded;
+    dstd::Vector<Macro> macros;
 };
 
 PathRegistry& registry() {
@@ -220,8 +228,8 @@ PathRegistry& registry() {
     [[maybe_unused]] static const bool hooked = [] {
         dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
             PathRegistry& held = dstd::Singleton<PathRegistry>::get();
-            std::set<std::string> dropped_loaded;
-            std::vector<Macro> dropped_macros;
+            dstd::Set<dstd::String> dropped_loaded;
+            dstd::Vector<Macro> dropped_macros;
             std::lock_guard<std::mutex> lock(held.mu);
             dropped_loaded.swap(held.loaded);
             dropped_macros.swap(held.macros);
@@ -237,53 +245,63 @@ void load_file(PathRegistry& r, const std::filesystem::path& file) {
     if (!in)
         throw common::DFTUtilsException(
             common::ErrorCode::Io,
-            "duql: cannot read macro file " + file.string());
-    std::stringstream ss;
-    ss << in.rdbuf();
-    const std::string text = ss.str();
+            ("duql: cannot read macro file " + dstd::String(file.string()))
+                .c_str());
+    dstd::String text;
+    char chunk[4096];
+    while (in.read(chunk, sizeof(chunk)) || in.gcount() > 0)
+        text.append(chunk, static_cast<std::size_t>(in.gcount()));
     auto tree = syntax::parse(text);
     if (!tree)
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
-            "duql macro file " + file.string() + ": " + tree.error().format());
+            ("duql macro file " + dstd::String(file.string()) + ": " +
+             tree.error().format())
+                .c_str());
     if (tree->pipeline)
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
-            "duql macro file " + file.string() +
-                " holds a pipeline; it may hold only "
-                "'def' declarations");
+            ("duql macro file " + dstd::String(file.string()) +
+             " holds a pipeline; it may hold only "
+             "'def' declarations")
+                .c_str());
     for (const auto& d : tree->decls)
         if (!std::holds_alternative<Def>(d))
             throw common::DFTUtilsException(
                 common::ErrorCode::InvalidArgument,
-                "duql macro file " + file.string() +
-                    " may hold only 'def' declarations");
-    std::vector<Def> defs = take_defs(tree->decls);
-    auto macros = macros_of(defs, text, file.string());
+                ("duql macro file " + dstd::String(file.string()) +
+                 " may hold only 'def' declarations")
+                    .c_str());
+    dstd::Vector<Def> defs = take_defs(tree->decls);
+    auto macros = macros_of(defs, text, dstd::String(file.string()));
     if (!macros)
-        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                        "duql macro file " + file.string() +
-                                            ": " + macros.error().format());
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
+            ("duql macro file " + dstd::String(file.string()) + ": " +
+             macros.error().format())
+                .c_str());
     for (auto& m : *macros) {
         for (const auto& old : r.macros)
             if (old.name == m.name)
                 throw common::DFTUtilsException(
                     common::ErrorCode::InvalidArgument,
-                    "duql macro '" + m.name + "' is defined in " + old.origin +
-                        " and " + file.string());
+                    ("duql macro '" + m.name + "' is defined in " + old.origin +
+                     " and " + dstd::String(file.string()))
+                        .c_str());
         r.macros.push_back(std::move(m));
     }
 }
 
-void load_locked(PathRegistry& r, const std::string& path) {
+void load_locked(PathRegistry& r, dstd::StringView path_text) {
     namespace fs = std::filesystem;
-    const std::string key = fs::weakly_canonical(path).string();
+    const fs::path path(path_text);
+    const dstd::String key(fs::weakly_canonical(path).string());
     if (!r.loaded.insert(key).second) return;
     if (!fs::is_directory(path)) {
         load_file(r, path);
         return;
     }
-    std::vector<fs::path> files;
+    dstd::Vector<fs::path> files;
     for (const auto& e : fs::directory_iterator(path))
         if (e.is_regular_file() && e.path().extension() == ".duql")
             files.push_back(e.path());
@@ -296,22 +314,22 @@ void load_env(PathRegistry& r) {
     r.env_loaded = true;
     const auto env = common::Env::get("DFTRACER_UTILS_DUQL_PATH");
     if (!env) return;
-    std::string_view rest = *env;
+    dstd::StringView rest = *env;
     while (!rest.empty()) {
         const std::size_t colon = rest.find(':');
-        const std::string part(rest.substr(0, colon));
+        const dstd::StringView part = rest.substr(0, colon);
         if (!part.empty()) load_locked(r, part);
-        if (colon == std::string_view::npos) break;
+        if (colon == dstd::StringView::npos) break;
         rest.remove_prefix(colon + 1);
     }
 }
 
 }  // namespace
 
-dftracer::utils::dstd::Expected<std::vector<Macro>, DuqlError> macros_of(
-    std::vector<syntax::Def>& defs, std::string_view text,
-    const std::string& origin) {
-    std::vector<Macro> out;
+dftracer::utils::dstd::Expected<dstd::Vector<Macro>, DuqlError> macros_of(
+    dstd::Vector<syntax::Def>& defs, dstd::StringView text,
+    const dstd::String& origin) {
+    dstd::Vector<Macro> out;
     for (auto& def : defs) {
         if (def.name == "args_fallback") continue;
         auto* expr = std::get_if<ExprPtr>(&def.body);
@@ -324,18 +342,18 @@ dftracer::utils::dstd::Expected<std::vector<Macro>, DuqlError> macros_of(
                     "macro '" + def.name + "' is defined twice"));
         if (expr)
             out.push_back({def.name, def.params,
-                           std::shared_ptr<const Expr>(std::move(*expr)),
+                           dstd::SharedPtr<const Expr>(std::move(*expr)),
                            origin});
         else
             out.push_back({def.name, def.params,
-                           std::shared_ptr<const Pipeline>(
+                           dstd::SharedPtr<const Pipeline>(
                                std::move(std::get<PipelinePtr>(def.body))),
                            origin});
     }
     return out;
 }
 
-bool args_fallback(const std::vector<syntax::Def>& defs) {
+bool args_fallback(const dstd::Vector<syntax::Def>& defs) {
     for (const auto& def : defs)
         if (const auto* e = std::get_if<ExprPtr>(&def.body);
             def.name == "args_fallback" && def.params.empty() && e && *e)
@@ -344,9 +362,9 @@ bool args_fallback(const std::vector<syntax::Def>& defs) {
     return false;
 }
 
-std::vector<syntax::Def> take_defs(std::vector<syntax::Decl>& decls) {
-    std::vector<Def> out;
-    std::vector<Decl> rest;
+dstd::Vector<syntax::Def> take_defs(dstd::Vector<syntax::Decl>& decls) {
+    dstd::Vector<Def> out;
+    dstd::Vector<Decl> rest;
     for (auto& d : decls) {
         if (auto* def = std::get_if<Def>(&d))
             out.push_back(std::move(*def));
@@ -359,8 +377,8 @@ std::vector<syntax::Def> take_defs(std::vector<syntax::Decl>& decls) {
 
 dftracer::utils::dstd::Expected<void, DuqlError> expand_macros(
     syntax::Pipeline& pipeline, const MacroScopes& scopes,
-    std::string_view text,
-    const std::function<bool(std::string_view)>& builtin) {
+    dstd::StringView text,
+    const dstd::Function<bool(dstd::StringView)>& builtin) {
     bool any = false;
     for (const auto& s : scopes) any = any || !s.empty();
     try {
@@ -374,14 +392,14 @@ dftracer::utils::dstd::Expected<void, DuqlError> expand_macros(
     return {};
 }
 
-std::vector<Macro> path_macros() {
+dstd::Vector<Macro> path_macros() {
     auto& r = registry();
     std::lock_guard lock(r.mu);
     load_env(r);
     return r.macros;
 }
 
-void load_macros(const std::string& path) {
+void load_macros(dstd::StringView path) {
     auto& r = registry();
     std::lock_guard lock(r.mu);
     load_env(r);

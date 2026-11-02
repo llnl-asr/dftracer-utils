@@ -2,14 +2,18 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/group_fold.h>
 #include <dftracer/utils/duql/vectorize.h>
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
-#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -32,7 +36,7 @@ bool is_float(TypeId t) {
 
 // `s` as the one type per kind the fold reads: Int64 (bools too), Uint64,
 // Float64 or String; nullopt for a list or object.
-std::optional<df::Series> normal(const df::Series& s) {
+dstd::Optional<df::Series> normal(const df::Series& s) {
     const TypeId t = s.type();
     if (t == TypeId::Int64 || t == TypeId::Uint64 || t == TypeId::Float64 ||
         t == TypeId::String)
@@ -113,7 +117,7 @@ struct GroupFold::Ord {
     std::int64_t i = 0;
     std::uint64_t u = 0;
     double d = 0;
-    std::string s;
+    dstd::String s;
 
     static int sign(auto a, auto b) { return a < b ? -1 : (b < a ? 1 : 0); }
 
@@ -202,7 +206,7 @@ void GroupFold::add(df::DataFrame batch) {
     const std::size_t n_keys = key_types_.size();
     std::vector<std::int64_t> gid(static_cast<std::size_t>(n));
     std::vector<std::int64_t> fresh;
-    std::string key;
+    dstd::String key;
     const bool str_key = n_keys == 1 && text_column(batch.columns[0]);
     for (std::int64_t r = 0; r < n; ++r) {
         if (str_key) {
@@ -215,7 +219,7 @@ void GroupFold::add(df::DataFrame batch) {
                 }
                 id = null_group_;
             } else {
-                std::string_view sv;
+                dstd::StringView sv;
                 if (!c.is_json()) {
                     sv = c.string_at(r);
                 } else {
@@ -240,8 +244,9 @@ void GroupFold::add(df::DataFrame batch) {
                 if (id < 0) {
                     auto it = str_groups_.find(sv);
                     if (it == str_groups_.end()) {
-                        it = str_groups_.emplace(std::string(sv), num_groups_++)
-                                 .first;
+                        it =
+                            str_groups_.emplace(dstd::String(sv), num_groups_++)
+                                .first;
                         fresh.push_back(r);
                     }
                     id = it->second;
@@ -290,13 +295,13 @@ void GroupFold::add(df::DataFrame batch) {
             case FoldOp::CountDistinct: {
                 auto& sets = distinct_[a];
                 sets.resize(groups);
-                std::string v;
+                dstd::String v;
                 const bool text = text_column(in);
                 const bool json = text && in.is_json();
                 for (std::int64_t r = 0; r < n; ++r) {
                     Distinct& d = sets[static_cast<std::size_t>(
                         gid[static_cast<std::size_t>(r)])];
-                    std::string_view sv;
+                    dstd::StringView sv;
                     if (text && !json) {
                         if (in.is_null(r)) continue;
                         sv = in.string_at(r);
@@ -311,7 +316,7 @@ void GroupFold::add(df::DataFrame batch) {
                         sv = *t;
                     }
                     if (d.text.find(sv) == d.text.end())
-                        d.text.emplace(std::string(sv));
+                        d.text.emplace(dstd::String(sv));
                 }
                 break;
             }
@@ -415,7 +420,7 @@ void GroupFold::sketches(std::size_t a, const df::Series& in,
             if (d.is_null(r) || std::isnan(v[r])) continue;
             auto& s = state[static_cast<std::size_t>(
                 gid[static_cast<std::size_t>(r)])];
-            if (!s) s = std::make_unique<Sketch>(SKETCH_ACCURACY);
+            if (!s) s = dstd::make_unique<Sketch>(SKETCH_ACCURACY);
             s->add(v[r]);
         }
         return;
@@ -431,7 +436,7 @@ void GroupFold::sketches(std::size_t a, const df::Series& in,
         if (one.empty()) continue;
         auto& s =
             state[static_cast<std::size_t>(gid[static_cast<std::size_t>(r)])];
-        if (!s) s = std::make_unique<Sketch>();
+        if (!s) s = dstd::make_unique<Sketch>();
         dataframe::merge_default_accuracy(*s, one);
         if (s->empty()) s.reset();
     }
@@ -449,7 +454,7 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
     }
     for (std::size_t k = 0; k < key_types_.size(); ++k)
         out.columns.push_back(joined(key_parts_[k], key_types_[k]));
-    std::optional<df::DataFrame> engine;
+    dstd::Optional<df::DataFrame> engine;
     std::vector<std::int64_t> order;
     if (engine_) {
         engine =
@@ -576,7 +581,7 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
                         df::Series::flat_f64(v.data(), groups, bits.data()));
                     break;
                 }
-                std::vector<std::string> text(count);
+                std::vector<dstd::String> text(count);
                 std::vector<std::uint8_t> buf;
                 for (std::size_t g = 0; g < count; ++g) {
                     if (!state[g]) continue;
@@ -585,7 +590,7 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
                     text[g] = dstd::base64_encode(buf.data(), buf.size());
                     valid[g] = true;
                 }
-                const std::vector<std::string_view> views(text.begin(),
+                const std::vector<dstd::StringView> views(text.begin(),
                                                           text.end());
                 const auto bits = validity(valid);
                 out.columns.push_back(df::Series::strings(views, bits.data()));

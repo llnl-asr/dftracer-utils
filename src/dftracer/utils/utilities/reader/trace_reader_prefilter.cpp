@@ -21,16 +21,16 @@ namespace {
 // key, so they are left to the full evaluator (returns false).
 bool compile_eq_leaf(const duql::CompareNode& n, CompiledEqProbe& out) {
     if (n.op != duql::CompareOp::Eq) return false;
-    const std::string& path = n.field.path;
+    const dstd::String& path = n.field.path;
     const auto dot = path.find('.');
-    if (dot == std::string::npos) {
-        out.top_key = path;
+    if (dot == dstd::String::npos) {
+        out.top_key.assign(path);
         out.nested_key.clear();
         out.args_fallback = true;
     } else if (path.compare(0, dot, "args") == 0 &&
-               path.find('.', dot + 1) == std::string::npos) {
+               path.find('.', dot + 1) == dstd::String::npos) {
         out.top_key = "args";
-        out.nested_key = path.substr(dot + 1);
+        out.nested_key.assign(dstd::StringView(path).substr(dot + 1));
         out.args_fallback = false;
     } else {
         return false;
@@ -38,9 +38,9 @@ bool compile_eq_leaf(const duql::CompareNode& n, CompiledEqProbe& out) {
     return std::visit(
         [&out](auto&& v) -> bool {
             using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::string>) {
+            if constexpr (std::is_same_v<T, dstd::String>) {
                 out.kind = CompiledEqProbe::Kind::String;
-                out.s_val = v;
+                out.s_val.assign(v);
                 return true;
             } else if constexpr (std::is_same_v<T, std::int64_t>) {
                 out.kind = CompiledEqProbe::Kind::Int64;

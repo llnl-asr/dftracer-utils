@@ -48,7 +48,9 @@ TEST_SUITE("unified field F") {
 
     TEST_CASE("string-match and membership push down") {
         CHECK((F("name").like("read%")).to_duql().references("name"));
-        CHECK((F("cat").in(std::vector<std::string>{"io", "net"}))
+        CHECK((F("cat").in(
+                   dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                       "io", "net"}))
                   .to_duql()
                   .references("cat"));
     }

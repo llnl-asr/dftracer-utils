@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/pattern_engine.h>
@@ -21,26 +23,28 @@ namespace {
 
 Truth truth(const char* query, const char* record) {
     auto ast = parse(query);
-    REQUIRE_MESSAGE(ast.has_value(),
-                    (ast ? std::string() : ast.error().message));
+    REQUIRE_MESSAGE(ast.has_value(), (ast ? dftracer::utils::dstd::String()
+                                          : ast.error().message));
     simdjson::dom::parser p;
     simdjson::dom::element el;
     REQUIRE(p.parse(record, std::strlen(record)).get(el) == simdjson::SUCCESS);
     return evaluate_truth(**ast, JsonValue(el));
 }
 
-std::string error_of(const char* query) {
+dftracer::utils::dstd::String error_of(const char* query) {
     auto ast = parse(query);
     REQUIRE_FALSE(ast.has_value());
     return ast.error().message;
 }
 
-bool has(const std::string& text, std::string_view part) {
-    return text.find(part) != std::string::npos;
+bool has(const dftracer::utils::dstd::String& text,
+         dftracer::utils::dstd::StringView part) {
+    return text.find(part) != dftracer::utils::dstd::String::npos;
 }
 
 // Reference SQL LIKE: `%` any run, `_` one UTF-8 character, no escape.
-bool like_ref(std::string_view p, std::string_view s) {
+bool like_ref(dftracer::utils::dstd::StringView p,
+              dftracer::utils::dstd::StringView s) {
     if (p.empty()) return s.empty();
     if (p[0] == '%')
         for (std::size_t i = 0; i <= s.size(); ++i) {
@@ -109,7 +113,7 @@ TEST_SUITE("duql patterns") {
               R"(n ~ "a*+")", R"(n ~ "a(?R)?")", R"(n ~ "(*UTF)a")",
               R"(n ~ "a\C")", R"(n ~ "(?x)a b")", R"(n ~ "\k<x>")",
               R"q(n ~ "a(?C1)")q"}) {
-            CAPTURE(std::string(q));
+            CAPTURE(dftracer::utils::dstd::String(q));
             CHECK(has(error_of(q), "dialect"));
         }
         for (const char* q :
@@ -117,7 +121,7 @@ TEST_SUITE("duql patterns") {
               R"q(n ~ "(?:a|b)")q", R"q(n ~ "(?P<x>a)")q", R"q(n ~ "(?<x>a)")q",
               R"(n ~ "[[:alpha:]]+")", R"(n ~ "\d+\.\d*")", R"(n ~ "\p{L}")",
               R"q(n ~ "(?s:a.b)")q"}) {
-            CAPTURE(std::string(q));
+            CAPTURE(dftracer::utils::dstd::String(q));
             CHECK(parse(q).has_value());
         }
         CHECK(has(error_of(R"(n ~ "a(")"), "pattern"));
@@ -134,22 +138,25 @@ TEST_SUITE("duql patterns") {
     }
 
     TEST_CASE("a catastrophic pattern is bounded and stable") {
-        const std::string record =
-            R"({"s":")" + std::string(10000, 'a') + R"(!"})";
+        const dftracer::utils::dstd::String record =
+            R"({"s":")" + dftracer::utils::dstd::String(10000, 'a') + R"(!"})";
         auto ast = parse(R"(s ~ "^(a|aa)+$")");
         REQUIRE(ast);
         simdjson::dom::parser p;
         simdjson::dom::element el;
-        REQUIRE(p.parse(record).get(el) == simdjson::SUCCESS);
+        REQUIRE(p.parse(record.data(), record.size()).get(el) ==
+                simdjson::SUCCESS);
         const Truth first = evaluate_truth(**ast, JsonValue(el));
         CHECK(first != Truth::Yes);
         for (int i = 0; i < 100; ++i)
             CHECK(evaluate_truth(**ast, JsonValue(el)) == first);
 
         namespace df = dftracer::utils::dataframe;
-        const std::string value = std::string(10000, 'a') + "!";
-        const df::Series col =
-            df::Series::strings(std::vector<std::string_view>{value, "aa"});
+        const dftracer::utils::dstd::String value =
+            dftracer::utils::dstd::String(10000, 'a') + "!";
+        const df::Series col = df::Series::strings(
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView>{
+                value, "aa"});
         const df::Series m = col.str_search("^(a|aa)+$");
         REQUIRE(m.handle());
         const bool null0 = m.is_null(0);
@@ -177,13 +184,14 @@ TEST_SUITE("duql patterns") {
 
     TEST_CASE("like kinds agree with a reference matcher") {
         std::mt19937 rng(20260928);
-        const std::string alphabet[] = {"a", "b", "c", "\xc3\xa9", "\n"};
+        const dftracer::utils::dstd::String alphabet[] = {"a", "b", "c",
+                                                          "\xc3\xa9", "\n"};
         const char pattern_chars[] = {'a', 'b', 'c', '%', '_'};
         for (int round = 0; round < 3000; ++round) {
-            std::string pat;
+            dftracer::utils::dstd::String pat;
             for (int k = static_cast<int>(rng() % 6); k > 0; --k)
                 pat += pattern_chars[rng() % 5];
-            std::string s;
+            dftracer::utils::dstd::String s;
             for (int k = rng() % 8; k > 0; --k) s += alphabet[rng() % 5];
             const auto p = compile_like(pat, false, std::nullopt);
             REQUIRE(p);
@@ -196,12 +204,12 @@ TEST_SUITE("duql patterns") {
     TEST_CASE("the case-insensitive SIMD search agrees with a scalar one") {
         std::mt19937 rng(7);
         for (int round = 0; round < 2000; ++round) {
-            std::string hay;
+            dftracer::utils::dstd::String hay;
             for (int k = static_cast<int>(rng() % 200); k > 0; --k)
                 hay += "aAbB!zZ"[rng() % 7];
-            std::string needle;
+            dftracer::utils::dstd::String needle;
             for (int k = 1 + rng() % 4; k > 0; --k) needle += "abz!"[rng() % 4];
-            std::string lower = hay;
+            dftracer::utils::dstd::String lower = hay;
             for (char& c : lower)
                 if (c >= 'A' && c <= 'Z') c = static_cast<char>(c | 0x20);
             const auto want = static_cast<std::int64_t>(lower.find(needle));
@@ -210,7 +218,8 @@ TEST_SUITE("duql patterns") {
                 needle.data(), static_cast<std::int64_t>(needle.size()));
             CAPTURE(hay);
             CAPTURE(needle);
-            CHECK(got == (want == static_cast<std::int64_t>(std::string::npos)
+            CHECK(got == (want == static_cast<std::int64_t>(
+                                      dftracer::utils::dstd::String::npos)
                               ? -1
                               : want));
         }
@@ -223,19 +232,29 @@ TEST_SUITE("duql patterns") {
             return required_literals(**p);
         };
         CHECK(lits("cuda.*Memcpy") ==
-              std::vector<std::string>{"Memcpy", "cuda"});
-        CHECK(lits("^MPI_(Send|Recv)$") == std::vector<std::string>{"MPI_"});
-        CHECK(lits("(abc)?xy") == std::vector<std::string>{"xy"});
-        CHECK(lits("(abc)+") == std::vector<std::string>{"abc"});
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "Memcpy", "cuda"});
+        CHECK(lits("^MPI_(Send|Recv)$") ==
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "MPI_"});
+        CHECK(
+            lits("(abc)?xy") ==
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"xy"});
+        CHECK(lits("(abc)+") ==
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "abc"});
         CHECK(lits("a|bcd").empty());
         CHECK(lits("(?i)abc").empty());
-        CHECK(lits("ab\\.c") == std::vector<std::string>{"ab.c"});
+        CHECK(lits("ab\\.c") ==
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "ab.c"});
     }
 
     TEST_CASE("DataFrame str_like escapes with a backslash") {
         namespace df = dftracer::utils::dataframe;
         const df::Series col = df::Series::strings(
-            std::vector<std::string_view>{"50%", "50x", "h\xc3\xa9", "a\nb"});
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView>{
+                "50%", "50x", "h\xc3\xa9", "a\nb"});
         const df::Series pct = col.str_like("50\\%");
         CHECK(pct.handle());
         CHECK(pct.all() == false);
@@ -252,14 +271,17 @@ TEST_SUITE("duql patterns") {
 TEST_CASE("a catastrophic pattern retries on Vectorscan at any length") {
     auto p = compile_regex("^(a|aa)+$", false);
     REQUIRE(p);
-    const std::string no = std::string(10000, 'a') + "!";
-    const std::string yes(10000, 'a');
+    const dftracer::utils::dstd::String no =
+        dftracer::utils::dstd::String(10000, 'a') + "!";
+    const dftracer::utils::dstd::String yes(10000, 'a');
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
     CHECK(match(**p, no) == MatchResult::No);
-    CHECK(match(**p, std::string(60, 'a') + "!") == MatchResult::No);
+    CHECK(match(**p, dftracer::utils::dstd::String(60, 'a') + "!") ==
+          MatchResult::No);
 #else
     CHECK(match(**p, no) == MatchResult::Limit);
-    CHECK(match(**p, std::string(60, 'a') + "!") == MatchResult::Limit);
+    CHECK(match(**p, dftracer::utils::dstd::String(60, 'a') + "!") ==
+          MatchResult::Limit);
 #endif
     CHECK(match(**p, yes) == MatchResult::Yes);
 }
@@ -269,18 +291,20 @@ TEST_CASE("a catastrophic pattern retries on Vectorscan at any length") {
 
 TEST_CASE("the engine path gives exact results") {
     namespace df = dftracer::utils::dataframe;
-    auto m = [](const char* re, bool icase, std::string_view s,
+    auto m = [](const char* re, bool icase, dftracer::utils::dstd::StringView s,
                 bool whole = false) {
         auto p = compile_regex(re, icase, whole);
         REQUIRE(p);
         return match(**p, s);
     };
-    const std::string hard = std::string(10000, 'a') + "!";
+    const dftracer::utils::dstd::String hard =
+        dftracer::utils::dstd::String(10000, 'a') + "!";
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
     CHECK(m("^(a|aa)+$", false, hard) == MatchResult::No);
     CHECK(m("^(a|aa)+$", true, hard) == MatchResult::No);
 #endif
-    CHECK(m("^(a|aa)+$", false, std::string(10000, 'a')) == MatchResult::Yes);
+    CHECK(m("^(a|aa)+$", false, dftracer::utils::dstd::String(10000, 'a')) ==
+          MatchResult::Yes);
     CHECK(m("^(a|aa)+$", true, "AAA") == MatchResult::Yes);
     CHECK(m("b+", true, "aBBc") == MatchResult::Yes);
     CHECK(m("b", false, "aBBc") == MatchResult::No);
@@ -313,8 +337,9 @@ TEST_CASE("the engine path gives exact results") {
     CHECK(m("^a\\Xc$", false, "ac") == MatchResult::No);
     CHECK(m("a\\Rb", false, "a\r\nb") == MatchResult::Yes);
 
-    const df::Series col =
-        df::Series::strings(std::vector<std::string_view>{hard, "aa"});
+    const df::Series col = df::Series::strings(
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView>{hard,
+                                                                         "aa"});
     const df::Series r = col.str_search("^(a|aa)+$");
     REQUIRE(r.handle());
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
@@ -351,14 +376,15 @@ TEST_CASE("vectorscan links and scans") {
 
 namespace {
 
-std::string replace_with(const char* re, const char* to, std::string_view s,
-                         MatchResult* res = nullptr) {
+dftracer::utils::dstd::String replace_with(const char* re, const char* to,
+                                           dftracer::utils::dstd::StringView s,
+                                           MatchResult* res = nullptr) {
     auto p = compile_regex(re, false);
     REQUIRE(p.has_value());
     auto sub = compile_substitution(**p, to);
-    REQUIRE_MESSAGE(sub.has_value(),
-                    (sub ? std::string() : sub.error().message));
-    std::string out;
+    REQUIRE_MESSAGE(sub.has_value(), (sub ? dftracer::utils::dstd::String()
+                                          : sub.error().message));
+    dftracer::utils::dstd::String out;
     const MatchResult r = regex_replace(**p, *sub, s, out);
     if (res) *res = r;
     return out;
@@ -372,9 +398,12 @@ TEST_CASE("capture_names lists named groups in group order") {
     REQUIRE(p.has_value());
     const auto names = capture_names(**p);
     REQUIRE(names.size() == 3);
-    CHECK(names[0] == std::make_pair(std::size_t{2}, std::string("second")));
-    CHECK(names[1] == std::make_pair(std::size_t{4}, std::string("fourth")));
-    CHECK(names[2] == std::make_pair(std::size_t{5}, std::string("fifth")));
+    CHECK(names[0] == std::make_pair(std::size_t{2},
+                                     dftracer::utils::dstd::String("second")));
+    CHECK(names[1] == std::make_pair(std::size_t{4},
+                                     dftracer::utils::dstd::String("fourth")));
+    CHECK(names[2] == std::make_pair(std::size_t{5},
+                                     dftracer::utils::dstd::String("fifth")));
     auto none = compile_regex("(a)b", false);
     REQUIRE(none.has_value());
     CHECK(capture_names(**none).empty());
@@ -426,11 +455,13 @@ TEST_CASE("compile_substitution rejects bad templates") {
     auto bad = [&](const char* to) { return compile_substitution(**p, to); };
     auto g2 = bad("x$2");
     REQUIRE(!g2.has_value());
-    CHECK(g2.error().message.find("group 2") != std::string::npos);
+    CHECK(g2.error().message.find("group 2") !=
+          dftracer::utils::dstd::String::npos);
     CHECK(g2.error().offset == 1);
     auto name = bad("${nope}");
     REQUIRE(!name.has_value());
-    CHECK(name.error().message.find("nope") != std::string::npos);
+    CHECK(name.error().message.find("nope") !=
+          dftracer::utils::dstd::String::npos);
     CHECK(!bad("${5}").has_value());
     CHECK(!bad("$10").has_value());
     CHECK(!bad("$").has_value());

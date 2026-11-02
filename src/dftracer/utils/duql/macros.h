@@ -2,42 +2,42 @@
 #define DFTRACER_UTILS_DUQL_MACROS_H
 
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 
-#include <functional>
-#include <memory>
-#include <string>
-#include <string_view>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
 /// `def name(params) = body`, from `origin` (a query, a source or a file).
 struct Macro {
-    std::string name;
-    std::vector<std::string> params;
-    std::variant<std::shared_ptr<const syntax::Expr>,
-                 std::shared_ptr<const syntax::Pipeline>>
+    dstd::String name;
+    dstd::Vector<dstd::String> params;
+    dstd::Variant<dstd::SharedPtr<const syntax::Expr>,
+                  dstd::SharedPtr<const syntax::Pipeline>>
         body;
-    std::string origin;
+    dstd::String origin;
 };
 
 /// The macros a text can call, the first scope hiding the later ones.
-using MacroScopes = std::vector<std::vector<Macro>>;
+using MacroScopes = dstd::Vector<dstd::Vector<Macro>>;
 
 /// `defs` as one scope, their bodies moved out; the `args_fallback` flag is
 /// not a macro and is left out. Fails for two macros of one name.
-dftracer::utils::dstd::Expected<std::vector<Macro>, DuqlError> macros_of(
-    std::vector<syntax::Def>& defs, std::string_view text,
-    const std::string& origin);
+dftracer::utils::dstd::Expected<dstd::Vector<Macro>, DuqlError> macros_of(
+    dstd::Vector<syntax::Def>& defs, dstd::StringView text,
+    const dstd::String& origin);
 
 /// Whether `defs` define `args_fallback = true`.
-bool args_fallback(const std::vector<syntax::Def>& defs);
+bool args_fallback(const dstd::Vector<syntax::Def>& defs);
 
 /// The `def`s of `decls`, taken out of it.
-std::vector<syntax::Def> take_defs(std::vector<syntax::Decl>& decls);
+dstd::Vector<syntax::Def> take_defs(dstd::Vector<syntax::Decl>& decls);
 
 /// Replaces every call of a macro in `pipeline` and in the pipelines it holds
 /// with its body, the arguments bound to the parameters by position. A
@@ -50,18 +50,18 @@ std::vector<syntax::Def> take_defs(std::vector<syntax::Decl>& decls);
 /// errors point into `text`.
 dftracer::utils::dstd::Expected<void, DuqlError> expand_macros(
     syntax::Pipeline& pipeline, const MacroScopes& scopes,
-    std::string_view text,
-    const std::function<bool(std::string_view)>& builtin);
+    dstd::StringView text,
+    const dstd::Function<bool(dstd::StringView)>& builtin);
 
 /// The macros of the `.duql` files on `$DFTRACER_UTILS_DUQL_PATH` (colon
 /// separated) and every path `load_macros` added. Thread-safe.
-std::vector<Macro> path_macros();
+dstd::Vector<Macro> path_macros();
 
 /// Adds the `def`s of the `.duql` file `path`, or of every `.duql` file of a
 /// directory in name order. A path is loaded once. Throws DFTUtilsException
 /// INVALID_ARGUMENT for a file that holds anything but `def`s or does not
 /// parse, IO when it cannot be read.
-void load_macros(const std::string& path);
+void load_macros(dstd::StringView path);
 
 }  // namespace dftracer::utils::duql
 

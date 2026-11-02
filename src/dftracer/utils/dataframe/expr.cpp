@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/internal/scalar.h>     // scalar_as
 #include <dftracer/utils/dataframe/kernels/string_ops.h>  // str_pattern
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/duql/substr_simd.h>
@@ -2081,7 +2082,7 @@ class TextCells {
         off_.reserve(static_cast<std::size_t>(n) + 1);
         off_.push_back(0);
     }
-    std::string& buf() { return data_; }
+    dstd::String& buf() { return data_; }
     void end_row(bool valid) {
         if (valid) {
             set_bit(valid_, static_cast<std::int64_t>(off_.size()) - 1);
@@ -2103,7 +2104,7 @@ class TextCells {
    private:
     std::int64_t n_;
     std::vector<std::int32_t> off_;
-    std::string data_;
+    dstd::String data_;
     std::vector<std::uint8_t> valid_;
     std::int64_t set_ = 0;
 };
@@ -2773,7 +2774,7 @@ Series str_replace_col_kernel(const Series& sa, const Series& sb,
         const std::string_view s = ta.at(i);
         const std::string_view from = tb.at(i);
         const std::string_view to = td.at(i);
-        std::string& out = c.buf();
+        dstd::String& out = c.buf();
         std::size_t pos = 0;
         if (!from.empty()) {
             for (std::size_t hit = s.find(from); hit != std::string_view::npos;
@@ -2905,7 +2906,7 @@ Series extract_col_kernel(const Series& sa, const Series& sb,
 }
 
 template <class T>
-void append_number(std::string& out, T v) {
+void append_number(dstd::String& out, T v) {
     if constexpr (std::is_floating_point_v<T>) {
         char buf[32];
         if (char* end = dstd::to_chars_double(buf, buf + sizeof(buf), v))

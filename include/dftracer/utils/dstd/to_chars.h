@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_DSTD_TO_CHARS_H
 #define DFTRACER_UTILS_DSTD_TO_CHARS_H
 
+#include <dftracer/utils/dstd/string.h>
+
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -60,6 +62,13 @@ inline std::string double_text(double v) {
     return end ? std::string(buf, end) : std::string();
 }
 
+/// double_text into a dstd::String.
+inline String double_string(double v) {
+    char buf[32];
+    char* end = to_chars_double(buf, buf + sizeof(buf), v);
+    return end ? String(buf, end) : String();
+}
+
 /// `v` in shortest round-trip form for a float ("0.1", not "0.100000001").
 inline std::string float_text(float v) {
     char buf[32];
@@ -78,6 +87,24 @@ inline std::string float_text(float v) {
 #endif
 }
 
+/// float_text into a dstd::String.
+inline String float_string(float v) {
+    char buf[32];
+#ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
+    for (int digits = 6; digits <= 9; ++digits) {
+        const int n = std::snprintf(buf, sizeof(buf), "%.*g", digits,
+                                    static_cast<double>(v));
+        if (n <= 0) return String();
+        if (digits == 9 || std::strtof(buf, nullptr) == v)
+            return String(buf, static_cast<std::size_t>(n));
+    }
+    return String();
+#else
+    auto [p, ec] = std::to_chars(buf, buf + sizeof(buf), v);
+    return ec == std::errc{} ? String(buf, p) : String();
+#endif
+}
+
 /// Format an unsigned 64-bit integer into [first, last). Returns past-the-end
 /// pointer on success, nullptr on overflow. The integer std::to_chars overload
 /// is available on every supported platform (only the floating-point one is
@@ -91,6 +118,22 @@ inline char* to_chars_u64(char* first, char* last, std::uint64_t v) noexcept {
 inline char* to_chars_i64(char* first, char* last, std::int64_t v) noexcept {
     auto [p, ec] = std::to_chars(first, last, v);
     return ec == std::errc{} ? p : nullptr;
+}
+
+/// The decimal text of an integer.
+template <class I>
+inline String int_text(I v) {
+    char buf[24];
+    auto [p, ec] = std::to_chars(buf, buf + sizeof(buf), v);
+    return ec == std::errc{} ? String(buf, p) : String();
+}
+
+/// `v` as std::to_string gives it: fixed notation with six decimals.
+inline String fixed_text(double v) {
+    const int n = std::snprintf(nullptr, 0, "%f", v);
+    String out(static_cast<std::size_t>(n), '\0');
+    std::snprintf(out.data(), out.size() + 1, "%f", v);
+    return out;
 }
 
 /// Parse a double from [first, last) like std::from_chars: no leading

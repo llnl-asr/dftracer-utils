@@ -23,7 +23,7 @@ bool metadata_phase(const duql::QueryNode& n) {
         if (in->field.any || in->field.path != "ph" || in->values.set)
             return false;
         for (const auto& v : in->values.elements) {
-            const auto* s = std::get_if<std::string>(&v.value);
+            const auto* s = std::get_if<dstd::String>(&v.value);
             const auto* i = std::get_if<std::int64_t>(&v.value);
             const auto* u = std::get_if<std::uint64_t>(&v.value);
             if (!(s && *s == "M") && !(i && *i == 4) && !(u && *u == 4))
@@ -32,7 +32,7 @@ bool metadata_phase(const duql::QueryNode& n) {
         return true;
     }
     const auto* c = std::get_if<duql::CompareNode>(&n.data);
-    const auto* s = c ? std::get_if<std::string>(&c->value.value) : nullptr;
+    const auto* s = c ? std::get_if<dstd::String>(&c->value.value) : nullptr;
     return c && c->op == duql::CompareOp::Eq && !c->field.any &&
            c->field.path == "ph" && s && *s == "M";
 }
@@ -51,8 +51,8 @@ void equalities(const duql::QueryNode& n,
     }
     const auto* c = std::get_if<duql::CompareNode>(&n.data);
     if (!c || c->op != duql::CompareOp::Eq || c->field.any) return;
-    if (const auto* s = std::get_if<std::string>(&c->value.value))
-        out.emplace_back(c->field.path, *s);
+    if (const auto* s = std::get_if<dstd::String>(&c->value.value))
+        out.emplace_back(std::string(c->field.path), std::string(*s));
 }
 
 // `n` without its top-level `and` terms that test the metadata phase; null
@@ -98,7 +98,7 @@ RowSetFold::Value cell(const views::PodSource& src, std::string_view path) {
 }
 
 std::uint64_t value_bytes(const RowSetFold::Value& v) {
-    if (const auto* s = std::get_if<std::string>(&v)) return s->size() + 8;
+    if (const auto* s = std::get_if<dstd::String>(&v)) return s->size() + 8;
     return 8;
 }
 
@@ -110,8 +110,8 @@ std::string text_of(const RowSetFold::Value& v) {
                 return {};
             else if constexpr (std::is_same_v<T, bool>)
                 return x ? "true" : "false";
-            else if constexpr (std::is_same_v<T, std::string>)
-                return x;
+            else if constexpr (std::is_same_v<T, dstd::String>)
+                return std::string(x);
             else
                 return std::to_string(x);
         },

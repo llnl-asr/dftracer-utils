@@ -73,20 +73,20 @@ class DomSource {
         return ok ? as_typed_number(e) : std::nullopt;
     }
 
-    void append_value(std::string& out, std::string_view field) const {
+    void append_value(dstd::String& out, std::string_view field) const {
         auto [e, ok] = resolve(field);
         if (ok) append_text(out, e);
     }
 
-    void append_arg(std::string& out, std::string_view key) const {
+    void append_arg(dstd::String& out, std::string_view key) const {
         if (!has_args_) return;
         json::JsonValue av =
             json::JsonValue(args_).at(common::strip_args_prefix(key));
         if (av.exists()) append_text(out, av.element());
     }
 
-    std::string value(std::string_view field) const {
-        std::string s;
+    dstd::String value(std::string_view field) const {
+        dstd::String s;
         append_value(s, field);
         return s;
     }
@@ -162,7 +162,7 @@ class DomSource {
     // Byte-for-byte the same text the group key and per-group value must agree
     // on: string as-is, integers via to_chars, double via to_string, bool
     // spelled out.
-    static void append_text(std::string& out, simdjson::dom::element e) {
+    static void append_text(dstd::String& out, simdjson::dom::element e) {
         std::string_view s;
         if (e.get_string().get(s) == simdjson::SUCCESS) {
             out.append(s);
@@ -258,7 +258,7 @@ class PodSource {
     }
 
     /// Appends the text of `field`; false when the event lacks it.
-    bool append_value(std::string& out, std::string_view field) const {
+    bool append_value(dstd::String& out, std::string_view field) const {
         if (ev_.by_path) return append_found(out, find_arg_by(field));
         if (field == "cat") return append_id(out, ev_.cat_id);
         if (field == "name") return append_id(out, ev_.name_id);
@@ -272,7 +272,7 @@ class PodSource {
     }
 
     /// Appends the text of arg `key`; false when the event lacks it.
-    bool append_arg(std::string& out, std::string_view key) const {
+    bool append_arg(dstd::String& out, std::string_view key) const {
         if (ev_.by_path) return append_found(out, find_arg_by(key));
         const std::string_view bare = common::strip_args_prefix(key);
         if (bare == "fhash") return append_id(out, ev_.fhash_id);
@@ -280,8 +280,8 @@ class PodSource {
         return append_found(out, find_arg(key));
     }
 
-    std::string value(std::string_view field) const {
-        std::string s;
+    dstd::String value(std::string_view field) const {
+        dstd::String s;
         append_value(s, field);
         return s;
     }
@@ -370,7 +370,7 @@ class PodSource {
         return nullptr;
     }
 
-    void append_arg_value(std::string& out,
+    void append_arg_value(dstd::String& out,
                           const FoldEvent::ArgValue& v) const {
         if (const auto* id = std::get_if<std::uint32_t>(&v))
             out.append(intern_.resolve(*id));
@@ -389,26 +389,26 @@ class PodSource {
             .get_or_insert(field);
     }
 
-    bool append_found(std::string& out, const FoldEvent::ArgValue* v) const {
+    bool append_found(dstd::String& out, const FoldEvent::ArgValue* v) const {
         if (!v) return false;
         append_arg_value(out, *v);
         return true;
     }
 
-    bool append_id(std::string& out, std::uint32_t id) const {
+    bool append_id(dstd::String& out, std::uint32_t id) const {
         if (id == dftracer::utils::dstd::StringIntern::NO_ID) return false;
         out.append(intern_.resolve(id));
         return true;
     }
 
-    static bool append_u64(std::string& out, std::uint64_t v) {
+    static bool append_u64(dstd::String& out, std::uint64_t v) {
         char buf[24];
         char* p = dstd::to_chars_u64(buf, buf + sizeof(buf), v);
         out.append(buf, static_cast<std::size_t>(p - buf));
         return true;
     }
 
-    static void append_i64(std::string& out, std::int64_t v) {
+    static void append_i64(dstd::String& out, std::int64_t v) {
         char buf[24];
         char* p = dstd::to_chars_i64(buf, buf + sizeof(buf), v);
         out.append(buf, static_cast<std::size_t>(p - buf));
@@ -416,7 +416,7 @@ class PodSource {
 
     // Doubles that hold an integer must print as an integer to match the DOM
     // path, which never widened them.
-    static void append_number(std::string& out, double d) {
+    static void append_number(dstd::String& out, double d) {
         auto i = static_cast<std::int64_t>(d);
         if (static_cast<double>(i) == d) {
             char buf[24];
@@ -500,7 +500,7 @@ inline bool pod_matches(const duql::Query& q, const FoldEvent& ev,
     }
     // An any() field reads the flattened positions `<path>.<k>`; a dftracer
     // event's args carry no "args." prefix.
-    for (const std::string& path : q.any_paths()) {
+    for (const dstd::String& path : q.any_paths()) {
         const std::string_view bare =
             std::string_view(path).starts_with("args.")
                 ? std::string_view(path).substr(5)
@@ -513,7 +513,7 @@ inline bool pod_matches(const duql::Query& q, const FoldEvent& ev,
             duql::LiteralValue lit = std::visit(
                 [&](auto x) -> duql::LiteralValue {
                     if constexpr (std::is_same_v<decltype(x), std::uint32_t>)
-                        return std::string(intern.resolve(x));
+                        return dstd::String(intern.resolve(x));
                     else
                         return x;
                 },

@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/group_fold.h>
 #include <doctest/doctest.h>
 
@@ -13,16 +14,16 @@ namespace df = dftracer::utils::dataframe;
 using dftracer::utils::duql::FoldAgg;
 using dftracer::utils::duql::FoldOp;
 using dftracer::utils::duql::GroupFold;
-using Cells = std::vector<std::optional<std::string>>;
+using Cells = std::vector<std::optional<dftracer::utils::dstd::String>>;
 
 namespace {
 
 df::Series strs(const Cells& cells) {
-    std::vector<std::string_view> v;
+    std::vector<dftracer::utils::dstd::StringView> v;
     std::vector<std::uint8_t> valid((cells.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < cells.size(); ++i) {
-        v.emplace_back(cells[i] ? std::string_view(*cells[i])
-                                : std::string_view());
+        v.emplace_back(cells[i] ? dftracer::utils::dstd::StringView(*cells[i])
+                                : dftracer::utils::dstd::StringView());
         if (cells[i]) valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     }
     return df::Series::strings(v, valid.data());
@@ -73,10 +74,10 @@ TEST_CASE("count_distinct by a string key keeps first-seen order and nulls") {
 }
 
 TEST_CASE("a string that spells the null key is its own group") {
-    const df::DataFrame out =
-        fold(df::scalar(df::TypeId::String),
-             batch(strs({std::string(1, '\0'), std::nullopt, ""}),
-                   strs({"p", "q", "r"})));
+    const df::DataFrame out = fold(
+        df::scalar(df::TypeId::String),
+        batch(strs({dftracer::utils::dstd::String(1, '\0'), std::nullopt, ""}),
+              strs({"p", "q", "r"})));
     REQUIRE(out.num_rows() == 3);
     CHECK(counts(out) == std::vector<std::int64_t>{1, 1, 1});
 }

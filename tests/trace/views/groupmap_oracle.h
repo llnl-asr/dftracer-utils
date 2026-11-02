@@ -89,36 +89,37 @@ using GroupMap = ankerl::unordered_dense::map<std::string, AggAccum>;
 // The key text of a missing or JSON-null Arg/Field value: a null output cell.
 inline constexpr std::string_view NULL_KEY{"\0", 1};
 
-template <class Src>
-void append_group_dim(std::string& out, const Src& src, const GroupKey& gk) {
+template <class Src, class Out>
+void append_group_dim(Out& out, const Src& src, const GroupKey& gk) {
+    dftracer::utils::dstd::String d;
     switch (gk.kind) {
         case GroupKey::Kind::Name:
-            src.append_value(out, "name");
+            src.append_value(d, "name");
             break;
         case GroupKey::Kind::Cat: {
-            const std::size_t start = out.size();
-            src.append_value(out, "cat");
-            ::dftracer::utils::common::detail::lower_ascii(out, start);
+            const std::size_t start = d.size();
+            src.append_value(d, "cat");
+            ::dftracer::utils::common::detail::lower_ascii(d, start);
             break;
         }
         case GroupKey::Kind::Pid:
-            src.append_value(out, "pid");
+            src.append_value(d, "pid");
             break;
         case GroupKey::Kind::Tid:
-            src.append_value(out, "tid");
+            src.append_value(d, "tid");
             break;
         case GroupKey::Kind::Fhash:
-            if (!src.append_arg(out, "fhash")) out += NULL_KEY;
+            if (!src.append_arg(d, "fhash")) d += NULL_KEY;
             break;
         case GroupKey::Kind::FilePath:
         case GroupKey::Kind::FileName:
-            src.append_arg(out, "fhash");
+            src.append_arg(d, "fhash");
             break;
         case GroupKey::Kind::Hhash:
-            if (!src.append_arg(out, "hhash")) out += NULL_KEY;
+            if (!src.append_arg(d, "hhash")) d += NULL_KEY;
             break;
         case GroupKey::Kind::HostName:
-            src.append_arg(out, "hhash");
+            src.append_arg(d, "hhash");
             break;
         case GroupKey::Kind::IoCat: {
             char buf[8];
@@ -126,25 +127,26 @@ void append_group_dim(std::string& out, const Src& src, const GroupKey& gk) {
                 buf, buf + sizeof(buf),
                 static_cast<int>(dftracer::utils::trace::internal::io_category(
                     src.value("name"))));
-            out.append(buf, static_cast<std::size_t>(p - buf));
+            d.append(buf, static_cast<std::size_t>(p - buf));
             break;
         }
         case GroupKey::Kind::AccPat:
-            out.push_back('0');
+            d.push_back('0');
             break;
         case GroupKey::Kind::Rank:
-            src.append_value(out, "pid");
+            src.append_value(d, "pid");
             break;
         case GroupKey::Kind::Arg:
-            if (!src.append_arg(out, gk.arg)) out += NULL_KEY;
+            if (!src.append_arg(d, gk.arg)) d += NULL_KEY;
             break;
         case GroupKey::Kind::Field:
-            if (!src.append_value(out, gk.arg)) out += NULL_KEY;
+            if (!src.append_value(d, gk.arg)) d += NULL_KEY;
             break;
         case GroupKey::Kind::Expr:
             // The oracle predates computed keys; no parity case uses one.
             break;
     }
+    out.append(d);
 }
 
 template <class Src>
@@ -252,14 +254,14 @@ void fold_event_over(GroupMap& map, const Src& src, const ViewPlan& plan,
         auto& am = a.argmax[slot];
         if (!am.has || *by > am.by) {
             am.by = *by;
-            am.repr = src.value(plan.agg[i].field);
+            am.repr = std::string(src.value(plan.agg[i].field));
             am.has = true;
         }
     }
     for (std::size_t i = 0; i < plan.agg.size(); ++i) {
         const int slot = sch.spec_set[i];
         if (slot < 0) continue;
-        std::string v = src.value(plan.agg[i].field);
+        std::string v(src.value(plan.agg[i].field));
         if (!v.empty()) a.sets[slot].insert(std::move(v));
     }
     if (plan.auto_numeric_metrics) fold_numeric_args_t(a, src, sch.dyn_sketch);

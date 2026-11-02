@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/evaluator.h>
@@ -27,8 +28,9 @@ namespace dftracer::utils::index::extensions {
 /// so the row sets run as query-time sides instead.
 class RowSetFold : public trace::views::detail::Fold {
    public:
-    using Value = std::variant<std::monostate, bool, std::int64_t,
-                               std::uint64_t, double, std::string>;
+    using Value =
+        std::variant<std::monostate, bool, std::int64_t, std::uint64_t, double,
+                     dftracer::utils::dstd::String>;
 
     RowSetFold(dftracer::utils::dstd::StringIntern& intern,
                std::vector<IndexedRowSet> rowsets,

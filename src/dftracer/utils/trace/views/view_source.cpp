@@ -159,7 +159,8 @@ std::optional<Pushable> translate_str_pred(
 
 // The integer value set of `values` as int64, for any integer width; nullopt
 // for a non-integer type or a Uint64 the int64 domain cannot hold.
-std::optional<std::vector<std::int64_t>> int_values(const df::Series& column) {
+dstd::Optional<dstd::Vector<std::int64_t>> int_values(
+    const df::Series& column) {
     const df::Series values =
         column.is_flat() ? column.share() : column.materialize();
     switch (values.type()) {
@@ -208,8 +209,8 @@ std::optional<std::vector<std::int64_t>> int_values(const df::Series& column) {
                           ? values.share()
                           : values.cast(df::TypeId::Int64);
     if (!as64.valid() || as64.null_count() != 0) return std::nullopt;
-    return std::vector<std::int64_t>(as64.data<std::int64_t>(),
-                                     as64.data<std::int64_t>() + as64.length());
+    return dstd::Vector<std::int64_t>(
+        as64.data<std::int64_t>(), as64.data<std::int64_t>() + as64.length());
 }
 
 // A `col is_in values` leaf: exact for an integer or String value set.
@@ -222,10 +223,10 @@ std::optional<Pushable> translate_is_in(const df::Expr& e,
     std::optional<std::string> field = pushable_field(ci, fnames, time_scale);
     if (!field) return std::nullopt;
     if (values.null_count() != 0) return std::nullopt;
-    if (std::optional<std::vector<std::int64_t>> v = int_values(values))
+    if (dstd::Optional<dstd::Vector<std::int64_t>> v = int_values(values))
         return Pushable{q::field_in(*field, *v), true};
     if (values.type() == df::TypeId::String) {
-        std::vector<std::string> v;
+        dstd::Vector<dstd::String> v;
         v.reserve(static_cast<std::size_t>(values.length()));
         for (std::int64_t i = 0; i < values.length(); ++i)
             v.emplace_back(values.string_at(i));
@@ -279,7 +280,7 @@ std::optional<q::Expr> translate_leaf(const df::Expr& e,
             lit = q::LiteralNode{rhs.u64()};
             break;
         case DFTU_SCALAR_TAG_STR:
-            lit = q::LiteralNode{std::string(rhs.str())};
+            lit = q::LiteralNode{dstd::String(rhs.str())};
             break;
         case DFTU_SCALAR_TAG_F64:
             lit = q::LiteralNode{rhs.f64()};

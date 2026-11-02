@@ -1,3 +1,5 @@
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 
 namespace dftracer::utils::duql {
@@ -21,14 +23,14 @@ Query conjoin(const Query& a, const Query& b) {
 }
 
 dftracer::utils::dstd::Expected<Query, DuqlError> Query::from_string(
-    std::string_view input) {
+    dstd::StringView input) {
     auto result = parse(input);
     if (!result) return dftracer::utils::dstd::Unexpected(result.error());
-    return Query(std::move(*result), std::string(input));
+    return Query(std::move(*result), dstd::String(input));
 }
 
 Query Query::from_node(QueryNodePtr root) {
-    std::string source = duql::to_string(*root);
+    dstd::String source = duql::to_string(*root);
     return Query(std::move(root), std::move(source));
 }
 
@@ -40,15 +42,15 @@ bool Query::evaluate(const ValueMap& fields) const {
     return duql::evaluate(*root_, fields);
 }
 
-std::string Query::to_string() const { return duql::to_string(*root_); }
+dstd::String Query::to_string() const { return duql::to_string(*root_); }
 
-Query parse_or_throw(std::string_view input) {
+Query parse_or_throw(dstd::StringView input) {
     auto result = Query::from_string(input);
     if (!result) throw DuqlParseError(result.error());
     return std::move(*result);
 }
 
-std::optional<Query> try_parse(std::string_view input) {
+dstd::Optional<Query> try_parse(dstd::StringView input) {
     auto result = Query::from_string(input);
     if (!result) return std::nullopt;
     return std::move(*result);

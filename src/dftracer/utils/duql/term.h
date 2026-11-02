@@ -1,17 +1,17 @@
 #ifndef DFTRACER_UTILS_DUQL_TERM_H
 #define DFTRACER_UTILS_DUQL_TERM_H
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -65,7 +65,7 @@ enum class Fn : std::uint8_t {
 
 struct FnInfo {
     Fn fn;
-    std::string_view name;
+    dstd::StringView name;
     std::uint8_t min_args;
     std::uint8_t max_args;  ///< VARIADIC for no upper bound.
 };
@@ -126,13 +126,14 @@ inline const FnInfo& fn_info(Fn fn) {
 }
 
 struct Term;
-using TermPtr = std::unique_ptr<const Term>;
+using TermPtr = dstd::UniquePtr<const Term>;
 
 struct TNull {};
 
 /// A constant; parameters are bound to constants when a query is lowered.
 struct TConst {
-    std::variant<TNull, bool, std::int64_t, std::uint64_t, double, std::string>
+    dstd::Variant<TNull, bool, std::int64_t, std::uint64_t, double,
+                  dstd::String>
         value;
 };
 
@@ -146,8 +147,8 @@ enum class FieldRoot : std::uint8_t { Record, Element, Outer };
 /// from the value at `base`. An element path walks every step from the
 /// element and has no base.
 struct TField {
-    std::string base;
-    std::vector<syntax::PathStep> steps;
+    dstd::String base;
+    dstd::Vector<syntax::PathStep> steps;
     std::size_t neg_at = 0;
     FieldRoot root = FieldRoot::Record;
 };
@@ -199,7 +200,7 @@ struct TIs {
 
 struct TIn {
     TermPtr subject;
-    std::vector<TermPtr> list;
+    dstd::Vector<TermPtr> list;
     bool negated = false;
 };
 
@@ -207,11 +208,11 @@ struct Substitution;
 
 struct TCall {
     Fn fn;
-    std::vector<TermPtr> args;
+    dstd::Vector<TermPtr> args;
     /// EXTRACT, REGEX_REPLACE: the compiled regex of its second argument.
-    std::shared_ptr<const CompiledPattern> pattern;
+    dstd::SharedPtr<const CompiledPattern> pattern;
     /// REGEX_REPLACE: the third argument compiled against `pattern`.
-    std::shared_ptr<const Substitution> substitution;
+    dstd::SharedPtr<const Substitution> substitution;
     /// DATE_PART, FORMAT_TIME: nanoseconds per unit of the time argument.
     /// The second argument stays the user's part name or format constant.
     std::int64_t ns_per_unit = 0;
@@ -231,7 +232,7 @@ struct LookupTable;
 
 /// The table a TLookup reads, bound after its side runs; null until then.
 struct LookupSlot {
-    std::shared_ptr<const LookupTable> table;
+    dstd::SharedPtr<const LookupTable> table;
 };
 
 /// How a TLookup reads its side: IN tests that some row has the key, ARROW
@@ -271,16 +272,16 @@ enum class RangeRead : std::uint8_t {
 /// `low` is GT or GE, `high` LT or LE. They count in `correlated` and are not
 /// in `target`.
 struct TLookup {
-    std::vector<TermPtr> keys;
+    dstd::Vector<TermPtr> keys;
     std::size_t side = 0;
-    std::string name;
-    std::vector<std::string> target;
-    std::string column;
+    dstd::String name;
+    dstd::Vector<dstd::String> target;
+    dstd::String column;
     std::size_t correlated = 0;
-    std::optional<std::size_t> empty;
-    std::shared_ptr<LookupSlot> slot;
-    std::optional<TermOp> low;
-    std::optional<TermOp> high;
+    dstd::Optional<std::size_t> empty;
+    dstd::SharedPtr<LookupSlot> slot;
+    dstd::Optional<TermOp> low;
+    dstd::Optional<TermOp> high;
     LookupKind kind = LookupKind::In;
     RangeRead range = RangeRead::None;
     bool negated = false;
@@ -302,10 +303,10 @@ inline bool joined(const TLookup& l) {
 struct TMatch {
     TermPtr subject;
     MatchOp op;
-    std::string pattern;
+    dstd::String pattern;
     bool negated = false;
-    std::optional<char> escape;
-    std::shared_ptr<const CompiledPattern> compiled;
+    dstd::Optional<char> escape;
+    dstd::SharedPtr<const CompiledPattern> compiled;
 };
 
 /// `array[index]`: the element of `array` at a computed index, 0-based and
@@ -317,18 +318,18 @@ struct TIndex {
 
 /// A list literal; a missing item is null.
 struct TList {
-    std::vector<TermPtr> items;
+    dstd::Vector<TermPtr> items;
 };
 
 struct Term {
-    std::variant<TConst, TField, TUnary, TBinary, TBetween, TIs, TIn, TCall,
-                 TMatch, TQuant, TLookup, TIndex, TList>
+    dstd::Variant<TConst, TField, TUnary, TBinary, TBetween, TIs, TIn, TCall,
+                  TMatch, TQuant, TLookup, TIndex, TList>
         node;
 };
 
 /// The duql text of `t`, which parses back to the same term unless it holds
 /// a TLookup.
-std::string term_text(const Term& t);
+dstd::String term_text(const Term& t);
 
 /// Calls `fn` with `t` and every term under it.
 template <class F>

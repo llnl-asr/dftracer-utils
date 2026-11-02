@@ -48,7 +48,7 @@ bool safe(std::string_view v) {
 
 std::optional<std::string> needle(const duql::LiteralNode& lit) {
     std::string out;
-    if (const auto* s = std::get_if<std::string>(&lit.value)) {
+    if (const auto* s = std::get_if<dstd::String>(&lit.value)) {
         if (!safe(*s)) return std::nullopt;
         out = "\"" + *s + "\"";
     } else if (const auto* i = std::get_if<std::int64_t>(&lit.value)) {
@@ -93,7 +93,7 @@ Clauses clauses_of(const duql::QueryNode& node) {
                 Clauses out;
                 for (const auto& lit : duql::required_literals(*n.compiled))
                     if (lit.size() >= MIN_NEEDLE && safe(lit))
-                        out.push_back({lit});
+                        out.push_back({std::string(lit)});
                 return out;
             } else if constexpr (std::is_same_v<T, duql::AndNode>) {
                 Clauses out = clauses_of(*n.left);
@@ -146,7 +146,7 @@ void ranges_of(const duql::QueryNode& node,
     const auto* n = std::get_if<duql::CompareNode>(&node.data);
     // An any() key is followed by an array, not the number a range reads.
     if (!n || n->field.any || n->op == duql::CompareOp::Ne) return;
-    const std::string& path = n->field.path;
+    const std::string path(n->field.path);
     const std::string_view key =
         std::string_view(path).substr(path.rfind('.') + 1);
     if (!plain_key(key)) return;

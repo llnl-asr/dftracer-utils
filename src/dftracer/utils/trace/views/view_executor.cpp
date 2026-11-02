@@ -128,16 +128,16 @@ bool export_bootstrap_eligible(const ViewPlan& plan) {
 // record lacks reads it under `args` when `args_fallback`. `parser` is
 // caller-owned: a thread_local parser is unsafe here because the export emit
 // runs on pooled coroutine threads.
-static std::string project_event(simdjson::dom::parser& parser,
-                                 std::string_view ev,
-                                 const std::vector<std::string>& select,
-                                 bool args_fallback) {
+static dstd::String project_event(simdjson::dom::parser& parser,
+                                  std::string_view ev,
+                                  const std::vector<std::string>& select,
+                                  bool args_fallback) {
     simdjson::padded_string padded(ev);
     simdjson::dom::element doc;
     if (parser.parse(padded).get(doc) || !doc.is_object())
-        return std::string(ev);
+        return dstd::String(ev);
     const json::JsonValue root(doc);
-    std::string out = "{";
+    dstd::String out = "{";
     bool first = true;
     for (const auto& name : select) {
         json::JsonValue val = root.at(name);

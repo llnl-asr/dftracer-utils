@@ -108,7 +108,8 @@ TEST_SUITE("EventSource") {
         for (const char* field : {"name", "cat", "pid", "tid", "ts", "dur",
                                   "fhash", "ret", "level", "absent"}) {
             CAPTURE(field);
-            CHECK(src.value(field) == top_or_args_str(root, field));
+            CHECK(std::string(src.value(field)) ==
+                  top_or_args_str(root, field));
         }
     }
 
@@ -139,7 +140,7 @@ TEST_SUITE("EventSource") {
                   R"({"ph":"X","name":"n","pid":123,"args":{"k":"v","m":9}})");
         DomSource src(root);
         for (const char* field : {"name", "pid", "k", "m", "absent"}) {
-            std::string out = "pre|";
+            dftracer::utils::dstd::String out = "pre|";
             src.append_value(out, field);
             CHECK(out == "pre|" + src.value(field));
         }
@@ -174,7 +175,7 @@ TEST_SUITE("EventSource") {
         // Group dims read args-only (fhash/hhash/arg), which must also match.
         for (const char* key : {"fhash", "hhash", "ret", "path", "absent"}) {
             CAPTURE(key);
-            std::string pd, dd;
+            dftracer::utils::dstd::String pd, dd;
             pod.append_arg(pd, key);
             dom.append_arg(dd, key);
             CHECK(pd == dd);

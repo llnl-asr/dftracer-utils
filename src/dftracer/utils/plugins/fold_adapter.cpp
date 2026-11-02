@@ -1239,8 +1239,8 @@ int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
                 case DFTU_TYPE_STRING: {
                     std::int64_t n = 0;
                     if (const char* p = dftu_series_string_at(c, row, &n))
-                        match_qmap_[f] =
-                            std::string(p, static_cast<std::size_t>(n));
+                        match_qmap_[f] = dftracer::utils::dstd::String(
+                            p, static_cast<std::size_t>(n));
                     break;
                 }
                 default:

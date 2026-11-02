@@ -1,9 +1,11 @@
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/pattern.h>
 #include <dftracer/utils/duql/term.h>
 
 #include <algorithm>
-#include <string_view>
 #include <type_traits>
 #include <variant>
 
@@ -26,10 +28,10 @@ void for_each_field(const QueryNode& node, Fn&& fn) {
                 for_each_field(*n.operand, fn);
             } else if constexpr (std::is_same_v<T, ExprLeaf>) {
                 for_each_term_field(*n.term, [&fn](const TField& f) {
-                    fn(std::string_view(f.base), false);
+                    fn(dstd::StringView(f.base), false);
                 });
             } else {
-                fn(std::string_view(n.field.path), n.field.any);
+                fn(dstd::StringView(n.field.path), n.field.any);
             }
         },
         node.data);
@@ -40,13 +42,13 @@ void for_each_field(const QueryNode& node, Fn&& fn) {
 dftracer::utils::dstd::StringViewSet collect_fields(const QueryNode& node) {
     dftracer::utils::dstd::StringViewSet fields;
     for_each_field(node,
-                   [&](std::string_view path, bool) { fields.insert(path); });
+                   [&](dstd::StringView path, bool) { fields.insert(path); });
     return fields;
 }
 
-std::vector<std::string> collect_any_paths(const QueryNode& node) {
-    std::vector<std::string> paths;
-    for_each_field(node, [&](std::string_view path, bool any) {
+dstd::Vector<dstd::String> collect_any_paths(const QueryNode& node) {
+    dstd::Vector<dstd::String> paths;
+    for_each_field(node, [&](dstd::StringView path, bool any) {
         if (any) paths.emplace_back(path);
     });
     std::sort(paths.begin(), paths.end());
@@ -85,12 +87,12 @@ QueryNodePtr clone(const QueryNode& node) {
         node.data);
 }
 
-std::shared_ptr<const InSet> make_in_set(const ArrayNode& values) {
+dstd::SharedPtr<const InSet> make_in_set(const ArrayNode& values) {
     if (values.elements.size() < IN_SET_MIN) return nullptr;
-    auto set = std::make_shared<InSet>();
+    auto set = dstd::make_shared<InSet>();
     set->values.reserve(values.elements.size());
     for (const auto& e : values.elements) {
-        const auto* s = std::get_if<std::string>(&e.value);
+        const auto* s = std::get_if<dstd::String>(&e.value);
         if (!s) return nullptr;
         set->values.insert(*s);
     }

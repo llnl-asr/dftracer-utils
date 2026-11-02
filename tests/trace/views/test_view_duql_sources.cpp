@@ -132,7 +132,7 @@ TEST_SUITE("View duql sources") {
     TEST_CASE("an indexed row set reads no chunk") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "t", dftracer_lines()));
-        const std::string plan = v.explain_duql("from files");
+        const dftracer::utils::dstd::String plan = v.explain_duql("from files");
         CHECK(plan.find("from files (rows stored in the index)") !=
               std::string::npos);
         CHECK(plan.find("scan") == std::string::npos);

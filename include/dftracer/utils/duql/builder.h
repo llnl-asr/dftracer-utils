@@ -1,7 +1,11 @@
 #ifndef DFTRACER_UTILS_DUQL_BUILDER_H
 #define DFTRACER_UTILS_DUQL_BUILDER_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/string_literal.h>
 
@@ -12,10 +16,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 // Render-only: Field/F/Expr and Expr::to_string() are header-only and pull
 // neither the parser nor simdjson, so a plugin links nothing. Expr::build() has
@@ -29,12 +31,12 @@ namespace detail {
 /// non-negative integers become uint64_t, negatives int64_t.
 inline LiteralNode literal(bool v) { return LiteralNode{v}; }
 inline LiteralNode literal(const char* v) {
-    return LiteralNode{std::string(v)};
+    return LiteralNode{dstd::String(v)};
 }
-inline LiteralNode literal(std::string_view v) {
-    return LiteralNode{std::string(v)};
+inline LiteralNode literal(dstd::StringView v) {
+    return LiteralNode{dstd::String(v)};
 }
-inline LiteralNode literal(const std::string& v) { return LiteralNode{v}; }
+inline LiteralNode literal(const dstd::String& v) { return LiteralNode{v}; }
 
 template <typename I,
           std::enable_if_t<std::is_integral_v<std::decay_t<I>> &&
@@ -64,7 +66,7 @@ class Expr {
     Expr& operator=(const Expr&) = delete;
 
     /// Serialize to the canonical DSL string.
-    std::string to_string() const { return duql::to_string(*node_); }
+    dstd::String to_string() const { return duql::to_string(*node_); }
 
     /// Borrow the underlying node.
     const QueryNode& node() const { return *node_; }
@@ -81,13 +83,13 @@ class Expr {
 };
 
 /// field op value with an explicit CompareOp and prebuilt literal.
-inline Expr field_cmp(std::string_view name, CompareOp op, LiteralNode value) {
+inline Expr field_cmp(dstd::StringView name, CompareOp op, LiteralNode value) {
     return Expr(make_node(CompareNode{field_node(name), op, std::move(value)}));
 }
 
 #define DFTRACER_UTILS_DUQL_DEFINE_CMP(fn, op_enum)                \
     template <typename T>                                          \
-    inline Expr fn(std::string_view name, T&& value) {             \
+    inline Expr fn(dstd::StringView name, T&& value) {             \
         return field_cmp(name, op_enum,                            \
                          detail::literal(std::forward<T>(value))); \
     }
@@ -102,16 +104,16 @@ DFTRACER_UTILS_DUQL_DEFINE_CMP(field_le, CompareOp::Le)
 #undef DFTRACER_UTILS_DUQL_DEFINE_CMP
 
 /// field in [values].
-inline Expr field_in(std::string_view name,
-                     const std::vector<std::int64_t>& values) {
+inline Expr field_in(dstd::StringView name,
+                     const dstd::Vector<std::int64_t>& values) {
     ArrayNode arr;
     arr.elements.reserve(values.size());
     for (std::int64_t v : values) arr.elements.push_back(detail::literal(v));
     return Expr(make_node(InNode{field_node(name), std::move(arr)}));
 }
 
-inline Expr field_in(std::string_view name,
-                     const std::vector<std::string>& values) {
+inline Expr field_in(dstd::StringView name,
+                     const dstd::Vector<dstd::String>& values) {
     ArrayNode arr;
     arr.elements.reserve(values.size());
     for (const auto& v : values) arr.elements.push_back(LiteralNode{v});
@@ -119,16 +121,16 @@ inline Expr field_in(std::string_view name,
 }
 
 /// field not in [values].
-inline Expr field_not_in(std::string_view name,
-                         const std::vector<std::int64_t>& values) {
+inline Expr field_not_in(dstd::StringView name,
+                         const dstd::Vector<std::int64_t>& values) {
     ArrayNode arr;
     arr.elements.reserve(values.size());
     for (std::int64_t v : values) arr.elements.push_back(detail::literal(v));
     return Expr(make_node(NotInNode{field_node(name), std::move(arr)}));
 }
 
-inline Expr field_not_in(std::string_view name,
-                         const std::vector<std::string>& values) {
+inline Expr field_not_in(dstd::StringView name,
+                         const dstd::Vector<dstd::String>& values) {
     ArrayNode arr;
     arr.elements.reserve(values.size());
     for (const auto& v : values) arr.elements.push_back(LiteralNode{v});
@@ -137,12 +139,12 @@ inline Expr field_not_in(std::string_view name,
 
 /// field like/ilike/~/~*/icontains pattern. The compiled matcher is filled in
 /// by Expr::build() (or the C ABI wrap), not here.
-inline Expr field_match(std::string_view name, MatchOp op,
-                        std::string_view pattern, bool negated = false) {
+inline Expr field_match(dstd::StringView name, MatchOp op,
+                        dstd::StringView pattern, bool negated = false) {
     MatchNode node;
     node.field = field_node(name);
     node.op = op;
-    node.pattern = std::string(pattern);
+    node.pattern = dstd::String(pattern);
     node.negated = negated;
     return Expr(make_node(std::move(node)));
 }
@@ -174,7 +176,7 @@ inline Expr operator!(Expr a) { return negate(std::move(a)); }
 /// with `&&`, `||`, `!`. Mirrors the Python `dftracer.utils.duql.Field` API.
 class Field {
    public:
-    explicit Field(std::string_view name) : name_(name) {}
+    explicit Field(dstd::StringView name) : name_(name) {}
     /// The same field as `any(<name>)`: a leaf on it holds when any element
     /// of the array holds.
     Field any() const { return Field("any(" + name_ + ")"); }
@@ -204,57 +206,57 @@ class Field {
         return field_le(name_, std::forward<T>(v));
     }
 
-    Expr in(const std::vector<std::int64_t>& values) const {
+    Expr in(const dstd::Vector<std::int64_t>& values) const {
         return field_in(name_, values);
     }
-    Expr in(const std::vector<std::string>& values) const {
+    Expr in(const dstd::Vector<dstd::String>& values) const {
         return field_in(name_, values);
     }
-    Expr not_in(const std::vector<std::int64_t>& values) const {
+    Expr not_in(const dstd::Vector<std::int64_t>& values) const {
         return field_not_in(name_, values);
     }
-    Expr not_in(const std::vector<std::string>& values) const {
+    Expr not_in(const dstd::Vector<dstd::String>& values) const {
         return field_not_in(name_, values);
     }
 
-    Expr like(std::string_view pattern) const {
+    Expr like(dstd::StringView pattern) const {
         return field_match(name_, MatchOp::Like, pattern);
     }
-    Expr ilike(std::string_view pattern) const {
+    Expr ilike(dstd::StringView pattern) const {
         return field_match(name_, MatchOp::Ilike, pattern);
     }
-    Expr regex(std::string_view pattern) const {
+    Expr regex(dstd::StringView pattern) const {
         return field_match(name_, MatchOp::Regex, pattern);
     }
-    Expr iregex(std::string_view pattern) const {
+    Expr iregex(dstd::StringView pattern) const {
         return field_match(name_, MatchOp::Iregex, pattern);
     }
-    Expr contains(std::string_view substring) const {
+    Expr contains(dstd::StringView substring) const {
         return field_match(name_, MatchOp::Icontains, substring);
     }
 
    private:
-    std::string name_;
+    dstd::String name_;
 };
 
 /// Call-form field shorthand matching Python's `F("args.level")`:
 /// `F("dur") < 25` is exactly `Field("dur") < 25`.
 struct FieldFactory {
-    Field operator()(std::string_view name) const { return Field(name); }
+    Field operator()(dstd::StringView name) const { return Field(name); }
 };
 inline constexpr FieldFactory F{};
 
 namespace detail {
 
-inline std::string string_literal(std::string_view v) {
+inline dstd::String string_literal(dstd::StringView v) {
     return quote_string(v);
 }
 
-inline std::string number_text(double v) {
+inline dstd::String number_text(double v) {
     if (!std::isfinite(v))
         throw std::invalid_argument("duql: a number must be finite");
-    std::string s = dstd::double_text(v);
-    if (s.find_first_of(".eE") == std::string::npos) s += ".0";
+    dstd::String s = dstd::double_string(v);
+    if (s.find_first_of(".eE") == dstd::String::npos) s += ".0";
     return s;
 }
 
@@ -273,22 +275,22 @@ class Col {
     template <typename I,
               std::enable_if_t<
                   std::is_integral_v<I> && !std::is_same_v<I, bool>, int> = 0>
-    Col(I v) : text_(std::to_string(v)) {}
+    Col(I v) : text_(dstd::int_text(v)) {}
     template <typename D,
               std::enable_if_t<std::is_floating_point_v<D>, int> = 0>
     Col(D v) : text_(detail::number_text(static_cast<double>(v))) {}
     Col(const char* v) : text_(detail::string_literal(v)) {}
-    Col(std::string_view v) : text_(detail::string_literal(v)) {}
-    Col(const std::string& v) : text_(detail::string_literal(v)) {}
+    Col(dstd::StringView v) : text_(detail::string_literal(v)) {}
+    Col(const dstd::String& v) : text_(detail::string_literal(v)) {}
 
     /// A value from its duql text, unchecked; the parser checks it.
-    static Col from_text(std::string text) {
+    static Col from_text(dstd::String text) {
         Col c(nullptr);
         c.text_ = std::move(text);
         return c;
     }
 
-    const std::string& raw() const { return text_; }
+    const dstd::String& raw() const { return text_; }
 
     /// `path[index]`: `index` is an int, `param("n")` or any expression.
     /// Throws std::invalid_argument unless this is a field path; an index
@@ -299,8 +301,8 @@ class Col {
         return from_text(text_ + "[" + index.text_ + "]");
     }
 
-    Col is_in(const std::vector<Col>& values) const;
-    Col not_in(const std::vector<Col>& values) const;
+    Col is_in(const dstd::Vector<Col>& values) const;
+    Col not_in(const dstd::Vector<Col>& values) const;
     /// `x in $p`: `list` is `param("p")`, bound to a list.
     Col is_in(const Col& list) const {
         return wrap(text_ + " in " + list.text_);
@@ -318,19 +320,19 @@ class Col {
     }
     /// A pattern is a string or `param("p")` bound to a string.
     Col like(const Col& pattern,
-             std::optional<std::string_view> escape = std::nullopt) const {
+             dstd::Optional<dstd::StringView> escape = std::nullopt) const {
         return match("like", pattern, escape);
     }
     Col ilike(const Col& pattern,
-              std::optional<std::string_view> escape = std::nullopt) const {
+              dstd::Optional<dstd::StringView> escape = std::nullopt) const {
         return match("ilike", pattern, escape);
     }
     Col not_like(const Col& pattern,
-                 std::optional<std::string_view> escape = std::nullopt) const {
+                 dstd::Optional<dstd::StringView> escape = std::nullopt) const {
         return match("not like", pattern, escape);
     }
-    Col not_ilike(const Col& pattern,
-                  std::optional<std::string_view> escape = std::nullopt) const {
+    Col not_ilike(const Col& pattern, dstd::Optional<dstd::StringView> escape =
+                                          std::nullopt) const {
         return match("not ilike", pattern, escape);
     }
     Col regex(const Col& pattern) const { return binary("~", pattern); }
@@ -339,7 +341,7 @@ class Col {
     Col not_iregex(const Col& pattern) const { return binary("!~*", pattern); }
     /// `<this> over n rows`, a rows frame on a window call.
     Col over_rows(std::int64_t n) const {
-        return from_text(text_ + " over " + std::to_string(n) + " rows");
+        return from_text(text_ + " over " + dstd::int_text(n) + " rows");
     }
     /// `<this> over <width>`, a range frame on a window call; `width` is a
     /// number, `duration(...)` or `param(...)`.
@@ -353,34 +355,34 @@ class Col {
     Col coalesce(const Col& other) const { return binary("??", other); }
     /// The legacy case-insensitive substring test `"text" in path`, or
     /// `"text" in any(path)`; this value must be a path.
-    Col icontains(std::string_view text, bool any = false) const {
+    Col icontains(dstd::StringView text, bool any = false) const {
         return contains(text, any, false);
     }
-    Col not_icontains(std::string_view text, bool any = false) const {
+    Col not_icontains(dstd::StringView text, bool any = false) const {
         return contains(text, any, true);
     }
     /// `this -> rowset.path`, or `this -> rowset(key).path`.
-    Col ref(std::string_view rowset, std::string_view path,
-            std::string_view key = {}) const {
-        std::string t = "(" + text_ + " -> " + std::string(rowset);
-        if (!key.empty()) t += "(" + std::string(key) + ")";
-        return from_text(t + "." + std::string(path) + ")");
+    Col ref(dstd::StringView rowset, dstd::StringView path,
+            dstd::StringView key = {}) const {
+        dstd::String t = "(" + text_ + " -> " + dstd::String(rowset);
+        if (!key.empty()) t += "(" + dstd::String(key) + ")";
+        return from_text(t + "." + dstd::String(path) + ")");
     }
 
-    Col binary(std::string_view op, const Col& right) const {
-        return wrap(text_ + " " + std::string(op) + " " + right.text_);
+    Col binary(dstd::StringView op, const Col& right) const {
+        return wrap(text_ + " " + dstd::String(op) + " " + right.text_);
     }
 
    private:
-    static Col wrap(const std::string& t) { return from_text("(" + t + ")"); }
-    Col match(std::string_view op, const Col& pattern,
-              std::optional<std::string_view> escape) const {
-        std::string t = text_ + " " + std::string(op) + " " + pattern.text_;
+    static Col wrap(const dstd::String& t) { return from_text("(" + t + ")"); }
+    Col match(dstd::StringView op, const Col& pattern,
+              dstd::Optional<dstd::StringView> escape) const {
+        dstd::String t = text_ + " " + dstd::String(op) + " " + pattern.text_;
         if (escape) t += " escape " + detail::string_literal(*escape);
         return wrap(t);
     }
-    Col contains(std::string_view text, bool any, bool negated) const {
-        std::string t = detail::string_literal(text);
+    Col contains(dstd::StringView text, bool any, bool negated) const {
+        dstd::String t = detail::string_literal(text);
         t += negated ? " not in " : " in ";
         t += any ? "any(" + text_ + ")" : text_;
         return wrap(t);
@@ -409,34 +411,34 @@ class Col {
         return true;
     }
 
-    std::string text_;
+    dstd::String text_;
 };
 
 /// A record path as written in duql: `a.b[0]`, `.x`, `^.x`, backtick keys.
-inline Col c(std::string_view path) {
-    return Col::from_text(std::string(path));
+inline Col c(dstd::StringView path) {
+    return Col::from_text(dstd::String(path));
 }
 inline Col lit(const Col& v) { return v; }
-inline Col param(std::string_view name) {
-    return Col::from_text("$" + std::string(name));
+inline Col param(dstd::StringView name) {
+    return Col::from_text("$" + dstd::String(name));
 }
 /// `amount` followed by a unit: ns, us, ms, s, m or h.
 template <typename N, std::enable_if_t<std::is_arithmetic_v<N>, int> = 0>
-Col duration(N amount, std::string_view unit) {
-    std::string t = std::is_integral_v<N>
-                        ? std::to_string(amount)
-                        : detail::number_text(static_cast<double>(amount));
-    return Col::from_text(t + std::string(unit));
+Col duration(N amount, dstd::StringView unit) {
+    dstd::String t = std::is_integral_v<N>
+                         ? dstd::int_text(amount)
+                         : detail::number_text(static_cast<double>(amount));
+    return Col::from_text(t + dstd::String(unit));
 }
 
 /// A named value: a `derive`, `agg` or `group` output, or a named argument.
 struct Named {
-    std::string name;
+    dstd::String name;
     Col value;
 };
 
-inline std::string join(const std::vector<Col>& items) {
-    std::string out;
+inline dstd::String join(const dstd::Vector<Col>& items) {
+    dstd::String out;
     for (std::size_t i = 0; i < items.size(); ++i) {
         if (i) out += ", ";
         out += items[i].raw();
@@ -445,26 +447,26 @@ inline std::string join(const std::vector<Col>& items) {
 }
 
 /// `name(args, named = value, ...)`; `name` may be namespaced (`ns.f`).
-inline Col fn(std::string_view name, const std::vector<Col>& args = {},
-              const std::vector<Named>& named = {}) {
-    std::string t = std::string(name) + "(" + join(args);
+inline Col fn(dstd::StringView name, const dstd::Vector<Col>& args = {},
+              const dstd::Vector<Named>& named = {}) {
+    dstd::String t = dstd::String(name) + "(" + join(args);
     for (std::size_t i = 0; i < named.size(); ++i) {
         if (i || !args.empty()) t += ", ";
         t += named[i].name + " = " + named[i].value.raw();
     }
     return Col::from_text(t + ")");
 }
-inline Col tup(const std::vector<Col>& items) {
+inline Col tup(const dstd::Vector<Col>& items) {
     return Col::from_text("(" + join(items) + ")");
 }
-inline Col list(const std::vector<Col>& items) {
+inline Col list(const dstd::Vector<Col>& items) {
     return Col::from_text("[" + join(items) + "]");
 }
 /// `case { cond => value, ..., else => otherwise }`; a missing `otherwise`
 /// is null.
-inline Col case_(const std::vector<std::pair<Col, Col>>& pairs,
-                 const std::optional<Col>& otherwise = std::nullopt) {
-    std::vector<Col> args;
+inline Col case_(const dstd::Vector<dstd::Pair<Col, Col>>& pairs,
+                 const dstd::Optional<Col>& otherwise = std::nullopt) {
+    dstd::Vector<Col> args;
     args.reserve(pairs.size() * 2 + 1);
     for (const auto& [cond, value] : pairs) {
         args.push_back(cond);
@@ -501,12 +503,12 @@ inline Col operator-(const Col& a) {
 /// an expression, or `name = expression`.
 struct Item {
     Item(const char* path) : value(c(path)) {}
-    Item(std::string_view path) : value(c(path)) {}
-    Item(const std::string& path) : value(c(path)) {}
+    Item(dstd::StringView path) : value(c(path)) {}
+    Item(const dstd::String& path) : value(c(path)) {}
     Item(Col v) : value(std::move(v)) {}
-    Item(std::string n, Col v) : value(std::move(v)), name(std::move(n)) {}
+    Item(dstd::String n, Col v) : value(std::move(v)), name(std::move(n)) {}
     Col value;
-    std::string name;
+    dstd::String name;
 };
 
 enum class Nulls : std::uint8_t { Default, First, Last };
@@ -515,7 +517,7 @@ enum class Nulls : std::uint8_t { Default, First, Last };
 /// sorts descending.
 struct SortKey {
     SortKey(const char* path) : value(c(path)) {}
-    SortKey(const std::string& path) : value(c(path)) {}
+    SortKey(const dstd::String& path) : value(c(path)) {}
     SortKey(Col v, Nulls n = Nulls::Default) : value(std::move(v)), nulls(n) {}
     Col value;
     Nulls nulls = Nulls::Default;
@@ -524,11 +526,11 @@ struct SortKey {
 /// A lookup key: `left`, or `left == right` (`right` the row set's side).
 struct JoinKey {
     JoinKey(const char* path) : left(c(path)) {}
-    JoinKey(const std::string& path) : left(c(path)) {}
+    JoinKey(const dstd::String& path) : left(c(path)) {}
     JoinKey(Col l) : left(std::move(l)) {}
     JoinKey(Col l, Col r) : left(std::move(l)), right(std::move(r)) {}
     Col left;
-    std::optional<Col> right;
+    dstd::Optional<Col> right;
 };
 
 enum class Asof : std::uint8_t { Backward, Forward, Nearest };
@@ -545,18 +547,18 @@ class Pipe {
     Pipe() = default;
 
     /// The builder's duql text, not canonical.
-    std::string raw() const;
+    dstd::String raw() const;
     /// The canonical duql text, the engine's `duql MAJOR.MINOR` first. Throws
     /// std::invalid_argument with the parser's message when the text does not
     /// parse (a malformed path or call). Defined in the duql library, not in
     /// this header.
-    std::string text() const;
+    dstd::String text() const;
     /// The bound parameters, by name without the `$`.
-    const std::vector<std::pair<std::string, ParamValue>>& bound() const {
+    const dstd::Vector<dstd::Pair<dstd::String, ParamValue>>& bound() const {
         return params_;
     }
     /// Binds `$name` to a scalar, or to a list for `x in $name`.
-    Pipe bind(std::string name, ParamValue value) const {
+    Pipe bind(dstd::String name, ParamValue value) const {
         Pipe p = *this;
         for (auto& kv : p.params_)
             if (kv.first == name) {
@@ -567,31 +569,31 @@ class Pipe {
         return p;
     }
 
-    Pipe let(std::string_view name, const Pipe& pipeline) const {
-        return decl("let " + std::string(name) + " = " +
+    Pipe let(dstd::StringView name, const Pipe& pipeline) const {
+        return decl("let " + dstd::String(name) + " = " +
                     pipeline.inline_text());
     }
-    Pipe define(std::string_view name, const std::vector<std::string>& params,
+    Pipe define(dstd::StringView name, const dstd::Vector<dstd::String>& params,
                 const Col& body) const {
         return define_text(name, params, body.raw());
     }
     /// `def name(params) = stages;`: a pipeline macro. `body` must not start
     /// with a source.
-    Pipe define(std::string_view name, const std::vector<std::string>& params,
+    Pipe define(dstd::StringView name, const dstd::Vector<dstd::String>& params,
                 const Pipe& body) const {
         return define_text(name, params, body.inline_text());
     }
     /// A stage that calls the pipeline macro `name` with `args`.
-    Pipe use(std::string_view name, const std::vector<Col>& args = {}) const {
-        std::string t = std::string(name) + "(";
+    Pipe use(dstd::StringView name, const dstd::Vector<Col>& args = {}) const {
+        dstd::String t = dstd::String(name) + "(";
         for (std::size_t i = 0; i < args.size(); ++i)
             t += (i ? ", " : "") + args[i].raw();
         return stage(t + ")");
     }
-    Pipe define_text(std::string_view name,
-                     const std::vector<std::string>& params,
-                     const std::string& body) const {
-        std::string t = "def " + std::string(name);
+    Pipe define_text(dstd::StringView name,
+                     const dstd::Vector<dstd::String>& params,
+                     const dstd::String& body) const {
+        dstd::String t = "def " + dstd::String(name);
         if (!params.empty()) {
             t += "(";
             for (std::size_t i = 0; i < params.size(); ++i)
@@ -607,49 +609,49 @@ class Pipe {
     Pipe where(const Expr& condition) const {
         return stage("where (" + condition.to_string() + ")");
     }
-    Pipe derive(const std::vector<Named>& fields) const {
+    Pipe derive(const dstd::Vector<Named>& fields) const {
         return stage("derive " + assigns(fields));
     }
-    Pipe select(const std::vector<Item>& items) const {
+    Pipe select(const dstd::Vector<Item>& items) const {
         return stage("select " + items_text(items));
     }
-    Pipe drop(const std::vector<std::string>& paths) const {
+    Pipe drop(const dstd::Vector<dstd::String>& paths) const {
         return stage("drop " + names(paths));
     }
     /// `rename new = old, ...`.
-    Pipe rename(
-        const std::vector<std::pair<std::string, std::string>>& pairs) const {
-        std::string t = "rename ";
+    Pipe rename(const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>&
+                    pairs) const {
+        dstd::String t = "rename ";
         for (std::size_t i = 0; i < pairs.size(); ++i)
             t += (i ? ", " : "") + pairs[i].first + " = " + pairs[i].second;
         return stage(t);
     }
-    Pipe distinct(const std::vector<Item>& keys = {}) const {
+    Pipe distinct(const dstd::Vector<Item>& keys = {}) const {
         return stage(keys.empty() ? "distinct"
                                   : "distinct " + items_text(keys));
     }
-    Pipe group(const std::vector<Item>& keys,
-               const std::vector<Named>& aggregates) const {
-        std::string t = "group ";
+    Pipe group(const dstd::Vector<Item>& keys,
+               const dstd::Vector<Named>& aggregates) const {
+        dstd::String t = "group ";
         if (!keys.empty()) t += items_text(keys) + " ";
         return stage(t + block(aggregates));
     }
-    Pipe agg(const std::vector<Named>& aggregates) const {
+    Pipe agg(const dstd::Vector<Named>& aggregates) const {
         return stage("agg " + block(aggregates));
     }
-    Pipe window(const std::vector<Item>& partition,
-                const std::vector<SortKey>& order,
-                const std::vector<Named>& fields) const {
-        std::string t = "window ";
+    Pipe window(const dstd::Vector<Item>& partition,
+                const dstd::Vector<SortKey>& order,
+                const dstd::Vector<Named>& fields) const {
+        dstd::String t = "window ";
         if (!partition.empty()) t += items_text(partition) + " ";
         if (!order.empty()) t += "sort " + sort_keys(order) + " ";
         return stage(t + block(fields));
     }
     /// `labels` pairs with `values`; a non-empty label names that column.
-    Pipe pivot(const Col& key, const std::vector<Col>& values,
-               const std::vector<Named>& aggregates,
-               const std::vector<std::string>& labels = {}) const {
-        std::string t = "pivot " + key.raw();
+    Pipe pivot(const Col& key, const dstd::Vector<Col>& values,
+               const dstd::Vector<Named>& aggregates,
+               const dstd::Vector<dstd::String>& labels = {}) const {
+        dstd::String t = "pivot " + key.raw();
         if (!values.empty()) {
             t += " in [";
             for (std::size_t i = 0; i < values.size(); ++i) {
@@ -662,17 +664,17 @@ class Pipe {
         }
         return stage(t + " " + block(aggregates));
     }
-    Pipe unpivot(const std::vector<std::string>& paths,
-                 std::string_view key_name, std::string_view value_name) const {
+    Pipe unpivot(const dstd::Vector<dstd::String>& paths,
+                 dstd::StringView key_name, dstd::StringView value_name) const {
         return stage("unpivot " + names(paths) + " as " +
-                     std::string(key_name) + ", " + std::string(value_name));
+                     dstd::String(key_name) + ", " + dstd::String(value_name));
     }
-    Pipe sort(const std::vector<SortKey>& keys) const {
+    Pipe sort(const dstd::Vector<SortKey>& keys) const {
         return stage("sort " + sort_keys(keys));
     }
-    Pipe take(const Col& count, const std::vector<Col>& by = {},
-              const std::vector<SortKey>& order = {}) const {
-        std::string t = "take " + count.raw();
+    Pipe take(const Col& count, const dstd::Vector<Col>& by = {},
+              const dstd::Vector<SortKey>& order = {}) const {
+        dstd::String t = "take " + count.raw();
         if (!by.empty()) t += " by " + join(by);
         if (!order.empty()) t += " sort " + sort_keys(order);
         return stage(t);
@@ -683,17 +685,17 @@ class Pipe {
     }
     Pipe skip(const Col& count) const { return stage("skip " + count.raw()); }
     Pipe sample(const Col& amount, bool percent = false,
-                std::optional<Col> seed = std::nullopt) const {
-        std::string t = "sample " + amount.raw() + (percent ? "%" : "");
+                dstd::Optional<Col> seed = std::nullopt) const {
+        dstd::String t = "sample " + amount.raw() + (percent ? "%" : "");
         if (seed) t += " seed " + seed->raw();
         return stage(t);
     }
-    Pipe expand(std::string_view path, std::string_view as = {},
-                std::string_view with_index = {},
+    Pipe expand(dstd::StringView path, dstd::StringView as = {},
+                dstd::StringView with_index = {},
                 bool keep_empty = false) const {
-        std::string t = "expand " + std::string(path);
-        if (!as.empty()) t += " as " + std::string(as);
-        if (!with_index.empty()) t += " with_index " + std::string(with_index);
+        dstd::String t = "expand " + dstd::String(path);
+        if (!as.empty()) t += " as " + dstd::String(as);
+        if (!with_index.empty()) t += " with_index " + dstd::String(with_index);
         if (keep_empty) t += " keep_empty";
         return stage(t);
     }
@@ -702,34 +704,35 @@ class Pipe {
     Pipe parse(const Col& col, const Col& pattern) const {
         return stage("parse " + col.raw() + " ~ " + pattern.raw());
     }
-    Pipe lookup(std::string_view rowset, const std::vector<JoinKey>& on,
-                std::string_view into = {},
+    Pipe lookup(dstd::StringView rowset, const dstd::Vector<JoinKey>& on,
+                dstd::StringView into = {},
                 LookupHow how = LookupHow::Left) const {
-        return lookup_text(std::string(rowset), on, into, how);
+        return lookup_text(dstd::String(rowset), on, into, how);
     }
     /// `side` needs a source; it prints as `(from ...)`.
-    Pipe lookup(const Pipe& side, const std::vector<JoinKey>& on,
-                std::string_view into = {},
+    Pipe lookup(const Pipe& side, const dstd::Vector<JoinKey>& on,
+                dstd::StringView into = {},
                 LookupHow how = LookupHow::Left) const {
         return lookup_text("(" + side.inline_text() + ")", on, into, how);
     }
-    Pipe lookup_asof(std::string_view rowset, const std::vector<JoinKey>& on,
+    Pipe lookup_asof(dstd::StringView rowset, const dstd::Vector<JoinKey>& on,
                      const JoinKey& time, Asof direction = Asof::Backward,
-                     std::optional<Col> within = std::nullopt) const {
-        return asof_text(std::string(rowset), on, time, direction, within);
+                     dstd::Optional<Col> within = std::nullopt) const {
+        return asof_text(dstd::String(rowset), on, time, direction, within);
     }
-    Pipe lookup_asof(const Pipe& side, const std::vector<JoinKey>& on,
+    Pipe lookup_asof(const Pipe& side, const dstd::Vector<JoinKey>& on,
                      const JoinKey& time, Asof direction = Asof::Backward,
-                     std::optional<Col> within = std::nullopt) const {
+                     dstd::Optional<Col> within = std::nullopt) const {
         return asof_text("(" + side.inline_text() + ")", on, time, direction,
                          within);
     }
-    Pipe lookup_overlap(std::string_view rowset, const std::vector<JoinKey>& on,
-                        std::string_view into = {}) const {
-        return overlap_text(std::string(rowset), on, into);
+    Pipe lookup_overlap(dstd::StringView rowset,
+                        const dstd::Vector<JoinKey>& on,
+                        dstd::StringView into = {}) const {
+        return overlap_text(dstd::String(rowset), on, into);
     }
-    Pipe lookup_overlap(const Pipe& side, const std::vector<JoinKey>& on,
-                        std::string_view into = {}) const {
+    Pipe lookup_overlap(const Pipe& side, const dstd::Vector<JoinKey>& on,
+                        dstd::StringView into = {}) const {
         return overlap_text("(" + side.inline_text() + ")", on, into);
     }
     /// `union (other)`; `other` needs a source.
@@ -737,17 +740,17 @@ class Pipe {
         return stage("union (" + other.inline_text() + ")");
     }
     /// `union name`: the rows of the row set or `let` `name`.
-    Pipe union_with(std::string_view name) const {
-        return stage("union " + std::string(name));
+    Pipe union_with(dstd::StringView name) const {
+        return stage("union " + dstd::String(name));
     }
     Pipe call(const Col& call) const { return stage("call " + call.raw()); }
     /// `time_range low .. high`; an absent bound leaves that side open.
-    Pipe time_range(std::optional<Col> low, std::optional<Col> high,
+    Pipe time_range(dstd::Optional<Col> low, dstd::Optional<Col> high,
                     bool overlap = false) const {
         if (!low && !high)
             throw std::invalid_argument(
                 "duql: time_range needs a low or a high bound");
-        std::string t = "time_range ";
+        dstd::String t = "time_range ";
         if (low) t += low->raw() + " ";
         t += "..";
         if (high) t += " " + high->raw();
@@ -757,12 +760,12 @@ class Pipe {
     /// `bucket width [every e] [at t] [fill [mode] [from low to high]] [as
     /// name]`; `mode` is "zero", "forward" or "linear", and a mode or range
     /// needs `fill`.
-    Pipe bucket(const Col& width, bool fill = false, std::string_view as = {},
-                std::string_view mode = "zero",
-                std::optional<Col> low = std::nullopt,
-                std::optional<Col> high = std::nullopt,
-                std::optional<Col> every = std::nullopt,
-                std::optional<Col> at = std::nullopt) const {
+    Pipe bucket(const Col& width, bool fill = false, dstd::StringView as = {},
+                dstd::StringView mode = "zero",
+                dstd::Optional<Col> low = std::nullopt,
+                dstd::Optional<Col> high = std::nullopt,
+                dstd::Optional<Col> every = std::nullopt,
+                dstd::Optional<Col> at = std::nullopt) const {
         if (mode != "zero" && mode != "forward" && mode != "linear")
             throw std::invalid_argument(
                 "duql: bucket mode is zero, forward or linear");
@@ -772,29 +775,29 @@ class Pipe {
         if (low.has_value() != high.has_value())
             throw std::invalid_argument(
                 "duql: a bucket range needs both low and high");
-        std::string t = "bucket " + width.raw();
+        dstd::String t = "bucket " + width.raw();
         if (every) t += " every " + every->raw();
         if (at) t += " at " + at->raw();
         if (fill) t += " fill";
-        if (mode != "zero") t += " " + std::string(mode);
+        if (mode != "zero") t += " " + dstd::String(mode);
         if (low) t += " from " + low->raw() + " to " + high->raw();
-        if (!as.empty()) t += " as " + std::string(as);
+        if (!as.empty()) t += " as " + dstd::String(as);
         return stage(t);
     }
-    Pipe session(const std::vector<Item>& keys, const Col& gap,
-                 std::optional<Col> max = std::nullopt,
-                 std::string_view as = {}) const {
-        std::string t = "session ";
+    Pipe session(const dstd::Vector<Item>& keys, const Col& gap,
+                 dstd::Optional<Col> max = std::nullopt,
+                 dstd::StringView as = {}) const {
+        dstd::String t = "session ";
         if (!keys.empty()) t += items_text(keys) + " ";
         t += "gap " + gap.raw();
         if (max) t += " max " + max->raw();
-        if (!as.empty()) t += " as " + std::string(as);
+        if (!as.empty()) t += " as " + dstd::String(as);
         return stage(t);
     }
 
     /// The pipeline on one line, stages joined by ` | `, without declarations.
-    std::string inline_text() const {
-        std::string out = from_;
+    dstd::String inline_text() const {
+        dstd::String out = from_;
         for (const auto& s : stages_) {
             if (!out.empty()) out += " | ";
             out += s;
@@ -803,39 +806,39 @@ class Pipe {
     }
 
    private:
-    friend Pipe source(std::string_view file);
-    friend Pipe sources(const std::vector<std::string>& files);
-    friend Pipe rowset(std::string_view name);
-    friend Pipe source_param(std::string_view name);
+    friend Pipe source(dstd::StringView file);
+    friend Pipe sources(const dstd::Vector<dstd::String>& files);
+    friend Pipe rowset(dstd::StringView name);
+    friend Pipe source_param(dstd::StringView name);
 
-    Pipe stage(std::string text) const {
+    Pipe stage(dstd::String text) const {
         Pipe p = *this;
         p.stages_.push_back(std::move(text));
         return p;
     }
-    Pipe decl(std::string text) const {
+    Pipe decl(dstd::String text) const {
         Pipe p = *this;
         p.decls_.push_back(std::move(text));
         return p;
     }
-    static std::string names(const std::vector<std::string>& list) {
-        std::string out;
+    static dstd::String names(const dstd::Vector<dstd::String>& list) {
+        dstd::String out;
         for (std::size_t i = 0; i < list.size(); ++i)
             out += (i ? ", " : "") + list[i];
         return out;
     }
-    static std::string assigns(const std::vector<Named>& fields) {
-        std::string out;
+    static dstd::String assigns(const dstd::Vector<Named>& fields) {
+        dstd::String out;
         for (std::size_t i = 0; i < fields.size(); ++i)
             out += (i ? ", " : "") + fields[i].name + " = " +
                    fields[i].value.raw();
         return out;
     }
-    static std::string block(const std::vector<Named>& fields) {
+    static dstd::String block(const dstd::Vector<Named>& fields) {
         return fields.empty() ? "{ }" : "{ " + assigns(fields) + " }";
     }
-    static std::string items_text(const std::vector<Item>& items) {
-        std::string out;
+    static dstd::String items_text(const dstd::Vector<Item>& items) {
+        dstd::String out;
         for (std::size_t i = 0; i < items.size(); ++i) {
             if (i) out += ", ";
             if (!items[i].name.empty()) out += items[i].name + " = ";
@@ -843,8 +846,8 @@ class Pipe {
         }
         return out;
     }
-    static std::string sort_keys(const std::vector<SortKey>& keys) {
-        std::string out;
+    static dstd::String sort_keys(const dstd::Vector<SortKey>& keys) {
+        dstd::String out;
         for (std::size_t i = 0; i < keys.size(); ++i) {
             if (i) out += ", ";
             out += keys[i].value.raw();
@@ -853,57 +856,57 @@ class Pipe {
         }
         return out;
     }
-    static std::string key_text(const JoinKey& k) {
+    static dstd::String key_text(const JoinKey& k) {
         return k.right ? k.left.raw() + " == " + k.right->raw() : k.left.raw();
     }
-    Pipe lookup_text(const std::string& side, const std::vector<JoinKey>& on,
-                     std::string_view into, LookupHow how) const {
+    Pipe lookup_text(const dstd::String& side, const dstd::Vector<JoinKey>& on,
+                     dstd::StringView into, LookupHow how) const {
         if (how == LookupHow::Anti && !into.empty())
             throw std::invalid_argument(
                 "duql: an anti lookup cannot take into");
-        std::string t = join_keys(side, on);
+        dstd::String t = join_keys(side, on);
         if (how == LookupHow::Inner) t += " inner";
         if (how == LookupHow::Anti) t += " anti";
-        if (!into.empty()) t += " into " + std::string(into);
+        if (!into.empty()) t += " into " + dstd::String(into);
         return stage(t);
     }
-    Pipe asof_text(const std::string& side, const std::vector<JoinKey>& on,
+    Pipe asof_text(const dstd::String& side, const dstd::Vector<JoinKey>& on,
                    const JoinKey& time, Asof direction,
-                   const std::optional<Col>& within) const {
-        std::string t = join_keys(side, on) + " asof " + key_text(time);
+                   const dstd::Optional<Col>& within) const {
+        dstd::String t = join_keys(side, on) + " asof " + key_text(time);
         if (direction == Asof::Forward) t += " forward";
         if (direction == Asof::Nearest) t += " nearest";
         if (within) t += " within " + within->raw();
         return stage(t);
     }
-    Pipe overlap_text(const std::string& side, const std::vector<JoinKey>& on,
-                      std::string_view into) const {
-        std::string t = join_keys(side, on) + " overlap";
-        if (!into.empty()) t += " into " + std::string(into);
+    Pipe overlap_text(const dstd::String& side, const dstd::Vector<JoinKey>& on,
+                      dstd::StringView into) const {
+        dstd::String t = join_keys(side, on) + " overlap";
+        if (!into.empty()) t += " into " + dstd::String(into);
         return stage(t);
     }
-    static std::string join_keys(const std::string& rowset,
-                                 const std::vector<JoinKey>& on) {
-        std::string t = "lookup " + rowset + " on ";
+    static dstd::String join_keys(const dstd::String& rowset,
+                                  const dstd::Vector<JoinKey>& on) {
+        dstd::String t = "lookup " + rowset + " on ";
         for (std::size_t i = 0; i < on.size(); ++i)
             t += (i ? ", " : "") + key_text(on[i]);
         return t;
     }
 
-    std::string from_;
-    std::vector<std::string> decls_;
-    std::vector<std::string> stages_;
-    std::vector<std::pair<std::string, ParamValue>> params_;
+    dstd::String from_;
+    dstd::Vector<dstd::String> decls_;
+    dstd::Vector<dstd::String> stages_;
+    dstd::Vector<dstd::Pair<dstd::String, ParamValue>> params_;
 };
 
 /// A pipeline over the trace file `file`: `from "file"`.
-inline Pipe source(std::string_view file) {
+inline Pipe source(dstd::StringView file) {
     Pipe p;
     p.from_ = "from " + detail::string_literal(file);
     return p;
 }
 /// A pipeline over several trace files.
-inline Pipe sources(const std::vector<std::string>& files) {
+inline Pipe sources(const dstd::Vector<dstd::String>& files) {
     Pipe p;
     p.from_ = "from ";
     for (std::size_t i = 0; i < files.size(); ++i)
@@ -911,15 +914,15 @@ inline Pipe sources(const std::vector<std::string>& files) {
     return p;
 }
 /// A pipeline over the row set or `let` `name` (`all`, `data`, ...).
-inline Pipe rowset(std::string_view name) {
+inline Pipe rowset(dstd::StringView name) {
     Pipe p;
-    p.from_ = "from " + std::string(name);
+    p.from_ = "from " + dstd::String(name);
     return p;
 }
 /// A pipeline over the file bound to parameter `name`: `from $name`.
-inline Pipe source_param(std::string_view name) {
+inline Pipe source_param(dstd::StringView name) {
     Pipe p;
-    p.from_ = "from $" + std::string(name);
+    p.from_ = "from $" + dstd::String(name);
     return p;
 }
 
@@ -928,10 +931,10 @@ inline Col sub(const Pipe& pipeline) {
     return Col::from_text("(" + pipeline.inline_text() + ")");
 }
 
-inline Col Col::is_in(const std::vector<Col>& values) const {
+inline Col Col::is_in(const dstd::Vector<Col>& values) const {
     return wrap(text_ + " in [" + join(values) + "]");
 }
-inline Col Col::not_in(const std::vector<Col>& values) const {
+inline Col Col::not_in(const dstd::Vector<Col>& values) const {
     return wrap(text_ + " not in [" + join(values) + "]");
 }
 inline Col Col::is_in(const Pipe& subquery) const {
@@ -941,8 +944,8 @@ inline Col Col::not_in(const Pipe& subquery) const {
     return wrap(text_ + " not in (" + subquery.inline_text() + ")");
 }
 
-inline std::string Pipe::raw() const {
-    std::string out;
+inline dstd::String Pipe::raw() const {
+    dstd::String out;
     for (const auto& d : decls_) out += d + ";\n";
     return out + inline_text();
 }
@@ -953,46 +956,48 @@ class Source {
    public:
     /// `name = pipeline`. Throws std::invalid_argument when `pipeline` starts
     /// with a source (`from ...`): a source member reads the data, not a file.
-    Source rowset(std::string_view name, const Pipe& pipeline) const {
-        const std::string body = pipeline.inline_text();
+    Source rowset(dstd::StringView name, const Pipe& pipeline) const {
+        const dstd::String body = pipeline.inline_text();
         if (body.rfind("from ", 0) == 0)
             throw std::invalid_argument(
                 "a source row set cannot start with from");
-        return add(std::string(name) + " = " + body);
+        return add(dstd::String(name) + " = " + body);
     }
     /// `def name(params) = body`: a column macro.
-    Source define(std::string_view name, const std::vector<std::string>& params,
+    Source define(dstd::StringView name,
+                  const dstd::Vector<dstd::String>& params,
                   const Col& body) const {
         return add(Pipe().define(name, params, body));
     }
     /// `def name(params) = stages`: a pipeline macro; `body` must not start
     /// with a source.
-    Source define(std::string_view name, const std::vector<std::string>& params,
+    Source define(dstd::StringView name,
+                  const dstd::Vector<dstd::String>& params,
                   const Pipe& body) const {
         return add(Pipe().define(name, params, body));
     }
     /// `def name = true` or `def name = false`.
-    Source flag(std::string_view name, bool value) const {
-        return add("def " + std::string(name) +
+    Source flag(dstd::StringView name, bool value) const {
+        return add("def " + dstd::String(name) +
                    (value ? " = true" : " = false"));
     }
     /// The members as canonical text joined by `;\n`, the form merge_source
     /// stores. Throws std::invalid_argument with the parser's message when a
     /// member does not parse. Defined in the duql library.
-    std::string text() const;
+    dstd::String text() const;
 
    private:
     Source add(const Pipe& decl) const {
-        std::string t = decl.raw();
+        dstd::String t = decl.raw();
         t.resize(t.size() - 2);
         return add(std::move(t));
     }
-    Source add(std::string member) const {
+    Source add(dstd::String member) const {
         Source s = *this;
         s.members_.push_back(std::move(member));
         return s;
     }
-    std::vector<std::string> members_;
+    dstd::Vector<dstd::String> members_;
 };
 
 }  // namespace dftracer::utils::duql

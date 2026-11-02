@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_SYNTAX_WALK_H
 #define DFTRACER_UTILS_DUQL_SYNTAX_WALK_H
 
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 
 #include <type_traits>
@@ -11,16 +12,16 @@ namespace dftracer::utils::duql::syntax {
 // Calls `fn` on every expression slot of the stages of `p`, unions included.
 template <class F>
 inline void each_slot(Pipeline& p, F&& fn) {
-    auto items = [&](std::vector<Item>& v) {
+    auto items = [&](dstd::Vector<Item>& v) {
         for (auto& it : v) fn(it.value);
     };
-    auto assigns = [&](std::vector<Assign>& v) {
+    auto assigns = [&](dstd::Vector<Assign>& v) {
         for (auto& a : v) fn(a.value);
     };
-    auto sort_keys = [&](std::vector<SortKey>& v) {
+    auto sort_keys = [&](dstd::Vector<SortKey>& v) {
         for (auto& k : v) fn(k.value);
     };
-    auto exprs = [&](std::vector<ExprPtr>& v) {
+    auto exprs = [&](dstd::Vector<ExprPtr>& v) {
         for (auto& x : v) fn(x);
     };
     for (auto& s : p.stages)

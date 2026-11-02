@@ -786,8 +786,8 @@ std::vector<SchemaLeaf> detail::catalog_leaves(const View& v) {
     return scan::catalog_tree(v.plan_);
 }
 
-std::string schema_tree_json(const std::vector<SchemaLeaf>& leaves) {
-    std::string out = "[";
+dstd::String schema_tree_json(const std::vector<SchemaLeaf>& leaves) {
+    dstd::String out = "[";
     auto text = [&](const std::string& s) {
         if (s.empty()) {
             out += "null";

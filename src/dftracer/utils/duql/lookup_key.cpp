@@ -1,5 +1,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/lookup.h>
 
 #include <algorithm>
@@ -7,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -17,19 +22,19 @@ constexpr char DOUBLE_TAG = 'd';
 constexpr char STRING_TAG = 's';
 constexpr char BOOL_TAG = 'b';
 
-std::uint64_t get_u64(std::string_view s) {
+std::uint64_t get_u64(dstd::StringView s) {
     return dstd::read_u64_be(reinterpret_cast<const std::uint8_t*>(s.data()));
 }
 
 }  // namespace
 
-void append_int_key(std::string& out, bool negative, std::uint64_t magnitude) {
+void append_int_key(dstd::String& out, bool negative, std::uint64_t magnitude) {
     out += INT_TAG;
     out += negative && magnitude != 0 ? '-' : '+';
     dstd::append_u64_be(out, magnitude);
 }
 
-bool append_double_key(std::string& out, double v) {
+bool append_double_key(dstd::String& out, double v) {
     if (std::isnan(v)) return false;
     if (std::trunc(v) == v && std::abs(v) < 18446744073709551616.0) {
         const bool neg = v < 0;
@@ -41,24 +46,24 @@ bool append_double_key(std::string& out, double v) {
     return true;
 }
 
-void append_string_key(std::string& out, std::string_view v) {
+void append_string_key(dstd::String& out, dstd::StringView v) {
     out += STRING_TAG;
     dstd::append_u64_be(out, v.size());
     out += v;
 }
 
-std::optional<std::string_view> string_key_text(std::string_view key) {
+dstd::Optional<dstd::StringView> string_key_text(dstd::StringView key) {
     if (key.size() < 9 || key[0] != STRING_TAG) return std::nullopt;
     return key.substr(9);
 }
 
-void append_bool_key(std::string& out, bool v) {
+void append_bool_key(dstd::String& out, bool v) {
     out += BOOL_TAG;
     out += v ? '1' : '0';
 }
 
-std::string key_text(std::string_view key) {
-    std::string out;
+dstd::String key_text(dstd::StringView key) {
+    dstd::String out;
     std::size_t parts = 0;
     while (!key.empty()) {
         if (parts++ > 0) out += ", ";
@@ -66,7 +71,7 @@ std::string key_text(std::string_view key) {
         key.remove_prefix(1);
         if (tag == INT_TAG) {
             if (key[0] == '-') out += '-';
-            out += std::to_string(get_u64(key.substr(1)));
+            out += dstd::int_text(get_u64(key.substr(1)));
             key.remove_prefix(9);
         } else if (tag == DOUBLE_TAG) {
             const double d = dstd::bits_double(get_u64(key));
@@ -88,28 +93,30 @@ std::string key_text(std::string_view key) {
     return parts > 1 ? "(" + out + ")" : out;
 }
 
-const std::vector<std::int64_t>* LookupTable::find(std::string_view key) const {
+const std::vector<std::int64_t>* LookupTable::find(dstd::StringView key) const {
     const auto it = rows.find(key);
     return it == rows.end() ? nullptr : &it->second;
 }
 
-void conflict(const LookupTable& table, std::string_view column,
-              std::string_view key) {
+void conflict(const LookupTable& table, dstd::StringView column,
+              dstd::StringView key) {
     throw common::DFTUtilsException(
         common::ErrorCode::InvalidArgument,
-        "View::duql '" + table.name + "' has rows with different values of '" +
-            std::string(column) + "' for key " + key_text(key) +
-            "; pick one with a narrower let, or read every row with "
-            "'lookup ... into'");
+        ("View::duql '" + table.name + "' has rows with different values of '" +
+         dstd::String(column) + "' for key " + key_text(key) +
+         "; pick one with a narrower let, or read every row with "
+         "'lookup ... into'")
+            .c_str());
 }
 
-void scalar_conflict(std::string_view name, std::string_view key,
+void scalar_conflict(dstd::StringView name, dstd::StringView key,
                      std::size_t rows) {
     throw common::DFTUtilsException(
         common::ErrorCode::InvalidArgument,
-        "View::duql the sub-query '" + std::string(name) + "' gives " +
-            std::to_string(rows) + " rows for key " + key_text(key) +
-            "; a sub-query in an expression gives one row");
+        ("View::duql the sub-query '" + dstd::String(name) + "' gives " +
+         dstd::int_text(rows) + " rows for key " + key_text(key) +
+         "; a sub-query in an expression gives one row")
+            .c_str());
 }
 
 namespace {
@@ -152,10 +159,10 @@ std::int64_t position(const RangeIndex& ix, std::int64_t first,
 }
 
 // The positions of [first, last) of the kind of `v`.
-std::pair<std::int64_t, std::int64_t> kind_range(const RangeIndex& ix,
-                                                 std::int64_t first,
-                                                 std::int64_t last,
-                                                 const Ordered& v) {
+dstd::Pair<std::int64_t, std::int64_t> kind_range(const RangeIndex& ix,
+                                                  std::int64_t first,
+                                                  std::int64_t last,
+                                                  const Ordered& v) {
     const auto begin = ix.values.begin();
     const int k = kind_of(v);
     const auto r = std::equal_range(
@@ -168,9 +175,9 @@ std::pair<std::int64_t, std::int64_t> kind_range(const RangeIndex& ix,
     return {r.first - begin, r.second - begin};
 }
 
-[[noreturn]] void range_fail(const std::string& why) {
+[[noreturn]] void range_fail(const dstd::String& why) {
     throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                    "View::duql " + why);
+                                    ("View::duql " + why).c_str());
 }
 
 }  // namespace
@@ -183,8 +190,8 @@ int compare_ordered(const Ordered& a, const Ordered& b) {
         [](const auto& x, const auto& y) -> int {
             using A = std::decay_t<decltype(x)>;
             using B = std::decay_t<decltype(y)>;
-            if constexpr (std::is_same_v<A, std::string_view> ||
-                          std::is_same_v<B, std::string_view> ||
+            if constexpr (std::is_same_v<A, dstd::StringView> ||
+                          std::is_same_v<B, dstd::StringView> ||
                           std::is_same_v<A, bool> || std::is_same_v<B, bool>) {
                 if constexpr (std::is_same_v<A, B>)
                     return x < y ? -1 : (y < x ? 1 : 0);
@@ -198,7 +205,7 @@ int compare_ordered(const Ordered& a, const Ordered& b) {
 }
 
 void build_range_tree(RangeIndex& ix, RangeRead read,
-                      const std::vector<RangeIndex::Node>& leaves) {
+                      const dstd::Vector<RangeIndex::Node>& leaves) {
     ix.tree.assign(2 * leaves.size(), {});
     for (const auto& [key, span] : ix.keys) {
         const auto [b, e] = span;
@@ -212,9 +219,9 @@ void build_range_tree(RangeIndex& ix, RangeRead read,
 }
 
 RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
-                         std::string_view key,
-                         const std::optional<Ordered>& low,
-                         const std::optional<Ordered>& high) {
+                         dstd::StringView key,
+                         const dstd::Optional<Ordered>& low,
+                         const dstd::Optional<Ordered>& high) {
     RangeAnswer out;
     const RangeRead read = l.range;
     if (read == RangeRead::Count || read == RangeRead::CountValues ||
@@ -235,8 +242,8 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
         if (l.kind == LookupKind::Scalar && out.rows > 1)
             range_fail(
                 "the sub-query '" + table.name + "' gives " +
-                std::to_string(out.rows) + " rows in the range of " +
-                (key.empty() ? std::string("a row") : "key " + key_text(key)) +
+                dstd::int_text(out.rows) + " rows in the range of " +
+                (key.empty() ? dstd::String("a row") : "key " + key_text(key)) +
                 "; a sub-query in an expression gives one row");
         out.row = ix.rows[static_cast<std::size_t>(lo)];
         return out;

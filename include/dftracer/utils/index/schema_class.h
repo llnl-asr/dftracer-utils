@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMA_CLASS_H
 #define DFTRACER_UTILS_INDEX_SCHEMA_CLASS_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/record_schema.h>
 
 #include <algorithm>
@@ -36,7 +37,7 @@ struct NameRole {};
 
 /// A json field's value: canonical JSON text.
 struct Json {
-    std::string text;
+    dstd::String text;
 };
 
 /// One field of a schema class: a value of `T` (bool, an integer, a floating

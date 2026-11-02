@@ -8,6 +8,9 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -586,7 +589,7 @@ struct SchemaLeaf {
 
 /// `leaves` as a JSON array of objects with path, type, count, field and
 /// declared_type (null when empty or unset).
-std::string schema_tree_json(const std::vector<SchemaLeaf>& leaves);
+dstd::String schema_tree_json(const std::vector<SchemaLeaf>& leaves);
 
 /// Collects several plans together: record them with collect(), then
 /// execute() once. Plans over the same trace base share one scan, as
@@ -704,7 +707,7 @@ class View : public dataframe::LazyOps<View> {
     /// scan projection, and the later stages run on the scanned columns.
     /// Throws DFTUtilsException INVALID_ARGUMENT for a query that does not
     /// compile against this view's columns and record schema.
-    View duql(const std::string& text, const duql::Params& params = {}) const;
+    View duql(dstd::StringView text, const duql::Params& params = {}) const;
     /// Apply the builder pipeline `pipe` with its bound parameters.
     View duql(const duql::Pipe& pipe) const {
         duql::Params params;
@@ -713,16 +716,16 @@ class View : public dataframe::LazyOps<View> {
         return duql(pipe.raw(), params);
     }
     /// Same as duql().
-    View query(const std::string& text, const duql::Params& params = {}) const {
+    View query(dstd::StringView text, const duql::Params& params = {}) const {
         return duql(text, params);
     }
     View query(const duql::Pipe& pipe) const { return duql(pipe); }
     /// The plan duql() builds, one step per line; nothing is scanned.
-    std::string explain_duql(const std::string& text,
-                             const duql::Params& params = {}) const;
+    dstd::String explain_duql(dstd::StringView text,
+                              const duql::Params& params = {}) const;
     /// Same as explain_duql().
-    std::string explain_query(const std::string& text,
-                              const duql::Params& params = {}) const {
+    dstd::String explain_query(dstd::StringView text,
+                               const duql::Params& params = {}) const {
         return explain_duql(text, params);
     }
     View phase(Phase p) const;
@@ -973,7 +976,7 @@ class View : public dataframe::LazyOps<View> {
         const View& v, std::vector<dataframe::Field> columns);
     friend std::vector<SchemaLeaf> detail::catalog_leaves(const View& v);
     std::pair<View, std::vector<std::string>> duql_plan(
-        const std::string& text, const duql::Params& params) const;
+        dstd::StringView text, const duql::Params& params) const;
 
     detail::ScanPlan plan_;
     dataframe::LazyFrame lf_;

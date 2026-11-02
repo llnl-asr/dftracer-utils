@@ -198,7 +198,7 @@ TEST_SUITE("SchemaView") {
         CHECK(tree["meta.host"].count == 0);
         CHECK(tree["meta.host"].type.empty());
         CHECK(tree["op"].field == "op");
-        CHECK(schema_tree_json({tree["meta.host"]}) ==
+        CHECK(std::string(schema_tree_json({tree["meta.host"]})) ==
               R"([{"path":"meta.host","type":null,"count":0,"field":"host",)"
               R"("declared_type":"string"}])");
     }

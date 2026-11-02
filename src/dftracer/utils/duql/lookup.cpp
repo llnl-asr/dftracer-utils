@@ -1,5 +1,11 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/decorrelate.h>
 #include <dftracer/utils/duql/vectorize.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -8,8 +14,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <deque>
 #include <utility>
+#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -17,9 +23,9 @@ namespace {
 
 namespace df = dftracer::utils::dataframe;
 
-[[noreturn]] void fail(const std::string& why) {
+[[noreturn]] void fail(const dstd::String& why) {
     throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                    "View::duql " + why);
+                                    ("View::duql " + why).c_str());
 }
 
 bool bit(const df::Series& s, std::int64_t r) {
@@ -28,7 +34,7 @@ bool bit(const df::Series& s, std::int64_t r) {
 }
 
 template <class T>
-bool int_key(std::string& out, const df::Series& s, std::int64_t r) {
+bool int_key(dstd::String& out, const df::Series& s, std::int64_t r) {
     const T v = s.data<T>()[r];
     if constexpr (std::is_signed_v<T>) {
         if (v < 0) {
@@ -44,7 +50,7 @@ bool int_key(std::string& out, const df::Series& s, std::int64_t r) {
 }
 
 // Row `r` of a FLAT column as the row evaluator reads it.
-std::optional<Cell> cell_of(const df::Series& s, std::int64_t r) {
+dstd::Optional<Cell> cell_of(const df::Series& s, std::int64_t r) {
     if (s.is_null(r)) return Cell::null();
     switch (s.type()) {
         case df::TypeId::Int8:
@@ -66,7 +72,7 @@ std::optional<Cell> cell_of(const df::Series& s, std::int64_t r) {
             return Cell{bit(s, r)};
         case df::TypeId::String:
         case df::TypeId::LargeString:
-            return Cell{std::string(s.string_at(r))};
+            return Cell{dstd::String(s.string_at(r))};
         default:
             return std::nullopt;
     }
@@ -74,7 +80,7 @@ std::optional<Cell> cell_of(const df::Series& s, std::int64_t r) {
 
 // The key of a JSON column's cell: its parsed scalar, as a typed column of
 // that value would key it. Containers have none.
-bool append_json_key(std::string& out, std::string_view text) {
+bool append_json_key(dstd::String& out, dstd::StringView text) {
     thread_local dftracer::utils::json::RecordParser parser;
     simdjson::dom::element el;
     if (parser.parse(text.data(), text.size()).get(el) != simdjson::SUCCESS)
@@ -106,10 +112,10 @@ bool append_json_key(std::string& out, std::string_view text) {
 
 // Row `r` of a FLAT column as duql orders it; nullopt for null, NaN and
 // containers. A JSON cell's string is kept in `owned`.
-std::optional<Ordered> ordered_of(const df::Series& s, std::int64_t r,
-                                  std::deque<std::string>& owned) {
+dstd::Optional<Ordered> ordered_of(const df::Series& s, std::int64_t r,
+                                   dstd::Deque<dstd::String>& owned) {
     if (s.is_null(r)) return std::nullopt;
-    auto real = [](double d) -> std::optional<Ordered> {
+    auto real = [](double d) -> dstd::Optional<Ordered> {
         if (std::isnan(d)) return std::nullopt;
         return Ordered{d};
     };
@@ -145,7 +151,7 @@ std::optional<Ordered> ordered_of(const df::Series& s, std::int64_t r,
     }
     if (!s.is_json()) return Ordered{s.string_at(r)};
     thread_local dftracer::utils::json::RecordParser parser;
-    const std::string_view text = s.string_at(r);
+    const dstd::StringView text = s.string_at(r);
     simdjson::dom::element el;
     if (parser.parse(text.data(), text.size()).get(el) != simdjson::SUCCESS)
         return std::nullopt;
@@ -158,7 +164,7 @@ std::optional<Ordered> ordered_of(const df::Series& s, std::int64_t r,
             return real(el.get_double().value());
         case simdjson::dom::element_type::STRING:
             owned.emplace_back(el.get_string().value());
-            return Ordered{std::string_view(owned.back())};
+            return Ordered{dstd::StringView(owned.back())};
         case simdjson::dom::element_type::BOOL:
             return Ordered{el.get_bool().value()};
         default:
@@ -185,7 +191,7 @@ bool integral(df::TypeId t) {
 
 }  // namespace
 
-bool append_cell_key(std::string& out, const df::Series& s, std::int64_t r) {
+bool append_cell_key(dstd::String& out, const df::Series& s, std::int64_t r) {
     if (s.is_null(r)) return false;
     switch (s.type()) {
         case df::TypeId::Int8:
@@ -262,20 +268,20 @@ std::uint64_t frame_bytes(const df::DataFrame& f) {
     return bytes;
 }
 
-std::optional<std::size_t> column_of(const df::DataFrame& f,
-                                     std::string_view name) {
+dstd::Optional<std::size_t> column_of(const df::DataFrame& f,
+                                      dstd::StringView name) {
     for (std::size_t i = 0; i < f.names.size(); ++i)
         if (f.names[i] == name) return i;
     for (std::size_t i = 0; i < f.names.size(); ++i)
         if (f.names[i].size() == name.size() + 5 &&
-            std::string_view(f.names[i]).starts_with("args.") &&
-            std::string_view(f.names[i]).substr(5) == name)
+            dstd::StringView(f.names[i]).starts_with("args.") &&
+            dstd::StringView(f.names[i]).substr(5) == name)
             return i;
     return std::nullopt;
 }
 
-std::shared_ptr<const LookupTable> make_lookup_table(
-    std::string name, std::shared_ptr<const df::DataFrame> frame,
+dstd::SharedPtr<const LookupTable> make_lookup_table(
+    dstd::String name, dstd::SharedPtr<const df::DataFrame> frame,
     const std::vector<std::size_t>& columns) {
     if (std::any_of(frame->columns.begin(), frame->columns.end(),
                     [](const df::Series& c) { return !c.is_flat(); })) {
@@ -283,12 +289,12 @@ std::shared_ptr<const LookupTable> make_lookup_table(
         flat.names = frame->names;
         for (const df::Series& c : frame->columns)
             flat.columns.push_back(c.is_flat() ? c.share() : c.materialize());
-        frame = std::make_shared<const df::DataFrame>(std::move(flat));
+        frame = dstd::make_shared<const df::DataFrame>(std::move(flat));
     }
-    auto t = std::make_shared<LookupTable>();
+    auto t = dstd::make_shared<LookupTable>();
     t->name = std::move(name);
     const std::int64_t n = frame->num_rows();
-    std::string key;
+    dstd::String key;
     for (std::int64_t r = 0; r < n; ++r) {
         key.clear();
         bool keyed = true;
@@ -309,8 +315,8 @@ namespace {
 // The range index of `t`, whose `rows` are its keys' rows, over the range
 // column `range` and the value column `value`; it takes over `t.rows`.
 void index_range(LookupTable& t, RangeRead read, std::size_t range,
-                 std::optional<std::size_t> value) {
-    auto ix = std::make_shared<RangeIndex>();
+                 dstd::Optional<std::size_t> value) {
+    auto ix = dstd::make_shared<RangeIndex>();
     const df::DataFrame& f = *t.frame;
     const df::Series& by = f.columns[range];
     const df::Series* arg = value ? &f.columns[*value] : nullptr;
@@ -326,8 +332,8 @@ void index_range(LookupTable& t, RangeRead read, std::size_t range,
                  "int() or float() in the sub-query");
         ix->integral = integral(type);
     }
-    std::vector<std::pair<Ordered, std::int64_t>> sorted;
-    std::vector<RangeIndex::Node> leaves;
+    dstd::Vector<dstd::Pair<Ordered, std::int64_t>> sorted;
+    dstd::Vector<RangeIndex::Node> leaves;
     for (auto& [key, rows] : t.rows) {
         sorted.clear();
         for (const std::int64_t r : rows)
@@ -405,13 +411,13 @@ void index_range(LookupTable& t, RangeRead read, std::size_t range,
 
 }  // namespace
 
-std::shared_ptr<const LookupTable> make_lookup_table(
-    const TLookup& l, std::shared_ptr<const df::DataFrame> frame) {
+dstd::SharedPtr<const LookupTable> make_lookup_table(
+    const TLookup& l, dstd::SharedPtr<const df::DataFrame> frame) {
     if (joined(l))
         fail("'" + l.name + "' reads its rows through a join, not a table");
     const df::DataFrame& f = *frame;
     std::vector<std::size_t> columns;
-    std::optional<std::size_t> range;
+    dstd::Optional<std::size_t> range;
     if (l.range != RangeRead::None) {
         range = column_of(f, CORRELATED_RANGE);
         if (!range)
@@ -421,9 +427,9 @@ std::shared_ptr<const LookupTable> make_lookup_table(
         case LookupKind::In:
             if (!range && f.columns.size() != l.keys.size())
                 fail("'" + l.name + "' gives " +
-                     std::to_string(f.columns.size()) +
+                     dstd::int_text(f.columns.size()) +
                      " columns; 'in' compares " +
-                     std::to_string(l.keys.size() - l.correlated));
+                     dstd::int_text(l.keys.size() - l.correlated));
             for (std::size_t i = 0; i < f.columns.size(); ++i)
                 if (!range || i != *range) columns.push_back(i);
             break;
@@ -447,8 +453,8 @@ std::shared_ptr<const LookupTable> make_lookup_table(
                 }
             } else if (f.columns.size() != 1 || f.num_rows() > 1)
                 fail("the sub-query '" + l.name + "' gives " +
-                     std::to_string(f.num_rows()) + " rows and " +
-                     std::to_string(f.columns.size()) +
+                     dstd::int_text(f.num_rows()) + " rows and " +
+                     dstd::int_text(f.columns.size()) +
                      " columns; a sub-query in an expression gives one "
                      "row and one column");
             break;
@@ -471,9 +477,9 @@ std::shared_ptr<const LookupTable> make_lookup_table(
     return t;
 }
 
-std::string row_key(const std::vector<const df::Series*>& keys,
-                    std::int64_t r) {
-    std::string key;
+dstd::String row_key(const std::vector<const df::Series*>& keys,
+                     std::int64_t r) {
+    dstd::String key;
     for (const auto* k : keys) append_cell_key(key, *k, r);
     return key;
 }
@@ -484,7 +490,7 @@ Matches match(const LookupTable& table,
     m.offsets.reserve(static_cast<std::size_t>(n) + 1);
     m.offsets.push_back(0);
     m.keyed.assign(static_cast<std::size_t>(n), 0);
-    std::string key;
+    dstd::String key;
     for (std::int64_t r = 0; r < n; ++r) {
         key.clear();
         bool keyed = true;
@@ -505,8 +511,8 @@ Matches match(const LookupTable& table,
 
 bool same_cell(const df::Series& x, std::int64_t a, const df::Series& y,
                std::int64_t b) {
-    std::string ka;
-    std::string kb;
+    dstd::String ka;
+    dstd::String kb;
     const bool ha = append_cell_key(ka, x, a);
     const bool hb = append_cell_key(kb, y, b);
     if (!ha || !hb) return ha == hb && x.is_null(a) == y.is_null(b);
@@ -533,8 +539,8 @@ df::Series range_column(const TLookup& t, const LookupTable& table,
     std::vector<std::int64_t> pick(picks ? rows : 0, -1);
     std::vector<std::int64_t> ints(!in && !picks && !reals ? rows : 0, 0);
     std::vector<double> doubles(reals ? rows : 0, 0);
-    std::string key;
-    std::deque<std::string> owned;
+    dstd::String key;
+    dstd::Deque<dstd::String> owned;
     for (std::int64_t r = 0; r < n; ++r) {
         const auto i = static_cast<std::size_t>(r);
         key.clear();
@@ -542,8 +548,8 @@ df::Series range_column(const TLookup& t, const LookupTable& table,
         std::size_t known = 0;
         while (known < keyed && append_cell_key(key, *keys[known], r)) ++known;
         if (in && known < subject) continue;
-        std::optional<Ordered> low;
-        std::optional<Ordered> high;
+        dstd::Optional<Ordered> low;
+        dstd::Optional<Ordered> high;
         std::size_t b = keyed;
         if (t.low) low = ordered_of(*keys[b++], r, owned);
         if (t.high) high = ordered_of(*keys[b], r, owned);
@@ -599,7 +605,7 @@ df::Series lookup_column(const TLookup& t,
         std::vector<std::uint8_t> out((static_cast<std::size_t>(n) + 7) / 8, 0);
         std::vector<std::uint8_t> valid(out.size(), 0);
         const std::size_t subject = t.keys.size() - t.correlated;
-        std::string scratch;
+        dstd::String scratch;
         for (std::int64_t r = 0; r < n; ++r) {
             const auto i = static_cast<std::size_t>(r);
             bool known = true;
@@ -639,7 +645,7 @@ df::Series in_column(const std::vector<const df::Series*>& keys,
     const std::int64_t n = matched.length();
     std::vector<std::uint8_t> out((static_cast<std::size_t>(n) + 7) / 8, 0);
     std::vector<std::uint8_t> valid(out.size(), 0);
-    std::string scratch;
+    dstd::String scratch;
     for (std::int64_t r = 0; r < n; ++r) {
         bool known = true;
         for (std::size_t k = 0; k < subject && known; ++k) {
@@ -655,7 +661,7 @@ df::Series in_column(const std::vector<const df::Series*>& keys,
     return df::Series::flat(df::TypeId::Bool, out.data(), n, valid.data());
 }
 
-df::Series scalar_column(const std::string& name,
+df::Series scalar_column(const dstd::String& name,
                          const std::vector<const df::Series*>& keys,
                          const df::Series& nest, std::size_t field,
                          const df::DataFrame* empty) {
@@ -669,7 +675,7 @@ df::Series scalar_column(const std::string& name,
     if (empty) {
         if (empty->num_rows() != 1)
             fail("'" + name + "' over no rows gives " +
-                 std::to_string(empty->num_rows()) + " rows, not one");
+                 dstd::int_text(empty->num_rows()) + " rows, not one");
         none = values.num_rows();
         values = df::concat({&values, empty}, df::ConcatHow::Diagonal);
     }

@@ -195,9 +195,9 @@ df::Series make_unknown_series(std::int64_t n) {
 }
 
 std::string cell(const df::Series& c, std::int64_t i) {
-    std::string s;
+    dftracer::utils::dstd::String s;
     dftracer::utils::binaries::append_cell_json(s, c, i);
-    return s;
+    return std::string(s);
 }
 
 // Create a trace in its own subdir and build its index, with the aggregation

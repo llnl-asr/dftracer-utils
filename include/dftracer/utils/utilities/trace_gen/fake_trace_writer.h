@@ -2,6 +2,8 @@
 #define DFTRACER_UTILS_UTILITIES_TRACE_GEN_FAKE_TRACE_WRITER_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
@@ -47,7 +49,7 @@ class TraceWriter {
     TraceWriter& operator=(const TraceWriter&) = delete;
 
     /// `s` must hold whole lines.
-    void write(const std::string& s) {
+    void write(dstd::StringView s) {
         buf_ += s;
         if (buf_.size() >= flush_threshold_) drain();
     }
@@ -106,14 +108,14 @@ inline void emit_metadata(TraceWriter& w, const std::string& kind,
     static constexpr int PH_M = dft::phase_to_int(dft::RecordPhase::Metadata);
     static constexpr int TY_DFT =
         dft::event_type_to_int(dft::EventType::Dftracer);
-    std::string buf;
+    dstd::String buf;
     buf.reserve(256);
     buf += R"({"name":")";
     buf += kind;
     buf += R"(","ph":)";
-    buf += std::to_string(PH_M);
+    buf += dstd::int_text(PH_M);
     buf += R"(,"type":)";
-    buf += std::to_string(TY_DFT);
+    buf += dstd::int_text(TY_DFT);
     buf += R"(,"args":{"hhash":")";
     json::append_json_escaped(buf, hhash);
     buf += R"(","name":")";
@@ -146,7 +148,7 @@ struct EventArgs {
 
 inline void emit_event(TraceWriter& w, const EventArgs& a) {
     char num_buf[128];
-    std::string buf;
+    dstd::String buf;
     buf.reserve(512);
 
     buf += R"({"id":)";

@@ -448,7 +448,7 @@ bool duql_param(PyObject* v, dftracer::utils::duql::LiteralValue& out) {
     } else if (PyUnicode_Check(v)) {
         const char* s = PyUnicode_AsUTF8(v);
         if (!s) return false;
-        out = std::string(s);
+        out = dftracer::utils::dstd::String(s);
     } else {
         PyErr_Format(PyExc_TypeError,
                      "a duql parameter must be bool, int, float or str, not %s",
@@ -475,7 +475,8 @@ bool duql_args(PyObject* args, const char*& text,
         if (PyList_Check(value) || PyTuple_Check(value)) {
             PyObject* seq = PySequence_Fast(value, "a list parameter");
             if (!seq) return false;
-            std::vector<dftracer::utils::duql::LiteralValue> items;
+            dftracer::utils::dstd::Vector<dftracer::utils::duql::LiteralValue>
+                items;
             const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
             items.reserve(static_cast<std::size_t>(n));
             bool ok = true;
@@ -508,7 +509,8 @@ PyObject* tv_explain_duql(PyObject* self, PyObject* args) {
     dftracer::utils::duql::Params params;
     if (!duql_args(args, text, params)) return nullptr;
     return guarded([&] {
-        const std::string plan = tv_of(self).explain_duql(text, params);
+        const dftracer::utils::dstd::String plan =
+            tv_of(self).explain_duql(text, params);
         return PyUnicode_FromStringAndSize(
             plan.data(), static_cast<Py_ssize_t>(plan.size()));
     });
@@ -715,7 +717,7 @@ PyObject* tv_column_info(PyObject* self, PyObject*) {
 }
 
 PyObject* tv_schema_tree(PyObject* self, PyObject*) {
-    std::string json;
+    dftracer::utils::dstd::String json;
     if (!run_blocking(
             [&] { json = views::schema_tree_json(tv_of(self).schema_tree()); }))
         return nullptr;
@@ -1153,8 +1155,9 @@ PyObject* duql_canonical_py(PyObject*, PyObject* arg) {
     if (!text) return nullptr;
     return guarded([&]() -> PyObject* {
         auto program = dftracer::utils::duql::syntax::parse(text);
-        if (!program) throw std::invalid_argument(program.error().format());
-        const std::string out =
+        if (!program)
+            throw std::invalid_argument(program.error().format().c_str());
+        const dftracer::utils::dstd::String out =
             dftracer::utils::duql::syntax::to_text(*program);
         return PyUnicode_FromStringAndSize(out.data(),
                                            static_cast<Py_ssize_t>(out.size()));

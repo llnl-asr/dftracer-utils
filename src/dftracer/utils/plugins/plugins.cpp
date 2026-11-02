@@ -373,7 +373,7 @@ common::Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
             return common::make_error(
                 common::ErrorCode::InvalidArgument,
                 "plugin '" + path + "' plan_duql '" + plan +
-                    "' does not parse: " + parsed.error().message);
+                    "' does not parse: " + std::string(parsed.error().message));
         }
     }
 

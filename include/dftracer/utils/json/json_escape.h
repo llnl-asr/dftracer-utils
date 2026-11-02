@@ -3,8 +3,6 @@
 
 #include <dftracer/utils/dstd/string.h>
 
-#include <string>
-
 namespace dftracer::utils::json {
 
 /// Append the JSON-escaped form of `s` (quotes, backslash, the standard
@@ -12,7 +10,7 @@ namespace dftracer::utils::json {
 /// character below 0x20, all required by the JSON spec) to `out`. No
 /// temporary allocation, so callers building a JSON line in a loop don't
 /// churn a string per field.
-inline void append_json_escaped(std::string& out, dstd::StringView s) {
+inline void append_json_escaped(dstd::String& out, dstd::StringView s) {
     static constexpr char HEX[] = "0123456789abcdef";
     for (char c : s) {
         switch (c) {
@@ -105,8 +103,8 @@ inline char* escape_json_to(char* dst, dstd::StringView s) {
 }
 
 /// Escape a string for embedding in a JSON string literal.
-inline std::string escape_json_string(dstd::StringView s) {
-    std::string result;
+inline dstd::String escape_json_string(dstd::StringView s) {
+    dstd::String result;
     result.reserve(s.size());
     append_json_escaped(result, s);
     return result;

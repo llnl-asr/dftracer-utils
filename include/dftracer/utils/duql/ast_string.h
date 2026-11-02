@@ -1,12 +1,13 @@
 #ifndef DFTRACER_UTILS_DUQL_AST_STRING_H
 #define DFTRACER_UTILS_DUQL_AST_STRING_H
 
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/string_literal.h>
 
 #include <cstddef>
-#include <sstream>
-#include <string>
+#include <cstdio>
 #include <type_traits>
 #include <variant>
 
@@ -35,83 +36,91 @@ inline const char* match_op_str(MatchOp op, bool negated) {
     return "??";
 }
 
-inline void string_to_string(std::ostringstream& os, const std::string& v) {
-    os << quote_string(v);
+inline void string_to_string(dstd::String& os, const dstd::String& v) {
+    os += quote_string(v);
 }
 
-inline void literal_to_string(std::ostringstream& os, const LiteralNode& lit) {
+inline void literal_to_string(dstd::String& os, const LiteralNode& lit) {
     std::visit(
         [&os](auto&& v) {
             using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::string>) {
+            if constexpr (std::is_same_v<T, dstd::String>) {
                 string_to_string(os, v);
             } else if constexpr (std::is_same_v<T, bool>) {
-                os << (v ? "true" : "false");
-            } else if constexpr (std::is_same_v<T, std::int64_t>) {
-                os << v;
-            } else if constexpr (std::is_same_v<T, std::uint64_t>) {
-                os << v;
+                os += v ? "true" : "false";
+            } else if constexpr (std::is_same_v<T, std::int64_t> ||
+                                 std::is_same_v<T, std::uint64_t>) {
+                os += dstd::int_text(v);
             } else if constexpr (std::is_same_v<T, double>) {
-                os << v;
+                char buf[32];
+                const int n = std::snprintf(buf, sizeof(buf), "%g", v);
+                os.append(buf, static_cast<std::size_t>(n));
             }
         },
         lit.value);
 }
 
-inline void array_to_string(std::ostringstream& os, const ArrayNode& arr) {
-    os << '[';
+inline void array_to_string(dstd::String& os, const ArrayNode& arr) {
+    os += '[';
     for (std::size_t i = 0; i < arr.elements.size(); ++i) {
-        if (i > 0) os << ", ";
+        if (i > 0) os += ", ";
         literal_to_string(os, arr.elements[i]);
     }
-    os << ']';
+    os += ']';
 }
 
-inline void node_to_string(std::ostringstream& os, const QueryNode& node) {
+inline void node_to_string(dstd::String& os, const QueryNode& node) {
     std::visit(
         [&os](auto&& n) {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, CompareNode>) {
-                os << field_text(n.field) << ' ' << compare_op_str(n.op) << ' ';
+                os += field_text(n.field);
+                os += ' ';
+                os += compare_op_str(n.op);
+                os += ' ';
                 literal_to_string(os, n.value);
             } else if constexpr (std::is_same_v<T, InNode>) {
-                os << field_text(n.field) << " in ";
+                os += field_text(n.field);
+                os += " in ";
                 array_to_string(os, n.values);
             } else if constexpr (std::is_same_v<T, NotInNode>) {
-                os << field_text(n.field) << " not in ";
+                os += field_text(n.field);
+                os += " not in ";
                 array_to_string(os, n.values);
             } else if constexpr (std::is_same_v<T, MatchNode>) {
                 if (n.op == MatchOp::Icontains) {
                     string_to_string(os, n.pattern);
-                    os << (n.negated ? " not in " : " in ")
-                       << field_text(n.field);
+                    os += n.negated ? " not in " : " in ";
+                    os += field_text(n.field);
                 } else {
-                    os << field_text(n.field) << ' '
-                       << match_op_str(n.op, n.negated) << ' ';
+                    os += field_text(n.field);
+                    os += ' ';
+                    os += match_op_str(n.op, n.negated);
+                    os += ' ';
                     string_to_string(os, n.pattern);
                     if (n.escape) {
-                        os << " escape ";
-                        string_to_string(os, std::string(1, *n.escape));
+                        os += " escape ";
+                        string_to_string(os, dstd::String(1, *n.escape));
                     }
                 }
             } else if constexpr (std::is_same_v<T, AndNode>) {
-                os << '(';
+                os += '(';
                 node_to_string(os, *n.left);
-                os << " and ";
+                os += " and ";
                 node_to_string(os, *n.right);
-                os << ')';
+                os += ')';
             } else if constexpr (std::is_same_v<T, OrNode>) {
-                os << '(';
+                os += '(';
                 node_to_string(os, *n.left);
-                os << " or ";
+                os += " or ";
                 node_to_string(os, *n.right);
-                os << ')';
+                os += ')';
             } else if constexpr (std::is_same_v<T, NotNode>) {
-                os << "not (";
+                os += "not (";
                 node_to_string(os, *n.operand);
-                os << ')';
+                os += ')';
             } else if constexpr (std::is_same_v<T, ExprLeaf>) {
-                os << n.text;
+                os += n.text;
             }
         },
         node.data);
@@ -139,10 +148,10 @@ inline const char* compare_op_str(CompareOp op) {
 }
 
 /// Serialize an AST back to query DSL string.
-inline std::string to_string(const QueryNode& node) {
-    std::ostringstream os;
+inline dstd::String to_string(const QueryNode& node) {
+    dstd::String os;
     detail::node_to_string(os, node);
-    return os.str();
+    return os;
 }
 
 }  // namespace dftracer::utils::duql

@@ -1,4 +1,9 @@
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 #include <dftracer/utils/duql/syntax/parser.h>
 
@@ -14,23 +19,23 @@ namespace {
 
 using ::dftracer::utils::common::detail::iequals;
 
-constexpr std::string_view RESERVED[] = {"and",    "or",    "not",     "in",
+constexpr dstd::StringView RESERVED[] = {"and",    "or",    "not",     "in",
                                          "like",   "ilike", "between", "is",
                                          "escape", "null",  "true",    "false"};
 
-constexpr std::string_view STAGES[] = {
+constexpr dstd::StringView STAGES[] = {
     "where",    "derive", "parse",      "select",    "drop",   "rename",
     "distinct", "group",  "agg",        "window",    "pivot",  "unpivot",
     "sort",     "take",   "skip",       "sample",    "expand", "lookup",
     "union",    "call",   "time_range", "call_tree", "bucket", "session"};
 
-bool reserved(std::string_view word) {
+bool reserved(dstd::StringView word) {
     for (auto r : RESERVED)
         if (iequals(word, r)) return true;
     return false;
 }
 
-bool stage_word(std::string_view word) {
+bool stage_word(dstd::StringView word) {
     for (auto s : STAGES)
         if (iequals(word, s)) return true;
     return false;
@@ -45,7 +50,7 @@ struct Failure {
 
 class Parser {
    public:
-    Parser(std::string_view src, std::vector<Token> tokens)
+    Parser(dstd::StringView src, dstd::Vector<Token> tokens)
         : src_(src), toks_(std::move(tokens)) {}
 
     Program program() {
@@ -68,19 +73,19 @@ class Parser {
             }
             if (!ok)
                 fail(v, "duql version must be MAJOR or MAJOR.MINOR, not " +
-                            std::string(v.text));
+                            dstd::String(v.text));
             if (major != DUQL_VERSION_MAJOR || minor > DUQL_VERSION_MINOR)
-                fail(v, "Unsupported duql version " + std::string(v.text) +
+                fail(v, "Unsupported duql version " + dstd::String(v.text) +
                             "; this build reads duql " +
-                            std::to_string(DUQL_VERSION_MAJOR) + "." +
-                            std::to_string(DUQL_VERSION_MINOR));
+                            dstd::int_text(DUQL_VERSION_MAJOR) + "." +
+                            dstd::int_text(DUQL_VERSION_MINOR));
         }
         while (true) {
             if (word("let") && peek(1).kind == Tok::Name &&
                 peek(2).kind == Tok::Assign) {
                 advance();
                 Let let;
-                let.name = std::string(advance().text);
+                let.name = dstd::String(advance().text);
                 advance();
                 let.pipeline = pipeline();
                 expect(Tok::Semi, "';' after a let");
@@ -109,8 +114,8 @@ class Parser {
     }
 
    private:
-    std::string_view src_;
-    std::vector<Token> toks_;
+    dstd::StringView src_;
+    dstd::Vector<Token> toks_;
     std::size_t pos_ = 0;
     const Token* wild_start_ = nullptr;
 
@@ -127,10 +132,10 @@ class Parser {
         advance();
         return true;
     }
-    bool word(std::string_view w) const {
+    bool word(dstd::StringView w) const {
         return at(Tok::Name) && iequals(cur().text, w);
     }
-    bool accept_word(std::string_view w) {
+    bool accept_word(dstd::StringView w) {
         if (!word(w)) return false;
         advance();
         return true;
@@ -139,9 +144,9 @@ class Parser {
     // The value of the string token `t`: `\\`, `\"`, `\'`, `\n`, `\t`,
     // `\r` and `\uXXXX` (a surrogate pair for one code point) decode; any
     // other backslash stays, so a regex such as "\d+" keeps its escape.
-    std::string string_value(const Token& t) const {
-        const std::string_view s = t.text;
-        std::string out;
+    dstd::String string_value(const Token& t) const {
+        const dstd::StringView s = t.text;
+        dstd::String out;
         out.reserve(s.size());
         auto hex4 = [&](std::size_t at) -> long {
             if (at + 4 > s.size()) return -1;
@@ -222,42 +227,42 @@ class Parser {
         return out;
     }
 
-    [[noreturn]] void fail(const Token& t, std::string msg) const {
+    [[noreturn]] void fail(const Token& t, dstd::String msg) const {
         throw Failure{make_error(src_, t.offset,
                                  t.text.empty() ? 1 : t.text.size(),
                                  std::move(msg))};
     }
     // The token as written, for a message: a parameter keeps its `$`.
-    static std::string shown(const Token& t) {
-        return t.kind == Tok::Param ? "$" + std::string(t.text)
-                                    : std::string(t.text);
+    static dstd::String shown(const Token& t) {
+        return t.kind == Tok::Param ? "$" + dstd::String(t.text)
+                                    : dstd::String(t.text);
     }
-    const Token& expect(Tok k, std::string_view what) {
+    const Token& expect(Tok k, dstd::StringView what) {
         if (!at(k))
-            fail(cur(), "Expected " + std::string(what) + ", got '" +
+            fail(cur(), "Expected " + dstd::String(what) + ", got '" +
                             shown(cur()) + "'");
         return advance();
     }
-    void expect_word(std::string_view w) {
+    void expect_word(dstd::StringView w) {
         if (!accept_word(w))
-            fail(cur(), "Expected '" + std::string(w) + "', got '" +
+            fail(cur(), "Expected '" + dstd::String(w) + "', got '" +
                             shown(cur()) + "'");
     }
-    std::string name(std::string_view what) {
+    dstd::String name(dstd::StringView what) {
         if (!at(Tok::Name) || reserved(cur().text))
-            fail(cur(), "Expected " + std::string(what) + ", got '" +
+            fail(cur(), "Expected " + dstd::String(what) + ", got '" +
                             shown(cur()) + "'");
-        return std::string(advance().text);
+        return dstd::String(advance().text);
     }
-    std::string int_text(std::string_view what) {
-        return std::string(expect(Tok::Int, what).text);
+    dstd::String int_text(dstd::StringView what) {
+        return dstd::String(expect(Tok::Int, what).text);
     }
     // A row count: an integer, or a parameter kept as `$name`.
-    std::string count_text() {
-        if (at(Tok::Param)) return "$" + std::string(advance().text);
+    dstd::String count_text() {
+        if (at(Tok::Param)) return "$" + dstd::String(advance().text);
         return int_text("a row count or a parameter");
     }
-    std::pair<ExprPtr, ExprPtr> join_key() {
+    dstd::Pair<ExprPtr, ExprPtr> join_key() {
         ExprPtr left = level(AddLevel);
         ExprPtr right;
         if (accept(Tok::Eq)) right = level(AddLevel);
@@ -272,7 +277,7 @@ class Parser {
     }
     template <class Node>
     ExprPtr make(Node node, const Token& first) {
-        auto e = std::make_unique<Expr>();
+        auto e = dstd::make_unique<Expr>();
         e->node = std::move(node);
         e->span = span_from(first);
         return e;
@@ -300,7 +305,7 @@ class Parser {
             const Token& first = cur();
             ExprPtr e = expr();
             if (at(Tok::Pipe)) {
-                auto p = std::make_unique<Pipeline>();
+                auto p = dstd::make_unique<Pipeline>();
                 p->stages.push_back(leading_stage(std::move(e), first));
                 def.body = pipeline_tail(std::move(p));
             } else {
@@ -312,7 +317,7 @@ class Parser {
 
     SourceDecl source_decl() {
         SourceDecl s;
-        s.name = std::string(advance().text);
+        s.name = dstd::String(advance().text);
         expect(Tok::Lbrace, "'{'");
         while (!at(Tok::Rbrace)) {
             if (word("def") && peek(1).kind == Tok::Name) {
@@ -327,7 +332,7 @@ class Parser {
             }
             if (!accept(Tok::Semi) && !at(Tok::Rbrace))
                 fail(cur(), "Expected ';' between source members, got '" +
-                                std::string(cur().text) + "'");
+                                dstd::String(cur().text) + "'");
         }
         advance();
         return s;
@@ -338,7 +343,7 @@ class Parser {
     bool stage_start() const { return at(Tok::Name) && stage_word(cur().text); }
 
     PipelinePtr pipeline() {
-        auto p = std::make_unique<Pipeline>();
+        auto p = dstd::make_unique<Pipeline>();
         if (word("from")) {
             advance();
             do {
@@ -347,7 +352,7 @@ class Parser {
                     f.name = string_value(advance());
                     f.quoted = true;
                 } else if (at(Tok::Param)) {
-                    f.name = Param{std::string(advance().text)};
+                    f.name = Param{dstd::String(advance().text)};
                 } else {
                     f.name = name("a file, a row set or a parameter");
                 }
@@ -365,7 +370,7 @@ class Parser {
     Stage leading_stage(ExprPtr e, const Token& first) {
         Stage s;
         if (auto* c = std::get_if<Call>(&e->node);
-            c && c->name.find('.') == std::string::npos &&
+            c && c->name.find('.') == dstd::String::npos &&
             first.kind == Tok::Name && first.text != "case")
             s.node = Use{std::move(*c)};
         else
@@ -380,7 +385,7 @@ class Parser {
                 peek(1).kind == Tok::Lparen) {
                 const Token& first = cur();
                 Stage s;
-                std::string n(advance().text);
+                dstd::String n(advance().text);
                 s.node = Use{call(std::move(n))};
                 s.span = span_from(first);
                 p->stages.push_back(std::move(s));
@@ -388,15 +393,15 @@ class Parser {
             }
             if (!at(Tok::Name) || !stage_word(cur().text))
                 fail(cur(), "Expected a stage after '|', got '" +
-                                std::string(cur().text) + "'");
+                                dstd::String(cur().text) + "'");
             p->stages.push_back(stage());
         }
         return p;
     }
 
-    std::vector<Assign> block() {
+    dstd::Vector<Assign> block() {
         expect(Tok::Lbrace, "'{'");
-        std::vector<Assign> out;
+        dstd::Vector<Assign> out;
         if (!at(Tok::Rbrace)) {
             do {
                 if (at(Tok::Name) && peek(1).kind == Tok::Assign) {
@@ -418,8 +423,8 @@ class Parser {
 
     // Each run of characters other than letters, digits and '_' becomes
     // one '_', trimmed at both ends; a leading digit or a keyword gets '_'.
-    static std::string implicit_name(std::string_view text) {
-        std::string out;
+    static dstd::String implicit_name(dstd::StringView text) {
+        dstd::String out;
         for (unsigned char c : text) {
             if (std::isalnum(c) || c == '_')
                 out += static_cast<char>(c);
@@ -427,7 +432,7 @@ class Parser {
                 out += '_';
         }
         const auto first = out.find_first_not_of('_');
-        if (first == std::string::npos) return {};
+        if (first == dstd::String::npos) return {};
         out = out.substr(first, out.find_last_not_of('_') - first + 1);
         if (std::isdigit(static_cast<unsigned char>(out[0])) || reserved(out))
             out.insert(out.begin(), '_');
@@ -455,8 +460,8 @@ class Parser {
         return it;
     }
 
-    std::vector<SortKey> sort_keys() {
-        std::vector<SortKey> keys;
+    dstd::Vector<SortKey> sort_keys() {
+        dstd::Vector<SortKey> keys;
         do {
             SortKey k;
             if (accept(Tok::Minus)) {
@@ -478,18 +483,18 @@ class Parser {
         return keys;
     }
 
-    std::vector<ExprPtr> expr_list() {
-        std::vector<ExprPtr> out;
+    dstd::Vector<ExprPtr> expr_list() {
+        dstd::Vector<ExprPtr> out;
         do {
             out.push_back(expr());
         } while (accept(Tok::Comma));
         return out;
     }
 
-    PipelinePtr from_pipeline(std::string_view what) {
+    PipelinePtr from_pipeline(dstd::StringView what) {
         expect(Tok::Lparen, "'('");
         if (!word("from"))
-            fail(cur(), std::string(what) + " starts with 'from'");
+            fail(cur(), dstd::String(what) + " starts with 'from'");
         auto p = pipeline();
         expect(Tok::Rparen, "')'");
         return p;
@@ -502,8 +507,8 @@ class Parser {
 
     Stage stage() {
         const Token& first = cur();
-        const std::string kw = [&] {
-            std::string w(advance().text);
+        const dstd::String kw = [&] {
+            dstd::String w(advance().text);
             ::dftracer::utils::common::detail::lower_ascii(w);
             return w;
         }();
@@ -549,7 +554,7 @@ class Parser {
         } else if (kw == "rename") {
             Rename r;
             do {
-                std::string n = name("a field name");
+                dstd::String n = name("a field name");
                 expect(Tok::Assign, "'='");
                 r.pairs.emplace_back(std::move(n), path());
             } while (accept(Tok::Comma));
@@ -593,7 +598,7 @@ class Parser {
                         p.values.push_back(expr());
                         p.labels.push_back(accept_word("as")
                                                ? name("a column name")
-                                               : std::string());
+                                               : dstd::String());
                     } while (accept(Tok::Comma));
                 }
                 expect(Tok::Rbracket, "']'");
@@ -632,9 +637,9 @@ class Parser {
         } else if (kw == "sample") {
             Sample sm;
             if (at(Tok::Int) || at(Tok::Float))
-                sm.amount = std::string(advance().text);
+                sm.amount = dstd::String(advance().text);
             else if (at(Tok::Param))
-                sm.amount = "$" + std::string(advance().text);
+                sm.amount = "$" + dstd::String(advance().text);
             else
                 fail(cur(),
                      "Expected a row count, a percentage or a "
@@ -699,7 +704,7 @@ class Parser {
             }
         } else if (kw == "union") {
             if (at(Tok::Name) || at(Tok::String)) {
-                auto other = std::make_unique<Pipeline>();
+                auto other = dstd::make_unique<Pipeline>();
                 From f;
                 f.quoted = at(Tok::String);
                 f.name = f.quoted ? string_value(advance())
@@ -711,7 +716,7 @@ class Parser {
             }
         } else if (kw == "call") {
             const Token& at_name = cur();
-            std::string n = name("a function name");
+            dstd::String n = name("a function name");
             while (at(Tok::Dot) && peek(1).kind == Tok::Name) {
                 advance();
                 n += '.';
@@ -766,7 +771,7 @@ class Parser {
             if (accept_word("as")) ss.as = name("a field name");
             s.node = std::move(ss);
         } else {
-            fail(first, "Unknown stage '" + std::string(first.text) + "'");
+            fail(first, "Unknown stage '" + dstd::String(first.text) + "'");
         }
         s.span = span_from(first);
         return s;
@@ -779,7 +784,7 @@ class Parser {
             case OrLevel:
             case AndLevel: {
                 const Token& first = cur();
-                const std::string_view op = lv == OrLevel ? "or" : "and";
+                const dstd::StringView op = lv == OrLevel ? "or" : "and";
                 ExprPtr left = lv == OrLevel ? level(AndLevel) : not_expr();
                 while (word(op)) {
                     advance();
@@ -922,7 +927,7 @@ class Parser {
                        iequals(peek(1).text, "from")) {
                 in.subquery = from_pipeline("A sub-query");
             } else if (at(Tok::Param)) {
-                in.list_param = std::string(advance().text);
+                in.list_param = dstd::String(advance().text);
             } else {
                 fail(cur(), "Expected '[', '(from' or a parameter after 'in'");
             }
@@ -943,7 +948,7 @@ class Parser {
             l.subject = std::move(left);
             l.negated = negated;
             if (at(Tok::Param))
-                l.pattern_param = std::string(advance().text);
+                l.pattern_param = dstd::String(advance().text);
             else
                 l.pattern =
                     string_value(expect(Tok::String, "a string pattern"));
@@ -1024,25 +1029,25 @@ class Parser {
                 p.steps.push_back({"*", false, {}});
             } else if (at(Tok::Name)) {
                 if (reserved(cur().text))
-                    fail(cur(), "'" + std::string(cur().text) +
+                    fail(cur(), "'" + dstd::String(cur().text) +
                                     "' is a keyword; quote the key as `" +
-                                    std::string(cur().text) + "`");
-                p.steps.push_back({std::string(advance().text), false, {}});
+                                    dstd::String(cur().text) + "`");
+                p.steps.push_back({dstd::String(advance().text), false, {}});
             } else if (at(Tok::Qname)) {
-                p.steps.push_back({std::string(advance().text), true, {}});
+                p.steps.push_back({dstd::String(advance().text), true, {}});
             } else if (!p.steps.empty() && at(Tok::Int)) {
-                p.steps.push_back({std::string(advance().text), false, {}});
+                p.steps.push_back({dstd::String(advance().text), false, {}});
             } else if (!p.steps.empty() && at(Tok::Float) &&
                        cur().text.find_first_not_of("0123456789.") ==
-                           std::string_view::npos) {
+                           dstd::StringView::npos) {
                 // `a.0.5` lexes 0.5 as one float: two numeric keys.
-                const std::string_view f = advance().text;
+                const dstd::StringView f = advance().text;
                 const auto dot = f.find('.');
-                p.steps.push_back({std::string(f.substr(0, dot)), false, {}});
-                p.steps.push_back({std::string(f.substr(dot + 1)), false, {}});
+                p.steps.push_back({dstd::String(f.substr(0, dot)), false, {}});
+                p.steps.push_back({dstd::String(f.substr(dot + 1)), false, {}});
             } else {
                 fail(cur(),
-                     "Expected a key, got '" + std::string(cur().text) + "'");
+                     "Expected a key, got '" + dstd::String(cur().text) + "'");
             }
             if (indexes(p, first, out)) return p;
             if (!(at(Tok::Dot) &&
@@ -1134,7 +1139,7 @@ class Parser {
         return computed ? std::move(computed) : make(std::move(p), t);
     }
 
-    Call call(std::string n) {
+    Call call(dstd::String n) {
         Call c;
         c.name = std::move(n);
         expect(Tok::Lparen, "'('");
@@ -1183,19 +1188,19 @@ class Parser {
 
     ExprPtr number(const Token& t) {
         Literal lit;
-        lit.number_text = std::string(t.text);
+        lit.number_text = dstd::String(t.text);
         if (t.kind == Tok::Int) {
             std::int64_t v = 0;
             const auto r = std::from_chars(t.text.data(),
                                            t.text.data() + t.text.size(), v);
             if (r.ec != std::errc{})
-                fail(t, "Invalid integer: '" + std::string(t.text) + "'");
+                fail(t, "Invalid integer: '" + dstd::String(t.text) + "'");
             lit.value = static_cast<std::uint64_t>(v);
         } else {
             try {
                 lit.value = std::stod(std::string(t.text));
             } catch (...) {
-                fail(t, "Invalid float: '" + std::string(t.text) + "'");
+                fail(t, "Invalid float: '" + dstd::String(t.text) + "'");
             }
         }
         advance();
@@ -1218,8 +1223,8 @@ class Parser {
                          (t.text[i - 1] == 'e' || t.text[i - 1] == 'E'))))
                     ++i;
                 advance();
-                return make(Duration{std::string(t.text.substr(0, i)),
-                                     std::string(t.text.substr(i))},
+                return make(Duration{dstd::String(t.text.substr(0, i)),
+                                     dstd::String(t.text.substr(i))},
                             t);
             }
             case Tok::String:
@@ -1227,7 +1232,7 @@ class Parser {
                 return make(Literal{string_value(t), {}}, t);
             case Tok::Param:
                 advance();
-                return make(Param{std::string(t.text)}, t);
+                return make(Param{dstd::String(t.text)}, t);
             case Tok::Lparen: {
                 if (peek(1).kind == Tok::Name && iequals(peek(1).text, "from"))
                     return make(Subquery{from_pipeline("A sub-query")}, t);
@@ -1267,7 +1272,7 @@ class Parser {
                     return make(case_block(), t);
                 if (reserved(t.text))
                     fail(t, "Expected a value, got the keyword '" +
-                                std::string(t.text) + "'");
+                                dstd::String(t.text) + "'");
                 // A dotted name directly followed by '(' is a call.
                 std::size_t k = 0;
                 while (peek(k).kind == Tok::Name &&
@@ -1277,7 +1282,7 @@ class Parser {
                     k += 2;
                 if (peek(k).kind == Tok::Name &&
                     peek(k + 1).kind == Tok::Lparen && peek(k + 1).adjacent) {
-                    std::string n(advance().text);
+                    dstd::String n(advance().text);
                     for (std::size_t i = 0; i < k; i += 2) {
                         advance();
                         n += '.';
@@ -1290,17 +1295,17 @@ class Parser {
             default:
                 fail(t, t.kind == Tok::End ? "Unexpected end of query"
                                            : "Expected a value, got '" +
-                                                 std::string(t.text) + "'");
+                                                 dstd::String(t.text) + "'");
         }
     }
 };
 
 }  // namespace
 
-bool is_stage_word(std::string_view word) { return stage_word(word); }
+bool is_stage_word(dstd::StringView word) { return stage_word(word); }
 
 dftracer::utils::dstd::Expected<Program, duql::DuqlError> parse(
-    std::string_view source) {
+    dstd::StringView source) {
     auto tokens = lex(source);
     if (!tokens) return dftracer::utils::dstd::Unexpected(tokens.error());
     try {

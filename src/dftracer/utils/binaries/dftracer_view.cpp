@@ -520,13 +520,15 @@ static bool parse_agg(const std::string& spec, std::vector<AggSpec>& out) {
 static void print_table(FILE* out, const dataframe::DataFrame& table) {
     const std::int64_t nrows = table.num_rows();
     for (std::int64_t r = 0; r < nrows; ++r) {
-        std::string s = "{";
+        dftracer::utils::dstd::String s = "{";
         bool first = true;
         for (std::size_t c = 0; c < table.columns.size(); ++c) {
             if (!binaries::cli_emittable(table.columns[c].type())) continue;
             if (!first) s += ",";
             first = false;
-            s += "\"" + table.names[c] + "\":";
+            s += '"';
+            s += table.names[c];
+            s += "\":";
             binaries::append_cell_json(s, table.columns[c], r);
         }
         s += "}\n";

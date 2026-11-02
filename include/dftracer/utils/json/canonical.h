@@ -4,19 +4,17 @@
 #include <dftracer/utils/dstd/string.h>
 #include <simdjson.h>
 
-#include <string>
-
 namespace dftracer::utils::json {
 
 /// Appends `v` to `out` as canonical JSON: no whitespace, object keys in byte
 /// order (repeated keys keep their order), integers exact and doubles in
 /// their shortest round-trip form, so an integral double reads like the
 /// integer. Two values with the same content give the same text.
-void append_canonical_json(std::string& out, simdjson::dom::element v);
+void append_canonical_json(dstd::String& out, simdjson::dom::element v);
 
 /// The canonical form of the JSON text `text`, or `text` itself when it does
 /// not parse.
-std::string canonical_json_text(dstd::StringView text);
+dstd::String canonical_json_text(dstd::StringView text);
 
 }  // namespace dftracer::utils::json
 

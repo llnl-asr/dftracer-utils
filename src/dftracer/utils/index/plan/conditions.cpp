@@ -33,8 +33,8 @@ std::string literal_to_string(const duql_ns::LiteralNode& lit) {
     return std::visit(
         [](auto&& v) -> std::string {
             using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::string>)
-                return v;
+            if constexpr (std::is_same_v<T, dstd::String>)
+                return std::string(v);
             else if constexpr (std::is_same_v<T, bool>)
                 return v ? "1" : "0";
             else if constexpr (std::is_same_v<T, int64_t>)
@@ -104,7 +104,7 @@ std::optional<std::uint64_t> timestamp_bound(const std::string& text,
     const char* end = text.data() + text.size();
     const auto parsed = std::from_chars(text.data(), end, out);
     if (parsed.ec == std::errc{} && parsed.ptr == end) return out;
-    if (std::holds_alternative<std::string>(n.value.value))
+    if (std::holds_alternative<dstd::String>(n.value.value))
         throw common::DFTUtilsException::cat(
             common::ErrorCode::InvalidArgument, "ts compared with \"", text,
             "\", which is not an integer timestamp");
@@ -251,17 +251,17 @@ bool path_may_exist(const Paths& paths, const std::string& path) {
 // leaf counts as satisfiable.
 bool name_may_match(const std::vector<std::string>& names,
                     const duql_ns::QueryNode& leaf) {
-    auto text = [](const duql_ns::LiteralNode& lit) -> const std::string* {
-        return std::get_if<std::string>(&lit.value);
+    auto text = [](const duql_ns::LiteralNode& lit) -> const dstd::String* {
+        return std::get_if<dstd::String>(&lit.value);
     };
     return std::visit(
         [&](auto&& n) -> bool {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, duql_ns::CompareNode>) {
-                const std::string* v = text(n.value);
+                const dstd::String* v = text(n.value);
                 if (!v) return false;
                 for (const auto& name : names) {
-                    const int c = name.compare(*v);
+                    const int c = name.compare(dstd::StringView(*v));
                     switch (n.op) {
                         case duql_ns::CompareOp::Eq:
                             if (c == 0) return true;
@@ -290,8 +290,8 @@ bool name_may_match(const std::vector<std::string>& names,
                 for (const auto& name : names) {
                     bool listed = false;
                     for (const auto& e : n.values.elements) {
-                        const std::string* v = text(e);
-                        if (v && *v == name) listed = true;
+                        const dstd::String* v = text(e);
+                        if (v && dstd::StringView(*v) == name) listed = true;
                     }
                     if (listed == in) return true;
                 }
@@ -338,7 +338,8 @@ class MetadataRecords final : public Condition {
         ChunkSet out;
         for (auto c : candidates) {
             const auto it = meta_.find(c);
-            if (it == meta_.end() || may_hold(it->second, leaf, field->path))
+            if (it == meta_.end() ||
+                may_hold(it->second, leaf, std::string(field->path)))
                 out.insert(c);
         }
         return out;
@@ -388,12 +389,13 @@ class FileBloom final : public Condition {
                 using T = std::decay_t<decltype(n)>;
                 if constexpr (std::is_same_v<T, duql_ns::CompareNode>) {
                     if (n.op != duql_ns::CompareOp::Eq) return true;
-                    return may_contain(n.field.path,
+                    return may_contain(std::string(n.field.path),
                                        literal_to_string(n.value));
                 } else if constexpr (std::is_same_v<T, duql_ns::InNode>) {
                     if (n.values.elements.size() > SEMI_JOIN_CAP) return true;
                     for (const auto& elem : n.values.elements)
-                        if (may_contain(n.field.path, literal_to_string(elem)))
+                        if (may_contain(std::string(n.field.path),
+                                        literal_to_string(elem)))
                             return true;
                     return false;
                 } else if constexpr (std::is_same_v<T, duql_ns::AndNode>) {
@@ -484,10 +486,12 @@ class Postings final : public Condition {
         if (const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data)) {
             if (n->op != duql_ns::CompareOp::Eq) return std::nullopt;
             const auto val = literal_to_string(n->value);
-            const auto contains = d_.posting_contains(n->field.path, val);
+            const auto contains =
+                d_.posting_contains(std::string(n->field.path), val);
             if (!contains) return std::nullopt;
             if (!*contains) return ChunkSet{};
-            const auto& chunks = d_.posting_chunks(n->field.path, val);
+            const auto& chunks =
+                d_.posting_chunks(std::string(n->field.path), val);
             if (chunks.empty()) return std::nullopt;
             return chunks;
         }
@@ -495,9 +499,11 @@ class Postings final : public Condition {
             ChunkSet out;
             for (const auto& elem : n->values.elements) {
                 const auto val = literal_to_string(elem);
-                const auto contains = d_.posting_contains(n->field.path, val);
+                const auto contains =
+                    d_.posting_contains(std::string(n->field.path), val);
                 if (!contains || !*contains) continue;
-                const auto& chunks = d_.posting_chunks(n->field.path, val);
+                const auto& chunks =
+                    d_.posting_chunks(std::string(n->field.path), val);
                 out.insert(chunks.begin(), chunks.end());
             }
             if (out.empty()) return std::nullopt;
@@ -522,7 +528,7 @@ class Counts final : public Condition {
             if (n->op != duql_ns::CompareOp::Eq &&
                 n->op != duql_ns::CompareOp::Ne)
                 return std::nullopt;
-            const auto& counts = d_.counts(n->field.path);
+            const auto& counts = d_.counts(std::string(n->field.path));
             const auto val = literal_to_string(n->value);
             ChunkSet out;
             for (auto ckpt : candidates) {
@@ -539,7 +545,7 @@ class Counts final : public Condition {
             return out;
         }
         if (const auto* n = std::get_if<duql_ns::InNode>(&leaf.data)) {
-            const auto& counts = d_.counts(n->field.path);
+            const auto& counts = d_.counts(std::string(n->field.path));
             ChunkSet out;
             for (auto ckpt : candidates) {
                 const auto* vc = values(counts, ckpt);
@@ -557,7 +563,7 @@ class Counts final : public Condition {
             return out;
         }
         if (const auto* n = std::get_if<duql_ns::NotInNode>(&leaf.data)) {
-            const auto& counts = d_.counts(n->field.path);
+            const auto& counts = d_.counts(std::string(n->field.path));
             ChunkSet out;
             for (auto ckpt : candidates) {
                 const auto* vc = values(counts, ckpt);
@@ -574,18 +580,18 @@ class Counts final : public Condition {
                 n->op != duql_ns::CompareOp::Ne)
                 return std::nullopt;
             const auto val = literal_to_string(n->value);
-            return proven(n->field.path, [&](const auto& vc) {
+            return proven(std::string(n->field.path), [&](const auto& vc) {
                 return n->op == duql_ns::CompareOp::Eq
                            ? vc.size() == 1 && vc.count(val) > 0
                            : vc.count(val) == 0;
             });
         }
         if (const auto* n = std::get_if<duql_ns::InNode>(&leaf.data))
-            return proven(n->field.path, [&](const auto& vc) {
+            return proven(std::string(n->field.path), [&](const auto& vc) {
                 return !vc.empty() && all_listed(vc, n->values);
             });
         if (const auto* n = std::get_if<duql_ns::NotInNode>(&leaf.data))
-            return proven(n->field.path, [&](const auto& vc) {
+            return proven(std::string(n->field.path), [&](const auto& vc) {
                 return !vc.empty() && none_listed(vc, n->values);
             });
         return std::nullopt;
@@ -657,7 +663,7 @@ class Zonemap final : public Condition {
         const bool bounds_equality =
             n->op == duql_ns::CompareOp::Eq && !d_.fixed_field(n->field.path);
         if (!is_range_op(n->op) && !bounds_equality) return std::nullopt;
-        const auto& zones = d_.zones(n->field.path);
+        const auto& zones = d_.zones(std::string(n->field.path));
         const auto val = literal_to_string(n->value);
         std::optional<std::uint64_t> ts_val;
         if (!d_.by_path && n->field.path == "ts" && is_range_op(n->op))
@@ -688,7 +694,7 @@ class Zonemap final : public Condition {
         if (!n || !is_range_op(n->op)) return std::nullopt;
         const auto val = literal_to_string(n->value);
         ChunkSet out;
-        for (const auto& [ckpt, z] : d_.zones(n->field.path))
+        for (const auto& [ckpt, z] : d_.zones(std::string(n->field.path)))
             if (covers_every_line(d_, ckpt, z.observed, z.present) &&
                 zone_all_match(z, n->op, val))
                 out.insert(ckpt);
@@ -705,7 +711,7 @@ class Zonemap final : public Condition {
         vals.reserve(in.values.elements.size());
         for (const auto& elem : in.values.elements)
             vals.push_back(literal_to_string(elem));
-        const auto& zones = d_.zones(in.field.path);
+        const auto& zones = d_.zones(std::string(in.field.path));
         ChunkSet out;
         for (auto ckpt : candidates) {
             auto it = zones.find(ckpt);
@@ -890,7 +896,7 @@ bool to_value(const duql_ns::LiteralNode& lit, ::dftu_value& out) {
         [&out](auto&& v) -> bool {
             using T = std::decay_t<decltype(v)>;
             out = ::dftu_value{};
-            if constexpr (std::is_same_v<T, std::string>) {
+            if constexpr (std::is_same_v<T, dstd::String>) {
                 out.kind = DFTU_VAL_STR;
                 out.count = static_cast<std::uint32_t>(v.size());
                 out.as.str = v.c_str();

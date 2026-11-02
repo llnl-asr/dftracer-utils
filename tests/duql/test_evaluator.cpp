@@ -1,4 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/parser.h>
@@ -185,13 +189,13 @@ TEST_CASE("evaluate - any over flattened positions in a value map") {
     auto ast = parse(R"(any(tags) == "b")");
     REQUIRE(ast.has_value());
     ValueMap m;
-    m["tags.0"] = std::string("a");
-    m["tags.1"] = std::string("b");
-    m["tagsx.0"] = std::string("b");
+    m["tags.0"] = dftracer::utils::dstd::String("a");
+    m["tags.1"] = dftracer::utils::dstd::String("b");
+    m["tagsx.0"] = dftracer::utils::dstd::String("b");
     CHECK(evaluate(**ast, m));
     ValueMap other;
-    other["tagsx.0"] = std::string("b");
-    other["tags.name"] = std::string("b");
+    other["tagsx.0"] = dftracer::utils::dstd::String("b");
+    other["tags.name"] = dftracer::utils::dstd::String("b");
     CHECK_FALSE(evaluate(**ast, other));
     auto args = parse("any(args.sizes) > 100");
     REQUIRE(args.has_value());
@@ -204,7 +208,7 @@ TEST_CASE("spec - empty string is a value") {
     CHECK(eval(R"(x == "")", R"({"x":""})"));
     CHECK(truth(R"(x != "")", R"({"x":""})") == Truth::No);
     ValueMap m;
-    m["x"] = std::string();
+    m["x"] = dftracer::utils::dstd::String();
     CHECK(eval(R"(x == "")", m));
     CHECK(truth(R"(x != "")", m) == Truth::No);
 }
@@ -248,7 +252,7 @@ TEST_CASE("spec - type mismatch fails a comparison and its negation") {
     CHECK_FALSE(eval("cat > 100", rec));
     CHECK_FALSE(eval("not (cat > 100)", rec));
     ValueMap m;
-    m["cat"] = std::string("POSIX");
+    m["cat"] = dftracer::utils::dstd::String("POSIX");
     CHECK(truth("cat > 100", m) == Truth::Unknown);
     CHECK(truth("not (cat > 100)", m) == Truth::Unknown);
 }
@@ -263,7 +267,7 @@ TEST_CASE("spec - any() over a missing, non-array or non-matching array") {
     CHECK(eval(R"(not (any(tags) == "a"))", R"({"tags":["b"]})"));
 
     ValueMap absent, b;
-    b["tags.0"] = std::string("b");
+    b["tags.0"] = dftracer::utils::dstd::String("b");
     CHECK(truth(R"(any(tags) == "a")", absent) == Truth::Unknown);
     CHECK_FALSE(eval(R"(not (any(tags) == "a"))", absent));
     CHECK(truth(R"(any(tags) == "a")", b) == Truth::No);
@@ -311,7 +315,7 @@ TEST_CASE("spec - in and not in") {
 
     ValueMap i, s, absent;
     i["x"] = std::int64_t{1};
-    s["x"] = std::string("1");
+    s["x"] = dftracer::utils::dstd::String("1");
     CHECK(truth(R"(x in ["a", "b"])", i) == Truth::Unknown);
     CHECK(truth(R"(x not in ["a", "b"])", i) == Truth::Unknown);
     CHECK(truth("x in [1, 2]", s) == Truth::Unknown);
@@ -322,10 +326,11 @@ TEST_CASE("spec - in and not in") {
 namespace {
 
 // Keeps the records `query` selects, as their indexes in `records`.
-std::vector<int> kept(const char* query, std::vector<const char*> records) {
+dftracer::utils::dstd::Vector<int> kept(
+    const char* query, dftracer::utils::dstd::Vector<const char*> records) {
     auto ast = parse(query);
     REQUIRE_MESSAGE(ast.has_value(), query);
-    std::vector<int> out;
+    dftracer::utils::dstd::Vector<int> out;
     for (std::size_t i = 0; i < records.size(); ++i) {
         JsonDoc doc(records[i]);
         REQUIRE(doc.valid);
@@ -334,7 +339,7 @@ std::vector<int> kept(const char* query, std::vector<const char*> records) {
     return out;
 }
 
-std::string compile_error(const char* query) {
+dftracer::utils::dstd::String compile_error(const char* query) {
     auto ast = parse(query);
     REQUIRE_FALSE(ast.has_value());
     return ast.error().message;
@@ -343,8 +348,9 @@ std::string compile_error(const char* query) {
 }  // namespace
 
 TEST_CASE("expressions - field against field") {
-    CHECK(kept("a > b", {R"({"a":3,"b":2})", R"({"a":1,"b":2})",
-                         R"({"a":3})"}) == std::vector<int>{0});
+    CHECK(
+        kept("a > b", {R"({"a":3,"b":2})", R"({"a":1,"b":2})", R"({"a":3})"}) ==
+        dftracer::utils::dstd::Vector<int>{0});
 }
 
 TEST_CASE("expressions - negative index") {
@@ -378,37 +384,44 @@ TEST_CASE("expressions - division by zero and overflow are unknown") {
 }
 
 TEST_CASE("expressions - presence tests") {
-    const std::vector<const char*> rs = {R"({"x":null})", R"({})",
-                                         R"({"x":0})"};
-    CHECK(kept("x is null", rs) == std::vector<int>{0});
-    CHECK(kept("x is missing", rs) == std::vector<int>{1});
-    CHECK(kept("exists(x)", rs) == std::vector<int>{0, 2});
-    CHECK(kept("x is not null", rs) == std::vector<int>{1, 2});
-    CHECK(kept("x is not missing", rs) == std::vector<int>{0, 2});
-    CHECK(kept("not exists(x)", rs) == std::vector<int>{1});
+    const dftracer::utils::dstd::Vector<const char*> rs = {
+        R"({"x":null})", R"({})", R"({"x":0})"};
+    CHECK(kept("x is null", rs) == dftracer::utils::dstd::Vector<int>{0});
+    CHECK(kept("x is missing", rs) == dftracer::utils::dstd::Vector<int>{1});
+    CHECK(kept("exists(x)", rs) == dftracer::utils::dstd::Vector<int>{0, 2});
+    CHECK(kept("x is not null", rs) ==
+          dftracer::utils::dstd::Vector<int>{1, 2});
+    CHECK(kept("x is not missing", rs) ==
+          dftracer::utils::dstd::Vector<int>{0, 2});
+    CHECK(kept("not exists(x)", rs) == dftracer::utils::dstd::Vector<int>{1});
 }
 
 TEST_CASE("expressions - coalesce") {
-    const std::vector<const char*> rs = {R"({"a":null,"b":2})", R"({"b":3})",
-                                         R"({"a":2,"b":9})"};
-    CHECK(kept("(a ?? b) == 2", rs) == std::vector<int>{0, 2});
-    CHECK(kept("coalesce(a, b) == 2", rs) == std::vector<int>{0, 2});
+    const dftracer::utils::dstd::Vector<const char*> rs = {
+        R"({"a":null,"b":2})", R"({"b":3})", R"({"a":2,"b":9})"};
+    CHECK(kept("(a ?? b) == 2", rs) ==
+          dftracer::utils::dstd::Vector<int>{0, 2});
+    CHECK(kept("coalesce(a, b) == 2", rs) ==
+          dftracer::utils::dstd::Vector<int>{0, 2});
     CHECK(truth("(a ?? b) == 2", R"({})") == Truth::Unknown);
 }
 
 TEST_CASE("expressions - between") {
-    const std::vector<const char*> rs = {R"({"x":1})", R"({"x":2})",
-                                         R"({"x":3})", R"({"x":4})", R"({})"};
-    CHECK(kept("x between 2 and 3", rs) == std::vector<int>{1, 2});
-    CHECK(kept("x not between 2 and 3", rs) == std::vector<int>{0, 3});
-    CHECK(kept("x between 2 and 3 and x != 3", rs) == std::vector<int>{1});
+    const dftracer::utils::dstd::Vector<const char*> rs = {
+        R"({"x":1})", R"({"x":2})", R"({"x":3})", R"({"x":4})", R"({})"};
+    CHECK(kept("x between 2 and 3", rs) ==
+          dftracer::utils::dstd::Vector<int>{1, 2});
+    CHECK(kept("x not between 2 and 3", rs) ==
+          dftracer::utils::dstd::Vector<int>{0, 3});
+    CHECK(kept("x between 2 and 3 and x != 3", rs) ==
+          dftracer::utils::dstd::Vector<int>{1});
 }
 
 TEST_CASE("expressions - in with expressions") {
-    const std::vector<const char*> rs = {R"({"x":1,"a":1})", R"({"x":2,"a":1})",
-                                         R"({"x":2})"};
-    CHECK(kept("x in [a, a + 5]", rs) == std::vector<int>{0});
-    CHECK(kept("x not in [a]", rs) == std::vector<int>{1});
+    const dftracer::utils::dstd::Vector<const char*> rs = {
+        R"({"x":1,"a":1})", R"({"x":2,"a":1})", R"({"x":2})"};
+    CHECK(kept("x in [a, a + 5]", rs) == dftracer::utils::dstd::Vector<int>{0});
+    CHECK(kept("x not in [a]", rs) == dftracer::utils::dstd::Vector<int>{1});
 }
 
 TEST_CASE("expressions - functions of the wrong input type are unknown") {
@@ -488,12 +501,12 @@ TEST_CASE("expressions - array index parameters fold to a literal step") {
     CHECK(at(R"(xs[$big] == "b")"));
     CHECK(at("o[$n] is missing"));
     CHECK_FALSE(at(R"(xs[$n] == "a")"));
-    p.emplace("bad", LiteralValue{std::string("1")});
+    p.emplace("bad", LiteralValue{dftracer::utils::dstd::String("1")});
     auto bad = parse("xs[$bad] == 1", p);
     REQUIRE_FALSE(bad.has_value());
     CHECK(
         bad.error().message.find("an array index parameter holds an integer") !=
-        std::string::npos);
+        dftracer::utils::dstd::String::npos);
 }
 
 TEST_CASE("expressions - list literals") {
@@ -565,21 +578,23 @@ TEST_CASE("expressions - join") {
     CHECK(eval(R"(join(n, ",") is null)", r));
     CHECK(eval(R"(join(s, ",") is null and join(missing, ",") is null)", r));
     Params p;
-    p.emplace("sep", LiteralValue{std::string("; ")});
+    p.emplace("sep", LiteralValue{dftracer::utils::dstd::String("; ")});
     auto ast = parse("join(tags, $sep) == \"b; a; b\"", p);
     REQUIRE(ast.has_value());
     JsonDoc doc(r);
     CHECK(evaluate(**ast, doc.root()));
     CHECK(compile_error("join(tags, sep) == \"x\"")
-              .find("join() takes a string separator") != std::string::npos);
+              .find("join() takes a string separator") !=
+          dftracer::utils::dstd::String::npos);
     CHECK(compile_error("join(tags, 1) == \"x\"")
-              .find("join() takes a string separator") != std::string::npos);
+              .find("join() takes a string separator") !=
+          dftracer::utils::dstd::String::npos);
 }
 
 TEST_CASE("expressions - sort is a stage keyword and a function") {
     CHECK(eval(R"(first(sort(xs)) == 1)", R"({"xs":[3,1,2]})"));
     CHECK(kept("first(sort(xs)) == 1", {R"({"xs":[3,1]})", R"({"xs":[2]})"}) ==
-          std::vector<int>{0});
+          dftracer::utils::dstd::Vector<int>{0});
 }
 
 TEST_CASE("expressions - string functions") {
@@ -636,17 +651,26 @@ TEST_CASE("expressions - object against a string is unknown") {
 }
 
 TEST_CASE("expressions - compile errors") {
-    CHECK(compile_error("x == null").find("is null") != std::string::npos);
-    CHECK(compile_error("x != null").find("is null") != std::string::npos);
-    CHECK(compile_error("x in [1, null]").find("null") != std::string::npos);
-    CHECK(compile_error("lenn(x) > 1").find("lenn") != std::string::npos);
-    CHECK(compile_error("len(x, y) > 1").find("len") != std::string::npos);
-    CHECK(compile_error("case(a, 1) == 1").find("case") != std::string::npos);
-    CHECK(compile_error("exists(x + 1)").find("path") != std::string::npos);
-    CHECK(compile_error("dur > 1ms").find("as_time") != std::string::npos);
-    CHECK(compile_error("now() > 1").find("time roles") != std::string::npos);
+    CHECK(compile_error("x == null").find("is null") !=
+          dftracer::utils::dstd::String::npos);
+    CHECK(compile_error("x != null").find("is null") !=
+          dftracer::utils::dstd::String::npos);
+    CHECK(compile_error("x in [1, null]").find("null") !=
+          dftracer::utils::dstd::String::npos);
+    CHECK(compile_error("lenn(x) > 1").find("lenn") !=
+          dftracer::utils::dstd::String::npos);
+    CHECK(compile_error("len(x, y) > 1").find("len") !=
+          dftracer::utils::dstd::String::npos);
+    CHECK(compile_error("case(a, 1) == 1").find("case") !=
+          dftracer::utils::dstd::String::npos);
+    CHECK(compile_error("exists(x + 1)").find("path") !=
+          dftracer::utils::dstd::String::npos);
+    CHECK(compile_error("dur > 1ms").find("as_time") !=
+          dftracer::utils::dstd::String::npos);
+    CHECK(compile_error("now() > 1").find("time roles") !=
+          dftracer::utils::dstd::String::npos);
     CHECK(compile_error("date_part(ts, \"hour\") > 1").find("needs a time") !=
-          std::string::npos);
+          dftracer::utils::dstd::String::npos);
 }
 
 TEST_CASE("expressions - field maps agree with JSON records") {
@@ -669,35 +693,37 @@ TEST_CASE("quantifiers - any and all truth tables") {
         R"({"e":[],"t":[true,true],"m":[true,false],"u":[null,true],)"
         R"("f":[false,null],"s":"x","n":null,"o":{"a":true},"cat":"io",)"
         R"("h":[{"up":false,"k":1},{"up":true,"k":2}],"g":[[1,2],[3]]})";
-    const std::vector<std::pair<const char*, Truth>> cases = {
-        {"any(e, .)", Truth::No},
-        {"all(e, .)", Truth::Yes},
-        {"any(t, .)", Truth::Yes},
-        {"all(t, .)", Truth::Yes},
-        {"any(m, .)", Truth::Yes},
-        {"all(m, .)", Truth::No},
-        {"any(u, .)", Truth::Yes},
-        {"all(u, .)", Truth::Unknown},
-        {"any(f, .)", Truth::Unknown},
-        {"all(f, .)", Truth::No},
-        {"any(s, .)", Truth::Unknown},
-        {"all(n, .)", Truth::Unknown},
-        {"any(nope, .)", Truth::Unknown},
-        {"all(o, .)", Truth::Unknown},
-        {"not all(e, .)", Truth::No},
-        {"not any(f, .)", Truth::Unknown},
-        {R"(any(h, .up and ^.cat == "io"))", Truth::Yes},
-        {R"(all(h, .k > 0 and ^.cat == "io"))", Truth::Yes},
-        {"all(h, .k > 1)", Truth::No},
-        {"any(h, .nope == 1)", Truth::Unknown},
-        {"any(g, .[0] == 3)", Truth::Yes},
-        {"all(g, len(.) > 0)", Truth::Yes},
-        {"any(h, .k == 2) and all(t, .)", Truth::Yes},
-        {"all(t) == true", Truth::Yes},
-        {"any(h) == 1", Truth::No},
-    };
+    const dftracer::utils::dstd::Vector<
+        dftracer::utils::dstd::Pair<const char*, Truth>>
+        cases = {
+            {"any(e, .)", Truth::No},
+            {"all(e, .)", Truth::Yes},
+            {"any(t, .)", Truth::Yes},
+            {"all(t, .)", Truth::Yes},
+            {"any(m, .)", Truth::Yes},
+            {"all(m, .)", Truth::No},
+            {"any(u, .)", Truth::Yes},
+            {"all(u, .)", Truth::Unknown},
+            {"any(f, .)", Truth::Unknown},
+            {"all(f, .)", Truth::No},
+            {"any(s, .)", Truth::Unknown},
+            {"all(n, .)", Truth::Unknown},
+            {"any(nope, .)", Truth::Unknown},
+            {"all(o, .)", Truth::Unknown},
+            {"not all(e, .)", Truth::No},
+            {"not any(f, .)", Truth::Unknown},
+            {R"(any(h, .up and ^.cat == "io"))", Truth::Yes},
+            {R"(all(h, .k > 0 and ^.cat == "io"))", Truth::Yes},
+            {"all(h, .k > 1)", Truth::No},
+            {"any(h, .nope == 1)", Truth::Unknown},
+            {"any(g, .[0] == 3)", Truth::Yes},
+            {"all(g, len(.) > 0)", Truth::Yes},
+            {"any(h, .k == 2) and all(t, .)", Truth::Yes},
+            {"all(t) == true", Truth::Yes},
+            {"any(h) == 1", Truth::No},
+        };
     for (const auto& [q, want] : cases) {
-        CAPTURE(std::string(q));
+        CAPTURE(dftracer::utils::dstd::String(q));
         CHECK(truth(q, rec) == want);
     }
 }
@@ -705,7 +731,7 @@ TEST_CASE("quantifiers - any and all truth tables") {
 TEST_CASE("quantifiers - a flattened record reads the array cell") {
     ValueMap m;
     m["h"] = Cell::json("[1,5]", true);
-    m["cat"] = Cell(std::string("io"));
+    m["cat"] = Cell(dftracer::utils::dstd::String("io"));
     CHECK(truth("any(h, . > 3)", m) == Truth::Yes);
     CHECK(truth("all(h, . > 3)", m) == Truth::No);
     CHECK(truth(R"(any(h, . == 1 and ^.cat == "io"))", m) == Truth::Yes);
@@ -733,7 +759,8 @@ TEST_CASE("evaluate - regex_replace") {
 
 namespace {
 
-std::optional<Number> parse_number_with_strtod_only(std::string_view text) {
+dftracer::utils::dstd::Optional<Number> parse_number_with_strtod_only(
+    dftracer::utils::dstd::StringView text) {
     const char* first = text.data();
     const char* last = first + text.size();
     if (std::int64_t i = 0;
@@ -742,7 +769,7 @@ std::optional<Number> parse_number_with_strtod_only(std::string_view text) {
     if (std::uint64_t u = 0;
         std::from_chars(first, last, u).ptr == last && !text.empty())
         return Number{u};
-    const std::string copy(text);
+    const dftracer::utils::dstd::String copy(text);
     char* end = nullptr;
     const double d = std::strtod(copy.c_str(), &end);
     if (!copy.empty() && end == copy.c_str() + copy.size()) return Number{d};
@@ -752,56 +779,57 @@ std::optional<Number> parse_number_with_strtod_only(std::string_view text) {
 }  // namespace
 
 TEST_CASE("parse_number - same results as strtod on every first character") {
-    const std::vector<std::string> inputs = {
-        "",
-        "0",
-        "007",
-        "-1.5e3",
-        "+5",
-        " 5",
-        "5 ",
-        "\t5",
-        "\n5",
-        ".5",
-        "5.",
-        "-.5",
-        "1e5",
-        "1E5",
-        "1e",
-        "e5",
-        "0x10",
-        "0x1p3",
-        "inf",
-        "-inf",
-        "+inf",
-        "Infinity",
-        "INF",
-        "nan",
-        "NaN",
-        "-nan",
-        "nano",
-        "abc",
-        "f911e308",
-        "n/a",
-        "i",
-        "n",
-        "-",
-        "+",
-        ".",
-        "--5",
-        "9223372036854775807",
-        "9223372036854775808",
-        "18446744073709551615",
-        "18446744073709551616",
-        "-9223372036854775808",
-        "-9223372036854775809",
-        "1,5",
-        ",5",
-        "/UqBWr9S",
-        "true",
-        "null",
-        "_1",
-    };
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> inputs =
+        {
+            "",
+            "0",
+            "007",
+            "-1.5e3",
+            "+5",
+            " 5",
+            "5 ",
+            "\t5",
+            "\n5",
+            ".5",
+            "5.",
+            "-.5",
+            "1e5",
+            "1E5",
+            "1e",
+            "e5",
+            "0x10",
+            "0x1p3",
+            "inf",
+            "-inf",
+            "+inf",
+            "Infinity",
+            "INF",
+            "nan",
+            "NaN",
+            "-nan",
+            "nano",
+            "abc",
+            "f911e308",
+            "n/a",
+            "i",
+            "n",
+            "-",
+            "+",
+            ".",
+            "--5",
+            "9223372036854775807",
+            "9223372036854775808",
+            "18446744073709551615",
+            "18446744073709551616",
+            "-9223372036854775808",
+            "-9223372036854775809",
+            "1,5",
+            ",5",
+            "/UqBWr9S",
+            "true",
+            "null",
+            "_1",
+        };
     for (const auto& in : inputs) {
         CAPTURE(in);
         const auto want = parse_number_with_strtod_only(in);
@@ -817,11 +845,11 @@ TEST_CASE("parse_number - same results as strtod on every first character") {
         }
     }
     for (int c = 1; c < 256; ++c) {
-        const std::string in(1, static_cast<char>(c));
+        const dftracer::utils::dstd::String in(1, static_cast<char>(c));
         CAPTURE(c);
         CHECK(parse_number_with_strtod_only(in).has_value() ==
               parse_number(in).has_value());
-        const std::string two = in + "5";
+        const dftracer::utils::dstd::String two = in + "5";
         CHECK(parse_number_with_strtod_only(two).has_value() ==
               parse_number(two).has_value());
     }

@@ -2,10 +2,9 @@
 #define DFTRACER_UTILS_DUQL_LOWER_H
 
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/syntax/tree.h>
-
-#include <string_view>
 
 namespace dftracer::utils::duql {
 
@@ -17,7 +16,7 @@ namespace dftracer::utils::duql {
 /// `$DFTRACER_UTILS_DUQL_PATH` expand first.
 dftracer::utils::dstd::Expected<duql::QueryNodePtr, duql::DuqlError>
 lower_filter(syntax::Program program, const duql::Params& params,
-             std::string_view source);
+             dstd::StringView source);
 
 }  // namespace dftracer::utils::duql
 

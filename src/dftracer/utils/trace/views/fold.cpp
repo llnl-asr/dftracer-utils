@@ -269,11 +269,11 @@ namespace {
 // A value rebuilt from flattened keys: a leaf's JSON text, or members.
 struct JsonNode {
     std::map<std::string, JsonNode, std::less<>> kids;
-    std::string leaf;
+    dstd::String leaf;
     bool is_leaf = false;
 };
 
-void insert_leaf(JsonNode& root, std::string_view rel, std::string text) {
+void insert_leaf(JsonNode& root, std::string_view rel, dstd::String text) {
     JsonNode* n = &root;
     std::size_t start = 0;
     for (;;) {
@@ -293,7 +293,7 @@ void insert_leaf(JsonNode& root, std::string_view rel, std::string text) {
 }
 
 // Members keyed 0..n-1 form an array, anything else an object.
-void put_node(std::string& out, const JsonNode& n) {
+void put_node(dstd::String& out, const JsonNode& n) {
     if (n.is_leaf) {
         out += n.leaf;
         return;
@@ -332,19 +332,19 @@ void put_node(std::string& out, const JsonNode& n) {
     out += '}';
 }
 
-std::string arg_json(const FoldEvent::ArgValue& v,
-                     const dftracer::utils::dstd::StringIntern& intern) {
-    std::string out;
+dstd::String arg_json(const FoldEvent::ArgValue& v,
+                      const dftracer::utils::dstd::StringIntern& intern) {
+    dstd::String out;
     if (const auto* id = std::get_if<std::uint32_t>(&v)) {
         out += '"';
         dftracer::utils::json::append_json_escaped(out, intern.resolve(*id));
         out += '"';
     } else if (const auto* i = std::get_if<std::int64_t>(&v)) {
-        out = std::to_string(*i);
+        out = dstd::int_text(*i);
     } else if (const auto* u = std::get_if<std::uint64_t>(&v)) {
-        out = std::to_string(*u);
+        out = dstd::int_text(*u);
     } else {
-        out = dstd::double_text(std::get<double>(v));
+        out = dstd::double_string(std::get<double>(v));
     }
     return out;
 }
@@ -409,11 +409,11 @@ std::optional<duql::Cell> container_cell(
             if (!s.top)
                 if (const auto r = rel(s.key))
                     insert_leaf(root, *r,
-                                std::string(is_json_text(s.kind)
-                                                ? json_text(ev, intern, s.key)
-                                                : special_json(s.kind)));
+                                dstd::String(is_json_text(s.kind)
+                                                 ? json_text(ev, intern, s.key)
+                                                 : special_json(s.kind)));
         if (!root.kids.empty()) {
-            std::string text;
+            dstd::String text;
             put_node(text, root);
             const bool array = text.front() == '[';
             return duql::Cell::json(
@@ -629,7 +629,7 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
             if (type == T::STRING || type == T::NULL_VALUE) {
                 keep();
             } else {
-                std::string text;
+                dstd::String text;
                 dftracer::utils::json::append_canonical_json(text, v);
                 d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
             }
@@ -650,7 +650,7 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
             }
             break;
         case ix::FieldType::Json: {
-            std::string text;
+            dstd::String text;
             dftracer::utils::json::append_canonical_json(text, v);
             d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
             return;
@@ -732,7 +732,7 @@ void capture_json(const std::string& path, simdjson::dom::element v,
     const auto* f = d.field(path, pos);
     if (!f || f->type != dftracer::utils::index::FieldType::Json) return;
     if (d.paths) --d.left;
-    std::string text;
+    dstd::String text;
     dftracer::utils::json::append_canonical_json(text, v);
     const std::uint32_t id = d.intern.get_or_insert(path);
     d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
@@ -748,7 +748,7 @@ void collapse(const std::string& path, simdjson::dom::element v,
     // A declared json field already holds its text.
     if (!d.ev.args.empty() && d.ev.args.back().first == id) return;
     if (d.schema) d.ev.schema_leaves.emplace_back(id, leaf_type_tag(v));
-    std::string text;
+    dstd::String text;
     dftracer::utils::json::append_canonical_json(text, v);
     d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
     d.ev.specials.push_back({id, v.is_array()

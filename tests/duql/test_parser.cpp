@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -15,7 +16,7 @@ TEST_CASE("parse - simple comparison") {
     auto& cmp = std::get<CompareNode>(node.data);
     CHECK(cmp.field.path == "cat");
     CHECK(cmp.op == CompareOp::Eq);
-    CHECK(std::get<std::string>(cmp.value.value) == "POSIX");
+    CHECK(std::get<dftracer::utils::dstd::String>(cmp.value.value) == "POSIX");
 }
 
 TEST_CASE("parse - and expression") {
@@ -82,7 +83,7 @@ TEST_CASE("parse - error reporting") {
     auto& err = result.error();
     CHECK(err.column == 6);
     auto formatted = err.format();
-    CHECK(formatted.find("column 6") != std::string::npos);
+    CHECK(formatted.find("column 6") != dftracer::utils::dstd::String::npos);
 }
 
 TEST_CASE("to_string round-trip") {
@@ -131,7 +132,8 @@ TEST_CASE("parse - field in [array] still membership") {
 TEST_CASE("parse - invalid regex reports error") {
     auto result = parse(R"(name ~ "(unclosed")");
     REQUIRE_FALSE(result.has_value());
-    CHECK(result.error().message.find("Invalid pattern") != std::string::npos);
+    CHECK(result.error().message.find("Invalid pattern") !=
+          dftracer::utils::dstd::String::npos);
 }
 
 TEST_CASE("to_string round-trip - patterns") {
@@ -153,9 +155,9 @@ TEST_CASE("parse - any(path) with every field operator round-trips") {
           R"(any(tags) ~ "^a")", R"("sub" in any(tags))",
           R"((any(tags) == "a" and not (x == 1)))"}) {
         auto ast = parse(text);
-        INFO(std::string(text));
-        CHECK_MESSAGE(ast.has_value(),
-                      (ast ? std::string() : ast.error().format()));
+        INFO(dftracer::utils::dstd::String(text));
+        CHECK_MESSAGE(ast.has_value(), (ast ? dftracer::utils::dstd::String()
+                                            : ast.error().format()));
         if (ast) CHECK(to_string(**ast) == text);
     }
     auto ast = parse(R"(any(args.tags) == "a")");
@@ -191,8 +193,8 @@ TEST_CASE("wildcard paths parse as flagged steps and round-trip") {
           "where all(a.*.b) == 0 and x * 2 > 1", "select a * b, a.b * 2"}) {
         INFO(q);
         auto a = syn::parse(q);
-        REQUIRE_MESSAGE(a.has_value(),
-                        (a ? std::string() : a.error().format()));
+        REQUIRE_MESSAGE(a.has_value(), (a ? dftracer::utils::dstd::String()
+                                          : a.error().format()));
         auto b = syn::parse(syn::to_text(*a));
         REQUIRE(b.has_value());
         CHECK(syn::equal(*a, *b));

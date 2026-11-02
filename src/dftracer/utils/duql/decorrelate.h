@@ -1,12 +1,11 @@
 #ifndef DFTRACER_UTILS_DUQL_DECORRELATE_H
 #define DFTRACER_UTILS_DUQL_DECORRELATE_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/duql/term.h>
-
-#include <optional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -29,29 +28,29 @@ struct CorrelatedBound {
 struct Decorrelated {
     /// The sub-query's canonical text, which the spans of `side` and `outer`
     /// index.
-    std::string text;
+    dstd::String text;
     syntax::PipelinePtr side;
     /// The key of each `where <inner> == ^.<outer>` term, from the enclosing
     /// row, with `^.` read as the row itself.
-    std::vector<syntax::ExprPtr> outer;
+    dstd::Vector<syntax::ExprPtr> outer;
     /// Columns of `side` that hold the keys, in the order of `outer`.
-    std::vector<std::string> names;
+    dstd::Vector<dstd::String> names;
     /// For a scalar sub-query ending in `agg`: the sub-query over no rows,
     /// which is what a row with no matching key reads. Null otherwise.
     syntax::PipelinePtr empty;
     /// A range: the bounds of `side`'s CORRELATED_RANGE column, and what the
     /// sub-query gives for its rows in range. `empty` is then null.
-    std::optional<CorrelatedBound> low;
-    std::optional<CorrelatedBound> high;
+    dstd::Optional<CorrelatedBound> low;
+    dstd::Optional<CorrelatedBound> high;
     RangeRead read = RangeRead::None;
 };
 
 /// A construct a correlated sub-query may not hold.
 struct Refusal {
     /// The sub-query's canonical text, which `span` indexes.
-    std::string text;
+    dstd::String text;
     syntax::Span span;
-    std::string message;
+    dstd::String message;
 };
 
 /// The sub-query `p` decorrelated, nullopt when it reads no enclosing row.
@@ -60,7 +59,8 @@ struct Refusal {
 /// expressions, a stage that depends on the other keys' rows after that
 /// `where`, a last stage that does not name its columns, or a range sub-query
 /// whose last stage has no range form.
-std::optional<Decorrelated> decorrelate(const syntax::Pipeline& p, bool scalar);
+dstd::Optional<Decorrelated> decorrelate(const syntax::Pipeline& p,
+                                         bool scalar);
 
 }  // namespace dftracer::utils::duql
 

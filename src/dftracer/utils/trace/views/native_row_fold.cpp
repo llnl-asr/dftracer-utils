@@ -4,6 +4,10 @@
 #include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/json/canonical.h>
@@ -158,7 +162,7 @@ struct Scalar {
     K k = K::Nul;
     std::int64_t i = 0;
     double d = 0;
-    std::string s;
+    dstd::String s;
 };
 
 Scalar scalar_of(simdjson::dom::element e) {
@@ -262,7 +266,7 @@ df::Series column_of(const std::vector<Scalar>& vals, char kind) {
         return df::Series::flat(df::TypeId::Bool, bits.data(), n,
                                 vbits.empty() ? nullptr : vbits.data());
     }
-    std::deque<std::string> owned;
+    dstd::Deque<dstd::String> owned;
     std::vector<std::string_view> text(vals.size());
     for (std::size_t r = 0; r < vals.size(); ++r) {
         const Scalar& v = vals[r];
@@ -273,7 +277,7 @@ df::Series column_of(const std::vector<Scalar>& vals, char kind) {
             text[r] = v.s;
             continue;
         }
-        std::string& t = owned.emplace_back();
+        dstd::String& t = owned.emplace_back();
         switch (v.k) {
             case Scalar::K::Str:
                 t += '"';
@@ -284,10 +288,10 @@ df::Series column_of(const std::vector<Scalar>& vals, char kind) {
                 t = v.i ? "true" : "false";
                 break;
             case Scalar::K::Int:
-                t = std::to_string(v.i);
+                t = dstd::int_text(v.i);
                 break;
             case Scalar::K::Dbl:
-                t = dstd::double_text(v.d);
+                t = dstd::double_string(v.d);
                 break;
             default:
                 t = v.s;
@@ -314,21 +318,20 @@ std::string flat_key(std::string_view path) {
     return out;
 }
 
-std::optional<std::string> array_text(
+dstd::Optional<dstd::String> array_text(
     const FoldEvent& ev, const dftracer::utils::dstd::StringIntern& intern,
     std::string_view at) {
     const std::string path = flat_key(at);
     PodSource src(ev, intern);
     if (const auto* sp = src.special(path)) {
         if (*sp == FoldEvent::Special::EmptyArray) return "[]";
-        if (*sp == FoldEvent::Special::JsonArray)
-            return std::string(src.value(path));
+        if (*sp == FoldEvent::Special::JsonArray) return src.value(path);
         return std::nullopt;
     }
     if (src.has(path)) return std::nullopt;
     auto cell = container_cell(ev, intern, path);
     if (!cell || cell->kind != duql::Cell::Kind::Array) return std::nullopt;
-    return std::get<std::string>(std::move(cell->value));
+    return std::get<dstd::String>(std::move(cell->value));
 }
 
 df::Series list_column(EventRows evs,
@@ -357,7 +360,9 @@ df::Series list_column(EventRows evs,
         const auto text = array_text(evs[r], intern, path);
         simdjson::dom::element root;
         simdjson::dom::array arr;
-        if (!text || parser.parse(*text).get(root) != simdjson::SUCCESS ||
+        if (!text ||
+            parser.parse(text->data(), text->size()).get(root) !=
+                simdjson::SUCCESS ||
             root.get_array().get(arr) != simdjson::SUCCESS) {
             offsets.push_back(offsets.back());
             rows.push_back(-1);
@@ -531,7 +536,7 @@ class ChunkViews {
 
 // A column over a buffer that holds every row's bytes back to back; row r
 // ends at ends[r]. The buffer is shared, so the column copies no bytes.
-df::Series text_view_column(const std::shared_ptr<std::string>& data,
+df::Series text_view_column(const dstd::SharedPtr<dstd::String>& data,
                             const std::vector<std::size_t>& ends,
                             const std::vector<bool>& present, bool json) {
     df::ViewBuilder b;
@@ -667,7 +672,7 @@ df::Series typed_arg_column(const std::vector<const FoldEvent::ArgValue*>& vals,
     }
     switch (kind) {
         case Kind::Json: {
-            auto data = std::make_shared<std::string>();
+            auto data = dstd::make_shared<dstd::String>();
             std::vector<std::size_t> ends(vals.size());
             for (std::size_t r = 0; r < vals.size(); ++r) {
                 if (vals[r]) {
@@ -853,7 +858,7 @@ df::Series accpat_column(EventRows evs) {
 }
 
 // `field` of `src` as canonical JSON text; false when absent or null.
-bool append_json_key(const PodSource& src, std::string& out,
+bool append_json_key(const PodSource& src, dstd::String& out,
                      std::string_view field) {
     if (const auto* sp = src.special(field)) {
         switch (*sp) {
@@ -890,7 +895,7 @@ bool append_json_key(const PodSource& src, std::string& out,
 df::Series group_key_str_column(
     EventRows evs, const dftracer::utils::dstd::StringIntern& intern,
     std::string_view field, bool arg_only, bool json) {
-    auto data = std::make_shared<std::string>();
+    auto data = dstd::make_shared<dstd::String>();
     std::vector<std::size_t> ends;
     std::vector<bool> present;
     ends.reserve(evs.size());

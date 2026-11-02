@@ -1,16 +1,15 @@
 #ifndef DFTRACER_UTILS_DUQL_QUERY_H
 #define DFTRACER_UTILS_DUQL_QUERY_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/parser.h>
-
-#include <optional>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::duql {
 
@@ -19,7 +18,7 @@ class Query {
    public:
     /// Parse a query DSL string. Returns error on invalid syntax.
     static dftracer::utils::dstd::Expected<Query, DuqlError> from_string(
-        std::string_view input);
+        dstd::StringView input);
     /// A query over a compiled filter; its source is the filter's text.
     static Query from_node(QueryNodePtr root);
 
@@ -40,24 +39,24 @@ class Query {
     /// Access the root AST node.
     const QueryNode& root() const { return *root_; }
     /// Original query source string.
-    const std::string& source() const { return source_; }
+    const dstd::String& source() const { return source_; }
     /// Serialize AST back to query DSL string.
-    std::string to_string() const;
+    dstd::String to_string() const;
     /// Fields referenced by this query, precomputed at construction.
     const dftracer::utils::dstd::StringViewSet& fields() const {
         return fields_;
     }
-    bool references(std::string_view field) const {
+    bool references(dstd::StringView field) const {
         return fields_.count(field) > 0;
     }
     /// The paths used as any(path), sorted.
-    const std::vector<std::string>& any_paths() const { return any_paths_; }
+    const dstd::Vector<dstd::String>& any_paths() const { return any_paths_; }
     /// Whether some leaf is an expression (ExprLeaf), which may read a whole
     /// array or object.
     bool has_expressions() const { return has_expressions_; }
 
    private:
-    Query(QueryNodePtr root, std::string source)
+    Query(QueryNodePtr root, dstd::String source)
         : root_(std::move(root)),
           source_(std::move(source)),
           fields_(collect_fields(*root_)),
@@ -65,9 +64,9 @@ class Query {
           has_expressions_(has_expression_leaf(*root_)) {}
 
     QueryNodePtr root_;
-    std::string source_;
+    dstd::String source_;
     dftracer::utils::dstd::StringViewSet fields_;
-    std::vector<std::string> any_paths_;
+    dstd::Vector<dstd::String> any_paths_;
     bool has_expressions_ = false;
 };
 
@@ -77,10 +76,10 @@ Query conjoin(const Query& a, const Query& b);
 inline auto Expr::build() const { return Query::from_string(to_string()); }
 
 /// Parse a query string, throwing DuqlParseError on failure.
-Query parse_or_throw(std::string_view input);
+Query parse_or_throw(dstd::StringView input);
 
-/// Parse a query string into std::optional (nullopt on failure).
-std::optional<Query> try_parse(std::string_view input);
+/// Parse a query string into dstd::Optional (nullopt on failure).
+dstd::Optional<Query> try_parse(dstd::StringView input);
 
 }  // namespace dftracer::utils::duql
 

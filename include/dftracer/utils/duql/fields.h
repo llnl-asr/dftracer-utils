@@ -1,11 +1,10 @@
 #ifndef DFTRACER_UTILS_DUQL_FIELDS_H
 #define DFTRACER_UTILS_DUQL_FIELDS_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/ast.h>
-
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -15,7 +14,7 @@ namespace dftracer::utils::duql {
 dftracer::utils::dstd::StringViewSet collect_fields(const QueryNode& node);
 
 /// The paths of the query's any() fields, sorted and unique.
-std::vector<std::string> collect_any_paths(const QueryNode& node);
+dstd::Vector<dstd::String> collect_any_paths(const QueryNode& node);
 
 /// Whether some leaf under `node` is an ExprLeaf.
 bool has_expression_leaf(const QueryNode& node);

@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -34,13 +35,13 @@ struct Member {
     std::string text;
 };
 
-[[noreturn]] void bad(std::string_view origin, const std::string& why) {
+[[noreturn]] void bad(std::string_view origin, std::string_view why) {
     throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
                                          "source of ", origin, ": ", why);
 }
 
 syn::Program parse_members(std::string_view text, std::string_view origin) {
-    auto tree = syn::parse("source s {\n" + std::string(text) + "\n}");
+    auto tree = syn::parse("source s {\n" + dstd::String(text) + "\n}");
     if (!tree) bad(origin, tree.error().format());
     return std::move(*tree);
 }
@@ -65,20 +66,24 @@ std::vector<Member> members(std::string_view text, std::string_view origin) {
                 !std::holds_alternative<syn::Where>(p.stages.front().node))
                 bad(origin, "'data' must be one 'where'");
         }
-        add(r.name, r.name + " = " + syn::to_text(*r.pipeline));
+        add(std::string(r.name),
+            std::string(r.name + " = " + syn::to_text(*r.pipeline)));
     }
     for (const auto& d : decl.defs) {
-        std::string params;
+        dstd::String params;
         if (!d.params.empty()) {
             params = "(";
-            for (std::size_t i = 0; i < d.params.size(); ++i)
-                params += (i ? ", " : "") + d.params[i];
+            for (std::size_t i = 0; i < d.params.size(); ++i) {
+                if (i) params += ", ";
+                params += d.params[i];
+            }
             params += ")";
         }
-        add(d.name, "def " + d.name + params + " = " +
+        add(std::string(d.name),
+            std::string("def " + d.name + params + " = " +
                         (std::holds_alternative<syn::PipelinePtr>(d.body)
                              ? syn::to_text(*std::get<syn::PipelinePtr>(d.body))
-                             : syn::to_text(*std::get<syn::ExprPtr>(d.body))));
+                             : syn::to_text(*std::get<syn::ExprPtr>(d.body)))));
     }
     return out;
 }
@@ -129,7 +134,9 @@ void check_source(const RecordSchema& schema, std::string_view origin) {
     if (schema.source.empty()) return;
     const duql::Roles roles = duql_roles(schema);
     auto p = duql::compile_program("where true", {}, &roles, schema.source);
-    if (!p) bad(origin, "schema " + schema.id + ": " + p.error().format());
+    if (!p)
+        bad(origin,
+            "schema " + dstd::String(schema.id) + ": " + p.error().format());
     if (schema.never_index.empty()) return;
     // A stored row set reads values from the decoded events, which a
     // listed path does not keep.
@@ -149,9 +156,9 @@ std::string data_condition(const RecordSchema& schema) {
     syn::Program tree = parse_members(schema.source, schema.id);
     for (const auto& r : std::get<syn::SourceDecl>(tree.decls.front()).rowsets)
         if (r.name == "data")
-            return syn::to_text(
+            return std::string(syn::to_text(
                 *std::get<syn::Where>(r.pipeline->stages.front().node)
-                     .condition);
+                     .condition));
     return {};
 }
 

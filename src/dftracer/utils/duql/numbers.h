@@ -1,20 +1,22 @@
 #ifndef DFTRACER_UTILS_DUQL_NUMBERS_H
 #define DFTRACER_UTILS_DUQL_NUMBERS_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/variant.h>
+
 #include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
-#include <string>
-#include <string_view>
 #include <type_traits>
 #include <variant>
 
 namespace dftracer::utils::duql {
 
 /// A JSON number as the widest exact type that holds it.
-using Number = std::variant<std::int64_t, std::uint64_t, double>;
+using Number = dstd::Variant<std::int64_t, std::uint64_t, double>;
 
 namespace detail {
 
@@ -25,7 +27,7 @@ int order(T a, T b) {
 
 // Exact comparison of an integer with a double: the integer is never rounded
 // to a double, so 2^53 + 1 does not equal 2^53.
-inline std::optional<int> cmp_num(std::int64_t a, double d) {
+inline dstd::Optional<int> cmp_num(std::int64_t a, double d) {
     constexpr double TWO_POW_63 = 9223372036854775808.0;
     if (std::isnan(d)) return std::nullopt;
     if (d >= TWO_POW_63) return -1;
@@ -36,7 +38,7 @@ inline std::optional<int> cmp_num(std::int64_t a, double d) {
     return d > f ? -1 : 0;
 }
 
-inline std::optional<int> cmp_num(std::uint64_t a, double d) {
+inline dstd::Optional<int> cmp_num(std::uint64_t a, double d) {
     constexpr double TWO_POW_64 = 18446744073709551616.0;
     if (std::isnan(d)) return std::nullopt;
     if (d < 0) return 1;
@@ -47,12 +49,12 @@ inline std::optional<int> cmp_num(std::uint64_t a, double d) {
     return d > f ? -1 : 0;
 }
 
-inline std::optional<int> cmp_num(std::int64_t a, std::uint64_t b) {
+inline dstd::Optional<int> cmp_num(std::int64_t a, std::uint64_t b) {
     if (a < 0) return -1;
     return order(static_cast<std::uint64_t>(a), b);
 }
 
-inline std::optional<int> flip(std::optional<int> c) {
+inline dstd::Optional<int> flip(dstd::Optional<int> c) {
     if (c) return -*c;
     return c;
 }
@@ -62,7 +64,7 @@ inline std::optional<int> flip(std::optional<int> c) {
 /// -1/0/1 for a < b, a == b, a > b, exact across integer and double types;
 /// nullopt when either is NaN.
 template <class A, class B>
-std::optional<int> compare_numbers(A a, B b) {
+dstd::Optional<int> compare_numbers(A a, B b) {
     using detail::cmp_num;
     using detail::flip;
     using detail::order;
@@ -81,7 +83,7 @@ std::optional<int> compare_numbers(A a, B b) {
     }
 }
 
-inline std::optional<int> compare_numbers(const Number& a, const Number& b) {
+inline dstd::Optional<int> compare_numbers(const Number& a, const Number& b) {
     return std::visit([](auto x, auto y) { return compare_numbers(x, y); }, a,
                       b);
 }
@@ -114,7 +116,7 @@ inline bool may_start_double(char c) {
 
 /// `text` as a number when all of it is one: an integer as int64, or uint64
 /// above int64's range, anything else as a double.
-inline std::optional<Number> parse_number(std::string_view text) {
+inline dstd::Optional<Number> parse_number(dstd::StringView text) {
     const char* first = text.data();
     const char* last = first + text.size();
     if (std::int64_t i = 0;
@@ -125,7 +127,7 @@ inline std::optional<Number> parse_number(std::string_view text) {
         return Number{u};
     if (text.empty() || !may_start_double(text.front())) return std::nullopt;
     // strtod, not from_chars: the double overload is not on older macOS.
-    const std::string copy(text);
+    const dstd::String copy(text);
     char* end = nullptr;
     const double d = std::strtod(copy.c_str(), &end);
     if (!copy.empty() && end == copy.c_str() + copy.size()) return Number{d};

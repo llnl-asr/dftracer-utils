@@ -219,8 +219,9 @@ TEST_SUITE("View C ABI") {
         dftu_dataframe* names_df = dftu_lazyframe_collect(listed, 0);
         REQUIRE(names_df != nullptr);
         duql::Params lp;
-        lp.emplace("names", std::vector<duql::LiteralValue>{
-                                std::string("read"), std::string("write")});
+        lp.emplace("names", dftracer::utils::dstd::Vector<duql::LiteralValue>{
+                                dftracer::utils::dstd::String("read"),
+                                dftracer::utils::dstd::String("write")});
         CHECK(dftu_dataframe_num_rows(names_df) ==
               run(View::from_file(s.gz, s.idx)
                       .duql("where name in $names | select name", lp)

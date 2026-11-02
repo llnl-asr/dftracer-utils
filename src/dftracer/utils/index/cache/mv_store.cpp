@@ -76,8 +76,8 @@ void replace_all(std::string& s, const std::string& from,
 // Render a predicate's canonical form to a filesystem-safe, readable token.
 // Lossy by design (truncated, operators reduced to words); the identity suffix
 // and manifest carry the exact query.
-std::string sanitize_predicate(const std::string& canonical) {
-    std::string s = canonical;
+std::string sanitize_predicate(dstd::StringView canonical) {
+    std::string s(canonical);
     replace_all(s, " not in ", "-nin-");
     replace_all(s, " not like ", "-notlike-");
     replace_all(s, " not ilike ", "-notilike-");
@@ -406,7 +406,7 @@ std::string views_root(const trace::views::detail::ViewPlan& plan) {
 }
 
 std::string view_slug(const trace::views::detail::ViewPlan& plan) {
-    const std::string canonical =
+    const dstd::String canonical =
         plan.query ? duql::to_string(plan.query->root()) : "all";
     return sanitize_predicate(canonical) + phase_tag(plan) + window_tag(plan) +
            "-" + hex8(identity_hash(plan));
@@ -455,18 +455,18 @@ void register_view(const std::string& dir,
         schema, sizeof(schema), "%016llx",
         static_cast<unsigned long long>(
             plan.record_schema ? plan.record_schema->params_hash() : 0));
-    std::string j = "{\n";
-    j += "  \"version\": " + std::to_string(MANIFEST_VERSION) + ",\n";
-    j += "  \"schema\": \"" + std::string(schema) + "\",\n";
-    j += "  \"bytes\": " + std::to_string(dir_size(dir)) + ",\n";
+    dstd::String j = "{\n";
+    j += "  \"version\": " + dstd::int_text(MANIFEST_VERSION) + ",\n";
+    j += "  \"schema\": \"" + dstd::String(schema) + "\",\n";
+    j += "  \"bytes\": " + dstd::int_text(dir_size(dir)) + ",\n";
     j += "  \"query\": \"";
     json::append_json_escaped(j, plan.query ? plan.query->source() : "");
     j += "\",\n";
-    j += "  \"phase\": " + std::to_string(static_cast<int>(plan.phase)) + ",\n";
+    j += "  \"phase\": " + dstd::int_text(static_cast<int>(plan.phase)) + ",\n";
     if (plan.time_range) {
         j += "  \"window\": {\"begin\": " +
-             std::to_string(plan.time_range->first) +
-             ", \"end\": " + std::to_string(plan.time_range->second) + "},\n";
+             dstd::int_text(plan.time_range->first) +
+             ", \"end\": " + dstd::int_text(plan.time_range->second) + "},\n";
     } else {
         j += "  \"window\": null,\n";
     }
@@ -476,8 +476,8 @@ void register_view(const std::string& dir,
         j += i ? ",\n    {" : "\n    {";
         j += "\"path\": \"";
         json::append_json_escaped(j, bases[i].path);
-        j += "\", \"size\": " + std::to_string(bases[i].size) +
-             ", \"mtime\": " + std::to_string(bases[i].mtime) + "}";
+        j += "\", \"size\": " + dstd::int_text(bases[i].size) +
+             ", \"mtime\": " + dstd::int_text(bases[i].mtime) + "}";
     }
     j += bases.empty() ? "]\n}\n" : "\n  ]\n}\n";
 

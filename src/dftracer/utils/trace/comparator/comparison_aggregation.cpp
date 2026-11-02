@@ -60,7 +60,7 @@ bool is_category(const duql::FieldNode& f) { return !f.any && f.path == "cat"; }
 
 void lower_literals(duql::ArrayNode& values) {
     for (auto& e : values.elements)
-        if (auto* text = std::get_if<std::string>(&e.value))
+        if (auto* text = std::get_if<dstd::String>(&e.value))
             for (char& c : *text)
                 if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
     values.set.reset();
@@ -71,7 +71,7 @@ void lower_literals(duql::ArrayNode& values) {
 // turns case-insensitive.
 template <class Leaf>
 dstd::String lowered_leaf(Leaf leaf) {
-    const std::string text = duql::to_string(duql::QueryNode(std::move(leaf)));
+    const dstd::String text = duql::to_string(duql::QueryNode(std::move(leaf)));
     constexpr dstd::StringView FIELD = "cat";
     dstd::String out("lower(cat)");
     out.append(dstd::StringView(text).substr(FIELD.size()));
@@ -94,7 +94,7 @@ dstd::String fold_category(const duql::QueryNode& n) {
     if (const auto* c = std::get_if<duql::CompareNode>(&n.data)) {
         if (!is_category(c->field)) return dstd::String(duql::to_string(n));
         duql::CompareNode leaf = *c;
-        if (auto* text = std::get_if<std::string>(&leaf.value.value))
+        if (auto* text = std::get_if<dstd::String>(&leaf.value.value))
             for (char& ch : *text)
                 if (ch >= 'A' && ch <= 'Z')
                     ch = static_cast<char>(ch - 'A' + 'a');
@@ -149,7 +149,7 @@ struct Translator {
         if (field.path == "cat" || field.path == "name") {
             dstd::Vector<dstd::String> out;
             for (const auto* v : values) {
-                const auto* text = std::get_if<std::string>(v);
+                const auto* text = std::get_if<dstd::String>(v);
                 if (text == nullptr) return fail();
                 std::string storage;
                 const dstd::StringView s =

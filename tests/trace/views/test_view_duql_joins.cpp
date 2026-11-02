@@ -101,10 +101,11 @@ std::string error_of(const std::function<void()>& fn) {
     return {};
 }
 
-bool has(const std::string& text, std::initializer_list<const char*> parts) {
+bool has(dftracer::utils::dstd::StringView text,
+         std::initializer_list<const char*> parts) {
     for (const char* p : parts)
-        if (text.find(p) == std::string::npos) {
-            MESSAGE(text);
+        if (text.find(p) == dftracer::utils::dstd::StringView::npos) {
+            MESSAGE(std::string(text));
             return false;
         }
     return true;
@@ -717,7 +718,7 @@ TEST_SUITE("View duql joins") {
     TEST_CASE("as-of lookup errors and explain") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "c", runs_and_events()));
-        const std::string plan = v.explain_duql(
+        const dftracer::utils::dstd::String plan = v.explain_duql(
             "let runs = where type == \"run\" | select run, when = run, app; "
             "where type == \"ev\" | lookup runs on run asof i == when "
             "forward within 3");
@@ -852,7 +853,7 @@ TEST_SUITE("View duql joins") {
         TestEnvironment env(10);
         const OverlapData d = overlap_data(20, 10, 1);
         const View v = view_of(write_records(env, "e2", d.lines));
-        const std::string plan = v.explain_duql(
+        const dftracer::utils::dstd::String plan = v.explain_duql(
             "let ph = where name == \"phase\" | select pid, ts, dur; where "
             "name == \"call\" | lookup ph on pid overlap");
         CHECK(has(plan, {"lookup ph on pid == pid overlap", "sweep over ph"}));
@@ -1014,16 +1015,16 @@ TEST_SUITE("View duql joins") {
     TEST_CASE("explain lists sides and pushed key sets without reading") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "e", runs_and_events()));
-        const std::string plan = v.explain_duql(
+        const dftracer::utils::dstd::String plan = v.explain_duql(
             "let runs = where type == \"run\"; where run -> runs.app == "
             "\"laghos\"");
         CHECK(has(plan, {"side runs: from data; not cached",
                          "run in (keys of runs) (pushed)"}));
-        const std::string not_pushed = v.explain_duql(
+        const dftracer::utils::dstd::String not_pushed = v.explain_duql(
             "let runs = where type == \"run\"; where not (run -> runs.app == "
             "\"laghos\")");
         CHECK(not_pushed.find("keys of runs") == std::string::npos);
-        const std::string stages = v.explain_duql(
+        const dftracer::utils::dstd::String stages = v.explain_duql(
             "let runs = where type == \"run\" | select run, app; lookup runs "
             "on run | union (from data)");
         CHECK(has(stages, {"lookup runs on run", "union from data"}));

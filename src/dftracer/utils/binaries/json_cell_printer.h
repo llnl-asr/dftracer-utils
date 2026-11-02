@@ -4,6 +4,8 @@
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/json/json_escape.h>
 
 #include <cstdint>
@@ -22,9 +24,9 @@ namespace detail {
 // Decimal256) as an exact base-10 string, with the decimal point `scale`
 // digits from the right. A JSON number cannot hold a precision-38 decimal
 // exactly in a double, so the caller quotes this as a JSON string.
-inline std::string decimal_to_exact_string(const std::uint8_t* bytes,
-                                           std::size_t nbytes,
-                                           std::int32_t scale) {
+inline dstd::String decimal_to_exact_string(const std::uint8_t* bytes,
+                                            std::size_t nbytes,
+                                            std::int32_t scale) {
     const bool negative = (bytes[nbytes - 1] & 0x80) != 0;
     std::vector<std::uint64_t> words(nbytes / 8);
     for (std::size_t w = 0; w < words.size(); ++w) {
@@ -42,7 +44,7 @@ inline std::string decimal_to_exact_string(const std::uint8_t* bytes,
         }
     }
 
-    std::string digits;
+    dstd::String digits;
     bool nonzero = true;
     while (nonzero) {
         nonzero = false;
@@ -58,7 +60,7 @@ inline std::string decimal_to_exact_string(const std::uint8_t* bytes,
     }
     std::reverse(digits.begin(), digits.end());
 
-    std::string out;
+    dstd::String out;
     if (scale > 0) {
         if (static_cast<std::size_t>(scale) >= digits.size())
             digits.insert(
@@ -69,7 +71,7 @@ inline std::string decimal_to_exact_string(const std::uint8_t* bytes,
     } else {
         out = digits;
     }
-    if (negative && digits.find_first_not_of('0') != std::string::npos)
+    if (negative && digits.find_first_not_of('0') != dstd::String::npos)
         out.insert(0, "-");
     return out;
 }
@@ -126,7 +128,7 @@ inline bool cli_emittable(dataframe::TypeId t) {
 /// Every TypeId has an explicit case, so -Wswitch flags a type added to the
 /// engine without an entry here rather than letting it fall through to a
 /// guessing default that reads past the column's buffer.
-inline void append_cell_json(std::string& s, const dataframe::Series& c,
+inline void append_cell_json(dstd::String& s, const dataframe::Series& c,
                              std::int64_t i) {
     using dataframe::TypeId;
     if (c.is_null(i)) {
@@ -153,36 +155,36 @@ inline void append_cell_json(std::string& s, const dataframe::Series& c,
             s += dataframe::read_i64(c, i) != 0 ? "true" : "false";
             break;
         case TypeId::Int8:
-            s += std::to_string(dataframe::read_i64(c, i));
+            s += dstd::int_text(dataframe::read_i64(c, i));
             break;
         case TypeId::Int16:
-            s += std::to_string(dataframe::read_i64(c, i));
+            s += dstd::int_text(dataframe::read_i64(c, i));
             break;
         case TypeId::Int32:
-            s += std::to_string(dataframe::read_i64(c, i));
+            s += dstd::int_text(dataframe::read_i64(c, i));
             break;
         case TypeId::Int64:
-            s += std::to_string(dataframe::read_i64(c, i));
+            s += dstd::int_text(dataframe::read_i64(c, i));
             break;
         case TypeId::Uint8:
-            s += std::to_string(dataframe::read_u64(c, i));
+            s += dstd::int_text(dataframe::read_u64(c, i));
             break;
         case TypeId::Uint16:
-            s += std::to_string(dataframe::read_u64(c, i));
+            s += dstd::int_text(dataframe::read_u64(c, i));
             break;
         case TypeId::Uint32:
-            s += std::to_string(dataframe::read_u64(c, i));
+            s += dstd::int_text(dataframe::read_u64(c, i));
             break;
         case TypeId::Uint64:
-            s += std::to_string(dataframe::read_u64(c, i));
+            s += dstd::int_text(dataframe::read_u64(c, i));
             break;
         case TypeId::Float16:
         case TypeId::Float32:
         case TypeId::Float64: {
             const double v = dataframe::read_f64(c, i);
             s += (v == static_cast<double>(static_cast<std::int64_t>(v)))
-                     ? std::to_string(static_cast<std::int64_t>(v))
-                     : std::to_string(v);
+                     ? dstd::int_text(static_cast<std::int64_t>(v))
+                     : dstd::fixed_text(v);
             break;
         }
         case TypeId::Date32:
@@ -191,7 +193,7 @@ inline void append_cell_json(std::string& s, const dataframe::Series& c,
         case TypeId::Time64:
         case TypeId::Timestamp:
         case TypeId::Duration:
-            s += std::to_string(dataframe::read_i64(c, i));
+            s += dstd::int_text(dataframe::read_i64(c, i));
             break;
         case TypeId::Decimal128:
             s += '"';

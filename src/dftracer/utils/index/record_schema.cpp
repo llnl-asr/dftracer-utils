@@ -428,7 +428,7 @@ std::vector<RecordSchema> builtins() {
     dft.roles.phase = "ph";
     {
         using namespace duql;
-        const Col meta = c("ph").is_in(std::vector<Col>{"M", 4});
+        const Col meta = c("ph").is_in(dstd::Vector<Col>{"M", 4});
         const auto dict = [&](const char* tag) {
             return Pipe().where(meta && c("name") == tag);
         };
@@ -436,7 +436,7 @@ std::vector<RecordSchema> builtins() {
             {},
             Source()
                 .rowset("data",
-                        Pipe().where(c("ph").not_in(std::vector<Col>{"M", 4})))
+                        Pipe().where(c("ph").not_in(dstd::Vector<Col>{"M", 4})))
                 .rowset("files", dict("FH")
                                      .select({{"fhash", c("args.value")},
                                               {"path", c("args.name")}})
@@ -939,7 +939,7 @@ const RecordSchema& register_schema(std::string_view text,
 void load_schemas(const std::string& path) { load_into(registry(), path); }
 
 std::string schemas_json() {
-    std::string out = "[";
+    dstd::String out = "[";
     auto quoted = [&](std::string_view s) {
         out += '"';
         json::append_json_escaped(out, s);
@@ -1000,7 +1000,7 @@ std::string schemas_json() {
         out += '}';
     }
     out += ']';
-    return out;
+    return std::string(out);
 }
 
 void load_index_schemas(const std::string& index_path) {
@@ -1084,7 +1084,7 @@ SchemaDetection explain_file_schema(const std::string& file_path) {
 }
 
 std::string to_json(const SchemaDetection& d) {
-    std::string out = "{\"chosen\":\"";
+    dstd::String out = "{\"chosen\":\"";
     json::append_json_escaped(out, d.chosen ? d.chosen->id : "");
     out += "\",\"objects\":" + std::to_string(d.objects) +
            ",\"records\":" + std::to_string(d.records) + ",\"scores\":[";
@@ -1097,7 +1097,7 @@ std::string to_json(const SchemaDetection& d) {
                ",\"share\":" + std::to_string(s.share) + '}';
     }
     out += "]}";
-    return out;
+    return std::string(out);
 }
 
 const RecordSchema& detect_schema(std::span<const std::string_view> lines) {

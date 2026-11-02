@@ -52,18 +52,18 @@ bool is_position(std::string_view digits) {
                        [](char c) { return c >= '0' && c <= '9'; });
 }
 
-using Positions = std::map<std::string, std::vector<std::string>>;
+using Positions = std::map<dstd::String, std::vector<dstd::String>>;
 
 // For each any() path, the catalog paths `<path>.<k>` in position order
 // (`args.<path>.<k>` for a dftracer arg written without the prefix).
 Positions any_positions(const Snapshot& snapshot, const FileRef& file,
                         const Query& query) {
     Positions out;
-    std::vector<std::pair<std::uint64_t, std::string>> found;
+    std::vector<std::pair<std::uint64_t, dstd::String>> found;
     const auto catalog = common::unwrap(index::catalog(snapshot, file));
-    for (const std::string& path : query.any_paths()) {
+    for (const dstd::String& path : query.any_paths()) {
         found.clear();
-        for (const std::string& base : {path, "args." + path}) {
+        for (const dstd::String& base : {path, "args." + path}) {
             for (const auto& [p, stat] : catalog) {
                 if (p.size() <= base.size() + 1 || !p.starts_with(base) ||
                     p[base.size()] != '.')
@@ -72,7 +72,7 @@ Positions any_positions(const Snapshot& snapshot, const FileRef& file,
                     std::string_view(p).substr(base.size() + 1);
                 if (is_position(k))
                     found.emplace_back(std::stoull(std::string(k)),
-                                       std::string(p.data(), p.size()));
+                                       dstd::String(p.data(), p.size()));
             }
             if (!found.empty() || path.starts_with("args.")) break;
         }
@@ -89,7 +89,7 @@ q::QueryNodePtr expand_field_leaf(const Leaf& leaf,
     if (!leaf.field.any) return q::make_node(Leaf(leaf));
     const auto& paths = positions.at(leaf.field.path);
     if (paths.size() > MAX_ANY_POSITIONS) return q::make_node(Leaf(leaf));
-    auto at = [&](const std::string& path) {
+    auto at = [&](const dstd::String& path) {
         Leaf copy(leaf);
         copy.field = q::FieldNode{path};
         return q::make_node(std::move(copy));

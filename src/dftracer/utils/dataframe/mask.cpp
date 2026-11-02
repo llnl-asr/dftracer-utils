@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/mask.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/fields.h>
@@ -32,7 +33,7 @@ namespace {
 // collects them, with domain fields under `args.`.
 constexpr bool FRAME_ARGS_FALLBACK = true;
 
-[[noreturn]] void unsupported(const std::string& why) {
+[[noreturn]] void unsupported(dstd::StringView why) {
     throw dftracer::utils::common::DFTUtilsException(
         dftracer::utils::dstd::Error{DuqlErrc::Unsupported, why});
 }
@@ -47,9 +48,9 @@ bool is_bool(const dataframe::Series& c) {
 }
 
 bool comparable(const dataframe::Series& col, const LiteralValue& v) {
-    if (is_string(col)) return std::holds_alternative<std::string>(v);
+    if (is_string(col)) return std::holds_alternative<dstd::String>(v);
     if (is_bool(col)) return std::holds_alternative<bool>(v);
-    return !std::holds_alternative<std::string>(v) &&
+    return !std::holds_alternative<dstd::String>(v) &&
            !std::holds_alternative<bool>(v);
 }
 
@@ -100,7 +101,7 @@ dataframe::Series compare_mask(const dataframe::Series& col, CompareOp op,
     if (!comparable(col, v)) return unknown(col.length());
     const bool eq = op == CompareOp::Eq || op == CompareOp::Ne;
     if (is_string(col)) {
-        const std::string& lit = std::get<std::string>(v);
+        const dstd::String& lit = std::get<dstd::String>(v);
         dftu_scalar rhs{};
         rhs.kind = DFTU_SCALAR_TAG_STR;
         rhs.len = static_cast<std::uint32_t>(lit.size());
@@ -134,7 +135,7 @@ dataframe::Series in_mask(const dataframe::Series& col, const ArrayNode& arr,
     if (is_string(col)) {
         std::unordered_set<std::string_view> set;
         for (const LiteralNode& e : arr.elements)
-            if (const auto* lit = std::get_if<std::string>(&e.value))
+            if (const auto* lit = std::get_if<dstd::String>(&e.value))
                 set.insert(*lit);
         if (set.empty()) return unknown(col.length());
         dataframe::Series m{dataframe::string_mask(

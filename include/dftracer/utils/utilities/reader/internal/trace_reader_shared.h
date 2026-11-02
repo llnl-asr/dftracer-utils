@@ -50,7 +50,7 @@ inline std::optional<duql::Cell> ondemand_to_cell(
     switch (val.type().value_unsafe()) {
         case simdjson::ondemand::json_type::string: {
             auto r = val.get_string();
-            if (!r.error()) return std::string(r.value_unsafe());
+            if (!r.error()) return dstd::String(r.value_unsafe());
             break;
         }
         case simdjson::ondemand::json_type::number: {

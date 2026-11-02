@@ -1,5 +1,6 @@
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/overlap.h>
 #include <dftracer/utils/duql/vectorize.h>
 
@@ -7,7 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
-#include <string>
+#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -47,8 +48,9 @@ template <class T>
 Numbers<T> read_numbers(const df::Series& s, const char* what) {
     if (!is_number(s.type()))
         throw std::invalid_argument(
-            std::string("overlap: the ") + what + " is " +
-            std::string(df::type_name(s.type())) + ", not a number");
+            (dstd::String("overlap: the ") + what + " is " +
+             dstd::String(df::type_name(s.type())) + ", not a number")
+                .c_str());
     const auto n = static_cast<std::size_t>(s.length());
     Numbers<T> out{std::vector<T>(n), std::vector<std::uint8_t>(n)};
     switch (s.type()) {
@@ -132,7 +134,7 @@ Intervals<T> read_intervals(const OverlapColumns& c) {
     return out;
 }
 
-bool row_key(std::string& out, const std::vector<df::Series>& keys,
+bool row_key(dstd::String& out, const std::vector<df::Series>& keys,
              std::int64_t r) {
     out.clear();
     for (const df::Series& k : keys)
@@ -214,8 +216,8 @@ template <class T>
 OverlapMatches run(const OverlapColumns& rows, const OverlapColumns& side) {
     const Intervals<T> mine = read_intervals<T>(rows);
     const Intervals<T> theirs = read_intervals<T>(side);
-    ankerl::unordered_dense::map<std::string, Group<T>> groups;
-    std::string key;
+    dstd::HashMap<dstd::String, Group<T>> groups;
+    dstd::String key;
     const auto m = static_cast<std::int64_t>(theirs.start.size());
     for (std::int64_t r = 0; r < m; ++r) {
         const auto at = static_cast<std::size_t>(r);

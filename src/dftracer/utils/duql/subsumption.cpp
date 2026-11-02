@@ -1,9 +1,11 @@
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/subsumption.h>
 
 #include <cstdint>
-#include <map>
 #include <optional>
-#include <set>
 #include <string>
 #include <variant>
 
@@ -11,7 +13,7 @@ namespace dftracer::utils::duql {
 
 namespace {
 
-std::optional<double> as_number(const LiteralValue& v) {
+dstd::Optional<double> as_number(const LiteralValue& v) {
     if (auto p = std::get_if<std::int64_t>(&v)) return static_cast<double>(*p);
     if (auto p = std::get_if<std::uint64_t>(&v)) return static_cast<double>(*p);
     if (auto p = std::get_if<double>(&v)) return *p;
@@ -19,14 +21,14 @@ std::optional<double> as_number(const LiteralValue& v) {
 }
 
 // Canonical token for one literal, used as a set-membership key.
-std::string literal_key(const LiteralValue& v) {
-    if (auto p = std::get_if<std::string>(&v)) return "s:" + *p;
+dstd::String literal_key(const LiteralValue& v) {
+    if (auto p = std::get_if<dstd::String>(&v)) return "s:" + *p;
     if (auto p = std::get_if<bool>(&v)) return *p ? "b:1" : "b:0";
     if (auto p = std::get_if<std::int64_t>(&v))
-        return "n:" + std::to_string(static_cast<double>(*p));
+        return "n:" + dstd::fixed_text(static_cast<double>(*p));
     if (auto p = std::get_if<std::uint64_t>(&v))
-        return "n:" + std::to_string(static_cast<double>(*p));
-    if (auto p = std::get_if<double>(&v)) return "n:" + std::to_string(*p);
+        return "n:" + dstd::fixed_text(static_cast<double>(*p));
+    if (auto p = std::get_if<double>(&v)) return "n:" + dstd::fixed_text(*p);
     return "?";
 }
 
@@ -37,17 +39,17 @@ struct Bound {
 };
 
 struct Interval {
-    std::optional<Bound> lo;  // lower bound (> or >=), empty = -inf
-    std::optional<Bound> hi;  // upper bound (< or <=), empty = +inf
+    dstd::Optional<Bound> lo;  // lower bound (> or >=), empty = -inf
+    dstd::Optional<Bound> hi;  // upper bound (< or <=), empty = +inf
 };
 
 // Intersect a conjunction's per-field constraints: keep the tighter bound.
-void tighten_lo(std::optional<Bound>& cur, const Bound& cand) {
+void tighten_lo(dstd::Optional<Bound>& cur, const Bound& cand) {
     if (!cur || cand.val > cur->val ||
         (cand.val == cur->val && cand.strict && !cur->strict))
         cur = cand;
 }
-void tighten_hi(std::optional<Bound>& cur, const Bound& cand) {
+void tighten_hi(dstd::Optional<Bound>& cur, const Bound& cand) {
     if (!cur || cand.val < cur->val ||
         (cand.val == cur->val && cand.strict && !cur->strict))
         cur = cand;
@@ -55,13 +57,15 @@ void tighten_hi(std::optional<Bound>& cur, const Bound& cand) {
 
 // True if query's bound is at least as restrictive as mv's (so query's
 // admitted values are a subset of mv's on that side).
-bool lo_within(const std::optional<Bound>& q, const std::optional<Bound>& mv) {
+bool lo_within(const dstd::Optional<Bound>& q,
+               const dstd::Optional<Bound>& mv) {
     if (!mv) return true;
     if (!q) return false;
     if (q->val != mv->val) return q->val > mv->val;
     return (q->strict ? 1 : 0) >= (mv->strict ? 1 : 0);
 }
-bool hi_within(const std::optional<Bound>& q, const std::optional<Bound>& mv) {
+bool hi_within(const dstd::Optional<Bound>& q,
+               const dstd::Optional<Bound>& mv) {
     if (!mv) return true;
     if (!q) return false;
     if (q->val != mv->val) return q->val < mv->val;
@@ -75,7 +79,7 @@ bool point_in(double v, const Interval& iv) {
         return false;
     return true;
 }
-std::optional<double> as_point(const Interval& iv) {
+dstd::Optional<double> as_point(const Interval& iv) {
     if (iv.lo && iv.hi && !iv.lo->strict && !iv.hi->strict &&
         iv.lo->val == iv.hi->val)
         return iv.lo->val;
@@ -85,12 +89,13 @@ std::optional<double> as_point(const Interval& iv) {
 // A conjunction split into numeric intervals, value sets, and opaque
 // residuals (or/not/like/!=/not in) keyed by canonical source.
 struct Buckets {
-    std::map<std::string, Interval> intervals;
-    std::map<std::string, std::map<std::string, std::optional<double>>> sets;
-    std::set<std::string> residual;
+    dstd::Map<dstd::String, Interval> intervals;
+    dstd::Map<dstd::String, dstd::Map<dstd::String, dstd::Optional<double>>>
+        sets;
+    dstd::Set<dstd::String> residual;
 };
 
-void add_set_value(Buckets& b, const std::string& field,
+void add_set_value(Buckets& b, const dstd::String& field,
                    const LiteralValue& v) {
     b.sets[field].emplace(literal_key(v), as_number(v));
 }
@@ -98,8 +103,8 @@ void add_set_value(Buckets& b, const std::string& field,
 // An `or` made only of equality/IN tests on ONE field is a value set
 // (`name == a or name == b` is `name in [a,b]`). Collects the field + values,
 // or returns false if the disjunction mixes fields or carries any other op.
-bool or_to_set(const QueryNode& node, std::string& field,
-               std::map<std::string, std::optional<double>>& vals) {
+bool or_to_set(const QueryNode& node, dstd::String& field,
+               dstd::Map<dstd::String, dstd::Optional<double>>& vals) {
     return std::visit(
         [&](auto&& n) -> bool {
             using T = std::decay_t<decltype(n)>;
@@ -175,8 +180,8 @@ void flatten(const QueryNode& node, Buckets& b) {
             } else if constexpr (std::is_same_v<T, OrNode>) {
                 // An all-equality/IN-on-one-field `or` is a value set; any
                 // other disjunction stays an opaque residual.
-                std::string field;
-                std::map<std::string, std::optional<double>> vals;
+                dstd::String field;
+                dstd::Map<dstd::String, dstd::Optional<double>> vals;
                 if (or_to_set(node, field, vals))
                     for (const auto& [k, v] : vals) b.sets[field].emplace(k, v);
                 else
@@ -191,7 +196,7 @@ void flatten(const QueryNode& node, Buckets& b) {
 
 // Every value listed for `field` in `q` sets is numeric and inside `iv`.
 bool set_within_interval(
-    const std::map<std::string, std::optional<double>>& vals,
+    const dstd::Map<dstd::String, dstd::Optional<double>>& vals,
     const Interval& iv) {
     for (const auto& entry : vals) {
         const auto& num = entry.second;

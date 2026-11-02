@@ -19,7 +19,7 @@ using json::append_json_escaped;
 
 namespace {
 
-void append_number(double v, std::string& out) {
+void append_number(double v, dstd::String& out) {
     if (v == static_cast<double>(static_cast<std::int64_t>(v)) && v < 9.0e15 &&
         v > -9.0e15) {
         out += std::to_string(static_cast<std::int64_t>(v));
@@ -36,12 +36,12 @@ int col_index(const std::vector<std::string>& cols, const std::string& name) {
 
 }  // namespace
 
-std::string counter_line(const std::vector<std::string>& group_cols,
-                         const std::vector<std::optional<std::string>>& keys,
-                         const std::vector<std::string>& value_cols,
-                         const std::vector<double>& values,
-                         const std::string& entity_col,
-                         const std::string& lane_col) {
+dstd::String counter_line(const std::vector<std::string>& group_cols,
+                          const std::vector<std::optional<std::string>>& keys,
+                          const std::vector<std::string>& value_cols,
+                          const std::vector<double>& values,
+                          const std::string& entity_col,
+                          const std::string& lane_col) {
     const int i_bucket = col_index(group_cols, "time_bucket");
     const int i_name = col_index(group_cols, "name");
     const int i_cat = col_index(group_cols, "cat");
@@ -57,7 +57,7 @@ std::string counter_line(const std::vector<std::string>& group_cols,
     const std::string tid = key(i_tid);
     const std::string bucket = key(i_bucket);
 
-    std::string s = "{\"name\":\"";
+    dstd::String s = "{\"name\":\"";
     append_json_escaped(s, name);
     s += "\",\"cat\":\"";
     append_json_escaped(s, cat);

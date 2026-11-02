@@ -1,4 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
@@ -261,7 +264,7 @@ TEST_CASE("Query::fields - no duplicates for repeated field") {
 }
 
 TEST_CASE("Query copies own their field views and any paths") {
-    std::optional<Query> copy;
+    dftracer::utils::dstd::Optional<Query> copy;
     {
         auto q = Query::from_string(R"(any(tags) == "a" and cat == "POSIX")");
         REQUIRE(q.has_value());
@@ -269,7 +272,8 @@ TEST_CASE("Query copies own their field views and any paths") {
     }
     CHECK(copy->references("cat"));
     CHECK(copy->references("tags"));
-    CHECK(copy->any_paths() == std::vector<std::string>{"tags"});
+    CHECK(copy->any_paths() ==
+          dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"tags"});
 }
 
 TEST_CASE("Query::evaluate keeps only TRUE records") {
@@ -290,6 +294,6 @@ TEST_CASE("Query::evaluate keeps only TRUE records") {
     CHECK_FALSE(q->evaluate(m));
     m["x"] = std::int64_t{2};
     CHECK(q->evaluate(m));
-    m["x"] = std::string();
+    m["x"] = dftracer::utils::dstd::String();
     CHECK_FALSE(q->evaluate(m));
 }

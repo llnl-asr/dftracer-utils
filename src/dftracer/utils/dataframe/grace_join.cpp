@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/internal/budget_share.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
 #include <dftracer/utils/dstd/hash/partition.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/vectorize.h>
 
 #include <algorithm>
@@ -64,7 +65,7 @@ std::vector<Series> flat_keys(const DataFrame& f,
 }
 
 // The value key of row `r`; false when a part has none.
-bool row_key(std::string& text, const std::vector<Series>& keys,
+bool row_key(dstd::String& text, const std::vector<Series>& keys,
              std::int64_t r) {
     text.clear();
     for (const Series& k : keys)
@@ -138,7 +139,7 @@ void GraceJoin::split(const DataFrame& rows, bool right_side, int level,
     flats.reserve(rows.columns.size());
     for (const Series& c : rows.columns) flats.push_back(flat(c));
     std::vector<std::vector<std::int64_t>> picks(into.size());
-    std::string text;
+    dstd::String text;
     for (std::int64_t r = 0; r < n; ++r) {
         text.clear();
         bool keyed = true;
@@ -292,7 +293,7 @@ coro::CoroTask<DataFrame> GraceJoin::lookup_heads(
         if (std::find(right_key_.begin(), right_key_.end(), c) ==
             right_key_.end())
             values.push_back(c);
-    std::string text;
+    dstd::String text;
     for (;;) {
         auto block = co_await right_block(max_rows);
         if (!block) break;
@@ -345,7 +346,7 @@ coro::CoroTask<DataFrame> GraceJoin::lookup_heads(
 // the keys into groups of about a block; a key past a block is a group alone.
 coro::CoroTask<void> GraceJoin::assign_groups(std::int64_t max_rows) {
     Current& c = *cur_;
-    std::string text;
+    dstd::String text;
     auto reader = c.part->right.reader();
     for (;;) {
         auto m = co_await reader->next(max_rows);
@@ -386,7 +387,7 @@ coro::CoroTask<std::optional<DataFrame>> GraceJoin::next_group(
     g_blocks.fetch_add(1, std::memory_order_relaxed);
     c.right = c.part->right.reader();
     std::vector<DataFrame> parts;
-    std::string text;
+    dstd::String text;
     for (;;) {
         auto m = co_await c.right->next(max_rows);
         if (!m) break;

@@ -1,11 +1,15 @@
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/duql/syntax/walk.h>
 #include <dftracer/utils/duql/wildcard.h>
 
 #include <algorithm>
-#include <optional>
-#include <set>
 #include <type_traits>
 #include <utility>
 
@@ -19,27 +23,27 @@ struct Failure {
     DuqlError error;
 };
 
-using Segments = std::vector<std::string>;
+using Segments = dstd::Vector<dstd::String>;
 
-bool all_digits(std::string_view s) {
+bool all_digits(dstd::StringView s) {
     return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) {
         return c >= '0' && c <= '9';
     });
 }
 
-Segments split(std::string_view s) {
+Segments split(dstd::StringView s) {
     Segments out;
     std::size_t at = 0;
     while (true) {
         const auto dot = s.find('.', at);
         out.emplace_back(s.substr(at, dot - at));
-        if (dot == std::string_view::npos) return out;
+        if (dot == dstd::StringView::npos) return out;
         at = dot + 1;
     }
 }
 
-std::string join(const Segments& s) {
-    std::string out;
+dstd::String join(const Segments& s) {
+    dstd::String out;
     for (const auto& x : s) out += (out.empty() ? "" : ".") + x;
     return out;
 }
@@ -48,7 +52,7 @@ Segments segments_of(const Path& p) {
     Segments out;
     for (const auto& st : p.steps) {
         if (!st.key.empty()) out.push_back(st.key);
-        if (st.index) out.push_back(std::to_string(*st.index));
+        if (st.index) out.push_back(dstd::int_text(*st.index));
     }
     return out;
 }
@@ -58,7 +62,7 @@ bool has_wildcard(const Path& p) {
                        [](const PathStep& s) { return s.wildcard(); });
 }
 
-bool is_ident(std::string_view s) {
+bool is_ident(dstd::StringView s) {
     if (s.empty() || all_digits(s.substr(0, 1))) return false;
     return std::all_of(s.begin(), s.end(), [](char c) {
         return c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
@@ -67,18 +71,18 @@ bool is_ident(std::string_view s) {
 }
 
 // Numeric segments by value and before the others, which go by bytes.
-bool segment_less(const std::string& a, const std::string& b) {
+bool segment_less(const dstd::String& a, const dstd::String& b) {
     const bool na = all_digits(a);
     const bool nb = all_digits(b);
     if (na != nb) return na;
     if (!na) return a < b;
-    const auto skip = [](const std::string& s) {
+    const auto skip = [](const dstd::String& s) {
         const auto k = s.find_first_not_of('0');
-        return k == std::string::npos ? std::string_view()
-                                      : std::string_view(s).substr(k);
+        return k == dstd::String::npos ? dstd::StringView()
+                                       : dstd::StringView(s).substr(k);
     };
-    const std::string_view x = skip(a);
-    const std::string_view y = skip(b);
+    const dstd::StringView x = skip(a);
+    const dstd::StringView y = skip(b);
     return x.size() != y.size() ? x.size() < y.size() : x < y;
 }
 
@@ -95,7 +99,7 @@ Path path_of(const Segments& segs) {
 }
 
 ExprPtr make(ExprNode node, Span span) {
-    return std::make_unique<Expr>(Expr{std::move(node), span});
+    return dstd::make_unique<Expr>(Expr{std::move(node), span});
 }
 
 ExprPtr clone(const Expr& e) {
@@ -136,7 +140,7 @@ bool comparison(const Expr& e) {
 
 class Expander {
    public:
-    Expander(const LeafPaths& leaves, bool fallback, std::string_view text)
+    Expander(const LeafPaths& leaves, bool fallback, dstd::StringView text)
         : leaves_(leaves), fallback_(fallback), text_(text) {}
 
     void run(Pipeline& p) {
@@ -147,22 +151,22 @@ class Expander {
    private:
     const LeafPaths& leaves_;
     bool fallback_;
-    std::string_view text_;
-    std::optional<std::vector<Segments>> cache_;
+    dstd::StringView text_;
+    dstd::Optional<dstd::Vector<Segments>> cache_;
 
-    [[noreturn]] void fail(Span span, std::string msg) const {
+    [[noreturn]] void fail(Span span, dstd::String msg) const {
         throw Failure{
             make_error(text_, span.offset, span.length, std::move(msg))};
     }
 
-    std::vector<Path> matches(const Path& pattern, Span span) {
+    dstd::Vector<Path> matches(const Path& pattern, Span span) {
         if (!cache_) {
             cache_.emplace();
             for (const auto& l : leaves_()) cache_->push_back(split(l));
         }
         const Segments want = segments_of(pattern);
         const bool bare = fallback_ && want.front() != "args";
-        std::set<Segments, decltype(&path_less)> found(&path_less);
+        dstd::Set<Segments, decltype(&path_less)> found(&path_less);
         const auto fits = [&](const Segments& s, std::size_t from) {
             if (s.size() - from != want.size()) return false;
             for (std::size_t i = 0; i < want.size(); ++i)
@@ -178,13 +182,13 @@ class Expander {
         }
         if (found.empty())
             fail(span, "no field matches the pattern '" + join(want) + "'");
-        std::vector<Path> out;
+        dstd::Vector<Path> out;
         for (const auto& s : found) out.push_back(path_of(s));
         return out;
     }
 
-    void paths(std::vector<Path>& list, Span span) {
-        std::vector<Path> next;
+    void paths(dstd::Vector<Path>& list, Span span) {
+        dstd::Vector<Path> next;
         for (auto& p : list) {
             if (!has_wildcard(p)) {
                 next.push_back(std::move(p));
@@ -201,7 +205,7 @@ class Expander {
                 [&](auto& n) {
                     using T = std::decay_t<decltype(n)>;
                     if constexpr (std::is_same_v<T, Select>) {
-                        std::vector<Item> next;
+                        dstd::Vector<Item> next;
                         for (auto& it : n.items) {
                             const auto* path =
                                 std::get_if<Path>(&it.value->node);
@@ -268,7 +272,7 @@ class Expander {
         const Call& call = std::get<Call>((*q)->node);
         const Path& pattern = *quant_pattern(**q);
         const bool all = call.name == "all";
-        std::vector<Path> ms = matches(pattern, (*q)->span);
+        dstd::Vector<Path> ms = matches(pattern, (*q)->span);
         if (ms.size() == 1) {
             *q = make(std::move(ms.front()), span);
             return;
@@ -293,7 +297,7 @@ class Expander {
 
 dftracer::utils::dstd::Expected<void, DuqlError> expand_wildcards(
     syntax::Pipeline& p, const LeafPaths& leaves, bool args_fallback,
-    std::string_view text) {
+    dstd::StringView text) {
     try {
         Expander(leaves, args_fallback, text).run(p);
         return {};

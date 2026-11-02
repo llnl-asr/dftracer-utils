@@ -2,11 +2,11 @@
 #define DFTRACER_UTILS_DUQL_SYNTAX_LEXER_H
 
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/parser.h>
 
 #include <cstddef>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::duql::syntax {
 
@@ -55,7 +55,7 @@ enum class Tok : std::uint8_t {
 
 struct Token {
     Tok kind;
-    std::string_view text;
+    dstd::StringView text;
     std::size_t offset;
     /// No whitespace or comment between this token and the previous one.
     bool adjacent;
@@ -64,13 +64,13 @@ struct Token {
 /// The tokens of `source`, ending with END. `#` comments and whitespace are
 /// skipped. Fails on an unterminated string or quoted key, or a character
 /// that starts no token.
-dftracer::utils::dstd::Expected<std::vector<Token>, duql::DuqlError> lex(
-    std::string_view source);
+dftracer::utils::dstd::Expected<dstd::Vector<Token>, duql::DuqlError> lex(
+    dstd::StringView source);
 
 /// A DuqlError for `length` bytes at `offset` of `source`, with line,
 /// column and a caret line.
-duql::DuqlError make_error(std::string_view source, std::size_t offset,
-                           std::size_t length, std::string message);
+duql::DuqlError make_error(dstd::StringView source, std::size_t offset,
+                           std::size_t length, dstd::String message);
 
 }  // namespace dftracer::utils::duql::syntax
 

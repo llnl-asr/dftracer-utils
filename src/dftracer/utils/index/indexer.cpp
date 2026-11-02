@@ -534,13 +534,13 @@ IndexStatus Indexer::drop_extension(std::string extension) {
 
 namespace {
 
-void append_string(std::string& out, std::string_view s) {
+void append_string(dstd::String& out, std::string_view s) {
     out.push_back('"');
     json::append_json_escaped(out, s);
     out.push_back('"');
 }
 
-void append_chunks(std::string& out, const std::vector<std::uint64_t>& v) {
+void append_chunks(dstd::String& out, const std::vector<std::uint64_t>& v) {
     out.push_back('[');
     for (std::size_t i = 0; i < v.size(); ++i) {
         if (i) out.push_back(',');
@@ -554,7 +554,7 @@ const char* json_bool(bool b) { return b ? "true" : "false"; }
 }  // namespace
 
 std::string to_json(const std::vector<FileManifest>& manifest) {
-    std::string out = "[";
+    dstd::String out = "[";
     for (std::size_t i = 0; i < manifest.size(); ++i) {
         const auto& m = manifest[i];
         if (i) out.push_back(',');
@@ -580,11 +580,11 @@ std::string to_json(const std::vector<FileManifest>& manifest) {
         out.append("]}");
     }
     out.push_back(']');
-    return out;
+    return std::string(out);
 }
 
 std::string to_json(const std::vector<FileExplain>& explain) {
-    std::string out = "[";
+    dstd::String out = "[";
     for (std::size_t i = 0; i < explain.size(); ++i) {
         const auto& f = explain[i];
         if (i) out.push_back(',');
@@ -610,7 +610,7 @@ std::string to_json(const std::vector<FileExplain>& explain) {
         out.append("]}");
     }
     out.push_back(']');
-    return out;
+    return std::string(out);
 }
 
 const std::vector<std::string>& Indexer::paths() const { return impl_->paths; }

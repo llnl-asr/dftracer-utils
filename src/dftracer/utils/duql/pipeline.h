@@ -2,7 +2,14 @@
 #define DFTRACER_UTILS_DUQL_PIPELINE_H
 
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/term.h>
@@ -10,14 +17,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <utility>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -27,43 +28,43 @@ namespace dftracer::utils::duql {
 struct Roles {
     dftracer::utils::dstd::StringViewMap<std::int64_t> fields;
     std::int64_t time_ns_per_unit = 1000;
-    std::string time;
-    std::string duration;
+    dstd::String time;
+    dstd::String duration;
     /// The record schema's id, for errors.
-    std::string schema;
+    dstd::String schema;
     /// The time is ISO-8601 text in the records and microseconds once
     /// decoded, so a condition on it runs after the scan.
     bool time_text = false;
 };
 
-using TermRef = std::shared_ptr<const Term>;
+using TermRef = dstd::SharedPtr<const Term>;
 
 /// A named expression: a derived column, a select item or a distinct key.
 struct PipelineItem {
-    std::string name;
+    dstd::String name;
     TermRef term;
-    std::string text;  ///< The term's duql text, for explain.
+    dstd::String text;  ///< The term's duql text, for explain.
 };
 
 struct PipelineWhere {
     TermRef condition;
-    std::string text;
+    dstd::String text;
 };
 struct PipelineSelect {
-    std::vector<PipelineItem> items;
+    dstd::Vector<PipelineItem> items;
 };
 struct PipelineDrop {
-    std::vector<std::string> names;
+    dstd::Vector<dstd::String> names;
 };
 /// Each pair is (new name, old name).
 struct PipelineRename {
-    std::vector<std::pair<std::string, std::string>> pairs;
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> pairs;
 };
 struct PipelineDerive {
-    std::vector<PipelineItem> items;
+    dstd::Vector<PipelineItem> items;
 };
 struct PipelineDistinct {
-    std::vector<PipelineItem> items;
+    dstd::Vector<PipelineItem> items;
 };
 struct PipelineSortKey {
     PipelineItem key;
@@ -71,7 +72,7 @@ struct PipelineSortKey {
     bool nulls_first = false;
 };
 struct PipelineSort {
-    std::vector<PipelineSortKey> keys;
+    dstd::Vector<PipelineSortKey> keys;
 };
 struct PipelineTake {
     std::int64_t count = 0;
@@ -83,8 +84,8 @@ struct PipelineSkip {
 /// `take n by k1, k2 [sort s]`.
 struct PipelineTakeBy {
     std::int64_t count = 0;
-    std::vector<PipelineItem> keys;
-    std::vector<PipelineSortKey> order;
+    dstd::Vector<PipelineItem> keys;
+    dstd::Vector<PipelineSortKey> order;
 };
 
 /// `sample n [seed s]`, or `sample p% [seed s]` when `percent`.
@@ -132,21 +133,21 @@ inline bool is_occupancy(AggFn fn) {
 /// PLUGIN runs the registered reducer `plugin` over each group's non-null
 /// `arg` values, `params` filling its operands after the column in order.
 struct PipelineAgg {
-    std::string name;
+    dstd::String name;
     AggFn fn = AggFn::Count;
     TermRef arg;
     double q = 0;
-    std::string text;
+    dstd::String text;
     TermRef by;
     bool merged = false;
-    std::string plugin;
-    std::vector<LiteralValue> params;
+    dstd::String plugin;
+    dstd::Vector<LiteralValue> params;
 };
 
 /// `group k { ... }`, or `agg { ... }` with no keys.
 struct PipelineGroup {
-    std::vector<PipelineItem> keys;
-    std::vector<PipelineAgg> aggs;
+    dstd::Vector<PipelineItem> keys;
+    dstd::Vector<PipelineAgg> aggs;
 };
 
 /// `time_range low .. high [overlap]`, in the unit of the time role, and
@@ -157,7 +158,7 @@ struct PipelineTimeRange {
     double high = 0;
     bool overlap = false;
     TermRef condition;
-    std::string text;
+    dstd::String text;
 };
 
 /// `bucket width [every step] [at origin] [fill [mode] [from low to high]]`, in
@@ -166,14 +167,14 @@ struct PipelineTimeRange {
 /// `high`.
 struct PipelineBucket {
     double width = 0;
-    std::optional<double> low;
-    std::optional<double> high;
+    dstd::Optional<double> low;
+    dstd::Optional<double> high;
     syntax::FillMode fill_mode = syntax::FillMode::Zero;
     bool fill = false;
     TermRef key;
-    std::string text;
-    std::string name = "bucket";
-    std::optional<double> every;
+    dstd::String text;
+    dstd::String name = "bucket";
+    dstd::Optional<double> every;
     double origin = 0;
 };
 
@@ -184,13 +185,13 @@ struct PipelineCallTree {};
 /// duration role); `gap` and `span` are in the time role's unit (`span` 0 = no
 /// limit).
 struct PipelineSession {
-    std::vector<PipelineItem> keys;
+    dstd::Vector<PipelineItem> keys;
     TermRef time;
     TermRef end;
     double gap = 0;
     double span = 0;
-    std::string name;
-    std::string text;
+    dstd::String name;
+    dstd::String text;
 };
 
 enum class WinFn : std::uint8_t {
@@ -242,30 +243,30 @@ struct WinFrame {
 /// position, `q` the quantile level. `fallback` is the lag or lead default
 /// past the partition's edge (null: none).
 struct PipelineWinCall {
-    std::string column;
+    dstd::String column;
     WinFn fn = WinFn::RowNumber;
     TermRef arg;
     TermRef fallback;
     TermRef by;
-    std::optional<WinFrame> frame;
+    dstd::Optional<WinFrame> frame;
     std::int64_t offset = 1;
     double q = 0;
-    std::string text;
+    dstd::String text;
 };
 
 /// `window k1, k2 [sort s] { ... }`: each item reads the calls' columns.
 struct PipelineWindow {
-    std::vector<PipelineItem> keys;
-    std::vector<PipelineSortKey> order;
-    std::vector<PipelineWinCall> calls;
-    std::vector<PipelineItem> items;
+    dstd::Vector<PipelineItem> keys;
+    dstd::Vector<PipelineSortKey> order;
+    dstd::Vector<PipelineWinCall> calls;
+    dstd::Vector<PipelineItem> items;
 };
 
 /// `expand path [as name] [with_index index] [keep_empty]`.
 struct PipelineExpand {
-    std::string path;
-    std::string name;
-    std::string index;
+    dstd::String path;
+    dstd::String name;
+    dstd::String index;
     bool keep_empty = false;
 };
 
@@ -273,31 +274,31 @@ struct PipelineExpand {
 struct PipelinePivot {
     PipelineItem key;
     bool fixed = false;
-    std::vector<TConst> values;
+    dstd::Vector<TConst> values;
     /// Pairs with `values`; a label names that value's column.
-    std::vector<std::string> labels;
-    std::vector<PipelineAgg> aggs;
+    dstd::Vector<dstd::String> labels;
+    dstd::Vector<PipelineAgg> aggs;
 };
 
 /// `unpivot fields as key, value`.
 struct PipelineUnpivot {
-    std::vector<std::string> fields;
-    std::string key;
-    std::string value;
+    dstd::Vector<dstd::String> fields;
+    dstd::String key;
+    dstd::String value;
 };
 
 /// `into name`: every match as a list column.
 struct PipelineNest {
-    std::string name;
+    dstd::String name;
 };
 
 /// `asof t == column [direction] [within d]`: the row of the side nearest in
 /// time. `tolerance` is in the time column's units.
 struct PipelineAsof {
     PipelineItem time;
-    std::string column;
+    dstd::String column;
     syntax::AsofDirection direction = syntax::AsofDirection::Backward;
-    std::optional<double> tolerance;
+    dstd::Optional<double> tolerance;
 };
 
 /// `overlap [into name]`: the rows of the side whose interval
@@ -307,19 +308,19 @@ struct PipelineAsof {
 struct PipelineOverlap {
     PipelineItem time;
     PipelineItem duration;
-    std::string time_column;
-    std::string duration_column;
+    dstd::String time_column;
+    dstd::String duration_column;
     double scale = 1;
-    std::string into;
+    dstd::String into;
 };
 
 /// `lookup side on k == k2, ... [into name | asof ... | overlap ...]`: each key
 /// pairs this row's term with the side's column. Monostate is the plain form.
 struct PipelineLookup {
     std::size_t side = 0;
-    std::string name;
-    std::vector<std::pair<PipelineItem, std::string>> keys;
-    std::variant<std::monostate, PipelineNest, PipelineAsof, PipelineOverlap>
+    dstd::String name;
+    dstd::Vector<dstd::Pair<PipelineItem, dstd::String>> keys;
+    dstd::Variant<std::monostate, PipelineNest, PipelineAsof, PipelineOverlap>
         mode;
     syntax::LookupKind kind = syntax::LookupKind::Left;
 };
@@ -328,7 +329,7 @@ struct Pipeline;
 
 /// `union (from ...)`: the rows so far, then the rows of `other`.
 struct PipelineUnion {
-    std::shared_ptr<const Pipeline> other;
+    dstd::SharedPtr<const Pipeline> other;
 };
 
 /// A scalar plugin function: the column `arg.name` from `arg`, the column
@@ -336,31 +337,31 @@ struct PipelineUnion {
 /// run batch by batch over `arg.name` in place, its operands filled in
 /// signature order from the second column, `scalars` and `str`.
 struct PipelinePlugin {
-    std::string op;
+    dstd::String op;
     PipelineItem arg;
-    std::optional<PipelineItem> arg2;
-    std::vector<LiteralValue> scalars;
-    std::optional<std::string> str;
-    std::string text;
+    dstd::Optional<PipelineItem> arg2;
+    dstd::Vector<LiteralValue> scalars;
+    dstd::Optional<dstd::String> str;
+    dstd::String text;
 };
 
 /// `call op(args)`: the registered table -> table op `op` over the rows so
 /// far, its operands after the frame filled in order from `args`. It ends
 /// the pipeline.
 struct PipelineCall {
-    std::string op;
-    std::vector<LiteralValue> args;
-    std::string text;
+    dstd::String op;
+    dstd::Vector<LiteralValue> args;
+    dstd::String text;
 };
 
 using PipelineStage =
-    std::variant<PipelineWhere, PipelineSelect, PipelineDrop, PipelineRename,
-                 PipelineDerive, PipelineDistinct, PipelineSort, PipelineTake,
-                 PipelineSkip, PipelineTakeBy, PipelineSample, PipelineGroup,
-                 PipelineTimeRange, PipelineBucket, PipelineCallTree,
-                 PipelineWindow, PipelineExpand, PipelinePivot, PipelineUnpivot,
-                 PipelineLookup, PipelineUnion, PipelineSession, PipelinePlugin,
-                 PipelineCall>;
+    dstd::Variant<PipelineWhere, PipelineSelect, PipelineDrop, PipelineRename,
+                  PipelineDerive, PipelineDistinct, PipelineSort, PipelineTake,
+                  PipelineSkip, PipelineTakeBy, PipelineSample, PipelineGroup,
+                  PipelineTimeRange, PipelineBucket, PipelineCallTree,
+                  PipelineWindow, PipelineExpand, PipelinePivot,
+                  PipelineUnpivot, PipelineLookup, PipelineUnion,
+                  PipelineSession, PipelinePlugin, PipelineCall>;
 
 /// The records a pipeline reads: every record of the View's files (`all`),
 /// the records the View reads (`data`), the records of the file `path`, or
@@ -369,7 +370,7 @@ enum class InputKind : std::uint8_t { All, Data, File, Side };
 
 struct Input {
     InputKind kind = InputKind::Data;
-    std::string path;
+    dstd::String path;
     std::size_t side = 0;
 };
 
@@ -379,17 +380,17 @@ struct Input {
 struct Pipeline {
     Input input;
     QueryNodePtr filter;  ///< Null when no stage leads with `where`.
-    std::string filter_text;
-    std::vector<std::string> scan_select;
-    std::vector<PipelineStage> stages;
+    dstd::String filter_text;
+    dstd::Vector<dstd::String> scan_select;
+    dstd::Vector<PipelineStage> stages;
 };
 
 /// A row set a lookup reads: a `let`, or a sub-query named `__sub_<n>`.
 /// `key` is its canonical text with parameters bound, for the lookup cache.
 struct Side {
-    std::string name;
+    dstd::String name;
     Pipeline pipeline;
-    std::string key;
+    dstd::String key;
     /// A row set the record schema's source declares.
     bool rowset = false;
 };
@@ -398,7 +399,7 @@ struct Side {
 /// earlier ones, and the main pipeline. `args_fallback` is the source's:
 /// a bare name absent from a record resolves at `args.<name>`.
 struct Program {
-    std::vector<Side> sides;
+    dstd::Vector<Side> sides;
     Pipeline main;
     bool args_fallback = false;
 };
@@ -411,8 +412,8 @@ enum class PluginKind : std::uint8_t { None, Column, Table, Aggregate, Other };
 /// The plugin functions a compile may call: `kind` of a dotted name, and
 /// the loaded plugin namespaces, sorted, for the unknown-name error.
 struct PluginCatalog {
-    std::function<PluginKind(std::string_view)> kind;
-    std::vector<std::string> namespaces;
+    dstd::Function<PluginKind(dstd::StringView)> kind;
+    dstd::Vector<dstd::String> namespaces;
 };
 
 /// Compile `text` with `params` bound. With `roles`, durations and the time
@@ -425,20 +426,20 @@ struct PluginCatalog {
 /// paths a wildcard path (`a.*.b`) expands to (see wildcard.h), and without it
 /// a wildcard is an error.
 dftracer::utils::dstd::Expected<Program, DuqlError> compile_program(
-    std::string_view text, const Params& params, const Roles* roles,
-    std::string_view source = {}, const PluginCatalog* plugins = nullptr,
+    dstd::StringView text, const Params& params, const Roles* roles,
+    dstd::StringView source = {}, const PluginCatalog* plugins = nullptr,
     const LeafPaths* leaves = nullptr);
 
 /// Calls `fn` with every term of `p`'s filter and stages, a union's other
 /// pipeline included.
 void for_each_pipeline_term(const Pipeline& p,
-                            const std::function<void(const Term&)>& fn);
+                            const dstd::Function<void(const Term&)>& fn);
 
 /// The parameter value `text` spells as a duql literal: a number (with an
 /// optional `-`), a string, `true`, `false`, or a list of them such as
 /// `["a", "b"]`.
 dftracer::utils::dstd::Expected<ParamValue, DuqlError> parse_param(
-    std::string_view text);
+    dstd::StringView text);
 
 }  // namespace dftracer::utils::duql
 

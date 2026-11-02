@@ -149,11 +149,11 @@ TEST_SUITE("PluginPlannerUnion") {
         // either side selects.
         CHECK(u->references("cat"));
         dftracer::utils::duql::ValueMap posix;
-        posix["cat"] = std::string("POSIX");
+        posix["cat"] = dftracer::utils::dstd::String("POSIX");
         dftracer::utils::duql::ValueMap stdio;
-        stdio["cat"] = std::string("STDIO");
+        stdio["cat"] = dftracer::utils::dstd::String("STDIO");
         dftracer::utils::duql::ValueMap other;
-        other["cat"] = std::string("OTHER");
+        other["cat"] = dftracer::utils::dstd::String("OTHER");
         CHECK(u->evaluate(posix));
         CHECK(u->evaluate(stdio));
         CHECK_FALSE(u->evaluate(other));
@@ -163,7 +163,7 @@ TEST_SUITE("PluginPlannerUnion") {
         const char* q = R"(cat == "STDIO")";
         auto u = plugin_union_prune_query(qs({q, q, q}));
         REQUIRE(u.has_value());
-        CHECK(u->source() == std::string(q));
+        CHECK(u->source() == dftracer::utils::dstd::String(q));
     }
 
     TEST_CASE("a plugin without a plan_duql disables the prune") {

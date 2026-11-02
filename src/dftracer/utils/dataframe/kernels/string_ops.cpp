@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/duql/substr_simd.h>
 #include <utf8proc.h>
@@ -468,7 +469,7 @@ dftu_series* regex_replace_w(const dftu_series* v,
     const std::size_t n = static_cast<std::size_t>(v->length);
     std::vector<std::int32_t> offsets(n + 1, 0);
     std::string data;
-    std::string buf;
+    dftracer::utils::dstd::String buf;
     std::vector<std::uint8_t> valid((n + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < n; ++i) {

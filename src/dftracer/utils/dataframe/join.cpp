@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/vectorize.h>
 
 #include <algorithm>
@@ -48,7 +49,7 @@ bool is_float(TypeId t) {
 }
 
 // The value key of row `r` over `keys`; false when a part has none.
-bool value_key(std::string& out, const std::vector<Series>& keys,
+bool value_key(dstd::String& out, const std::vector<Series>& keys,
                std::int64_t r) {
     out.clear();
     for (const Series& k : keys)
@@ -717,7 +718,7 @@ DataFrame HashJoin::probe(const DataFrame& left,
 void HashJoin::build_value_index() {
     if (value_index_) return;
     const std::int64_t n = right_.num_rows();
-    std::string key;
+    dstd::String key;
     for (std::int64_t r = 0; r < n; ++r)
         if (value_key(key, right_keys_, r)) by_value_[key].push_back(r);
     if (how_ == JoinHow::Lookup && !conflicts_given_)
@@ -784,7 +785,7 @@ std::vector<std::int64_t> HashJoin::heads(const std::vector<Series>& left_keys,
     if (!typed) {
         build_value_index();
         parallel_for(n, GRAIN, [&](std::int64_t b, std::int64_t e) {
-            std::string key;
+            dstd::String key;
             for (std::int64_t i = b; i < e; ++i)
                 if (value_key(key, left_keys, i))
                     if (auto it = by_value_.find(key); it != by_value_.end())
@@ -817,7 +818,7 @@ std::vector<std::int64_t> HashJoin::heads(const std::vector<Series>& left_keys,
 void HashJoin::members(std::int64_t head, bool typed,
                        std::vector<std::int64_t>& out) const {
     if (!typed) {
-        std::string key;
+        dstd::String key;
         value_key(key, right_keys_, head);
         const auto& rows = by_value_.find(key)->second;
         out.insert(out.end(), rows.begin(), rows.end());
@@ -876,17 +877,20 @@ DataFrame HashJoin::probe_values(const DataFrame& left,
     for (std::int64_t i = 0; i < n; ++i) {
         const std::int64_t h = hs[static_cast<std::size_t>(i)];
         if (h < 0 || conf[static_cast<std::size_t>(h)] < 0) continue;
-        std::string key;
+        dstd::String key;
         value_key(key, right_keys_, h);
-        std::string on;
-        for (const std::string& k : right_on_)
-            on += (on.empty() ? "" : ", ") + k;
+        dstd::String on;
+        for (const std::string& k : right_on_) {
+            if (!on.empty()) on += ", ";
+            on += dstd::StringView(k);
+        }
         throw std::invalid_argument(
-            "join: lookup key " + duql::key_text(key) + " of '" + on +
-            "' has right rows with different values of '" +
-            right_.names[static_cast<std::size_t>(
-                conf[static_cast<std::size_t>(h)])] +
-            "'");
+            ("join: lookup key " + duql::key_text(key) + " of '" + on +
+             "' has right rows with different values of '" +
+             dstd::String(right_.names[static_cast<std::size_t>(
+                 conf[static_cast<std::size_t>(h)])]) +
+             "'")
+                .c_str());
     }
     const JoinRightLayout layout = join_right_layout(
         left.names, right_.names, left_on_, right_on_, how_, suffix_);

@@ -1,6 +1,13 @@
 #include <dftracer/utils/common/calendar.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/scope_exit.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/decorrelate.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/lower.h>
@@ -20,8 +27,6 @@
 #include <cmath>
 #include <functional>
 #include <limits>
-#include <map>
-#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -42,7 +47,7 @@ struct Failure {
 
 struct AggInfo {
     duql::AggFn fn;
-    std::string_view name;
+    dstd::StringView name;
     std::uint8_t min_args;
     std::uint8_t max_args;
 };
@@ -74,7 +79,7 @@ constexpr AggInfo AGGREGATES[] = {
 
 struct WinInfo {
     duql::WinFn fn;
-    std::string_view name;
+    dstd::StringView name;
     std::uint8_t min_args;
     std::uint8_t max_args;
     bool window_only;
@@ -114,25 +119,25 @@ constexpr WinInfo WINDOW_FUNCTIONS[] = {
     {duql::WinFn::Argmin, "arg_min", 2, 2, false},
 };
 
-const WinInfo* window_info(std::string_view name) {
+const WinInfo* window_info(dstd::StringView name) {
     for (const auto& w : WINDOW_FUNCTIONS)
         if (w.name == name) return &w;
     return nullptr;
 }
 
-bool listed(std::string_view name, const auto& names) {
+bool listed(dstd::StringView name, const auto& names) {
     for (const auto& n : names)
         if (n == name) return true;
     return false;
 }
 
-const AggInfo* aggregate_info(std::string_view name) {
+const AggInfo* aggregate_info(dstd::StringView name) {
     for (const auto& a : AGGREGATES)
         if (a.name == name) return &a;
     return nullptr;
 }
 
-bool builtin_name(std::string_view name) {
+bool builtin_name(dstd::StringView name) {
     for (const auto& f : duql::FUNCTIONS)
         if (f.name == name) return true;
     return aggregate_info(name) || window_info(name) || name == "any" ||
@@ -148,7 +153,7 @@ class Lowering {
     };
 
    public:
-    Lowering(const duql::Params& params, std::string_view source,
+    Lowering(const duql::Params& params, dstd::StringView source,
              const duql::Roles* roles = nullptr,
              const duql::PluginCatalog* plugins = nullptr)
         : params_(params), src_(source), roles_(roles), plugins_(plugins) {}
@@ -173,8 +178,8 @@ class Lowering {
 
     // `rowsets` are the source's, which the query's lets follow.
     duql::Program program(const syntax::Program& q,
-                          const std::vector<Let>& rowsets) {
-        std::vector<const Let*> all;
+                          const dstd::Vector<Let>& rowsets) {
+        dstd::Vector<const Let*> all;
         for (const auto& r : rowsets) {
             if (r.name == "data") continue;
             names_.push_back(r.name);
@@ -201,11 +206,11 @@ class Lowering {
                          syntax::to_text(*let->pipeline) + ";\n";
             all.push_back(let);
         }
-        std::vector<std::string> bound;
+        dstd::Vector<dstd::String> bound;
         for (const auto& [name, value] : params_) {
-            std::string text;
+            dstd::String text;
             if (const auto* list =
-                    std::get_if<std::vector<duql::LiteralValue>>(&value)) {
+                    std::get_if<dstd::Vector<duql::LiteralValue>>(&value)) {
                 for (const auto& v : *list)
                     text += (text.empty() ? "" : ", ") +
                             duql::term_text(*make_term(constant(v)));
@@ -214,7 +219,7 @@ class Lowering {
                 text = duql::term_text(
                     *make_term(constant(std::get<duql::LiteralValue>(value))));
             }
-            bound.push_back(std::string(name) + "=" + text + ";\n");
+            bound.push_back(dstd::String(name) + "=" + text + ";\n");
         }
         std::sort(bound.begin(), bound.end());
         for (const auto& b : bound) key_text_ += b;
@@ -232,7 +237,7 @@ class Lowering {
         current_.clear();
         if (!q.pipeline) fail(Span{}, "Expected a pipeline");
         duql::Input in;
-        std::vector<Step> steps;
+        dstd::Vector<Step> steps;
         flatten(*q.pipeline, duql::InputKind::Data, in, steps);
         prog_.main = lower_steps(std::move(in), steps);
         return std::move(prog_);
@@ -268,7 +273,7 @@ class Lowering {
     // One pipeline over `in`: `steps` in order, each a stage or a union
     // with a source.
     duql::Pipeline lower_steps(duql::Input in,
-                               const std::vector<Step>& steps) const {
+                               const dstd::Vector<Step>& steps) const {
         auto units = std::move(col_units_);
         const bool record = record_units_;
         col_units_.clear();
@@ -285,16 +290,16 @@ class Lowering {
         // A term that joins a sub-query's side runs after the scan; the
         // other terms of the leading `where`s filter the scan, a top-level
         // `k in (...)` from the side's distinct rows.
-        std::vector<duql::PipelineStage> joined;
+        dstd::Vector<duql::PipelineStage> joined;
         for (; scan && i < steps.size(); ++i) {
             const auto* w = steps[i].stage
                                 ? std::get_if<Where>(&steps[i].stage->node)
                                 : nullptr;
             if (!w) break;
-            std::vector<const Expr*> terms;
+            dstd::Vector<const Expr*> terms;
             conjuncts(*w->condition, terms);
             QueryNodePtr node;
-            std::vector<const Expr*> after;
+            dstd::Vector<const Expr*> after;
             for (const Expr* t : terms) {
                 const auto* semi = std::get_if<In>(&t->node);
                 const bool set =
@@ -332,7 +337,7 @@ class Lowering {
         const bool leading =
             i == steps.size() || !steps[i].stage ||
             !std::holds_alternative<Select>(steps[i].stage->node);
-        std::optional<Span> bucket;
+        dstd::Optional<Span> bucket;
         bool open_pivot = false;
         bool called = false;
         for (std::size_t first = i; i < steps.size(); ++i) {
@@ -389,38 +394,38 @@ class Lowering {
         return out;
     }
 
-    std::optional<LiteralNode> value_of(const Expr& e) const {
+    dstd::Optional<LiteralNode> value_of(const Expr& e) const {
         if (std::holds_alternative<Param>(e.node)) return std::nullopt;
         return literal(e);
     }
 
    private:
     const duql::Params& params_;
-    mutable std::string_view src_;
+    mutable dstd::StringView src_;
     // Units of the columns the stages lowered so far made; see column_unit.
-    mutable std::map<std::string, std::optional<std::int64_t>, std::less<>>
+    mutable dstd::Map<dstd::String, dstd::Optional<std::int64_t>, std::less<>>
         col_units_;
     mutable bool record_units_ = true;
     const duql::Roles* roles_;
-    mutable std::optional<std::int64_t> now_;
+    mutable dstd::Optional<std::int64_t> now_;
     const duql::PluginCatalog* plugins_;
     // While a window entry lowers: its calls, and whether a call's argument
     // is lowering.
-    mutable std::vector<duql::PipelineWinCall>* win_ = nullptr;
+    mutable dstd::Vector<duql::PipelineWinCall>* win_ = nullptr;
     mutable bool win_arg_ = false;
-    mutable const std::vector<SortKey>* win_order_ = nullptr;
+    mutable const dstd::Vector<SortKey>* win_order_ = nullptr;
     // While a group entry that is an expression lowers: the group's
     // aggregates, the name its first aggregate takes, and the hidden columns.
-    mutable std::vector<duql::PipelineAgg>* agg_ = nullptr;
-    mutable std::string agg_name_;
-    mutable std::vector<std::string> agg_hidden_;
+    mutable dstd::Vector<duql::PipelineAgg>* agg_ = nullptr;
+    mutable dstd::String agg_name_;
+    mutable dstd::Vector<dstd::String> agg_hidden_;
     // Stages a group lowering adds after itself.
-    mutable std::vector<duql::PipelineStage> after_;
+    mutable dstd::Vector<duql::PipelineStage> after_;
     // While a derive or select entry lowers: where its plugin calls add their
     // stages, which run before the entry's stage, and the hidden columns.
-    mutable std::vector<duql::PipelineStage>* plug_ = nullptr;
-    mutable std::vector<duql::PipelineStage> before_;
-    mutable std::vector<std::string> plug_hidden_;
+    mutable dstd::Vector<duql::PipelineStage>* plug_ = nullptr;
+    mutable dstd::Vector<duql::PipelineStage> before_;
+    mutable dstd::Vector<dstd::String> plug_hidden_;
     mutable std::size_t plug_count_ = 0;
     mutable int side_depth_ = 0;
     // Quantifier conditions being lowered.
@@ -446,11 +451,11 @@ class Lowering {
         const Let* let = nullptr;
         std::size_t side = 0;
     };
-    std::vector<LetSide> lets_;
-    std::vector<std::string> names_;
-    std::vector<std::string> rowsets_;
-    std::string current_;
-    std::string key_text_;
+    dstd::Vector<LetSide> lets_;
+    dstd::Vector<dstd::String> names_;
+    dstd::Vector<dstd::String> rowsets_;
+    dstd::String current_;
+    dstd::String key_text_;
 
     struct Flag {
         bool& flag;
@@ -459,7 +464,7 @@ class Lowering {
         ~Flag() { flag = old; }
     };
 
-    static std::string declaration_message(const Decl& d) {
+    static dstd::String declaration_message(const Decl& d) {
         if (std::holds_alternative<Let>(d))
             return "'let' runs only on a View pipeline";
         if (std::holds_alternative<Def>(d))
@@ -468,7 +473,7 @@ class Lowering {
                "schema's 'source'";
     }
 
-    void need_view(Span span, const std::string& what) const {
+    void need_view(Span span, const dstd::String& what) const {
         if (!view_)
             fail(span, what +
                            " reads other rows, which only a View pipeline "
@@ -478,7 +483,7 @@ class Lowering {
     // `p` as its input and steps: a `from` naming a let reads that let's
     // input and runs its stages first; each later source is a union step.
     void flatten(const syntax::Pipeline& p, duql::InputKind first,
-                 duql::Input& in, std::vector<Step>& steps) const {
+                 duql::Input& in, dstd::Vector<Step>& steps) const {
         if (p.sources.empty())
             in = {first, {}};
         else
@@ -488,17 +493,17 @@ class Lowering {
         for (const auto& st : p.stages) steps.push_back({&st, nullptr});
     }
 
-    void read(const From& f, duql::Input& in, std::vector<Step>& steps) const {
+    void read(const From& f, duql::Input& in, dstd::Vector<Step>& steps) const {
         if (const auto* prm = std::get_if<Param>(&f.name)) {
             const auto v = bound(*prm, Span{});
-            const auto* path = std::get_if<std::string>(&v);
+            const auto* path = std::get_if<dstd::String>(&v);
             if (!path)
                 fail(Span{}, "'from $" + prm->name +
                                  "' reads a file: bind it to a path string");
             in = {duql::InputKind::File, *path};
             return;
         }
-        const auto& name = std::get<std::string>(f.name);
+        const auto& name = std::get<dstd::String>(f.name);
         if (f.quoted) {
             in = {duql::InputKind::File, name};
         } else if (name == "all") {
@@ -514,7 +519,7 @@ class Lowering {
     }
 
     // The let `name`, declared before this point.
-    const LetSide& let_of(const std::string& name, Span span) const {
+    const LetSide& let_of(const dstd::String& name, Span span) const {
         for (const auto& l : lets_)
             if (l.let->name == name) return l;
         if (name == current_) fail(span, "'" + name + "' refers to itself");
@@ -527,23 +532,23 @@ class Lowering {
 
     duql::PipelineUnion union_of(const From& f) const {
         duql::Input in;
-        std::vector<Step> steps;
+        dstd::Vector<Step> steps;
         read(f, in, steps);
-        return {std::make_shared<const duql::Pipeline>(
+        return {dstd::make_shared<const duql::Pipeline>(
             lower_steps(std::move(in), steps))};
     }
 
     duql::PipelineUnion union_of(const syntax::Pipeline& p) const {
         duql::Input in;
-        std::vector<Step> steps;
+        dstd::Vector<Step> steps;
         flatten(p, duql::InputKind::Data, in, steps);
-        return {std::make_shared<const duql::Pipeline>(
+        return {dstd::make_shared<const duql::Pipeline>(
             lower_steps(std::move(in), steps))};
     }
 
     // Lowers `p` as the row set `name`, reading `first` unless it says
     // `from`.
-    std::size_t add_side(std::string name, const syntax::Pipeline& p, bool sub,
+    std::size_t add_side(dstd::String name, const syntax::Pipeline& p, bool sub,
                          duql::InputKind first) const {
         auto* win = win_;
         auto* agg = agg_;
@@ -562,7 +567,7 @@ class Lowering {
         cond_ = false;
         if (sub) ++sub_;
         duql::Input in;
-        std::vector<Step> steps;
+        dstd::Vector<Step> steps;
         flatten(p, first, in, steps);
         duql::Pipeline lowered = lower_steps(std::move(in), steps);
         if (sub) --sub_;
@@ -574,15 +579,15 @@ class Lowering {
         win_arg_ = win_arg;
         quant_ = quant;
         cond_ = cond;
-        std::string key = key_text_ + (sub ? "sub " : "let " + name + " ") +
-                          syntax::to_text(p);
+        dstd::String key = key_text_ + (sub ? "sub " : "let " + name + " ") +
+                           syntax::to_text(p);
         prog_.sides.push_back(
             {std::move(name), std::move(lowered), std::move(key)});
         return prog_.sides.size() - 1;
     }
 
     // The number of columns a side gives, when its last stage fixes them.
-    std::optional<std::size_t> width(std::size_t side) const {
+    dstd::Optional<std::size_t> width(std::size_t side) const {
         const duql::Pipeline& p = prog_.sides[side].pipeline;
         if (p.stages.empty()) {
             if (p.scan_select.empty()) return std::nullopt;
@@ -600,13 +605,13 @@ class Lowering {
         return std::nullopt;
     }
 
-    std::shared_ptr<duql::LookupSlot> slot() const {
-        return std::make_shared<duql::LookupSlot>();
+    dstd::SharedPtr<duql::LookupSlot> slot() const {
+        return dstd::make_shared<duql::LookupSlot>();
     }
 
     // The key terms of `e`: the items of a tuple, else `e`.
-    std::vector<duql::TermPtr> key_terms(const Expr& e) const {
-        std::vector<duql::TermPtr> out;
+    dstd::Vector<duql::TermPtr> key_terms(const Expr& e) const {
+        dstd::Vector<duql::TermPtr> out;
         if (const auto* tup = std::get_if<Tuple>(&e.node))
             for (const auto& it : tup->items) out.push_back(term(*it));
         else
@@ -625,14 +630,15 @@ class Lowering {
     // The side a sub-query reads: a let's own when it is only `from let`.
     void side_of(const syntax::Pipeline& p, duql::TLookup& t) const {
         if (p.stages.empty() && p.sources.size() == 1)
-            if (const auto* name = std::get_if<std::string>(&p.sources[0].name);
+            if (const auto* name =
+                    std::get_if<dstd::String>(&p.sources[0].name);
                 name && !p.sources[0].quoted && *name != "all" &&
                 *name != "data") {
                 t.name = *name;
                 t.side = let_of(*name, Span{}).side;
                 return;
             }
-        t.name = "__sub_" + std::to_string(subs_++);
+        t.name = "__sub_" + dstd::int_text(subs_++);
         t.side = add_side(t.name, p, true, duql::InputKind::Data);
     }
 
@@ -641,7 +647,7 @@ class Lowering {
     // correlated.
     bool correlated(const syntax::Pipeline& p, bool scalar,
                     duql::TLookup& t) const {
-        std::optional<duql::Decorrelated> d;
+        dstd::Optional<duql::Decorrelated> d;
         try {
             d = duql::decorrelate(p, scalar);
         } catch (const duql::Refusal& r) {
@@ -650,7 +656,7 @@ class Lowering {
         }
         if (!d) return false;
         const std::size_t subject = t.keys.size();
-        const std::string_view outer = src_;
+        const dstd::StringView outer = src_;
         src_ = d->text;
         try {
             auto outer_key = [&](const Expr& e) {
@@ -672,10 +678,10 @@ class Lowering {
                 outer_key(*d->high->outer);
                 t.high = d->high->open ? duql::TermOp::Lt : duql::TermOp::Le;
             }
-            t.name = "__sub_" + std::to_string(subs_++);
+            t.name = "__sub_" + dstd::int_text(subs_++);
             t.side = add_side(t.name, *d->side, true, duql::InputKind::Data);
             if (d->empty)
-                t.empty = add_side("__sub_" + std::to_string(subs_++),
+                t.empty = add_side("__sub_" + dstd::int_text(subs_++),
                                    *d->empty, true, duql::InputKind::Data);
         } catch (...) {
             src_ = outer;
@@ -700,9 +706,9 @@ class Lowering {
         const std::size_t added =
             t.target.size() + (t.range != duql::RangeRead::None ? 1 : 0);
         if (const auto w = width(t.side); w && *w != subject + added)
-            fail(span, "the sub-query gives " + std::to_string(*w - added) +
+            fail(span, "the sub-query gives " + dstd::int_text(*w - added) +
                            " columns; 'in' compares " +
-                           std::to_string(subject));
+                           dstd::int_text(subject));
         t.slot = slot();
         return t;
     }
@@ -721,7 +727,7 @@ class Lowering {
             fail(span,
                  "a sub-query in an expression gives one column; this "
                  "one gives " +
-                     std::to_string(*w));
+                     dstd::int_text(*w));
         t.slot = slot();
         return t;
     }
@@ -743,7 +749,7 @@ class Lowering {
                          a.rowset + "'");
             t.target.push_back(path_text(*a.target_key, span));
         }
-        auto name_of = [&](const Expr& k) -> std::string {
+        auto name_of = [&](const Expr& k) -> dstd::String {
             if (const auto* p = std::get_if<Path>(&k.node))
                 return path_text(*p, k.span);
             if (const auto* inner = std::get_if<Arrow>(&k.node))
@@ -766,8 +772,8 @@ class Lowering {
     // quantifier over the matching rows' values; `cond` reads the value as
     // `.`.
     template <class Cond>
-    std::optional<duql::TermPtr> any_match(const Expr& subject,
-                                           Cond&& cond) const {
+    dstd::Optional<duql::TermPtr> any_match(const Expr& subject,
+                                            Cond&& cond) const {
         const auto* a = std::get_if<Arrow>(&subject.node);
         if (!cond_ || !a) return std::nullopt;
         return make_term(duql::TQuant{
@@ -784,9 +790,9 @@ class Lowering {
         return !sel.items.empty();
     }
 
-    duql::PipelineItem item(std::string name, const Expr& value) const {
+    duql::PipelineItem item(dstd::String name, const Expr& value) const {
         auto t = term(value);
-        std::string text = duql::term_text(*t);
+        dstd::String text = duql::term_text(*t);
         if (name.empty()) {
             const auto* path = std::get_if<Path>(&value.node);
             if (!path)
@@ -799,8 +805,8 @@ class Lowering {
     }
 
     duql::PipelineItem plugin_item(
-        std::string name, const Expr& value,
-        std::vector<duql::PipelineStage>& sink) const {
+        dstd::String name, const Expr& value,
+        dstd::Vector<duql::PipelineStage>& sink) const {
         const auto prev = plug_;
         plug_ = side_depth_ == 0 ? &sink : nullptr;
         auto scope = dstd::defer([&] { plug_ = prev; });
@@ -816,7 +822,7 @@ class Lowering {
             Call c;
             c.name = "extract";
             const auto arg = [&](ExprNode node) {
-                auto e = std::make_unique<Expr>();
+                auto e = dstd::make_unique<Expr>();
                 e->node = std::move(node);
                 e->span = at.span;
                 c.args.push_back(Arg{{}, std::move(e)});
@@ -827,7 +833,7 @@ class Lowering {
             else
                 arg(std::get<Param>(at.node));
             arg(Literal{static_cast<std::uint64_t>(group), {}});
-            auto value = std::make_unique<Expr>();
+            auto value = dstd::make_unique<Expr>();
             value->node = std::move(c);
             value->span = at.span;
             out.fields.push_back(Assign{name, std::move(value)});
@@ -838,8 +844,8 @@ class Lowering {
     }
 
     duql::PipelineStage derive_stage(const Derive& n) const {
-        std::vector<std::vector<duql::PipelineStage>> pre(n.fields.size());
-        std::vector<duql::PipelineItem> items;
+        dstd::Vector<dstd::Vector<duql::PipelineStage>> pre(n.fields.size());
+        dstd::Vector<duql::PipelineItem> items;
         plug_hidden_.clear();
         bool any = false;
         for (std::size_t k = 0; k < n.fields.size(); ++k) {
@@ -857,13 +863,13 @@ class Lowering {
         return duql::PipelineDrop{std::move(plug_hidden_)};
     }
 
-    duql::PluginKind plugin_kind(const std::string& name) const {
+    duql::PluginKind plugin_kind(const dstd::String& name) const {
         return plugins_ && plugins_->kind ? plugins_->kind(name)
                                           : duql::PluginKind::None;
     }
 
-    std::string unknown_function(const std::string& name) const {
-        std::string out = "Unknown function '" + name + "'; ";
+    dstd::String unknown_function(const dstd::String& name) const {
+        dstd::String out = "Unknown function '" + name + "'; ";
         if (!plugins_ || plugins_->namespaces.empty())
             return out + "no plugin is loaded";
         out += "loaded plugin namespaces: ";
@@ -928,17 +934,17 @@ class Lowering {
         duql::PipelinePlugin st;
         st.op = c.name;
         st.text = text_of(span);
-        const std::string name = "__duql_p_" + std::to_string(plug_count_++);
+        const dstd::String name = "__duql_p_" + dstd::int_text(plug_count_++);
         st.arg = {name, duql::TermRef(term(*c.args[0].value)),
                   text_of(*c.args[0].value)};
         plug_hidden_.push_back(name);
         for (std::size_t k = 1; k < c.args.size(); ++k) {
             const Expr& e = *c.args[k].value;
             const auto v = literal(e);
-            if (v && std::holds_alternative<std::string>(v->value)) {
+            if (v && std::holds_alternative<dstd::String>(v->value)) {
                 if (st.str)
                     fail(e.span, "'" + c.name + "' takes one text argument");
-                st.str = std::get<std::string>(v->value);
+                st.str = std::get<dstd::String>(v->value);
             } else if (v) {
                 if (st.scalars.size() == 2)
                     fail(e.span,
@@ -948,7 +954,7 @@ class Lowering {
                 if (st.arg2)
                     fail(e.span,
                          "'" + c.name + "' takes one second column argument");
-                const std::string second = name + "_b";
+                const dstd::String second = name + "_b";
                 st.arg2 = duql::PipelineItem{second, duql::TermRef(term(e)),
                                              text_of(e)};
                 plug_hidden_.push_back(second);
@@ -963,7 +969,7 @@ class Lowering {
         return make_term(std::move(f));
     }
 
-    std::int64_t count(const std::string& text, Span span) const {
+    std::int64_t count(const dstd::String& text, Span span) const {
         if (text.starts_with('$')) {
             const auto v = bound(Param{text.substr(1)}, span);
             if (const auto* i = std::get_if<std::int64_t>(&v); i && *i >= 0)
@@ -985,12 +991,12 @@ class Lowering {
     duql::PipelineWhere where_stage(const Expr& condition) const {
         const Flag in_condition(cond_, true);
         auto t = term(condition);
-        std::string text = duql::term_text(*t);
+        dstd::String text = duql::term_text(*t);
         return duql::PipelineWhere{duql::TermRef(std::move(t)),
                                    std::move(text)};
     }
 
-    static void conjuncts(const Expr& e, std::vector<const Expr*>& out) {
+    static void conjuncts(const Expr& e, dstd::Vector<const Expr*>& out) {
         if (const auto* b = std::get_if<Binary>(&e.node);
             b && b->op == BinaryOp::And) {
             conjuncts(*b->left, out);
@@ -1063,7 +1069,7 @@ class Lowering {
                         const auto& key = n.keys[k];
                         out.keys.push_back(
                             {item(std::holds_alternative<Path>(key.value->node)
-                                      ? std::string{}
+                                      ? dstd::String{}
                                       : duql::term_text(*term(*key.value)),
                                   *key.value),
                              key.descending, key.nulls == NullsOrder::First});
@@ -1134,7 +1140,7 @@ class Lowering {
                     const double width = time_value(*n.width);
                     if (!(width > 0))
                         fail(n.width->span, "a bucket width must be positive");
-                    std::optional<double> every;
+                    dstd::Optional<double> every;
                     if (n.every) {
                         every = time_value(*n.every);
                         if (!(*every > 0))
@@ -1157,7 +1163,7 @@ class Lowering {
                         key = make_term(duql::TBinary{duql::TermOp::Add,
                                                       std::move(key),
                                                       number_term(origin)});
-                    std::string text = duql::term_text(*key);
+                    dstd::String text = duql::term_text(*key);
                     duql::PipelineBucket out{
                         width,
                         {},
@@ -1166,7 +1172,7 @@ class Lowering {
                         n.fill,
                         std::move(key),
                         std::move(text),
-                        n.as.empty() ? std::string("bucket") : n.as,
+                        n.as.empty() ? dstd::String("bucket") : n.as,
                         every,
                         origin};
                     if (n.low) {
@@ -1280,29 +1286,30 @@ class Lowering {
 
     // The side's column a key or time pairs with: `named` when the key gives
     // one, else the row's own path.
-    std::string key_column(const Expr& k, const Expr* k2,
-                           const std::string& rowset,
-                           const char* clause) const {
+    dstd::String key_column(const Expr& k, const Expr* k2,
+                            const dstd::String& rowset,
+                            const char* clause) const {
         const Expr& named = k2 ? *k2 : k;
         const auto* p = std::get_if<Path>(&named.node);
         if (!p)
             fail(named.span,
-                 k2 ? std::string("'") + clause +
+                 k2 ? dstd::String("'") + clause +
                           " k == c' names a column of the row set with c"
-                    : "name the row set's " + std::string(clause) +
+                    : "name the row set's " + dstd::String(clause) +
                           " column: 'lookup " + rowset + " ... " + clause +
                           " expr == column'");
         return path_text(*p, named.span);
     }
 
     duql::PipelineLookup lookup(
-        const std::string& rowset, const syntax::Pipeline* inline_side,
-        const std::vector<std::pair<ExprPtr, ExprPtr>>& keys, Span span) const {
+        const dstd::String& rowset, const syntax::Pipeline* inline_side,
+        const dstd::Vector<dstd::Pair<ExprPtr, ExprPtr>>& keys,
+        Span span) const {
         duql::PipelineLookup out;
-        std::string shown = rowset;
+        dstd::String shown = rowset;
         if (inline_side) {
             shown = "(from ...)";
-            out.name = "__lookup_" + std::to_string(lookups_++);
+            out.name = "__lookup_" + dstd::int_text(lookups_++);
             ++lookup_side_;
             try {
                 out.side = add_side(out.name, *inline_side, true,
@@ -1324,7 +1331,7 @@ class Lowering {
 
     duql::PipelineItem key_item(const Expr& e) const {
         return item(std::holds_alternative<Path>(e.node)
-                        ? std::string{}
+                        ? dstd::String{}
                         : duql::term_text(*term(e)),
                     e);
     }
@@ -1382,21 +1389,21 @@ class Lowering {
             out.end = make_term(duql::TBinary{
                 duql::TermOp::Add, role_field(roles_->time), std::move(dur)});
         }
-        out.name = n.as.empty() ? std::string("session") : n.as;
+        out.name = n.as.empty() ? dstd::String("session") : n.as;
         out.text = duql::term_text(*out.time) +
                    (out.end ? " end " + duql::term_text(*out.end) : "");
         return out;
     }
 
-    void require_role(Span span, std::string_view stage, bool time,
+    void require_role(Span span, dstd::StringView stage, bool time,
                       bool duration) const {
-        const auto missing = [&](std::string_view role) {
-            const std::string schema =
+        const auto missing = [&](dstd::StringView role) {
+            const dstd::String schema =
                 roles_ && !roles_->schema.empty()
                     ? "record schema '" + roles_->schema + "'"
-                    : std::string("this record schema");
-            fail(span, "'" + std::string(stage) + "' needs the " +
-                           std::string(role) + " role, which " + schema +
+                    : dstd::String("this record schema");
+            fail(span, "'" + dstd::String(stage) + "' needs the " +
+                           dstd::String(role) + " role, which " + schema +
                            " does not bind");
         };
         if (time && (!roles_ || roles_->time.empty())) missing("time");
@@ -1452,12 +1459,12 @@ class Lowering {
     // `within d` in the units of the time key `time`: a number as written, a
     // duration converted like a comparison with `time`, or a parameter.
     double tolerance(const Expr& w, const Expr& time,
-                     std::string_view what = "within") const {
-        std::optional<double> v;
+                     dstd::StringView what = "within") const {
+        dstd::Optional<double> v;
         if (std::holds_alternative<Duration>(w.node)) {
             if (!unit_of(time))
                 fail(w.span,
-                     "'" + std::string(what) +
+                     "'" + dstd::String(what) +
                          "' with a duration needs a time key with a time "
                          "or duration role; give a number in the key's "
                          "units");
@@ -1470,11 +1477,11 @@ class Lowering {
             v = number(lit->value);
         }
         if (!v)
-            fail(w.span, "'" + std::string(what) +
+            fail(w.span, "'" + dstd::String(what) +
                              "' takes a number in the time key's units, a "
                              "duration or a parameter");
         if (!(*v >= 0) || !std::isfinite(*v))
-            fail(w.span, "'" + std::string(what) +
+            fail(w.span, "'" + dstd::String(what) +
                              "' must be a finite non-negative distance");
         return *v;
     }
@@ -1487,13 +1494,13 @@ class Lowering {
         return make_term(duql::TConst{v});
     }
 
-    duql::PipelineItem role_item(const std::string& path) const {
+    duql::PipelineItem role_item(const dstd::String& path) const {
         duql::TermPtr t = role_field(path);
-        std::string text = duql::term_text(*t);
+        dstd::String text = duql::term_text(*t);
         return {{}, duql::TermRef(std::move(t)), std::move(text)};
     }
 
-    duql::TermPtr role_field(const std::string& path) const {
+    duql::TermPtr role_field(const dstd::String& path) const {
         duql::TField f;
         f.base = path;
         std::size_t at = 0;
@@ -1506,7 +1513,7 @@ class Lowering {
         return make_term(std::move(f));
     }
 
-    static std::optional<double> number(const duql::LiteralValue& v) {
+    static dstd::Optional<double> number(const duql::LiteralValue& v) {
         if (const auto* i = std::get_if<std::int64_t>(&v))
             return static_cast<double>(*i);
         if (const auto* u = std::get_if<std::uint64_t>(&v))
@@ -1515,8 +1522,8 @@ class Lowering {
         return std::nullopt;
     }
 
-    std::string text_of(Span span) const {
-        return std::string(src_.substr(span.offset, span.length));
+    dstd::String text_of(Span span) const {
+        return dstd::String(src_.substr(span.offset, span.length));
     }
 
     duql::PipelineWindow window(const Window& n) const {
@@ -1545,15 +1552,15 @@ class Lowering {
         return out;
     }
 
-    std::optional<std::int64_t> whole_number(const Expr& e) const {
+    dstd::Optional<std::int64_t> whole_number(const Expr& e) const {
         const auto v = literal(e);
         if (!v) return std::nullopt;
         if (const auto* i = std::get_if<std::int64_t>(&v->value))
-            return *i >= 0 ? std::optional<std::int64_t>(*i) : std::nullopt;
+            return *i >= 0 ? dstd::Optional<std::int64_t>(*i) : std::nullopt;
         if (const auto* u = std::get_if<std::uint64_t>(&v->value))
             return *u <= static_cast<std::uint64_t>(
                              std::numeric_limits<std::int64_t>::max())
-                       ? std::optional<std::int64_t>(
+                       ? dstd::Optional<std::int64_t>(
                              static_cast<std::int64_t>(*u))
                        : std::nullopt;
         return std::nullopt;
@@ -1576,7 +1583,7 @@ class Lowering {
                  "'window' block");
         if (win_order_->size() > 1)
             fail(span, "'over' with a width needs exactly one sort key, got " +
-                           std::to_string(win_order_->size()));
+                           dstd::int_text(win_order_->size()));
         const SortKey& key = win_order_->front();
         if (key.descending)
             fail(span, "'over' with a width needs an ascending sort key");
@@ -1628,8 +1635,8 @@ class Lowering {
 
     // A call of a window function inside a window entry, as a field of the
     // hidden column it fills; nullopt for any other function.
-    std::optional<duql::TermPtr> window_call(const Call& c, Span span,
-                                             const Over* over = nullptr) const {
+    dstd::Optional<duql::TermPtr> window_call(
+        const Call& c, Span span, const Over* over = nullptr) const {
         const WinInfo* w = window_info(c.name);
         if (!win_) {
             if (w && w->window_only)
@@ -1662,7 +1669,7 @@ class Lowering {
         const bool arg_by =
             w->fn == duql::WinFn::Argmax || w->fn == duql::WinFn::Argmin;
         duql::PipelineWinCall call;
-        call.column = "__duql_w_" + std::to_string(win_->size());
+        call.column = "__duql_w_" + dstd::int_text(win_->size());
         call.fn = w->fn;
         call.text = text_of(span);
         if (n > 0 && w->fn != duql::WinFn::Ntile) {
@@ -1713,10 +1720,10 @@ class Lowering {
         return make_term(std::move(f));
     }
 
-    std::vector<duql::PipelineAgg> aggregates(
-        const std::vector<Assign>& block,
-        std::string_view stage = "group") const {
-        std::vector<duql::PipelineAgg> out;
+    dstd::Vector<duql::PipelineAgg> aggregates(
+        const dstd::Vector<Assign>& block,
+        dstd::StringView stage = "group") const {
+        dstd::Vector<duql::PipelineAgg> out;
         duql::PipelineDerive derive;
         agg_hidden_.clear();
         for (const auto& a : block) {
@@ -1746,7 +1753,7 @@ class Lowering {
                 fail(e.span, stage == "pivot"
                                  ? "each entry of a 'pivot' block is one "
                                    "aggregate call, such as 'n = count()'"
-                                 : "each entry of a '" + std::string(stage) +
+                                 : "each entry of a '" + dstd::String(stage) +
                                        "' block holds an aggregate call, "
                                        "such as 'n = count()' or "
                                        "'ms = sum(dur) / 1000'");
@@ -1769,8 +1776,8 @@ class Lowering {
 
     // An aggregate call inside a group entry that is an expression, as a
     // field of the column it fills; nullopt for any other call.
-    std::optional<duql::TermPtr> entry_aggregate(const Call& c,
-                                                 Span span) const {
+    dstd::Optional<duql::TermPtr> entry_aggregate(const Call& c,
+                                                  Span span) const {
         const bool plug = plugin_kind(c.name) == duql::PluginKind::Aggregate;
         if (plug && !agg_) fail(span, plugin_aggregate_stage(c.name));
         if (!agg_ || (!plug && !aggregate_info(c.name))) return std::nullopt;
@@ -1778,9 +1785,9 @@ class Lowering {
             std::any_of(std::begin(duql::FUNCTIONS), std::end(duql::FUNCTIONS),
                         [&](const auto& f) { return f.name == c.name; });
         if (!plug && is_fn && !aggregate_arity(c)) return std::nullopt;
-        std::string name = agg_name_;
+        dstd::String name = agg_name_;
         if (name.empty()) {
-            name = "__duql_a_" + std::to_string(agg_hidden_.size());
+            name = "__duql_a_" + dstd::int_text(agg_hidden_.size());
             agg_hidden_.push_back(name);
         }
         agg_name_.clear();
@@ -1796,14 +1803,14 @@ class Lowering {
         return make_term(std::move(f));
     }
 
-    static std::string plugin_aggregate_stage(const std::string& name) {
+    static dstd::String plugin_aggregate_stage(const dstd::String& name) {
         return "'" + name +
                "' is a plugin aggregate; it stands in a 'group' or 'agg' "
                "block";
     }
 
     duql::PipelineAgg plugin_aggregate(const Call& c, Span span,
-                                       const std::string& name) const {
+                                       const dstd::String& name) const {
         if (c.args.empty())
             fail(span, "'" + c.name + "' takes a column as its first argument");
         for (const auto& a : c.args) {
@@ -1838,7 +1845,7 @@ class Lowering {
     }
 
     duql::PipelineAgg aggregate(const Call& call, Span span,
-                                const std::string& name) const {
+                                const dstd::String& name) const {
         const Call* c = &call;
         const AggInfo* info = aggregate_info(c->name);
         const std::size_t n = c->args.size();
@@ -1889,7 +1896,7 @@ class Lowering {
         return agg;
     }
 
-    static std::string stage_name(const Stage& s) {
+    static dstd::String stage_name(const Stage& s) {
         static constexpr const char* NAMES[] = {
             "where",    "derive",     "select",    "drop",   "rename",
             "distinct", "group",      "agg",       "window", "pivot",
@@ -1901,7 +1908,7 @@ class Lowering {
         return NAMES[s.node.index()];
     }
 
-    static std::optional<std::int64_t> unit_ns(std::string_view unit) {
+    static dstd::Optional<std::int64_t> unit_ns(dstd::StringView unit) {
         if (unit == "ns") return 1;
         if (unit == "us") return 1000;
         if (unit == "ms") return 1'000'000;
@@ -1918,8 +1925,8 @@ class Lowering {
     // agree; a product or quotient of a timed field has none and fails, since
     // a duration beside it could mean either scale.
     // `strict` fails on a scaled timed field; otherwise it has no unit.
-    std::optional<std::int64_t> unit_of(const Expr& e,
-                                        bool strict = true) const {
+    dstd::Optional<std::int64_t> unit_of(const Expr& e,
+                                         bool strict = true) const {
         if (!roles_) return std::nullopt;
         if (const auto* p = std::get_if<Path>(&e.node)) {
             if (p->root != PathRoot::Record) return std::nullopt;
@@ -1956,7 +1963,7 @@ class Lowering {
                 return roles_->time_ns_per_unit;
             if ((c->name == "bin" || c->name == "abs") && !c->args.empty())
                 return unit_of(*c->args[0].value, strict);
-            std::vector<const Expr*> values;
+            dstd::Vector<const Expr*> values;
             if (c->name == "coalesce" || c->name == "min" || c->name == "max") {
                 for (const Arg& a : c->args) values.push_back(a.value.get());
             } else if (c->name == "if" && c->args.size() == 3) {
@@ -1974,9 +1981,9 @@ class Lowering {
 
     // The unit the timed ones of `parts` share; none when none is timed or
     // two differ. A part with no unit (a number, a duration) takes it.
-    std::optional<std::int64_t> common_unit(
-        const std::vector<const Expr*>& parts, bool strict = true) const {
-        std::optional<std::int64_t> unit;
+    dstd::Optional<std::int64_t> common_unit(
+        const dstd::Vector<const Expr*>& parts, bool strict = true) const {
+        dstd::Optional<std::int64_t> unit;
         for (const Expr* p : parts) {
             if (!p) continue;
             const auto u = unit_of(*p, strict);
@@ -1989,7 +1996,7 @@ class Lowering {
 
     // The unit of column `name`: its entry in `col_units_`, else, while the
     // rows still hold the records, the role of the record field.
-    std::optional<std::int64_t> column_unit(std::string_view name) const {
+    dstd::Optional<std::int64_t> column_unit(dstd::StringView name) const {
         if (const auto c = col_units_.find(name); c != col_units_.end())
             return c->second;
         if (!record_units_) return std::nullopt;
@@ -2002,17 +2009,17 @@ class Lowering {
 
     // The unit an aggregate keeps: that of its argument for the ones whose
     // result is a value of it.
-    std::optional<std::int64_t> aggregate_unit(const Expr& e) const {
+    dstd::Optional<std::int64_t> aggregate_unit(const Expr& e) const {
         const auto* c = std::get_if<Call>(&e.node);
         if (!c || c->args.empty()) return std::nullopt;
-        static constexpr std::string_view KEEP[] = {
+        static constexpr dstd::StringView KEEP[] = {
             "sum", "min", "max", "mean", "first", "last", "quantile", "std"};
-        for (std::string_view k : KEEP)
+        for (dstd::StringView k : KEEP)
             if (c->name == k) return unit_of(*c->args[0].value, false);
         return std::nullopt;
     }
 
-    std::string column_name(const Item& it) const {
+    dstd::String column_name(const Item& it) const {
         if (!it.name.empty()) return it.name;
         if (const auto* p = std::get_if<Path>(&it.value->node))
             return path_text(*p, it.value->span);
@@ -2023,8 +2030,8 @@ class Lowering {
     // units it reads are those before it.
     void track_units(const Stage& s) const {
         using Units = decltype(col_units_);
-        auto set = [&](Units& into, const std::string& name,
-                       std::optional<std::int64_t> u) {
+        auto set = [&](Units& into, const dstd::String& name,
+                       dstd::Optional<std::int64_t> u) {
             if (!name.empty()) into[name] = u;
         };
         std::visit(
@@ -2097,8 +2104,8 @@ class Lowering {
             s.node);
     }
 
-    std::string text_of(const Expr& e) const {
-        return std::string(src_.substr(e.span.offset, e.span.length));
+    dstd::String text_of(const Expr& e) const {
+        return dstd::String(src_.substr(e.span.offset, e.span.length));
     }
 
     // The duration `dur` in the unit of `other`: an integer when exact.
@@ -2114,7 +2121,7 @@ class Lowering {
         if (!unit)
             fail(other.span,
                  "'" +
-                     std::string(
+                     dstd::String(
                          src_.substr(other.span.offset, other.span.length)) +
                      "' has no time or duration role to give the duration "
                      "a unit; write as_time(x, \"ns\") to give it one");
@@ -2148,7 +2155,7 @@ class Lowering {
 
     // bin(t, d), to_seconds(t) and as_time(x, unit) as arithmetic in the
     // units of the schema's roles.
-    std::optional<duql::TermPtr> time_call(const Call& c, Span span) const {
+    dstd::Optional<duql::TermPtr> time_call(const Call& c, Span span) const {
         if (c.name != "bin" && c.name != "to_seconds" && c.name != "as_time" &&
             c.name != "now")
             return std::nullopt;
@@ -2206,20 +2213,20 @@ class Lowering {
                                                  static_cast<double>(*per)})});
     }
 
-    static std::string arity(std::string_view name, std::size_t lo,
-                             std::size_t hi, std::size_t got) {
+    static dstd::String arity(dstd::StringView name, std::size_t lo,
+                              std::size_t hi, std::size_t got) {
         auto args = [](std::size_t k) {
-            return std::to_string(k) + (k == 1 ? " argument" : " arguments");
+            return dstd::int_text(k) + (k == 1 ? " argument" : " arguments");
         };
-        std::string want = lo == hi ? args(lo)
-                           : hi == SIZE_MAX
-                               ? "at least " + args(lo)
-                               : std::to_string(lo) + " to " + args(hi);
-        return "'" + std::string(name) + "' takes " + want + ", got " +
-               std::to_string(got);
+        dstd::String want = lo == hi ? args(lo)
+                            : hi == SIZE_MAX
+                                ? "at least " + args(lo)
+                                : dstd::int_text(lo) + " to " + args(hi);
+        return "'" + dstd::String(name) + "' takes " + want + ", got " +
+               dstd::int_text(got);
     }
 
-    [[noreturn]] void fail(Span span, std::string msg) const {
+    [[noreturn]] void fail(Span span, dstd::String msg) const {
         throw Failure{
             make_error(src_, span.offset, span.length, std::move(msg))};
     }
@@ -2271,12 +2278,12 @@ class Lowering {
         }
         const Flag in_condition(cond_, true);
         auto t = term(e);
-        std::string text = duql::term_text(*t);
+        dstd::String text = duql::term_text(*t);
         return duql::make_node(duql::ExprLeaf{
-            std::shared_ptr<const duql::Term>(std::move(t)), std::move(text)});
+            dstd::SharedPtr<const duql::Term>(std::move(t)), std::move(text)});
     }
 
-    static std::pair<MatchOp, bool> regex_op(BinaryOp op) {
+    static dstd::Pair<MatchOp, bool> regex_op(BinaryOp op) {
         const bool icase = op == BinaryOp::Iregex || op == BinaryOp::Niregex;
         const bool negated = op == BinaryOp::Nregex || op == BinaryOp::Niregex;
         return {icase ? MatchOp::Iregex : MatchOp::Regex, negated};
@@ -2357,20 +2364,21 @@ class Lowering {
         return duql::make_node(duql::InNode{std::move(*f), std::move(arr)});
     }
 
-    std::string pattern(const Expr& e,
-                        const char* what = "Expected a string pattern") const {
+    dstd::String pattern(const Expr& e,
+                         const char* what = "Expected a string pattern") const {
         if (const auto* lit = std::get_if<Literal>(&e.node))
-            if (const auto* s = std::get_if<std::string>(&lit->value))
+            if (const auto* s = std::get_if<dstd::String>(&lit->value))
                 return *s;
         if (const auto* p = std::get_if<Param>(&e.node)) {
             const auto value = bound(*p, e.span);
-            if (const auto* s = std::get_if<std::string>(&value)) return *s;
+            if (const auto* s = std::get_if<dstd::String>(&value)) return *s;
         }
         fail(e.span, what);
     }
 
-    duql::PatternPtr compile(MatchOp op, const std::string& pattern,
-                             std::optional<char> escape, const Expr& at) const {
+    duql::PatternPtr compile(MatchOp op, const dstd::String& pattern,
+                             dstd::Optional<char> escape,
+                             const Expr& at) const {
         duql::PatternResult r = [&] {
             switch (op) {
                 case MatchOp::Like:
@@ -2388,21 +2396,21 @@ class Lowering {
         }();
         if (!r)
             fail(at.span, "Invalid pattern at offset " +
-                              std::to_string(r.error().offset) + ": " +
+                              dstd::int_text(r.error().offset) + ": " +
                               r.error().message);
         return std::move(*r);
     }
 
-    std::optional<char> escape_char(const std::optional<std::string>& esc,
-                                    Span span) const {
+    dstd::Optional<char> escape_char(const dstd::Optional<dstd::String>& esc,
+                                     Span span) const {
         if (!esc) return std::nullopt;
         if (esc->size() != 1) fail(span, "'escape' takes one character");
         return (*esc)[0];
     }
 
-    QueryNodePtr match(duql::FieldNode f, MatchOp op, std::string pattern,
+    QueryNodePtr match(duql::FieldNode f, MatchOp op, dstd::String pattern,
                        bool negated, const Expr& at,
-                       std::optional<char> escape = std::nullopt) const {
+                       dstd::Optional<char> escape = std::nullopt) const {
         duql::MatchNode node;
         node.compiled = compile(op, pattern, escape, at);
         node.field = std::move(f);
@@ -2415,7 +2423,7 @@ class Lowering {
 
     // The field a literal leaf tests: a record path without a negative index,
     // or any(path).
-    std::optional<duql::FieldNode> as_field(const Expr& e) const {
+    dstd::Optional<duql::FieldNode> as_field(const Expr& e) const {
         const Path* p = std::get_if<Path>(&e.node);
         bool any = false;
         if (!p)
@@ -2435,7 +2443,7 @@ class Lowering {
         return p.steps.size();
     }
 
-    std::string path_text(const Path& p, Span span) const {
+    dstd::String path_text(const Path& p, Span span) const {
         return steps_text(p, span, p.steps.size());
     }
 
@@ -2449,13 +2457,13 @@ class Lowering {
         fail(span, "'.' and '^.' paths stand inside any(p, e) or all(p, e)");
     }
 
-    std::string steps_text(const Path& p, Span span, std::size_t end) const {
+    dstd::String steps_text(const Path& p, Span span, std::size_t end) const {
         if (p.root != PathRoot::Record) reject_root(p, span);
         for (const auto& step : p.steps)
             if (step.wildcard())
                 fail(span,
                      "a wildcard path needs a source with a field catalog");
-        std::string out;
+        dstd::String out;
         for (std::size_t i = 0; i < end; ++i) {
             const auto& step = p.steps[i];
             if (!step.key.empty() || !step.index) {
@@ -2464,7 +2472,7 @@ class Lowering {
             }
             if (step.index) {
                 out += '[';
-                out += std::to_string(*step.index);
+                out += dstd::int_text(*step.index);
                 out += ']';
             }
         }
@@ -2472,7 +2480,7 @@ class Lowering {
     }
 
     static duql::TermPtr make_term(decltype(duql::Term::node) node) {
-        return std::make_unique<const duql::Term>(duql::Term{std::move(node)});
+        return dstd::make_unique<const duql::Term>(duql::Term{std::move(node)});
     }
 
     static duql::TConst constant(const duql::LiteralValue& v) {
@@ -2638,7 +2646,7 @@ class Lowering {
     static duql::TermPtr element() {
         duql::TField f;
         f.root = duql::FieldRoot::Element;
-        return std::make_unique<const duql::Term>(duql::Term{std::move(f)});
+        return dstd::make_unique<const duql::Term>(duql::Term{std::move(f)});
     }
 
     // `t ?? false`: the legacy any() leaf counts an unknown element as false.
@@ -2684,7 +2692,7 @@ class Lowering {
             case BinaryOp::Nregex:
             case BinaryOp::Niregex: {
                 const auto [op, negated] = regex_op(b.op);
-                std::string p = pattern(*b.right);
+                dstd::String p = pattern(*b.right);
                 auto compiled = compile(op, p, std::nullopt, *b.right);
                 if (auto t = any_match(*b.left, [&] {
                         return make_term(duql::TMatch{element(), op, p, negated,
@@ -2737,7 +2745,7 @@ class Lowering {
 
     // `any(p) op v` as `any(p, (. op v) ?? false)`, and `all(p) op v` as
     // `all(p, . op v)`; nullopt when neither side is quantified.
-    std::optional<duql::TermPtr> quantified(const Binary& b) const {
+    dstd::Optional<duql::TermPtr> quantified(const Binary& b) const {
         const Call* l = quantified_side(*b.left);
         const Call* r = quantified_side(*b.right);
         if (!l && !r) return std::nullopt;
@@ -2791,7 +2799,7 @@ class Lowering {
             fail(span, "'" + c.name +
                            "' is an aggregate; it stands in a 'group' or "
                            "'agg' block");
-        if (!info && c.name.find('.') != std::string::npos)
+        if (!info && c.name.find('.') != dstd::String::npos)
             return plugin_call(c, span);
         if (!info) fail(span, "Unknown function '" + c.name + "'");
         const std::size_t n = c.args.size();
@@ -2799,7 +2807,7 @@ class Lowering {
             fail(span,
                  "'case' takes pairs of a condition and a value, then a "
                  "default: an odd number of arguments, got " +
-                     std::to_string(n));
+                     dstd::int_text(n));
         if (n < info->min_args ||
             (info->max_args != duql::VARIADIC && n > info->max_args))
             fail(span, arity(c.name, info->min_args,
@@ -2829,27 +2837,27 @@ class Lowering {
                             std::get_if<std::uint64_t>(&g->value);
                         want && *want > groups)
                         fail(c.args[2].value->span,
-                             "extract() group " + std::to_string(*want) +
+                             "extract() group " + dstd::int_text(*want) +
                                  " is past the pattern's " +
-                                 std::to_string(groups) + " groups");
+                                 dstd::int_text(groups) + " groups");
         }
         if (info->fn == duql::Fn::RegexReplace) {
             const Expr& at = *c.args[1].value;
             const Expr& to = *c.args[2].value;
             t.pattern = compile(MatchOp::Regex, pattern(at), std::nullopt, at);
-            const std::string text =
+            const dstd::String text =
                 pattern(to, "regex_replace() takes a string replacement");
             auto sub = duql::compile_substitution(*t.pattern, text);
             if (!sub)
                 fail(to.span, "Invalid replacement at offset " +
-                                  std::to_string(sub.error().offset) + ": " +
+                                  dstd::int_text(sub.error().offset) + ": " +
                                   sub.error().message);
             t.substitution =
-                std::make_shared<const duql::Substitution>(std::move(*sub));
+                dstd::make_shared<const duql::Substitution>(std::move(*sub));
         }
         if (info->fn == duql::Fn::DatePart ||
             info->fn == duql::Fn::FormatTime) {
-            const std::string name = c.name + "()";
+            const dstd::String name = c.name + "()";
             const auto unit = unit_of(*c.args[0].value);
             if (!unit)
                 fail(c.args[0].value->span,
@@ -2858,7 +2866,7 @@ class Lowering {
                          "role, or as_time(x, unit)");
             t.ns_per_unit = *unit;
             const Expr& at = *c.args[1].value;
-            const std::string text =
+            const dstd::String text =
                 pattern(at, info->fn == duql::Fn::DatePart
                                 ? "date_part() takes a string part"
                                 : "format_time() takes a string format");
@@ -2875,7 +2883,7 @@ class Lowering {
             } else if (const auto bad = common::invalid_time_format(text);
                        !bad.empty()) {
                 fail(at.span, "Unknown time format directive '" +
-                                  std::string(bad) + "' in format_time()");
+                                  dstd::String(bad) + "' in format_time()");
             }
             t.args[1] = make_term(duql::TConst{text});
         }
@@ -2894,7 +2902,7 @@ class Lowering {
 
     // A literal, a parameter, or a negated numeric literal, as the value of a
     // query node.
-    std::optional<LiteralNode> literal(const Expr& e) const {
+    dstd::Optional<LiteralNode> literal(const Expr& e) const {
         if (const auto* p = std::get_if<Param>(&e.node))
             return LiteralNode{bound(*p, e.span)};
         if (const auto* u = std::get_if<Unary>(&e.node)) {
@@ -2916,7 +2924,7 @@ class Lowering {
         const auto* lit = std::get_if<Literal>(&e.node);
         if (!lit) return std::nullopt;
         return std::visit(
-            [&](const auto& v) -> std::optional<LiteralNode> {
+            [&](const auto& v) -> dstd::Optional<LiteralNode> {
                 using T = std::decay_t<decltype(v)>;
                 if constexpr (std::is_same_v<T, Null>)
                     return std::nullopt;
@@ -2933,8 +2941,8 @@ namespace {
 
 // The macros in scope for a query with `defs`, after the source's `source`.
 dftracer::utils::dstd::Expected<MacroScopes, duql::DuqlError> scopes_of(
-    std::vector<Def>& defs, std::string_view text,
-    std::vector<duql::Macro> source) {
+    dstd::Vector<Def>& defs, dstd::StringView text,
+    dstd::Vector<duql::Macro> source) {
     auto own = duql::macros_of(defs, text, "the query");
     if (!own) return dftracer::utils::dstd::Unexpected(own.error());
     MacroScopes scopes{std::move(*own), std::move(source), duql::path_macros()};
@@ -2955,15 +2963,15 @@ dftracer::utils::dstd::Expected<MacroScopes, duql::DuqlError> scopes_of(
 }
 
 dftracer::utils::dstd::Expected<void, duql::DuqlError> expand(
-    syntax::Pipeline& p, const MacroScopes& scopes, std::string_view text) {
+    syntax::Pipeline& p, const MacroScopes& scopes, dstd::StringView text) {
     return duql::expand_macros(p, scopes, text, builtin_name);
 }
 
 // Fills `x in $p` from the list and `x like $p` from the string bound to `p`.
 dftracer::utils::dstd::Expected<void, duql::DuqlError> bind_params(
-    syntax::Pipeline& p, const duql::Params& params, std::string_view text) {
-    std::optional<duql::DuqlError> error;
-    auto value = [&](const std::string& name,
+    syntax::Pipeline& p, const duql::Params& params, dstd::StringView text) {
+    dstd::Optional<duql::DuqlError> error;
+    auto value = [&](const dstd::String& name,
                      Span span) -> const duql::ParamValue* {
         const auto it = params.find(name);
         if (it == params.end()) {
@@ -2973,13 +2981,13 @@ dftracer::utils::dstd::Expected<void, duql::DuqlError> bind_params(
         }
         return &it->second;
     };
-    std::function<void(ExprPtr&)> visit = [&](ExprPtr& e) {
+    dstd::Function<void(ExprPtr&)> visit = [&](ExprPtr& e) {
         if (!e || error) return;
         if (auto* in = std::get_if<In>(&e->node);
             in && !in->list_param.empty()) {
             const auto* v = value(in->list_param, e->span);
             if (!v) return;
-            const auto* list = std::get_if<std::vector<duql::LiteralValue>>(v);
+            const auto* list = std::get_if<dstd::Vector<duql::LiteralValue>>(v);
             if (!list) {
                 error = make_error(text, e->span.offset, e->span.length,
                                    "'in $" + in->list_param +
@@ -2989,7 +2997,7 @@ dftracer::utils::dstd::Expected<void, duql::DuqlError> bind_params(
             }
             in->list.clear();
             for (const auto& item : *list) {
-                auto lit = std::make_unique<Expr>();
+                auto lit = dstd::make_unique<Expr>();
                 lit->span = e->span;
                 lit->node =
                     Literal{std::visit(
@@ -3006,7 +3014,7 @@ dftracer::utils::dstd::Expected<void, duql::DuqlError> bind_params(
             const auto* v = value(l->pattern_param, e->span);
             if (!v) return;
             const auto* lit = std::get_if<duql::LiteralValue>(v);
-            const auto* s = lit ? std::get_if<std::string>(lit) : nullptr;
+            const auto* s = lit ? std::get_if<dstd::String>(lit) : nullptr;
             if (!s) {
                 error = make_error(text, e->span.offset, e->span.length,
                                    "'like $" + l->pattern_param +
@@ -3025,7 +3033,7 @@ dftracer::utils::dstd::Expected<void, duql::DuqlError> bind_params(
             const auto* v = value(prm->name, ix->index->span);
             if (!v) return;
             const auto* lit = std::get_if<duql::LiteralValue>(v);
-            std::optional<std::int64_t> at;
+            dstd::Optional<std::int64_t> at;
             if (lit) {
                 if (const auto* i = std::get_if<std::int64_t>(lit))
                     at = *i;
@@ -3057,19 +3065,19 @@ dftracer::utils::dstd::Expected<void, duql::DuqlError> bind_params(
 }  // namespace
 
 dftracer::utils::dstd::Expected<duql::Program, duql::DuqlError> compile_program(
-    std::string_view text, const duql::Params& params, const duql::Roles* roles,
-    std::string_view source, const duql::PluginCatalog* plugins,
+    dstd::StringView text, const duql::Params& params, const duql::Roles* roles,
+    dstd::StringView source, const duql::PluginCatalog* plugins,
     const LeafPaths* leaves) {
     auto tree = syntax::parse(text);
     if (!tree) return dftracer::utils::dstd::Unexpected(tree.error());
-    std::vector<Def> defs = duql::take_defs(tree->decls);
-    std::vector<Let> rowsets;
-    std::vector<duql::Macro> source_macros;
+    dstd::Vector<Def> defs = duql::take_defs(tree->decls);
+    dstd::Vector<Let> rowsets;
+    dstd::Vector<duql::Macro> source_macros;
     bool fallback = false;
-    const std::string source_text =
-        source.empty() ? std::string()
-                       : "source s {\n" + std::string(source) + "\n}";
-    std::optional<syntax::Program> source_tree;
+    const dstd::String source_text =
+        source.empty() ? dstd::String()
+                       : "source s {\n" + dstd::String(source) + "\n}";
+    dstd::Optional<syntax::Program> source_tree;
     if (!source.empty()) {
         auto st = syntax::parse(source_text);
         if (!st) return dftracer::utils::dstd::Unexpected(st.error());
@@ -3125,17 +3133,17 @@ dftracer::utils::dstd::Expected<duql::Program, duql::DuqlError> compile_program(
 }
 
 void for_each_pipeline_term(const duql::Pipeline& p,
-                            const std::function<void(const duql::Term&)>& fn) {
+                            const dstd::Function<void(const duql::Term&)>& fn) {
     auto on = [&](const duql::TermRef& t) {
         if (t) duql::for_each_term(*t, fn);
     };
-    auto items = [&](const std::vector<duql::PipelineItem>& v) {
+    auto items = [&](const dstd::Vector<duql::PipelineItem>& v) {
         for (const auto& it : v) on(it.term);
     };
-    auto keys = [&](const std::vector<duql::PipelineSortKey>& v) {
+    auto keys = [&](const dstd::Vector<duql::PipelineSortKey>& v) {
         for (const auto& k : v) on(k.key.term);
     };
-    std::function<void(const duql::QueryNode&)> node =
+    dstd::Function<void(const duql::QueryNode&)> node =
         [&](const duql::QueryNode& n) {
             std::visit(
                 [&](const auto& x) {
@@ -3212,7 +3220,7 @@ void for_each_pipeline_term(const duql::Pipeline& p,
 }
 
 dftracer::utils::dstd::Expected<duql::ParamValue, duql::DuqlError> parse_param(
-    std::string_view text) {
+    dstd::StringView text) {
     auto tree = syntax::parse(text);
     if (!tree) return dftracer::utils::dstd::Unexpected(tree.error());
     if (tree->decls.empty() && tree->pipeline &&
@@ -3222,7 +3230,7 @@ dftracer::utils::dstd::Expected<duql::ParamValue, duql::DuqlError> parse_param(
             const duql::Params none;
             const Lowering l(none, text);
             if (const auto* list = std::get_if<List>(&w->condition->node)) {
-                std::vector<duql::LiteralValue> out;
+                dstd::Vector<duql::LiteralValue> out;
                 bool ok = true;
                 for (const auto& item : list->items) {
                     auto lit = l.value_of(*item);
@@ -3245,8 +3253,8 @@ dftracer::utils::dstd::Expected<duql::ParamValue, duql::DuqlError> parse_param(
 
 dftracer::utils::dstd::Expected<duql::QueryNodePtr, duql::DuqlError>
 lower_filter(syntax::Program program, const duql::Params& params,
-             std::string_view source) {
-    std::vector<Def> defs = duql::take_defs(program.decls);
+             dstd::StringView source) {
+    dstd::Vector<Def> defs = duql::take_defs(program.decls);
     auto scopes = scopes_of(defs, source, {});
     if (!scopes) return dftracer::utils::dstd::Unexpected(scopes.error());
     if (program.pipeline) {

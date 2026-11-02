@@ -1,17 +1,16 @@
 #ifndef DFTRACER_UTILS_DUQL_STRING_LITERAL_H
 #define DFTRACER_UTILS_DUQL_STRING_LITERAL_H
 
-#include <string>
-#include <string_view>
+#include <dftracer/utils/dstd/string.h>
 
 namespace dftracer::utils::duql {
 
 /// `v` as a duql string literal that reads back as exactly `v`: in double
 /// quotes, with `\\`, `\"`, `\n`, `\t`, `\r` and `\u00XX` for the other
 /// control bytes. Other bytes, UTF-8 included, pass through.
-inline std::string quote_string(std::string_view v) {
+inline dstd::String quote_string(dstd::StringView v) {
     static constexpr char HEX[] = "0123456789abcdef";
-    std::string out;
+    dstd::String out;
     out.reserve(v.size() + 2);
     out += '"';
     for (const char ch : v) {

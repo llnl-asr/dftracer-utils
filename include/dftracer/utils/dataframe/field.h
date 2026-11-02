@@ -6,6 +6,8 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
 
@@ -64,8 +66,8 @@ struct FNode {
     std::string str;             // Str-rhs Cmp / Match pattern
     bool negated = false;        // In: not-in
     bool in_is_string = false;   // In: string vs int element type
-    std::vector<std::int64_t> in_ints;
-    std::vector<std::string> in_strs;
+    dstd::Vector<std::int64_t> in_ints;
+    dstd::Vector<dstd::String> in_strs;
     std::shared_ptr<const FNode> a;
     std::shared_ptr<const FNode> b;
 };
@@ -177,16 +179,16 @@ class FieldExpr {
     }
 
     /// Membership predicates (filter-only). The field is (not) one of `values`.
-    FieldExpr in(const std::vector<std::int64_t>& values) const {
+    FieldExpr in(const dstd::Vector<std::int64_t>& values) const {
         return in_impl(values, /*negated=*/false);
     }
-    FieldExpr in(const std::vector<std::string>& values) const {
+    FieldExpr in(const dstd::Vector<dstd::String>& values) const {
         return in_impl(values, /*negated=*/false);
     }
-    FieldExpr not_in(const std::vector<std::int64_t>& values) const {
+    FieldExpr not_in(const dstd::Vector<std::int64_t>& values) const {
         return in_impl(values, /*negated=*/true);
     }
-    FieldExpr not_in(const std::vector<std::string>& values) const {
+    FieldExpr not_in(const dstd::Vector<dstd::String>& values) const {
         return in_impl(values, /*negated=*/true);
     }
 
@@ -345,12 +347,12 @@ class FieldExpr {
     }
 
     template <typename V>
-    FieldExpr in_impl(const std::vector<V>& values, bool negated) const {
+    FieldExpr in_impl(const dstd::Vector<V>& values, bool negated) const {
         return FieldExpr(
             detail::make_node(detail::FKind::In, [&](detail::FNode& n) {
                 n.name = field_name();
                 n.negated = negated;
-                if constexpr (std::is_same_v<V, std::string>) {
+                if constexpr (std::is_same_v<V, dstd::String>) {
                     n.in_is_string = true;
                     n.in_strs = values;
                 } else {

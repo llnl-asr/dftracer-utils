@@ -1,18 +1,17 @@
 #ifndef DFTRACER_UTILS_DUQL_GROUP_FOLD_H
 #define DFTRACER_UTILS_DUQL_GROUP_FOLD_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <string_view>
 #include <vector>
 
 namespace dftracer::utils::duql {
@@ -46,7 +45,7 @@ struct FoldAgg {
     std::int32_t by = -1;
     double param = 0;
     dataframe::DataType type;
-    std::string plugin;
+    dstd::String plugin;
     std::vector<double> params;
 };
 
@@ -79,7 +78,7 @@ class GroupFold {
 
     std::vector<dataframe::DataType> key_types_;
     std::vector<FoldAgg> aggs_;
-    ankerl::unordered_dense::map<std::string, std::int64_t> groups_;
+    dstd::HashMap<dstd::String, std::int64_t> groups_;
     dstd::StringViewMap<std::int64_t> str_groups_;
     std::int64_t null_group_ = -1;
     std::int64_t num_groups_ = 0;
@@ -95,7 +94,7 @@ class GroupFold {
     std::vector<std::int64_t> part_rows_;
     std::vector<std::vector<std::vector<std::int64_t>>> members_;
     std::vector<std::vector<Arg>> args_;
-    std::vector<std::vector<std::unique_ptr<Sketch>>> sketches_;
+    std::vector<std::vector<dstd::UniquePtr<Sketch>>> sketches_;
 };
 
 }  // namespace dftracer::utils::duql

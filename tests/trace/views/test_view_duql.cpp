@@ -363,8 +363,10 @@ TEST_SUITE("View duql pipeline") {
             R"(where date_part(ts, "year") == 2023 | derive y = date_part(ts, "year"))"));
         CHECK(scan.num_rows() == 3);
         duql::Params p;
-        p.emplace("part", duql::LiteralValue{std::string("minute")});
-        p.emplace("fmt", duql::LiteralValue{std::string("%H:%M")});
+        p.emplace("part",
+                  duql::LiteralValue{dftracer::utils::dstd::String("minute")});
+        p.emplace("fmt",
+                  duql::LiteralValue{dftracer::utils::dstd::String("%H:%M")});
         const df::DataFrame bound =
             frame(v.duql("where ts > 0 | derive m = date_part(ts, $part), "
                          "t = format_time(ts, $fmt) | sort ts | take 1",
@@ -434,10 +436,13 @@ TEST_SUITE("View duql pipeline") {
 
     TEST_CASE("list and pattern parameters") {
         duql::Params p;
-        p.emplace("names", std::vector<duql::LiteralValue>{
-                               std::string("read"), std::string("write")});
-        p.emplace("pat", duql::LiteralValue{std::string("re%")});
-        p.emplace("one", duql::LiteralValue{std::string("read")});
+        p.emplace("names", dftracer::utils::dstd::Vector<duql::LiteralValue>{
+                               dftracer::utils::dstd::String("read"),
+                               dftracer::utils::dstd::String("write")});
+        p.emplace("pat",
+                  duql::LiteralValue{dftracer::utils::dstd::String("re%")});
+        p.emplace("one",
+                  duql::LiteralValue{dftracer::utils::dstd::String("read")});
         CHECK(
             text(pipe("where name in $names | select ts, name", p)) ==
             text(pipe(R"(where name in ["read", "write"] | select ts, name)")));
@@ -517,8 +522,10 @@ TEST_SUITE("View duql pipeline") {
 
     TEST_CASE("regex_replace takes parameter patterns and compile errors") {
         duql::Params p;
-        p.emplace("re", duql::LiteralValue{std::string("^re")});
-        p.emplace("to", duql::LiteralValue{std::string("RE")});
+        p.emplace("re",
+                  duql::LiteralValue{dftracer::utils::dstd::String("^re")});
+        p.emplace("to",
+                  duql::LiteralValue{dftracer::utils::dstd::String("RE")});
         CHECK(text(pipe("derive r = regex_replace(name, $re, $to) | "
                         "select name, r | distinct | sort name",
                         p)) ==
@@ -567,7 +574,8 @@ TEST_SUITE("View duql pipeline") {
         CHECK(f.columns[bcol(f, "fd")].is_null(3));
 
         duql::Params p;
-        p.emplace("re", duql::LiteralValue{std::string("(?<op>[a-z]+)")});
+        p.emplace("re", duql::LiteralValue{
+                            dftracer::utils::dstd::String("(?<op>[a-z]+)")});
         CHECK(text(frame(
                   v.duql("parse name ~ $re | select ts, op | sort ts", p))) ==
               text(run_parse(
@@ -735,7 +743,7 @@ TEST_SUITE("View duql pipeline") {
     }
 
     TEST_CASE("explain lists each step") {
-        const std::string plan = base().explain_duql(
+        const dftracer::utils::dstd::String plan = base().explain_duql(
             R"(where cat == "POSIX" | derive ms = dur / 1000 | sort -ms)"
             " | take 5");
         CHECK(plan.find("scan filter: cat == \"POSIX\" (pushed)\n") == 0);
@@ -746,9 +754,10 @@ TEST_SUITE("View duql pipeline") {
 
     TEST_CASE("explain lists the reshaping steps") {
         const View v = base();
-        auto has = [](const std::string& plan, const char* line) {
-            INFO(plan);
-            CHECK(plan.find(line) != std::string::npos);
+        auto has = [](dftracer::utils::dstd::StringView plan,
+                      const char* line) {
+            INFO(std::string(plan));
+            CHECK(plan.find(line) != dftracer::utils::dstd::StringView::npos);
         };
         has(v.explain_duql("window name sort -dur { r = row_number() }"),
             "window keys name; sort -dur; r = row_number()\n");
@@ -915,9 +924,10 @@ TEST_SUITE("View duql aggregation") {
             const std::string stage =
                 std::string(*keys ? "group " : "agg ") + keys + " " + aggs;
             INFO(stage);
-            const std::string trace_plan = v.explain_duql(stage);
+            const dftracer::utils::dstd::String trace_plan =
+                v.explain_duql(stage);
             CHECK(trace_plan.find("(trace plan)") != std::string::npos);
-            const std::string frame_plan =
+            const dftracer::utils::dstd::String frame_plan =
                 v.explain_duql("derive z = 1 | " + stage);
             CHECK(frame_plan.find("(frame plan)") != std::string::npos);
             const df::DataFrame a = frame(v.duql(stage));
@@ -948,7 +958,7 @@ TEST_SUITE("View duql aggregation") {
         const View v = view_of_lines(env, null_dur_lines());
         const auto agree = [&v](const std::string& stage, bool trace_plan) {
             INFO(stage);
-            const std::string plan = v.explain_duql(stage);
+            const dftracer::utils::dstd::String plan = v.explain_duql(stage);
             CHECK(plan.find(trace_plan ? "(trace plan)" : "(frame plan)") !=
                   std::string::npos);
             const df::DataFrame f = frame(v.duql(stage));
@@ -1476,7 +1486,7 @@ TEST_SUITE("View duql aggregation") {
         }
         for (const auto& [s, n] : by) want.push_back(n);
         CHECK(nums(trace, "n") == want);
-        const std::string plan =
+        const dftracer::utils::dstd::String plan =
             base().explain_duql("bucket 2ms at 500us | agg { n = count() }");
         CHECK(plan.find("time_bucket 2000 us at 500 us\n") !=
               std::string::npos);
@@ -1500,7 +1510,7 @@ TEST_SUITE("View duql aggregation") {
     }
 
     TEST_CASE("hopping buckets explain and refuse occupancy") {
-        const std::string plan = base().explain_duql(
+        const dftracer::utils::dstd::String plan = base().explain_duql(
             "bucket 2ms every 1ms at 500us | agg { n = count() }");
         CHECK(plan.find("hop buckets 2000 every 1000 at 500\n") !=
               std::string::npos);
@@ -1533,7 +1543,7 @@ TEST_SUITE("View duql aggregation") {
     }
 
     TEST_CASE("explain names each new step") {
-        const std::string plan = base().explain_duql(
+        const dftracer::utils::dstd::String plan = base().explain_duql(
             "time_range 0 .. 10s | bucket 1ms | group cat { n = count() }"
             " | take 1 by cat | sample 5 seed 3");
         CHECK(plan.find("scan time_range 0 .. 10000000 (pushed)\n") !=
@@ -2785,7 +2795,7 @@ TEST_SUITE("View duql array indexes and lists") {
         const View v = arrays_view(env);
         CHECK(fails_with("derive a = xs[i].b", {"index"}));
         duql::Params p;
-        p.emplace("n", duql::LiteralValue{std::string("x")});
+        p.emplace("n", duql::LiteralValue{dftracer::utils::dstd::String("x")});
         try {
             (void)frame(v.duql("derive a = xs[$n]", p));
             FAIL("xs[$n] with a string compiled");
@@ -2858,7 +2868,7 @@ TEST_SUITE("View duql session") {
     TEST_CASE("one scan reads the keys, time and duration") {
         TestEnvironment env(10);
         const std::string gz = session_trace(env, {{1, 1, 0, 5}});
-        const std::string plan = view_of(gz).explain_duql(
+        const dftracer::utils::dstd::String plan = view_of(gz).explain_duql(
             "session pid gap 1s | group pid, session { n = count() }");
         CHECK(plan.find("scan select: pid, ts, dur\n") != std::string::npos);
         CHECK(plan.find("session keys pid; time ts end ts + dur; gap "

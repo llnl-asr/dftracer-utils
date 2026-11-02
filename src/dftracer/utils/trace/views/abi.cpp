@@ -42,9 +42,11 @@ dftu_view* wrap(scan::ScanPlan p) { return new dftu_view{std::move(p)}; }
 
 using dftracer::utils::trace::views::View;
 
-char* owned_string(const std::string& s) {
+char* owned_string(std::string_view s) {
     char* out = static_cast<char*>(std::malloc(s.size() + 1));
-    if (out) std::memcpy(out, s.c_str(), s.size() + 1);
+    if (!out) return nullptr;
+    std::memcpy(out, s.data(), s.size());
+    out[s.size()] = '\0';
     return out;
 }
 
@@ -66,8 +68,10 @@ dftracer::utils::duql::Params duql_params(const char* const* names,
             throw std::invalid_argument("a NULL parameter name or value");
         auto value = dftracer::utils::duql::parse_param(values[i]);
         if (!value)
-            throw std::invalid_argument("$" + std::string(names[i]) + ": " +
-                                        value.error().message);
+            throw std::invalid_argument(
+                ("$" + dftracer::utils::dstd::String(names[i]) + ": " +
+                 value.error().message)
+                    .c_str());
         out.insert_or_assign(names[i], std::move(*value));
     }
     return out;

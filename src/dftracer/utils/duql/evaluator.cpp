@@ -1,7 +1,14 @@
 #include <dftracer/utils/common/calendar.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/numbers.h>
@@ -17,14 +24,10 @@
 #include <charconv>
 #include <cmath>
 #include <cstdint>
-#include <deque>
 #include <limits>
-#include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -52,14 +55,14 @@ using dftracer::utils::duql::compare_numbers;
 using dftracer::utils::duql::detail::order;
 
 // -1/0/1 for less/equal/greater; nullopt when the types differ.
-std::optional<int> compare(const JsonValue& field, const LiteralNode& lit) {
+dstd::Optional<int> compare(const JsonValue& field, const LiteralNode& lit) {
     return std::visit(
-        [&field](const auto& v) -> std::optional<int> {
+        [&field](const auto& v) -> dstd::Optional<int> {
             using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::string>) {
+            if constexpr (std::is_same_v<T, dstd::String>) {
                 if (!field.is_string()) return std::nullopt;
-                return order(field.get<std::string_view>(),
-                             std::string_view(v));
+                return order(field.get<dstd::StringView>(),
+                             dstd::StringView(v));
             } else if constexpr (std::is_same_v<T, bool>) {
                 if (!field.is_bool()) return std::nullopt;
                 return order(field.get<bool>(), v);
@@ -76,9 +79,9 @@ std::optional<int> compare(const JsonValue& field, const LiteralNode& lit) {
         lit.value);
 }
 
-std::optional<int> compare(const LiteralValue& a, const LiteralNode& lit) {
+dstd::Optional<int> compare(const LiteralValue& a, const LiteralNode& lit) {
     return std::visit(
-        [](const auto& va, const auto& vb) -> std::optional<int> {
+        [](const auto& va, const auto& vb) -> dstd::Optional<int> {
             using A = std::decay_t<decltype(va)>;
             using B = std::decay_t<decltype(vb)>;
             if constexpr (std::is_same_v<A, B>)
@@ -94,19 +97,19 @@ std::optional<int> compare(const LiteralValue& a, const LiteralNode& lit) {
         a, lit.value);
 }
 
-std::optional<std::string_view> as_string(const JsonValue& v) {
+dstd::Optional<dstd::StringView> as_string(const JsonValue& v) {
     if (!v.is_string()) return std::nullopt;
-    return v.get<std::string_view>();
+    return v.get<dstd::StringView>();
 }
 
-std::optional<std::string_view> as_string(const LiteralValue& v) {
-    if (const auto* s = std::get_if<std::string>(&v)) return *s;
+dstd::Optional<dstd::StringView> as_string(const LiteralValue& v) {
+    if (const auto* s = std::get_if<dstd::String>(&v)) return *s;
     return std::nullopt;
 }
 
 bool plain_string(const JsonValue& v) { return v.is_string(); }
 bool plain_string(const LiteralValue& v) {
-    return std::holds_alternative<std::string>(v);
+    return std::holds_alternative<dstd::String>(v);
 }
 
 // YES when the value equals an element, NO when it is comparable with some
@@ -127,7 +130,7 @@ Truth in_values(const ArrayNode& values, const V& v) {
     return comparable ? Truth::No : Truth::Unknown;
 }
 
-Truth apply(CompareOp op, std::optional<int> c) {
+Truth apply(CompareOp op, dstd::Optional<int> c) {
     if (!c) return Truth::Unknown;
     switch (op) {
         case CompareOp::Eq:
@@ -147,7 +150,7 @@ Truth apply(CompareOp op, std::optional<int> c) {
 }
 
 // A match reaching its work limit is UNKNOWN.
-Truth pattern_truth(const CompiledPattern& p, std::string_view s) {
+Truth pattern_truth(const CompiledPattern& p, dstd::StringView s) {
     switch (match(p, s)) {
         case MatchResult::Yes:
             return Truth::Yes;
@@ -164,8 +167,8 @@ struct VNull {};
 
 // A value during expression evaluation. Strings and containers borrow from
 // the record, the term or the scratch arena, and live for one leaf.
-using Value = std::variant<VMissing, VNull, bool, std::int64_t, std::uint64_t,
-                           double, std::string_view, simdjson::dom::element>;
+using Value = dstd::Variant<VMissing, VNull, bool, std::int64_t, std::uint64_t,
+                            double, dstd::StringView, simdjson::dom::element>;
 
 bool absent(const Value& v) {
     return std::holds_alternative<VMissing>(v) ||
@@ -174,18 +177,18 @@ bool absent(const Value& v) {
 
 // Owned strings and parsed containers of one expression leaf.
 struct Scratch {
-    std::deque<std::string> strings;
-    std::vector<std::unique_ptr<dftracer::utils::json::RecordParser>> parsers;
+    dstd::Deque<dstd::String> strings;
+    dstd::Vector<dstd::UniquePtr<dftracer::utils::json::RecordParser>> parsers;
     std::size_t next_parser = 0;
 
-    std::string_view own(std::string s) {
+    dstd::StringView own(dstd::String s) {
         return strings.emplace_back(std::move(s));
     }
 
-    Value parse(std::string_view json) {
+    Value parse(dstd::StringView json) {
         if (next_parser == parsers.size())
             parsers.push_back(
-                std::make_unique<dftracer::utils::json::RecordParser>());
+                dstd::make_unique<dftracer::utils::json::RecordParser>());
         simdjson::dom::element el;
         if (parsers[next_parser++]->parse(json.data(), json.size()).get(el) !=
             simdjson::SUCCESS)
@@ -232,15 +235,15 @@ Value of_cell(const Cell& c) {
             return VNull{};
         case Cell::Kind::Array:
         case Cell::Kind::Object:
-            return scratch.parse(std::get<std::string>(c.value));
+            return scratch.parse(std::get<dstd::String>(c.value));
         case Cell::Kind::Value:
             break;
     }
     return std::visit(
         [](const auto& v) -> Value {
             using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::string>)
-                return std::string_view(v);
+            if constexpr (std::is_same_v<T, dstd::String>)
+                return dstd::StringView(v);
             else
                 return v;
         },
@@ -281,9 +284,9 @@ Value walk(Value v, const TField& f) {
 }
 
 // -1/0/1, or nullopt across types and for missing, null and containers.
-std::optional<int> cmp(const Value& a, const Value& b) {
+dstd::Optional<int> cmp(const Value& a, const Value& b) {
     return std::visit(
-        [](const auto& x, const auto& y) -> std::optional<int> {
+        [](const auto& x, const auto& y) -> dstd::Optional<int> {
             using A = std::decay_t<decltype(x)>;
             using B = std::decay_t<decltype(y)>;
             constexpr bool NUM_A = std::is_same_v<A, std::int64_t> ||
@@ -296,7 +299,7 @@ std::optional<int> cmp(const Value& a, const Value& b) {
                 return compare_numbers(x, y);
             else if constexpr (std::is_same_v<A, B> &&
                                (std::is_same_v<A, bool> ||
-                                std::is_same_v<A, std::string_view>))
+                                std::is_same_v<A, dstd::StringView>))
                 return order(x, y);
             else
                 return std::nullopt;
@@ -323,7 +326,7 @@ struct Int {
 constexpr std::uint64_t U64_MAX = std::numeric_limits<std::uint64_t>::max();
 constexpr std::uint64_t I64_MIN_MAG = std::uint64_t{1} << 63;
 
-std::optional<Int> as_int(const Value& v) {
+dstd::Optional<Int> as_int(const Value& v) {
     if (const auto* i = std::get_if<std::int64_t>(&v)) {
         if (*i < 0)
             return Int{true, std::uint64_t{0} - static_cast<std::uint64_t>(*i)};
@@ -333,7 +336,7 @@ std::optional<Int> as_int(const Value& v) {
     return std::nullopt;
 }
 
-std::optional<double> as_double(const Value& v) {
+dstd::Optional<double> as_double(const Value& v) {
     if (const auto* d = std::get_if<double>(&v)) return *d;
     if (const auto* i = std::get_if<std::int64_t>(&v))
         return static_cast<double>(*i);
@@ -360,7 +363,7 @@ Value of_double(double d) {
     return d;
 }
 
-std::optional<Int> add(Int a, Int b) {
+dstd::Optional<Int> add(Int a, Int b) {
     if (a.neg == b.neg) {
         if (a.mag > U64_MAX - b.mag) return std::nullopt;
         return Int{a.neg, a.mag + b.mag};
@@ -369,7 +372,7 @@ std::optional<Int> add(Int a, Int b) {
     return Int{b.neg, b.mag - a.mag};
 }
 
-std::optional<Int> mul(Int a, Int b) {
+dstd::Optional<Int> mul(Int a, Int b) {
     if (a.mag != 0 && b.mag > U64_MAX / a.mag) return std::nullopt;
     return Int{a.neg != b.neg, a.mag * b.mag};
 }
@@ -380,7 +383,7 @@ Value arith(TermOp op, const Value& l, const Value& r) {
     if (li && ri && op != TermOp::Div) {
         const Int a = *li;
         const Int b = *ri;
-        std::optional<Int> out;
+        dstd::Optional<Int> out;
         switch (op) {
             case TermOp::Add:
                 out = add(a, b);
@@ -438,7 +441,7 @@ Value arith(TermOp op, const Value& l, const Value& r) {
     }
 }
 
-void append_double(std::string& out, double d) {
+void append_double(dstd::String& out, double d) {
     char buf[32];
     if (char* end = dstd::to_chars_double(buf, buf + sizeof(buf), d))
         out.append(buf, end);
@@ -446,11 +449,11 @@ void append_double(std::string& out, double d) {
 
 // The text of a present value: strings as they are, containers as canonical
 // JSON; `json_strings` also quotes strings and writes null.
-std::optional<std::string> text_of(const Value& v, bool json_strings) {
+dstd::Optional<dstd::String> text_of(const Value& v, bool json_strings) {
     return std::visit(
-        [json_strings](const auto& x) -> std::optional<std::string> {
+        [json_strings](const auto& x) -> dstd::Optional<dstd::String> {
             using T = std::decay_t<decltype(x)>;
-            std::string out;
+            dstd::String out;
             if constexpr (std::is_same_v<T, VMissing>) {
                 return std::nullopt;
             } else if constexpr (std::is_same_v<T, VNull>) {
@@ -460,7 +463,7 @@ std::optional<std::string> text_of(const Value& v, bool json_strings) {
                 out = x ? "true" : "false";
             } else if constexpr (std::is_same_v<T, double>) {
                 append_double(out, x);
-            } else if constexpr (std::is_same_v<T, std::string_view>) {
+            } else if constexpr (std::is_same_v<T, dstd::StringView>) {
                 if (json_strings) {
                     out += '"';
                     json::append_json_escaped(out, x);
@@ -471,7 +474,7 @@ std::optional<std::string> text_of(const Value& v, bool json_strings) {
             } else if constexpr (std::is_same_v<T, simdjson::dom::element>) {
                 json::append_canonical_json(out, x);
             } else {
-                out = std::to_string(x);
+                out = dstd::int_text(x);
             }
             return out;
         },
@@ -487,13 +490,13 @@ bool continuation(char c) {
     return (static_cast<unsigned char>(c) & 0xC0) == 0x80;
 }
 
-std::size_t utf8_length(std::string_view s) {
+std::size_t utf8_length(dstd::StringView s) {
     return static_cast<std::size_t>(std::count_if(
         s.begin(), s.end(), [](char c) { return !continuation(c); }));
 }
 
 // Byte offset of code point `n` in `s`, or s.size() past the end.
-std::size_t utf8_offset(std::string_view s, std::uint64_t n) {
+std::size_t utf8_offset(dstd::StringView s, std::uint64_t n) {
     std::size_t i = 0;
     while (i < s.size() && n > 0) {
         ++i;
@@ -503,9 +506,9 @@ std::size_t utf8_offset(std::string_view s, std::uint64_t n) {
     return i;
 }
 
-std::string_view type_name(const Value& v) {
+dstd::StringView type_name(const Value& v) {
     return std::visit(
-        [](const auto& x) -> std::string_view {
+        [](const auto& x) -> dstd::StringView {
             using T = std::decay_t<decltype(x)>;
             if constexpr (std::is_same_v<T, VMissing>)
                 return "missing";
@@ -513,7 +516,7 @@ std::string_view type_name(const Value& v) {
                 return "null";
             else if constexpr (std::is_same_v<T, bool>)
                 return "bool";
-            else if constexpr (std::is_same_v<T, std::string_view>)
+            else if constexpr (std::is_same_v<T, dstd::StringView>)
                 return "string";
             else if constexpr (std::is_same_v<T, simdjson::dom::element>)
                 return x.is_array() ? "array" : "object";
@@ -524,7 +527,7 @@ std::string_view type_name(const Value& v) {
 }
 
 template <class V>
-std::optional<V> parse_number(std::string_view s) {
+dstd::Optional<V> parse_number(dstd::StringView s) {
     V out{};
     std::from_chars_result res{};
     if constexpr (std::is_same_v<V, double>)
@@ -540,9 +543,9 @@ std::optional<V> parse_number(std::string_view s) {
 Value to_int(const Value& v) {
     if (const auto i = as_int(v)) return of_int(*i);
     if (const auto* b = std::get_if<bool>(&v)) return std::int64_t{*b};
-    std::optional<double> d;
+    dstd::Optional<double> d;
     if (const auto* x = std::get_if<double>(&v)) d = *x;
-    if (const auto* s = std::get_if<std::string_view>(&v)) {
+    if (const auto* s = std::get_if<dstd::StringView>(&v)) {
         if (auto i = parse_number<std::int64_t>(*s)) return *i;
         d = parse_number<double>(*s);
     }
@@ -556,7 +559,7 @@ Value to_int(const Value& v) {
 Value to_float(const Value& v) {
     if (const auto d = as_double(v)) return *d;
     if (const auto* b = std::get_if<bool>(&v)) return *b ? 1.0 : 0.0;
-    if (const auto* s = std::get_if<std::string_view>(&v))
+    if (const auto* s = std::get_if<dstd::StringView>(&v))
         if (auto d = parse_number<double>(*s)) return of_double(*d);
     return VNull{};
 }
@@ -575,7 +578,7 @@ Value round_to(const Value& v, const Value& digits) {
 }
 
 Value length(const Value& v) {
-    if (const auto* s = std::get_if<std::string_view>(&v))
+    if (const auto* s = std::get_if<dstd::StringView>(&v))
         return static_cast<std::int64_t>(utf8_length(*s));
     if (const auto* el = std::get_if<simdjson::dom::element>(&v)) {
         simdjson::dom::array arr;
@@ -590,10 +593,10 @@ Value length(const Value& v) {
 
 Value contains(const Value& a, const Value& b) {
     if (absent(b)) return VNull{};
-    if (const auto* s = std::get_if<std::string_view>(&a)) {
-        const auto* p = std::get_if<std::string_view>(&b);
+    if (const auto* s = std::get_if<dstd::StringView>(&a)) {
+        const auto* p = std::get_if<dstd::StringView>(&b);
         if (!p) return VNull{};
-        return s->find(*p) != std::string_view::npos;
+        return s->find(*p) != dstd::StringView::npos;
     }
     simdjson::dom::array arr;
     if (!is_array(a, arr)) return VNull{};
@@ -632,7 +635,7 @@ Value sum(const Value& v) {
 }
 
 // The lookup key of `v`; false for a value with none.
-bool value_key(std::string& out, const Value& v) {
+bool value_key(dstd::String& out, const Value& v) {
     return std::visit(
         [&out](const auto& x) {
             using T = std::decay_t<decltype(x)>;
@@ -647,7 +650,7 @@ bool value_key(std::string& out, const Value& v) {
                 return true;
             } else if constexpr (std::is_same_v<T, double>) {
                 return append_double_key(out, x);
-            } else if constexpr (std::is_same_v<T, std::string_view>) {
+            } else if constexpr (std::is_same_v<T, dstd::StringView>) {
                 append_string_key(out, x);
                 return true;
             } else if constexpr (std::is_same_v<T, bool>) {
@@ -661,16 +664,16 @@ bool value_key(std::string& out, const Value& v) {
 }
 
 // `v` as a range value: a scalar other than NaN.
-std::optional<Ordered> ordered(const Value& v) {
+dstd::Optional<Ordered> ordered(const Value& v) {
     return std::visit(
-        [](const auto& x) -> std::optional<Ordered> {
+        [](const auto& x) -> dstd::Optional<Ordered> {
             using T = std::decay_t<decltype(x)>;
             if constexpr (std::is_same_v<T, double>) {
                 if (std::isnan(x)) return std::nullopt;
                 return Ordered{x};
             } else if constexpr (std::is_same_v<T, std::int64_t> ||
                                  std::is_same_v<T, std::uint64_t> ||
-                                 std::is_same_v<T, std::string_view> ||
+                                 std::is_same_v<T, dstd::StringView> ||
                                  std::is_same_v<T, bool>) {
                 return Ordered{x};
             } else {
@@ -686,15 +689,16 @@ Value table_value(const LookupTable& t, std::int64_t r) {
     if (!c)
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
-            "View::duql a scan filter reads a list or object column of '" +
-                t.name + "'; read it in a stage after the scan filter");
+            ("View::duql a scan filter reads a list or object column of '" +
+             t.name + "'; read it in a stage after the scan filter")
+                .c_str());
     return of_cell(*c);
 }
 
 // Rows `a` and `b` of the column `t` reads hold equal values.
 bool same_value(const LookupTable& t, std::int64_t a, std::int64_t b) {
-    std::string ka;
-    std::string kb;
+    dstd::String ka;
+    dstd::String kb;
     const bool ha = value_key(ka, table_value(t, a));
     const bool hb = value_key(kb, table_value(t, b));
     return ha == hb && ka == kb;
@@ -704,43 +708,45 @@ const LookupTable& bound_table(const TLookup& l) {
     if (!l.slot || !l.slot->table)
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
-            "View::duql '" + l.name + "' was read before its rows were bound");
+            ("View::duql '" + l.name + "' was read before its rows were bound")
+                .c_str());
     return *l.slot->table;
 }
 
-std::optional<std::string_view> str(const Value& v) {
-    if (const auto* s = std::get_if<std::string_view>(&v)) return *s;
+dstd::Optional<dstd::StringView> str(const Value& v) {
+    if (const auto* s = std::get_if<dstd::StringView>(&v)) return *s;
     return std::nullopt;
 }
 
 // The container `json` spells, parsed into the scratch arena.
-Value parsed(const std::string& json) {
+Value parsed(const dstd::String& json) {
     const Value v = scratch.parse(scratch.own(json));
     if (std::holds_alternative<VMissing>(v)) return VNull{};
     return v;
 }
 
-void append_element(std::string& out, simdjson::dom::element el) {
+void append_element(dstd::String& out, simdjson::dom::element el) {
     if (out.size() > 1) out += ',';
     json::append_canonical_json(out, el);
 }
 
 // A slice index: from the end when negative, clamped to [0, size].
-std::optional<std::uint64_t> slice_at(const Value& v, std::uint64_t size) {
+dstd::Optional<std::uint64_t> slice_at(const Value& v, std::uint64_t size) {
     const auto i = as_int(v);
     if (!i) return std::nullopt;
     if (!i->neg) return std::min(i->mag, size);
     return i->mag >= size ? 0 : size - i->mag;
 }
 
-Value slice(const Value& v, const Value& from, const std::optional<Value>& to) {
+Value slice(const Value& v, const Value& from,
+            const dstd::Optional<Value>& to) {
     simdjson::dom::array arr;
     if (!is_array(v, arr)) return VNull{};
     const std::uint64_t size = arr.size();
     const auto b = slice_at(from, size);
-    const auto e = to ? slice_at(*to, size) : std::optional{size};
+    const auto e = to ? slice_at(*to, size) : dstd::Optional{size};
     if (!b || !e) return VNull{};
-    std::string out = "[";
+    dstd::String out = "[";
     std::uint64_t i = 0;
     for (auto el : arr) {
         if (i >= *b && i < *e) append_element(out, el);
@@ -752,7 +758,7 @@ Value slice(const Value& v, const Value& from, const std::optional<Value>& to) {
 Value flatten(const Value& v) {
     simdjson::dom::array arr;
     if (!is_array(v, arr)) return VNull{};
-    std::string out = "[";
+    dstd::String out = "[";
     for (auto el : arr) {
         simdjson::dom::array inner;
         if (el.get_array().get(inner) != simdjson::SUCCESS) {
@@ -769,12 +775,12 @@ Value members(const Value& v, bool keys) {
     const auto* el = std::get_if<simdjson::dom::element>(&v);
     simdjson::dom::object obj;
     if (!el || el->get_object().get(obj) != simdjson::SUCCESS) return VNull{};
-    std::vector<std::pair<std::string_view, simdjson::dom::element>> fields;
+    dstd::Vector<dstd::Pair<dstd::StringView, simdjson::dom::element>> fields;
     for (auto f : obj) fields.emplace_back(f.key, f.value);
     std::stable_sort(
         fields.begin(), fields.end(),
         [](const auto& a, const auto& b) { return a.first < b.first; });
-    std::string out = "[";
+    dstd::String out = "[";
     for (const auto& [k, x] : fields) {
         if (!keys) {
             append_element(out, x);
@@ -801,7 +807,7 @@ Value split(const Value& v, const Value& sep) {
     const auto s = str(v);
     const auto p = str(sep);
     if (!s || !p || p->empty()) return VNull{};
-    std::string out = "[";
+    dstd::String out = "[";
     std::size_t at = 0;
     for (;;) {
         const std::size_t hit = s->find(*p, at);
@@ -809,7 +815,7 @@ Value split(const Value& v, const Value& sep) {
         out += '"';
         json::append_json_escaped(out, s->substr(at, hit - at));
         out += '"';
-        if (hit == std::string_view::npos) break;
+        if (hit == dstd::StringView::npos) break;
         at = hit + p->size();
     }
     return parsed(out + "]");
@@ -830,7 +836,7 @@ Value index_of(const Value& v, const Value& x) {
 Value sort_array(const Value& v) {
     simdjson::dom::array arr;
     if (!is_array(v, arr)) return VNull{};
-    std::vector<std::pair<Value, simdjson::dom::element>> present;
+    dstd::Vector<dstd::Pair<Value, simdjson::dom::element>> present;
     for (auto el : arr) {
         Value x = of_element(el);
         if (absent(x)) continue;
@@ -842,7 +848,7 @@ Value sort_array(const Value& v) {
                      [](const auto& a, const auto& b) {
                          return *cmp(a.first, b.first) < 0;
                      });
-    std::string out = "[";
+    dstd::String out = "[";
     for (const auto& p : present) append_element(out, p.second);
     for (std::size_t i = 0; i < arr.size() - present.size(); ++i)
         out += out.size() > 1 ? ",null" : "null";
@@ -857,8 +863,8 @@ bool same(simdjson::dom::element a, simdjson::dom::element b) {
     if (!std::holds_alternative<simdjson::dom::element>(x) ||
         !std::holds_alternative<simdjson::dom::element>(y))
         return false;
-    std::string ja;
-    std::string jb;
+    dstd::String ja;
+    dstd::String jb;
     json::append_canonical_json(ja, a);
     json::append_canonical_json(jb, b);
     return ja == jb;
@@ -867,8 +873,8 @@ bool same(simdjson::dom::element a, simdjson::dom::element b) {
 Value unique(const Value& v) {
     simdjson::dom::array arr;
     if (!is_array(v, arr)) return VNull{};
-    std::vector<simdjson::dom::element> kept;
-    std::string out = "[";
+    dstd::Vector<simdjson::dom::element> kept;
+    dstd::String out = "[";
     for (auto el : arr) {
         bool seen = false;
         for (const auto& k : kept)
@@ -884,7 +890,7 @@ Value join(const Value& v, const Value& sep) {
     simdjson::dom::array arr;
     const auto s = str(sep);
     if (!is_array(v, arr) || !s) return VNull{};
-    std::string out;
+    dstd::String out;
     bool first = true;
     for (auto el : arr) {
         const Value x = of_element(el);
@@ -919,8 +925,8 @@ class TermEval {
                 using T = std::decay_t<decltype(v)>;
                 if constexpr (std::is_same_v<T, TNull>)
                     return VNull{};
-                else if constexpr (std::is_same_v<T, std::string>)
-                    return std::string_view(v);
+                else if constexpr (std::is_same_v<T, dstd::String>)
+                    return dstd::StringView(v);
                 else
                     return v;
             },
@@ -948,7 +954,7 @@ class TermEval {
     }
 
     Value node(const TList& l) const {
-        std::string out = "[";
+        dstd::String out = "[";
         for (const auto& item : l.items) {
             if (out.size() > 1) out += ',';
             const auto t = text_of((*this)(*item), true);
@@ -976,8 +982,8 @@ class TermEval {
     }
 
     // The keys of `l` for this record, or nullopt when a part has none.
-    std::optional<std::string> key(const TLookup& l) const {
-        std::string out;
+    dstd::Optional<dstd::String> key(const TLookup& l) const {
+        dstd::String out;
         for (const auto& k : l.keys)
             if (!value_key(out, (*this)(*k))) return std::nullopt;
         return out;
@@ -1005,14 +1011,14 @@ class TermEval {
     Value ranged(const TLookup& l, const LookupTable& t) const {
         const std::size_t keyed =
             l.keys.size() - (l.low ? 1 : 0) - (l.high ? 1 : 0);
-        std::string key;
+        dstd::String key;
         std::size_t known = 0;
         while (known < keyed && value_key(key, (*this)(*l.keys[known])))
             ++known;
         if (l.kind == LookupKind::In && known < l.keys.size() - l.correlated)
             return VNull{};
-        std::optional<Ordered> low;
-        std::optional<Ordered> high;
+        dstd::Optional<Ordered> low;
+        dstd::Optional<Ordered> high;
         std::size_t b = keyed;
         if (l.low) low = ordered((*this)(*l.keys[b++]));
         if (l.high) high = ordered((*this)(*l.keys[b]));
@@ -1040,7 +1046,7 @@ class TermEval {
         const auto k = key(l);
         if (l.kind == LookupKind::In) {
             if (!k) {
-                std::string subject;
+                dstd::String subject;
                 for (std::size_t i = 0; i + l.correlated < l.keys.size(); ++i)
                     if (!value_key(subject, (*this)(*l.keys[i])))
                         return VNull{};
@@ -1098,7 +1104,7 @@ class TermEval {
         }
     }
 
-    std::optional<int> compared(const TBinary& b) const {
+    dstd::Optional<int> compared(const TBinary& b) const {
         return cmp((*this)(*b.left), (*this)(*b.right));
     }
 
@@ -1202,7 +1208,7 @@ class TermEval {
             case Fn::Len:
                 return length(arg(c, 0));
             case Fn::Concat: {
-                std::string out;
+                dstd::String out;
                 for (const auto& a : c.args) {
                     const auto t = text_of((*this)(*a), false);
                     if (!t) return VNull{};
@@ -1214,7 +1220,7 @@ class TermEval {
             case Fn::Upper: {
                 const auto s = str(arg(c, 0));
                 if (!s) return VNull{};
-                std::string out(*s);
+                dstd::String out(*s);
                 for (char& ch : out) {
                     if (c.fn == Fn::Lower && ch >= 'A' && ch <= 'Z')
                         ch = static_cast<char>(ch - 'A' + 'a');
@@ -1226,9 +1232,9 @@ class TermEval {
             case Fn::Trim: {
                 const auto s = str(arg(c, 0));
                 if (!s) return VNull{};
-                constexpr std::string_view WS = " \t\n\r\f\v";
+                constexpr dstd::StringView WS = " \t\n\r\f\v";
                 const auto b = s->find_first_not_of(WS);
-                if (b == std::string_view::npos) return std::string_view{};
+                if (b == dstd::StringView::npos) return dstd::StringView{};
                 return s->substr(b, s->find_last_not_of(WS) - b + 1);
             }
             case Fn::StartsWith:
@@ -1278,7 +1284,7 @@ class TermEval {
             }
             case Fn::Slice:
                 return slice(arg(c, 0), arg(c, 1),
-                             c.args.size() > 2 ? std::optional{arg(c, 2)}
+                             c.args.size() > 2 ? dstd::Optional{arg(c, 2)}
                                                : std::nullopt);
             case Fn::Flatten:
                 return flatten(arg(c, 0));
@@ -1306,7 +1312,7 @@ class TermEval {
                     if (!g || g->neg) return VNull{};
                     group = static_cast<std::size_t>(g->mag);
                 }
-                std::string_view out;
+                dstd::StringView out;
                 if (extract(*c.pattern, *s, group, out) != MatchResult::Yes)
                     return VNull{};
                 return out;
@@ -1314,7 +1320,7 @@ class TermEval {
             case Fn::RegexReplace: {
                 const auto s = str(arg(c, 0));
                 if (!s || !c.pattern || !c.substitution) return VNull{};
-                std::string out;
+                dstd::String out;
                 const MatchResult r =
                     regex_replace(*c.pattern, *c.substitution, *s, out);
                 if (r == MatchResult::Limit) return VNull{};
@@ -1344,8 +1350,9 @@ class TermEval {
                     return common::date_part(
                         ct, static_cast<common::DatePart>(c.part));
                 const auto* fmt = std::get_if<TConst>(&c.args[1]->node);
-                std::string out;
-                common::format_time(out, ct, std::get<std::string>(fmt->value));
+                dstd::String out;
+                common::format_time(out, ct,
+                                    std::get<dstd::String>(fmt->value));
                 return scratch.own(std::move(out));
             }
         }
@@ -1353,7 +1360,7 @@ class TermEval {
     }
 
     Value extreme(const TCall& c, int want) const {
-        std::vector<Value> values;
+        dstd::Vector<Value> values;
         if (c.args.size() == 1) {
             simdjson::dom::array arr;
             if (!is_array(arg(c, 0), arr)) return VNull{};
@@ -1375,7 +1382,7 @@ class TermEval {
         const auto s = str(arg(c, 0));
         const auto start = as_int(arg(c, 1));
         if (!s || !start || start->neg) return VNull{};
-        const std::string_view rest = s->substr(utf8_offset(*s, start->mag));
+        const dstd::StringView rest = s->substr(utf8_offset(*s, start->mag));
         if (c.args.size() < 3) return rest;
         const auto len = as_int(arg(c, 2));
         if (!len || len->neg) return VNull{};
@@ -1388,9 +1395,9 @@ class TermEval {
         const auto to = str(arg(c, 2));
         if (!s || !from || !to) return VNull{};
         if (from->empty()) return *s;
-        std::string out;
+        dstd::String out;
         std::size_t pos = 0;
-        for (std::size_t hit = s->find(*from); hit != std::string_view::npos;
+        for (std::size_t hit = s->find(*from); hit != dstd::StringView::npos;
              hit = s->find(*from, pos)) {
             out.append(s->substr(pos, hit - pos));
             out.append(*to);
@@ -1408,7 +1415,7 @@ struct JsonRecord {
     const JsonValue& event;
     bool args_fallback;
 
-    JsonValue lookup(const std::string& path) const {
+    JsonValue lookup(const dstd::String& path) const {
         JsonValue v = event.at(path);
         if (args_fallback && !v.exists() && !common::has_args_prefix(path))
             v = event.at("args." + path);
@@ -1439,13 +1446,13 @@ struct JsonRecord {
     }
 };
 
-bool is_position(std::string_view digits) {
+bool is_position(dstd::StringView digits) {
     return !digits.empty() &&
            std::all_of(digits.begin(), digits.end(),
                        [](char c) { return c >= '0' && c <= '9'; });
 }
 
-bool is_position_of(std::string_view key, std::string_view path) {
+bool is_position_of(dstd::StringView key, dstd::StringView path) {
     return key.size() > path.size() + 1 && key.starts_with(path) &&
            key[path.size()] == '.' && is_position(key.substr(path.size() + 1));
 }
@@ -1466,8 +1473,8 @@ struct MapRecord {
                 return Truth::Unknown;
             return leaf(it->second.value);
         }
-        const std::string_view path = f.path;
-        const std::string_view bare =
+        const dstd::StringView path = f.path;
+        const dstd::StringView bare =
             path.starts_with("args.") ? path.substr(5) : path;
         bool array = false;
         for (const auto& [key, cell] : fields) {

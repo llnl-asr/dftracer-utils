@@ -307,7 +307,7 @@ bool add_leaf(const ViewPlan& plan, const duql::FieldNode& field,
         if (seen) return false;
         seen = true;
         for (const auto* v : values) {
-            const auto* s = std::get_if<std::string>(v);
+            const auto* s = std::get_if<dstd::String>(v);
             if (!s) return false;
             out.emplace_back(s->data(), s->size());
         }

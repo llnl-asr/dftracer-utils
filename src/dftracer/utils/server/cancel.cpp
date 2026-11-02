@@ -1,3 +1,4 @@
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/server/cancel.h>
 #include <dftracer/utils/server/signal_handler.h>
 #include <sys/socket.h>
@@ -45,8 +46,7 @@ bool CancelToken::cancelled() const {
 }
 
 CancelRegistry& CancelRegistry::instance() {
-    static CancelRegistry registry;
-    return registry;
+    return dstd::Singleton<CancelRegistry>::get();
 }
 
 CancelToken CancelRegistry::create(const std::string& id, int peer_fd) {

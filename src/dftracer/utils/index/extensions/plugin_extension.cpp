@@ -1,4 +1,6 @@
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/tables.h>
 
@@ -17,7 +19,16 @@ struct Registry {
 };
 
 Registry& registry() {
-    static Registry r;
+    Registry& r = dstd::Singleton<Registry>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+            Registry& held = dstd::Singleton<Registry>::get();
+            decltype(held.by_name) dropped;
+            std::unique_lock lock(held.mutex);
+            dropped.swap(held.by_name);
+        });
+        return true;
+    }();
     return r;
 }
 

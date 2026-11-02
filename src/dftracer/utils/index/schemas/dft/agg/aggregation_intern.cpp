@@ -1,3 +1,4 @@
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 
@@ -12,10 +13,7 @@ struct Registry {
     dstd::StringViewMap<std::weak_ptr<AggInternTable>> tables;
 };
 
-Registry& registry() {
-    static Registry r;
-    return r;
-}
+Registry& registry() { return dstd::Singleton<Registry>::get(); }
 
 std::atomic<bool>& deterministic_ids() {
     static std::atomic<bool> enabled{false};

@@ -1,25 +1,34 @@
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 
 #include <mutex>
 
 namespace dftracer::utils::trace::internal {
 
+namespace {
+
+struct IndexRoots {
+    std::mutex guard;
+    dstd::StringViewMap<std::shared_ptr<IndexRoot>> roots;
+    dstd::StringViewMap<std::shared_ptr<IndexRoot>> by_spelling;
+};
+
+}  // namespace
+
 std::shared_ptr<IndexRoot> index_root(const std::string& index_path) {
-    static std::mutex guard;
-    static dstd::StringViewMap<std::shared_ptr<IndexRoot>> roots;
-    static dstd::StringViewMap<std::shared_ptr<IndexRoot>> by_spelling;
+    IndexRoots& known = dstd::Singleton<IndexRoots>::get();
     {
-        const std::lock_guard<std::mutex> lock(guard);
-        const auto it = by_spelling.find(index_path);
-        if (it != by_spelling.end()) return it->second;
+        const std::lock_guard<std::mutex> lock(known.guard);
+        const auto it = known.by_spelling.find(index_path);
+        if (it != known.by_spelling.end()) return it->second;
     }
     std::error_code ec;
     const fs::path canonical = fs::weakly_canonical(index_path, ec);
-    const std::lock_guard<std::mutex> lock(guard);
-    auto& r = roots[ec ? index_path : canonical.string()];
+    const std::lock_guard<std::mutex> lock(known.guard);
+    auto& r = known.roots[ec ? index_path : canonical.string()];
     if (!r) r = std::make_shared<IndexRoot>();
-    by_spelling[index_path] = r;
+    known.by_spelling[index_path] = r;
     return r;
 }
 

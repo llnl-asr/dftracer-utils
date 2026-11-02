@@ -1,3 +1,4 @@
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/store/io_fault.h>
 
 #include <atomic>
@@ -32,10 +33,7 @@ struct Recorder {
 
 /// Never destroyed: the log outlives the memory manager its allocator charges,
 /// so a recorder left over at exit must not free through it.
-Recorder& recorder() {
-    static Recorder* instance = new Recorder();
-    return *instance;
-}
+Recorder& recorder() { return dstd::Singleton<Recorder>::get(); }
 
 bool records(std::uint64_t mode, int fd) {
     return fd >= 0 &&

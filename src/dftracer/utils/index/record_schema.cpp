@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -875,9 +876,9 @@ void load_into(Registry& reg, const std::string& path) {
 // Loads $DFTRACER_UTILS_SCHEMA_PATH on first use. A failed load throws and the
 // next access retries.
 Registry& registry() {
-    static Registry r;
+    Registry& r = dstd::Singleton<Registry>::get();
     static std::once_flag env;
-    std::call_once(env, [] {
+    std::call_once(env, [&r] {
         if (const auto paths = Env::get("DFTRACER_UTILS_SCHEMA_PATH")) {
             std::stringstream ss{std::string(*paths)};
             for (std::string p; std::getline(ss, p, ':');)
@@ -1023,13 +1024,12 @@ struct CachedDetection {
 struct DetectionCache {
     std::mutex mu;
     // A std map, since pool memory alive at exit would fail the memory exit
-    // check for this process-lifetime static.
+    // check for this process-lifetime object.
     std::unordered_map<std::string, CachedDetection> map;
 };
 
 DetectionCache& detection_cache() {
-    static DetectionCache cache;
-    return cache;
+    return dstd::Singleton<DetectionCache>::get();
 }
 
 std::optional<SchemaDetection> cached_detection(const std::string& file_path,

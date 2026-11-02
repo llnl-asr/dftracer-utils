@@ -1,6 +1,7 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -188,8 +189,7 @@ struct ConfirmedFiles {
 };
 
 ConfirmedFiles& confirmed_files() {
-    static ConfirmedFiles c;
-    return c;
+    return dstd::Singleton<ConfirmedFiles>::get();
 }
 
 // Brings every index the files read fresh through the resolver, which clears

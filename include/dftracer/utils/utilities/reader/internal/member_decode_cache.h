@@ -199,29 +199,18 @@ class MemberDecodeCache {
     std::atomic<std::uint64_t> evictions_{0};
 };
 
-namespace detail {
-inline std::atomic<MemberDecodeCache*>& global_cache_slot() noexcept {
-    static std::atomic<MemberDecodeCache*> slot{nullptr};
-    return slot;
-}
-}  // namespace detail
-
 /// Process-level decode cache, or nullptr when unconfigured. Readers pass it
 /// to the inflater so concurrent server queries share member decodes; a null
 /// return keeps the plain per-reader decode path (CLI, tests).
-inline MemberDecodeCache* global_member_decode_cache() noexcept {
-    return detail::global_cache_slot().load(std::memory_order_acquire);
-}
+MemberDecodeCache* global_member_decode_cache() noexcept;
 
 /// Enable the process-level cache with `capacity_bytes` of retained decoded
 /// members and the given eviction policy. Idempotent: the first call fixes the
 /// instance; later calls just ensure it is published. Call once at startup.
-inline void configure_global_member_decode_cache(
+/// Shutdown frees the cache, after which the global is nullptr again.
+void configure_global_member_decode_cache(
     std::size_t capacity_bytes,
-    dstd::cache::EvictionKind kind = dstd::cache::EvictionKind::Lru) {
-    static MemberDecodeCache instance(capacity_bytes, kind);
-    detail::global_cache_slot().store(&instance, std::memory_order_release);
-}
+    dstd::cache::EvictionKind kind = dstd::cache::EvictionKind::Lru);
 
 }  // namespace dftracer::utils::utilities::reader::internal
 

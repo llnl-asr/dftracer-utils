@@ -4,6 +4,8 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/runtime/coro/adaptive_gate.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
@@ -61,8 +63,9 @@ class ScanStatThreads {
         return ids_.count(id) > 0;
     }
     void clear() {
+        dftracer::utils::dstd::Set<std::thread::id> dropped;
         std::lock_guard<std::mutex> lock(mu_);
-        ids_.clear();
+        dropped.swap(ids_);
     }
 
    private:
@@ -71,7 +74,16 @@ class ScanStatThreads {
 };
 
 inline ScanStatThreads& scan_stat_threads() {
-    static ScanStatThreads threads;
+    ScanStatThreads& threads =
+        dftracer::utils::dstd::Singleton<ScanStatThreads>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        dftracer::utils::dstd::add_shutdown_hook(
+            dftracer::utils::dstd::ShutdownStage::FreeCaches, [] {
+                dftracer::utils::dstd::Singleton<ScanStatThreads>::get()
+                    .clear();
+            });
+        return true;
+    }();
     return threads;
 }
 

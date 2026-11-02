@@ -165,3 +165,24 @@ TEST_CASE("Thread::try_start runs the body or reports an error") {
     t->join();
     CHECK(ran.load() == 1);
 }
+
+TEST_CASE("Thread takes a stack size at start") {
+    constexpr std::size_t WANT = 4 * 1024 * 1024;
+    std::size_t got = 0;
+    dstd::Thread t(
+        [&] {
+#if defined(__APPLE__)
+            got = pthread_get_stacksize_np(pthread_self());
+#else
+            pthread_attr_t attr;
+            if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+                (void)pthread_attr_getstacksize(&attr, &got);
+                (void)pthread_attr_destroy(&attr);
+            }
+#endif
+        },
+        "dftu-stack", WANT);
+    t.join();
+    CHECK(got >= WANT);
+    CHECK(got < 2 * WANT);
+}

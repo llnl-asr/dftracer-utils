@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <pthread.h>
 
+#include <cstddef>
 #include <type_traits>
 #include <utility>
 
@@ -43,24 +44,27 @@ class Thread {
     Thread() noexcept = default;
 
     /// Runs `fn()` on a new thread. A non-empty `name` is the name a debugger
-    /// and `top -H` show, cut to 15 bytes on Linux.
+    /// and `top -H` show, cut to 15 bytes on Linux. A non-zero `stack_size` in
+    /// bytes is rounded up to the page size and the system minimum, and zero
+    /// keeps the system default (512 KiB on macOS, often 8 MiB on Linux).
     template <class Fn>
         requires std::is_invocable_v<std::decay_t<Fn>&>
-    explicit Thread(Fn&& fn, StringView name = {}) {
+    explicit Thread(Fn&& fn, StringView name = {}, std::size_t stack_size = 0) {
         using Body = std::decay_t<Fn>;
         auto start = dstd::make_unique<Start<Body>>(std::forward<Fn>(fn), name);
-        launch(&Start<Body>::run, start.get());
+        launch(&Start<Body>::run, start.get(), stack_size);
         (void)start.release();
     }
 
     /// Like the constructor, but a thread that cannot be created is an error.
     template <class Fn>
         requires std::is_invocable_v<std::decay_t<Fn>&>
-    static Expected<Thread, Error> try_start(Fn&& fn, StringView name = {}) {
+    static Expected<Thread, Error> try_start(Fn&& fn, StringView name = {},
+                                             std::size_t stack_size = 0) {
         using Body = std::decay_t<Fn>;
         auto start = dstd::make_unique<Start<Body>>(std::forward<Fn>(fn), name);
         Thread t;
-        const int rc = t.create(&Start<Body>::run, start.get());
+        const int rc = t.create(&Start<Body>::run, start.get(), stack_size);
         if (rc != 0) return Unexpected(create_error(rc));
         (void)start.release();
         return t;
@@ -104,8 +108,8 @@ class Thread {
 
     static void set_current_name(const String& name) noexcept;
     static Error create_error(int rc);
-    void launch(void (*run)(void*), void* arg);
-    int create(void (*run)(void*), void* arg) noexcept;
+    void launch(void (*run)(void*), void* arg, std::size_t stack_size);
+    int create(void (*run)(void*), void* arg, std::size_t stack_size) noexcept;
 
     pthread_t handle_{};
     bool joinable_{false};

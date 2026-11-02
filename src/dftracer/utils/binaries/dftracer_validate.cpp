@@ -29,11 +29,11 @@ using dftracer::utils::json::trim_and_validate;
 using dftracer::utils::utilities::fileio::lines::sources::
     async_streaming_gz_lines;
 
-class ValidateArgParse : public cli::ArgParse {
+class ValidateArgParse : public binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
-    cli::FilesArgs files_args{"Trace files to validate (.pfw.gz)"};
-    cli::PipelineArgs pipeline;
+    binaries::DirectoryArgs directory{binaries::DirMode::DefaultEmpty};
+    binaries::FilesArgs files_args{"Trace files to validate (.pfw.gz)"};
+    binaries::PipelineArgs pipeline;
 
     explicit ValidateArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
         schema(directory, files_args, pipeline);
@@ -58,10 +58,10 @@ coro::CoroTask<std::vector<std::string>> collect_files(
     CoroScope& ctx, std::string directory, std::vector<std::string> cli_files) {
     std::vector<std::string> files;
     for (auto& f : cli_files) {
-        if (cli::is_trace_file(f)) files.push_back(std::move(f));
+        if (binaries::is_trace_file(f)) files.push_back(std::move(f));
     }
     if (!directory.empty() && common::input_exists(directory)) {
-        auto scanned = co_await cli::scan_directory_trace_files(
+        auto scanned = co_await binaries::scan_directory_trace_files(
             ctx, directory, /*recursive=*/true);
         files.insert(files.end(), std::make_move_iterator(scanned.begin()),
                      std::make_move_iterator(scanned.end()));
@@ -125,7 +125,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
     const auto executor_threads = cli->pipeline.executor_threads;
 
     auto config =
-        cli::build_pipeline_config("DFTracer Validate", cli->pipeline);
+        binaries::build_pipeline_config("DFTracer Validate", cli->pipeline);
     Pipeline pipeline(config);
 
     // Task 1: discover files (parallel per-subdirectory scan + explicit
@@ -148,7 +148,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
             auto validate_scope =
                 [files, &results,
                  executor_threads](CoroScope& scope) -> coro::CoroTask<void> {
-                cli::parallel_for_each(
+                binaries::parallel_for_each(
                     scope, std::views::iota(std::size_t{0}, files->size()),
                     executor_threads,
                     [files, &results](std::size_t idx) -> coro::CoroTask<void> {
@@ -207,7 +207,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    return cli::cli_main<ValidateArgParse>(
+    return binaries::cli_main<ValidateArgParse>(
         argc, argv, "dftracer_validate",
         "Validate DFTracer .pfw.gz trace files: every non-wrapper line "
         "must be valid JSON. Parallel C++ equivalent of the dftracer_validate "

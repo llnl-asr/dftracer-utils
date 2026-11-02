@@ -288,9 +288,9 @@ static coro::CoroTask<int> run_verify(
     co_return 0;
 }
 
-class GenFakeTraceArgParse : public cli::ArgParse {
+class GenFakeTraceArgParse : public binaries::ArgParse {
    public:
-    cli::PipelineArgs pipeline;
+    binaries::PipelineArgs pipeline;
 
     std::string output_dir;
     int num_ranks = 8;
@@ -393,10 +393,11 @@ class GenFakeTraceArgParse : public cli::ArgParse {
         num_train_files = parser().get<int>("--num-train-files");
         num_val_files = parser().get<int>("--num-val-files");
         step_dur_ms = static_cast<int>(std::lround(
-            cli::get_duration_arg(parser(), "--step-duration-ms", 1e3)));
+            binaries::get_duration_arg(parser(), "--step-duration-ms", 1e3)));
         base_seed = parser().get<std::uint64_t>("--seed");
         verify = parser().get<bool>("--verify");
-        checkpoint_size = cli::get_bytes_arg(parser(), "--checkpoint-size");
+        checkpoint_size =
+            binaries::get_bytes_arg(parser(), "--checkpoint-size");
     }
 };
 
@@ -404,7 +405,7 @@ class GenFakeTraceArgParse : public cli::ArgParse {
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv) {
-    return cli::cli_main<GenFakeTraceArgParse>(
+    return binaries::cli_main<GenFakeTraceArgParse>(
         argc, argv, "dftracer_gen_fake_trace",
         "Generate realistic DFTracer traces modeled after UNet3D training. "
         "Produces per-rank .pfw.gz files with known patterns "
@@ -495,7 +496,7 @@ int main(int argc, char** argv) {
             // -----------------------------------------------------------------------
             // Generate one file per rank (parallel via pipeline)
             // -----------------------------------------------------------------------
-            auto pipeline_config = cli::build_pipeline_config(
+            auto pipeline_config = binaries::build_pipeline_config(
                 "DFTracer Fake Trace Generator", cli.pipeline);
             Pipeline pipeline(pipeline_config);
 

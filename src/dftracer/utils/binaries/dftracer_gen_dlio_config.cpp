@@ -31,12 +31,13 @@ namespace dlio = dftracer::utils::utilities::dlio;
 
 namespace {
 
-class GenDlioConfigArgParse : public cli::ArgParse {
+class GenDlioConfigArgParse : public binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DefaultDot,
-                                 "Input directory containing .pfw.gz traces"};
-    cli::PipelineArgs pipeline;
-    cli::IndexingArgs indexing;
+    binaries::DirectoryArgs directory{
+        binaries::DirMode::DefaultDot,
+        "Input directory containing .pfw.gz traces"};
+    binaries::PipelineArgs pipeline;
+    binaries::IndexingArgs indexing;
 
     std::string output;
     double max_bound_percentile = 95.0;
@@ -165,7 +166,8 @@ class GenDlioConfigArgParse : public cli::ArgParse {
         seed = parser().get<std::uint64_t>("--seed");
         max_samples_per_entry =
             parser().get<std::uint64_t>("--max-samples-per-entry");
-        time_interval = cli::get_duration_arg(parser(), "--time-interval", 1e3);
+        time_interval =
+            binaries::get_duration_arg(parser(), "--time-interval", 1e3);
         event_map = parser().get<std::string>("--event-map");
     }
 };
@@ -211,7 +213,7 @@ const char* model_label(const dlio::BestModel& m) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    return cli::cli_main<GenDlioConfigArgParse>(
+    return binaries::cli_main<GenDlioConfigArgParse>(
         argc, argv, "dftracer_gen_dlio_config",
         "Generate a DLIO YAML configuration from raw DFTracer logs. Indexes "
         "and aggregates the input directory automatically; no separate "
@@ -229,7 +231,7 @@ int main(int argc, char** argv) {
 
             const agg::AggregationConfig query_config = agg_config;
 
-            const auto scanned = cli::ensure_indexes_fresh_blocking(
+            const auto scanned = binaries::ensure_indexes_fresh_blocking(
                 "DLIO Config Generator", cli.pipeline, cli.directory.value, {},
                 cli.indexing.index_dir, cli.indexing.force, agg_config,
                 cli.indexing.checkpoint_size);

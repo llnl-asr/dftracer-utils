@@ -28,11 +28,11 @@ using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::store;
 
-class IndexArgParse : public cli::ArgParse {
+class IndexArgParse : public binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory;
-    cli::PipelineArgs pipeline;
-    cli::IndexingArgs indexing;
+    binaries::DirectoryArgs directory;
+    binaries::PipelineArgs pipeline;
+    binaries::IndexingArgs indexing;
 
     std::string dimensions;
     std::size_t path_budget = 0;
@@ -127,10 +127,10 @@ class IndexArgParse : public cli::ArgParse {
         dimensions = parser().get<std::string>("--dimensions");
         path_budget = parser().get<std::size_t>("--path-budget");
         stats_share = parser().get<double>("--stats-share");
-        memory_budget = cli::get_bytes_arg(parser(), "--memory-budget");
+        memory_budget = binaries::get_bytes_arg(parser(), "--memory-budget");
         record_schema = parser().get<std::string>("--schema");
         read_batch_size =
-            cli::get_bytes_arg_with_unit(parser(), "--read-batch-size");
+            binaries::get_bytes_arg_with_unit(parser(), "--read-batch-size");
         expected_entries = parser().get<std::size_t>("--expected-entries");
         false_positive_rate = parser().get<double>("--false-positive-rate");
         plugins = parser().get<std::vector<std::string>>("--plugin");
@@ -190,7 +190,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     const auto expected_entries = cli->expected_entries;
     const auto false_positive_rate = cli->false_positive_rate;
 
-    std::vector<std::string> user_dimensions = cli::split_csv(dimensions_str);
+    std::vector<std::string> user_dimensions =
+        binaries::split_csv(dimensions_str);
 
     // Held for the whole build: loading registers the plugins' index
     // extensions, and destroying the set removes them.
@@ -263,7 +264,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     };
 
     auto matched_entries =
-        cli::scan_trace_files_on_pool(cli->pipeline, log_dir);
+        binaries::scan_trace_files_on_pool(cli->pipeline, log_dir);
 
     const auto start_time = std::chrono::high_resolution_clock::now();
     if (matched_entries.empty()) {
@@ -286,7 +287,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         resolve_input.bloom_config = indexer_config;
         resolve_input.schema = cli->record_schema;
         IndexWork stale;
-        cli::run_single_task(
+        binaries::run_single_task(
             "DFTracer Bloom Indexer", cli->pipeline, [&](CoroScope&) {
                 return select_stale_task(std::move(resolve_input), &stale);
             });
@@ -342,10 +343,10 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     // them (PER_FILE_EXPANSION_FACTOR) to a decompressed + aggregated peak.
     const std::size_t required_bytes =
         common::estimate_per_file_bytes(scanned_sizes) * scanned_sizes.size();
-    cli::warn_if_memory_tight(required_bytes);
+    binaries::warn_if_memory_tight(required_bytes);
 
-    auto pipeline_config =
-        cli::build_pipeline_config("DFTracer Bloom Indexer", cli->pipeline);
+    auto pipeline_config = binaries::build_pipeline_config(
+        "DFTracer Bloom Indexer", cli->pipeline);
 
     Pipeline pipeline(pipeline_config);
 
@@ -416,7 +417,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    return cli::cli_main<IndexArgParse>(
+    return binaries::cli_main<IndexArgParse>(
         argc, argv, "dftracer_index",
         "Build per-chunk bloom filter indices for DFTracer trace files. "
         "Creates root-local .dftindex databases enabling fast chunk-skipping "

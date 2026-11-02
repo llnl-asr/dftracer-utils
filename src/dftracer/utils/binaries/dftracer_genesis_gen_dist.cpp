@@ -46,15 +46,15 @@ struct Shard {
     std::size_t count = 1;
 };
 
-class GenDistArgParse : public cli::ArgParse {
+class GenDistArgParse : public binaries::ArgParse {
    public:
     std::vector<std::string> roots;
     std::string output;
     std::size_t member_size = 0;
     std::string shard_text;
     Shard shard;
-    cli::PipelineArgs pipeline;
-    cli::MemoryArgs memory;
+    binaries::PipelineArgs pipeline;
+    binaries::MemoryArgs memory;
 
     explicit GenDistArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
         schema(pipeline);
@@ -90,7 +90,7 @@ class GenDistArgParse : public cli::ArgParse {
     void post_parse() override {
         roots = parser().get<std::vector<std::string>>("roots");
         output = parser().get<std::string>("--output");
-        member_size = cli::get_bytes_arg(parser(), "--member-size");
+        member_size = binaries::get_bytes_arg(parser(), "--member-size");
         shard_text = parser().get<std::string>("--shard");
     }
 
@@ -771,11 +771,11 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
 
 int run_local(GenDistArgParse& cli, Shard shard, const std::string& output,
               Report* report) {
-    return cli::run_single_task("DFTracer Genesis Gen Dist", cli.pipeline,
-                                [&cli, shard, output, report](CoroScope& ctx) {
-                                    return run_gen_dist(ctx, &cli, shard,
-                                                        output, report);
-                                });
+    return binaries::run_single_task(
+        "DFTracer Genesis Gen Dist", cli.pipeline,
+        [&cli, shard, output, report](CoroScope& ctx) {
+            return run_gen_dist(ctx, &cli, shard, output, report);
+        });
 }
 
 void print_summary(const Report& r, const std::string& output) {
@@ -895,7 +895,7 @@ int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
     distributed::set_local_thread_budget();
 #endif
-    const int rc = cli::cli_main<GenDistArgParse>(
+    const int rc = binaries::cli_main<GenDistArgParse>(
         argc, argv, "dftracer_genesis_gen_dist",
         "Build per-call-path duration and counter distributions from genesis "
         "sweep traces into one combined .pfw.gz trace",

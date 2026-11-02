@@ -132,7 +132,6 @@ std::size_t count_lines(const std::string& s) {
 // ----------------------------------------------------------------------------
 
 namespace df = dftracer::utils::dataframe;
-namespace cli = dftracer::utils::binaries;
 
 df::Series make_bool_series(const std::vector<bool>& bits) {
     std::vector<std::uint8_t> packed((bits.size() + 7) / 8, 0);
@@ -197,7 +196,7 @@ df::Series make_unknown_series(std::int64_t n) {
 
 std::string cell(const df::Series& c, std::int64_t i) {
     std::string s;
-    cli::append_cell_json(s, c, i);
+    dftracer::utils::binaries::append_cell_json(s, c, i);
     return s;
 }
 
@@ -1092,13 +1091,14 @@ TEST_SUITE("DFTracerView JSON cell printer") {
     }
 
     TEST_CASE("cli_emittable leaves out the types it cannot render") {
-        CHECK(cli::cli_emittable(df::TypeId::List));
-        CHECK(cli::cli_emittable(df::TypeId::Struct));
-        CHECK(cli::cli_emittable(df::TypeId::LargeList));
-        CHECK_FALSE(cli::cli_emittable(df::TypeId::FixedSizeList));
-        CHECK_FALSE(cli::cli_emittable(df::TypeId::Map));
-        CHECK(cli::cli_emittable(df::TypeId::Int64));
-        CHECK(cli::cli_emittable(df::TypeId::Bool));
-        CHECK(cli::cli_emittable(df::TypeId::Decimal128));
+        CHECK(dftracer::utils::binaries::cli_emittable(df::TypeId::List));
+        CHECK(dftracer::utils::binaries::cli_emittable(df::TypeId::Struct));
+        CHECK(dftracer::utils::binaries::cli_emittable(df::TypeId::LargeList));
+        CHECK_FALSE(dftracer::utils::binaries::cli_emittable(
+            df::TypeId::FixedSizeList));
+        CHECK_FALSE(dftracer::utils::binaries::cli_emittable(df::TypeId::Map));
+        CHECK(dftracer::utils::binaries::cli_emittable(df::TypeId::Int64));
+        CHECK(dftracer::utils::binaries::cli_emittable(df::TypeId::Bool));
+        CHECK(dftracer::utils::binaries::cli_emittable(df::TypeId::Decimal128));
     }
 }

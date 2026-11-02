@@ -33,11 +33,11 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::build;
 
-class EventCountArgParse : public cli::ArgParse {
+class EventCountArgParse : public binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory;
-    cli::PipelineArgs pipeline;
-    cli::IndexingArgs indexing;
+    binaries::DirectoryArgs directory;
+    binaries::PipelineArgs pipeline;
+    binaries::IndexingArgs indexing;
 
     explicit EventCountArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
         indexing.index_dir_help =
@@ -182,7 +182,7 @@ coro::CoroTask<std::size_t> stream_count(std::string path) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    return cli::cli_main<EventCountArgParse>(
+    return binaries::cli_main<EventCountArgParse>(
         argc, argv, "dftracer_event_count",
         "Count valid events in DFTracer .pfw.gz files using composable "
         "utilities and pipeline processing",
@@ -230,7 +230,7 @@ static int run_event_count(const EventCountArgParse* cli) {
         stream_items.push_back(std::move(item.file_path));
 
     auto pipeline_config =
-        cli::build_pipeline_config("DFTracer Event Count", cli->pipeline);
+        binaries::build_pipeline_config("DFTracer Event Count", cli->pipeline);
     Pipeline pipeline(pipeline_config);
 
     auto count_task = make_task(
@@ -248,7 +248,7 @@ static int run_event_count(const EventCountArgParse* cli) {
 
             if (stream_items.empty()) co_return;
             co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                cli::parallel_for_each(
+                binaries::parallel_for_each(
                     scope, std::move(stream_items), executor_threads,
                     [total_events_ptr = &total_events,
                      files_processed_ptr = &files_processed,

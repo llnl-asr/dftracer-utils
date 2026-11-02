@@ -29,11 +29,11 @@ using namespace dftracer::utils::trace::comparator;
 using dftracer::utils::index::build::resolve_and_build_index;
 using dftracer::utils::index::build::ResolveAndBuildInput;
 
-class ComparatorArgParse : public cli::ArgParse {
+class ComparatorArgParse : public binaries::ArgParse {
    public:
-    cli::PipelineArgs pipeline;
-    cli::IndexingArgs indexing;
-    cli::DuqlArgs duql_args{"duql filter (default: all events)"};
+    binaries::PipelineArgs pipeline;
+    binaries::IndexingArgs indexing;
+    binaries::DuqlArgs duql_args{"duql filter (default: all events)"};
 
     std::string config_path;
     std::string preset;
@@ -131,7 +131,8 @@ class ComparatorArgParse : public cli::ArgParse {
         variant_index_dir = parser().get<std::string>("--variant-index-dir");
         group_by = parser().get<std::string>("--group-by");
         format = parser().get<std::string>("--format");
-        time_interval = cli::get_duration_arg(parser(), "--time-interval", 1e3);
+        time_interval =
+            binaries::get_duration_arg(parser(), "--time-interval", 1e3);
         threshold = parser().get<double>("--threshold");
         no_color = parser().get<bool>("--no-color");
         compact = parser().get<bool>("--compact");
@@ -330,7 +331,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
     if (!build_agg_plans(config, agg_plans, filters)) return 1;
 
     auto pipeline_config =
-        cli::build_pipeline_config("DFTracer Comparator", cli->pipeline);
+        binaries::build_pipeline_config("DFTracer Comparator", cli->pipeline);
     Pipeline pipeline(pipeline_config);
 
     // Indexes the traces under `path` with the aggregation config the queries
@@ -579,7 +580,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    return cli::cli_main<ComparatorArgParse>(
+    return binaries::cli_main<ComparatorArgParse>(
         argc, argv, "dftracer_comparator",
         "Compare DFTracer trace metrics between baseline and variant",
         [](ComparatorArgParse& cli) { return run_comparator(&cli); });

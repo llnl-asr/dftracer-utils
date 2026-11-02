@@ -125,13 +125,13 @@ static bool prescan_plugin_args(int argc, char** argv, std::vector<char*>& kept,
     return true;
 }
 
-class RunArgParse : public cli::ArgParse {
+class RunArgParse : public binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
-    cli::FilesArgs files_args;
-    cli::PipelineArgs pipeline;
-    cli::IndexingArgs indexing;
-    cli::WatchdogArgs watchdog;
+    binaries::DirectoryArgs directory{binaries::DirMode::DefaultEmpty};
+    binaries::FilesArgs files_args;
+    binaries::PipelineArgs pipeline;
+    binaries::IndexingArgs indexing;
+    binaries::WatchdogArgs watchdog;
 
     bool no_auto_index = false;
     bool describe = false;
@@ -275,7 +275,8 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
 
     std::vector<std::string> files;
     if (!directory.empty()) {
-        auto matched = cli::scan_trace_files_on_pool(cli->pipeline, directory);
+        auto matched =
+            binaries::scan_trace_files_on_pool(cli->pipeline, directory);
         for (const auto& entry : matched) files.push_back(entry.path.string());
     } else {
         files = cli->files_args.value;
@@ -305,7 +306,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     }
 
     ExportStats stats;
-    auto pipeline_config = cli::build_pipeline_config(
+    auto pipeline_config = binaries::build_pipeline_config(
         "DFTracer Run", cli->pipeline, cli->watchdog);
     Pipeline pipeline(pipeline_config);
     auto task = make_task(
@@ -349,7 +350,7 @@ int main(int argc, char** argv) {
     kept.reserve(static_cast<std::size_t>(argc));
     if (!prescan_plugin_args(argc, argv, kept, plugin_args)) return 1;
 
-    return cli::cli_main<RunArgParse>(
+    return binaries::cli_main<RunArgParse>(
         static_cast<int>(kept.size()), kept.data(), "dftracer_run",
         "Run compiled analysis plugins over DFTracer trace files. Each "
         "--plugin shared library is loaded and run as a fold over one shared, "

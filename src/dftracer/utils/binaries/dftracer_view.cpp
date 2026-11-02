@@ -59,13 +59,13 @@ static std::vector<std::string> shard_files(
 }
 #endif
 
-class ViewArgParse : public cli::ArgParse {
+class ViewArgParse : public binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
-    cli::FilesArgs files_args;
-    cli::PipelineArgs pipeline;
-    cli::IndexingArgs indexing;
-    cli::DuqlArgs duql_args;
+    binaries::DirectoryArgs directory{binaries::DirMode::DefaultEmpty};
+    binaries::FilesArgs files_args;
+    binaries::PipelineArgs pipeline;
+    binaries::IndexingArgs indexing;
+    binaries::DuqlArgs duql_args;
 
     std::string preset;
     std::string recipe;
@@ -324,16 +324,18 @@ class ViewArgParse : public cli::ArgParse {
         recipe = parser().get<std::string>("--recipe");
         save_recipe = parser().get<std::string>("--save-recipe");
         time_range = parser().get<std::string>("--time-range");
-        min_duration = cli::get_duration_arg(parser(), "--min-duration", 1e6);
-        max_duration = cli::get_duration_arg(parser(), "--max-duration", 1e6);
+        min_duration =
+            binaries::get_duration_arg(parser(), "--min-duration", 1e6);
+        max_duration =
+            binaries::get_duration_arg(parser(), "--max-duration", 1e6);
         output = parser().get<std::string>("--output");
         no_auto_index = parser().get<bool>("--no-auto-index");
         group_by = parser().get<std::string>("--group-by");
         agg = parser().get<std::string>("--agg");
         time_bucket = static_cast<std::uint64_t>(std::llround(
-            cli::get_duration_arg(parser(), "--time-bucket", 1e6)));
-        occ_cell = static_cast<std::uint64_t>(
-            std::llround(cli::get_duration_arg(parser(), "--occ-cell", 1e6)));
+            binaries::get_duration_arg(parser(), "--time-bucket", 1e6)));
+        occ_cell = static_cast<std::uint64_t>(std::llround(
+            binaries::get_duration_arg(parser(), "--occ-cell", 1e6)));
         counters = parser().get<bool>("--counters");
         call_tree = parser().get<bool>("--call-tree");
         flamegraph = parser().get<bool>("--flamegraph");
@@ -349,7 +351,7 @@ class ViewArgParse : public cli::ArgParse {
         params = parser().get<std::vector<std::string>>("--param");
         explain = parser().get<bool>("--explain");
         time_scale = parser().get<double>("--time-scale");
-        memory_budget = cli::get_bytes_arg(parser(), "--memory-budget");
+        memory_budget = binaries::get_bytes_arg(parser(), "--memory-budget");
         no_spill = parser().get<bool>("--no-spill");
         agg_numeric_args = parser().get<bool>("--agg-numeric-args");
         collect_typed = parser().get<bool>("--collect-typed");
@@ -668,7 +670,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     const bool ct_mode = cli->call_tree;
     const bool fg_mode = cli->flamegraph;
     const std::vector<std::string> ct_partition =
-        cli::split_csv(cli->ct_partition);
+        binaries::split_csv(cli->ct_partition);
     const bool aggregate = !group_keys.empty() || !agg_specs.empty() ||
                            counters || time_bucket > 0 || cli->agg_numeric_args;
     const bool typed_mode = cli->collect_typed;
@@ -759,8 +761,9 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             co_return 1;
         }
 
-        auto matched = cli::scan_trace_files_on_pool(cli->pipeline, directory,
-                                                     /*populate_size=*/false);
+        auto matched =
+            binaries::scan_trace_files_on_pool(cli->pipeline, directory,
+                                               /*populate_size=*/false);
 
         for (const auto& entry : matched) {
             files.push_back(entry.path.string());
@@ -801,12 +804,12 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         // built before the query compiles. A distributed aggregation builds
         // its shards' indexes itself.
         if (!no_auto_index && !aggregate && !counters && !fg_mode)
-            cli::run_on_pool(cli->pipeline, "dftracer_view index",
-                             [&](CoroScope& scope) -> coro::CoroTask<void> {
-                                 co_await dftracer::utils::index::build::
-                                     ensure_indexes_fresh(&scope, "", files,
-                                                          index_dir);
-                             });
+            binaries::run_on_pool(
+                cli->pipeline, "dftracer_view index",
+                [&](CoroScope& scope) -> coro::CoroTask<void> {
+                    co_await dftracer::utils::index::build::
+                        ensure_indexes_fresh(&scope, "", files, index_dir);
+                });
         std::string plan;
         try {
             View probe = View::from_files(view_files);
@@ -900,7 +903,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     bool index_merge_failed = false;
 
     auto pipeline_config =
-        cli::build_pipeline_config("DFTracer View", cli->pipeline);
+        binaries::build_pipeline_config("DFTracer View", cli->pipeline);
     Pipeline pipeline(pipeline_config);
 
     ExportStats stats;
@@ -935,7 +938,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         cli->limit > 0 ? static_cast<std::int64_t>(cli->limit)
                        : std::numeric_limits<std::int64_t>::max();
     auto windowed = [&](View v) {
-        if (!cli->select.empty()) v = v.select(cli::split_csv(cli->select));
+        if (!cli->select.empty())
+            v = v.select(binaries::split_csv(cli->select));
         if (has_window)
             v = v.slice(static_cast<std::int64_t>(cli->offset), window_len);
         return v;
@@ -946,7 +950,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         if (cli->select.empty() && !has_window) co_return table;
         dataframe::LazyFrame rows = dataframe::lazy(std::move(table));
         if (!cli->select.empty())
-            rows = rows.select(cli::split_csv(cli->select));
+            rows = rows.select(binaries::split_csv(cli->select));
         if (has_window)
             rows =
                 rows.slice(static_cast<std::int64_t>(cli->offset), window_len);
@@ -1223,7 +1227,7 @@ int main(int argc, char** argv) {
     // Local ranks share the node's cores (Dask-style) before any runtime work.
     distributed::set_local_thread_budget();
 #endif
-    int rc = cli::cli_main<ViewArgParse>(
+    int rc = binaries::cli_main<ViewArgParse>(
         argc, argv, "dftracer_view",
         "Apply filtered views to DFTracer trace files. Uses bloom filter "
         "indices for efficient chunk-skipping. Supports predefined views "

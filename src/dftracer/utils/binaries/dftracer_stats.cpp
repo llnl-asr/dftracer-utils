@@ -58,7 +58,6 @@ using namespace dftracer::utils::index::schemas::dft;
 using namespace dftracer::utils::utilities::filesystem;
 using dftracer::utils::index::schemas::dft::ChunkStatistics;
 using duql::Query;
-namespace cli = dftracer::utils::cli;
 
 struct StatsConfig {
     std::string directory;
@@ -76,13 +75,15 @@ struct StatsConfig {
     StatisticsQueryType report_type = StatisticsQueryType::Summary;
 };
 
-class StatsArgParse : public cli::ArgParse {
+class StatsArgParse : public dftracer::utils::binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
-    cli::FilesArgs files_args{"Trace files to inspect (.pfw.gz)"};
-    cli::PipelineArgs pipeline;
-    cli::IndexingArgs indexing;
-    cli::DuqlArgs duql_args;
+    dftracer::utils::binaries::DirectoryArgs directory{
+        dftracer::utils::binaries::DirMode::DefaultEmpty};
+    dftracer::utils::binaries::FilesArgs files_args{
+        "Trace files to inspect (.pfw.gz)"};
+    dftracer::utils::binaries::PipelineArgs pipeline;
+    dftracer::utils::binaries::IndexingArgs indexing;
+    dftracer::utils::binaries::DuqlArgs duql_args;
 
     bool json_output = false;
     std::string report_str = "summary";
@@ -885,8 +886,9 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
             co_return std::vector<std::string>{};
         }
 
-        auto files = co_await cli::scan_directory_trace_files(
-            ctx, directory, /*recursive=*/true);
+        auto files =
+            co_await dftracer::utils::binaries::scan_directory_trace_files(
+                ctx, directory, /*recursive=*/true);
 
         if (files.empty()) {
             DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
@@ -1586,13 +1588,13 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
 }
 
 int main(int argc, char** argv) {
-    return cli::cli_main<StatsArgParse>(
+    return dftracer::utils::binaries::cli_main<StatsArgParse>(
         argc, argv, "dftracer_stats",
         "Display statistics for DFTracer trace files from pre-built "
         ".dftindex databases. Auto-builds indexes if missing. "
         "Zero-cost reads from index metadata, no decompression.",
         [](StatsArgParse& args) {
-            return cli::run_single_task(
+            return dftracer::utils::binaries::run_single_task(
                 "DFTracer Stats Main", args.pipeline,
                 [&args](CoroScope& ctx) -> coro::CoroTask<int> {
                     co_return co_await run_stats(ctx, &args);

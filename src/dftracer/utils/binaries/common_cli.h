@@ -42,7 +42,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace dftracer::utils::cli {
+namespace dftracer::utils::binaries {
 
 class ArgParse;
 
@@ -765,6 +765,6 @@ void parallel_for_each(CoroScope& scope, Range items, std::size_t threads,
     }
 }
 
-}  // namespace dftracer::utils::cli
+}  // namespace dftracer::utils::binaries
 
 #endif  // DFTRACER_UTILS_BINARIES_COMMON_CLI_H

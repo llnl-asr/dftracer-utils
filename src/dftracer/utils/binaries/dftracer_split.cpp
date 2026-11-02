@@ -32,13 +32,13 @@ using ExtractResult = trace::ChunkExtractorUtilityOutput;
 using ExtractChunksOutput = std::vector<ExtractResult>;
 namespace gzc = utilities::fileio::compress;
 
-class SplitArgParse : public cli::ArgParse {
+class SplitArgParse : public binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory;
-    cli::PipelineArgs pipeline;
-    cli::IndexingArgs member;
-    cli::MemoryArgs memory;
-    cli::WatchdogArgs watchdog;
+    binaries::DirectoryArgs directory;
+    binaries::PipelineArgs pipeline;
+    binaries::IndexingArgs member;
+    binaries::MemoryArgs memory;
+    binaries::WatchdogArgs watchdog;
 
     std::string app_name = "app";
     std::string output_dir = "./split";
@@ -99,7 +99,7 @@ class SplitArgParse : public cli::ArgParse {
         app_name = parser().get<std::string>("--app-name");
         output_dir = parser().get<std::string>("--output");
         chunk_size_bytes =
-            cli::get_bytes_arg_with_unit(parser(), "--chunk-size");
+            binaries::get_bytes_arg_with_unit(parser(), "--chunk-size");
         compress = parser().get<bool>("--compress");
         verify = parser().get<bool>("--verify");
     }
@@ -246,7 +246,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
         common::fs::create_directories(output_dir);
     }
 
-    auto pipeline_config = cli::build_pipeline_config(
+    auto pipeline_config = binaries::build_pipeline_config(
         "DFTracer Split", cli->pipeline, cli->watchdog);
     Pipeline pipeline(pipeline_config);
 
@@ -256,7 +256,8 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 
     std::vector<std::string> input_files;
     {
-        auto matched = cli::scan_trace_files_on_pool(cli->pipeline, log_dir);
+        auto matched =
+            binaries::scan_trace_files_on_pool(cli->pipeline, log_dir);
         // Never read back this run's own output. A file is tested by its walked
         // path, so a symlink into the output directory from outside its
         // spelling is not caught.
@@ -314,7 +315,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     auto* input_files_ptr = &input_files;
     std::atomic<std::size_t> open_count{0};
     auto* open_count_ptr = &open_count;
-    const std::size_t open_budget = cli::open_file_budget();
+    const std::size_t open_budget = binaries::open_file_budget();
     auto file_probes = graph.parallel<FileProbe>(
         input_files.size(),
         [input_files_ptr, rechunk_dir_ptr, member_size_bytes, open_count_ptr,
@@ -590,7 +591,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    return cli::cli_main<SplitArgParse>(
+    return binaries::cli_main<SplitArgParse>(
         argc, argv, "dftracer_split",
         "Split DFTracer traces into equal-sized chunks using explicit pipeline "
         "with maximum parallelism",

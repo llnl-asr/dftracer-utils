@@ -18,12 +18,12 @@
 using namespace dftracer::utils;
 namespace fileio = dftracer::utils::utilities::fileio;
 
-class PgzipArgParse : public cli::ArgParse {
+class PgzipArgParse : public binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DefaultDot,
-                                 "Directory containing .pfw files"};
-    cli::PipelineArgs pipeline;
-    cli::WatchdogArgs watchdog;
+    binaries::DirectoryArgs directory{binaries::DirMode::DefaultDot,
+                                      "Directory containing .pfw files"};
+    binaries::PipelineArgs pipeline;
+    binaries::WatchdogArgs watchdog;
 
     int compression_level = 6;
     std::size_t chunk_size = 4 * 1024 * 1024;
@@ -50,7 +50,7 @@ class PgzipArgParse : public cli::ArgParse {
 
     void post_parse() override {
         compression_level = parser().get<int>("--compression-level");
-        chunk_size = cli::get_bytes_arg(parser(), "--chunk-size");
+        chunk_size = binaries::get_bytes_arg(parser(), "--chunk-size");
     }
 };
 
@@ -169,7 +169,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    auto pipeline_config = cli::build_pipeline_config(
+    auto pipeline_config = binaries::build_pipeline_config(
         "DFTracer Parallel Gzip", cli.pipeline, cli.watchdog);
     Pipeline pipeline(pipeline_config);
 
@@ -301,7 +301,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
 }
 
 int main(int argc, char** argv) {
-    return cli::cli_main<PgzipArgParse>(
+    return binaries::cli_main<PgzipArgParse>(
         argc, argv, "dftracer_pgzip",
         "Parallel gzip compression for DFTracer .pfw files. "
         "Splits each file into chunks and compresses them in parallel "

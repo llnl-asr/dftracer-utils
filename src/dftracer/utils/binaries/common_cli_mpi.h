@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <cstdio>
 
-namespace dftracer::utils::cli {
+namespace dftracer::utils::binaries {
 
 // Standard MPI entry point: init with THREAD_MULTIPLE, run, finalize.
 // Aborts if the implementation cannot provide at least THREAD_FUNNELED.
@@ -63,6 +63,6 @@ inline void scale_threads_for_ppn(PipelineArgs& pipeline, int rank,
     }
 }
 
-}  // namespace dftracer::utils::cli
+}  // namespace dftracer::utils::binaries
 
 #endif  // DFTRACER_UTILS_BINARIES_COMMON_CLI_MPI_H

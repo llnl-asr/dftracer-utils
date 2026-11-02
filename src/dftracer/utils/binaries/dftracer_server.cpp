@@ -27,10 +27,10 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::server;
 
-class ServerArgParse : public cli::ArgParse {
+class ServerArgParse : public binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::Required};
-    cli::PipelineArgs pipeline;
+    binaries::DirectoryArgs directory{binaries::DirMode::Required};
+    binaries::PipelineArgs pipeline;
 
     std::string index_dir;
     std::string bind_addr = "127.0.0.1";
@@ -107,10 +107,12 @@ class ServerArgParse : public cli::ArgParse {
         bind_addr = parser().get<std::string>("--bind");
         auth_token = parser().get<std::string>("--token");
         port = parser().get<uint16_t>("--port");
-        checkpoint_size = cli::get_bytes_arg(parser(), "--checkpoint-size");
-        member_cache_size = cli::get_bytes_arg(parser(), "--member-cache-size");
+        checkpoint_size =
+            binaries::get_bytes_arg(parser(), "--checkpoint-size");
+        member_cache_size =
+            binaries::get_bytes_arg(parser(), "--member-cache-size");
         timeout_seconds = static_cast<std::uint64_t>(
-            cli::get_seconds_arg(parser(), "--timeout"));
+            binaries::get_seconds_arg(parser(), "--timeout"));
     }
 };
 
@@ -137,7 +139,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
                  cli->member_cache_size);
 
     auto pipeline_config =
-        cli::build_pipeline_config("DFTracer Server", cli->pipeline);
+        binaries::build_pipeline_config("DFTracer Server", cli->pipeline);
     // Steady-load, latency-sensitive service: keep the full pool warm rather
     // than paying the elastic grow ramp on every request.
     pipeline_config.with_io_backend(io::IoBackendType::Threadpool)
@@ -229,7 +231,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    return cli::cli_main<ServerArgParse>(
+    return binaries::cli_main<ServerArgParse>(
         argc, argv, "dftracer_server",
         "Serve DFTracer trace data over HTTP. Query, filter, and stream "
         "trace events via REST API.",

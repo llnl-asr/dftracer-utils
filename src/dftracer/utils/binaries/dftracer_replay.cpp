@@ -50,7 +50,7 @@ namespace {
 // integer.
 std::unordered_set<std::uint32_t> parse_csv_uint32(const std::string& csv) {
     std::unordered_set<std::uint32_t> out;
-    for (const auto& token : cli::split_csv(csv)) {
+    for (const auto& token : binaries::split_csv(csv)) {
         std::uint32_t value = 0;
         const char* end = token.data() + token.size();
         const auto parsed = std::from_chars(token.data(), end, value);
@@ -62,9 +62,9 @@ std::unordered_set<std::uint32_t> parse_csv_uint32(const std::string& csv) {
     return out;
 }
 
-class ReplayArgParse : public cli::ArgParse {
+class ReplayArgParse : public binaries::ArgParse {
    public:
-    cli::PipelineArgs pipeline;
+    binaries::PipelineArgs pipeline;
 
     std::vector<std::string> inputs;
     bool no_timing = false;
@@ -227,16 +227,16 @@ class ReplayArgParse : public cli::ArgParse {
         filter_category_csv = p.get<std::string>("--filter-category");
         exclude_category_csv = p.get<std::string>("--exclude-category");
 
-        start_timestamp = static_cast<std::uint64_t>(
-            std::llround(cli::get_duration_arg(p, "--start-timestamp", 1e6)));
+        start_timestamp = static_cast<std::uint64_t>(std::llround(
+            binaries::get_duration_arg(p, "--start-timestamp", 1e6)));
         const auto end_raw = p.get<std::string>("--end-timestamp");
         end_timestamp =
             end_raw.empty()
                 ? UINT64_MAX
                 : static_cast<std::uint64_t>(std::llround(
-                      cli::get_duration_arg(p, "--end-timestamp", 1e6)));
-        min_size = cli::get_bytes_arg_signed(p, "--min-size");
-        max_size = cli::get_bytes_arg_signed(p, "--max-size");
+                      binaries::get_duration_arg(p, "--end-timestamp", 1e6)));
+        min_size = binaries::get_bytes_arg_signed(p, "--min-size");
+        max_size = binaries::get_bytes_arg_signed(p, "--max-size");
         sample_rate = p.get<double>("--sample-rate");
         sample_seed = p.get<std::uint64_t>("--sample-seed");
         max_events = p.get<std::size_t>("--max-events");
@@ -286,7 +286,7 @@ class ReplayArgParse : public cli::ArgParse {
 
 std::unordered_set<std::string> parse_csv_string(const std::string& csv) {
     std::unordered_set<std::string> out;
-    for (const auto& token : cli::split_csv(csv)) out.insert(token);
+    for (const auto& token : binaries::split_csv(csv)) out.insert(token);
     return out;
 }
 
@@ -309,7 +309,7 @@ struct RunCtx {
 coro::CoroTask<void> task_scan(RunCtx* ctx, CoroScope& scope) {
     const auto t0 = std::chrono::steady_clock::now();
 
-    ctx->trace_files = co_await cli::collect_input_trace_files(
+    ctx->trace_files = co_await binaries::collect_input_trace_files(
         scope, ctx->cli->inputs, /*recursive=*/true, [](const std::string& in) {
             DFTRACER_UTILS_LOG_ERROR("Input not found or not accessible: %s",
                                      in.c_str());
@@ -494,7 +494,7 @@ int run(int argc, char** argv) {
         "trace files (.pfw, .pfw.gz)");
 
     ReplayArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
+    if (!binaries::setup_and_parse(cli, argc, argv)) return 1;
 
     RunCtx ctx;
     ctx.cli = &cli;
@@ -533,7 +533,7 @@ int run(int argc, char** argv) {
     c.max_events = cli.max_events;
 
     auto pipeline_config =
-        cli::build_pipeline_config("DFTracer Replay", cli.pipeline);
+        binaries::build_pipeline_config("DFTracer Replay", cli.pipeline);
     Pipeline pipeline(pipeline_config);
 
     RunCtx* ctx_ptr = &ctx;

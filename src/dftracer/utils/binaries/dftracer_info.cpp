@@ -36,12 +36,13 @@ using dftracer::utils::index::build::IndexBuildBatchConfig;
 using dftracer::utils::index::gzip::CheckpointIndexerFactory;
 using dftracer::utils::index::store::IndexExtension;
 
-class InfoArgParse : public cli::ArgParse {
+class InfoArgParse : public binaries::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
-    cli::FilesArgs files_args{"Compressed files to inspect (GZIP, TAR.GZ)"};
-    cli::PipelineArgs pipeline;
-    cli::IndexingArgs indexing;
+    binaries::DirectoryArgs directory{binaries::DirMode::DefaultEmpty};
+    binaries::FilesArgs files_args{
+        "Compressed files to inspect (GZIP, TAR.GZ)"};
+    binaries::PipelineArgs pipeline;
+    binaries::IndexingArgs indexing;
 
     std::string query_type = "summary";
     bool force_rebuild = false;
@@ -616,12 +617,12 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    return cli::cli_main<InfoArgParse>(
+    return binaries::cli_main<InfoArgParse>(
         argc, argv, "dftracer_info",
         "Display metadata and index information for DFTracer compressed files "
         "using composable utilities and pipeline processing",
         [](InfoArgParse& cli) {
-            return cli::run_single_task(
+            return binaries::run_single_task(
                 "DFTracer Info", cli.pipeline,
                 [&cli](CoroScope& ctx) -> coro::CoroTask<int> {
                     co_return co_await run_info(ctx, &cli);

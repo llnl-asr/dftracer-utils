@@ -34,7 +34,9 @@ class Function<R(Args...)> {
                            std::is_invocable_r_v<R, std::decay_t<F>&, Args...>>>
     Function(F&& f) {
         using T = std::decay_t<F>;
-        if constexpr (std::is_pointer_v<T> || std::is_member_pointer_v<T>) {
+        using Given = std::remove_reference_t<F>;
+        if constexpr (std::is_pointer_v<Given> ||
+                      std::is_member_pointer_v<Given>) {
             if (f == nullptr) return;
         }
         if constexpr (fits_inline<T>()) {

@@ -43,8 +43,8 @@ struct BaseId {
 };
 
 std::optional<BaseId> stat_base(const std::string& path) {
-    dftracer::utils::InputFileStat st;
-    if (!dftracer::utils::stat_input(path, st)) return std::nullopt;
+    dftracer::utils::common::InputFileStat st;
+    if (!dftracer::utils::common::stat_input(path, st)) return std::nullopt;
     return BaseId{path, st.size, st.mtime};
 }
 
@@ -163,7 +163,7 @@ std::string hex8(std::uint64_t h) {
 }
 
 std::string manifest_path(const std::string& dir) {
-    return (fs::path(dir) / MANIFEST_NAME).string();
+    return (common::fs::path(dir) / MANIFEST_NAME).string();
 }
 
 struct Manifest {
@@ -182,7 +182,7 @@ struct Manifest {
 std::optional<Manifest> read_manifest(const std::string& dir) {
     const std::string path = manifest_path(dir);
     std::error_code ec;
-    if (!fs::exists(path, ec)) return std::nullopt;
+    if (!common::fs::exists(path, ec)) return std::nullopt;
     try {
         simdjson::dom::parser parser;
         simdjson::dom::element root = parser.load(path);
@@ -225,8 +225,8 @@ std::optional<Manifest> read_manifest(const std::string& dir) {
 std::uint64_t dir_size(const std::string& dir) {
     std::uint64_t sum = 0;
     std::error_code ec;
-    for (fs::recursive_directory_iterator it(dir, ec), end; !ec && it != end;
-         it.increment(ec))
+    for (common::fs::recursive_directory_iterator it(dir, ec), end;
+         !ec && it != end; it.increment(ec))
         if (it->is_regular_file(ec)) {
             const auto sz = it->file_size(ec);
             if (!ec) sum += sz;
@@ -238,17 +238,19 @@ std::uint64_t dir_size(const std::string& dir) {
 std::int64_t last_used(const std::string& dir) {
     std::error_code ec;
     for (const char* name : {LAST_USED_NAME, MANIFEST_NAME}) {
-        const auto t = fs::last_write_time(fs::path(dir) / name, ec);
+        const auto t =
+            common::fs::last_write_time(common::fs::path(dir) / name, ec);
         if (!ec) return static_cast<std::int64_t>(t.time_since_epoch().count());
     }
     return 0;
 }
 
 void touch_last_used(const std::string& dir) {
-    const auto path = fs::path(dir) / LAST_USED_NAME;
+    const auto path = common::fs::path(dir) / LAST_USED_NAME;
     std::ofstream(path, std::ios::app).close();
     std::error_code ec;
-    fs::last_write_time(path, fs::file_time_type::clock::now(), ec);
+    common::fs::last_write_time(path, common::fs::file_time_type::clock::now(),
+                                ec);
 }
 
 // Removes the least recently used views under `root` until they hold at most
@@ -263,7 +265,7 @@ void evict_views(const std::string& root, const std::string& keep) {
     std::vector<Entry> entries;
     std::uint64_t total = 0;
     std::error_code ec;
-    for (fs::directory_iterator it(root, ec), end; !ec && it != end;
+    for (common::fs::directory_iterator it(root, ec), end; !ec && it != end;
          it.increment(ec)) {
         if (!it->is_directory(ec)) continue;
         const std::string dir = it->path().string();
@@ -285,7 +287,7 @@ void evict_views(const std::string& root, const std::string& keep) {
         if (fd < 0 && e.dir != keep) return;
         std::error_code rm;
         release_root(e.dir);
-        fs::remove_all(e.dir, rm);
+        common::fs::remove_all(e.dir, rm);
         unlock_view_dir(fd);
         if (!rm) total -= e.bytes;
     };
@@ -302,7 +304,7 @@ void evict_views(const std::string& root, const std::string& keep) {
 std::vector<std::string> view_trace_files(const std::string& dir) {
     std::vector<std::string> out;
     std::error_code ec;
-    for (fs::directory_iterator it(dir, ec), end; !ec && it != end;
+    for (common::fs::directory_iterator it(dir, ec), end; !ec && it != end;
          it.increment(ec)) {
         if (!it->is_regular_file(ec)) continue;
         const std::string name = it->path().filename().string();
@@ -328,7 +330,7 @@ std::vector<trace::views::ViewFile> gather_view_files(const std::string& dir) {
     for (const auto& t : view_trace_files(parts))
         out.push_back(trace::views::ViewFile{t, view_idx});
     std::error_code ec;
-    for (fs::directory_iterator it(parts, ec), end; !ec && it != end;
+    for (common::fs::directory_iterator it(parts, ec), end; !ec && it != end;
          it.increment(ec)) {
         if (!it->is_directory(ec)) continue;
         const std::string sub = it->path().string();
@@ -342,8 +344,9 @@ std::vector<trace::views::ViewFile> gather_view_files(const std::string& dir) {
 std::uint64_t total_size(const std::vector<trace::views::ViewFile>& files) {
     std::uint64_t sum = 0;
     for (const auto& f : files) {
-        dftracer::utils::InputFileStat st;
-        if (dftracer::utils::stat_input(f.file_path, st)) sum += st.size;
+        dftracer::utils::common::InputFileStat st;
+        if (dftracer::utils::common::stat_input(f.file_path, st))
+            sum += st.size;
     }
     return sum;
 }
@@ -412,14 +415,14 @@ std::string view_slug(const trace::views::detail::ViewPlan& plan) {
 bool view_is_fresh(const trace::views::detail::ViewPlan& plan) {
     const std::string root = views_root(plan);
     if (root.empty()) return false;
-    const std::string dir = (fs::path(root) / view_slug(plan)).string();
+    const std::string dir = (common::fs::path(root) / view_slug(plan)).string();
     std::error_code ec;
-    return fs::exists(manifest_path(dir), ec) &&
+    return common::fs::exists(manifest_path(dir), ec) &&
            !gather_view_files(dir).empty();
 }
 
 int lock_view_dir(const std::string& dir) {
-    const std::string path = (fs::path(dir) / ".lock").string();
+    const std::string path = (common::fs::path(dir) / ".lock").string();
     const int fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0644);
     if (fd < 0) return -1;
     if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {  // another builder holds it
@@ -438,9 +441,9 @@ void unlock_view_dir(int fd) {
 std::string materialize_view_dir(const trace::views::detail::ViewPlan& plan) {
     const std::string root = views_root(plan);
     if (root.empty()) return {};
-    const std::string dir = (fs::path(root) / view_slug(plan)).string();
+    const std::string dir = (common::fs::path(root) / view_slug(plan)).string();
     std::error_code ec;
-    fs::create_directories(index::view_parts_dir(dir), ec);
+    common::fs::create_directories(index::view_parts_dir(dir), ec);
     if (ec) return {};
     return dir;
 }
@@ -492,7 +495,8 @@ std::optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
     const trace::views::detail::ViewPlan& plan) {
     const std::string root = views_root(plan);
     std::error_code ec;
-    if (root.empty() || !fs::is_directory(root, ec)) return std::nullopt;
+    if (root.empty() || !common::fs::is_directory(root, ec))
+        return std::nullopt;
 
     const auto q_bases = plan_bases(plan);
     if (q_bases.size() != plan.files.size())
@@ -506,7 +510,7 @@ std::optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
     std::vector<trace::views::ViewFile> best;
     std::string best_dir;
     std::uint64_t best_bytes = base_bytes;  // must beat the base to be worth it
-    for (fs::directory_iterator it(root, ec), end; !ec && it != end;
+    for (common::fs::directory_iterator it(root, ec), end; !ec && it != end;
          it.increment(ec)) {
         if (!it->is_directory(ec)) continue;
         const std::string dir = it->path().string();
@@ -517,7 +521,7 @@ std::optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
         if (manifest_is_stale(*m)) {
             std::error_code rm;
             release_root(dir);
-            fs::remove_all(dir, rm);
+            common::fs::remove_all(dir, rm);
             continue;
         }
         if (!manifest_matches(*m, plan, q_bases)) continue;

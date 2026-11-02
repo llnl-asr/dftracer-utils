@@ -10,15 +10,15 @@
 #include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
-#include <dftracer/utils/utilities/common/arrow/parallel_reader.h>
+#include <dftracer/utils/utilities/arrow/parallel_reader.h>
 
 #include <string>
 #include <vector>
 
 namespace dftracer::utils::python {
 
-using utilities::common::arrow::ArrowExportResult;
-using utilities::common::arrow::read_arrow_files_parallel;
+using utilities::arrow::ArrowExportResult;
+using utilities::arrow::read_arrow_files_parallel;
 
 static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
                                               PyObject* args,
@@ -51,7 +51,7 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
     }
 
     // Call C++ parallel reader (releases GIL during file I/O)
-    utilities::common::arrow::ParallelReadResult result;
+    utilities::arrow::ParallelReadResult result;
     if (!run_blocking_r(
             [&] {
                 auto task = read_arrow_files_parallel(std::move(paths));

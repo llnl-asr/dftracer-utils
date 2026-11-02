@@ -39,7 +39,8 @@ struct BloomOptions {
 struct IndexerOptions {
     /// Directory holding the index; empty puts it beside each trace.
     std::string index_dir;
-    std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+    std::size_t checkpoint_size =
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     /// Worker count; 0 uses all cores.
     std::size_t parallelism = 0;
     bool checkpoints = true;

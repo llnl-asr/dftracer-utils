@@ -117,34 +117,36 @@ class FileDecompressorUtility {
      * @param input Decompression configuration
      * @return Decompression payload, or an error on failure.
      */
-    coro::CoroTask<Result<FileDecompressionUtilityOutput>> operator()(
+    coro::CoroTask<common::Result<FileDecompressionUtilityOutput>> operator()(
         const FileDecompressionUtilityInput& input) const {
         std::size_t compressed_size = 0;
         std::size_t decompressed_size = 0;
 
         try {
             // Validate input file exists
-            if (!fs::exists(input.input_path)) {
-                co_return make_error(
-                    ErrorCode::NotFound,
+            if (!common::fs::exists(input.input_path)) {
+                co_return common::make_error(
+                    common::ErrorCode::NotFound,
                     "Input file does not exist: " + input.input_path);
             }
 
             // Get compressed file size
-            compressed_size = fs::file_size(input.input_path);
+            compressed_size = common::fs::file_size(input.input_path);
 
             ssize_t fd_result =
                 co_await io::open(input.input_path.c_str(), O_RDONLY);
             if (fd_result < 0) {
-                co_return make_error(ErrorCode::Io,
-                                     "Cannot open file: " + input.input_path);
+                co_return common::make_error(
+                    common::ErrorCode::Io,
+                    "Cannot open file: " + input.input_path);
             }
-            ScopedFd fd(static_cast<int>(fd_result));
+            common::ScopedFd fd(static_cast<int>(fd_result));
 
             struct stat st;
             if (::fstat(fd.get(), &st) != 0) {
-                co_return make_error(ErrorCode::Io,
-                                     "Cannot stat file: " + input.input_path);
+                co_return common::make_error(
+                    common::ErrorCode::Io,
+                    "Cannot stat file: " + input.input_path);
             }
 
             fileio::StreamingFileWriterUtility writer(input.output_path);
@@ -160,14 +162,14 @@ class FileDecompressorUtility {
             writer.close();
 
             // Get final decompressed size
-            decompressed_size = fs::file_size(input.output_path);
+            decompressed_size = common::fs::file_size(input.output_path);
 
         } catch (const std::exception& e) {
             // Clean up partial output file on error
-            remove_file_quietly(input.output_path);
+            common::remove_file_quietly(input.output_path);
 
-            co_return make_error(
-                ErrorCode::Compression,
+            co_return common::make_error(
+                common::ErrorCode::Compression,
                 std::string("Decompression failed: ") + e.what());
         }
 

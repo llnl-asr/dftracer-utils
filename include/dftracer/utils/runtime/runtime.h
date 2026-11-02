@@ -257,7 +257,8 @@ std::shared_ptr<Runtime> peek_default_runtime();
 template <typename T>
 TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
-        throw DFTUtilsException(ErrorCode::Pipeline, "Runtime is shut down");
+        throw common::DFTUtilsException(common::ErrorCode::Pipeline,
+                                        "Runtime is shut down");
     }
     if (name.empty()) {
         name = "task-" + std::to_string(task_name_counter_++);
@@ -270,13 +271,13 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
     auto void_promise = std::make_shared<std::promise<void>>();
     auto void_future = void_promise->get_future().share();
 
-    auto tid = std::make_shared<std::atomic<TaskIndex>>(-1);
+    auto tid = std::make_shared<std::atomic<common::TaskIndex>>(-1);
 
-    auto wrapper =
-        [](coro::CoroTask<T> t,
-           std::shared_ptr<std::promise<std::shared_ptr<T>>> tp,
-           std::shared_ptr<std::promise<void>> vp, Executor* exec,
-           std::shared_ptr<std::atomic<TaskIndex>> task_id) -> coro::Coro {
+    auto wrapper = [](coro::CoroTask<T> t,
+                      std::shared_ptr<std::promise<std::shared_ptr<T>>> tp,
+                      std::shared_ptr<std::promise<void>> vp, Executor* exec,
+                      std::shared_ptr<std::atomic<common::TaskIndex>> task_id)
+        -> coro::Coro {
         try {
             T val = co_await std::move(t);
             t = coro::CoroTask<T>{std::coroutine_handle<
@@ -304,7 +305,8 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
     }
     auto coro = wrapper(std::move(task), typed_promise, void_promise,
                         executor_.get(), tid);
-    TaskIndex id = executor_->enqueue_tracked(std::move(coro), name, tid);
+    common::TaskIndex id =
+        executor_->enqueue_tracked(std::move(coro), name, tid);
 
     {
         std::lock_guard<std::mutex> lock(futures_mutex_);

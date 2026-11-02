@@ -62,10 +62,10 @@ struct ShardData {
 };
 
 struct Registry {
-    ShardedMutex<ShardData, 64> shards;
+    common::ShardedMutex<ShardData, 64> shards;
     std::atomic<long long> next_id{0};
     Mode mode = Mode::Off;
-    ScopedFile csv;
+    common::ScopedFile csv;
     long long min_us = 0;  // hide coroutines shorter than this in the report
 };
 
@@ -81,8 +81,9 @@ thread_local long long t_current = -1;
 thread_local int t_worker = -1;
 
 Mode parse_mode() {
-    const auto v = Env::get<std::string_view>("DFTRACER_UTILS_MONITOR");
-    const auto file = Env::get<std::string_view>("DFTRACER_UTILS_MONITOR_FILE");
+    const auto v = common::Env::get<std::string_view>("DFTRACER_UTILS_MONITOR");
+    const auto file =
+        common::Env::get<std::string_view>("DFTRACER_UTILS_MONITOR_FILE");
     if (!v.has_value() && !file.has_value()) return Mode::Off;
     if (v.has_value()) {
         if (*v == "tree") return Mode::Tree;
@@ -98,7 +99,7 @@ std::string label(const void* fn,
                   std::unordered_map<const void*, std::string>& cache) {
     auto it = cache.find(fn);
     if (it != cache.end()) return it->second;
-    return cache.emplace(fn, symbolize_function(fn)).first->second;
+    return cache.emplace(fn, common::symbolize_function(fn)).first->second;
 }
 
 const char* kind_str(CoroKind k) {
@@ -242,7 +243,7 @@ bool monitoring_enabled() {
         r.mode = parse_mode();
         if (r.mode == Mode::Off) return false;
         const auto file =
-            Env::get<std::string_view>("DFTRACER_UTILS_MONITOR_FILE");
+            common::Env::get<std::string_view>("DFTRACER_UTILS_MONITOR_FILE");
         if (file.has_value()) {
             r.csv.reset(std::fopen(std::string(*file).c_str(), "w"));
             if (r.csv) {
@@ -253,7 +254,7 @@ bool monitoring_enabled() {
         }
         detail::g_monitor_deep = (r.mode == Mode::Deep);
         const auto min =
-            Env::get<std::string_view>("DFTRACER_UTILS_MONITOR_MIN_US");
+            common::Env::get<std::string_view>("DFTRACER_UTILS_MONITOR_MIN_US");
         if (min.has_value()) {
             r.min_us = std::strtoll(std::string(*min).c_str(), nullptr, 10);
         }
@@ -300,14 +301,14 @@ long long record_and_erase(Registry& r, ShardData& s, It it, int finish_tid) {
                              .count();
     if (r.mode == Mode::Trace) {
         std::fprintf(stderr, "[monitor] %s [%.3f ms]\n",
-                     symbolize_function(l.resume_fn).c_str(),
+                     common::symbolize_function(l.resume_fn).c_str(),
                      static_cast<double>(us) / 1000.0);
     }
     if (r.csv) {
         std::fprintf(r.csv.get(), "%lld,%lld,%s,%s,%d,%d,%lld\n", l.id,
                      l.parent, kind_str(l.kind),
-                     symbolize_function(l.resume_fn).c_str(), l.spawn_tid,
-                     finish_tid, us);
+                     common::symbolize_function(l.resume_fn).c_str(),
+                     l.spawn_tid, finish_tid, us);
     }
     s.done.push_back(
         Done{l.id, l.parent, l.resume_fn, us, l.kind, l.spawn_tid, finish_tid});

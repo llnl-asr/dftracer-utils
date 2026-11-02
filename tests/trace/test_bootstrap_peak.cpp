@@ -149,7 +149,7 @@ TEST_SUITE("BootstrapPeak") {
     // behind moves the next run's peak.
     TEST_CASE("one bootstrap of big files" * doctest::skip()) {
         fresh_process::announce();
-        const auto n = Env::get<int>(FILES_ENV);
+        const auto n = common::Env::get<int>(FILES_ENV);
         REQUIRE(n.has_value());
         dftu_utils_test::TestEnvironment env(10);
         std::vector<std::string> files;

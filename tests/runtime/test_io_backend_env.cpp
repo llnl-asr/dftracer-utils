@@ -40,7 +40,7 @@ TEST_CASE("child: start with a bogus backend" * doctest::skip()) {
     fresh_process::announce();
     try {
         Runtime runtime(2);
-    } catch (const DFTUtilsException& e) {
+    } catch (const common::DFTUtilsException& e) {
         std::fprintf(stderr, "start failed: %s\n", e.what());
         return;
     }

@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 static constexpr std::size_t DEFAULT_MEMORY_BUDGET_FRACTION_PERCENT = 50;
 
@@ -59,6 +59,6 @@ MemoryBudgetAdvice memory_budget_advice(std::size_t required_bytes,
 /// so the CLI binaries and the Python/dfanalyzer path surface the same message.
 std::string format_memory_budget_warning(const MemoryBudgetAdvice& advice);
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_MEMORY_BUDGET_H

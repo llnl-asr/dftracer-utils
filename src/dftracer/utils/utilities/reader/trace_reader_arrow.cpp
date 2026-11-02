@@ -6,7 +6,7 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/trace/schema.h>
-#include <dftracer/utils/utilities/common/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/trace_reader_prefilter.h>
 #include <dftracer/utils/utilities/reader/internal/trace_reader_shared.h>
@@ -29,9 +29,9 @@ using internal::try_compile_eq_probes;
 
 namespace {
 
-using common::arrow::ArrowExportResult;
-using common::arrow::ColumnType;
-using common::arrow::RecordBatchBuilder;
+using utilities::arrow::ArrowExportResult;
+using utilities::arrow::ColumnType;
+using utilities::arrow::RecordBatchBuilder;
 
 struct ArrowKeyHint {
     std::string key;

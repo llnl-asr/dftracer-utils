@@ -75,8 +75,8 @@ std::uint64_t u64_at(dstd::ByteView b, std::size_t at) {
 
 [[noreturn]] void throw_io(std::string_view what, const dstd::Error& error) {
     const dstd::String text = error.format();
-    throw DFTUtilsException(
-        ErrorCode::Io,
+    throw common::DFTUtilsException(
+        common::ErrorCode::Io,
         std::string(what) + ": " + std::string(text.data(), text.size()));
 }
 
@@ -140,10 +140,10 @@ CacheRoots& cache_roots() {
 void clear_cache_roots() { cache_roots().clear(); }
 
 std::uint64_t cache_max_bytes() {
-    const auto text = dftracer::utils::Env::get<std::string_view>(
+    const auto text = dftracer::utils::common::Env::get<std::string_view>(
         "DFTRACER_UTILS_CACHE_MAX_BYTES");
     if (!text) return DEFAULT_CACHE_MAX_BYTES;
-    return dftracer::utils::parse_bytes(*text).value_or(
+    return dftracer::utils::common::parse_bytes(*text).value_or(
         DEFAULT_CACHE_MAX_BYTES);
 }
 
@@ -269,8 +269,8 @@ void CacheStore::put(
     const std::vector<std::pair<std::string, std::string>>& entries,
     std::uint64_t bytes) {
     if (!writable_)
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "cache write: the store is read-only");
+        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                        "cache write: the store is read-only");
     const kv::ScopeKey scope = scope_of(sig);
     kv::Batch data = store_.batch(data_, scope);
     for (const auto& [key, value] : entries)

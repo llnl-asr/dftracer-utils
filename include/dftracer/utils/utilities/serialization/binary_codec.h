@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_SERIALIZATION_BINARY_CODEC_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_SERIALIZATION_BINARY_CODEC_H
+#ifndef DFTRACER_UTILS_UTILITIES_SERIALIZATION_BINARY_CODEC_H
+#define DFTRACER_UTILS_UTILITIES_SERIALIZATION_BINARY_CODEC_H
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/big_endian.h>
@@ -10,7 +10,7 @@
 #include <string>
 #include <string_view>
 
-namespace dftracer::utils::utilities::common::serialization {
+namespace dftracer::utils::utilities::serialization {
 
 /// u16 length, then the bytes.
 inline void put_str(std::string& out, std::string_view s) {
@@ -70,8 +70,8 @@ class BinaryReader {
         const auto* end = p + (data_.size() - off_);
         std::uint64_t v = 0;
         if (!dstd::read_varint(p, end, v))
-            throw DFTUtilsException(ErrorCode::Parse,
-                                    "binary_codec: truncated varint");
+            throw common::DFTUtilsException(common::ErrorCode::Parse,
+                                            "binary_codec: truncated varint");
         off_ = static_cast<std::size_t>(
             p - reinterpret_cast<const std::uint8_t*>(data_.data()));
         return v;
@@ -90,8 +90,8 @@ class BinaryReader {
 
     std::string_view take(std::size_t n) {
         if (off_ + n > data_.size()) {
-            throw DFTUtilsException(ErrorCode::Parse,
-                                    "binary_codec: truncated data");
+            throw common::DFTUtilsException(common::ErrorCode::Parse,
+                                            "binary_codec: truncated data");
         }
         auto s = data_.substr(off_, n);
         off_ += n;
@@ -102,6 +102,6 @@ class BinaryReader {
     std::size_t off_ = 0;
 };
 
-}  // namespace dftracer::utils::utilities::common::serialization
+}  // namespace dftracer::utils::utilities::serialization
 
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_SERIALIZATION_BINARY_CODEC_H
+#endif  // DFTRACER_UTILS_UTILITIES_SERIALIZATION_BINARY_CODEC_H

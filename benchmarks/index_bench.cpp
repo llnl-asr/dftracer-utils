@@ -66,7 +66,8 @@ constexpr double MAX_SLOWDOWN = 0.05;
 struct Options {
     std::string out = "index_bench.json";
     std::string baseline;
-    std::string workdir = (fs::temp_directory_path() / "index_bench").string();
+    std::string workdir =
+        (common::fs::temp_directory_path() / "index_bench").string();
     int build_runs = 3;
     int runs = 10;
     int warmups = 2;
@@ -107,9 +108,9 @@ std::vector<double> timed(const std::function<void()>& f, int warmups,
     return t;
 }
 
-std::uint64_t dir_bytes(const fs::path& p) {
+std::uint64_t dir_bytes(const common::fs::path& p) {
     std::uint64_t n = 0;
-    for (const auto& e : fs::recursive_directory_iterator(p))
+    for (const auto& e : common::fs::recursive_directory_iterator(p))
         if (e.is_regular_file()) n += e.file_size();
     return n;
 }
@@ -126,8 +127,8 @@ std::uint64_t peak_rss_bytes() {
 
 std::vector<std::string> trace_files(const std::string& input) {
     std::vector<std::string> files;
-    if (fs::is_regular_file(input)) return {input};
-    for (const auto& e : fs::recursive_directory_iterator(input)) {
+    if (common::fs::is_regular_file(input)) return {input};
+    for (const auto& e : common::fs::recursive_directory_iterator(input)) {
         const std::string p = e.path().string();
         if (e.is_regular_file() && p.size() > 7 &&
             p.compare(p.size() - 7, 7, ".pfw.gz") == 0)
@@ -347,7 +348,7 @@ struct Result {
 };
 
 View open_view(const std::string& input, const std::string& index_dir) {
-    View v = fs::is_regular_file(input)
+    View v = common::fs::is_regular_file(input)
                  ? View::from_file(input, index_dir)
                  : run(View::from_directory(input, index_dir));
     return v;
@@ -358,12 +359,12 @@ Result measure(const Options& opt, const std::string& input,
     Result r;
     const auto files = trace_files(input);
     r.files = files.size();
-    for (const auto& f : files) r.compressed_bytes += fs::file_size(f);
+    for (const auto& f : files) r.compressed_bytes += common::fs::file_size(f);
 
     for (int i = 0; i < opt.build_runs; ++i) {
         std::error_code ec;
-        fs::remove_all(index_dir, ec);
-        fs::create_directories(index_dir);
+        common::fs::remove_all(index_dir, ec);
+        common::fs::create_directories(index_dir);
         r.build_s.push_back(seconds([&] {
             dftracer::utils::index::IndexerOptions options;
             options.index_dir = index_dir;
@@ -381,7 +382,7 @@ Result measure(const Options& opt, const std::string& input,
     }
     r.build_peak_rss = peak_rss_bytes();
     std::string index_path;
-    for (const auto& e : fs::recursive_directory_iterator(index_dir))
+    for (const auto& e : common::fs::recursive_directory_iterator(index_dir))
         if (e.is_directory() && e.path().filename() == ".dftindex")
             index_path = e.path().string();
     if (index_path.empty()) {
@@ -400,18 +401,18 @@ Result measure(const Options& opt, const std::string& input,
         opt.warmups, opt.runs);
 
     {
-        const auto snapshot =
-            unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
+        const auto snapshot = common::unwrap(
+            dftracer::utils::index::plan::open_snapshot(index_path));
         std::unordered_set<std::string> paths;
         for (const auto& f : files) {
             const auto file = snapshot.file(
                 dftracer::utils::index::store::internal::get_logical_path(f));
             if (!file) continue;
-            if (auto meta = unwrap(
+            if (auto meta = common::unwrap(
                     dftracer::utils::index::file_metadata(snapshot, *file)))
                 r.lines += meta->num_lines;
-            for (const auto& [p, stat] :
-                 unwrap(dftracer::utils::index::catalog(snapshot, *file)))
+            for (const auto& [p, stat] : common::unwrap(
+                     dftracer::utils::index::catalog(snapshot, *file)))
                 paths.insert(std::string(p));
         }
         r.distinct_paths = paths.size();
@@ -654,7 +655,7 @@ bool compare(simdjson::dom::object base, simdjson::dom::object cur) {
 }
 
 std::string write_smoke_trace(const std::string& dir) {
-    fs::create_directories(dir);
+    common::fs::create_directories(dir);
     const std::string gz = dir + "/smoke.pfw.gz";
     std::string lines;
     const char* names[] = {"read", "write", "open", "close"};
@@ -683,7 +684,8 @@ std::string write_smoke_trace(const std::string& dir) {
 Options parse_args(int argc, char** argv) {
     Options o;
     if (argc == 2 && std::string_view(argv[1]) == "--smoke") {
-        o.workdir = (fs::temp_directory_path() / "index_bench_smoke").string();
+        o.workdir =
+            (common::fs::temp_directory_path() / "index_bench_smoke").string();
         o.out = o.workdir + "/index_bench.json";
         o.build_runs = 1;
         o.runs = 1;
@@ -735,11 +737,11 @@ Options parse_args(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     const Options opt = parse_args(argc, argv);
-    fs::create_directories(opt.workdir);
+    common::fs::create_directories(opt.workdir);
 
     std::string entries;
     for (std::size_t i = 0; i < opt.inputs.size(); ++i) {
-        const std::string input = fs::absolute(opt.inputs[i]).string();
+        const std::string input = common::fs::absolute(opt.inputs[i]).string();
         const std::string part =
             opt.workdir + "/input_" + std::to_string(i) + ".json";
         const std::string index_dir =

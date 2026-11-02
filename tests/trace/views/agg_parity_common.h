@@ -147,7 +147,7 @@ inline void frames_equal(const dataframe::DataFrame& a,
 inline std::string write_agg_engine_trace(const std::string& dir) {
     const std::string pfw = dir + "/agg_engine.pfw";
     const std::string gz = pfw + ".gz";
-    if (fs::exists(gz)) return gz;
+    if (dftracer::utils::common::fs::exists(gz)) return gz;
     {
         std::ofstream ofs(pfw);
         const char* names[] = {"read", "write", "open"};
@@ -164,7 +164,7 @@ inline std::string write_agg_engine_trace(const std::string& dir) {
         }
     }
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
@@ -307,7 +307,7 @@ inline TestEnvironment& parity_env() {
 // One index root per trace set, so each set is one first touch.
 inline std::string parity_sub(const char* name) {
     const std::string d = parity_env().get_dir() + "/" + name;
-    fs::create_directories(d);
+    dftracer::utils::common::fs::create_directories(d);
     return d;
 }
 

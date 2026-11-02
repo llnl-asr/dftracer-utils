@@ -82,8 +82,8 @@ std::string density_body(Router& router, const std::string& target) {
 }
 
 std::unique_ptr<TraceIndex> build_index(const std::string& content,
-                                        const fs::path& dir) {
-    fs::create_directories(dir);
+                                        const common::fs::path& dir) {
+    common::fs::create_directories(dir);
     write_single_member((dir / "trace.pfw.gz").string(), content);
     auto index =
         std::make_unique<TraceIndex>(dir.string(), (dir / "idx").string());

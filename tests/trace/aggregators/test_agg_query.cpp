@@ -248,7 +248,7 @@ std::string write_trace(const std::string& dir, int n,
                        static_cast<std::streamsize>(member->size()));
         }
     }
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 
@@ -542,13 +542,13 @@ AggQueryResult check(const Fixture& fx, const Ask& ask,
 }
 
 std::size_t partial_count(const Fixture& fx) {
-    auto snapshot = unwrap(index::plan::open_snapshot(fx.index_path));
+    auto snapshot = common::unwrap(index::plan::open_snapshot(fx.index_path));
     std::size_t n = 0;
     for (const auto& f : fx.files) {
         const auto file =
             snapshot.file(index::store::internal::get_logical_path(f));
         REQUIRE(file);
-        unwrap(index::for_each_agg_partial(
+        common::unwrap(index::for_each_agg_partial(
             snapshot, *file,
             [&](std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
                 std::uint32_t, agg::PartialKind,
@@ -929,7 +929,7 @@ TEST_SUITE("AggQuery") {
         const std::string gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             pfw, gz, CHECKPOINT_SIZE));
-        fs::remove(pfw);
+        common::fs::remove(pfw);
         fx->files.push_back(gz);
         fx->index_dir = fx->env.get_dir() + "/idx_mixed";
         index::IndexerOptions o;

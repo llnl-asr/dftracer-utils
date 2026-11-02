@@ -60,7 +60,7 @@ PyObject* series_reduce_scalar(PyObject* self, PyObject*) {
     if (!a) return nullptr;
     try {
         return scalar_to_py((a->*Method)());
-    } catch (const dftracer::utils::DFTUtilsException& e) {
+    } catch (const dftracer::utils::common::DFTUtilsException& e) {
         PyErr_SetString(PyExc_TypeError, e.what());
         return nullptr;
     }
@@ -71,7 +71,7 @@ PyObject* series_reduce_f64(PyObject* self, PyObject*) {
     if (!a) return nullptr;
     try {
         return PyFloat_FromDouble((a->*Method)());
-    } catch (const dftracer::utils::DFTUtilsException& e) {
+    } catch (const dftracer::utils::common::DFTUtilsException& e) {
         PyErr_SetString(PyExc_TypeError, e.what());
         return nullptr;
     }

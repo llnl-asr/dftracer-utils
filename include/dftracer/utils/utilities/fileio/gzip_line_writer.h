@@ -40,7 +40,8 @@ struct MemberRef {
 };
 
 struct GzipWriterOptions {
-    std::size_t member_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+    std::size_t member_size =
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     int level = 6;
     std::size_t workers = 0;    ///< 0: the machine's parallelism
     std::size_t part_size = 0;  ///< 0: one file
@@ -125,11 +126,11 @@ class GzipLineWriter {
         ~Producer();
 
         /// Like GzipLineWriter::append, into this producer's buffer.
-        coro::CoroTask<Result<void>> append(std::string_view lines);
+        coro::CoroTask<common::Result<void>> append(std::string_view lines);
 
         /// Like GzipLineWriter::append_with, formatting at the tail of this
         /// producer's buffer.
-        coro::CoroTask<Result<void>> append_with(
+        coro::CoroTask<common::Result<void>> append_with(
             std::size_t max_bytes,
             std::function<std::size_t(char*, std::size_t)> fill);
 
@@ -143,12 +144,12 @@ class GzipLineWriter {
         template <line_format::FixedString Fmt, line_format::LineArg... A>
             requires(Fmt.line_safe() &&
                      sizeof...(A) == line_format::detail::HOLES<Fmt>)
-        coro::CoroTask<Result<void>> append_fmt(const A&... args) {
+        coro::CoroTask<common::Result<void>> append_fmt(const A&... args) {
             co_return co_await append_view<line_format::PlainEscape>(
                 line_format::view<Fmt>(), args...);
         }
         template <line_format::LineArg... A>
-        coro::CoroTask<Result<void>> append_fmt(
+        coro::CoroTask<common::Result<void>> append_fmt(
             const line_format::LineFormat& fmt, const A&... args) {
             co_return co_await append_view<line_format::PlainEscape>(fmt.view(),
                                                                      args...);
@@ -156,26 +157,27 @@ class GzipLineWriter {
         template <line_format::FixedString Fmt, line_format::LineArg... A>
             requires(Fmt.line_safe() &&
                      sizeof...(A) == line_format::detail::HOLES<Fmt>)
-        coro::CoroTask<Result<void>> append_json(const A&... args) {
+        coro::CoroTask<common::Result<void>> append_json(const A&... args) {
             co_return co_await append_view<line_format::JsonEscape>(
                 line_format::view<Fmt>(), args...);
         }
         template <line_format::LineArg... A>
-        coro::CoroTask<Result<void>> append_json(
+        coro::CoroTask<common::Result<void>> append_json(
             const line_format::JsonLineFormat& fmt, const A&... args) {
             co_return co_await append_view<line_format::JsonEscape>(fmt.view(),
                                                                     args...);
         }
 
         template <class E, line_format::LineArg... A>
-        coro::CoroTask<Result<void>> append_view(line_format::detail::View f,
-                                                 const A&... args) {
+        coro::CoroTask<common::Result<void>> append_view(
+            line_format::detail::View f, const A&... args) {
             if (f.holes != sizeof...(A))
-                co_return make_error(ErrorCode::InvalidArgument,
-                                     "line format argument count mismatch");
+                co_return common::make_error(
+                    common::ErrorCode::InvalidArgument,
+                    "line format argument count mismatch");
             if (line_format::any_null(args...))
-                co_return make_error(ErrorCode::InvalidArgument,
-                                     "null string argument");
+                co_return common::make_error(common::ErrorCode::InvalidArgument,
+                                             "null string argument");
             co_return co_await append_with(
                 line_format::max_line_bytes<E>(f, args...),
                 [&](char* dst, std::size_t) {
@@ -184,13 +186,13 @@ class GzipLineWriter {
         }
 
         /// Submits the pending bytes as a member; no-op when empty.
-        coro::CoroTask<Result<void>> flush();
+        coro::CoroTask<common::Result<void>> flush();
 
        private:
         friend class GzipLineWriter;
         explicit Producer(Impl* impl);
         coro::CoroTask<void> reserve_for(std::size_t extra);
-        coro::CoroTask<Result<void>> submit_full();
+        coro::CoroTask<common::Result<void>> submit_full();
         void release_extra();
         Impl* impl_;
         std::string buf_;
@@ -198,10 +200,10 @@ class GzipLineWriter {
     };
 
     /// A new producer. Fails with INVALID_ARGUMENT in ordered mode.
-    Result<Producer> producer();
+    common::Result<Producer> producer();
 
-    static coro::CoroTask<Result<GzipLineWriter>> open(std::string path,
-                                                       GzipWriterOptions opts);
+    static coro::CoroTask<common::Result<GzipLineWriter>> open(
+        std::string path, GzipWriterOptions opts);
 
     /// Empty; only open() produces a usable writer.
     GzipLineWriter();
@@ -211,14 +213,14 @@ class GzipLineWriter {
 
     /// Copies `lines`. A non-empty span must end with '\n'; otherwise the call
     /// fails with INVALID_ARGUMENT and the writer stays usable.
-    coro::CoroTask<Result<void>> append(std::string_view lines);
+    coro::CoroTask<common::Result<void>> append(std::string_view lines);
 
     /// Formats lines in place. `fill(dst, cap)` writes whole lines to `dst`
     /// (cap >= max_bytes) and returns the bytes written; a non-empty span must
     /// end with '\n', otherwise the call fails like append. Cuts as append
     /// does. In unordered mode the call fills a member of its own and submits
     /// it, so concurrent calls share no state.
-    coro::CoroTask<Result<void>> append_with(
+    coro::CoroTask<common::Result<void>> append_with(
         std::size_t max_bytes,
         std::function<std::size_t(char*, std::size_t)> fill);
 
@@ -232,39 +234,39 @@ class GzipLineWriter {
     template <line_format::FixedString Fmt, line_format::LineArg... A>
         requires(Fmt.line_safe() &&
                  sizeof...(A) == line_format::detail::HOLES<Fmt>)
-    coro::CoroTask<Result<void>> append_fmt(const A&... args) {
+    coro::CoroTask<common::Result<void>> append_fmt(const A&... args) {
         co_return co_await append_view<line_format::PlainEscape>(
             line_format::view<Fmt>(), args...);
     }
     template <line_format::LineArg... A>
-    coro::CoroTask<Result<void>> append_fmt(const line_format::LineFormat& fmt,
-                                            const A&... args) {
+    coro::CoroTask<common::Result<void>> append_fmt(
+        const line_format::LineFormat& fmt, const A&... args) {
         co_return co_await append_view<line_format::PlainEscape>(fmt.view(),
                                                                  args...);
     }
     template <line_format::FixedString Fmt, line_format::LineArg... A>
         requires(Fmt.line_safe() &&
                  sizeof...(A) == line_format::detail::HOLES<Fmt>)
-    coro::CoroTask<Result<void>> append_json(const A&... args) {
+    coro::CoroTask<common::Result<void>> append_json(const A&... args) {
         co_return co_await append_view<line_format::JsonEscape>(
             line_format::view<Fmt>(), args...);
     }
     template <line_format::LineArg... A>
-    coro::CoroTask<Result<void>> append_json(
+    coro::CoroTask<common::Result<void>> append_json(
         const line_format::JsonLineFormat& fmt, const A&... args) {
         co_return co_await append_view<line_format::JsonEscape>(fmt.view(),
                                                                 args...);
     }
 
     template <class E, line_format::LineArg... A>
-    coro::CoroTask<Result<void>> append_view(line_format::detail::View f,
-                                             const A&... args) {
+    coro::CoroTask<common::Result<void>> append_view(
+        line_format::detail::View f, const A&... args) {
         if (f.holes != sizeof...(A))
-            co_return make_error(ErrorCode::InvalidArgument,
-                                 "line format argument count mismatch");
+            co_return common::make_error(common::ErrorCode::InvalidArgument,
+                                         "line format argument count mismatch");
         if (line_format::any_null(args...))
-            co_return make_error(ErrorCode::InvalidArgument,
-                                 "null string argument");
+            co_return common::make_error(common::ErrorCode::InvalidArgument,
+                                         "null string argument");
         co_return co_await append_with(
             line_format::max_line_bytes<E>(f, args...),
             [&](char* dst, std::size_t) {
@@ -273,13 +275,13 @@ class GzipLineWriter {
     }
 
     /// Ends the current member now; no-op when it is empty.
-    coro::CoroTask<Result<void>> cut();
+    coro::CoroTask<common::Result<void>> cut();
 
-    coro::CoroTask<Result<WriteSummary>> close();
+    coro::CoroTask<common::Result<WriteSummary>> close();
 
     /// Like close(), with `tail` (any bytes, may lack '\n') appended to the
     /// last member; it forms its own member when none is pending.
-    coro::CoroTask<Result<WriteSummary>> close(std::string_view tail);
+    coro::CoroTask<common::Result<WriteSummary>> close(std::string_view tail);
 
    private:
     explicit GzipLineWriter(std::unique_ptr<Impl> impl);
@@ -289,20 +291,20 @@ class GzipLineWriter {
 /// The same operations, blocking on the default runtime.
 class GzipLineWriterBlocking {
    public:
-    static Result<GzipLineWriterBlocking> open(std::string path,
-                                               GzipWriterOptions opts);
+    static common::Result<GzipLineWriterBlocking> open(std::string path,
+                                                       GzipWriterOptions opts);
 
     GzipLineWriterBlocking(GzipLineWriterBlocking&&) noexcept;
     GzipLineWriterBlocking& operator=(GzipLineWriterBlocking&&) noexcept;
     ~GzipLineWriterBlocking();
 
-    Result<void> append(std::string_view lines);
-    Result<void> append_with(
+    common::Result<void> append(std::string_view lines);
+    common::Result<void> append_with(
         std::size_t max_bytes,
         std::function<std::size_t(char*, std::size_t)> fill);
-    Result<void> cut();
-    Result<WriteSummary> close();
-    Result<WriteSummary> close(std::string_view tail);
+    common::Result<void> cut();
+    common::Result<WriteSummary> close();
+    common::Result<WriteSummary> close(std::string_view tail);
 
    private:
     explicit GzipLineWriterBlocking(GzipLineWriter w);

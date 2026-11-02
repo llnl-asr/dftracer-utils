@@ -22,7 +22,8 @@ struct ChunkWriterConfig {
     /// Uncompressed bytes per gzip member; members end at line boundaries.
     /// A chunk rolls over at the first member boundary at or past
     /// chunk_size_bytes of uncompressed line bytes.
-    std::size_t member_size_bytes = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+    std::size_t member_size_bytes =
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     /// Coalesce output into writes of this many bytes so I/O granularity suits
     /// a parallel filesystem (Lustre/GPFS) instead of many tiny writes.
     std::size_t io_flush_bytes = 16 * 1024 * 1024;

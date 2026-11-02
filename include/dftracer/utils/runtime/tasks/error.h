@@ -8,7 +8,7 @@
 
 namespace dftracer::utils {
 
-class PipelineError : public DFTUtilsException {
+class PipelineError : public common::DFTUtilsException {
    public:
     enum Type {
         TypeMismatch,
@@ -24,7 +24,8 @@ class PipelineError : public DFTUtilsException {
     };
 
     PipelineError(Type type, const std::string &message)
-        : DFTUtilsException(ErrorCode::Pipeline, format_message(type, message)),
+        : common::DFTUtilsException(common::ErrorCode::Pipeline,
+                                    format_message(type, message)),
           type_(type) {}
 
     inline Type get_type() const { return type_; }

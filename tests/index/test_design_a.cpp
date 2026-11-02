@@ -216,8 +216,8 @@ TEST_SUITE("DesignA") {
         using build::FileAdmission;
         constexpr std::uint64_t PACKED = 3 << 20;
         CHECK(FileAdmission::plaintext_estimate(0, PACKED) ==
-              PACKED *
-                  constants::file_admission::PLAINTEXT_PER_COMPRESSED_BYTE);
+              PACKED * common::constants::file_admission::
+                           PLAINTEXT_PER_COMPRESSED_BYTE);
         CHECK(FileAdmission::plaintext_estimate(50 << 20, PACKED) ==
               (std::uint64_t{50} << 20));
     }

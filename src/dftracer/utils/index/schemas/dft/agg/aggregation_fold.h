@@ -38,7 +38,7 @@ namespace dftracer::utils::index::schemas::dft::agg {
 /// The closed rows a fold that writes through holds before its first run. For
 /// tests.
 inline std::atomic<std::uint64_t> g_agg_run_bytes{
-    constants::file_admission::MIN_SPILL_RUN_BYTES};
+    common::constants::file_admission::MIN_SPILL_RUN_BYTES};
 #if DFTRACER_UTILS_TEST_PROBES
 /// Runs staged so far by folds that write through. For tests.
 inline std::atomic<std::uint64_t> g_agg_runs_staged{0};

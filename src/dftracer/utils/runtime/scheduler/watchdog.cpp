@@ -61,7 +61,7 @@ void Watchdog::mark_execution_start() {
     DFTRACER_UTILS_LOG_DEBUG("%s", "Watchdog: execution started");
 }
 
-void Watchdog::register_task_start(TaskIndex task_id,
+void Watchdog::register_task_start(common::TaskIndex task_id,
                                    std::shared_ptr<Task> task,
                                    std::chrono::milliseconds timeout) {
     std::lock_guard<std::mutex> lock(active_tasks_mutex_);
@@ -85,7 +85,7 @@ void Watchdog::register_task_start(TaskIndex task_id,
         static_cast<long long>(effective_timeout.count()));
 }
 
-void Watchdog::unregister_task(TaskIndex task_id) {
+void Watchdog::unregister_task(common::TaskIndex task_id) {
     std::lock_guard<std::mutex> lock(active_tasks_mutex_);
 
     auto it = active_tasks_.find(task_id);

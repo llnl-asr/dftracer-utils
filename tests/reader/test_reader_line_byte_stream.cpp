@@ -69,7 +69,7 @@ static std::string create_variable_line_test_file(
         return "";
     }
 
-    fs::remove(txt_file);
+    common::fs::remove(txt_file);
     return gz_file;
 }
 
@@ -759,7 +759,7 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         f.close();
 
         compress_file_to_gzip(txt_file, gz_file);
-        fs::remove(txt_file);
+        common::fs::remove(txt_file);
 
         std::string idx_file = env.get_index_path(gz_file);
 

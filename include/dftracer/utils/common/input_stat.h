@@ -10,7 +10,7 @@
 #include <shared_mutex>
 #include <string>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// The stat results of the paths one run has read, so an input is stat'ed once
 /// however many layers ask. Owned by one run (see InputStatScope). Thread safe.
@@ -69,6 +69,6 @@ inline bool input_is_regular_file(const std::string& path) {
     return stat_input(path, st) && st.is_regular_file;
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_INPUT_STAT_H

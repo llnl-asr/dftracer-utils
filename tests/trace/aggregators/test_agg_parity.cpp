@@ -55,7 +55,7 @@ String read_text(const std::string& path) {
 // reference text (a failure when the file is missing).
 String reference(const char* file, StringView produced) {
     if (const char* dir = std::getenv(RECORD_ENV)) {
-        fs::create_directories(dir);
+        dftracer::utils::common::fs::create_directories(dir);
         std::ofstream ofs(std::string(dir) + "/" + file, std::ios::binary);
         ofs << produced;
         return String();
@@ -179,13 +179,13 @@ std::string write_trace(const std::string& dir, int file, std::uint64_t seed,
     }
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
 // A seeded jitter keeps the fitted distributions from being degenerate.
 void write_dlio_traces(const std::string& dir) {
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     for (int file = 0; file < 2; ++file) {
         const std::string pfw = dir + "/dlio_" + std::to_string(file) + ".pfw";
         {
@@ -225,7 +225,7 @@ void write_dlio_traces(const std::string& dir) {
             ofs << "]\n";
         }
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, pfw + ".gz"));
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
     }
 }
 
@@ -240,8 +240,8 @@ struct Fixtures {
         baseline_dir = root.str() + "/baseline";
         variant_dir = root.str() + "/variant";
         dlio_dir = root.str() + "/dlio";
-        fs::create_directories(baseline_dir);
-        fs::create_directories(variant_dir);
+        dftracer::utils::common::fs::create_directories(baseline_dir);
+        dftracer::utils::common::fs::create_directories(variant_dir);
         for (int f = 0; f < FILES_PER_SET; ++f) {
             baseline_files.push_back(write_trace(baseline_dir, f, 11, false));
             write_trace(variant_dir, f, 29, true);

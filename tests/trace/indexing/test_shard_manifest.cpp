@@ -8,7 +8,6 @@
 
 #include <string>
 
-using dftracer::utils::DFTUtilsException;
 using dftracer::utils::index::shard_manifest_path;
 using dftracer::utils::index::store::IndexShardManifest;
 using dftracer::utils::index::store::parse_manifest;
@@ -106,8 +105,9 @@ TEST_SUITE("shard_manifest") {
         write_shard_manifest(root, sample());
         CHECK(resolve_shard_set_root(dir.path().string()) == root);
         CHECK(resolve_shard_set_root(root) == root);
-        CHECK(fs::exists(shard_manifest_path(root)));
-        CHECK_FALSE(fs::exists(dir.path() / std::string(".dftindex-shards")));
+        CHECK(dftracer::utils::common::fs::exists(shard_manifest_path(root)));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(
+            dir.path() / std::string(".dftindex-shards")));
     }
 
     TEST_CASE("a manifest with no format version has none, not 0") {
@@ -119,13 +119,14 @@ TEST_SUITE("shard_manifest") {
     }
 
     TEST_CASE("malformed JSON throws") {
-        CHECK_THROWS_AS(parse_manifest("{ not json"), DFTUtilsException);
+        CHECK_THROWS_AS(parse_manifest("{ not json"),
+                        dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("a shard entry missing its path throws") {
         CHECK_THROWS_AS(
             parse_manifest(
                 R"({"format_version":8,"shards":[{"num_files":1}]})"),
-            DFTUtilsException);
+            dftracer::utils::common::DFTUtilsException);
     }
 }

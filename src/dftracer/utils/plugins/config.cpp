@@ -121,7 +121,7 @@ ConfigTree::Node ConfigTree::infer_leaf(std::string_view raw) {
             return n;
         }
     }
-    using ::dftracer::utils::detail::iequals;
+    using ::dftracer::utils::common::detail::iequals;
     if (iequals(raw, "true")) {
         n.kind = DFTU_VAL_BOOL;
         n.b = true;

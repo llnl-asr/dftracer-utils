@@ -9,7 +9,7 @@ namespace dftracer::utils::server {
 namespace {
 
 bool icase_equal(std::string_view a, std::string_view b) {
-    return ::dftracer::utils::detail::iequals(a, b);
+    return ::dftracer::utils::common::detail::iequals(a, b);
 }
 
 }  // namespace

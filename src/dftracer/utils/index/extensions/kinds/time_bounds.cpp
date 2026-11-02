@@ -27,7 +27,7 @@ chunk_bounds(const index::Snapshot& snapshot, const index::FileRef& file,
     if (!index::extension_current(snapshot, file,
                                   index::store::IndexExtension::Zonemap))
         return out;
-    for (const auto& [granule, bytes] : unwrap(index::granules(
+    for (const auto& [granule, bytes] : common::unwrap(index::granules(
              snapshot, file, index::store::IndexExtension::Zonemap, path))) {
         auto zone = decode_zone(bytes);
         std::uint64_t lo = 0;
@@ -60,7 +60,7 @@ ankerl::unordered_dense::set<std::uint64_t> chunks_without_starts(
     if (!index::extension_current(snapshot, file,
                                   index::store::IndexExtension::Zonemap))
         return out;
-    for (const auto& [granule, bytes] : unwrap(index::granules(
+    for (const auto& [granule, bytes] : common::unwrap(index::granules(
              snapshot, file, index::store::IndexExtension::Zonemap, "ts"))) {
         auto zone = decode_zone(bytes);
         if (zone && zone->histogram && !zone->histogram->empty() &&
@@ -96,7 +96,7 @@ std::optional<std::pair<double, double>> file_value_range(
         v = std::strtod(text.c_str(), &end);
         return !text.empty() && end == text.c_str() + text.size();
     };
-    for (const auto& [granule, bytes] : unwrap(index::granules(
+    for (const auto& [granule, bytes] : common::unwrap(index::granules(
              snapshot, file, index::store::IndexExtension::Zonemap, path))) {
         auto zone = decode_zone(bytes);
         double lo = 0;

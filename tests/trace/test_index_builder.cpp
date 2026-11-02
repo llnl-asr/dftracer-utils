@@ -74,7 +74,7 @@ TEST_SUITE("IndexBuilder") {
             CHECK(output.index_path == db_root);
             CHECK(output.success == true);
 
-            CHECK(fs::exists(db_root));
+            CHECK(common::fs::exists(db_root));
         }
 
         SUBCASE("Repeat build re-indexes") {

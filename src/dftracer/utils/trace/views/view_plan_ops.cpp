@@ -140,16 +140,16 @@ void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
                 break;
             case GroupKey::Kind::IoCat:
             case GroupKey::Kind::AccPat:
-                throw DFTUtilsException::cat(
-                    ErrorCode::InvalidArgument, "group key ",
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::InvalidArgument, "group key ",
                     detail::group_col_name(k),
                     " needs dftracer events; schema ", schema.id,
                     " records have paths only");
         }
         if (auto c = detail::resolver_column(k.kind);
             c && !has_rowset(schema, c->rowset, c->key, c->value))
-            throw DFTUtilsException::cat(
-                ErrorCode::InvalidArgument, "group key ",
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument, "group key ",
                 detail::group_col_name(k), " needs row set ", c->rowset, " (",
                 c->key, ", ", c->value, "); schema ", schema.id,
                 " defines none");
@@ -176,7 +176,7 @@ FileIndex find_file_index(Snapshots& snapshots, const ViewFile& f) {
     if (at == snapshots.end())
         at = snapshots
                  .emplace(f.index_path,
-                          unwrap(ix::plan::open_snapshot(f.index_path)))
+                          common::unwrap(ix::plan::open_snapshot(f.index_path)))
                  .first;
     return {
         &at->second,
@@ -224,8 +224,9 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
         std::lock_guard<std::mutex> lock(confirmed_files().mu);
         for (const auto& f : files) {
             if (f.index_path.empty()) continue;
-            dftracer::utils::InputFileStat file_stat;
-            if (!dftracer::utils::stat_input(f.file_path, file_stat)) continue;
+            dftracer::utils::common::InputFileStat file_stat;
+            if (!dftracer::utils::common::stat_input(f.file_path, file_stat))
+                continue;
             const std::string logical =
                 st::internal::get_logical_path(f.file_path);
             std::string key = logical;
@@ -242,20 +243,20 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
             if (missing_roots.contains(std::string_view(f.index_path)))
                 continue;
             if (!snapshots.contains(f.index_path) &&
-                !input_exists(ix::store_of(f.index_path))) {
+                !common::input_exists(ix::store_of(f.index_path))) {
                 missing_roots.insert(dstd::String(f.index_path));
                 continue;
             }
             FileIndex found;
             try {
                 found = find_file_index(snapshots, f);
-            } catch (const DFTUtilsException&) {
+            } catch (const common::DFTUtilsException&) {
                 continue;
             }
             std::string schema;
             if (found.file) {
-                const auto meta =
-                    unwrap(ix::file_metadata(*found.snapshot, *found.file));
+                const auto meta = common::unwrap(
+                    ix::file_metadata(*found.snapshot, *found.file));
                 const std::uint64_t recorded = meta ? meta->checkpoint_size : 0;
                 const bool same_ckpt = f.checkpoint_size == 0 ||
                                        recorded == 0 ||
@@ -269,8 +270,8 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
                     confirmed.push_back(std::move(key));
                     continue;
                 }
-                if (const auto recorded_schema =
-                        unwrap(ix::schema(*found.snapshot, *found.file))) {
+                if (const auto recorded_schema = common::unwrap(
+                        ix::schema(*found.snapshot, *found.file))) {
                     ix::get_schema(*recorded_schema);
                     schema.assign(recorded_schema->data(),
                                   recorded_schema->size());
@@ -296,10 +297,11 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
                     co_await ib::resolve_and_build_index(&scope, std::move(in));
             });
         if (!result.failures.empty())
-            throw DFTUtilsException::cat(ErrorCode::Io, "index of ",
-                                         result.failures.front().file_path,
-                                         " is stale and its rebuild failed: ",
-                                         result.failures.front().message);
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Io, "index of ",
+                result.failures.front().file_path,
+                " is stale and its rebuild failed: ",
+                result.failures.front().message);
         std::lock_guard<std::mutex> lock(confirmed_files().mu);
         for (auto& p : pending) confirmed_files().keys.insert(std::move(p.key));
     }
@@ -404,7 +406,8 @@ ColTypeMap harvest_path_types(const std::vector<ViewFile>& files) {
         const FileIndex found = find_file_index(snapshots, f);
         if (!found.file) continue;
         ColTypeMap one;
-        for (auto& [path, t] : unwrap(dftracer::utils::index::file_column_types(
+        for (auto& [path, t] :
+             common::unwrap(dftracer::utils::index::file_column_types(
                  *found.snapshot, *found.file)))
             one.emplace(std::string(path.data(), path.size()), t);
         fold_col_map(merged, one);
@@ -450,15 +453,15 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
                     namespace ix = dftracer::utils::index;
                     namespace st = ix::store;
                     const ix::Snapshot snapshot =
-                        unwrap(ix::plan::open_snapshot(
+                        common::unwrap(ix::plan::open_snapshot(
                             roots[static_cast<std::size_t>(i)]));
                     for (const std::string& logical :
                          root_files[static_cast<std::size_t>(i)]) {
                         const auto file = snapshot.file(logical);
                         if (!file) continue;
                         ColTypeMap one;
-                        for (auto& [path, t] :
-                             unwrap(ix::file_column_types(snapshot, *file))) {
+                        for (auto& [path, t] : common::unwrap(
+                                 ix::file_column_types(snapshot, *file))) {
                             std::string_view name(path.data(), path.size());
                             if (name.starts_with("args."))
                                 name.remove_prefix(5);
@@ -611,8 +614,9 @@ std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
         if (f.index_path.empty()) continue;
         const FileIndex found = find_file_index(snapshots, f);
         if (!found.file) continue;
-        for (auto& [path, stat] : unwrap(dftracer::utils::index::catalog(
-                 *found.snapshot, *found.file))) {
+        for (auto& [path, stat] :
+             common::unwrap(dftracer::utils::index::catalog(*found.snapshot,
+                                                            *found.file))) {
             auto [pos, inserted] =
                 merged.try_emplace(std::string(path.data(), path.size()), stat);
             if (inserted) continue;
@@ -683,8 +687,8 @@ std::shared_ptr<const detail::JsonColumns> json_columns(
         if (by_path)
             out->emplace(name, text);
         else
-            out->emplace(std::string(dftracer::utils::ARGS_PREFIX) + name,
-                         text);
+            out->emplace(
+                std::string(dftracer::utils::common::ARGS_PREFIX) + name, text);
     }
     if (out->empty()) return nullptr;
     return out;
@@ -790,8 +794,8 @@ ScanPlan occ_cell(const ScanPlan& plan_, std::uint64_t cell_us) {
 
 ScanPlan time_scale(const ScanPlan& plan_, double ns_ratio) {
     if (ns_ratio != 1.0 && detail::plan_by_path(*plan_))
-        throw DFTUtilsException::cat(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument,
             "time_scale scales dftracer ts and dur; schema ",
             detail::plan_record_schema(*plan_).id,
             " gives its time units on its time and duration fields");
@@ -851,8 +855,8 @@ AggSpec lower_field_agg(const FieldAggExpr& e) {
         case AggFn::ArgMax:
             return AggSpec(AggOp::ArgMax, e.field(), "", e.by());
     }
-    throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
-                                 "unhandled aggregate function");
+    throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
+                                         "unhandled aggregate function");
 }
 
 }  // namespace
@@ -897,8 +901,8 @@ ScanPlan agg(const ScanPlan& plan_, std::vector<FieldAggExpr> exprs) {
                     num_args.push_back(AggSpec(AggOp::Kurt));
                     break;
                 default:
-                    throw DFTUtilsException::cat(
-                        ErrorCode::InvalidArgument,
+                    throw common::DFTUtilsException::cat(
+                        common::ErrorCode::InvalidArgument,
                         "F.any supports .count()/.mean()/.sum()/.min()/.max()/"
                         ".var()/.std()/.skew()/.kurt(); name a field for "
                         "argmax "
@@ -929,8 +933,8 @@ ScanPlan agg_numeric_args(const ScanPlan& plan_,
                           std::vector<AggSpec> reductions) {
     for (const auto& s : reductions)
         if (!is_dyn_reduction(s.op))
-            throw DFTUtilsException::cat(
-                ErrorCode::InvalidArgument,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument,
                 "agg_numeric_args supports only Count/Sum/Min/Max/SumSq/Mean/"
                 "Var/Std/Skew/Kurt over numeric args; Pct/Hist/ArgMax need a "
                 "named field");

@@ -1,7 +1,7 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/utilities/common/arrow/ipc_reader.h>
+#include <dftracer/utils/utilities/arrow/ipc_reader.h>
 #include <nanoarrow/nanoarrow.h>
 #include <nanoarrow/nanoarrow_ipc.h>
 
@@ -18,7 +18,7 @@
 #include <unistd.h>
 #endif
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -350,6 +350,6 @@ int IpcReader::for_each_batch(std::function<int(ArrowExportResult&)> callback) {
     return 0;
 }
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC

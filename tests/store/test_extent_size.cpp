@@ -14,11 +14,8 @@
 
 namespace {
 
-namespace constants = dftracer::utils::constants;
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
-
-using dftracer::utils::lustre_stripe;
 
 constexpr std::uint32_t ONE_MIB = 1U << 20;
 constexpr std::uint32_t FOUR_MIB = 4U << 20;
@@ -28,28 +25,31 @@ constexpr std::uint32_t ONE_TWENTY_EIGHT_KIB = 128U << 10;
 
 struct ExtentBytesOverride {
     explicit ExtentBytesOverride(const char* value) {
-        ::setenv(constants::store::STORE_EXTENT_BYTES_ENV, value, 1);
+        ::setenv(
+            dftracer::utils::common::constants::store::STORE_EXTENT_BYTES_ENV,
+            value, 1);
     }
     ExtentBytesOverride(const ExtentBytesOverride&) = delete;
     ExtentBytesOverride& operator=(const ExtentBytesOverride&) = delete;
     ~ExtentBytesOverride() {
-        ::unsetenv(constants::store::STORE_EXTENT_BYTES_ENV);
+        ::unsetenv(
+            dftracer::utils::common::constants::store::STORE_EXTENT_BYTES_ENV);
     }
 };
 
 struct TempDir {
-    fs::path path;
+    dftracer::utils::common::fs::path path;
     TempDir() {
-        path = fs::temp_directory_path() /
+        path = dftracer::utils::common::fs::temp_directory_path() /
                ("dftu_store_extent_size_" + std::to_string(::getpid()));
-        fs::remove_all(path);
-        fs::create_directories(path);
+        dftracer::utils::common::fs::remove_all(path);
+        dftracer::utils::common::fs::create_directories(path);
     }
     TempDir(const TempDir&) = delete;
     TempDir& operator=(const TempDir&) = delete;
     ~TempDir() {
         std::error_code ec;
-        fs::remove_all(path, ec);
+        dftracer::utils::common::fs::remove_all(path, ec);
     }
 };
 
@@ -65,17 +65,21 @@ std::uint32_t chosen(std::size_t stripe_size,
 void check_override_error(dstd::Expected<std::uint32_t, dstd::Error> result) {
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().is(dstd::Condition::InvalidArgument));
-    CHECK(result.error().message().find(
-              constants::store::STORE_EXTENT_BYTES_ENV) !=
+    CHECK(result.error().message().find(dftracer::utils::common::constants::
+                                            store::STORE_EXTENT_BYTES_ENV) !=
           std::string_view::npos);
 }
 
 }  // namespace
 
 TEST_CASE("store extent size: the default is 1 MiB") {
-    CHECK(constants::store::STORE_DEFAULT_EXTENT_BYTES == ONE_MIB);
-    CHECK(constants::store::STORE_MIN_EXTENT_BYTES == 4096);
-    CHECK(constants::store::STORE_MAX_EXTENT_BYTES == SIXTEEN_MIB);
+    CHECK(
+        dftracer::utils::common::constants::store::STORE_DEFAULT_EXTENT_BYTES ==
+        ONE_MIB);
+    CHECK(dftracer::utils::common::constants::store::STORE_MIN_EXTENT_BYTES ==
+          4096);
+    CHECK(dftracer::utils::common::constants::store::STORE_MAX_EXTENT_BYTES ==
+          SIXTEEN_MIB);
     CHECK(chosen(0) == ONE_MIB);
 }
 
@@ -117,7 +121,8 @@ TEST_CASE(
     "store extent size: a directory without a Lustre stripe uses the "
     "default") {
     TempDir dir;
-    const std::size_t stripe = lustre_stripe(dir.path.string()).size;
+    const std::size_t stripe =
+        dftracer::utils::common::lustre_stripe(dir.path.string()).size;
     auto result = store::engine::extent_size_for(dir.path.string());
     REQUIRE(result.has_value());
     if (stripe == 0) {
@@ -140,7 +145,9 @@ TEST_CASE(
     {
         auto result = store::engine::extent_size_for(dir.path.string());
         REQUIRE(result.has_value());
-        CHECK(*result == chosen(lustre_stripe(dir.path.string()).size));
+        CHECK(*result ==
+              chosen(dftracer::utils::common::lustre_stripe(dir.path.string())
+                         .size));
     }
 }
 

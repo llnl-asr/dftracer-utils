@@ -87,8 +87,8 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
         self->group_keys = nullptr;
         self->compute_percentiles = 1;
         self->group_by_file = 1;
-        self->checkpoint_size =
-            dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        self->checkpoint_size = dftracer::utils::common::constants::indexer::
+            DEFAULT_CHECKPOINT_SIZE;
         self->parallelism = 0;
         self->force_rebuild = 0;
     }
@@ -132,7 +132,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     int compute_percentiles = 1;
     int group_by_file = 1;
     Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
-        dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
+        dftracer::utils::common::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     Py_ssize_t parallelism = 0;
     int force_rebuild = 0;
     PyObject* runtime_arg = nullptr;
@@ -626,7 +626,7 @@ using PidsByPath = ankerl::unordered_dense::map<std::string, PidSet>;
 PidSet file_pids(const dftracer::utils::index::Snapshot& snapshot,
                  const dftracer::utils::index::FileRef& file) {
     PidSet pids;
-    auto counts = dftracer::utils::unwrap(
+    auto counts = dftracer::utils::common::unwrap(
         dftracer::utils::index::pid_tid_counts(snapshot, file));
     if (!counts) return pids;
     for (const auto& [key, _] : *counts) pids.insert(pid_of(key));
@@ -635,10 +635,10 @@ PidSet file_pids(const dftracer::utils::index::Snapshot& snapshot,
 
 // Every indexed file with its PID set, keyed by the path the index names it by.
 PidsByPath all_file_pids(const std::string& index_path) {
-    const auto snapshot = dftracer::utils::unwrap(
+    const auto snapshot = dftracer::utils::common::unwrap(
         dftracer::utils::index::plan::open_snapshot(index_path));
     PidsByPath out;
-    for (const auto& file : dftracer::utils::unwrap(snapshot.files())) {
+    for (const auto& file : dftracer::utils::common::unwrap(snapshot.files())) {
         const auto path = file.path();
         out.emplace(std::string(path.data(), path.size()),
                     file_pids(snapshot, file));
@@ -694,7 +694,7 @@ static PyObject* Indexer_query_file_pids(IndexerObject* self, PyObject* args) {
     PidSet pids;
     if (!run_blocking_r(
             [&] {
-                const auto snapshot = dftracer::utils::unwrap(
+                const auto snapshot = dftracer::utils::common::unwrap(
                     dftracer::utils::index::plan::open_snapshot(index_path));
                 const auto file = snapshot.file(
                     dftracer::utils::index::store::internal::get_logical_path(

@@ -45,13 +45,13 @@ class LargeTestEnvironment {
         // Calculate number of lines needed for target size
         num_lines_ = (target_size_mb * 1024 * 1024) / bytes_per_line;
         temp_dir_ = make_unique_test_path("dftu_robustness_test").string();
-        fs::create_directories(temp_dir_);
+        common::fs::create_directories(temp_dir_);
     }
 
     ~LargeTestEnvironment() {
         try {
-            if (fs::exists(temp_dir_)) {
-                fs::remove_all(temp_dir_);
+            if (common::fs::exists(temp_dir_)) {
+                common::fs::remove_all(temp_dir_);
             }
         } catch (...) {
             // Ignore cleanup errors
@@ -100,7 +100,7 @@ class LargeTestEnvironment {
         // re-inflating from the start of a single giant member.
         bool success = compress_file_to_gzip_multimember(txt_file, gz_file,
                                                          4 * 1024 * 1024);
-        fs::remove(txt_file);
+        common::fs::remove(txt_file);
         return success ? gz_file : "";
     }
 
@@ -111,7 +111,7 @@ class LargeTestEnvironment {
     std::string get_dir() const { return temp_dir_; }
     std::size_t get_num_lines() const { return num_lines_; }
     std::size_t get_bytes_per_line() const { return bytes_per_line_; }
-    bool is_valid() const { return fs::exists(temp_dir_); }
+    bool is_valid() const { return common::fs::exists(temp_dir_); }
 };
 
 // Helper function to count JSON lines in content

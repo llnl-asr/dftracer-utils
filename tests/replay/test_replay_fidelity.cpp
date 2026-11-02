@@ -189,11 +189,11 @@ void check_fidelity(const FidelityStats& s, const char* label) {
 }  // namespace
 
 TEST_CASE("Replay fidelity - sync path") {
-    dftracer::utils::logger::init();
+    common::logger::init();
 
-    fs::path temp_dir =
+    common::fs::path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_fid_sync");
-    fs::create_directories(temp_dir);
+    common::fs::create_directories(temp_dir);
     std::string trace_file = (temp_dir / "fid.pfw.gz").string();
 
     constexpr std::size_t N = 40;
@@ -217,15 +217,15 @@ TEST_CASE("Replay fidelity - sync path") {
     check_fidelity(stats, "sync");
 
     std::error_code ec;
-    fs::remove_all(temp_dir, ec);
+    common::fs::remove_all(temp_dir, ec);
 }
 
 TEST_CASE("Replay fidelity - pipelined path") {
-    dftracer::utils::logger::init();
+    common::logger::init();
 
-    fs::path temp_dir =
+    common::fs::path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_fid_pipelined");
-    fs::create_directories(temp_dir);
+    common::fs::create_directories(temp_dir);
     std::string trace_file = (temp_dir / "fid.pfw.gz").string();
 
     constexpr std::size_t N = 40;
@@ -259,15 +259,15 @@ TEST_CASE("Replay fidelity - pipelined path") {
     check_fidelity(stats, "pipelined");
 
     std::error_code ec;
-    fs::remove_all(temp_dir, ec);
+    common::fs::remove_all(temp_dir, ec);
 }
 
 TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
-    dftracer::utils::logger::init();
+    common::logger::init();
 
-    fs::path temp_dir =
+    common::fs::path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_fid_anchor");
-    fs::create_directories(temp_dir);
+    common::fs::create_directories(temp_dir);
     std::string trace_file = (temp_dir / "fid.pfw.gz").string();
 
     constexpr std::size_t N = 20;
@@ -298,15 +298,15 @@ TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
     check_fidelity(stats, "anchor-reset");
 
     std::error_code ec;
-    fs::remove_all(temp_dir, ec);
+    common::fs::remove_all(temp_dir, ec);
 }
 
 TEST_CASE("Replay pipelined - files replay at the same time") {
-    dftracer::utils::logger::init();
+    common::logger::init();
 
-    fs::path temp_dir =
+    common::fs::path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_concurrent");
-    fs::create_directories(temp_dir);
+    common::fs::create_directories(temp_dir);
     const std::string file_a = (temp_dir / "a.pfw.gz").string();
     const std::string file_b = (temp_dir / "b.pfw.gz").string();
     constexpr std::size_t N = 8;
@@ -348,15 +348,15 @@ TEST_CASE("Replay pipelined - files replay at the same time") {
     CHECK(result.pid_counts[PID_B] == N);
 
     std::error_code ec;
-    fs::remove_all(temp_dir, ec);
+    common::fs::remove_all(temp_dir, ec);
 }
 
 TEST_CASE("Replay pipelined - each file keeps its own timeline") {
-    dftracer::utils::logger::init();
+    common::logger::init();
 
-    fs::path temp_dir =
+    common::fs::path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_lanes");
-    fs::create_directories(temp_dir);
+    common::fs::create_directories(temp_dir);
     const std::string file_a = (temp_dir / "a.pfw.gz").string();
     const std::string file_b = (temp_dir / "b.pfw.gz").string();
     constexpr std::size_t N = 20;
@@ -389,15 +389,15 @@ TEST_CASE("Replay pipelined - each file keeps its own timeline") {
     check_fidelity(analyze(rec_b.samples), "lane b");
 
     std::error_code ec;
-    fs::remove_all(temp_dir, ec);
+    common::fs::remove_all(temp_dir, ec);
 }
 
 TEST_CASE("Replay pipelined - max_events caps the whole run") {
-    dftracer::utils::logger::init();
+    common::logger::init();
 
-    fs::path temp_dir =
+    common::fs::path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_cap");
-    fs::create_directories(temp_dir);
+    common::fs::create_directories(temp_dir);
     constexpr std::size_t FILES = 3;
     constexpr std::size_t N = 50;
     constexpr std::size_t MAX_EVENTS = 60;
@@ -422,5 +422,5 @@ TEST_CASE("Replay pipelined - max_events caps the whole run") {
     CHECK(result.executed_events == MAX_EVENTS);
 
     std::error_code ec;
-    fs::remove_all(temp_dir, ec);
+    common::fs::remove_all(temp_dir, ec);
 }

@@ -9,9 +9,6 @@
 #include <thread>
 #include <vector>
 
-using dftracer::utils::ExternalSorter;
-using dftracer::utils::SpillFile;
-
 namespace {
 
 struct Rec {
@@ -36,7 +33,7 @@ std::vector<Rec> shuffled(std::size_t n) {
 
 std::vector<Rec> sorted_through(const std::vector<Rec>& in,
                                 std::uint64_t budget, std::size_t* runs) {
-    ExternalSorter<Rec, Less> s(Less{}, budget);
+    dftracer::utils::common::ExternalSorter<Rec, Less> s(Less{}, budget);
     for (const Rec& r : in) REQUIRE(s.add(r).has_value());
     std::vector<Rec> out;
     REQUIRE(s.drain([&](const Rec& r) { out.push_back(r); }).has_value());
@@ -77,9 +74,9 @@ TEST_CASE("an empty sorter drains nothing") {
 }
 
 TEST_CASE("a spill file returns what was appended at the returned offsets") {
-    auto made = SpillFile::create();
+    auto made = dftracer::utils::common::SpillFile::create();
     REQUIRE(made.has_value());
-    SpillFile& f = **made;
+    dftracer::utils::common::SpillFile& f = **made;
     const char a[] = "abcdef";
     const char b[] = "XYZ";
     const auto oa = *f.append(a, 6);
@@ -94,7 +91,7 @@ TEST_CASE("a spill file returns what was appended at the returned offsets") {
 
 TEST_CASE("runs added from several threads merge to the sorted order") {
     const auto in = shuffled(20000);
-    ExternalSorter<Rec, Less> s(Less{}, 1 << 20);
+    dftracer::utils::common::ExternalSorter<Rec, Less> s(Less{}, 1 << 20);
     std::vector<std::thread> threads;
     for (std::size_t t = 0; t < 4; ++t) {
         threads.emplace_back([&, t] {

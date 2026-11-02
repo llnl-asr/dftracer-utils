@@ -31,7 +31,8 @@ struct FileCompressionUtilityInput {
      */
     static FileCompressionUtilityInput from_file(
         const std::string& input_path, int compression_level = 6,
-        std::size_t member_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE) {
+        std::size_t member_size =
+            common::constants::indexer::DEFAULT_CHECKPOINT_SIZE) {
         return FileCompressionUtilityInput{
             input_path,
             input_path + ".gz",  // Auto-generate output path
@@ -122,34 +123,34 @@ class FileCompressorUtility {
      * @param input Compression configuration
      * @return Compression payload, or an error on failure.
      */
-    coro::CoroTask<Result<FileCompressionUtilityOutput>> operator()(
+    coro::CoroTask<common::Result<FileCompressionUtilityOutput>> operator()(
         const FileCompressionUtilityInput& input) const {
         std::size_t original_size = 0;
         std::size_t compressed_size = 0;
 
         try {
             // Validate input file exists
-            if (!fs::exists(input.input_path)) {
-                co_return make_error(
-                    ErrorCode::NotFound,
+            if (!common::fs::exists(input.input_path)) {
+                co_return common::make_error(
+                    common::ErrorCode::NotFound,
                     "Input file does not exist: " + input.input_path);
             }
 
             // Get original file size
-            original_size = fs::file_size(input.input_path);
+            original_size = common::fs::file_size(input.input_path);
 
             int level =
                 input.compression_level < 0 ? 6 : input.compression_level;
             const std::size_t member_size =
                 input.member_size > 0
                     ? input.member_size
-                    : constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+                    : common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
 
             GzipWriterOptions opts;
             opts.member_size = member_size;
             opts.level = level;
-            auto writer =
-                unwrap(co_await GzipLineWriter::open(input.output_path, opts));
+            auto writer = common::unwrap(
+                co_await GzipLineWriter::open(input.output_path, opts));
 
             std::string carry;
             auto gen = fileio::read_binary_file(input.input_path, member_size);
@@ -163,20 +164,20 @@ class FileCompressorUtility {
                     continue;
                 }
                 carry.append(block.substr(0, nl + 1));
-                unwrap(co_await writer.append(carry));
+                common::unwrap(co_await writer.append(carry));
                 carry.assign(block.substr(nl + 1));
             }
-            unwrap(co_await writer.close(carry));
+            common::unwrap(co_await writer.close(carry));
 
             // Get final compressed size
-            compressed_size = fs::file_size(input.output_path);
+            compressed_size = common::fs::file_size(input.output_path);
 
         } catch (const std::exception& e) {
             // Clean up partial output file on error
-            remove_file_quietly(input.output_path);
+            common::remove_file_quietly(input.output_path);
 
-            co_return make_error(
-                ErrorCode::Compression,
+            co_return common::make_error(
+                common::ErrorCode::Compression,
                 std::string("Compression failed: ") + e.what());
         }
 

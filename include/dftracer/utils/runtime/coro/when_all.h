@@ -138,7 +138,7 @@ class WhenAllVectorAwaitable {
     result_type await_resume() {
         state_->finish_wait();
         if (state_->exception_) {
-            rethrow_and_clear(state_->exception_);
+            common::rethrow_and_clear(state_->exception_);
         }
         if constexpr (std::is_same_v<typename Awaitable::result_type, bool>) {
             return result_type(state_->results_.begin(),
@@ -281,7 +281,7 @@ class WhenAllVectorAwaitable<Awaitable> {
     void await_resume() {
         state_->finish_wait();
         if (state_->exception_) {
-            rethrow_and_clear(state_->exception_);
+            common::rethrow_and_clear(state_->exception_);
         }
     }
 
@@ -399,7 +399,7 @@ class WhenAllTupleAwaitable {
     result_type await_resume() {
         state_->finish_wait();
         if (state_->exception_) {
-            rethrow_and_clear(state_->exception_);
+            common::rethrow_and_clear(state_->exception_);
         }
         return build_result(std::index_sequence_for<Awaitables...>{});
     }

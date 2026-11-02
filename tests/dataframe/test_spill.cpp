@@ -102,7 +102,7 @@ TEST_SUITE("spill") {
                 w.write(cols, N);
                 w.close();
             }
-            *bytes = fs::file_size(path);
+            *bytes = dftracer::utils::common::fs::file_size(path);
             spill::Reader r(path);
             int morsels = 0;
             while (auto m = run(r.next(0))) {
@@ -174,7 +174,8 @@ TEST_SUITE("spill errors") {
             w.write(cols, 8);
             w.close();
         }
-        const std::uintmax_t full = fs::file_size(path);
+        const std::uintmax_t full =
+            dftracer::utils::common::fs::file_size(path);
         auto drain = [&] {
             spill::Reader r(path);
             while (auto m = run(r.next(0))) {
@@ -182,9 +183,9 @@ TEST_SUITE("spill errors") {
         };
         CHECK_NOTHROW(drain());
         // Cut inside the second morsel's payload, then inside its header.
-        fs::resize_file(path, full - 5);
+        dftracer::utils::common::fs::resize_file(path, full - 5);
         CHECK_THROWS(drain());
-        fs::resize_file(path, full / 2 + 5);
+        dftracer::utils::common::fs::resize_file(path, full / 2 + 5);
         CHECK_THROWS(drain());
     }
 

@@ -73,7 +73,7 @@ inline void set_local_thread_budget(MPI_Comm comm = MPI_COMM_WORLD) {
     MPI_Comm_size(local, &local_size);
     MPI_Comm_free(&local);
 
-    const auto cores = static_cast<unsigned>(hardware_concurrency());
+    const auto cores = static_cast<unsigned>(common::hardware_concurrency());
     unsigned per_rank =
         std::max(1u, cores / static_cast<unsigned>(std::max(1, local_size)));
     const std::string n = std::to_string(per_rank);

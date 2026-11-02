@@ -141,8 +141,9 @@ class TaskGraph {
     TaskGroup<U> fan_out(const TaskGroup<T>& source, num_outputs count,
                          Func&& mapper, TaskGraphFanOutConfig opts = {}) {
         if (source.size() != 1) {
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "fan_out: source must have exactly 1 task");
+            throw common::DFTUtilsException(
+                common::ErrorCode::InvalidArgument,
+                "fan_out: source must have exactly 1 task");
         }
 
         auto max_conc = resolve_max_concurrency(opts.max_concurrency);
@@ -211,8 +212,8 @@ class TaskGraph {
     TaskGroup<U> reduce(const TaskGroup<T>& group, split_every count,
                         Reducer&& reducer, TaskGraphReduceConfig opts = {}) {
         if (group.empty()) {
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "reduce: group cannot be empty");
+            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                            "reduce: group cannot be empty");
         }
 
         if (group.size() == 1) {
@@ -275,8 +276,8 @@ class TaskGraph {
     TaskGroup<T> fold(const TaskGroup<T>& group, T init, split_every count,
                       BinaryOp&& op, TaskGraphFoldConfig opts = {}) {
         if (group.empty()) {
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "fold: group cannot be empty");
+            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                            "fold: group cannot be empty");
         }
 
         if (group.size() == 1) {
@@ -353,8 +354,8 @@ class TaskGraph {
                                         num_partitions count,
                                         TaskGraphPartitionConfig opts = {}) {
         if (count.count == 0) {
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "partition: count must be > 0");
+            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                            "partition: count must be > 0");
         }
 
         TaskGroup<std::vector<T>> group;
@@ -395,8 +396,9 @@ class TaskGraph {
         const TaskGroup<std::vector<T>>& group,
         split_every count = split_every{2}, TaskGraphConcatConfig opts = {}) {
         if (group.empty()) {
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "concat_partitions: group cannot be empty");
+            throw common::DFTUtilsException(
+                common::ErrorCode::InvalidArgument,
+                "concat_partitions: group cannot be empty");
         }
 
         if (group.size() == 1) {

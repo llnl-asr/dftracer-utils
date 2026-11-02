@@ -52,7 +52,7 @@ coro::CoroTask<void> wait_for(std::chrono::microseconds wait) {
     }
     try {
         co_await coro::timeout(wait, &executor->get_timer_service());
-    } catch (const DFTUtilsException& e) {
+    } catch (const common::DFTUtilsException& e) {
         if (coro::is_cancelled(e)) throw;
     }
 }
@@ -585,7 +585,7 @@ std::vector<std::string> glob_trace_files(const std::string& dir,
         suffix = suffix.substr(star + 1);
     std::vector<std::string> out;
     std::error_code ec;
-    fs::recursive_directory_iterator it(dir, ec), end;
+    common::fs::recursive_directory_iterator it(dir, ec), end;
     for (; !ec && it != end; it.increment(ec)) {
         if (!it->is_regular_file()) continue;
         const std::string s = it->path().string();

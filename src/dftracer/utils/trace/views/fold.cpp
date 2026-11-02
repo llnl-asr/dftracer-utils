@@ -389,7 +389,7 @@ bool is_json_text(FoldEvent::Special s) {
 std::optional<duql::Cell> container_cell(
     const FoldEvent& ev, const dftracer::utils::dstd::StringIntern& intern,
     std::string_view path) {
-    const std::string_view bare = strip_args_prefix(path);
+    const std::string_view bare = common::strip_args_prefix(path);
     const std::array<std::string_view, 2> prefixes{path, bare};
     const std::size_t tries = bare != path && !ev.by_path ? 2 : 1;
     for (std::size_t t = 0; t < tries; ++t) {
@@ -1373,11 +1373,12 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
     // unit queue, so under the elastic runtime live threads grow toward the
     // cap.
     const std::size_t nworkers =
-        std::min<std::size_t>(units.size(), available_parallelism());
+        std::min<std::size_t>(units.size(), common::available_parallelism());
     // Bound bytes decoded concurrently so a scan cannot OOM the box. Always on:
     // an explicit memory_budget() or a RAM-fraction default. Workers park when
     // full, so a generous budget never throttles.
-    coro::CoroSemaphore budget_sem(compute_memory_budget(plan.memory_budget));
+    coro::CoroSemaphore budget_sem(
+        common::compute_memory_budget(plan.memory_budget));
     std::atomic<std::size_t> next_unit{0};
     std::vector<ScanCounts> counts_v(nworkers);
     std::vector<CoverageSet> covered_v(nworkers);

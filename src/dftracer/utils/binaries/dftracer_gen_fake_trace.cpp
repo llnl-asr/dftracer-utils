@@ -78,7 +78,7 @@ static coro::CoroTask<int> run_verify(
         std::vector<std::string> abs_paths;
         abs_paths.reserve(file_paths.size());
         for (const auto& fp : file_paths) {
-            abs_paths.push_back(fs::absolute(fp).string());
+            abs_paths.push_back(common::fs::absolute(fp).string());
         }
 
         auto index_path = internal::determine_index_path(abs_paths.front(), "");
@@ -93,7 +93,7 @@ static coro::CoroTask<int> run_verify(
     }
 
     for (const auto& file_path : file_paths) {
-        std::string abs_path = fs::absolute(file_path).string();
+        std::string abs_path = common::fs::absolute(file_path).string();
         std::string index_path = internal::determine_index_path(abs_path, "");
 
         // Collect metadata
@@ -211,7 +211,8 @@ static coro::CoroTask<int> run_verify(
                 continue;
             }
 
-            std::string basename = fs::path(abs_path).filename().string();
+            std::string basename =
+                common::fs::path(abs_path).filename().string();
             std::printf("  %s: indexed (%zu events, %zu chunks)\n",
                         basename.c_str(), total_events, chunks.size());
         } catch (const std::exception& e) {
@@ -236,7 +237,7 @@ static coro::CoroTask<int> run_verify(
         std::size_t chunks_matched = 0;
 
         for (const auto& file_path : file_paths) {
-            std::string abs_path = fs::absolute(file_path).string();
+            std::string abs_path = common::fs::absolute(file_path).string();
             std::string idx_path_q =
                 internal::determine_index_path(abs_path, "");
 
@@ -428,7 +429,7 @@ int main(int argc, char** argv) {
                 static_cast<std::uint64_t>(step_dur_ms) * 1000ULL;
 
             // Create output directory
-            fs::create_directories(output_dir);
+            common::fs::create_directories(output_dir);
 
             // -----------------------------------------------------------------------
             // Pre-compute hashes using project HasherUtility

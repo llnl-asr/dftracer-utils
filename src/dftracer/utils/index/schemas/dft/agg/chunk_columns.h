@@ -126,7 +126,7 @@ void encode_chunk_columns(const ChunkColumns& block, std::size_t column_count,
 /// `chunk` stays 0, since neither is in the bytes. Values round-trip exactly,
 /// doubles bit for bit. An unknown format, a truncated body or a value out of
 /// range is ErrorCode::Parse.
-dstd::Expected<ChunkColumns, ErrorCode> decode_chunk_columns(
+dstd::Expected<ChunkColumns, common::ErrorCode> decode_chunk_columns(
     dstd::Span<const std::uint8_t> bytes);
 
 }  // namespace dftracer::utils::index::schemas::dft::agg

@@ -20,8 +20,9 @@ class GzipSink : public trace::views::ExportSink {
         utilities::fileio::GzipWriterOptions opts;
         opts.member_size = 4 * 1024 * 1024;
         opts.level = level;
-        writer_.emplace(unwrap(utilities::fileio::GzipLineWriterBlocking::open(
-            path, std::move(opts))));
+        writer_.emplace(
+            common::unwrap(utilities::fileio::GzipLineWriterBlocking::open(
+                path, std::move(opts))));
     }
     ~GzipSink() override {
         if (writer_) (void)writer_->close(tail_);
@@ -33,10 +34,10 @@ class GzipSink : public trace::views::ExportSink {
             return;
         }
         if (tail_.empty()) {
-            unwrap(writer_->append(data.substr(0, nl + 1)));
+            common::unwrap(writer_->append(data.substr(0, nl + 1)));
         } else {
             tail_.append(data.substr(0, nl + 1));
-            unwrap(writer_->append(tail_));
+            common::unwrap(writer_->append(tail_));
             tail_.clear();
         }
         tail_.append(data.substr(nl + 1));

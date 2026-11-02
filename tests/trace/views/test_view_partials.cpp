@@ -58,7 +58,7 @@ struct Fixture {
         REQUIRE(env.is_valid());
         for (int i = 0; i < FILES; ++i) {
             const std::string dir = env.get_dir() + "/f" + std::to_string(i);
-            fs::create_directories(dir);
+            dftracer::utils::common::fs::create_directories(dir);
             const std::string plain = dir + "/t.pfw";
             const std::string pid = std::to_string(100 + i);
             const std::string host =
@@ -99,7 +99,7 @@ struct Fixture {
             const std::string out = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
-            fs::remove(plain);
+            dftracer::utils::common::fs::remove(plain);
             gz.push_back(out);
         }
         aggregation.compute_percentiles = true;
@@ -121,7 +121,7 @@ struct Fixture {
     View view() const { return View::from_files(files()); }
 
     void delete_traces() const {
-        for (const auto& g : gz) fs::remove(g);
+        for (const auto& g : gz) dftracer::utils::common::fs::remove(g);
     }
 };
 

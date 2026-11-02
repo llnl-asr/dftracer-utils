@@ -40,38 +40,37 @@ namespace {
 PyObject* py_set_log_level(PyObject*, PyObject* args) {
     const char* name = nullptr;
     if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
-    auto lvl = dftracer::utils::logger::level_from_name(name);
+    auto lvl = dftracer::utils::common::logger::level_from_name(name);
     if (!lvl) {
         PyErr_Format(PyExc_ValueError, "invalid log level: '%s'", name);
         return nullptr;
     }
-    dftracer::utils::logger::set_level(*lvl);
+    dftracer::utils::common::logger::set_level(*lvl);
     Py_RETURN_NONE;
 }
 
 PyObject* py_get_log_level(PyObject*, PyObject*) {
-    return PyUnicode_FromString(dftracer::utils::logger::level_name(
-        dftracer::utils::logger::get_level()));
+    return PyUnicode_FromString(dftracer::utils::common::logger::level_name(
+        dftracer::utils::common::logger::get_level()));
 }
 
 PyObject* py_set_log_color(PyObject*, PyObject* args) {
     const char* mode = nullptr;
     if (!PyArg_ParseTuple(args, "s", &mode)) return nullptr;
-    using dftracer::utils::logger::ColorMode;
     const std::string_view m(mode);
-    ColorMode cm;
+    dftracer::utils::common::logger::ColorMode cm;
     if (m == "auto") {
-        cm = ColorMode::Auto;
+        cm = dftracer::utils::common::logger::ColorMode::Auto;
     } else if (m == "always") {
-        cm = ColorMode::Always;
+        cm = dftracer::utils::common::logger::ColorMode::Always;
     } else if (m == "never") {
-        cm = ColorMode::Never;
+        cm = dftracer::utils::common::logger::ColorMode::Never;
     } else {
         PyErr_Format(PyExc_ValueError,
                      "invalid color mode: '%s' (auto|always|never)", mode);
         return nullptr;
     }
-    dftracer::utils::logger::set_color(cm);
+    dftracer::utils::common::logger::set_color(cm);
     Py_RETURN_NONE;
 }
 
@@ -83,11 +82,11 @@ PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
                                      const_cast<char**>(kwlist), &required,
                                      &available))
         return nullptr;
-    const auto a = dftracer::utils::memory_budget_advice(
+    const auto a = dftracer::utils::common::memory_budget_advice(
         static_cast<std::size_t>(required),
         static_cast<std::size_t>(available));
     const std::string warning =
-        dftracer::utils::format_memory_budget_warning(a);
+        dftracer::utils::common::format_memory_budget_warning(a);
     return Py_BuildValue(
         "{s:O,s:K,s:K,s:K,s:K,s:s}", "fits", a.fits ? Py_True : Py_False,
         "required_bytes", (unsigned long long)a.required_bytes, "peak_bytes",
@@ -173,8 +172,8 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     // Configure the C++ logger for the extension: picks up
     // DFTRACER_UTILS_LOG_LEVEL and auto color (on only when stderr is a TTY),
     // matching the CLI binaries. Without this the logger runs on bare defaults.
-    dftracer::utils::logger::init();
-    if (auto configured = dftracer::utils::configure_memory_from_env();
+    dftracer::utils::common::logger::init();
+    if (auto configured = dftracer::utils::common::configure_memory_from_env();
         !configured) {
         PyErr_SetString(PyExc_ImportError, configured.error().format().c_str());
         return NULL;

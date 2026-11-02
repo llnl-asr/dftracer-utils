@@ -69,15 +69,15 @@ IndexedCounts count_from_index(const std::string& index_path,
                                const std::vector<ResolvedFile>& entries) {
     IndexedCounts counts;
     try {
-        const auto snapshot =
-            unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
+        const auto snapshot = common::unwrap(
+            dftracer::utils::index::plan::open_snapshot(index_path));
         for (const auto& entry : entries) {
             const auto file = snapshot.file(
                 dftracer::utils::index::store::internal::get_logical_path(
                     entry.file_path));
             const auto stats =
-                file ? unwrap(dftracer::utils::index::scalar_stats(snapshot,
-                                                                   *file))
+                file ? common::unwrap(dftracer::utils::index::scalar_stats(
+                           snapshot, *file))
                      : std::nullopt;
             if (stats && stats->num_chunks > 0) {
                 counts.total_events +=
@@ -138,15 +138,17 @@ class StreamCounter {
 };
 
 coro::CoroTask<std::size_t> stream_count(std::string path) {
-    ScopedFd fd(::open(path.c_str(), O_RDONLY));
+    common::ScopedFd fd(::open(path.c_str(), O_RDONLY));
     if (fd.get() < 0)
-        throw DFTUtilsException::cat(ErrorCode::Io, "cannot open ", path);
+        throw common::DFTUtilsException::cat(common::ErrorCode::Io,
+                                             "cannot open ", path);
     struct stat st;
     if (::fstat(fd.get(), &st) != 0)
-        throw DFTUtilsException::cat(ErrorCode::Io, "cannot stat ", path);
+        throw common::DFTUtilsException::cat(common::ErrorCode::Io,
+                                             "cannot stat ", path);
     const auto size = static_cast<std::uint64_t>(st.st_size);
-    const auto& schema =
-        index::detect_file_schema(path, fd.get(), size, stat_mtime_ns(st));
+    const auto& schema = index::detect_file_schema(path, fd.get(), size,
+                                                   common::stat_mtime_ns(st));
     StreamCounter counter(schema.decoder == index::Decoder::Path);
 
     unsigned char magic[2] = {0, 0};
@@ -166,8 +168,8 @@ coro::CoroTask<std::size_t> stream_count(std::string path) {
             const auto got = co_await io::pread(
                 fd.get(), buf.data(), buf.size(), static_cast<off_t>(offset));
             if (got < 0)
-                throw DFTUtilsException::cat(ErrorCode::Io, "cannot read ",
-                                             path);
+                throw common::DFTUtilsException::cat(common::ErrorCode::Io,
+                                                     "cannot read ", path);
             if (got == 0) break;
             counter.feed(
                 std::string_view(buf.data(), static_cast<std::size_t>(got)));
@@ -188,7 +190,7 @@ int main(int argc, char** argv) {
 }
 
 static int run_event_count(const EventCountArgParse* cli) {
-    const auto log_dir = fs::absolute(cli->directory.value).string();
+    const auto log_dir = common::fs::absolute(cli->directory.value).string();
     const auto index_dir = cli->indexing.index_dir;
     const auto force = cli->indexing.force;
     const auto executor_threads = cli->pipeline.executor_threads;

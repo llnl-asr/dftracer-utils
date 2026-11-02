@@ -257,7 +257,7 @@ TEST_CASE("the pre-filter never drops a match") {
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                MEMBER_BYTES));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     REQUIRE(dftu_utils_test::build_index(gz));
 
     simdjson::dom::parser parser;
@@ -309,7 +309,7 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                MEMBER_BYTES));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     REQUIRE(dftu_utils_test::build_index(gz));
 
     auto leaf = [&]() -> std::string {

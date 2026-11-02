@@ -84,7 +84,7 @@ std::string write_group_trace(TestEnvironment& env) {
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
@@ -113,7 +113,7 @@ std::string write_argmax_trace(TestEnvironment& env) {
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
@@ -121,7 +121,7 @@ std::string write_argmax_trace(TestEnvironment& env) {
 // index, for the directory-scan test.
 std::string write_and_index(const std::string& dir, const std::string& name,
                             int n, int pid) {
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     std::string pfw = dir + "/" + name + ".pfw";
     std::ofstream ofs(pfw);
     for (int i = 0; i < n; ++i)
@@ -131,7 +131,7 @@ std::string write_and_index(const std::string& dir, const std::string& name,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     std::string idx = determine_index_path(gz, "");
     StringSink sink;
     View::from_file(gz, idx).sink_json(sink).get();
@@ -625,7 +625,7 @@ TEST_SUITE("View C ABI") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         StringSink sink;
         View::from_file(gz, idx).sink_json(sink).get();

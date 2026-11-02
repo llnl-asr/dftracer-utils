@@ -73,7 +73,7 @@ std::pair<std::string, std::vector<std::uint64_t>> write_multi_member_gz(
     // temp root would still collapse every case onto one shared index and
     // corrupt it.
     auto dir = make_unique_test_path("members");
-    fs::create_directories(dir);
+    common::fs::create_directories(dir);
     auto path = dir / "members.pfw.gz";
     std::ofstream ofs(path, std::ios::binary);
     ofs.write(reinterpret_cast<const char*>(bytes.data()),
@@ -114,7 +114,7 @@ TEST_SUITE("IndexBuilder") {
             "t2\nline4\n",           // starts mid-line
         };
         auto [gz_file, offs] = write_multi_member_gz(texts);
-        const std::uint64_t fsize = fs::file_size(gz_file);
+        const std::uint64_t fsize = common::fs::file_size(gz_file);
 
         std::vector<GzipMember> members(texts.size());
         for (std::size_t i = 0; i < texts.size(); ++i) {
@@ -160,14 +160,14 @@ TEST_SUITE("IndexBuilder") {
         auto result = build_one(gz_file);
 
         CHECK(result.success);
-        CHECK(fs::exists(result.index_path));
+        CHECK(common::fs::exists(result.index_path));
     }
 
     TEST_CASE("Files under different index roots each build into their own") {
         std::vector<std::string> files;
         for (const char* name : {"a", "b"}) {
             auto dir = make_unique_test_path(name);
-            fs::create_directories(dir);
+            common::fs::create_directories(dir);
             const std::string path = (dir / "t.pfw.gz").string();
             const std::string text = dftu_lines(0, 20);
             dftracer::utils::utilities::fileio::compress::GzipMemberCompressor
@@ -207,7 +207,7 @@ TEST_SUITE("IndexBuilder") {
         auto result = build_one(gz_file);
 
         REQUIRE(result.success);
-        REQUIRE(fs::exists(result.index_path));
+        REQUIRE(common::fs::exists(result.index_path));
 
         const auto snapshot = index_snapshot(result.index_path);
         const auto file = require_indexed_file(snapshot, gz_file);
@@ -218,7 +218,7 @@ TEST_SUITE("IndexBuilder") {
         const std::vector<std::string> texts = {
             dftu_lines(0, 40), dftu_lines(40, 25), dftu_lines(65, 35)};
         auto [gz_file, c_offsets] = write_multi_member_gz(texts);
-        const std::uint64_t file_size = fs::file_size(gz_file);
+        const std::uint64_t file_size = common::fs::file_size(gz_file);
 
         auto result = build_one(gz_file);
         REQUIRE(result.success);
@@ -267,7 +267,7 @@ TEST_SUITE("IndexBuilder") {
             texts.push_back(std::move(t));
         }
         auto [gz_file, c_offsets] = write_multi_member_gz(texts);
-        const std::uint64_t file_size = fs::file_size(gz_file);
+        const std::uint64_t file_size = common::fs::file_size(gz_file);
         REQUIRE(file_size >
                 2 * dftracer::utils::index::gzip::MEMBER_SCAN_WINDOW);
 

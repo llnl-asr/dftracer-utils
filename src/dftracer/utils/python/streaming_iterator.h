@@ -16,7 +16,7 @@
 #include <queue>
 #include <utility>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
 #endif
 
 namespace dftracer::utils::python {
@@ -132,7 +132,7 @@ class StreamingState {
 };
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-using utilities::common::arrow::ArrowExportResult;
+using utilities::arrow::ArrowExportResult;
 #endif
 
 /// Internal C++ state for ArrowStreamingIterator.

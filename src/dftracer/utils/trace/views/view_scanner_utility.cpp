@@ -365,13 +365,13 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <dftracer/utils/utilities/common/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
 
 namespace dftracer::utils::trace::views {
 
-using utilities::common::arrow::ArrowExportResult;
-using utilities::common::arrow::ColumnType;
-using utilities::common::arrow::RecordBatchBuilder;
+using utilities::arrow::ArrowExportResult;
+using utilities::arrow::ColumnType;
+using utilities::arrow::RecordBatchBuilder;
 
 ArrowExportResult ViewScannerBatch::to_arrow() const {
     RecordBatchBuilder builder;

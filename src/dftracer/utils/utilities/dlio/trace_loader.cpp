@@ -138,9 +138,9 @@ AggregatedTraces load_aggregated_traces(const std::string& index_path,
 
     auto queried = trace::run_agg_query(query).get();
     if (!queried) {
-        throw DFTUtilsException(ErrorCode::Io,
-                                "dlio: aggregation query failed: " +
-                                    std::string(queried.error().format()));
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io, "dlio: aggregation query failed: " +
+                                       std::string(queried.error().format()));
     }
     trace::AggQueryResult& result = *queried;
     out.chunks_reread = result.stats.chunks_reread;
@@ -383,14 +383,15 @@ void load_event_map(const std::string& path, TraceLoaderOptions& options) {
     try {
         root = YAML::LoadFile(path);
     } catch (const YAML::Exception& e) {
-        throw DFTUtilsException(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
             "dlio: failed to parse event map " + path + ": " + e.what());
     }
     if (!root.IsMap()) {
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "dlio: event map " + path +
-                                    " must be a mapping of component names");
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
+            "dlio: event map " + path +
+                " must be a mapping of component names");
     }
     overlay_selector(root, "fetch_block", options.fetch_block);
     overlay_selector(root, "fetch_iter", options.fetch_iter);

@@ -493,9 +493,9 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
             case FoldOp::Plugin: {
                 const dftu_op_desc* op = dftu_op_find(f.plugin.c_str());
                 if (!op)
-                    throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
-                                                 "plugin function '", f.plugin,
-                                                 "' is not registered");
+                    throw common::DFTUtilsException::cat(
+                        common::ErrorCode::InvalidArgument, "plugin function '",
+                        f.plugin, "' is not registered");
                 const dftu_op_arg arg = plugin_arg(*op, f.params);
                 auto& members = members_[a];
                 members.resize(count);
@@ -513,9 +513,10 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
                         const dftu_scalar r =
                             dftu_op_run_aggregate(op, part.handle(), &arg, &ok);
                         if (!ok)
-                            throw DFTUtilsException::cat(
-                                ErrorCode::InvalidArgument, "plugin function '",
-                                f.plugin, "' failed on a group; it takes ",
+                            throw common::DFTUtilsException::cat(
+                                common::ErrorCode::InvalidArgument,
+                                "plugin function '", f.plugin,
+                                "' failed on a group; it takes ",
                                 dftu_op_signature(op->sig));
                         valid[g] = true;
                         const bool from_f = r.kind == DFTU_SCALAR_TAG_F64;

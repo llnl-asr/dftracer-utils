@@ -44,13 +44,13 @@ class ParseGate {
     bool spare_workers() const noexcept {
         return (workers_ - files_.load(std::memory_order_relaxed)) *
                    static_cast<std::int64_t>(
-                       constants::file_admission::SPAWN_FREE_DIVISOR) >=
+                       common::constants::file_admission::SPAWN_FREE_DIVISOR) >=
                workers_;
     }
 
     static std::uint64_t piece_bytes(std::size_t plaintext) noexcept {
-        return plaintext *
-               constants::file_admission::PIECE_BYTES_PER_PLAINTEXT_BYTE;
+        return plaintext * common::constants::file_admission::
+                               PIECE_BYTES_PER_PLAINTEXT_BYTE;
     }
 
     /// Reserves @p bytes for a piece beyond the first of a file without

@@ -35,7 +35,7 @@ bool read_peak(const std::string& output, std::size_t& peak) {
 
 TEST_CASE("child: hold a block and exit" * doctest::skip()) {
     fresh_process::announce();
-    REQUIRE(dut::configure_memory_from_env());
+    REQUIRE(dut::common::configure_memory_from_env());
     constexpr std::size_t BYTES = 64 * MIB;
     auto* block = static_cast<char*>(mem::allocate(BYTES, 64));
     REQUIRE(block != nullptr);
@@ -45,9 +45,9 @@ TEST_CASE("child: hold a block and exit" * doctest::skip()) {
 }
 
 TEST_CASE("the report shows a peak at least as large as a block held") {
-    ::setenv(dut::constants::memory_settings::REPORT_ENV, "1", 1);
+    ::setenv(dut::common::constants::memory_settings::REPORT_ENV, "1", 1);
     auto result = fresh_process::run("child: hold a block and exit");
-    ::unsetenv(dut::constants::memory_settings::REPORT_ENV);
+    ::unsetenv(dut::common::constants::memory_settings::REPORT_ENV);
     REQUIRE(result.ok());
     std::size_t peak = 0;
     REQUIRE(read_peak(result.output, peak));
@@ -66,7 +66,7 @@ TEST_CASE("the report shows a peak at least as large as a block held") {
 }
 
 TEST_CASE("no report without the variable") {
-    ::unsetenv(dut::constants::memory_settings::REPORT_ENV);
+    ::unsetenv(dut::common::constants::memory_settings::REPORT_ENV);
     auto result = fresh_process::run("child: hold a block and exit");
     REQUIRE(result.ok());
     CHECK(result.output.find("dftracer-utils memory:") == std::string::npos);

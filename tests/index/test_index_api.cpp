@@ -388,8 +388,8 @@ TEST_CASE("the index api reads a built index and a plugin extension") {
     CHECK_FALSE(snapshot.file("/no/such/file").has_value());
 
     for (const auto& trace : traces) {
-        dftracer::utils::InputFileStat st;
-        REQUIRE(dftracer::utils::stat_input(trace, st));
+        dftracer::utils::common::InputFileStat st;
+        REQUIRE(dftracer::utils::common::stat_input(trace, st));
         const std::string logical =
             index_store::internal::get_logical_path(trace);
         const Freshness got = snapshot.freshness(
@@ -1466,8 +1466,8 @@ std::string write_bytes(const std::filesystem::path& path,
 }
 
 SourceStat stat_of_file(const std::string& path) {
-    dftracer::utils::InputFileStat st;
-    REQUIRE(dftracer::utils::stat_input(path, st));
+    dftracer::utils::common::InputFileStat st;
+    REQUIRE(dftracer::utils::common::stat_input(path, st));
     return stat_of(static_cast<std::uint64_t>(st.mtime), st.size);
 }
 

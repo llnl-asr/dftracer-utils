@@ -246,7 +246,7 @@ TEST_CASE("when_any reports a cancelled winner") {
         std::vector<CancelledAtOnce> children(2);
         try {
             co_await when_any(std::move(children));
-        } catch (const DFTUtilsException& e) {
+        } catch (const common::DFTUtilsException& e) {
             if (is_cancelled(e)) {
                 cancelled.fetch_add(1);
             } else {

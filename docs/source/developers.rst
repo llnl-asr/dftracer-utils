@@ -223,23 +223,23 @@ Conventions beyond formatting (checked in review):
 Logging and Tracing
 ~~~~~~~~~~~~~~~~~~~~
 
-The library has its own small logger (namespace ``dftracer::utils::logger``).
+The library has its own small logger (namespace ``dftracer::utils::common::logger``).
 Configure it once at startup with functions; emit with macros:
 
 .. code-block:: cpp
 
    #include <dftracer/utils/common/logging.h>
-   namespace logger = dftracer::utils::logger;
 
-   logger::init();  // reads env, defaults to Info + auto color
-   // or: logger::init({.level = logger::Level::Debug,
-   //                   .color = logger::ColorMode::Never});
+   dftracer::utils::common::logger::init();  // reads env, defaults to Info
+                                             // + auto color
 
    DFTRACER_UTILS_LOG_ERROR("cannot open %s: errno=%d", path, e);
    DFTRACER_UTILS_LOG_INFO("processed %zu files", n);
    DFTRACER_UTILS_LOG_DEBUG("resolved %d checkpoints", k);
 
-   logger::set_level(logger::Level::Debug);  // change verbosity at runtime
+   // change verbosity at runtime
+   dftracer::utils::common::logger::set_level(
+       dftracer::utils::common::logger::Level::Debug);
 
 Levels are ``Trace < Debug < Info < Warn < Error < Off``. Each level is
 **compile-gated** by the build (``LOGGER_LEVEL_*``) and **runtime-gated** by the

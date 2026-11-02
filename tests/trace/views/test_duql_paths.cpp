@@ -87,7 +87,7 @@ std::string write_trace(TestEnvironment& env) {
     }
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
@@ -259,7 +259,7 @@ TEST_SUITE("duql paths") {
         }
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        fs::remove(plain);
+        dftracer::utils::common::fs::remove(plain);
         dftracer::utils::index::Indexer::open({gz}).build();
         reader::TraceReader tr({.file_path = gz, .index_dir = env.get_dir()});
         REQUIRE(tr.has_index());
@@ -309,7 +309,7 @@ TEST_SUITE("duql paths") {
         }
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        fs::remove(plain);
+        dftracer::utils::common::fs::remove(plain);
         dftracer::utils::index::Indexer::open({gz}).build();
         CHECK(names_of(run(view_of(gz, "exists(tags)").collect())) ==
               Names{"e"});

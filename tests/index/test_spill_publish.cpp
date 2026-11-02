@@ -53,7 +53,7 @@ std::string write_trace(const std::string& dir, const std::string& name,
     const auto gz = plain + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, 2048));
-    fs::remove(plain);
+    common::fs::remove(plain);
     return gz;
 }
 

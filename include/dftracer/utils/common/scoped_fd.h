@@ -5,7 +5,7 @@
 
 #include <cstdio>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// Move-only owner of a raw file descriptor that closes it on destruction.
 /// reset() closes any current fd before taking the new one, so a descriptor is
@@ -90,6 +90,6 @@ class ScopedFile {
     std::FILE* f_ = nullptr;
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif

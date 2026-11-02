@@ -367,8 +367,8 @@ class ReaderInflater {
                 co_await decode_member_at(fd, off, fsize, bound, too_big);
             if (too_big) co_return nullptr;
             if (!decoded) {
-                throw DFTUtilsException(ErrorCode::Compression,
-                                        "gzip member decode failed");
+                throw common::DFTUtilsException(common::ErrorCode::Compression,
+                                                "gzip member decode failed");
             }
             co_return std::make_shared<const DecodedMember>(
                 std::move(*decoded));

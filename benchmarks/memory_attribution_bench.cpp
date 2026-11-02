@@ -264,7 +264,7 @@ void spill_cycle(const Sizes& s) {
 }
 
 void index_build(const Paths& p) {
-    fs::create_directories(p.index_dir);
+    common::fs::create_directories(p.index_dir);
     index::IndexerOptions options;
     options.index_dir = p.index_dir;
     options.bloom->required = false;
@@ -317,13 +317,13 @@ std::string trace_text(std::int64_t lines) {
 }
 
 Paths prepare(const std::string& dir, const Sizes& s) {
-    fs::remove_all(dir);
+    common::fs::remove_all(dir);
     Paths p;
     p.trace = dir + "/trace/smoke.pfw.gz";
     write_gz(p.trace, trace_text(s.trace_lines));
     p.index_dir = dir + "/index";
     const std::string run = dir + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
-    fs::create_directories(run);
+    common::fs::create_directories(run);
     std::ofstream(run + "/summary.json")
         << R"({"ok":true,"app":"app1","system":"sys1","input":"in1",)"
            R"("nodes":1,"ppn":)"
@@ -421,7 +421,8 @@ int main(int argc, char** argv) {
     }
     const Sizes sizes = smoke ? SMOKE_SIZES : FULL_SIZES;
     const std::string dir =
-        (fs::temp_directory_path() / "memory_attribution_bench").string();
+        (common::fs::temp_directory_path() / "memory_attribution_bench")
+            .string();
     const Paths paths = prepare(dir, sizes);
 
     int failures = 0;

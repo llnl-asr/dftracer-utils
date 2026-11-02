@@ -77,7 +77,7 @@ reader/test_reader_stream	30.7
 trace/test_index_builder	29.4
 index/test_record_schema	28.6
 dataframe/test_join_spill	27.1
-utilities/common/statistics/test_mixture	27.0
+utilities/statistics/test_mixture	27.0
 utilities/reader/test_large_gzip_members	26.5
 utilities/plugins/test_plugin_agg_spill	25.5
 utilities/fileio/lines/sources/test_async_indexed_file_line_generator	25.3
@@ -136,7 +136,7 @@ runtime/test_runtime	11.1
 index/test_prefilter	10.9
 duql/test_query	10.6
 dataframe/test_expr_string_ops	10.6
-utilities/common/statistics/test_distinct_sketch	10.5
+utilities/statistics/test_distinct_sketch	10.5
 index/test_member_pieces	10.5
 dataframe/test_methods	10.5
 duql/test_parser	10.4
@@ -153,7 +153,7 @@ runtime/test_runtime_abi	9.6
 dataframe/test_string_simd	9.5
 task_graph/test_task_graph	9.4
 dataframe/test_expr_string_methods	9.4
-utilities/common/arrow/test_arrow_ipc_reader	9.3
+utilities/arrow/test_arrow_ipc_reader	9.3
 duql/test_lookup	9.2
 dataframe/test_op_registry	9.2
 dataframe/test_field	9.0
@@ -188,7 +188,7 @@ utilities/plugins/test_plugin_state	7.9
 utilities/plugins/test_plugin_providers	7.9
 utilities/plugins/test_plugin_cxx_wrappers	7.9
 utilities/plugins/test_plugin_agg	7.9
-utilities/common/arrow/test_arrow_ipc_writer	7.9
+utilities/arrow/test_arrow_ipc_writer	7.9
 replay/test_replay	7.9
 pipeline/test_coro_scope	7.9
 dataframe/test_lazyframe_abi	7.9
@@ -200,7 +200,7 @@ utilities/fileio/test_file_reader	7.8
 utilities/fileio/parallel/test_padded_striped_writer	7.8
 coro/test_when_all_heterogeneous	7.8
 coro/test_async_generator	7.8
-utilities/common/statistics/test_distributions	7.7
+utilities/statistics/test_distributions	7.7
 dataframe/test_plugin_sdk	7.7
 dataframe/test_lazy_plan	7.7
 dataframe/test_filter_columns	7.7
@@ -231,7 +231,7 @@ common/test_filesystem_info	7.5
 utilities/plugins/test_plugin_results	7.4
 utilities/fileio/parallel/test_striped_writer	7.4
 utilities/fileio/parallel/test_sharded_writer	7.4
-utilities/common/statistics/test_ddsketch	7.4
+utilities/statistics/test_ddsketch	7.4
 trace/statistics/test_statistics_query	7.4
 pipeline/test_run_loop	7.4
 dataframe/test_spill	7.4
@@ -253,7 +253,7 @@ dataframe/test_arrow_types_windowed	7.3
 dataframe/test_arrow_large_types_compute	7.3
 dstd/test_eviction_policy	7.3
 utilities/compression/test_libdeflate_gzip	7.2
-utilities/common/arrow/test_arrow_attribution	7.2
+utilities/arrow/test_arrow_attribution	7.2
 pipeline/test_simple_scope	7.2
 dataframe/test_type_parameter_propagation	7.2
 dataframe/test_struct_concat_by_name	7.2
@@ -264,7 +264,7 @@ dataframe/test_arrow_types	7.2
 dstd/test_hex64	7.2
 utilities/plugins/test_plugin_ops	7.1
 utilities/fileio/lines/sources/test_async_streaming_gz_line_generator	7.1
-utilities/common/statistics/test_log2_histogram	7.1
+utilities/statistics/test_log2_histogram	7.1
 trace/views/test_result_join	7.1
 trace/statistics/test_detailed_statistics	7.1
 trace/indexing/test_chunk_statistics	7.1
@@ -279,8 +279,8 @@ dataframe/test_cast_pairs	7.1
 coro/test_generator	7.1
 coro/test_coro	7.1
 utilities/plugins/test_plugin_abi_gate	7.0
-utilities/common/statistics/test_timestamp_histogram	7.0
-utilities/common/arrow/test_arrow_column_builder	7.0
+utilities/statistics/test_timestamp_histogram	7.0
+utilities/arrow/test_arrow_column_builder	7.0
 trace/views/test_row_build	7.0
 trace/comparator/test_tree_table_formatter	7.0
 server/test_query_params	7.0
@@ -293,7 +293,7 @@ dataframe/test_cast_followups	7.0
 utilities/text/test_line_filter	6.9
 utilities/plugins/test_plugin_ports	6.9
 utilities/fileio/parallel/test_layout_sizing	6.9
-utilities/common/statistics/test_field_stat	6.9
+utilities/statistics/test_field_stat	6.9
 trace/views/test_coverage	6.9
 trace/test_schema	6.9
 trace/test_parse_inflated	6.9

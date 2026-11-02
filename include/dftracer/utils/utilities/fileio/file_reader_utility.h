@@ -63,22 +63,23 @@ class FileReaderUtility {
      */
     coro::CoroTask<text::Text> operator()(
         const filesystem::FileEntry& input) const {
-        if (!fs::exists(input.path)) {
-            throw DFTUtilsException(
-                ErrorCode::NotFound,
+        if (!common::fs::exists(input.path)) {
+            throw common::DFTUtilsException(
+                common::ErrorCode::NotFound,
                 "File does not exist: " + input.path.string());
         }
 
         if (!input.is_regular_file) {
-            throw DFTUtilsException(
-                ErrorCode::Io,
+            throw common::DFTUtilsException(
+                common::ErrorCode::Io,
                 "Path is not a regular file: " + input.path.string());
         }
 
         std::ifstream file(input.path, std::ios::binary);
         if (!file) {
-            throw DFTUtilsException(ErrorCode::Io,
-                                    "Cannot open file: " + input.path.string());
+            throw common::DFTUtilsException(
+                common::ErrorCode::Io,
+                "Cannot open file: " + input.path.string());
         }
 
         std::ostringstream content;

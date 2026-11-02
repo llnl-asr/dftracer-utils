@@ -102,7 +102,7 @@ TEST_SUITE("ChunkExtractor") {
         CHECK(output.chunks.size() >= 2);
         std::size_t chunk_events = 0;
         for (const auto& chunk : output.chunks) {
-            CHECK(fs::exists(chunk.path));
+            CHECK(common::fs::exists(chunk.path));
             chunk_events += chunk.events_written;
         }
         CHECK(chunk_events == output.events);

@@ -62,21 +62,21 @@ std::string rank(std::int64_t pid, std::int64_t start, std::int64_t end) {
     return marker(pid, "start", start) + marker(pid, "end", end);
 }
 
-void write_gz(const fs::path& p, const std::string& content) {
-    fs::create_directories(p.parent_path());
+void write_gz(const common::fs::path& p, const std::string& content) {
+    common::fs::create_directories(p.parent_path());
     dftu_utils_test::write_gz_trace(p.string(), content);
 }
 
-void write_text(const fs::path& p, const std::string& content) {
-    fs::create_directories(p.parent_path());
+void write_text(const common::fs::path& p, const std::string& content) {
+    common::fs::create_directories(p.parent_path());
     std::ofstream(p) << content;
 }
 
-fs::path matrix_run(const ScopedTestDir& d, std::int64_t ppn,
-                    const std::string& trace,
-                    const std::string& input = "in1") {
-    const fs::path dir = d.path() / "app1" / "sys1" / input / "nodes_1" /
-                         ("ppn_" + std::to_string(ppn));
+common::fs::path matrix_run(const ScopedTestDir& d, std::int64_t ppn,
+                            const std::string& trace,
+                            const std::string& input = "in1") {
+    const common::fs::path dir = d.path() / "app1" / "sys1" / input /
+                                 "nodes_1" / ("ppn_" + std::to_string(ppn));
     write_text(dir / "summary.json",
                R"({"ok":true,"app":"app1","system":"sys1","input":")" + input +
                    R"(","nodes":1,"ppn":)" + std::to_string(ppn) +
@@ -212,7 +212,7 @@ TEST_CASE("run_id is FNV-1a 64 of the joined run keys") {
 
 TEST_CASE("discover reads the matrix layout, one group per set") {
     ScopedTestDir d("genesis_v1");
-    const fs::path dir =
+    const common::fs::path dir =
         d.path() / "laghos" / "matrix" / "p1" / "nodes_2" / "ppn_4";
     write_text(dir / "summary.json",
                R"({"ok":true,"app":"laghos","system":"matrix","input":"p1",)"
@@ -235,7 +235,7 @@ TEST_CASE("discover reads the matrix layout, one group per set") {
 
 TEST_CASE("discover reads the tioga v2 layout as one group of several sets") {
     ScopedTestDir d("genesis_v2");
-    const fs::path dir =
+    const common::fs::path dir =
         d.path() / "laghos" / "tioga" / "tioga" / "caseA" / "nodes_1" / "ppn_1";
     write_text(dir / "summary.json",
                R"({"application":"laghos","case":"caseA","nodes":1,"ppn":1,)"
@@ -259,7 +259,7 @@ TEST_CASE("discover reads the tioga v2 layout as one group of several sets") {
 
 TEST_CASE("discover skips a tioga v2 directory with missing slices") {
     ScopedTestDir d("genesis_gap");
-    const fs::path dir =
+    const common::fs::path dir =
         d.path() / "laghos" / "tioga" / "tioga" / "c" / "nodes_1" / "ppn_1";
     write_text(dir / "summary.json",
                R"({"application":"laghos","case":"c","nodes":1,"ppn":1,)"
@@ -276,8 +276,8 @@ TEST_CASE("discover skips a tioga v2 directory with missing slices") {
 
 TEST_CASE("discover reads the path-only layout as one sliced group") {
     ScopedTestDir d("genesis_path");
-    const fs::path c = d.path() / "minife" / "tioga" / "tioga" / "input_50" /
-                       "nodes_2" / "ppn_2" / "compacted";
+    const common::fs::path c = d.path() / "minife" / "tioga" / "tioga" /
+                               "input_50" / "nodes_2" / "ppn_2" / "compacted";
     write_gz(c / "nx50_N2_ppn2-1_chunk0.pfw.gz", "[\n");
     write_gz(c / "nx50_N2_ppn2-2_chunk0.pfw.gz", "[\n");
     auto disc = discover_dir(d);
@@ -295,7 +295,7 @@ TEST_CASE("discover reads the path-only layout as one sliced group") {
 
 TEST_CASE("discover reads path-only slices kept in the run directory") {
     ScopedTestDir d("genesis_run_dir");
-    const fs::path run =
+    const common::fs::path run =
         d.path() / "amg" / "tuolumne" / "p2_n8x8x4" / "nodes_1" / "ppn_2";
     write_gz(run / "app-1_chunk0.pfw.gz", "[\n");
     write_gz(run / "app-2_chunk0.pfw.gz", "[\n");
@@ -311,7 +311,7 @@ TEST_CASE("discover reads path-only slices kept in the run directory") {
 
 TEST_CASE("compacted slices win over traces beside them in the run directory") {
     ScopedTestDir d("genesis_run_dir_both");
-    const fs::path run =
+    const common::fs::path run =
         d.path() / "minife" / "tioga" / "input_50" / "nodes_1" / "ppn_1";
     write_gz(run / "compacted" / "nx-1_chunk0.pfw.gz", "[\n");
     write_gz(run / "stray-1_chunk0.pfw.gz", "[\n");
@@ -325,7 +325,7 @@ TEST_CASE("compacted slices win over traces beside them in the run directory") {
 
 TEST_CASE("a matrix set without its compacted file reads its raw traces") {
     ScopedTestDir d("genesis_raw");
-    const fs::path dir =
+    const common::fs::path dir =
         d.path() / "laghos" / "matrix" / "p1" / "nodes_1" / "ppn_2";
     write_text(dir / "summary.json",
                R"({"ok":true,"app":"laghos","system":"matrix","input":"p1",)"
@@ -351,8 +351,8 @@ TEST_CASE("a matrix set without its compacted file reads its raw traces") {
 
 TEST_CASE("path-only sets come from each process's PAPI counters") {
     ScopedTestDir d("genesis_derive");
-    const fs::path c = d.path() / "minife" / "tioga" / "tioga" / "in" /
-                       "nodes_1" / "ppn_1" / "compacted";
+    const common::fs::path c = d.path() / "minife" / "tioga" / "tioga" / "in" /
+                               "nodes_1" / "ppn_1" / "compacted";
     write_gz(c / "nx_N1_ppn1-1_chunk0.pfw.gz",
              rank(1, 0, 100) + papi(1, 0, "PAPI_B", 0) +
                  call(1, 1, "a", 0, 10) + rank(2, 200, 300) +
@@ -369,7 +369,7 @@ TEST_CASE("path-only sets come from each process's PAPI counters") {
 
 TEST_CASE("a matrix summary without app and system takes them from the path") {
     ScopedTestDir d("genesis_v1path");
-    const fs::path dir =
+    const common::fs::path dir =
         d.path() / "minife" / "matrix" / "input_9" / "nodes_1" / "ppn_1";
     write_text(dir / "summary.json",
                R"({"ok":true,"input":"9","nodes":1,"ppn":1,"sets":["s1"]})");
@@ -384,7 +384,7 @@ TEST_CASE("a matrix summary without app and system takes them from the path") {
 
 TEST_CASE("discover reports directory-level problems as skips") {
     ScopedTestDir d("genesis_dirskip");
-    const fs::path base = d.path() / "a" / "s";
+    const common::fs::path base = d.path() / "a" / "s";
     write_text(base / "i1" / "nodes_1" / "ppn_1" / "summary.json", "{not json");
     write_text(base / "i2" / "nodes_1" / "ppn_1" / "summary.json",
                R"({"ok":false,"sets":[]})");
@@ -495,7 +495,7 @@ TEST_CASE("host levels are time-weighted and per-core cpu is dropped") {
 
 TEST_CASE("matrix GPU CSV values become per-GPU gauges") {
     ScopedTestDir d("genesis_csv");
-    const fs::path dir = matrix_run(
+    const common::fs::path dir = matrix_run(
         d, 1,
         R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"h1","name":"node1","value":"h1"}})"
         "\n" +
@@ -574,9 +574,9 @@ TEST_CASE("a truncated trace file skips the run and names the file") {
     ScopedTestDir d("genesis_trunc");
     std::string t = rank(1, 0, 1000);
     for (int i = 0; i < 2000; ++i) t += call(1, 1, "w", i * 10, 5);
-    const fs::path dir = matrix_run(d, 1, t);
-    const fs::path f = dir / "compacted" / "set1.pfw.gz";
-    fs::resize_file(f, fs::file_size(f) / 2);
+    const common::fs::path dir = matrix_run(d, 1, t);
+    const common::fs::path f = dir / "compacted" / "set1.pfw.gz";
+    common::fs::resize_file(f, common::fs::file_size(f) / 2);
     auto r = process_only(d);
     CHECK(r.runs.empty());
     CHECK(skipped_with(r, f.string()));
@@ -626,7 +626,7 @@ TEST_CASE("an overlap in any process skips the run, naming the first") {
 
 TEST_CASE("tioga v2 processes are assigned to sets by PAPI counters") {
     auto make = [](const ScopedTestDir& d, const std::string& extra) {
-        const fs::path dir =
+        const common::fs::path dir =
             d.path() / "l" / "tioga" / "tioga" / "c" / "nodes_1" / "ppn_1";
         write_text(dir / "summary.json",
                    R"({"application":"l","case":"c","nodes":1,"ppn":1,)"
@@ -774,8 +774,8 @@ TEST_CASE("an unknown host counter category skips the run") {
 
 TEST_CASE("a trace file name that matches no layout is reported") {
     ScopedTestDir d("genesis_badname");
-    const fs::path c = d.path() / "minife" / "tioga" / "tioga" / "input_50" /
-                       "nodes_1" / "ppn_1" / "compacted";
+    const common::fs::path c = d.path() / "minife" / "tioga" / "tioga" /
+                               "input_50" / "nodes_1" / "ppn_1" / "compacted";
     write_gz(c / "trace.pfw.gz", "[\n");
     auto disc = discover_dir(d);
     CHECK(disc.groups.empty());
@@ -881,7 +881,7 @@ TEST_CASE("a tiny share spills on its group pools and closes them clean") {
 TEST_CASE("a group that must spill names the spill directory when it fails") {
     ScopedTestDir d("genesis_nospill");
     matrix_run(d, 2, busy_trace());
-    const fs::path blocked = d.path() / "blocked";
+    const common::fs::path blocked = d.path() / "blocked";
     std::ofstream(blocked) << "not a directory";
     SpillDirGuard guard(blocked.string());
     auto disc = discover_dir(d);

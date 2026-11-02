@@ -75,7 +75,7 @@ class InfoArgParse : public cli::ArgParse {
 };
 
 static std::string format_size(std::uint64_t bytes) {
-    return human_bytes(static_cast<double>(bytes), "", 2);
+    return common::human_bytes(static_cast<double>(bytes), "", 2);
 }
 
 struct RootInfoSummary {
@@ -89,13 +89,14 @@ static coro::CoroTask<std::shared_ptr<RootInfoSummary>> load_root_info_summary(
     std::string index_path) {
     auto result = std::make_shared<RootInfoSummary>();
 
-    const auto snapshot = unwrap(index::plan::open_snapshot(index_path));
-    const auto listed = unwrap(snapshot.files());
+    const auto snapshot =
+        common::unwrap(index::plan::open_snapshot(index_path));
+    const auto listed = common::unwrap(snapshot.files());
     result->file_count = listed.size();
     for (const auto& file : listed) {
-        if (auto summary = unwrap(index::scalar_stats(snapshot, file)))
+        if (auto summary = common::unwrap(index::scalar_stats(snapshot, file)))
             result->total_events += summary->stats.total_events;
-        if (auto meta = unwrap(index::file_metadata(snapshot, file))) {
+        if (auto meta = common::unwrap(index::file_metadata(snapshot, file))) {
             result->total_lines += meta->num_lines;
             result->total_uncompressed += meta->max_bytes;
         }
@@ -108,8 +109,9 @@ static coro::CoroTask<std::shared_ptr<RootInfoSummary>> load_root_info_summary(
 static void load_cached_files(const std::string& index_path,
                               std::vector<std::string>& files,
                               std::vector<ResolvedFile>& group) {
-    const auto snapshot = unwrap(index::plan::open_snapshot(index_path));
-    const auto listed = unwrap(snapshot.files());
+    const auto snapshot =
+        common::unwrap(index::plan::open_snapshot(index_path));
+    const auto listed = common::unwrap(snapshot.files());
     files.reserve(listed.size());
     group.reserve(listed.size());
     std::size_t fi = 0;
@@ -124,7 +126,8 @@ static void load_cached_files(const std::string& index_path,
 static std::vector<MetadataCollectorUtilityOutput>
 process_index_group_info_sync(std::string index_path,
                               std::vector<ResolvedFile> entries) {
-    const auto snapshot = unwrap(index::plan::open_snapshot(index_path));
+    const auto snapshot =
+        common::unwrap(index::plan::open_snapshot(index_path));
 
     std::vector<MetadataCollectorUtilityOutput> results;
     results.reserve(entries.size());
@@ -139,7 +142,8 @@ process_index_group_info_sync(std::string index_path,
         const auto file = snapshot.file(
             index::store::internal::get_logical_path(entry.file_path));
         const auto metadata =
-            file ? unwrap(index::file_metadata(snapshot, *file)) : std::nullopt;
+            file ? common::unwrap(index::file_metadata(snapshot, *file))
+                 : std::nullopt;
         if (!metadata) {
             meta.success = false;
             meta.error_message = "No file metadata found in shared index";
@@ -163,8 +167,8 @@ process_index_group_info_sync(std::string index_path,
                 meta.checkpoint_size;
         }
 
-        const auto merged =
-            unwrap(index::schemas::dft::merged_statistics(snapshot, *file));
+        const auto merged = common::unwrap(
+            index::schemas::dft::merged_statistics(snapshot, *file));
         if (merged) {
             meta.valid_events = merged->stats.total_events;
             if (merged->num_chunks > 0) {
@@ -202,7 +206,7 @@ static void print_extensions(const MetadataCollectorUtilityOutput& info,
             dftracer::utils::index::store::internal::get_logical_path(
                 info.file_path));
         if (!file) return;
-        if (auto schema = unwrap(index::schema(snapshot, *file)))
+        if (auto schema = common::unwrap(index::schema(snapshot, *file)))
             std::printf("  Schema: %s\n", schema->c_str());
         std::printf("  Extensions:");
         for (auto ext : ALL_EXTENSIONS) {
@@ -222,7 +226,8 @@ static void print_extensions(const MetadataCollectorUtilityOutput& info,
         }
         // No plugin is loaded here, so a plugin extension's currency is
         // unknown.
-        for (const auto& plugin : unwrap(index::plugins(snapshot, *file)))
+        for (const auto& plugin :
+             common::unwrap(index::plugins(snapshot, *file)))
             std::printf(" %s (plugin%s)", plugin.name.c_str(),
                         plugin.ready ? "" : ", failed");
         std::printf("\n");
@@ -244,7 +249,7 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
     }
 
     std::printf("Basic Information:\n");
-    std::printf("  Format: %s\n", get_format_name(info.format));
+    std::printf("  Format: %s\n", common::get_format_name(info.format));
     std::printf("  Status: %s\n", "OK");
 
     std::printf("\nFile Size:\n");
@@ -359,19 +364,20 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
     const auto executor_threads = cli->pipeline.executor_threads;
     const bool summary_mode = (query_type != "detailed");
 
-    Timer stages_storage("dftracer_info");
-    Timer* stages = cli->pipeline.time_profiling ? &stages_storage : nullptr;
-    Timer overall(true);
+    common::Timer stages_storage("dftracer_info");
+    common::Timer* stages =
+        cli->pipeline.time_profiling ? &stages_storage : nullptr;
+    common::Timer overall(true);
 
     std::vector<std::string> files;
     std::vector<FileWorkItem> files_needing_index;
     std::unordered_map<std::string, std::vector<ResolvedFile>> indexed_groups;
 
     {
-        ScopedTimer _t(stages, "collect_and_classify");
+        common::ScopedTimer _t(stages, "collect_and_classify");
 
         if (!directory.empty()) {
-            if (!dftracer::utils::input_exists(directory)) {
+            if (!common::input_exists(directory)) {
                 DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                          directory.c_str());
                 co_return 1;
@@ -382,10 +388,11 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
 
             auto trusted_index_path =
                 internal::determine_index_path(directory, index_dir);
-            if (!force_rebuild && fs::exists(dftracer::utils::index::store_dir(
-                                      trusted_index_path))) {
+            if (!force_rebuild &&
+                common::fs::exists(
+                    dftracer::utils::index::store_dir(trusted_index_path))) {
                 if (summary_mode) {
-                    ScopedTimer _rt(stages, "root_summary_read");
+                    common::ScopedTimer _rt(stages, "root_summary_read");
                     auto root_result =
                         co_await load_root_info_summary(trusted_index_path);
 
@@ -421,12 +428,12 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
                 }
 
                 {
-                    ScopedTimer _lr(stages, "load_registry");
+                    common::ScopedTimer _lr(stages, "load_registry");
                     load_cached_files(trusted_index_path, files,
                                       indexed_groups[trusted_index_path]);
                 }
             } else {
-                ScopedTimer _ds(stages, "scan_and_resolve");
+                common::ScopedTimer _ds(stages, "scan_and_resolve");
                 Resolver resolver;
                 auto input = std::make_unique<ResolverInput>();
                 input->directory = directory;
@@ -440,7 +447,7 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
                 files_needing_index = std::move(result.needs_checkpoint);
             }
         } else {
-            ScopedTimer _rs(stages, "resolve_index_state");
+            common::ScopedTimer _rs(stages, "resolve_index_state");
             co_await ensure_indexes_fresh(&ctx, "", cli->files_args.value,
                                           index_dir, force_rebuild);
             Resolver resolver;
@@ -465,7 +472,7 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
     std::mutex results_mutex;
 
     if (!indexed_groups.empty()) {
-        ScopedTimer _t(stages, "index_batch_read");
+        common::ScopedTimer _t(stages, "index_batch_read");
         co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
             auto* all_results_ptr = &all_results;
             auto* mutex_ptr = &results_mutex;
@@ -489,13 +496,13 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
     }
 
     if (!files_needing_index.empty()) {
-        ScopedTimer _t(stages, "auto_index_and_build");
+        common::ScopedTimer _t(stages, "auto_index_and_build");
         co_await auto_index_and_resolve(ctx, files_needing_index, index_dir,
                                         checkpoint_size, executor_threads,
                                         indexed_groups);
 
         if (!indexed_groups.empty()) {
-            ScopedTimer _t2(stages, "newly_indexed_batch_read");
+            common::ScopedTimer _t2(stages, "newly_indexed_batch_read");
             co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
                 auto* all_results_ptr = &all_results;
                 auto* mutex_ptr = &results_mutex;
@@ -573,7 +580,8 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
         if (it == snapshots.end())
             it = snapshots
                      .emplace(r.index_path,
-                              unwrap(index::plan::open_snapshot(r.index_path)))
+                              common::unwrap(
+                                  index::plan::open_snapshot(r.index_path)))
                      .first;
         print_file_info(r, it->second, !summary_mode);
     }

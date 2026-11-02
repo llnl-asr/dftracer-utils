@@ -24,8 +24,8 @@ struct RunContext {
         if (auto* table = intern()) table->release();
     }
 
-    InternTable* intern() const noexcept {
-        return static_cast<InternTable*>(tag.user);
+    common::InternTable* intern() const noexcept {
+        return static_cast<common::InternTable*>(tag.user);
     }
 
     void enter() const noexcept { memory::enter_task(tag); }

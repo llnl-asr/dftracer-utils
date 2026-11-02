@@ -12,7 +12,7 @@
 #endif
 
 TEST_CASE("the default worker count is never 0") {
-    CHECK(dftracer::utils::hardware_concurrency() >= 1);
+    CHECK(dftracer::utils::common::hardware_concurrency() >= 1);
 }
 
 #if defined(__linux__)
@@ -20,7 +20,7 @@ TEST_CASE("the default worker count follows the CPU affinity") {
     // The override wins over the affinity, and the Valgrind runner sets it.
     constexpr const char* OVERRIDE = "DFTRACER_UTILS_HW_CONCURRENCY";
     std::optional<std::string> kept;
-    if (const auto v = dftracer::utils::Env::get(OVERRIDE))
+    if (const auto v = dftracer::utils::common::Env::get(OVERRIDE))
         kept = std::string(*v);
     ::unsetenv(OVERRIDE);
 
@@ -40,11 +40,11 @@ TEST_CASE("the default worker count follows the CPU affinity") {
     CPU_ZERO(&one);
     CPU_SET(first, &one);
     REQUIRE(sched_setaffinity(0, sizeof(one), &one) == 0);
-    const auto narrowed = dftracer::utils::hardware_concurrency();
+    const auto narrowed = dftracer::utils::common::hardware_concurrency();
     REQUIRE(sched_setaffinity(0, sizeof(saved), &saved) == 0);
 
     CHECK(narrowed == 1);
-    CHECK(dftracer::utils::hardware_concurrency() ==
+    CHECK(dftracer::utils::common::hardware_concurrency() ==
           static_cast<std::size_t>(CPU_COUNT(&saved)));
     if (kept) ::setenv(OVERRIDE, kept->c_str(), 1);
 }

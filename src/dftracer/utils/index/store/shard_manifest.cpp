@@ -74,9 +74,10 @@ IndexShardManifest parse_manifest(std::string_view json) {
     simdjson::dom::element doc;
     auto err = parser.parse(simdjson::padded_string(json)).get(doc);
     if (err) {
-        throw DFTUtilsException(ErrorCode::Parse,
-                                std::string("shard manifest parse failed: ") +
-                                    simdjson::error_message(err));
+        throw common::DFTUtilsException(
+            common::ErrorCode::Parse,
+            std::string("shard manifest parse failed: ") +
+                simdjson::error_message(err));
     }
 
     IndexShardManifest manifest;
@@ -91,8 +92,8 @@ IndexShardManifest parse_manifest(std::string_view json) {
         IndexShardEntry e;
         std::string_view path;
         if (s["path"].get(path) != simdjson::SUCCESS) {
-            throw DFTUtilsException(ErrorCode::Parse,
-                                    "shard manifest entry missing path");
+            throw common::DFTUtilsException(
+                common::ErrorCode::Parse, "shard manifest entry missing path");
         }
         e.path.assign(path);
 
@@ -107,11 +108,11 @@ IndexShardManifest parse_manifest(std::string_view json) {
 void write_shard_manifest(const std::string& root,
                           const IndexShardManifest& manifest) {
     std::error_code ec;
-    fs::create_directories(root, ec);
+    common::fs::create_directories(root, ec);
 
-    const fs::path final_path = shard_manifest_path(root);
-    const fs::path tmp_path =
-        fs::path(root) /
+    const common::fs::path final_path = shard_manifest_path(root);
+    const common::fs::path tmp_path =
+        common::fs::path(root) /
         (std::string(SHARD_MANIFEST) + ".tmp." + std::to_string(::getpid()));
 
     const std::string body = to_json(manifest);
@@ -120,40 +121,42 @@ void write_shard_manifest(const std::string& root,
         out.write(body.data(), static_cast<std::streamsize>(body.size()));
         out.flush();
         if (!out) {
-            fs::remove(tmp_path, ec);
-            throw DFTUtilsException(
-                ErrorCode::Io,
+            common::fs::remove(tmp_path, ec);
+            throw common::DFTUtilsException(
+                common::ErrorCode::Io,
                 "failed to write shard manifest: " + tmp_path.string());
         }
     }
 
-    fs::rename(tmp_path, final_path, ec);
+    common::fs::rename(tmp_path, final_path, ec);
     if (ec) {
-        fs::remove(tmp_path, ec);
-        throw DFTUtilsException(ErrorCode::Io,
-                                "failed to publish shard manifest to " +
-                                    final_path.string() + ": " + ec.message());
+        common::fs::remove(tmp_path, ec);
+        throw common::DFTUtilsException(common::ErrorCode::Io,
+                                        "failed to publish shard manifest to " +
+                                            final_path.string() + ": " +
+                                            ec.message());
     }
 }
 
 std::optional<IndexShardManifest> read_shard_manifest(const std::string& root) {
-    const fs::path path = shard_manifest_path(root);
+    const common::fs::path path = shard_manifest_path(root);
     std::error_code ec;
-    if (!fs::exists(path, ec)) return std::nullopt;
+    if (!common::fs::exists(path, ec)) return std::nullopt;
 
     simdjson::padded_string contents;
     auto load_err = simdjson::padded_string::load(path.string()).get(contents);
     if (load_err) {
-        throw DFTUtilsException(
-            ErrorCode::Io, "failed to read shard manifest " + path.string() +
-                               ": " + simdjson::error_message(load_err));
+        throw common::DFTUtilsException(common::ErrorCode::Io,
+                                        "failed to read shard manifest " +
+                                            path.string() + ": " +
+                                            simdjson::error_message(load_err));
     }
     return parse_manifest(std::string_view(contents.data(), contents.size()));
 }
 
 bool has_shard_manifest(const std::string& root) {
     std::error_code ec;
-    return fs::exists(shard_manifest_path(root), ec);
+    return common::fs::exists(shard_manifest_path(root), ec);
 }
 
 std::string resolve_shard_set_root(const std::string& target) {

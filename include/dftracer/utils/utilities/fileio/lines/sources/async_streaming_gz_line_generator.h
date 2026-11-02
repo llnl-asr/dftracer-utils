@@ -27,26 +27,26 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
 inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     std::string file_path, std::size_t start_line = 0, std::size_t end_line = 0,
     bool recover_truncated = true,
-    dftracer::utils::dstd::SharedPtr<dftracer::utils::ScopedFd> open_file =
-        nullptr) {
-    dftracer::utils::ScopedFd owned;
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::common::ScopedFd>
+        open_file = nullptr) {
+    dftracer::utils::common::ScopedFd owned;
     if (!open_file) {
         ssize_t fd_result =
             co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
         if (fd_result < 0) {
-            throw DFTUtilsException(
-                ErrorCode::Io,
+            throw common::DFTUtilsException(
+                common::ErrorCode::Io,
                 "Cannot open compressed file: " + file_path + " (errno=" +
                     std::to_string(static_cast<int>(-fd_result)) + ")");
         }
-        owned = dftracer::utils::ScopedFd(static_cast<int>(fd_result));
+        owned = dftracer::utils::common::ScopedFd(static_cast<int>(fd_result));
     }
-    dftracer::utils::ScopedFd& fd = open_file ? *open_file : owned;
+    dftracer::utils::common::ScopedFd& fd = open_file ? *open_file : owned;
 
     struct stat st;
     if (::fstat(fd.get(), &st) != 0) {
-        throw DFTUtilsException(ErrorCode::Io,
-                                "Cannot stat compressed file: " + file_path);
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io, "Cannot stat compressed file: " + file_path);
     }
     const std::uint64_t file_size = static_cast<std::uint64_t>(st.st_size);
 
@@ -103,7 +103,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
         ex = std::current_exception();
     }
 
-    if (ex) rethrow_and_clear(ex);
+    if (ex) common::rethrow_and_clear(ex);
 }
 
 }  // namespace dftracer::utils::utilities::fileio::lines::sources

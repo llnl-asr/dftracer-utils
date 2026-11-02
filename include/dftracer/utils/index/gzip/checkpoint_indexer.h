@@ -23,7 +23,7 @@ namespace dftracer::utils::index::gzip {
 class CheckpointIndexer {
    public:
     static constexpr std::uint64_t DEFAULT_CHECKPOINT_SIZE =
-        constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
 
     virtual ~CheckpointIndexer() = default;
 
@@ -64,7 +64,7 @@ class CheckpointIndexer {
     virtual std::string restart_window(std::uint64_t member_idx) const = 0;
 
     // Archive format identification
-    virtual ArchiveFormat get_format_type() const = 0;
+    virtual common::ArchiveFormat get_format_type() const = 0;
     virtual const char *get_format_name() const = 0;
 
    protected:

@@ -69,7 +69,7 @@ static std::string create_variable_line_test_file(
         return "";
     }
 
-    fs::remove(txt_file);
+    common::fs::remove(txt_file);
     return gz_file;
 }
 

@@ -183,9 +183,10 @@ void AggregationFold::close_chunk() {
         slot.used = false;
     }
     if (through_ == nullptr) return;
-    namespace fa = constants::file_admission;
-    const std::size_t doublings = std::min(
-        through_runs_ / fa::SPILL_RUNS_PER_DOUBLING, fa::MAX_SPILL_DOUBLINGS);
+    const std::size_t doublings =
+        std::min(through_runs_ /
+                     common::constants::file_admission::SPILL_RUNS_PER_DOUBLING,
+                 common::constants::file_admission::MAX_SPILL_DOUBLINGS);
     if (closed_bytes_ >= g_agg_run_bytes.load(std::memory_order_relaxed)
                              << doublings)
         drain_due_ = true;

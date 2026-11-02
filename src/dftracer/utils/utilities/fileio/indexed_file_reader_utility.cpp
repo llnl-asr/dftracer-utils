@@ -16,9 +16,10 @@ namespace dftracer::utils::utilities::fileio {
 coro::CoroTask<std::shared_ptr<reader::internal::Reader>>
 IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
     // Validate input
-    if (!dftracer::utils::input_exists(input.file_path)) {
-        throw DFTUtilsException(ErrorCode::NotFound,
-                                "File does not exist: " + input.file_path);
+    if (!dftracer::utils::common::input_exists(input.file_path)) {
+        throw common::DFTUtilsException(
+            common::ErrorCode::NotFound,
+            "File does not exist: " + input.file_path);
     }
 
     const std::string normalized_index_path =
@@ -30,22 +31,22 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
 
     // Step 1: Check if index needs to be built/rebuilt
     bool need_build =
-        !dftracer::utils::input_exists(
+        !dftracer::utils::common::input_exists(
             dftracer::utils::index::store_of(normalized_index_path)) ||
         input.force_rebuild;
 
     if (need_build) {
         // Remove old index if forcing rebuild
         if (input.force_rebuild &&
-            dftracer::utils::input_exists(
+            dftracer::utils::common::input_exists(
                 dftracer::utils::index::store_of(normalized_index_path))) {
             // Force rebuild drops the handle this process keeps before removing
             // the store. The other artifacts in the root stay.
             const std::string store =
                 dftracer::utils::index::store_of(normalized_index_path);
             dftracer::utils::index::release_root(normalized_index_path);
-            fs::remove_all(store);
-            forget_input(store);
+            common::fs::remove_all(store);
+            common::forget_input(store);
         }
 
         // Build new index

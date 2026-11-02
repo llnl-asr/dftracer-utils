@@ -21,14 +21,14 @@ namespace dftracer::utils::utilities::fileio {
 class ChunkIterator {
    private:
     struct State {
-        fs::path path;
+        common::fs::path path;
         std::size_t chunk_size;
         std::ifstream file;
         std::vector<unsigned char> buffer;
         dstd::ByteView current_view;
         bool is_end = false;
 
-        State(fs::path p, std::size_t cs)
+        State(common::fs::path p, std::size_t cs)
             : path(std::move(p)), chunk_size(cs), buffer(cs) {
             file.open(path, std::ios::binary);
             if (!file) {
@@ -63,7 +63,7 @@ class ChunkIterator {
 
     ChunkIterator() : state_(nullptr) {}
 
-    ChunkIterator(fs::path path, std::size_t chunk_size = 64 * 1024)
+    ChunkIterator(common::fs::path path, std::size_t chunk_size = 64 * 1024)
         : state_(std::make_shared<State>(std::move(path), chunk_size)) {
         if (state_->is_end) {
             state_ = nullptr;
@@ -106,12 +106,12 @@ class ChunkIterator {
  */
 class ChunkRange {
    private:
-    fs::path path_;
+    common::fs::path path_;
     std::size_t chunk_size_;
 
    public:
     ChunkRange() : path_(), chunk_size_(64 * 1024) {}
-    ChunkRange(fs::path path, std::size_t chunk_size = 64 * 1024)
+    ChunkRange(common::fs::path path, std::size_t chunk_size = 64 * 1024)
         : path_(std::move(path)), chunk_size_(chunk_size) {}
 
     ChunkIterator begin() const { return ChunkIterator{path_, chunk_size_}; }

@@ -5,7 +5,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/common/arrow/arrow.h>
+#include <dftracer/utils/utilities/arrow/arrow.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -15,7 +15,7 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
-using namespace dftracer::utils::utilities::common::arrow;
+using namespace dftracer::utils::utilities::arrow;
 
 static std::string tmp_path(const char* name) {
     return dftu_utils_test::make_unique_test_path(name).string();
@@ -56,9 +56,9 @@ TEST_CASE("IpcWriter - basic write and close") {
     auto result = runtime.submit(task(), "test").get();
 
     CHECK(result == 0);
-    CHECK(fs::exists(path));
-    CHECK(fs::file_size(path) > 0);
-    fs::remove(path);
+    CHECK(common::fs::exists(path));
+    CHECK(common::fs::file_size(path) > 0);
+    common::fs::remove(path);
 }
 
 TEST_CASE("IpcWriter - multiple batches") {
@@ -90,9 +90,9 @@ TEST_CASE("IpcWriter - multiple batches") {
     auto result = runtime.submit(task(), "test").get();
 
     CHECK(result == 0);
-    CHECK(fs::exists(path));
-    CHECK(fs::file_size(path) > 0);
-    fs::remove(path);
+    CHECK(common::fs::exists(path));
+    CHECK(common::fs::file_size(path) > 0);
+    common::fs::remove(path);
 }
 
 TEST_CASE("IpcWriter - close without writing batches") {
@@ -110,7 +110,7 @@ TEST_CASE("IpcWriter - close without writing batches") {
     auto result = runtime.submit(task(), "test").get();
 
     CHECK(result == 0);
-    fs::remove(path);
+    common::fs::remove(path);
 }
 
 // With no pooled slot every batch takes the overflow slot, which the writer
@@ -150,9 +150,9 @@ TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
         const std::string bare = tmp_path("test_ipc_bare.arrows");
         REQUIRE(write_file(pooled, mode, 4) == 0);
         REQUIRE(write_file(bare, mode, 0) == 0);
-        CHECK(fs::file_size(bare) == fs::file_size(pooled));
-        fs::remove(pooled);
-        fs::remove(bare);
+        CHECK(common::fs::file_size(bare) == common::fs::file_size(pooled));
+        common::fs::remove(pooled);
+        common::fs::remove(bare);
     }
 }
 
@@ -182,14 +182,14 @@ TEST_CASE("IpcWriter - explicit ZSTD compression") {
     auto result = runtime.submit(task(), "test").get();
 
     CHECK(result == 0);
-    CHECK(fs::exists(path));
-    CHECK(fs::file_size(path) > 0);
-    fs::remove(path);
+    CHECK(common::fs::exists(path));
+    CHECK(common::fs::file_size(path) > 0);
+    common::fs::remove(path);
 }
 
 TEST_CASE("PartitionWriter - basic single file") {
     std::string dir = tmp_path("test_partition_basic");
-    fs::remove_all(dir);
+    common::fs::remove_all(dir);
 
     Runtime runtime(2);
     PartitionWriteStats stats;
@@ -220,14 +220,14 @@ TEST_CASE("PartitionWriter - basic single file") {
     CHECK(stats.total_rows == 100);
     CHECK(stats.row_counts.size() == 1);
     CHECK(stats.row_counts[0] == 100);
-    CHECK(fs::exists(stats.files[0]));
+    CHECK(common::fs::exists(stats.files[0]));
 
-    fs::remove_all(dir);
+    common::fs::remove_all(dir);
 }
 
 TEST_CASE("PartitionRouter - NONE mode pass-through") {
     std::string dir = tmp_path("test_router_none");
-    fs::remove_all(dir);
+    common::fs::remove_all(dir);
 
     PartitionConfig config;
     config.mode = PartitionConfig::Mode::None;
@@ -261,12 +261,12 @@ TEST_CASE("PartitionRouter - NONE mode pass-through") {
     CHECK(stats.partitions.size() == 1);
     CHECK(stats.partitions.count("") == 1);
 
-    fs::remove_all(dir);
+    common::fs::remove_all(dir);
 }
 
 TEST_CASE("PartitionRouter - COLUMN mode single column") {
     std::string dir = tmp_path("test_router_column");
-    fs::remove_all(dir);
+    common::fs::remove_all(dir);
 
     PartitionConfig config;
     config.mode = PartitionConfig::Mode::Column;
@@ -310,10 +310,10 @@ TEST_CASE("PartitionRouter - COLUMN mode single column") {
     CHECK(stats.partitions["cat=POSIX"].total_rows == 3);
     CHECK(stats.partitions["cat=APP"].total_rows == 3);
 
-    CHECK(fs::exists(dir + "/cat=POSIX"));
-    CHECK(fs::exists(dir + "/cat=APP"));
+    CHECK(common::fs::exists(dir + "/cat=POSIX"));
+    CHECK(common::fs::exists(dir + "/cat=APP"));
 
-    fs::remove_all(dir);
+    common::fs::remove_all(dir);
 }
 
 #else

@@ -1,18 +1,18 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_WRITER_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_WRITER_H
+#ifndef DFTRACER_UTILS_UTILITIES_ARROW_PARTITION_WRITER_H
+#define DFTRACER_UTILS_UTILITIES_ARROW_PARTITION_WRITER_H
 
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
-#include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/ipc_writer.h>
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 struct PartitionWriteStats {
     std::vector<std::string> files;
@@ -69,7 +69,7 @@ class PartitionWriter {
     int64_t calculate_uncompressed_size(ArrowExportResult& batch);
 };
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_WRITER_H
+#endif  // DFTRACER_UTILS_UTILITIES_ARROW_PARTITION_WRITER_H

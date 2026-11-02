@@ -40,7 +40,7 @@ class KqueueThreadPoolBackend : public ThreadPoolFileOps {
     void kqueue_loop();
 
     IoCompletionThread completion_thread_;
-    ScopedFd kqueue_fd_;
+    common::ScopedFd kqueue_fd_;
 
     /// User event identifier for shutdown signaling.
     static constexpr uintptr_t SHUTDOWN_IDENT = 0xDEAD;

@@ -146,7 +146,7 @@ std::string apply_group_transform(const GroupKey& gk, std::string v) {
             return slash == std::string::npos ? v : v.substr(slash + 1);
         }
         case GroupKey::Transform::Lower: {
-            ::dftracer::utils::detail::lower_ascii(v);
+            ::dftracer::utils::common::detail::lower_ascii(v);
             return v;
         }
         case GroupKey::Transform::Bucket:

@@ -190,7 +190,7 @@ static bool block_has_config(const SharedConfig& shared,
 // --describe and the real run so both go through the same load-time
 // validation (ABI gate, reserved-name refusal, duplicate-provides, unmet
 // consumes).
-static Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
+static common::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
     auto builder = Plugins::builder();
     for (const auto& block : plugin_args.blocks) {
         if (block_has_config(plugin_args.shared, block)) {
@@ -198,8 +198,8 @@ static Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
                 builder.add(block.path,
                             build_config(plugin_args.shared, block));
             } catch (const std::exception& e) {
-                return make_error(
-                    ErrorCode::InvalidArgument,
+                return common::make_error(
+                    common::ErrorCode::InvalidArgument,
                     "plugin '" + block.path + "' config error: " + e.what());
             }
         } else {

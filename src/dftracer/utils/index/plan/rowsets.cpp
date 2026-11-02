@@ -34,7 +34,7 @@ const RecordSchema* recorded_schema(const Snapshot& snapshot,
     const auto file =
         snapshot.file(index::store::internal::get_logical_path(trace));
     if (!file) return nullptr;
-    const auto id = unwrap(index::schema(snapshot, *file));
+    const auto id = common::unwrap(index::schema(snapshot, *file));
     return id ? &get_schema(*id) : nullptr;
 }
 
@@ -42,9 +42,9 @@ const RecordSchema* recorded_schema(const Snapshot& snapshot,
 // the trace is now.
 static dstd::Optional<FileRef> current_file(const Snapshot& snapshot,
                                             const RowSetFile& f) {
-    InputFileStat st;
+    common::InputFileStat st;
     SourceStat now;
-    if (stat_input(f.trace, st)) {
+    if (common::stat_input(f.trace, st)) {
         now.mtime = static_cast<std::uint64_t>(st.mtime);
         now.size = st.size;
     }
@@ -56,8 +56,8 @@ static dstd::Optional<FileRef> current_file(const Snapshot& snapshot,
 }
 
 static SchemaDetection explain_trace_schema(const RowSetFile& f) {
-    InputFileStat st;
-    if (f.fd >= 0 && stat_input(f.trace, st))
+    common::InputFileStat st;
+    if (f.fd >= 0 && common::stat_input(f.trace, st))
         return explain_file_schema(f.trace, f.fd, st.size, st.mtime_ns);
     return explain_file_schema(f.trace);
 }
@@ -67,8 +67,8 @@ static const RecordSchema& detect_trace_schema(const RowSetFile& f) {
 }
 
 static bool trace_exists(const std::string& path) {
-    InputFileStat st;
-    return stat_input(path, st);
+    common::InputFileStat st;
+    return common::stat_input(path, st);
 }
 
 namespace {
@@ -130,9 +130,9 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
         const auto& f = files[i];
         if (f.index.empty()) continue;
         auto [it, fresh] = snapshots.try_emplace(f.index);
-        if (fresh && fs::exists(store_of(f.index))) {
+        if (fresh && common::fs::exists(store_of(f.index))) {
             load_index_schemas(f.index);
-            it->second.emplace(unwrap(open_snapshot(f.index)));
+            it->second.emplace(common::unwrap(open_snapshot(f.index)));
         }
         if (it->second) snapshot_of[i] = &*it->second;
     }
@@ -185,8 +185,8 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
             continue;
         }
         if (found && found != schemas[i])
-            throw DFTUtilsException::cat(
-                ErrorCode::InvalidArgument,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument,
                 "a View reads files of one record schema: ", files[voter].trace,
                 " is ", found->id, " and ", files[i].trace, " is ",
                 schemas[i]->id);
@@ -213,11 +213,12 @@ std::optional<df::DataFrame> stored_rowset(const std::vector<RowSetFile>& files,
         for (const auto& f : files) {
             if (f.index.empty()) return std::nullopt;
             auto [it, fresh] = snapshots.try_emplace(f.index);
-            if (fresh) it->second.emplace(unwrap(open_snapshot(f.index)));
+            if (fresh)
+                it->second.emplace(common::unwrap(open_snapshot(f.index)));
             const Snapshot& snapshot = *it->second;
             const auto file = current_file(snapshot, f);
             if (!file) return std::nullopt;
-            auto bytes = unwrap(index::rowset(snapshot, *file, name));
+            auto bytes = common::unwrap(index::rowset(snapshot, *file, name));
             if (!bytes) return std::nullopt;
             auto frame = df::frame_from_native(*bytes);
             if (!frame) return std::nullopt;
@@ -239,7 +240,8 @@ bool has_stored_rowsets(const std::vector<RowSetFile>& files) {
         for (const auto& f : files) {
             if (f.index.empty()) return false;
             auto [it, fresh] = snapshots.try_emplace(f.index);
-            if (fresh) it->second.emplace(unwrap(open_snapshot(f.index)));
+            if (fresh)
+                it->second.emplace(common::unwrap(open_snapshot(f.index)));
             const Snapshot& snapshot = *it->second;
             const auto file = current_file(snapshot, f);
             if (!file || !index::extension_current(

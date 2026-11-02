@@ -25,11 +25,11 @@ class Executor {
     virtual ~Executor() = default;
 
     virtual void enqueue(std::coroutine_handle<> handle,
-                         TaskIndex task_id = -1) = 0;
+                         common::TaskIndex task_id = -1) = 0;
     virtual void schedule_coroutine_resumption(
         std::coroutine_handle<> handle) = 0;
     virtual void schedule_destroy(std::coroutine_handle<> handle) = 0;
-    virtual void mark_coro_completed(TaskIndex id) = 0;
+    virtual void mark_coro_completed(common::TaskIndex id) = 0;
 
     virtual bool is_running() const = 0;
     virtual std::size_t get_num_threads() const = 0;

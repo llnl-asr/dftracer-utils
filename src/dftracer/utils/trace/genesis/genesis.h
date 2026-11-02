@@ -127,7 +127,8 @@ struct GroupProgress {
     std::function<void()> on_update;
 
     void enter(Phase p) noexcept {
-        phase_since_ns.store(steady_now_ns(), std::memory_order_relaxed);
+        phase_since_ns.store(common::steady_now_ns(),
+                             std::memory_order_relaxed);
         phase.store(p, std::memory_order_relaxed);
     }
 

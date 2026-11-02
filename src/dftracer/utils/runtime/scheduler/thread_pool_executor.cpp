@@ -21,14 +21,15 @@
 namespace dftracer::utils {
 
 ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
-    : last_progress_ns_(steady_now_ns()),
+    : last_progress_ns_(common::steady_now_ns()),
       idle_timeout_(config.idle_timeout),
       deadlock_timeout_s_(config.deadlock_timeout.count()),
       keepalive_(config.elastic_keepalive),
       io_backend_type_(config.io_backend_type),
       io_batch_threshold_(config.io_batch_threshold) {
-    std::size_t threads =
-        config.num_threads == 0 ? hardware_concurrency() : config.num_threads;
+    std::size_t threads = config.num_threads == 0
+                              ? common::hardware_concurrency()
+                              : config.num_threads;
     if (threads == 0) {
         threads = 2;
     }
@@ -335,7 +336,8 @@ void ThreadPoolExecutor::ensure_running_worker() {
 void ThreadPoolExecutor::enter_blocking() {
     auto* ctx = static_cast<WorkerContext*>(get_current_worker_context());
     if (!ctx || !ctx->holds_permit) return;
-    ctx->blocking_since_ns.store(steady_now_ns(), std::memory_order_relaxed);
+    ctx->blocking_since_ns.store(common::steady_now_ns(),
+                                 std::memory_order_relaxed);
     ctx->blk_state.store(BLK_SYSCALL, std::memory_order_release);
     // Only the 0->1 transition can find the sysmon parked; skip the wake else.
     // Notify under sysmon_mutex_ so the wake cannot slip between the sysmon's
@@ -380,7 +382,7 @@ void ThreadPoolExecutor::sysmon_loop() {
         if (!running_.load(std::memory_order_acquire)) break;
         if (blocked_workers_.load(std::memory_order_acquire) == 0) continue;
 
-        const std::int64_t now = steady_now_ns();
+        const std::int64_t now = common::steady_now_ns();
         int handed = 0;
         {
             std::unique_lock<std::mutex> wl(workers_mutex_, std::try_to_lock);
@@ -411,7 +413,7 @@ void ThreadPoolExecutor::sysmon_loop() {
 
 void ThreadPoolExecutor::set_threads(std::size_t threads,
                                      std::optional<bool> eager) {
-    if (threads == 0) threads = hardware_concurrency();
+    if (threads == 0) threads = common::hardware_concurrency();
     if (threads == 0) threads = 2;
 #ifdef DFTRACER_UTILS_VALGRIND_MODE
     if (threads > 2) threads = 2;
@@ -562,7 +564,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
             if (pending_resume && !pending_resume.done()) {
                 // Id comes from the entry, not the promise: foreign promise
                 // types have no task_id field.
-                TaskIndex tid = pending_entry.task_id;
+                common::TaskIndex tid = pending_entry.task_id;
                 if (tid >= 0) {
                     std::unique_lock<std::shared_mutex> lock(registry_mutex_);
                     auto it = task_registry_.find(tid);
@@ -761,7 +763,7 @@ void ThreadPoolExecutor::wake_all_workers() {
 // Helper function for when_all.h (avoids circular dependency)
 
 void ThreadPoolExecutor::enqueue(std::coroutine_handle<> handle,
-                                 TaskIndex task_id) {
+                                 common::TaskIndex task_id) {
     if (!handle || handle.done()) {
         return;  // Invalid or already completed
     }
@@ -860,7 +862,7 @@ ExecutorProgress ThreadPoolExecutor::get_progress() const {
     }
 
     // Build task trees (find root tasks)
-    std::unordered_set<TaskIndex> processed;
+    std::unordered_set<common::TaskIndex> processed;
     for (const auto& [task_id, info] : task_registry_) {
         if (info.parent_task_id == -1) {  // Root task
             auto task_progress = build_task_progress_tree(task_id, processed);
@@ -876,7 +878,7 @@ ExecutorProgress ThreadPoolExecutor::get_progress() const {
             status.worker_id = worker->worker_id;
             status.is_idle = worker->is_idle.load();
 
-            TaskIndex current_id = worker->current_task_id.load();
+            common::TaskIndex current_id = worker->current_task_id.load();
             if (current_id != -1) {
                 status.current_task_id = current_id;
                 std::lock_guard<std::mutex> name_lock(worker->task_name_mutex);
@@ -895,7 +897,8 @@ ExecutorProgress ThreadPoolExecutor::get_progress() const {
 }
 
 TaskProgress ThreadPoolExecutor::build_task_progress_tree(
-    TaskIndex task_id, std::unordered_set<TaskIndex>& processed) const {
+    common::TaskIndex task_id,
+    std::unordered_set<common::TaskIndex>& processed) const {
     TaskProgress progress;
 
     if (processed.count(task_id)) {
@@ -992,7 +995,7 @@ TaskProgress ThreadPoolExecutor::build_task_progress_tree(
     }
 
     // Build children recursively
-    for (TaskIndex child_id : info.child_task_ids) {
+    for (common::TaskIndex child_id : info.child_task_ids) {
         progress.children.push_back(
             build_task_progress_tree(child_id, processed));
     }
@@ -1187,7 +1190,7 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
 void ThreadPoolExecutor::submit_task(std::shared_ptr<Task> task,
                                      std::shared_ptr<std::any> input,
                                      TaskOwner* owner,
-                                     TaskIndex parent_task_id) {
+                                     common::TaskIndex parent_task_id) {
     // Register in task registry
     {
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);
@@ -1222,10 +1225,11 @@ void ThreadPoolExecutor::submit_task(std::shared_ptr<Task> task,
     enqueue(coro.release());
 }
 
-TaskIndex ThreadPoolExecutor::enqueue_tracked(
+common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
     coro::Coro coro, std::string name,
-    std::shared_ptr<std::atomic<TaskIndex>> tid_out) {
-    TaskIndex id = next_coro_task_id_.fetch_sub(1, std::memory_order_relaxed);
+    std::shared_ptr<std::atomic<common::TaskIndex>> tid_out) {
+    common::TaskIndex id =
+        next_coro_task_id_.fetch_sub(1, std::memory_order_relaxed);
     coro.handle().promise().task_id = id;
     coro.handle().promise().executor = this;
 
@@ -1256,12 +1260,12 @@ TaskIndex ThreadPoolExecutor::enqueue_tracked(
     return id;
 }
 
-TaskIndex ThreadPoolExecutor::current_worker_task_id() const {
+common::TaskIndex ThreadPoolExecutor::current_worker_task_id() const {
     auto* ctx = static_cast<WorkerContext*>(get_current_worker_context());
     return ctx ? ctx->current_task_id.load() : -1;
 }
 
-void ThreadPoolExecutor::mark_coro_completed(TaskIndex id) {
+void ThreadPoolExecutor::mark_coro_completed(common::TaskIndex id) {
     bool was_new = false;
     {
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);

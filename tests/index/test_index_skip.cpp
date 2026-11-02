@@ -44,9 +44,11 @@ IndexRun run_index(const std::string& dir, bool force) {
 
 std::vector<std::string> index_files(const std::string& dir) {
     std::vector<std::string> files;
-    const fs::path root = fs::path(dir) / ".dftindex";
-    if (!fs::exists(root)) return files;
-    for (const auto& entry : fs::recursive_directory_iterator(root))
+    const dftracer::utils::common::fs::path root =
+        dftracer::utils::common::fs::path(dir) / ".dftindex";
+    if (!dftracer::utils::common::fs::exists(root)) return files;
+    for (const auto& entry :
+         dftracer::utils::common::fs::recursive_directory_iterator(root))
         if (entry.is_regular_file())
             files.push_back(entry.path().string() + " " +
                             std::to_string(entry.file_size()));
@@ -62,7 +64,7 @@ void write_trace(dftu_utils_test::TestEnvironment& env, int id,
                  int num_events) {
     auto made = env.create_dft_test_gzip_file(num_events);
     REQUIRE(!made.empty());
-    fs::rename(made, trace_path(env.get_dir(), id));
+    dftracer::utils::common::fs::rename(made, trace_path(env.get_dir(), id));
 }
 
 }  // namespace
@@ -98,8 +100,9 @@ TEST_CASE("a second dftracer_index skips files that did not change") {
 
     SUBCASE("a file with a newer mtime is indexed again") {
         const std::string path = trace_path(dir, 2);
-        fs::last_write_time(
-            path, fs::last_write_time(path) + std::chrono::seconds(60));
+        dftracer::utils::common::fs::last_write_time(
+            path, dftracer::utils::common::fs::last_write_time(path) +
+                      std::chrono::seconds(60));
         const auto second = run_index(dir, false);
         CHECK(second.exit_code == 0);
         CHECK(second.indexed == 1);

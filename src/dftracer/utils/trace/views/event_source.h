@@ -80,7 +80,8 @@ class DomSource {
 
     void append_arg(std::string& out, std::string_view key) const {
         if (!has_args_) return;
-        json::JsonValue av = json::JsonValue(args_).at(strip_args_prefix(key));
+        json::JsonValue av =
+            json::JsonValue(args_).at(common::strip_args_prefix(key));
         if (av.exists()) append_text(out, av.element());
     }
 
@@ -107,7 +108,7 @@ class DomSource {
         if (auto t = top(field); t.second) return t;
         if (has_args_) {
             json::JsonValue av =
-                json::JsonValue(args_).at(strip_args_prefix(field));
+                json::JsonValue(args_).at(common::strip_args_prefix(field));
             if (av.exists()) return {av.element(), true};
         }
         if (is_nested_path(field)) {
@@ -273,7 +274,7 @@ class PodSource {
     /// Appends the text of arg `key`; false when the event lacks it.
     bool append_arg(std::string& out, std::string_view key) const {
         if (ev_.by_path) return append_found(out, find_arg_by(key));
-        const std::string_view bare = strip_args_prefix(key);
+        const std::string_view bare = common::strip_args_prefix(key);
         if (bare == "fhash") return append_id(out, ev_.fhash_id);
         if (bare == "hhash") return append_id(out, ev_.hhash_id);
         return append_found(out, find_arg(key));
@@ -294,7 +295,7 @@ class PodSource {
         if (field == "pid" || field == "tid" || field == "ts") return true;
         if (field == "dur") return ev_.has_dur;
         if (is_schema_field(field)) return find_top(field) != nullptr;
-        const std::string_view bare = strip_args_prefix(field);
+        const std::string_view bare = common::strip_args_prefix(field);
         if (bare == "fhash") return ev_.fhash_id != NO_ID;
         if (bare == "hhash") return ev_.hhash_id != NO_ID;
         return find_arg(field) != nullptr;
@@ -314,7 +315,7 @@ class PodSource {
         if (ev_.by_path) return find(field, false);
         if (is_schema_field(field)) return find(field, true);
         if (const auto* v = find(field, false)) return v;
-        const std::string_view bare = strip_args_prefix(field);
+        const std::string_view bare = common::strip_args_prefix(field);
         return bare == field ? nullptr : find(bare, false);
     }
 
@@ -349,7 +350,7 @@ class PodSource {
     // stored bare) resolve.
     const FoldEvent::ArgValue* find_arg(std::string_view field) const {
         if (const auto* v = find_arg_by(field)) return v;
-        const std::string_view bare = strip_args_prefix(field);
+        const std::string_view bare = common::strip_args_prefix(field);
         return bare == field ? nullptr : find_arg_by(bare);
     }
 

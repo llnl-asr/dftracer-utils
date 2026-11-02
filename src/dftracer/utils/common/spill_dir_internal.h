@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace dftracer::utils::detail {
+namespace dftracer::utils::common::detail {
 
 /// spill_dir() with its inputs given: `env` is DFTRACER_UTILS_SPILL_DIR (empty
 /// when unset), `local_root` is local_spill_root(), and `fallbacks` are tried
@@ -16,6 +16,6 @@ Result<std::string> choose_spill_dir(const std::string& env,
                                      const std::string& local_root,
                                      const std::vector<std::string>& fallbacks);
 
-}  // namespace dftracer::utils::detail
+}  // namespace dftracer::utils::common::detail
 
 #endif  // DFTRACER_UTILS_COMMON_SPILL_DIR_INTERNAL_H

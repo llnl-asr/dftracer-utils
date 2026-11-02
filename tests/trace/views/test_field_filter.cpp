@@ -3,7 +3,6 @@
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
 
-using dftracer::utils::DFTUtilsException;
 using dftracer::utils::dataframe::field::F;
 
 TEST_SUITE("View unified F filter") {
@@ -55,7 +54,7 @@ TEST_SUITE("View unified F filter") {
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    16 * 1024));
-        fs::remove(plain);
+        dftracer::utils::common::fs::remove(plain);
         dftracer::utils::index::Indexer::open({gz}).build();
         const std::string idx = determine_index_path(gz, "");
         auto count = [&](Phase ph, const char* q) {
@@ -101,6 +100,6 @@ TEST_SUITE("View unified F filter") {
         const auto& s = shared_trace();
         View base = View::from_file(s.gz, s.idx);
         CHECK_THROWS_AS(base.filter((F("dur") + F("ts")) > 3),
-                        DFTUtilsException);
+                        dftracer::utils::common::DFTUtilsException);
     }
 }

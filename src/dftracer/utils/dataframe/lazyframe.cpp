@@ -5772,7 +5772,7 @@ coro::CoroTask<std::vector<DataFrame>> collect_all(
     runs.reserve(trees.size());
     for (PlannedTree& t : trees) {
         const std::uint64_t budget =
-            share_spill_budget(t.memory_budget, trees.size());
+            common::share_spill_budget(t.memory_budget, trees.size());
         runs.push_back(collect_plan(finish_tree(std::move(t)), budget, 0));
     }
     co_return co_await coro::when_all(std::move(runs));

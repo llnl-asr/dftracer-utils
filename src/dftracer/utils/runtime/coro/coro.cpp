@@ -15,7 +15,7 @@ std::coroutine_handle<> CoroPromise::FinalAwaiter::await_suspend(
     const bool was_released = p.released;
     auto* const jc = p.join_counter;
     auto* const jcont = p.join_continuation;
-    const TaskIndex tracked_id = p.task_id;
+    const common::TaskIndex tracked_id = p.task_id;
     Executor* const tracked_executor = p.executor;
 
     // Mark tracked coro as completed regardless of join-group path.

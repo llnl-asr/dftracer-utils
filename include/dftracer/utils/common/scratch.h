@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// The best node-local scratch root discovered from the OS mount table (RAM
 /// tmpfs preferred over local disk, larger free space breaks ties), or "" when
@@ -71,6 +71,6 @@ std::optional<ScratchSession> staged_build_scratch(
 /// copies then removes `src`. Throws DFTUtilsException on failure.
 void publish_path(const std::string& src, const std::string& dst);
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_SCRATCH_H

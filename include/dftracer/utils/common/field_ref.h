@@ -3,7 +3,7 @@
 
 #include <string_view>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// The explicit prefix that addresses a value inside the event's "args" object.
 inline constexpr std::string_view ARGS_PREFIX = "args.";
@@ -27,6 +27,6 @@ inline bool has_args_prefix(std::string_view field) {
     return strip_args_prefix(field) != field;
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_FIELD_REF_H

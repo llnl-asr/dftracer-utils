@@ -69,7 +69,7 @@ void register_schemas() {
         index::register_schema(spec, "test_viz_schema");
 }
 
-void write_gz(const fs::path& path, const std::string& content) {
+void write_gz(const common::fs::path& path, const std::string& content) {
     using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
     GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());

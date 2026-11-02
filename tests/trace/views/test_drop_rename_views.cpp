@@ -24,7 +24,7 @@ std::string gzip_of(TestEnvironment& env, const std::string& stem,
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     return gz;
 }
 

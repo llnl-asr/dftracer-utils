@@ -581,15 +581,17 @@ static void print_detailed_grouped_io(
             const auto& io = *sorted_io[0].second;
             std::printf("    Count: %llu   Size Mean: %s",
                         (unsigned long long)io.size.count(),
-                        human_bytes(io.size.mean()).c_str());
+                        common::human_bytes(io.size.mean()).c_str());
             if (!io.size.sketch.empty()) {
-                std::printf("   Size p50: %s",
-                            human_bytes(io.size.sketch.quantile(0.5)).c_str());
+                std::printf(
+                    "   Size p50: %s",
+                    common::human_bytes(io.size.sketch.quantile(0.5)).c_str());
             }
             if (io.bandwidth.count() > 0 && !io.bandwidth.sketch.empty()) {
-                std::printf("   BW p50: %s",
-                            human_bytes(io.bandwidth.sketch.quantile(0.5), "/s")
-                                .c_str());
+                std::printf(
+                    "   BW p50: %s",
+                    common::human_bytes(io.bandwidth.sketch.quantile(0.5), "/s")
+                        .c_str());
             }
             std::printf("\n");
 
@@ -602,9 +604,12 @@ static void print_detailed_grouped_io(
                     std::printf("  I/O Size Percentiles:\n");
                     std::printf(
                         "    p50: %s  p90: %s  p99: %s\n",
-                        human_bytes(io.size.sketch.quantile(0.5)).c_str(),
-                        human_bytes(io.size.sketch.quantile(0.9)).c_str(),
-                        human_bytes(io.size.sketch.quantile(0.99)).c_str());
+                        common::human_bytes(io.size.sketch.quantile(0.5))
+                            .c_str(),
+                        common::human_bytes(io.size.sketch.quantile(0.9))
+                            .c_str(),
+                        common::human_bytes(io.size.sketch.quantile(0.99))
+                            .c_str());
                 }
             }
         } else {
@@ -620,19 +625,20 @@ static void print_detailed_grouped_io(
                     display_key = display_key.substr(0, 27) + "...";
                 }
 
-                std::string size_mean = human_bytes(io->size.mean());
+                std::string size_mean = common::human_bytes(io->size.mean());
                 std::string size_p50 =
                     io->size.sketch.empty()
                         ? "-"
-                        : human_bytes(io->size.sketch.quantile(0.5));
+                        : common::human_bytes(io->size.sketch.quantile(0.5));
                 std::string bw_p50 =
                     (io->bandwidth.count() == 0 || io->bandwidth.sketch.empty())
                         ? "-"
-                        : human_bytes(io->bandwidth.sketch.quantile(0.5), "/s");
+                        : common::human_bytes(
+                              io->bandwidth.sketch.quantile(0.5), "/s");
                 std::string offset_p50 =
                     (io->offset.count() == 0 || io->offset.sketch.empty())
                         ? "-"
-                        : human_bytes(io->offset.sketch.quantile(0.5));
+                        : common::human_bytes(io->offset.sketch.quantile(0.5));
 
                 std::printf("    %-30s %12llu %12s %12s %12s %12s\n",
                             display_key.c_str(),
@@ -698,7 +704,7 @@ static coro::CoroTask<void> process_file_detailed(
     // Hash resolution (sequential, all chunks done)
     std::unordered_map<std::string, std::string> hash_resolutions;
     if (needs_hash_resolution &&
-        fs::exists(dftracer::utils::index::store_dir(index_path))) {
+        common::fs::exists(dftracer::utils::index::store_dir(index_path))) {
         try {
             using dftracer::utils::index::plan::GroupResolver;
             const std::vector<dftracer::utils::index::plan::RowSetFile> files{
@@ -873,7 +879,7 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
     CoroScope& ctx, const std::vector<std::string>& cli_files,
     std::string directory) {
     if (!directory.empty()) {
-        if (!dftracer::utils::input_exists(directory)) {
+        if (!common::input_exists(directory)) {
             DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                      directory.c_str());
             co_return std::vector<std::string>{};
@@ -900,8 +906,8 @@ static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
     const std::string& index_path) {
     auto snapshot = std::make_unique<IndexedRootSnapshot>();
     const auto index_snapshot =
-        unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
-    const auto registry = unwrap(index_snapshot.files());
+        common::unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
+    const auto registry = common::unwrap(index_snapshot.files());
 
     snapshot->logical_files.reserve(registry.size());
     snapshot->partition.indexed_entries.reserve(registry.size());
@@ -1037,8 +1043,9 @@ static coro::CoroTask<void> auto_index_files(CoroScope& ctx,
     // Add successfully indexed files
     std::optional<dftracer::utils::index::Snapshot> refreshed;
     if (!refresh_result.cached.empty())
-        refreshed.emplace(unwrap(dftracer::utils::index::plan::open_snapshot(
-            refresh_result.index_path)));
+        refreshed.emplace(
+            common::unwrap(dftracer::utils::index::plan::open_snapshot(
+                refresh_result.index_path)));
     for (auto& entry : refresh_result.cached) {
         const auto file = refreshed->file(
             dftracer::utils::index::store::internal::get_logical_path(
@@ -1179,7 +1186,7 @@ static std::optional<ChunkStatistics> file_rows_to_statistics(
         add_path_counts(snapshot, file, "cat", raw);
         for (const auto& [cat, count] : raw) {
             std::string lower(cat);
-            ::dftracer::utils::detail::lower_ascii(lower);
+            ::dftracer::utils::common::detail::lower_ascii(lower);
             cs.category_counts[lower] += count;
         }
     }
@@ -1221,7 +1228,7 @@ static coro::CoroTask<void> process_index_group(
         std::size_t fast_files = 0;
         std::vector<const ResolvedFile*> slow_files;
         {
-            const auto snapshot = unwrap(
+            const auto snapshot = common::unwrap(
                 dftracer::utils::index::plan::open_snapshot(*index_path_ptr));
             for (const auto& rf : *group_ptr) {
                 const auto file = snapshot.file(
@@ -1231,13 +1238,14 @@ static coro::CoroTask<void> process_index_group(
                     slow_files.push_back(&rf);
                     continue;
                 }
-                auto scalar = unwrap(
+                auto scalar = common::unwrap(
                     dftracer::utils::index::scalar_stats(snapshot, *file));
                 if (scalar) num_chunks_map[rf.file_index] = scalar->num_chunks;
                 dstd::Optional<dstd::StringViewMap<std::uint64_t>> pid_tids;
                 if (needs.pid_tids) {
-                    auto counts = unwrap(dftracer::utils::index::pid_tid_counts(
-                        snapshot, *file));
+                    auto counts =
+                        common::unwrap(dftracer::utils::index::pid_tid_counts(
+                            snapshot, *file));
                     if (!counts) {
                         slow_files.push_back(&rf);
                         continue;
@@ -1377,7 +1385,7 @@ static coro::CoroTask<AggregateStatsResult> run_aggregate_stats(
 
     std::mutex stats_mutex;
     std::mutex total_mutex;
-    Timer read_timer("stats_read_path", true, false);
+    common::Timer read_timer("stats_read_path", true, false);
 
     auto* indexed_stats_ptr = &agg->indexed_stats;
     auto* stats_mutex_ptr = &stats_mutex;
@@ -1406,7 +1414,7 @@ static coro::CoroTask<AggregateStatsResult> run_aggregate_stats(
 
 static coro::CoroTask<int> output_aggregate_stats(
     const StatsConfig* config_ptr, const std::vector<std::string>* files_ptr,
-    std::unique_ptr<AggregateStatsResult> agg, Timer overall) {
+    std::unique_ptr<AggregateStatsResult> agg, common::Timer overall) {
     std::vector<TraceStatistics> all_stats;
     if (config_ptr->json_output) {
         std::sort(
@@ -1481,18 +1489,19 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
         co_return 1;
     }
 
-    Timer stages_storage("dftracer_stats");
-    Timer* stages = args->pipeline.time_profiling ? &stages_storage : nullptr;
-    Timer overall(true);
+    common::Timer stages_storage("dftracer_stats");
+    common::Timer* stages =
+        args->pipeline.time_profiling ? &stages_storage : nullptr;
+    common::Timer overall(true);
 
     std::vector<std::string> files;
     IndexPartition partition;
     bool used_index_source_of_truth = false;
 
     {
-        ScopedTimer _t(stages, "collect_and_classify");
+        common::ScopedTimer _t(stages, "collect_and_classify");
         if (!config.no_auto_index) {
-            ScopedTimer _ef(stages, "ensure_index_fresh");
+            common::ScopedTimer _ef(stages, "ensure_index_fresh");
             if (!config.directory.empty())
                 co_await ensure_index_fresh(&ctx, config.directory, "",
                                             config.index_dir);
@@ -1504,7 +1513,7 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
             config.report_type != StatisticsQueryType::Detailed) {
             auto trusted_index_path = trace::internal::determine_index_path(
                 config.directory, config.index_dir);
-            const bool trusted_index_exists = fs::exists(
+            const bool trusted_index_exists = common::fs::exists(
                 dftracer::utils::index::store_dir(trusted_index_path));
             DFTRACER_UTILS_LOG_DEBUG(
                 "Stats direct-index decision: directory=%s index_path=%s "
@@ -1513,7 +1522,7 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
                 trusted_index_exists ? 1 : 0, config.json_output ? 1 : 0,
                 static_cast<int>(config.report_type));
             if (trusted_index_exists) {
-                ScopedTimer _ls(stages, "load_index_snapshot");
+                common::ScopedTimer _ls(stages, "load_index_snapshot");
                 auto snapshot =
                     co_await load_index_root_snapshot(trusted_index_path);
                 files = std::move(snapshot->logical_files);
@@ -1524,7 +1533,7 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
 
         if (!used_index_source_of_truth) {
             {
-                ScopedTimer _cf(stages, "collect_files");
+                common::ScopedTimer _cf(stages, "collect_files");
                 files = co_await collect_files(ctx, args->files_args.value,
                                                config.directory);
             }
@@ -1532,7 +1541,7 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
                 co_return 1;
             }
             {
-                ScopedTimer _ri(stages, "resolve_index_state");
+                common::ScopedTimer _ri(stages, "resolve_index_state");
                 partition = co_await resolve_index_state(
                     files, config.index_dir, config.report_type);
             }
@@ -1551,7 +1560,7 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
             }
             co_return 1;
         }
-        ScopedTimer _ai(stages, "auto_index_files");
+        common::ScopedTimer _ai(stages, "auto_index_files");
         co_await auto_index_files(ctx, partition, config.index_dir,
                                   config.checkpoint_size,
                                   config.executor_threads);
@@ -1564,7 +1573,7 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
 
     std::unique_ptr<AggregateStatsResult> agg_ptr;
     {
-        ScopedTimer _ag(stages, "aggregate_stats");
+        common::ScopedTimer _ag(stages, "aggregate_stats");
         auto agg_val = co_await run_aggregate_stats(
             ctx, &config,
             std::make_unique<IndexPartition>(std::move(partition)));

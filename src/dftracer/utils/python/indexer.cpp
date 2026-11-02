@@ -64,7 +64,7 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
     const char *gz_path;
     const char *index_path = NULL;
     std::uint64_t checkpoint_size =
-        dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        dftracer::utils::common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     int force_rebuild = 0;
     int build_bloom = 0;
     PyObject *runtime_arg = NULL;

@@ -73,12 +73,12 @@ static coro::CoroTask<FileResult> compress_file_parallel(
     result.output_path = file_path + ".gz";
 
     try {
-        if (!fs::exists(file_path)) {
+        if (!common::fs::exists(file_path)) {
             result.error_message = "File does not exist: " + file_path;
             co_return result;
         }
 
-        result.original_size = fs::file_size(file_path);
+        result.original_size = common::fs::file_size(file_path);
         if (result.original_size == 0) {
             result.error_message = "Empty file: " + file_path;
             co_return result;
@@ -94,7 +94,7 @@ static coro::CoroTask<FileResult> compress_file_parallel(
         opts.member_size = chunk_size;
         opts.level = compression_level;
         opts.workers = num_workers;
-        auto writer = unwrap(
+        auto writer = common::unwrap(
             co_await fileio::GzipLineWriter::open(result.output_path, opts));
 
         std::string buf;
@@ -112,23 +112,23 @@ static coro::CoroTask<FileResult> compress_file_parallel(
             }
             std::string_view whole = block.substr(0, nl + 1);
             if (carry.empty()) {
-                unwrap(co_await writer.append(whole));
+                common::unwrap(co_await writer.append(whole));
             } else {
                 carry.append(whole);
-                unwrap(co_await writer.append(carry));
+                common::unwrap(co_await writer.append(carry));
                 carry.clear();
             }
             carry.append(block.substr(nl + 1));
         }
         if (ifs.bad()) throw std::runtime_error("read error: " + file_path);
 
-        unwrap(co_await writer.close(carry));
-        result.compressed_size = fs::file_size(result.output_path);
+        common::unwrap(co_await writer.close(carry));
+        result.compressed_size = common::fs::file_size(result.output_path);
         result.success = true;
     } catch (const std::exception& e) {
         result.error_message = std::string("Compression failed: ") + e.what();
         std::error_code ec;
-        fs::remove(result.output_path, ec);
+        common::fs::remove(result.output_path, ec);
     }
 
     co_return result;
@@ -137,13 +137,13 @@ static coro::CoroTask<FileResult> compress_file_parallel(
 }  // namespace
 
 static int run_pgzip(const PgzipArgParse& cli) {
-    const auto input_dir = fs::absolute(cli.directory.value).string();
+    const auto input_dir = common::fs::absolute(cli.directory.value).string();
     const auto executor_threads = cli.pipeline.executor_threads;
     const auto compression_level = cli.compression_level;
     const auto chunk_size = cli.chunk_size;
 
     std::vector<std::string> input_files;
-    for (const auto& entry : fs::directory_iterator(input_dir)) {
+    for (const auto& entry : common::fs::directory_iterator(input_dir)) {
         if (!entry.is_regular_file()) continue;
         auto ext = entry.path().extension().string();
         if (ext == ".pfw") {
@@ -227,14 +227,14 @@ static int run_pgzip(const PgzipArgParse& cli) {
                                 DFTRACER_UTILS_LOG_DEBUG(
                                     "Compressed %s: %zu -> %zu "
                                     "bytes (%.1f%%)",
-                                    fs::path(path).filename().c_str(),
+                                    common::fs::path(path).filename().c_str(),
                                     result.original_size,
                                     result.compressed_size, ratio);
                             }
 
                             if (result.success) {
                                 try {
-                                    fs::remove(path);
+                                    common::fs::remove(path);
                                 } catch (const std::exception& e) {
                                     DFTRACER_UTILS_LOG_ERROR(
                                         "Failed to remove %s: %s", path.c_str(),

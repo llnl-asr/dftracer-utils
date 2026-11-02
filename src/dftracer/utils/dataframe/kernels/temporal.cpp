@@ -76,11 +76,11 @@ dftu_series* alloc_i64_like(const dftu_series* v) {
 std::int64_t part_of(std::int64_t t, std::int64_t per_second, bool days,
                      dftu_dt_part part) {
     const std::int64_t day_len = days ? 1 : per_second * 86400;
-    const std::int64_t day = floor_div(t, day_len);
-    const std::int64_t in_day = days ? 0 : floor_mod(t, day_len);
+    const std::int64_t day = common::floor_div(t, day_len);
+    const std::int64_t in_day = days ? 0 : common::floor_mod(t, day_len);
     const std::int64_t secs = days ? 0 : in_day / per_second;
     const std::int64_t frac = days ? 0 : in_day % per_second;
-    const CivilDate c = civil_from_days(day);
+    const common::CivilDate c = common::civil_from_days(day);
     switch (part) {
         case DFTU_DT_YEAR:
             return c.year;
@@ -104,23 +104,24 @@ std::int64_t part_of(std::int64_t t, std::int64_t per_second, bool days,
                        : frac * (1'000'000'000 / per_second) % 1'000;
         case DFTU_DT_DAY_OF_WEEK:
             // 1970-01-01 was a Thursday (3, Monday = 0).
-            return floor_mod(day + 3, 7);
+            return common::floor_mod(day + 3, 7);
         case DFTU_DT_DAY_OF_YEAR:
-            return day - days_from_civil(c.year, 1, 1) + 1;
+            return day - common::days_from_civil(c.year, 1, 1) + 1;
         case DFTU_DT_QUARTER:
             return (c.month - 1) / 3 + 1;
         case DFTU_DT_IS_LEAP_YEAR:
-            return is_leap_year(c.year) ? 1 : 0;
+            return common::is_leap_year(c.year) ? 1 : 0;
         case DFTU_DT_DAYS_IN_MONTH:
-            return days_in_month(c.year, c.month);
+            return common::days_in_month(c.year, c.month);
         case DFTU_DT_ISO_WEEK:
         case DFTU_DT_ISO_YEAR: {
             // ISO 8601: the week holding the year's first Thursday is week 1.
-            const std::int64_t wd = floor_mod(day + 3, 7);  // Monday = 0
+            const std::int64_t wd =
+                common::floor_mod(day + 3, 7);  // Monday = 0
             const std::int64_t thursday = day - wd + 3;
-            const CivilDate tc = civil_from_days(thursday);
+            const common::CivilDate tc = common::civil_from_days(thursday);
             if (part == DFTU_DT_ISO_YEAR) return tc.year;
-            const std::int64_t jan1 = days_from_civil(tc.year, 1, 1);
+            const std::int64_t jan1 = common::days_from_civil(tc.year, 1, 1);
             return (thursday - jan1) / 7 + 1;
         }
         case DFTU_DT_EPOCH_DAYS:
@@ -171,7 +172,7 @@ dftu_series* dftu_series_dt_format(const dftu_series* in, const char* fmt,
     if (unit < DFTU_TIME_UNIT_SECOND || unit > DFTU_TIME_UNIT_NANO)
         return nullptr;
     const std::string_view f(fmt ? fmt : "", static_cast<std::size_t>(fmt_len));
-    if (!invalid_time_format(f).empty()) return nullptr;
+    if (!common::invalid_time_format(f).empty()) return nullptr;
     dftu_series* v = dftu_series_materialize(in);
     if (!v) return nullptr;
     TimeUnit u = TimeUnit::Micro;
@@ -181,7 +182,7 @@ dftu_series* dftu_series_dt_format(const dftu_series* in, const char* fmt,
         return nullptr;
     }
     const std::int64_t ns_per_unit =
-        days ? NS_PER_DAY : NS_PER_SECOND / unit_per_second(u);
+        days ? common::NS_PER_DAY : common::NS_PER_SECOND / unit_per_second(u);
     std::vector<std::int32_t> offsets;
     offsets.reserve(static_cast<std::size_t>(v->length) + 1);
     offsets.push_back(0);
@@ -190,8 +191,9 @@ dftu_series* dftu_series_dt_format(const dftu_series* in, const char* fmt,
         const bool valid = !v->validity.block() ||
                            ((v->validity.data()[i >> 3] >> (i & 7)) & 1);
         if (valid)
-            format_time(text, civil_time(value_at(*v, i, days), ns_per_unit),
-                        f);
+            common::format_time(
+                text, common::civil_time(value_at(*v, i, days), ns_per_unit),
+                f);
         if (text.size() > static_cast<std::size_t>(
                               std::numeric_limits<std::int32_t>::max())) {
             dftu_series_free(v);
@@ -232,7 +234,8 @@ dftu_series* dftu_series_dt_round(const dftu_series* in, int64_t every,
     auto* po = reinterpret_cast<std::int64_t*>(writable(out->data));
     for (std::int64_t i = 0; i < v->length; ++i) {
         const std::int64_t t = pi[i];
-        const std::int64_t lo = dftracer::utils::floor_div(t, every) * every;
+        const std::int64_t lo =
+            dftracer::utils::common::floor_div(t, every) * every;
         std::int64_t r = lo;
         if (mode == DFTU_DT_CEIL) {
             r = lo == t ? t : lo + every;

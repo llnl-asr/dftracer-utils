@@ -128,14 +128,14 @@ Deferred<dataframe::DataFrame> ViewSession::join(
     JoinType how, std::int64_t n_key) {
     if (!left.value_ || !right.value_ || left.executed_ != executed_ ||
         right.executed_ != executed_)
-        throw DFTUtilsException::cat(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument,
             "ViewSession::join: both handles must be collect() results of "
             "this session");
     if (n_key < 0) n_key = key_count_of(left.value_.get());
     if (n_key < 0)
-        throw DFTUtilsException::cat(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument,
             "ViewSession::join: cannot infer n_key; pass it explicitly");
     auto out = std::make_shared<dataframe::DataFrame>();
     combines_.emplace_back(
@@ -150,14 +150,14 @@ Deferred<dataframe::DataFrame> ViewSession::compare(
     Deferred<dataframe::DataFrame> variant, std::int64_t n_key) {
     if (!baseline.value_ || !variant.value_ ||
         baseline.executed_ != executed_ || variant.executed_ != executed_)
-        throw DFTUtilsException::cat(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument,
             "ViewSession::compare: both handles must be collect() results of "
             "this session");
     if (n_key < 0) n_key = key_count_of(baseline.value_.get());
     if (n_key < 0)
-        throw DFTUtilsException::cat(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument,
             "ViewSession::compare: cannot infer n_key; pass it explicitly");
     auto out = std::make_shared<dataframe::DataFrame>();
     combines_.emplace_back(
@@ -388,8 +388,9 @@ coro::CoroTask<ExportStats> ViewSession::execute() {
 void TraceSession::add(const std::vector<dataframe::LazyFrame>& plans,
                        Resolve resolve) {
     if (*executed_)
-        throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
-                                     "TraceSession::collect after execute()");
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument,
+            "TraceSession::collect after execute()");
     plans_.insert(plans_.end(), plans.begin(), plans.end());
     pending_.push_back(Pending{plans.size(), std::move(resolve)});
 }
@@ -466,8 +467,8 @@ View View::reshape(
     const char* builder,
     const std::function<scan::ScanPlan(const scan::ScanPlan&)>& step) const {
     auto refuse = [&](const std::string& why) {
-        return DFTUtilsException::cat(
-            ErrorCode::InvalidArgument,
+        return common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument,
             std::string("View::") + builder + " " + why);
     };
     if (std::optional<std::string> op =
@@ -513,8 +514,8 @@ bool View::aggregates() const {
 
 scan::ScanPlan View::absorbed(const char* method, Need need) const {
     auto fail = [&](const std::string& why) {
-        return DFTUtilsException::cat(
-            ErrorCode::InvalidArgument,
+        return common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument,
             std::string("View::") + method + " " + why);
     };
     dataframe::LazyFrame planned = dataframe::detail::optimize_plan(lf_);

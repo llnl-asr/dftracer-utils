@@ -95,8 +95,8 @@ void for_each_head_line(int fd, const std::string& path, Emit&& emit) {
         // member end).
         if (utilities::fileio::compress::open_inflate_stream(
                 zs, 16 + MAX_WBITS) != Z_OK)
-            throw DFTUtilsException::cat(ErrorCode::Io,
-                                         "cannot inflate trace: ", path);
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Io, "cannot inflate trace: ", path);
         std::vector<char> out(CHUNK);
         bool eof = false;
         while (!done) {
@@ -505,8 +505,9 @@ struct Entry {
 
 [[noreturn]] void spec_error(const std::string& source,
                              const std::string& what) {
-    throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
-                                 "record schema spec ", source, ": ", what);
+    throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
+                                         "record schema spec ", source, ": ",
+                                         what);
 }
 
 class Registry {
@@ -826,7 +827,7 @@ SchemaSpec parse_spec(const YAML::Node& spec, const std::string& source) {
     return out;
 }
 
-bool spec_file(const fs::path& p) {
+bool spec_file(const common::fs::path& p) {
     const auto ext = p.extension().string();
     return ext == ".yaml" || ext == ".yml" || ext == ".json";
 }
@@ -844,13 +845,14 @@ const RecordSchema& register_into(Registry& reg, std::string_view text,
 
 void load_into(Registry& reg, const std::string& path) {
     std::error_code ec;
-    const fs::path p = fs::weakly_canonical(fs::path(path), ec);
+    const common::fs::path p =
+        common::fs::weakly_canonical(common::fs::path(path), ec);
     const std::string key = ec ? path : p.string();
     if (!reg.first_load(key)) return;
     try {
-        std::vector<fs::path> files;
-        if (fs::is_directory(p)) {
-            for (const auto& e : fs::directory_iterator(p))
+        std::vector<common::fs::path> files;
+        if (common::fs::is_directory(p)) {
+            for (const auto& e : common::fs::directory_iterator(p))
                 if (e.is_regular_file() && spec_file(e.path()))
                     files.push_back(e.path());
             std::sort(files.begin(), files.end());
@@ -860,9 +862,9 @@ void load_into(Registry& reg, const std::string& path) {
         for (const auto& f : files) {
             std::ifstream in(f, std::ios::binary);
             if (!in)
-                throw DFTUtilsException::cat(ErrorCode::Io,
-                                             "cannot read record schema spec ",
-                                             f.string());
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io, "cannot read record schema spec ",
+                    f.string());
             std::stringstream text;
             text << in.rdbuf();
             register_into(reg, text.str(), f.string());
@@ -879,7 +881,7 @@ Registry& registry() {
     Registry& r = dstd::Singleton<Registry>::get();
     static std::once_flag env;
     std::call_once(env, [&r] {
-        if (const auto paths = Env::get("DFTRACER_UTILS_SCHEMA_PATH")) {
+        if (const auto paths = common::Env::get("DFTRACER_UTILS_SCHEMA_PATH")) {
             std::stringstream ss{std::string(*paths)};
             for (std::string p; std::getline(ss, p, ':');)
                 if (!p.empty()) load_into(r, p);
@@ -917,9 +919,9 @@ const RecordSchema& get_schema(std::string_view id) {
         if (!ids.empty()) ids += ", ";
         ids += s->id;
     }
-    throw DFTUtilsException::cat(
-        ErrorCode::InvalidArgument, "unknown record schema ", std::string(id),
-        " (registered: ", ids,
+    throw common::DFTUtilsException::cat(
+        common::ErrorCode::InvalidArgument, "unknown record schema ",
+        std::string(id), " (registered: ", ids,
         "); user schemas load from $DFTRACER_UTILS_SCHEMA_PATH and "
         "<index_dir>/schemas/");
 }
@@ -1002,8 +1004,9 @@ std::string schemas_json() {
 }
 
 void load_index_schemas(const std::string& index_path) {
-    const fs::path dir = fs::path(index_path).parent_path() / "schemas";
-    if (fs::is_directory(dir)) load_schemas(dir.string());
+    const common::fs::path dir =
+        common::fs::path(index_path).parent_path() / "schemas";
+    if (common::fs::is_directory(dir)) load_schemas(dir.string());
 }
 
 SchemaDetection explain_schema(std::span<const std::string_view> lines) {
@@ -1063,20 +1066,20 @@ SchemaDetection explain_file_schema(const std::string& file_path, int fd,
 }
 
 SchemaDetection explain_file_schema(const std::string& file_path) {
-    InputFileStat st;
-    if (!stat_input(file_path, st))
-        throw DFTUtilsException::cat(ErrorCode::Io,
-                                     "cannot read trace for schema "
-                                     "detection: ",
-                                     file_path);
+    common::InputFileStat st;
+    if (!common::stat_input(file_path, st))
+        throw common::DFTUtilsException::cat(common::ErrorCode::Io,
+                                             "cannot read trace for schema "
+                                             "detection: ",
+                                             file_path);
     if (const auto hit = cached_detection(file_path, st.size, st.mtime_ns))
         return *hit;
-    ScopedFd fd(::open(file_path.c_str(), O_RDONLY));
+    common::ScopedFd fd(::open(file_path.c_str(), O_RDONLY));
     if (fd.get() < 0)
-        throw DFTUtilsException::cat(ErrorCode::Io,
-                                     "cannot read trace for schema "
-                                     "detection: ",
-                                     file_path);
+        throw common::DFTUtilsException::cat(common::ErrorCode::Io,
+                                             "cannot read trace for schema "
+                                             "detection: ",
+                                             file_path);
     return explain_file_schema(file_path, fd.get(), st.size, st.mtime_ns);
 }
 

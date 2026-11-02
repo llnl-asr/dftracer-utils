@@ -83,9 +83,9 @@ class Scheduler final : public TaskOwner {
     std::condition_variable in_flight_cv_;
 
     // Coroutine support - completion callbacks
-    using CallbackMap =
-        std::unordered_map<TaskIndex, std::vector<std::function<void()>>>;
-    ShardedMutex<CallbackMap, 64> completion_callbacks_;
+    using CallbackMap = std::unordered_map<common::TaskIndex,
+                                           std::vector<std::function<void()>>>;
+    common::ShardedMutex<CallbackMap, 64> completion_callbacks_;
 
    public:
     explicit Scheduler(TaskExecutor* executor);
@@ -222,7 +222,7 @@ class Scheduler final : public TaskOwner {
      * });
      * @endcode
      */
-    void register_task_completion_callback(TaskIndex task_id,
+    void register_task_completion_callback(common::TaskIndex task_id,
                                            std::function<void()> callback);
 
     /**
@@ -236,7 +236,7 @@ class Scheduler final : public TaskOwner {
      * Called by on_task_completed() when a task finishes.
      * Invokes all registered callbacks (e.g., resuming awaiting coroutines).
      */
-    void invoke_completion_callbacks(TaskIndex task_id);
+    void invoke_completion_callbacks(common::TaskIndex task_id);
 
    private:
     /**
@@ -264,7 +264,7 @@ class Scheduler final : public TaskOwner {
      * DFS helper for counting tasks
      */
     void count_tasks_dfs(std::shared_ptr<Task> task,
-                         std::unordered_set<TaskIndex>& visited,
+                         std::unordered_set<common::TaskIndex>& visited,
                          std::size_t& count);
 
     /**
@@ -275,8 +275,9 @@ class Scheduler final : public TaskOwner {
     /**
      * DFS helper for initializing pending counts
      */
-    void initialize_pending_counts_dfs(std::shared_ptr<Task> task,
-                                       std::unordered_set<TaskIndex>& visited);
+    void initialize_pending_counts_dfs(
+        std::shared_ptr<Task> task,
+        std::unordered_set<common::TaskIndex>& visited);
 
     /**
      * Handle task error

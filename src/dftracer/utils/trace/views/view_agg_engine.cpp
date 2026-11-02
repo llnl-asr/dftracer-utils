@@ -154,8 +154,8 @@ dataframe::Agg to_engine_agg(AggOp op) {
         case AggOp::Active:
             return dataframe::Agg::Active;
     }
-    throw DFTUtilsException::cat(ErrorCode::Internal,
-                                 "agg engine: unknown aggregate op");
+    throw common::DFTUtilsException::cat(common::ErrorCode::Internal,
+                                         "agg engine: unknown aggregate op");
 }
 
 dataframe::GroupAgg to_group_agg(const AggSpec& spec, bool by_path) {
@@ -215,8 +215,8 @@ dataframe::Series key_column_to_string(const dataframe::Series& col) {
             break;
         }
         default:
-            throw DFTUtilsException::cat(
-                ErrorCode::Internal,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Internal,
                 "agg engine: unexpected group-key column type");
     }
     if (col.null_count() == 0) return dataframe::Series::strings(vals);
@@ -333,8 +333,8 @@ std::string cell_to_key_string(const dataframe::Series& col, std::int64_t r) {
         case TypeId::Uint64:
             return std::to_string(col.data<std::uint64_t>()[r]);
         default:
-            throw DFTUtilsException::cat(
-                ErrorCode::Internal,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Internal,
                 "agg engine: unexpected transform key-column type");
     }
 }
@@ -350,7 +350,7 @@ std::string transform_key_base(
     if (key_is_resolved(gk.kind))
         return resolver ? resolve_group_value(*resolver, gk, raw) : raw;
     if (gk.kind == GroupKey::Kind::Cat)
-        ::dftracer::utils::detail::lower_ascii(raw);
+        ::dftracer::utils::common::detail::lower_ascii(raw);
     return raw;
 }
 
@@ -387,8 +387,9 @@ dataframe::AggOp to_dyn_op(AggOp op) {
         case AggOp::Active:
             break;
     }
-    throw DFTUtilsException::cat(ErrorCode::Internal,
-                                 "agg engine: op has no per-arg dyn reduction");
+    throw common::DFTUtilsException::cat(
+        common::ErrorCode::Internal,
+        "agg engine: op has no per-arg dyn reduction");
 }
 
 // The dyn reductions for an auto_numeric_metrics plan, matching the canonical
@@ -438,8 +439,8 @@ dataframe::DataFrame finalize_engine_frame(
     if (plan.agg.empty()) n_plan_value = 1;
     const std::size_t fixed = off + ng + n_plan_value + n_plan_text;
     if (r.columns.size() < fixed || r.names.size() != r.columns.size())
-        throw DFTUtilsException::cat(
-            ErrorCode::Internal, "agg engine: the grouped result has ",
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::Internal, "agg engine: the grouped result has ",
             r.columns.size(), " columns and ", r.names.size(),
             " names, the plan needs at least ", fixed);
 
@@ -879,8 +880,8 @@ static double cell_as_double(const dataframe::Series& c, std::int64_t r) {
         case dataframe::TypeId::Float64:
             return c.data<double>()[r];
         default:
-            throw DFTUtilsException::cat(
-                ErrorCode::Internal,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Internal,
                 "agg engine: unexpected numeric column type");
     }
 }
@@ -1055,7 +1056,7 @@ dataframe::DataFrame build_agg_input_frame(
                 continue;
             }
             std::string s(src.string_at(r));
-            ::dftracer::utils::detail::lower_ascii(s);
+            ::dftracer::utils::common::detail::lower_ascii(s);
             vals[static_cast<std::size_t>(r)] = std::move(s);
             vbits[static_cast<std::size_t>(r) >> 3] |=
                 static_cast<std::uint8_t>(1u << (r & 7));

@@ -21,7 +21,7 @@ using index::store::internal::get_logical_path;
 namespace {
 
 bool indexed_by_path(const Snapshot& snapshot, const FileRef& file) {
-    const auto id = unwrap(index::schema(snapshot, file));
+    const auto id = common::unwrap(index::schema(snapshot, file));
     const RecordSchema* schema = id ? find_schema(*id) : nullptr;
     return schema && schema->decoder == Decoder::Path;
 }
@@ -29,7 +29,7 @@ bool indexed_by_path(const Snapshot& snapshot, const FileRef& file) {
 // Chunk i is gzip member i; every member is a candidate until a Condition
 // rules it out, whether or not the index holds data for it.
 void load_chunks(FileIndexData& ctx) {
-    const auto spans = unwrap(index::spans(*ctx.snapshot, *ctx.file));
+    const auto spans = common::unwrap(index::spans(*ctx.snapshot, *ctx.file));
     ctx.total_chunks = spans.size();
     for (std::uint64_t i = 0; i < spans.size(); ++i) {
         ctx.all_chunks.insert(ctx.all_chunks.end(), i);
@@ -60,7 +60,7 @@ Positions any_positions(const Snapshot& snapshot, const FileRef& file,
                         const Query& query) {
     Positions out;
     std::vector<std::pair<std::uint64_t, std::string>> found;
-    const auto catalog = unwrap(index::catalog(snapshot, file));
+    const auto catalog = common::unwrap(index::catalog(snapshot, file));
     for (const std::string& path : query.any_paths()) {
         found.clear();
         for (const std::string& base : {path, "args." + path}) {
@@ -247,20 +247,20 @@ coro::CoroTask<ChunkPrunerOutput> ChunkPruner::operator()(
     std::optional<Snapshot> owned;
     const Snapshot* snapshot = input.snapshot;
     if (!snapshot) {
-        owned.emplace(unwrap(open_snapshot(input.index_path)));
+        owned.emplace(common::unwrap(open_snapshot(input.index_path)));
         snapshot = &*owned;
     }
     co_return prune_file_chunks(*snapshot, input.file_path, input.query);
 }
 
-Result<ChunkPrunerBatchOutput> ChunkPruner::process_batch(
+common::Result<ChunkPrunerBatchOutput> ChunkPruner::process_batch(
     const ChunkPrunerBatchInput& input) {
     ChunkPrunerBatchOutput batch_out;
     try {
         std::optional<Snapshot> owned;
         const Snapshot* snapshot = input.snapshot;
         if (!snapshot) {
-            owned.emplace(unwrap(open_snapshot(input.index_path)));
+            owned.emplace(common::unwrap(open_snapshot(input.index_path)));
             snapshot = &*owned;
         }
         batch_out.outputs.reserve(input.items.size());
@@ -268,8 +268,8 @@ Result<ChunkPrunerBatchOutput> ChunkPruner::process_batch(
             batch_out.outputs.push_back(
                 prune_file_chunks(*snapshot, item.file_path, item.query));
     } catch (const std::exception& e) {
-        return make_error(
-            ErrorCode::Indexer,
+        return common::make_error(
+            common::ErrorCode::Indexer,
             std::string("ChunkPruner: batch failed: ") + e.what());
     }
     return batch_out;

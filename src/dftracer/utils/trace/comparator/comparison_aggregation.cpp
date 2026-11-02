@@ -382,7 +382,7 @@ bool ComparisonFilter::same_cut(const ComparisonFilter& other) const {
            ts_begin == other.ts_begin && ts_end == other.ts_end;
 }
 
-Result<ComparisonFilter> filter_from_query(const duql::Query& query) {
+common::Result<ComparisonFilter> filter_from_query(const duql::Query& query) {
     Translator t;
     auto f = t.node(query.root());
     if (f) return std::move(*f);
@@ -392,9 +392,10 @@ Result<ComparisonFilter> filter_from_query(const duql::Query& query) {
     // The folded text is the query's own with `cat` wrapped in lower(), so a
     // parse failure is a bug of the rewrite.
     if (!folded)
-        return make_error(ErrorCode::Internal,
-                          "comparator: cannot fold the categories of " +
-                              query.source() + ": " + folded.error().format());
+        return common::make_error(common::ErrorCode::Internal,
+                                  "comparator: cannot fold the categories of " +
+                                      query.source() + ": " +
+                                      folded.error().format());
     out.expr = std::move(*folded);
     return out;
 }
@@ -523,7 +524,7 @@ CollapsedMap collapse_by_group(const AggQueryResult& windows,
     return result;
 }
 
-coro::CoroTask<Result<SideAggregate>> aggregate_side(
+coro::CoroTask<common::Result<SideAggregate>> aggregate_side(
     dstd::Span<const std::string> files, dstd::StringView index_dir,
     const dstd::Vector<ComparisonFilter>& filters, std::uint64_t window_us,
     std::size_t workers, dstd::StringIntern& strings) {

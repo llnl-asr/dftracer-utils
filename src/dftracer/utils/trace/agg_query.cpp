@@ -61,9 +61,9 @@ struct Source {
         : path(s.index_path),
           params_hash(s.params_hash ? *s.params_hash : default_params_hash) {
         if (path.empty() ||
-            !dftracer::utils::input_exists(index::store_of(path)))
+            !dftracer::utils::common::input_exists(index::store_of(path)))
             return;
-        snapshot.emplace(unwrap(index::plan::open_snapshot(path)));
+        snapshot.emplace(common::unwrap(index::plan::open_snapshot(path)));
     }
 
     std::string path;
@@ -219,9 +219,9 @@ class Task {
     std::string_view text_of(std::uint32_t id) const {
         const auto at = texts_.find(id);
         if (at == texts_.end())
-            throw DFTUtilsException::cat(ErrorCode::Parse,
-                                         "aggregation query: dictionary id ",
-                                         id, " is missing in ", src_.path);
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Parse, "aggregation query: dictionary id ",
+                id, " is missing in ", src_.path);
         return std::string_view(at->second.data(), at->second.size());
     }
 
@@ -559,17 +559,17 @@ coro::CoroTask<void> Task::scan_file(
     const std::string& path, dstd::Vector<ChunkJob>& jobs,
     dstd::Vector<index::gzip::ChunkSpan>& spans) {
     if (!src_.snapshot)
-        throw DFTUtilsException::cat(ErrorCode::NotFound,
-                                     "aggregation query: ", src_.path,
-                                     " is not an open index");
+        throw common::DFTUtilsException::cat(common::ErrorCode::NotFound,
+                                             "aggregation query: ", src_.path,
+                                             " is not an open index");
     const auto file =
         src_.snapshot->file(index::store::internal::get_logical_path(path));
     if (!file)
-        throw DFTUtilsException::cat(ErrorCode::NotFound,
-                                     "aggregation query: ", path,
-                                     " is not in the index ", src_.path);
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::NotFound, "aggregation query: ", path,
+            " is not in the index ", src_.path);
     ++stats.files;
-    spans = unwrap(index::spans(*src_.snapshot, *file));
+    spans = common::unwrap(index::spans(*src_.snapshot, *file));
 
     const bool usable =
         src_.snapshot->extension(*file, index::store::IndexExtension::Agg,
@@ -577,8 +577,8 @@ coro::CoroTask<void> Task::scan_file(
 
     std::size_t seen = 0;
     if (usable) {
-        unwrap(index::agg_file_texts(*src_.snapshot, *file, texts_));
-        unwrap(index::for_each_agg_partial(
+        common::unwrap(index::agg_file_texts(*src_.snapshot, *file, texts_));
+        common::unwrap(index::for_each_agg_partial(
             *src_.snapshot, *file,
             [&](std::uint32_t chunk, std::uint32_t cat_root,
                 std::uint32_t name_root, std::uint32_t host_root,
@@ -630,9 +630,9 @@ coro::CoroTask<void> Task::scan_file(
         job.chunk = rereads_[i].chunk;
         job.file = *file;
         if (job.chunk >= spans.size())
-            throw DFTUtilsException::cat(
-                ErrorCode::Parse, "aggregation query: a partial of ", path,
-                " names chunk ", job.chunk, " past its ", spans.size());
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Parse, "aggregation query: a partial of ",
+                path, " names chunk ", job.chunk, " past its ", spans.size());
         for (; i < rereads_.size() && rereads_[i].chunk == job.chunk; ++i) {
             job.groups.push_back(rereads_[i].group);
             ++stats.partials_reread;
@@ -651,7 +651,7 @@ coro::CoroTask<void> Task::trace_jobs(
                 index::store::internal::get_logical_path(path)))
             file = std::move(*found);
     }
-    if (file) spans = unwrap(index::spans(*src_.snapshot, *file));
+    if (file) spans = common::unwrap(index::spans(*src_.snapshot, *file));
     if (spans.empty()) {
         ChunkJob job;
         job.all = true;
@@ -682,7 +682,7 @@ coro::CoroTask<void> Task::whole_file_chunks(const std::string& path,
         request.chunk_count = chunk_count;
         request.by_start = true;
         auto pruned = co_await index::plan::prune_file(std::move(request));
-        if (!pruned) throw DFTUtilsException(pruned.error());
+        if (!pruned) throw common::DFTUtilsException(pruned.error());
         if (!pruned->file_may_match) co_return;
         if (!pruned->all_chunks) {
             chunks.assign(pruned->candidates.begin(), pruned->candidates.end());
@@ -722,8 +722,8 @@ void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
         dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()),
         r_.rules.q.config.sketch_accuracy, keep);
     if (!parsed)
-        throw DFTUtilsException(ErrorCode::Parse,
-                                "aggregation partial: malformed record");
+        throw common::DFTUtilsException(
+            common::ErrorCode::Parse, "aggregation partial: malformed record");
     agg::AggPartial& p = *parsed;
     if (p.count == 0) {
         ++stats.partials_pruned;
@@ -968,8 +968,8 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
 bool Task::add_chunk_columns(
     const ChunkJob& job, const dstd::HashSet<AggGroup, AggGroupHash>* wanted) {
     if (!src_.snapshot || !job.file) return false;
-    auto found =
-        unwrap(index::agg_chunk_columns(*src_.snapshot, *job.file, job.chunk));
+    auto found = common::unwrap(
+        index::agg_chunk_columns(*src_.snapshot, *job.file, job.chunk));
     if (!found) return false;
     agg::ChunkColumns block = std::move(*found);
     dstd::Vector<std::uint32_t> read_ids(block.ids.size(), AGG_UNSET);
@@ -1019,15 +1019,16 @@ bool Task::add_chunk_columns(
 
 }  // namespace
 
-coro::CoroTask<Result<AggQueryResult>> run_agg_query(const AggQuery& query) {
+coro::CoroTask<common::Result<AggQueryResult>> run_agg_query(
+    const AggQuery& query) {
     AggQueryResult result;
     try {
         Runner runner(query, result);
         co_await runner.run();
-    } catch (const DFTUtilsException& e) {
+    } catch (const common::DFTUtilsException& e) {
         co_return dstd::Unexpected<dstd::Error>(e.error());
     } catch (const std::exception& e) {
-        co_return make_error(ErrorCode::Unknown, e.what());
+        co_return common::make_error(common::ErrorCode::Unknown, e.what());
     }
     co_return result;
 }

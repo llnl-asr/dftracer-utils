@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::constants {
+namespace dftracer::utils::common::constants {
 /// Directory that holds every spill file; when unset or empty, a writable
 /// node-local disk mount, else the system temp directory (spill_dir()).
 inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";
@@ -148,7 +148,7 @@ static constexpr std::size_t FILE_IO_BUFFER_SIZE =
     262144;  ///< 256KB for file I/O
 }  // namespace reader
 
-}  // namespace dftracer::utils::constants
+}  // namespace dftracer::utils::common::constants
 
 #else  // C
 

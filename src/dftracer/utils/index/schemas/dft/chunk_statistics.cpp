@@ -67,14 +67,14 @@ void ChunkStatistics::update_from_event(NameSlots& names, PidSlots& pids,
         char pt_buf[pid_tid_buf_size];
         auto [pp, ec1] = std::to_chars(pt_buf, pt_buf + sizeof(pt_buf), pid);
         if (ec1 != std::errc{} || pp == pt_buf + sizeof(pt_buf)) {
-            throw DFTUtilsException(ErrorCode::Internal,
-                                    "failed to format pid");
+            throw common::DFTUtilsException(common::ErrorCode::Internal,
+                                            "failed to format pid");
         }
         *pp++ = ':';
         auto [tp, ec2] = std::to_chars(pp, pt_buf + sizeof(pt_buf), tid);
         if (ec2 != std::errc{}) {
-            throw DFTUtilsException(ErrorCode::Internal,
-                                    "failed to format tid");
+            throw common::DFTUtilsException(common::ErrorCode::Internal,
+                                            "failed to format tid");
         }
         pids.pid_tid_count =
             slot_of(pid_tid_counts, std::string_view(pt_buf, tp - pt_buf));

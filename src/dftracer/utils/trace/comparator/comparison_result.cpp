@@ -2,7 +2,7 @@
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/utilities/common/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
 #endif
 
 #include <cmath>
@@ -242,9 +242,9 @@ const char* significance_to_string(Significance s) {
 }
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-using utilities::common::arrow::ArrowExportResult;
-using utilities::common::arrow::ColumnType;
-using utilities::common::arrow::RecordBatchBuilder;
+using utilities::arrow::ArrowExportResult;
+using utilities::arrow::ColumnType;
+using utilities::arrow::RecordBatchBuilder;
 
 namespace {
 

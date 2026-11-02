@@ -84,7 +84,7 @@ void persist_gzip_index_artifacts(index::FileBuild &build,
 class GzipIndexer : public CheckpointIndexer {
    public:
     static constexpr std::uint64_t DEFAULT_CHECKPOINT_SIZE =
-        constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
 
     GzipIndexer(const std::string &gz_path, const std::string &index_path,
                 std::uint64_t checkpoint_size = DEFAULT_CHECKPOINT_SIZE,
@@ -118,11 +118,11 @@ class GzipIndexer : public CheckpointIndexer {
     dstd::Vector<std::uint64_t> piece_heads() const override;
     std::string restart_window(std::uint64_t member_idx) const override;
 
-    inline ArchiveFormat get_format_type() const override {
-        return ArchiveFormat::Gzip;
+    inline common::ArchiveFormat get_format_type() const override {
+        return common::ArchiveFormat::Gzip;
     }
     inline const char *get_format_name() const override {
-        return dftracer::utils::get_format_name(get_format_type());
+        return dftracer::utils::common::get_format_name(get_format_type());
     }
 
    private:

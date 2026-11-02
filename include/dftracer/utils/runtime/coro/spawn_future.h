@@ -177,7 +177,7 @@ class SpawnFuture {
         }
         if (cancelled_) throw_cancelled("future wait cancelled");
         if (state_->exception) {
-            rethrow_and_clear(state_->exception);
+            common::rethrow_and_clear(state_->exception);
         }
         if constexpr (!std::is_void_v<T>) {
             return std::move(*state_->result);

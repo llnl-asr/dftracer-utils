@@ -9,8 +9,8 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
-#include <dftracer/utils/utilities/common/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
 #endif
 
 #include <cstddef>
@@ -105,9 +105,9 @@ struct ViewScannerBatch {
     std::uint64_t values_unconverted = 0;
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    utilities::common::arrow::ArrowExportResult to_arrow() const;
-    utilities::common::arrow::ArrowExportResult to_arrow(
-        utilities::common::arrow::RecordBatchBuilder& builder) const;
+    utilities::arrow::ArrowExportResult to_arrow() const;
+    utilities::arrow::ArrowExportResult to_arrow(
+        utilities::arrow::RecordBatchBuilder& builder) const;
 #endif
 };
 

@@ -31,7 +31,7 @@ class TraceWriter {
         : flush_threshold_(flush_threshold) {
         fileio::GzipWriterOptions opts;
         opts.member_size = flush_threshold;
-        writer_.emplace(unwrap(
+        writer_.emplace(common::unwrap(
             fileio::GzipLineWriterBlocking::open(path, std::move(opts))));
         buf_.reserve(flush_threshold * 2);
     }
@@ -54,7 +54,7 @@ class TraceWriter {
 
     void flush() {
         drain();
-        unwrap(writer_->cut());
+        common::unwrap(writer_->cut());
     }
 
     void close() {
@@ -62,13 +62,13 @@ class TraceWriter {
         drain();
         auto w = std::move(*writer_);
         writer_.reset();
-        unwrap(w.close());
+        common::unwrap(w.close());
     }
 
    private:
     void drain() {
         if (buf_.empty()) return;
-        unwrap(writer_->append(buf_));
+        common::unwrap(writer_->append(buf_));
         buf_.clear();
     }
 

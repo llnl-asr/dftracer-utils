@@ -276,9 +276,9 @@ TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
 
     std::string expected;
     const std::string line(999, 'x');
-    while (expected.size() <
-           2 * dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE +
-               1024) {
+    while (expected.size() < 2 * dftracer::utils::common::constants::indexer::
+                                         DEFAULT_CHECKPOINT_SIZE +
+                                 1024) {
         expected += line + "\n";
     }
     expected += "{\"tail\":true}";

@@ -162,11 +162,13 @@ TestEnvironment::TestEnvironment(std::size_t lines, Format format)
     : num_lines(lines), format_(format) {
     // @note: enable this for debugging
     // dftracer::utils::logger::init();
-    fs::path test_path = make_unique_test_path("dftracer_test");
+    dftracer::utils::common::fs::path test_path =
+        make_unique_test_path("dftracer_test");
 
     try {
-        if (fs::create_directories(test_path) ||
-            (fs::exists(test_path) && fs::is_directory(test_path))) {
+        if (dftracer::utils::common::fs::create_directories(test_path) ||
+            (dftracer::utils::common::fs::exists(test_path) &&
+             dftracer::utils::common::fs::is_directory(test_path))) {
             test_dir = test_path.string();
         }
     } catch (const std::exception& e) {
@@ -176,7 +178,7 @@ TestEnvironment::TestEnvironment(std::size_t lines, Format format)
 
 TestEnvironment::~TestEnvironment() {
     if (!test_dir.empty()) {
-        fs::remove_all(test_dir);
+        dftracer::utils::common::fs::remove_all(test_dir);
     }
 }
 
@@ -219,7 +221,7 @@ std::string TestEnvironment::create_test_gzip_file_impl() {
 
     bool success = compress_file_to_gzip(txt_file, gz_file);
 
-    fs::remove(txt_file);
+    dftracer::utils::common::fs::remove(txt_file);
 
     if (success) {
         return gz_file;
@@ -307,10 +309,10 @@ std::string TestEnvironment::create_dft_multirun_gzip_file(
 
     std::string gz_file = plain_file + ".gz";
     if (!compress_file_to_gzip(plain_file, gz_file)) {
-        fs::remove(plain_file);
+        dftracer::utils::common::fs::remove(plain_file);
         return "";
     }
-    fs::remove(plain_file);
+    dftracer::utils::common::fs::remove(plain_file);
     return gz_file;
 }
 
@@ -324,19 +326,21 @@ std::string TestEnvironment::create_dft_test_gzip_file(int num_events) {
     // Compress to gzip
     std::string gz_file = plain_file + ".gz";
     if (!compress_file_to_gzip(plain_file, gz_file)) {
-        fs::remove(plain_file);
+        dftracer::utils::common::fs::remove(plain_file);
         return "";
     }
 
     // Remove the plain file after compression
-    fs::remove(plain_file);
+    dftracer::utils::common::fs::remove(plain_file);
 
     return gz_file;
 }
 
 void set_test_library_path(const std::string& binary) {
-    const fs::path build_root =
-        fs::absolute(binary).parent_path().parent_path();
+    const dftracer::utils::common::fs::path build_root =
+        dftracer::utils::common::fs::absolute(binary)
+            .parent_path()
+            .parent_path();
     const std::string libs = (build_root / "lib").string();
     ::setenv("LD_LIBRARY_PATH", libs.c_str(), 1);
 }

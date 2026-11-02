@@ -67,8 +67,9 @@ class TaskResult {
      */
     const T& get() const {
         if (!data_) {
-            throw DFTUtilsException(ErrorCode::Internal,
-                                    "TaskResult::get() called on empty result");
+            throw common::DFTUtilsException(
+                common::ErrorCode::Internal,
+                "TaskResult::get() called on empty result");
         }
         return *data_;
     }
@@ -81,8 +82,8 @@ class TaskResult {
      */
     T copy() const {
         if (!data_) {
-            throw DFTUtilsException(
-                ErrorCode::Internal,
+            throw common::DFTUtilsException(
+                common::ErrorCode::Internal,
                 "TaskResult::copy() called on empty result");
         }
         return T(*data_);

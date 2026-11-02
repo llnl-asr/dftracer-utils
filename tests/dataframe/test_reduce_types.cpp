@@ -11,7 +11,6 @@
 #include <string_view>
 #include <vector>
 
-using dftracer::utils::DFTUtilsException;
 using dftracer::utils::dataframe::Agg;
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::GroupAgg;
@@ -116,13 +115,15 @@ TEST_CASE("sum and mean of a string column are refused") {
     Series s = strs({"a", "b"});
     const dftu_scalar r = dftu_series_reduce(s.handle(), DFTU_REDUCE_SUM);
     CHECK(names(error_text(r), "sum", "string"));
-    CHECK_THROWS_AS((void)s.sum(), DFTUtilsException);
-    CHECK_THROWS_AS((void)s.mean(), DFTUtilsException);
+    CHECK_THROWS_AS((void)s.sum(), dftracer::utils::common::DFTUtilsException);
+    CHECK_THROWS_AS((void)s.mean(), dftracer::utils::common::DFTUtilsException);
 
     // A string column with no valid value is still refused for sum and mean.
     Series none = strs({"x"}, {false});
-    CHECK_THROWS_AS((void)none.sum(), DFTUtilsException);
-    CHECK_THROWS_AS((void)none.mean(), DFTUtilsException);
+    CHECK_THROWS_AS((void)none.sum(),
+                    dftracer::utils::common::DFTUtilsException);
+    CHECK_THROWS_AS((void)none.mean(),
+                    dftracer::utils::common::DFTUtilsException);
 }
 
 TEST_CASE("the refusal names the reduction and the type") {
@@ -130,7 +131,7 @@ TEST_CASE("the refusal names the reduction and the type") {
     try {
         (void)s.sum();
         FAIL("sum of a string column must throw");
-    } catch (const DFTUtilsException& e) {
+    } catch (const dftracer::utils::common::DFTUtilsException& e) {
         CHECK(names(e.what(), "sum", "string"));
     }
 }
@@ -139,7 +140,7 @@ TEST_CASE("sum of a timestamp column is refused, max still works") {
     Series t = timestamps({30, 10, 20});
     const dftu_scalar r = dftu_series_reduce(t.handle(), DFTU_REDUCE_SUM);
     CHECK(names(error_text(r), "sum", "timestamp"));
-    CHECK_THROWS_AS((void)t.sum(), DFTUtilsException);
+    CHECK_THROWS_AS((void)t.sum(), dftracer::utils::common::DFTUtilsException);
     CHECK(t.max().i64() == 30);
     CHECK(t.min().i64() == 10);
 }

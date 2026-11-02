@@ -15,7 +15,7 @@ namespace dftracer::utils {
 /// Call .wait() to block (re-raises on error) or .done() to check.
 struct TaskHandle {
     std::shared_future<void> future;
-    TaskIndex id{-1};
+    common::TaskIndex id{-1};
     std::string name;
 
     void get() { future.get(); }
@@ -36,7 +36,7 @@ struct TaskHandle {
 template <typename T>
 struct TypedTaskHandle {
     std::shared_future<std::shared_ptr<T>> future;
-    TaskIndex id{-1};
+    common::TaskIndex id{-1};
     std::string name;
 
     T get() { return std::move(*future.get()); }

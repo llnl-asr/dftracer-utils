@@ -11,7 +11,7 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_plan.h>
-#include <dftracer/utils/utilities/common/serialization/binary_codec.h>
+#include <dftracer/utils/utilities/serialization/binary_codec.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -23,7 +23,7 @@
 
 namespace dftracer::utils::index::cache {
 
-namespace codec = utilities::common::serialization;
+namespace codec = utilities::serialization;
 namespace dataframe = dftracer::utils::dataframe;
 
 namespace {
@@ -63,9 +63,10 @@ void add_rest_fields(std::string& sig,
     // Dictionaries of the record schema resolve `resolved.*` fields, so a
     // rollup made under one schema must not serve another.
     if (!plan.record_schema)
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "rollup signature: the plan's record schema "
-                                "is not resolved");
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
+            "rollup signature: the plan's record schema "
+            "is not resolved");
     add(std::to_string(plan.record_schema->params_hash()));
     std::vector<const trace::views::ViewFile*> files;
     files.reserve(plan.files.size());
@@ -74,8 +75,8 @@ void add_rest_fields(std::string& sig,
               [](auto* a, auto* b) { return a->file_path < b->file_path; });
     for (auto* f : files) {
         add(f->file_path);
-        dftracer::utils::InputFileStat st;
-        const bool ok = dftracer::utils::stat_input(f->file_path, st);
+        dftracer::utils::common::InputFileStat st;
+        const bool ok = dftracer::utils::common::stat_input(f->file_path, st);
         add(std::to_string(ok ? st.size : 0));
         add(std::to_string(static_cast<long long>(ok ? st.mtime : 0)));
     }

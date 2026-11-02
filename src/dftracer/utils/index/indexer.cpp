@@ -69,7 +69,7 @@ struct Indexer::Impl {
         }
         std::vector<utilities::filesystem::FileEntry> out;
         out.reserve(paths.size());
-        for (const auto& p : paths) out.emplace_back(fs::path(p));
+        for (const auto& p : paths) out.emplace_back(common::fs::path(p));
         return out;
     }
 
@@ -133,12 +133,14 @@ IndexStatus to_status(const build::ResolverResult& r) {
 void throw_on_failures(const build::ResolverResult& r) {
     if (r.failures.empty()) return;
     const auto& f = r.failures.front();
-    throw DFTUtilsException::cat(ErrorCode::Io, "failed to index ", f.file_path,
-                                 ": ", f.message);
+    throw common::DFTUtilsException::cat(common::ErrorCode::Io,
+                                         "failed to index ", f.file_path, ": ",
+                                         f.message);
 }
 
 void throw_on_error(const dstd::Error& error, std::string_view what) {
-    throw DFTUtilsException::cat(ErrorCode::Io, what, ": ", error.message());
+    throw common::DFTUtilsException::cat(common::ErrorCode::Io, what, ": ",
+                                         error.message());
 }
 
 /// Clears plugin extension `name` of every file in `traces`.
@@ -168,8 +170,8 @@ store::IndexExtension tier_extension(const std::string& name) {
     if (!ext || !(store::PRUNING_EXTENSIONS.has(*ext) ||
                   *ext == store::IndexExtension::Stats ||
                   *ext == store::IndexExtension::Metadata))
-        throw DFTUtilsException::cat(
-            ErrorCode::InvalidArgument, "not a tier extension: ", name,
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument, "not a tier extension: ", name,
             " (expected zonemap, bloom, counts, postings, dft.stats, "
             "dft.metadata or a registered plugin extension)");
     return *ext;
@@ -192,8 +194,8 @@ void Indexer::validate_options(Impl& impl) {
     for (const auto& name : impl.options.extensions) {
         auto ext = store::parse_extension(name);
         if (!ext || !store::PRUNING_EXTENSIONS.has(*ext))
-            throw DFTUtilsException::cat(
-                ErrorCode::InvalidArgument,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument,
                 "Indexer::open: not a pruning extension: ", name,
                 " (expected zonemap, bloom, counts or postings)");
         impl.extensions.add(*ext);
@@ -210,17 +212,19 @@ Indexer Indexer::finish_open(std::shared_ptr<Impl> impl) {
 
 Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
     if (paths.empty())
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "Indexer::open: no trace paths given");
+        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                        "Indexer::open: no trace paths given");
     auto impl = std::make_shared<Impl>();
     impl->options = std::move(options);
     validate_options(*impl);
     for (auto& p : paths) {
-        utilities::filesystem::FileEntry self{fs::path(p)};
+        utilities::filesystem::FileEntry self{common::fs::path(p)};
         std::error_code ec;
-        if (!self.is_directory && !self.is_regular_file && !fs::exists(p, ec))
-            throw DFTUtilsException::cat(ErrorCode::NotFound,
-                                         "Indexer::open: no such path: ", p);
+        if (!self.is_directory && !self.is_regular_file &&
+            !common::fs::exists(p, ec))
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::NotFound,
+                "Indexer::open: no such path: ", p);
         if (!self.is_directory) {
             impl->paths.push_back(std::move(p));
             continue;
@@ -244,8 +248,9 @@ Indexer Indexer::open_scanned(
     std::vector<utilities::filesystem::FileEntry> files,
     IndexerOptions options) {
     if (files.empty())
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "Indexer::open_scanned: no trace files given");
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
+            "Indexer::open_scanned: no trace files given");
     auto impl = std::make_shared<Impl>();
     impl->options = std::move(options);
     validate_options(*impl);
@@ -275,12 +280,12 @@ coro::CoroTask<IndexStatus> Indexer::status_of(
                      f.file_path, impl_->options.index_dir)]
             .push_back(&f);
     for (const auto& [index_path, ready] : by_index) {
-        const auto snapshot = unwrap(plan::open_snapshot(index_path));
+        const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
         for (const auto* f : ready) {
             const auto file =
                 snapshot.file(store::internal::get_logical_path(f->file_path));
             if (!file) continue;
-            const auto meta = unwrap(file_metadata(snapshot, *file));
+            const auto meta = common::unwrap(file_metadata(snapshot, *file));
             if (meta && meta->truncated)
                 status.truncated.push_back(f->file_path);
         }
@@ -315,8 +320,8 @@ coro::CoroTask<IndexStatus> Indexer::rebuild(CoroScope& scope) {
 coro::CoroTask<std::vector<IndexedFile>> Indexer::files(CoroScope&) const {
     std::vector<IndexedFile> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!fs::exists(store_of(index_path))) continue;
-        const auto snapshot = unwrap(plan::open_snapshot(index_path));
+        if (!common::fs::exists(store_of(index_path))) continue;
+        const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
         for (const auto* p : traces) {
             const auto logical = store::internal::get_logical_path(*p);
             const auto file = snapshot.file(logical);
@@ -326,9 +331,9 @@ coro::CoroTask<std::vector<IndexedFile>> Indexer::files(CoroScope&) const {
             f.index_path = index_path;
             f.size_bytes = file->stat().size;
             f.mtime = file->stat().mtime;
-            const auto meta = unwrap(file_metadata(snapshot, *file));
+            const auto meta = common::unwrap(file_metadata(snapshot, *file));
             f.truncated = meta && meta->truncated;
-            const auto recorded = unwrap(schema(snapshot, *file));
+            const auto recorded = common::unwrap(schema(snapshot, *file));
             if (recorded) f.schema.assign(recorded->data(), recorded->size());
             out.push_back(std::move(f));
         }
@@ -340,8 +345,8 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
     const auto config = impl_->bloom_config();
     std::vector<FileManifest> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!fs::exists(store_of(index_path))) continue;
-        const auto snapshot = unwrap(plan::open_snapshot(index_path));
+        if (!common::fs::exists(store_of(index_path))) continue;
+        const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
         const std::uint64_t agg_params =
             impl_->options.aggregation.params_hash();
         for (const auto* p : traces) {
@@ -349,7 +354,7 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
                 snapshot.file(store::internal::get_logical_path(*p));
             if (!file) continue;
             FileManifest m{*p, index_path, {}};
-            const auto recorded = unwrap(schema(snapshot, *file));
+            const auto recorded = common::unwrap(schema(snapshot, *file));
             const std::string id =
                 recorded ? std::string(recorded->data(), recorded->size())
                          : std::string{};
@@ -371,7 +376,7 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
                      extension_current(snapshot, *file, ext) &&
                          state->params_hash == want});
             }
-            for (const auto& copy : unwrap(plugins(snapshot, *file))) {
+            for (const auto& copy : common::unwrap(plugins(snapshot, *file))) {
                 const std::string name(copy.name.data(), copy.name.size());
                 const auto ext = extensions::find_plugin_extension(name);
                 const bool current =
@@ -390,12 +395,12 @@ coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
     CoroScope&, std::string query) const {
     auto parsed = duql::Query::from_string(query);
     if (!parsed)
-        throw DFTUtilsException::cat(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument,
             "Indexer::explain: ", parsed.error().format());
     std::vector<FileExplain> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!fs::exists(store_of(index_path))) {
+        if (!common::fs::exists(store_of(index_path))) {
             for (const auto* p : traces) {
                 FileExplain f;
                 f.path = *p;
@@ -403,7 +408,7 @@ coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
             }
             continue;
         }
-        const auto snapshot = unwrap(plan::open_snapshot(index_path));
+        const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
         const duql::Query& q = *parsed;
         for (const auto* p : traces) {
             auto e = plan::explain_file_chunks(snapshot, *p, q);
@@ -443,7 +448,7 @@ coro::CoroTask<IndexStatus> Indexer::drop_extension(CoroScope& scope,
                                                     std::string extension) {
     const auto ext = tier_extension(extension);
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!fs::exists(store_of(index_path))) continue;
+        if (!common::fs::exists(store_of(index_path))) continue;
         if (ext == store::IndexExtension::Plugin) {
             co_await drop_plugin_extension(index_path, extension, traces);
             continue;
@@ -512,11 +517,11 @@ dataframe::DataFrame Indexer::rowset(std::string name) const {
     for (const auto& f : this->files()) files.push_back({f.path, f.index_path});
     auto frame = plan::stored_rowset(files, name);
     if (!frame)
-        throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
-                                     "Indexer::rowset: the index holds no "
-                                     "rows for row set '",
-                                     name, "'; read it with View::duql(\"from ",
-                                     name, "\")");
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument,
+            "Indexer::rowset: the index holds no "
+            "rows for row set '",
+            name, "'; read it with View::duql(\"from ", name, "\")");
     return std::move(*frame);
 }
 

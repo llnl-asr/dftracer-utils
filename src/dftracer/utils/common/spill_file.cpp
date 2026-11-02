@@ -11,7 +11,7 @@
 #include <cstring>
 #include <string>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 Result<std::unique_ptr<SpillFile>> SpillFile::create() {
     auto dir = spill_dir();
@@ -88,4 +88,4 @@ Result<void> SpillFile::read(std::uint64_t offset, void* out,
     return {};
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

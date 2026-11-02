@@ -60,7 +60,7 @@ coro::CoroTask<std::vector<std::string>> collect_files(
     for (auto& f : cli_files) {
         if (cli::is_trace_file(f)) files.push_back(std::move(f));
     }
-    if (!directory.empty() && dftracer::utils::input_exists(directory)) {
+    if (!directory.empty() && common::input_exists(directory)) {
         auto scanned = co_await cli::scan_directory_trace_files(
             ctx, directory, /*recursive=*/true);
         files.insert(files.end(), std::make_move_iterator(scanned.begin()),
@@ -81,7 +81,7 @@ coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
         // validate would read no lines and still count the file as passing
         // without ever decompressing it.
         if (CheckpointIndexerFactory::detect_format(result->path) !=
-            ArchiveFormat::Gzip) {
+            common::ArchiveFormat::Gzip) {
             throw std::runtime_error(
                 "not a gzip trace (dftracer traces must be gzip-compressed)");
         }

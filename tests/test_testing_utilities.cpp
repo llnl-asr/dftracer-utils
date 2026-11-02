@@ -24,27 +24,27 @@ TEST_SUITE("testing utilities") {
 
     TEST_CASE(
         "ScopedTestDir creates on construction and removes on scope exit") {
-        fs::path kept;
+        dftracer::utils::common::fs::path kept;
         {
             ScopedTestDir dir("scoped_probe");
             kept = dir.path();
-            REQUIRE(fs::exists(kept));
+            REQUIRE(dftracer::utils::common::fs::exists(kept));
             std::ofstream(dir.file("inner.txt")) << "x";
-            CHECK(fs::exists(dir.file("inner.txt")));
+            CHECK(dftracer::utils::common::fs::exists(dir.file("inner.txt")));
         }
-        CHECK_FALSE(fs::exists(kept));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(kept));
     }
 
     TEST_CASE("ScopedTestDir removes its tree even when the scope throws") {
-        fs::path kept;
+        dftracer::utils::common::fs::path kept;
         try {
             ScopedTestDir dir("throwing_probe");
             kept = dir.path();
-            REQUIRE(fs::exists(kept));
+            REQUIRE(dftracer::utils::common::fs::exists(kept));
             throw std::runtime_error("unwind");
         } catch (const std::runtime_error&) {
         }
-        CHECK_FALSE(fs::exists(kept));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(kept));
     }
 
     TEST_CASE("run_process reports the child's exit code") {

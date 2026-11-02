@@ -8,10 +8,11 @@ namespace dftracer::utils::coro {
 /// Throws the error a cancelled wait or cancelled task ends with. Its
 /// condition() is dstd::Condition::Cancelled.
 [[noreturn]] inline void throw_cancelled(const char* what) {
-    throw DFTUtilsException(dstd::Error{dstd::Condition::Cancelled, what});
+    throw common::DFTUtilsException(
+        dstd::Error{dstd::Condition::Cancelled, what});
 }
 
-inline bool is_cancelled(const DFTUtilsException& e) noexcept {
+inline bool is_cancelled(const common::DFTUtilsException& e) noexcept {
     return e.condition() == dstd::Condition::Cancelled;
 }
 

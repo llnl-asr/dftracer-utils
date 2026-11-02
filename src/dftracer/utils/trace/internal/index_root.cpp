@@ -24,7 +24,8 @@ std::shared_ptr<IndexRoot> index_root(const std::string& index_path) {
         if (it != known.by_spelling.end()) return it->second;
     }
     std::error_code ec;
-    const fs::path canonical = fs::weakly_canonical(index_path, ec);
+    const common::fs::path canonical =
+        common::fs::weakly_canonical(index_path, ec);
     const std::lock_guard<std::mutex> lock(known.guard);
     auto& r = known.roots[ec ? index_path : canonical.string()];
     if (!r) r = std::make_shared<IndexRoot>();

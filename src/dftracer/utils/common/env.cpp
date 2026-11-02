@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <string>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 template <>
 std::optional<std::string_view> Env::get<std::string_view>(
@@ -51,4 +51,4 @@ std::optional<std::uint64_t> Env::get<std::uint64_t>(std::string_view name) {
     return parsed;
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

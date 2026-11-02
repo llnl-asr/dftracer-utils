@@ -20,7 +20,7 @@ typedef struct {
     bool has_typed_future;
 
     std::string name;
-    dftracer::utils::TaskIndex task_id;
+    dftracer::utils::common::TaskIndex task_id;
 } TaskHandleObject;
 
 extern PyTypeObject TaskHandleType;

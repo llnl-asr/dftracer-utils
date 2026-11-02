@@ -170,6 +170,7 @@ TEST_SUITE("make_sampler") {
 
     TEST_CASE("throws on invalid fit") {
         FittedDistribution fit;  // valid = false
-        CHECK_THROWS_AS(make_sampler(fit), dftracer::utils::DFTUtilsException);
+        CHECK_THROWS_AS(make_sampler(fit),
+                        dftracer::utils::common::DFTUtilsException);
     }
 }

@@ -553,7 +553,7 @@ std::atomic<int> g_force_scalar{-1};
 bool scalar_forced() {
     int v = g_force_scalar.load(std::memory_order_relaxed);
     if (v < 0) {
-        v = Env::get("DFTRACER_UTILS_STRING_SCALAR") ? 1 : 0;
+        v = common::Env::get("DFTRACER_UTILS_STRING_SCALAR") ? 1 : 0;
         g_force_scalar.store(v, std::memory_order_relaxed);
     }
     return v == 1;
@@ -643,7 +643,7 @@ void class_rows_scalar(BitKind kind, const std::uint8_t* data, const Off* off,
 PredStrategy pred_strategy() {
     int v = g_pred_strategy.load(std::memory_order_relaxed);
     if (v < 0) {
-        const auto e = Env::get("DFTRACER_UTILS_STRING_PREDICATE");
+        const auto e = common::Env::get("DFTRACER_UTILS_STRING_PREDICATE");
         v = !e ? 0 : *e == "bits" ? 1 : *e == "rows" ? 2 : 0;
         g_pred_strategy.store(v, std::memory_order_relaxed);
     }

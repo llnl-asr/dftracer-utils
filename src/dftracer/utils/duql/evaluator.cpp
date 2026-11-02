@@ -684,8 +684,8 @@ std::optional<Ordered> ordered(const Value& v) {
 Value table_value(const LookupTable& t, std::int64_t r) {
     const auto& c = t.cells[static_cast<std::size_t>(r)];
     if (!c)
-        throw DFTUtilsException(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
             "View::duql a scan filter reads a list or object column of '" +
                 t.name + "'; read it in a stage after the scan filter");
     return of_cell(*c);
@@ -702,8 +702,8 @@ bool same_value(const LookupTable& t, std::int64_t a, std::int64_t b) {
 
 const LookupTable& bound_table(const TLookup& l) {
     if (!l.slot || !l.slot->table)
-        throw DFTUtilsException(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
             "View::duql '" + l.name + "' was read before its rows were bound");
     return *l.slot->table;
 }
@@ -1338,12 +1338,14 @@ class TermEval {
                 } else {
                     return VNull{};
                 }
-                const CivilTime ct = civil_time(t, c.ns_per_unit);
+                const common::CivilTime ct =
+                    common::civil_time(t, c.ns_per_unit);
                 if (c.fn == Fn::DatePart)
-                    return date_part(ct, static_cast<DatePart>(c.part));
+                    return common::date_part(
+                        ct, static_cast<common::DatePart>(c.part));
                 const auto* fmt = std::get_if<TConst>(&c.args[1]->node);
                 std::string out;
-                format_time(out, ct, std::get<std::string>(fmt->value));
+                common::format_time(out, ct, std::get<std::string>(fmt->value));
                 return scratch.own(std::move(out));
             }
         }
@@ -1408,7 +1410,7 @@ struct JsonRecord {
 
     JsonValue lookup(const std::string& path) const {
         JsonValue v = event.at(path);
-        if (args_fallback && !v.exists() && !has_args_prefix(path))
+        if (args_fallback && !v.exists() && !common::has_args_prefix(path))
             v = event.at("args." + path);
         return v;
     }

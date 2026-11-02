@@ -29,6 +29,6 @@ Composition and inheritance across the utility types:
 .. include:: /cpp_api/_generated/utilities.dlio.rst.inc
 .. include:: /cpp_api/_generated/utilities.trace_gen.rst.inc
 .. include:: /cpp_api/_generated/utilities.common.statistics.rst.inc
-.. include:: /cpp_api/_generated/utilities.common.serialization.rst.inc
+.. include:: /cpp_api/_generated/utilities.serialization.rst.inc
 .. include:: /cpp_api/_generated/hash.rst.inc
 .. include:: /cpp_api/_generated/json.rst.inc

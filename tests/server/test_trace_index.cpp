@@ -26,7 +26,7 @@ static std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env,
     // Rename to .pfw.gz so TraceIndex discovers it
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    fs::rename(trace_gz, pfw_path);
+    common::fs::rename(trace_gz, pfw_path);
     return pfw_path;
 }
 
@@ -176,7 +176,7 @@ TEST_CASE("TraceIndex - file_at by index") {
 
 TEST_CASE("TraceIndex - empty directory") {
     auto dir = dftu_utils_test::make_unique_test_path("trace_index_empty");
-    fs::create_directories(dir);
+    common::fs::create_directories(dir);
 
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
     Scheduler scheduler(&executor);
@@ -198,7 +198,7 @@ TEST_CASE("TraceIndex - empty directory") {
     CHECK(count.load() == 0);
 
     executor.shutdown();
-    fs::remove_all(dir);
+    common::fs::remove_all(dir);
 }
 
 TEST_CASE("TraceIndex - directory and index_dir accessors") {

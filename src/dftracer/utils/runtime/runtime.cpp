@@ -25,13 +25,13 @@ namespace {
 // (a debugging lever: force a fixed count, e.g. 1 for a single-threaded async
 // loop). Otherwise 0 means hardware_concurrency.
 std::size_t resolve_threads(std::size_t requested) {
-    if (auto env = Env::get<std::string_view>("DFTRACER_UTILS_THREADS");
+    if (auto env = common::Env::get<std::string_view>("DFTRACER_UTILS_THREADS");
         env.has_value()) {
         const long long n =
             std::strtoll(std::string(*env).c_str(), nullptr, 10);
         if (n > 0) return static_cast<std::size_t>(n);
     }
-    return requested == 0 ? hardware_concurrency() : requested;
+    return requested == 0 ? common::hardware_concurrency() : requested;
 }
 
 // Resolve the I/O-pool size. DFTRACER_UTILS_IO_THREADS overrides everything (a
@@ -39,7 +39,8 @@ std::size_t resolve_threads(std::size_t requested) {
 // pool, e.g. so the coordinator does not open a full-machine-sized pool).
 // Otherwise 0 means one I/O thread per worker.
 std::size_t resolve_io_threads(std::size_t requested, std::size_t workers) {
-    if (auto env = Env::get<std::string_view>("DFTRACER_UTILS_IO_THREADS");
+    if (auto env =
+            common::Env::get<std::string_view>("DFTRACER_UTILS_IO_THREADS");
         env.has_value()) {
         const long long n =
             std::strtoll(std::string(*env).c_str(), nullptr, 10);
@@ -50,7 +51,7 @@ std::size_t resolve_io_threads(std::size_t requested, std::size_t workers) {
 }  // namespace
 
 Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
-    unwrap(configure_memory_from_env());
+    common::unwrap(common::configure_memory_from_env());
     ExecutorConfig config;
     config.num_threads = threads_.load(std::memory_order_relaxed);
     config.io_pool_size = resolve_io_threads(
@@ -66,7 +67,7 @@ Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
     : threads_(resolve_threads(config.num_threads)),
       io_backend_(config.io_backend_type),
       io_batch_threshold_(config.io_batch_threshold) {
-    unwrap(configure_memory_from_env());
+    common::unwrap(common::configure_memory_from_env());
     ExecutorConfig cfg = config;
     cfg.num_threads = threads_.load(std::memory_order_relaxed);
     cfg.io_pool_size = resolve_io_threads(
@@ -102,7 +103,8 @@ Runtime::~Runtime() { stop(); }
 
 TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
-        throw DFTUtilsException(ErrorCode::Pipeline, "Runtime is shut down");
+        throw common::DFTUtilsException(common::ErrorCode::Pipeline,
+                                        "Runtime is shut down");
     }
     if (name.empty()) {
         name = "task-" + std::to_string(task_name_counter_++);
@@ -110,12 +112,12 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
 
     auto promise = std::make_shared<std::promise<void>>();
     auto future = promise->get_future().share();
-    auto tid = std::make_shared<std::atomic<TaskIndex>>(-1);
+    auto tid = std::make_shared<std::atomic<common::TaskIndex>>(-1);
 
-    auto wrapper =
-        [](coro::CoroTask<void> t, std::shared_ptr<std::promise<void>> p,
-           Executor* exec,
-           std::shared_ptr<std::atomic<TaskIndex>> task_id) -> coro::Coro {
+    auto wrapper = [](coro::CoroTask<void> t,
+                      std::shared_ptr<std::promise<void>> p, Executor* exec,
+                      std::shared_ptr<std::atomic<common::TaskIndex>> task_id)
+        -> coro::Coro {
         try {
             co_await std::move(t);
             t = coro::CoroTask<void>{
@@ -140,7 +142,8 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
         task.handle().promise().set_executor(executor_.get());
     }
     auto coro = wrapper(std::move(task), promise, executor_.get(), tid);
-    TaskIndex id = executor_->enqueue_tracked(std::move(coro), name, tid);
+    common::TaskIndex id =
+        executor_->enqueue_tracked(std::move(coro), name, tid);
 
     {
         std::lock_guard<std::mutex> lock(futures_mutex_);
@@ -181,8 +184,8 @@ bool Runtime::is_responsive() const { return executor_->is_responsive(); }
 
 void Runtime::set_global_timeout(std::chrono::milliseconds timeout) {
     if (!watchdog_) {
-        throw DFTUtilsException(
-            ErrorCode::Pipeline,
+        throw common::DFTUtilsException(
+            common::ErrorCode::Pipeline,
             "Cannot set timeout: Runtime created without watchdog");
     }
     watchdog_->set_global_timeout(timeout);
@@ -190,8 +193,8 @@ void Runtime::set_global_timeout(std::chrono::milliseconds timeout) {
 
 void Runtime::set_default_task_timeout(std::chrono::milliseconds timeout) {
     if (!watchdog_) {
-        throw DFTUtilsException(
-            ErrorCode::Pipeline,
+        throw common::DFTUtilsException(
+            common::ErrorCode::Pipeline,
             "Cannot set timeout: Runtime created without watchdog");
     }
     watchdog_->set_default_task_timeout(timeout);
@@ -311,7 +314,7 @@ void Runtime::stop_at_exit() {
 }
 
 bool elastic_default_enabled() {
-    if (auto e = Env::get<std::string_view>("DFTRACER_UTILS_ELASTIC");
+    if (auto e = common::Env::get<std::string_view>("DFTRACER_UTILS_ELASTIC");
         e.has_value()) {
         return !(*e == "0" || *e == "false" || *e == "off");
     }

@@ -247,8 +247,8 @@ class FieldExpr {
         duql::Expr e = to_query_expr(require());
         auto q = e.build();
         if (!q.has_value()) {
-            throw DFTUtilsException::cat(
-                ErrorCode::InvalidArgument,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument,
                 "failed to build query from field expression");
         }
         return std::move(q.value());
@@ -276,8 +276,8 @@ class FieldExpr {
         for (std::size_t i = 0; i < names.size(); ++i) {
             std::int64_t idx = df.column_index(names[i]);
             if (idx < 0) {
-                throw DFTUtilsException::cat(
-                    ErrorCode::InvalidArgument,
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::InvalidArgument,
                     "field expression references column not present in frame: ",
                     names[i]);
             }
@@ -298,8 +298,8 @@ class FieldExpr {
 
     const detail::FNode& require() const {
         if (!node_) {
-            throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
-                                         "empty field expression");
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument, "empty field expression");
         }
         return *node_;
     }
@@ -367,8 +367,8 @@ class FieldExpr {
     std::string field_name() const {
         const detail::FNode& n = require();
         if (n.kind != detail::FKind::Col) {
-            throw DFTUtilsException::cat(
-                ErrorCode::InvalidArgument,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument,
                 "string-match / membership needs a bare field on the left");
         }
         return n.name;
@@ -377,8 +377,8 @@ class FieldExpr {
     FieldAggExpr agg_of(AggFn fn) const {
         const detail::FNode& n = require();
         if (n.kind != detail::FKind::Col) {
-            throw DFTUtilsException::cat(
-                ErrorCode::InvalidArgument,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument,
                 "aggregate needs a bare field, e.g. F(\"dur\").sum()");
         }
         return FieldAggExpr(fn, n.name);
@@ -406,8 +406,8 @@ class FieldExpr {
                 return n.negated ? duql::field_not_in(n.name, n.in_ints)
                                  : duql::field_in(n.name, n.in_ints);
             default:
-                throw DFTUtilsException::cat(
-                    ErrorCode::InvalidArgument,
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::InvalidArgument,
                     "not an index-pushable predicate; compute it with apply() "
                     "or filter the materialized frame");
         }
@@ -415,8 +415,8 @@ class FieldExpr {
 
     static duql::Expr cmp_to_duql(const detail::FNode& n) {
         if (!n.a || n.a->kind != detail::FKind::Col) {
-            throw DFTUtilsException::cat(
-                ErrorCode::InvalidArgument,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument,
                 "not an index-pushable predicate; compute it with apply() or "
                 "filter the materialized frame");
         }
@@ -435,8 +435,8 @@ class FieldExpr {
                 return duql::field_cmp(n.a->name, op,
                                        duql::detail::literal(n.str));
         }
-        throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
-                                     "unhandled comparison rhs");
+        throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
+                                             "unhandled comparison rhs");
     }
 
     static void collect_value_columns(const detail::FNode& n,
@@ -464,8 +464,8 @@ class FieldExpr {
             case FKind::Cmp:
                 if (n.rhs != detail::RhsKind::Int &&
                     n.rhs != detail::RhsKind::Float) {
-                    throw DFTUtilsException::cat(
-                        ErrorCode::InvalidArgument,
+                    throw common::DFTUtilsException::cat(
+                        common::ErrorCode::InvalidArgument,
                         "string/bool comparison is filter-only; push it down "
                         "with View::filter / to_duql()");
                 }
@@ -473,8 +473,8 @@ class FieldExpr {
                 return;
             case FKind::Match:
             case FKind::In:
-                throw DFTUtilsException::cat(
-                    ErrorCode::InvalidArgument,
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::InvalidArgument,
                     "string-match / membership is filter-only; push it down "
                     "with View::filter / to_duql()");
         }
@@ -519,8 +519,8 @@ class FieldExpr {
             case FKind::Not:
                 return expr_not(to_value_expr(*n.a, index));
             default:
-                throw DFTUtilsException::cat(
-                    ErrorCode::InvalidArgument,
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::InvalidArgument,
                     "filter-only predicate has no in-memory form");
         }
     }

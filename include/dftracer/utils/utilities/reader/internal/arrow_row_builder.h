@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/time_metric.h>
-#include <dftracer/utils/utilities/common/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <simdjson.h>
 
 #include <string>
@@ -36,13 +36,13 @@ struct RowBuildOptions {
 // row is mapped into the semantic output schema (see normalize_row); otherwise
 // every field is passed through with its native type. Returns false when the
 // row should be skipped.
-bool build_arrow_row(common::arrow::RecordBatchBuilder &builder,
+bool build_arrow_row(arrow::RecordBatchBuilder &builder,
                      json::JsonParser &parser, dstd::StringArena &arena,
                      bool normalize, TimeScaleState &time_scale,
                      const RowBuildOptions &opts = {});
 
 // Flatten a simdjson object into "prefix.key" columns using native types.
-bool process_json_line(common::arrow::RecordBatchBuilder &builder,
+bool process_json_line(arrow::RecordBatchBuilder &builder,
                        json::JsonParser &parser, dstd::StringArena &arena,
                        std::string_view content, bool normalize,
                        TimeScaleState &time_scale,

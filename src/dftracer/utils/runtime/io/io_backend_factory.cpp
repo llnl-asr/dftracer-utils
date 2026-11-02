@@ -47,16 +47,18 @@ constexpr bool HAVE_IO_URING =
 
 [[noreturn]] void fail_backend_env(std::string_view value,
                                    std::string_view why) {
-    throw DFTUtilsException(
-        ErrorCode::InvalidArgument,
-        str_cat(constants::io_settings::BACKEND_ENV, ": '", value, "' ", why));
+    throw common::DFTUtilsException(
+        common::ErrorCode::InvalidArgument,
+        common::str_cat(common::constants::io_settings::BACKEND_ENV, ": '",
+                        value, "' ", why));
 }
 
 // Auto when the variable is unset, empty or "auto". Otherwise the backend it
 // names. One the platform lacks or an unknown name throws.
 IoBackendType backend_from_env(bool& forced) {
     forced = false;
-    auto raw = Env::get<std::string_view>(constants::io_settings::BACKEND_ENV);
+    auto raw = common::Env::get<std::string_view>(
+        common::constants::io_settings::BACKEND_ENV);
     if (!raw || raw->empty() || *raw == "auto") return IoBackendType::Auto;
     forced = true;
     if (*raw == "threadpool") return IoBackendType::Threadpool;

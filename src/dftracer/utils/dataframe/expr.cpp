@@ -467,13 +467,13 @@ Expr make_time_node(ExprKind k, std::int32_t part, const Expr& a,
 }  // namespace
 Expr expr_date_part(const Expr& a, std::int32_t part,
                     std::int64_t ns_per_unit) {
-    if (!is_date_part_code(part))
+    if (!common::is_date_part_code(part))
         throw std::invalid_argument("expr: unknown date part");
     return make_time_node(ExprKind::DatePart, part, a, ns_per_unit, {});
 }
 Expr expr_format_time(const Expr& a, std::string_view fmt,
                       std::int64_t ns_per_unit) {
-    const std::string_view bad = invalid_time_format(fmt);
+    const std::string_view bad = common::invalid_time_format(fmt);
     if (!bad.empty())
         throw std::invalid_argument("expr: invalid time format directive '" +
                                     std::string(bad) + "'");
@@ -2654,11 +2654,12 @@ Series date_part_kernel(const Series& sa, std::int32_t part,
     with_num(a->type, [&](auto xa) {
         using A = decltype(xa);
         const A* pa = values_of<A>(a);
-        const auto p = static_cast<DatePart>(part);
+        const auto p = static_cast<common::DatePart>(part);
         for (std::int64_t i = 0; i < a->length; ++i) {
             if (!valid_at(a, i)) continue;
             if (const auto t = time_units<A>(pa[i]))
-                c.set(i, date_part(civil_time(*t, ns_per_unit), p));
+                c.set(i, common::date_part(common::civil_time(*t, ns_per_unit),
+                                           p));
         }
     });
     return c.finish(TypeId::Int64);
@@ -2675,7 +2676,9 @@ Series format_time_kernel(const Series& sa, std::string_view fmt,
         const A* pa = values_of<A>(a);
         for (std::int64_t i = 0; i < a->length; ++i) {
             const auto t = valid_at(a, i) ? time_units<A>(pa[i]) : std::nullopt;
-            if (t) format_time(c.buf(), civil_time(*t, ns_per_unit), fmt);
+            if (t)
+                common::format_time(c.buf(),
+                                    common::civil_time(*t, ns_per_unit), fmt);
             c.end_row(t.has_value());
         }
     });
@@ -3960,7 +3963,8 @@ dftu_expr* dftu_expr_str_replace(const dftu_expr* a, const char* from,
 }
 dftu_expr* dftu_expr_date_part(const dftu_expr* a, int32_t part,
                                int64_t ns_per_unit) {
-    if (!a || !dftracer::utils::is_date_part_code(part) || ns_per_unit <= 0)
+    if (!a || !dftracer::utils::common::is_date_part_code(part) ||
+        ns_per_unit <= 0)
         return nullptr;
     return wrap(dataframe::expr_date_part(unwrap(a), part, ns_per_unit));
 }
@@ -3969,7 +3973,8 @@ dftu_expr* dftu_expr_format_time(const dftu_expr* a, const char* fmt,
     if (!a || fmt_len < 0 || (fmt_len > 0 && !fmt) || ns_per_unit <= 0)
         return nullptr;
     const std::string_view f(fmt ? fmt : "", static_cast<std::size_t>(fmt_len));
-    if (!dftracer::utils::invalid_time_format(f).empty()) return nullptr;
+    if (!dftracer::utils::common::invalid_time_format(f).empty())
+        return nullptr;
     return wrap(dataframe::expr_format_time(unwrap(a), f, ns_per_unit));
 }
 dftu_expr* dftu_expr_str_slice(const dftu_expr* a, int64_t start, int64_t len) {

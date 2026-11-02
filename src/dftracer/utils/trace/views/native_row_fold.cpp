@@ -1156,9 +1156,9 @@ std::string canonical_row_column_name(std::string_view sel, bool by_path) {
     if (is_top_level(sel)) return std::string(sel);
     if (is_iocat_field(sel)) return std::string(sel);
     if (is_accpat_field(sel)) return std::string(sel);
-    const std::string_view key = strip_args_prefix(sel);
+    const std::string_view key = common::strip_args_prefix(sel);
     if (is_hash_field(key)) return std::string(key);
-    return std::string(dftracer::utils::ARGS_PREFIX) + std::string(key);
+    return std::string(dftracer::utils::common::ARGS_PREFIX) + std::string(key);
 }
 
 dataframe::TypeId row_column_type(std::string_view sel, bool by_path) {
@@ -1185,7 +1185,7 @@ dataframe::TypeId row_column_type(std::string_view sel, bool by_path) {
     }
     if (is_iocat_field(sel)) return df::TypeId::Int64;
     if (is_accpat_field(sel)) return df::TypeId::String;
-    const std::string_view key = strip_args_prefix(sel);
+    const std::string_view key = common::strip_args_prefix(sel);
     if (is_hash_field(key)) return df::TypeId::String;
     return df::TypeId::Unknown;  // a flattened arg: type is data-dependent
 }
@@ -1232,7 +1232,7 @@ df::Series select_column(EventRows evs,
         return iocat_column(evs, intern);
     } else if (is_accpat_field(sel)) {
         return accpat_column(evs);
-    } else if (const std::string_view key = strip_args_prefix(sel);
+    } else if (const std::string_view key = common::strip_args_prefix(sel);
                is_hash_field(key)) {
         return hash_column(evs, key, intern);
     } else {
@@ -1269,7 +1269,7 @@ RowKeySource row_key_source(std::string_view sel, bool by_path) {
         is_derived_agg_field(sel, f) || is_iocat_field(sel) ||
         is_accpat_field(sel))
         return out;
-    const std::string_view key = strip_args_prefix(sel);
+    const std::string_view key = common::strip_args_prefix(sel);
     const std::string_view field = is_top_level(sel) ? sel : key;
     if (is_top_level(sel) || is_hash_field(key)) {
         if (field == "name")
@@ -1326,7 +1326,7 @@ dataframe::DataFrame build_row_frame(
             out.columns.push_back(hash_column(evs, "hhash", *intern_));
         }
         append_all_arg_columns(evs, *intern_, out,
-                               dftracer::utils::ARGS_PREFIX);
+                               dftracer::utils::common::ARGS_PREFIX);
     } else {
         for (const std::string& sel : select_) {
             out.names.push_back(canonical_row_column_name(sel, by_path));

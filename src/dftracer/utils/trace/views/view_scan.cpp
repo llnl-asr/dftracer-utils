@@ -67,9 +67,9 @@ void require_role(const ViewPlan& plan, std::string_view op, TraceRole role) {
     const auto& record_schema = plan_record_schema(plan);
     auto need = [&](const std::string& path, std::string_view name) {
         if (path.empty())
-            throw DFTUtilsException::cat(ErrorCode::InvalidArgument, op,
-                                         " needs a ", name, " role; schema ",
-                                         record_schema.id, " binds none");
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument, op, " needs a ", name,
+                " role; schema ", record_schema.id, " binds none");
     };
     need(record_schema.roles.time, "time");
     if (role == TraceRole::Duration)
@@ -88,8 +88,8 @@ std::optional<duql::Query> phase_query(const ViewPlan& plan) {
     if (plan_by_path(plan)) {
         if (plan.phase == Phase::Events || plan.phase == Phase::Any)
             return plan.query;
-        throw DFTUtilsException(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
             "record schema '" + plan_record_schema(plan).id +
                 "' decodes records by path, which have no phase; only the "
                 "events phase (every record) applies");
@@ -333,8 +333,8 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                     // Fail loudly: dropping the file would silently omit its
                     // events from the result.
                     if (!md.success)
-                        throw DFTUtilsException(
-                            ErrorCode::Io,
+                        throw common::DFTUtilsException(
+                            common::ErrorCode::Io,
                             "gather_units: metadata read failed for " +
                                 f.file_path + ": " + md.error_message);
                     uc_sizes[fi] = md.uncompressed_size;
@@ -357,7 +357,7 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
     for (const auto& f : plan.files) {
         if (f.index_path.empty()) continue;
         if (!seen_roots.insert(dstd::String(f.index_path)).second) continue;
-        if (!input_exists(ix::store_of(f.index_path))) continue;
+        if (!common::input_exists(ix::store_of(f.index_path))) continue;
         if (auto taken = ix::plan::open_snapshot(f.index_path))
             snapshots.emplace(dstd::String(f.index_path), std::move(*taken));
     }
@@ -375,9 +375,10 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                     ViewPlannerInput pin;
                     pin.with_view(vdef)
                         .with_file_path(f.file_path)
-                        .with_index_path(input_exists(ix::store_of(index_path))
-                                             ? index_path
-                                             : "")
+                        .with_index_path(
+                            common::input_exists(ix::store_of(index_path))
+                                ? index_path
+                                : "")
                         .with_uncompressed_size(uc_sizes[fi])
                         .with_num_checkpoints(ckpt_counts[fi]);
                     const auto held =
@@ -393,7 +394,8 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                     auto planned = co_await planner(pin);
                     // A planner error must propagate; file_may_match == false
                     // is a legitimate prune, so that one stays a quiet skip.
-                    if (!planned) throw DFTUtilsException(planned.error());
+                    if (!planned)
+                        throw common::DFTUtilsException(planned.error());
                     skip_v[fi] = planned->skipped_checkpoints;
                     if (!planned->file_may_match) co_return;
 
@@ -446,7 +448,8 @@ bool any_file_missing_extension(
             if (at == snapshots.end())
                 at = snapshots
                          .emplace(f.index_path,
-                                  unwrap(ix::plan::open_snapshot(f.index_path)))
+                                  common::unwrap(
+                                      ix::plan::open_snapshot(f.index_path)))
                          .first;
             const auto file = at->second.file(
                 ix::store::internal::get_logical_path(f.file_path));

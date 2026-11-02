@@ -3,8 +3,8 @@
 
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/io/ops.h>
-#include <dftracer/utils/utilities/common/arrow/array_view.h>
-#include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
+#include <dftracer/utils/utilities/arrow/array_view.h>
+#include <dftracer/utils/utilities/arrow/ipc_writer.h>
 #include <fcntl.h>
 #include <flatcc/flatcc_builder.h>
 #include <nanoarrow/ipc/flatcc_generated.h>
@@ -19,7 +19,7 @@
 
 #define ns(x) FLATBUFFERS_WRAP_NAMESPACE(org_apache_arrow_flatbuf, x)
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 using FileBlock = ArrowIpcFileBlock;
 
@@ -652,6 +652,6 @@ coro::CoroTask<int> IpcWriter::close() {
     co_return rc;
 }
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC

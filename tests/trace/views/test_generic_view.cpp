@@ -33,7 +33,7 @@ std::string write_ndjson(TestEnvironment& env, const std::string& name) {
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
@@ -181,7 +181,7 @@ TEST_SUITE("GenericView") {
     TEST_CASE("files without records take no vote") {
         TestEnvironment env(10);
         const auto dft = create_mixed_trace(env, 5, 5);
-        const auto dir = fs::path(dft).parent_path();
+        const auto dir = dftracer::utils::common::fs::path(dft).parent_path();
         std::ofstream(dir / "rank_1.pfw.gz");
         {
             const auto meta = (dir / "rank_2.pfw").string();
@@ -190,7 +190,7 @@ TEST_SUITE("GenericView") {
                    R"("ph":"M","args":{"name":"host","value":"h1"}})"
                 << "\n";
             REQUIRE(dftu_utils_test::compress_file_to_gzip(meta, meta + ".gz"));
-            fs::remove(meta);
+            dftracer::utils::common::fs::remove(meta);
         }
         // Unindexed, then indexed with each file's own detection.
         auto rows = [&] {

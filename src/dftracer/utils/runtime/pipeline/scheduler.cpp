@@ -485,7 +485,7 @@ void Scheduler::submit_task_to_executor(std::shared_ptr<Task> task,
     auto input_ptr = std::make_shared<std::any>(std::move(input));
 
     // Determine parent task ID for tracking
-    TaskIndex parent_id = -1;
+    common::TaskIndex parent_id = -1;
     if (executor_) {
         parent_id = executor_->current_worker_task_id();
     }
@@ -498,14 +498,14 @@ void Scheduler::submit_task_to_executor(std::shared_ptr<Task> task,
 }
 
 size_t Scheduler::count_reachable_tasks(std::shared_ptr<Task> source) {
-    std::unordered_set<TaskIndex> visited;
+    std::unordered_set<common::TaskIndex> visited;
     size_t count = 0;
     count_tasks_dfs(source, visited, count);
     return count;
 }
 
 void Scheduler::count_tasks_dfs(std::shared_ptr<Task> task,
-                                std::unordered_set<TaskIndex>& visited,
+                                std::unordered_set<common::TaskIndex>& visited,
                                 size_t& count) {
     if (!task || visited.find(task->get_id()) != visited.end()) {
         return;
@@ -520,12 +520,13 @@ void Scheduler::count_tasks_dfs(std::shared_ptr<Task> task,
 }
 
 void Scheduler::initialize_pending_counts(std::shared_ptr<Task> source) {
-    std::unordered_set<TaskIndex> visited;
+    std::unordered_set<common::TaskIndex> visited;
     initialize_pending_counts_dfs(source, visited);
 }
 
 void Scheduler::initialize_pending_counts_dfs(
-    std::shared_ptr<Task> task, std::unordered_set<TaskIndex>& visited) {
+    std::shared_ptr<Task> task,
+    std::unordered_set<common::TaskIndex>& visited) {
     if (!task || visited.find(task->get_id()) != visited.end()) {
         return;
     }
@@ -585,7 +586,7 @@ void Scheduler::handle_task_error(std::shared_ptr<Task> task) {
 
 void Scheduler::validate_task_types(std::shared_ptr<Task> task) {
     // BFS to validate types for this task and all descendants
-    std::unordered_set<TaskIndex> visited;
+    std::unordered_set<common::TaskIndex> visited;
     std::queue<std::shared_ptr<Task>> queue;
 
     queue.push(task);
@@ -702,13 +703,13 @@ void Scheduler::set_default_task_timeout(std::chrono::milliseconds timeout) {
 // ============================================================================
 
 void Scheduler::register_task_completion_callback(
-    TaskIndex task_id, std::function<void()> callback) {
+    common::TaskIndex task_id, std::function<void()> callback) {
     completion_callbacks_.with_shard(task_id, [&](CallbackMap& callbacks) {
         callbacks[task_id].push_back(std::move(callback));
     });
 }
 
-void Scheduler::invoke_completion_callbacks(TaskIndex task_id) {
+void Scheduler::invoke_completion_callbacks(common::TaskIndex task_id) {
     // Only locks the specific shard for this task_id
     // Other tasks completing concurrently don't block
     completion_callbacks_.with_shard(task_id, [&](CallbackMap& callbacks) {

@@ -126,7 +126,8 @@ std::unique_ptr<ParallelWriter> make_writer(const WriterConfig& cfg) {
     // Padded striped needs gzip and a large-enough stripe to guarantee a
     // compressed flush fits one slot. Below the minimum, fall back to the
     // atomic-byte-offset writer.
-    LayoutInfo info{cfg.layout, FilesystemKind::Unknown, cfg.stripe_size, 0};
+    LayoutInfo info{cfg.layout, common::FilesystemKind::Unknown,
+                    cfg.stripe_size, 0};
     if (uses_padded_layout(info, cfg.gzip)) {
         return make_padded_striped_writer(cfg.stripe_size);
     }

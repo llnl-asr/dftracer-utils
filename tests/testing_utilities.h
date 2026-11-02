@@ -140,7 +140,8 @@ inline int valgrind_threads(int n) {
 #endif
 }
 
-inline fs::path make_unique_test_path(const std::string& name) {
+inline dftracer::utils::common::fs::path make_unique_test_path(
+    const std::string& name) {
     static std::atomic<unsigned long long> counter{0};
     // The pid is what keeps concurrently running test processes apart. None
     // of the other components do: steady_clock reads the same on processes
@@ -158,7 +159,8 @@ inline fs::path make_unique_test_path(const std::string& name) {
         std::to_string(pid) + "_" + std::to_string(now) + "_" +
         std::to_string(tid) + "_" +
         std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
-    return fs::temp_directory_path() / (name + "_" + unique_id);
+    return dftracer::utils::common::fs::temp_directory_path() /
+           (name + "_" + unique_id);
 }
 
 /// Write `content` as a gzip trace at `path` and return that path. Traces
@@ -292,16 +294,16 @@ class ScopedTestDir {
    public:
     explicit ScopedTestDir(const std::string& tag) {
         path_ = make_unique_test_path(tag);
-        fs::create_directories(path_);
+        dftracer::utils::common::fs::create_directories(path_);
     }
     ScopedTestDir(const ScopedTestDir&) = delete;
     ScopedTestDir& operator=(const ScopedTestDir&) = delete;
     ~ScopedTestDir() {
         std::error_code ec;
-        fs::remove_all(path_, ec);
+        dftracer::utils::common::fs::remove_all(path_, ec);
     }
 
-    const fs::path& path() const { return path_; }
+    const dftracer::utils::common::fs::path& path() const { return path_; }
     std::string str() const { return path_.string(); }
     /// `name` resolved inside the directory.
     std::string file(const std::string& name) const {
@@ -311,18 +313,18 @@ class ScopedTestDir {
     /// Write `content` at `relative_path`, creating any parent directories.
     void create_file(const std::string& relative_path,
                      const std::string& content = "test") const {
-        const fs::path p = path_ / relative_path;
-        fs::create_directories(p.parent_path());
+        const dftracer::utils::common::fs::path p = path_ / relative_path;
+        dftracer::utils::common::fs::create_directories(p.parent_path());
         std::ofstream ofs(p);
         ofs << content;
     }
 
     void create_dir(const std::string& relative_path) const {
-        fs::create_directories(path_ / relative_path);
+        dftracer::utils::common::fs::create_directories(path_ / relative_path);
     }
 
    private:
-    fs::path path_;
+    dftracer::utils::common::fs::path path_;
 };
 
 #ifdef DFTRACER_UTILS_MPI_ENABLED

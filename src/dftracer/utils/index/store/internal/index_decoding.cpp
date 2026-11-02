@@ -92,8 +92,8 @@ index::gzip::GzipMemberRecord decode_gzip_member(std::uint32_t member_idx,
         const auto kind = cursor.u8();
         if (kind >
             static_cast<std::uint8_t>(index::gzip::GzipRecordKind::Restart))
-            throw DFTUtilsException::cat(ErrorCode::Indexer,
-                                         "unknown gzip record kind ", kind);
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Indexer, "unknown gzip record kind ", kind);
         member.kind = static_cast<index::gzip::GzipRecordKind>(kind);
         member.bits = cursor.u8();
     }

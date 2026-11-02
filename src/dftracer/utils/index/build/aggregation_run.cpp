@@ -19,10 +19,10 @@ AggRun::AggRun(std::string path,
 
 AggRun start_aggregation(const std::string& index_path,
                          const agg::AggregationConfig& config) {
-    auto target = unwrap(index::Index::open(
+    auto target = common::unwrap(index::Index::open(
         index::store::internal::normalize_index_root(index_path)));
     auto intern = agg::intern_for_index(index_path);
-    unwrap(agg_dictionary(unwrap(target.snapshot()), *intern));
+    common::unwrap(agg_dictionary(common::unwrap(target.snapshot()), *intern));
     agg::tier::write_config(target,
                             {config.time_interval_us, config.params_hash(),
                              config.group_by_file, config.extra_group_keys});
@@ -36,7 +36,7 @@ AggRun start_aggregation(const std::string& index_path,
 }
 
 void finish_aggregation(AggRun& run, IndexBuildBatchResult& batch) {
-    auto target = unwrap(index::Index::open(
+    auto target = common::unwrap(index::Index::open(
         index::store::internal::normalize_index_root(run.index_path)));
     agg::merge_aggregation_folds(batch.agg_outputs, target);
 }
@@ -44,7 +44,7 @@ void finish_aggregation(AggRun& run, IndexBuildBatchResult& batch) {
 void clear_aggregation(const std::string& index_path) {
     DFTRACER_UTILS_LOG_INFO("Clearing the aggregation tier of %s",
                             index_path.c_str());
-    auto target = unwrap(index::Index::open(
+    auto target = common::unwrap(index::Index::open(
         index::store::internal::normalize_index_root(index_path)));
     agg::tier::clear(target);
 }

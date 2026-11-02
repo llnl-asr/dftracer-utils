@@ -126,7 +126,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
             probe.entered.store(true);
             try {
                 co_await semaphore.acquire(1);
-            } catch (const DFTUtilsException& e) {
+            } catch (const common::DFTUtilsException& e) {
                 probe.cancelled.store(coro::is_cancelled(e));
             }
             probe.finished.store(true);
@@ -150,7 +150,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
             probe.entered.store(true);
             try {
                 co_await mutex.lock();
-            } catch (const DFTUtilsException& e) {
+            } catch (const common::DFTUtilsException& e) {
                 probe.cancelled.store(coro::is_cancelled(e));
             }
             probe.finished.store(true);
@@ -170,7 +170,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
             children.push_back(stuck_child(&gate));
             try {
                 co_await coro::when_all(std::move(children));
-            } catch (const DFTUtilsException& e) {
+            } catch (const common::DFTUtilsException& e) {
                 probe.cancelled.store(coro::is_cancelled(e));
             }
             probe.finished.store(true);
@@ -192,7 +192,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
             probe.entered.store(true);
             try {
                 co_await coro::timeout(1h, &rt.executor()->get_timer_service());
-            } catch (const DFTUtilsException& e) {
+            } catch (const common::DFTUtilsException& e) {
                 probe.cancelled.store(coro::is_cancelled(e));
             }
             probe.finished.store(true);
@@ -235,7 +235,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
             probe.entered.store(true);
             try {
                 co_await channel->receive();
-            } catch (const DFTUtilsException& e) {
+            } catch (const common::DFTUtilsException& e) {
                 probe.cancelled.store(coro::is_cancelled(e));
             }
             probe.finished.store(true);
@@ -252,7 +252,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
             probe.entered.store(true);
             try {
                 co_await channel->send(2);
-            } catch (const DFTUtilsException& e) {
+            } catch (const common::DFTUtilsException& e) {
                 probe.cancelled.store(coro::is_cancelled(e));
             }
             probe.finished.store(true);
@@ -273,7 +273,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
                     auto v = co_await channel->receive();
                     co_return v ? *v : 0;
                 });
-            } catch (const DFTUtilsException& e) {
+            } catch (const common::DFTUtilsException& e) {
                 leader.cancelled.store(coro::is_cancelled(e));
             }
             leader.finished.store(true);
@@ -285,7 +285,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
             probe.entered.store(true);
             try {
                 co_await once.get([]() -> coro::CoroTask<int> { co_return 1; });
-            } catch (const DFTUtilsException& e) {
+            } catch (const common::DFTUtilsException& e) {
                 probe.cancelled.store(coro::is_cancelled(e));
             }
             probe.finished.store(true);
@@ -304,7 +304,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
             try {
                 coro::SpawnFuture<int> future(state);
                 co_await future;
-            } catch (const DFTUtilsException& e) {
+            } catch (const common::DFTUtilsException& e) {
                 probe.cancelled.store(coro::is_cancelled(e));
             }
             probe.finished.store(true);
@@ -327,7 +327,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
                             std::atomic<bool>* cancelled) -> coro::Coro {
                 try {
                     co_await sem->acquire(1);
-                } catch (const DFTUtilsException& e) {
+                } catch (const common::DFTUtilsException& e) {
                     cancelled->store(coro::is_cancelled(e));
                 }
                 co_return;

@@ -168,9 +168,9 @@ void genesis(const std::string& root) {
 }
 
 std::string prepare_genesis(const std::string& dir, const Sizes& s) {
-    fs::remove_all(dir);
+    common::fs::remove_all(dir);
     const std::string run = dir + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
-    fs::create_directories(run);
+    common::fs::create_directories(run);
     std::ofstream(run + "/summary.json")
         << R"({"ok":true,"app":"app1","system":"sys1","input":"in1",)"
            R"("nodes":1,"ppn":)"
@@ -192,7 +192,8 @@ std::uint64_t calls_up_to(const SizeMix& m, std::size_t max_bucket) {
 
 SizeMix collect_mix(const Sizes& s) {
     const std::string dir =
-        (fs::temp_directory_path() / "counter_contention_bench").string();
+        (common::fs::temp_directory_path() / "counter_contention_bench")
+            .string();
     const std::string root = prepare_genesis(dir, s);
     SizeMix mix_out;
     std::array<std::uint64_t, mp::HISTOGRAM_BUCKETS> before{};
@@ -204,7 +205,7 @@ SizeMix collect_mix(const Sizes& s) {
         mix_out.counts[b] = mp::histogram_count(b) - before[b];
         mix_out.total += mix_out.counts[b];
     }
-    fs::remove_all(dir);
+    common::fs::remove_all(dir);
     return mix_out;
 }
 

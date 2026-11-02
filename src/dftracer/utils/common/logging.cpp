@@ -14,7 +14,7 @@
 #include <string>
 #include <string_view>
 
-namespace dftracer::utils::logger {
+namespace dftracer::utils::common::logger {
 
 namespace detail {
 std::atomic<int> g_level{static_cast<int>(Level::Info)};
@@ -259,4 +259,4 @@ void coro_trace_leave(void* handle) {
 }
 
 }  // namespace detail
-}  // namespace dftracer::utils::logger
+}  // namespace dftracer::utils::common::logger

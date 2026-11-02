@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
 #endif
 
 #include <cmath>
@@ -124,7 +124,7 @@ struct ComparisonOutput {
     /// variant, baseline_stdev, variant_stdev, delta, pct_change,
     /// cohens_d, significance, is_regression.
     /// Rows with all-zero values are skipped.
-    utilities::common::arrow::ArrowExportResult to_arrow() const;
+    utilities::arrow::ArrowExportResult to_arrow() const;
 #endif
 };
 

@@ -230,14 +230,14 @@ template <class Escape>
 class BasicLineFormat {
    public:
     /// INVALID_ARGUMENT for a format containing a newline or carriage return.
-    static Result<BasicLineFormat> parse(std::string_view fmt) {
+    static common::Result<BasicLineFormat> parse(std::string_view fmt) {
         BasicLineFormat f;
         const char* err = detail::scan(
             fmt, [&](char c) { f.text_.push_back(c); },
             [&] { f.end_.push_back(f.text_.size()); });
         if (err)
-            return make_error(ErrorCode::InvalidArgument,
-                              std::string("line format: ") + err);
+            return common::make_error(common::ErrorCode::InvalidArgument,
+                                      std::string("line format: ") + err);
         f.end_.push_back(f.text_.size());
         return f;
     }

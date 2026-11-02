@@ -206,7 +206,7 @@ std::string text(const df::DataFrame& f) {
 bool fails_with(const std::string& q, std::vector<std::string> words) {
     try {
         (void)frame(base().duql(q));
-    } catch (const DFTUtilsException& e) {
+    } catch (const dftracer::utils::common::DFTUtilsException& e) {
         const std::string what = e.what();
         for (const auto& w : words)
             if (what.find(w) == std::string::npos) {
@@ -233,7 +233,7 @@ View view_of_lines(TestEnvironment& env, const std::vector<std::string>& lines,
     }
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     dftracer::utils::index::Indexer::open({gz}).build();
     return View::from_file(gz, determine_index_path(gz, ""));
 }
@@ -294,7 +294,8 @@ TEST_SUITE("View duql pipeline") {
         CHECK(pipe("where dur > 0.03ms").num_rows() == 18);
         CHECK(pipe("where dur between 10us and 0.012ms").num_rows() == 3);
         CHECK(pipe("derive x = 1 | where dur + 1us > 39us").num_rows() == 2);
-        CHECK_THROWS_AS(base().duql("where pid > 1ms"), DFTUtilsException);
+        CHECK_THROWS_AS(base().duql("where pid > 1ms"),
+                        dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("a duration keeps its unit only where the unit is clear") {
@@ -315,7 +316,8 @@ TEST_SUITE("View duql pipeline") {
                               "group name { c = count() } | where c > 1ms",
                               "derive x = dur / 1000 | where x > 30us"}) {
             CAPTURE(q);
-            CHECK_THROWS_AS(base().duql(q), DFTUtilsException);
+            CHECK_THROWS_AS(base().duql(q),
+                            dftracer::utils::common::DFTUtilsException);
         }
     }
 
@@ -450,7 +452,8 @@ TEST_SUITE("View duql pipeline") {
              {"where name == $names", "where name in $one",
               "where name like $names", "where name in $nope"}) {
             CAPTURE(q);
-            CHECK_THROWS_AS(base().duql(q, p), DFTUtilsException);
+            CHECK_THROWS_AS(base().duql(q, p),
+                            dftracer::utils::common::DFTUtilsException);
         }
     }
 
@@ -648,7 +651,8 @@ TEST_SUITE("View duql pipeline") {
         CHECK(nums(pipe("sort ts | take 1..1 | select ts"), "ts").size() == 1);
         for (const char* q : {"take 0..2", "take 5..3", "take 1..2 by cat"}) {
             CAPTURE(q);
-            CHECK_THROWS_AS(base().duql(q), DFTUtilsException);
+            CHECK_THROWS_AS(base().duql(q),
+                            dftracer::utils::common::DFTUtilsException);
         }
     }
 
@@ -686,7 +690,7 @@ TEST_SUITE("View duql pipeline") {
             try {
                 (void)base().duql(q);
                 FAIL("no error");
-            } catch (const DFTUtilsException& e) {
+            } catch (const dftracer::utils::common::DFTUtilsException& e) {
                 CHECK(std::string(e.what()).find("'count'") !=
                       std::string::npos);
             }
@@ -1098,7 +1102,7 @@ TEST_SUITE("View duql aggregation") {
         CHECK(pipe("time_range .. 1006 overlap").num_rows() ==
               pipe("where ts < 1006").num_rows());
         CHECK_THROWS_AS(base().duql("time_range 2ms .. 1ms"),
-                        DFTUtilsException);
+                        dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("sample takes parameters and bucket a name") {
@@ -1160,7 +1164,7 @@ TEST_SUITE("View duql aggregation") {
         ::setenv("DUQL_FILL_MAX_ROWS", "5", 1);
         CHECK_THROWS_AS(
             frame(base().duql("bucket 100us fill | agg { n = count() }")),
-            DFTUtilsException);
+            dftracer::utils::common::DFTUtilsException);
         ::unsetenv("DUQL_FILL_MAX_ROWS");
     }
 
@@ -1288,7 +1292,7 @@ TEST_SUITE("View duql aggregation") {
         CHECK_THROWS_AS(
             frame(
                 v.duql("bucket 1ms fill from 0 to 8ms | agg { n = count() }")),
-            DFTUtilsException);
+            dftracer::utils::common::DFTUtilsException);
         ::unsetenv("DUQL_FILL_MAX_ROWS");
     }
 
@@ -1512,7 +1516,7 @@ TEST_SUITE("View duql aggregation") {
         try {
             (void)generic.duql("time_range 1s .. 2s");
             FAIL("expected a failure");
-        } catch (const DFTUtilsException& e) {
+        } catch (const dftracer::utils::common::DFTUtilsException& e) {
             CHECK(std::string(e.what()).find("time role") != std::string::npos);
         }
     }
@@ -1650,7 +1654,7 @@ TEST_SUITE("View duql quantifiers") {
             // After the scan, elements of mixed types have no column kernel.
             CHECK_THROWS_WITH_AS(frame(v.duql(both(cond).back())),
                                  doctest::Contains("mix types"),
-                                 DFTUtilsException);
+                                 dftracer::utils::common::DFTUtilsException);
         }
     }
 
@@ -1665,7 +1669,7 @@ TEST_SUITE("View duql quantifiers") {
         CHECK(rows(frame(v.duql(both("any(g[-1], . == 2)").front()))) == "2");
         CHECK_THROWS_WITH_AS(frame(v.duql(both("any(g[-1], . == 2)").back())),
                              doctest::Contains("negative index"),
-                             DFTUtilsException);
+                             dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("a quantifier in a derive") {
@@ -2322,7 +2326,7 @@ TEST_SUITE("View duql pivot and unpivot") {
         std::string what;
         try {
             (void)frame(v.duql("select m | pivot m { n = count() }"));
-        } catch (const DFTUtilsException& e) {
+        } catch (const dftracer::utils::common::DFTUtilsException& e) {
             what = e.what();
         }
         unsetenv("DUQL_PIVOT_MAX_COLUMNS");
@@ -2352,7 +2356,7 @@ TEST_SUITE("View duql pivot and unpivot") {
         std::string what;
         try {
             (void)frame(v.duql("select a, s | unpivot a, s as k, v"));
-        } catch (const DFTUtilsException& e) {
+        } catch (const dftracer::utils::common::DFTUtilsException& e) {
             what = e.what();
         }
         CHECK(what.find("mixes") != std::string::npos);
@@ -2381,7 +2385,7 @@ TEST_SUITE("View duql reshape determinism") {
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                            member_bytes);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         dftracer::utils::index::Indexer::open({gz}).build();
         return gz;
     }
@@ -2603,7 +2607,7 @@ TEST_SUITE("View duql array and object functions") {
         try {
             (void)frame(v.duql(R"(derive p = split(parse_json(j), ","))"));
             FAIL("split(parse_json(j)) compiled");
-        } catch (const DFTUtilsException& e) {
+        } catch (const dftracer::utils::common::DFTUtilsException& e) {
             CHECK(std::string(e.what()).find("scan filter") !=
                   std::string::npos);
         }
@@ -2617,7 +2621,7 @@ TEST_SUITE("View duql array and object functions") {
         try {
             (void)frame(v.duql("derive w = values(o)"));
             FAIL("values() of mixed fields compiled");
-        } catch (const DFTUtilsException& e) {
+        } catch (const dftracer::utils::common::DFTUtilsException& e) {
             CHECK(std::string(e.what()).find("different types") !=
                   std::string::npos);
         }
@@ -2785,7 +2789,7 @@ TEST_SUITE("View duql array indexes and lists") {
         try {
             (void)frame(v.duql("derive a = xs[$n]", p));
             FAIL("xs[$n] with a string compiled");
-        } catch (const DFTUtilsException& e) {
+        } catch (const dftracer::utils::common::DFTUtilsException& e) {
             CHECK(std::string(e.what()).find("$n") != std::string::npos);
         }
     }
@@ -2797,7 +2801,7 @@ TEST_SUITE("View duql array indexes and lists") {
         try {
             (void)frame(v.duql("derive z = 1 | where any(tags, xs[i] > 1)"));
             FAIL("an index in a quantifier compiled");
-        } catch (const DFTUtilsException& e) {
+        } catch (const dftracer::utils::common::DFTUtilsException& e) {
             CHECK(std::string(e.what()).find("call_column") !=
                   std::string::npos);
         }
@@ -2822,7 +2826,7 @@ TEST_SUITE("View duql session") {
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                            member_bytes);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         dftracer::utils::index::Indexer::open({gz}).build();
         return gz;
     }

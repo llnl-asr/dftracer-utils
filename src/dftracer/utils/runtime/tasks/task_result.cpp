@@ -77,7 +77,8 @@ std::any TaskResult::get() const {
         std::rethrow_exception(exception_);
     }
     if (s == State::Cancelled) {
-        throw DFTUtilsException(ErrorCode::Pipeline, "Task was cancelled");
+        throw common::DFTUtilsException(common::ErrorCode::Pipeline,
+                                        "Task was cancelled");
     }
     return value_;  // returns COPY
 }
@@ -90,7 +91,8 @@ std::any TaskResult::get_ready() const {
         std::rethrow_exception(exception_);
     }
     if (s == State::Cancelled) {
-        throw DFTUtilsException(ErrorCode::Pipeline, "Task was cancelled");
+        throw common::DFTUtilsException(common::ErrorCode::Pipeline,
+                                        "Task was cancelled");
     }
     return value_;  // returns COPY
 }

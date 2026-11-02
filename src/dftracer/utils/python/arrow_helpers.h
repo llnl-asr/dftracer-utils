@@ -5,11 +5,11 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <Python.h>
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 namespace dftracer::utils::python {
 
-using utilities::common::arrow::ArrowExportResult;
+using utilities::arrow::ArrowExportResult;
 
 /// Wrap an ArrowExportResult in an ArrowBatchCapsuleObject.
 /// Returns a new reference, or NULL on error.

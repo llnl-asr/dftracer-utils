@@ -4,7 +4,7 @@
 #include <mutex>
 #include <string_view>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 namespace {
 
@@ -70,4 +70,4 @@ void forget_input(const std::string& path) {
     if (cache) cache->erase(path);
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

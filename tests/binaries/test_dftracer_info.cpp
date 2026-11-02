@@ -23,7 +23,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    fs::rename(trace_gz, pfw_path);
+    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
     return pfw_path;
 }
 
@@ -172,8 +172,8 @@ TEST_SUITE("DFTracerInfo") {
         // Rewrite the same file with more events; the index is now stale.
         auto raw = env.create_dft_test_gzip_file(300);
         REQUIRE(!raw.empty());
-        fs::remove(f);
-        fs::rename(raw, f);
+        dftracer::utils::common::fs::remove(f);
+        dftracer::utils::common::fs::rename(raw, f);
 
         long n2 =
             valid_events(run_info_capture(binary, {"-d", env.get_dir()}, &rc));

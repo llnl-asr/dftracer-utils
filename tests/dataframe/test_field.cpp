@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <vector>
 
-using dftracer::utils::DFTUtilsException;
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::field::F;
@@ -90,7 +89,8 @@ TEST_SUITE("unified field F") {
     TEST_CASE("non-pushable predicate raises on to_duql but applies") {
         DataFrame df = make_frame();
         FieldExpr non_pushable = (F("a") + F("b")) > 3;
-        CHECK_THROWS_AS(non_pushable.to_duql(), DFTUtilsException);
+        CHECK_THROWS_AS(non_pushable.to_duql(),
+                        dftracer::utils::common::DFTUtilsException);
 
         Series mask = non_pushable.apply(df);  // (a+b) > 3 -> all true
         REQUIRE(mask.length() == 4);
@@ -99,12 +99,15 @@ TEST_SUITE("unified field F") {
 
     TEST_CASE("filter-only predicate raises on apply") {
         DataFrame df = make_frame();
-        CHECK_THROWS_AS(F("cat").like("i%").apply(df), DFTUtilsException);
-        CHECK_THROWS_AS((F("cat") == "io").apply(df), DFTUtilsException);
+        CHECK_THROWS_AS(F("cat").like("i%").apply(df),
+                        dftracer::utils::common::DFTUtilsException);
+        CHECK_THROWS_AS((F("cat") == "io").apply(df),
+                        dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("missing column raises on apply") {
         DataFrame df = make_frame();
-        CHECK_THROWS_AS(F("missing").apply(df), DFTUtilsException);
+        CHECK_THROWS_AS(F("missing").apply(df),
+                        dftracer::utils::common::DFTUtilsException);
     }
 }

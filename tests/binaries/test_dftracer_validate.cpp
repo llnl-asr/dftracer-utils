@@ -18,22 +18,25 @@ namespace {
 
 // Move a freshly generated valid pfw.gz into `dir`.
 std::string make_valid_pfw(dftu_utils_test::TestEnvironment& env,
-                           const fs::path& dir, int num_events, int id) {
+                           const dftracer::utils::common::fs::path& dir,
+                           int num_events, int id) {
     auto gz = env.create_dft_test_gzip_file(num_events);
     if (gz.empty()) return "";
     std::error_code ec;
-    fs::create_directories(dir, ec);
-    fs::path dest = dir / ("trace_" + std::to_string(id) + ".pfw.gz");
-    fs::rename(gz, dest, ec);
+    dftracer::utils::common::fs::create_directories(dir, ec);
+    dftracer::utils::common::fs::path dest =
+        dir / ("trace_" + std::to_string(id) + ".pfw.gz");
+    dftracer::utils::common::fs::rename(gz, dest, ec);
     if (ec) return "";
     return dest.string();
 }
 
 // Write a plain .pfw whose second event line is not valid JSON.
-std::string make_bad_pfw(const fs::path& dir, int id) {
+std::string make_bad_pfw(const dftracer::utils::common::fs::path& dir, int id) {
     std::error_code ec;
-    fs::create_directories(dir, ec);
-    fs::path p = dir / ("bad_" + std::to_string(id) + ".pfw");
+    dftracer::utils::common::fs::create_directories(dir, ec);
+    dftracer::utils::common::fs::path p =
+        dir / ("bad_" + std::to_string(id) + ".pfw");
     std::ofstream ofs(p);
     if (!ofs) return "";
     ofs << "[\n";
@@ -83,7 +86,8 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        fs::path work = fs::path(env.get_dir()) / "valid";
+        dftracer::utils::common::fs::path work =
+            dftracer::utils::common::fs::path(env.get_dir()) / "valid";
         REQUIRE(!make_valid_pfw(env, work, 30, 0).empty());
         REQUIRE(!make_valid_pfw(env, work, 20, 1).empty());
 
@@ -102,7 +106,8 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        fs::path root = fs::path(env.get_dir()) / "nested";
+        dftracer::utils::common::fs::path root =
+            dftracer::utils::common::fs::path(env.get_dir()) / "nested";
         REQUIRE(!make_valid_pfw(env, root / "a", 10, 0).empty());
         REQUIRE(!make_valid_pfw(env, root / "b" / "c", 10, 1).empty());
 
@@ -120,7 +125,8 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
-        auto bad = make_bad_pfw(fs::path(env.get_dir()) / "bad", 0);
+        auto bad = make_bad_pfw(
+            dftracer::utils::common::fs::path(env.get_dir()) / "bad", 0);
         REQUIRE(!bad.empty());
 
         int rc = -1;
@@ -137,9 +143,10 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
-        fs::path empty = fs::path(env.get_dir()) / "empty";
+        dftracer::utils::common::fs::path empty =
+            dftracer::utils::common::fs::path(env.get_dir()) / "empty";
         std::error_code ec;
-        fs::create_directories(empty, ec);
+        dftracer::utils::common::fs::create_directories(empty, ec);
 
         int rc = -1;
         run_validate_capture(binary, {"-d", empty.string()}, &rc);
@@ -154,7 +161,9 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        auto f = make_valid_pfw(env, fs::path(env.get_dir()) / "single", 25, 0);
+        auto f = make_valid_pfw(
+            env, dftracer::utils::common::fs::path(env.get_dir()) / "single",
+            25, 0);
         REQUIRE(!f.empty());
 
         int rc = -1;
@@ -171,7 +180,9 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        auto f = make_valid_pfw(env, fs::path(env.get_dir()) / "loglvl", 10, 0);
+        auto f = make_valid_pfw(
+            env, dftracer::utils::common::fs::path(env.get_dir()) / "loglvl",
+            10, 0);
         REQUIRE(!f.empty());
 
         int rc = -1;

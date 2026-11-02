@@ -13,12 +13,12 @@ namespace dftracer::utils::utilities::fileio {
  * @brief Configuration for streaming file read operations.
  */
 struct StreamReadInput {
-    fs::path path;
+    common::fs::path path;
     std::size_t chunk_size = 64 * 1024;  ///< 64KB default
 
     StreamReadInput() = default;
 
-    explicit StreamReadInput(fs::path p, std::size_t cs = 64 * 1024)
+    explicit StreamReadInput(common::fs::path p, std::size_t cs = 64 * 1024)
         : path(std::move(p)), chunk_size(cs) {}
 
     /// Equality for caching support
@@ -35,14 +35,15 @@ struct StreamReadInput {
  * @brief Result of a streaming write operation.
  */
 struct StreamWriteResult {
-    fs::path path;
+    common::fs::path path;
     std::size_t bytes_written = 0;
     std::size_t chunks_written = 0;
     bool success = false;
 
     StreamWriteResult() = default;
 
-    static StreamWriteResult success_result(fs::path p, std::size_t bytes,
+    static StreamWriteResult success_result(common::fs::path p,
+                                            std::size_t bytes,
                                             std::size_t chunks) {
         StreamWriteResult result;
         result.path = std::move(p);

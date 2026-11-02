@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 enum class FilesystemKind {
     Unknown,
@@ -66,6 +66,6 @@ struct StripeInfo {
 /// Returns an all-zero StripeInfo off Lustre or when the query is unavailable.
 StripeInfo lustre_stripe(const std::string& path) noexcept;
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_FILESYSTEM_INFO_H

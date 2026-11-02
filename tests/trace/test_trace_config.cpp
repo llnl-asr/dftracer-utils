@@ -42,7 +42,7 @@ std::string make_gz(TestEnvironment& env, const std::string& body) {
     }
     std::string gz = pfw + ".gz";
     compress_file_to_gzip_multimember(pfw, gz, 512);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 

@@ -50,11 +50,11 @@ std::optional<index::Snapshot> covering_index(const ViewPlan& plan) {
     const std::string& index_path = plan.files.front().index_path;
     if (index_path.empty()) return std::nullopt;
     try {
-        auto snapshot = unwrap(index::plan::open_snapshot(index_path));
-        const auto config = unwrap(agg::tier::read_config(snapshot));
+        auto snapshot = common::unwrap(index::plan::open_snapshot(index_path));
+        const auto config = common::unwrap(agg::tier::read_config(snapshot));
         if (!config) return std::nullopt;
         std::set<std::string> current;
-        for (const auto& file : unwrap(snapshot.files())) {
+        for (const auto& file : common::unwrap(snapshot.files())) {
             if (snapshot.extension(file, store::IndexExtension::Agg,
                                    config->params_hash) ==
                 index::Freshness::Current)
@@ -222,7 +222,7 @@ bool system_collect(const ViewPlan& plan, dataframe::DataFrame& out_table,
     auto index = covering_index(plan);
     if (!index) return false;
     if (shard_end <= 0) shard_end = agg::AGG_KEY_NUM_SHARDS;
-    const auto stored = unwrap(agg::tier::read_config(*index));
+    const auto stored = common::unwrap(agg::tier::read_config(*index));
     if (!stored) return false;
     agg::AggregationConfig cfg;
     cfg.time_interval_us = stored->time_interval_us;
@@ -232,7 +232,7 @@ bool system_collect(const ViewPlan& plan, dataframe::DataFrame& out_table,
         const auto file =
             index->file(store::internal::get_logical_path(f.file_path));
         if (!file) return false;
-        unwrap(index::for_each_agg_chunk_columns(
+        common::unwrap(index::for_each_agg_chunk_columns(
             *index, *file, [&](std::uint64_t, const agg::ChunkColumns& block) {
                 for (std::uint64_t r = 0; r < block.rows; ++r) {
                     GroupKey key;

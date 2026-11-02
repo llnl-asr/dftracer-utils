@@ -65,7 +65,7 @@ TEST_SUITE("member_cache_integration") {
     TEST_CASE("cached reads match uncached, and coalesce decodes") {
         const int n = 4000;
         auto dir = dftu_utils_test::make_unique_test_path("mcache");
-        fs::create_directories(dir);
+        common::fs::create_directories(dir);
         const std::string src = (dir / "src.pfw.gz").string();
         const std::string gz = (dir / "trace.pfw.gz").string();
         const std::string index_dir = (dir / "idx").string();
@@ -134,6 +134,6 @@ TEST_SUITE("member_cache_integration") {
         CHECK(decs < reqs);
         CHECK(decs * 2 < reqs);
 
-        fs::remove_all(dir);
+        common::fs::remove_all(dir);
     }
 }

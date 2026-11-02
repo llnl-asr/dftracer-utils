@@ -227,7 +227,8 @@ class GzipStream : public StreamBase {
         }
         if (!use_member_) {
             const auto initialize_ok = co_await inflater_.initialize(
-                fd_, file_offset_, 0, constants::indexer::ZLIB_GZIP_WINDOW_BITS,
+                fd_, file_offset_, 0,
+                common::constants::indexer::ZLIB_GZIP_WINDOW_BITS,
                 expected_out_bytes());
             if (!initialize_ok) {
                 throw ReaderError(ReaderError::CompressionError,
@@ -301,7 +302,8 @@ class GzipStream : public StreamBase {
             }
         } else {
             const auto initialize_ok = co_await inflater_.initialize(
-                fd_, file_offset_, 0, constants::indexer::ZLIB_GZIP_WINDOW_BITS,
+                fd_, file_offset_, 0,
+                common::constants::indexer::ZLIB_GZIP_WINDOW_BITS,
                 expected_out_bytes());
             if (!initialize_ok) {
                 throw ReaderError(ReaderError::CompressionError,

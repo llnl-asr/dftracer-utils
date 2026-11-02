@@ -37,9 +37,10 @@ std::string lookup_cache_path(const trace::views::detail::ViewPlan& plan) {
 std::optional<std::uint64_t> lookup_signature(
     const trace::views::detail::ViewPlan& plan, std::string_view side_text) {
     if (!plan.record_schema)
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "lookup signature: the plan's record schema "
-                                "is not resolved");
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
+            "lookup signature: the plan's record schema "
+            "is not resolved");
     std::string sig;
     auto add = [&](std::string_view s) {
         sig.append(s);
@@ -60,16 +61,16 @@ std::optional<std::uint64_t> lookup_signature(
         if (fresh) {
             try {
                 it->second.emplace(
-                    unwrap(index::plan::open_snapshot(f->index_path)));
-            } catch (const DFTUtilsException&) {
+                    common::unwrap(index::plan::open_snapshot(f->index_path)));
+            } catch (const common::DFTUtilsException&) {
                 return std::nullopt;
             }
         }
         const index::Snapshot& snapshot = *it->second;
         const std::string logical =
             rdb::internal::get_logical_path(f->file_path);
-        InputFileStat now;
-        dftracer::utils::stat_input(f->file_path, now);
+        common::InputFileStat now;
+        dftracer::utils::common::stat_input(f->file_path, now);
         const SourceStat now_stat{static_cast<std::uint64_t>(now.mtime),
                                   now.size};
         if (snapshot.freshness(logical, now_stat) != index::Freshness::Current)

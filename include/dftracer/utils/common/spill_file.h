@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// One temp file in spill_dir(), unlinked at creation so a crash leaves
 /// nothing behind. append() and read() may be called from many threads; the
@@ -56,6 +56,6 @@ class SpillFile {
     SpillCharge charge_;
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_SPILL_FILE_H

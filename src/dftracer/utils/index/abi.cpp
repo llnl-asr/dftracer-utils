@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::DFTUtilsException;
 using dftracer::utils::dstd::Condition;
 using dftracer::utils::index::IndexedFile;
 using dftracer::utils::index::Indexer;
@@ -43,7 +42,7 @@ dftu_error fill_error(std::string& storage, Condition condition,
 dftu_error current_error(std::string& storage) {
     try {
         throw;
-    } catch (const DFTUtilsException& e) {
+    } catch (const dftracer::utils::common::DFTUtilsException& e) {
         return fill_error(storage, e.condition(), e.domain(), e.code_int(),
                           e.what());
     } catch (const std::exception& e) {

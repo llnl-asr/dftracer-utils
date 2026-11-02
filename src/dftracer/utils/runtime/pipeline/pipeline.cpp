@@ -244,12 +244,13 @@ void Pipeline::set_progress_callback(
 
 void Pipeline::collect_all_tasks() {
     all_tasks_.clear();
-    std::unordered_set<TaskIndex> visited;
+    std::unordered_set<common::TaskIndex> visited;
     collect_tasks_dfs(source_, visited);
 }
 
-void Pipeline::collect_tasks_dfs(std::shared_ptr<Task> task,
-                                 std::unordered_set<TaskIndex>& visited) {
+void Pipeline::collect_tasks_dfs(
+    std::shared_ptr<Task> task,
+    std::unordered_set<common::TaskIndex>& visited) {
     if (!task || visited.find(task->get_id()) != visited.end()) {
         return;
     }
@@ -267,13 +268,13 @@ bool Pipeline::validate_reachability() {
         return false;
     }
 
-    std::unordered_set<TaskIndex> visited;
+    std::unordered_set<common::TaskIndex> visited;
     return is_reachable_dfs(source_, destination_, visited);
 }
 
-bool Pipeline::is_reachable_dfs(std::shared_ptr<Task> current,
-                                std::shared_ptr<Task> target,
-                                std::unordered_set<TaskIndex>& visited) {
+bool Pipeline::is_reachable_dfs(
+    std::shared_ptr<Task> current, std::shared_ptr<Task> target,
+    std::unordered_set<common::TaskIndex>& visited) {
     if (!current) {
         return false;
     }
@@ -298,8 +299,8 @@ bool Pipeline::is_reachable_dfs(std::shared_ptr<Task> current,
 }
 
 bool Pipeline::has_cycles() {
-    std::unordered_set<TaskIndex> visited;
-    std::unordered_set<TaskIndex> rec_stack;
+    std::unordered_set<common::TaskIndex> visited;
+    std::unordered_set<common::TaskIndex> rec_stack;
 
     for (const auto& task : all_tasks_) {
         if (visited.find(task->get_id()) == visited.end()) {
@@ -312,14 +313,14 @@ bool Pipeline::has_cycles() {
     return false;
 }
 
-bool Pipeline::has_cycles_dfs(std::shared_ptr<Task> task,
-                              std::unordered_set<TaskIndex>& visited,
-                              std::unordered_set<TaskIndex>& rec_stack) {
+bool Pipeline::has_cycles_dfs(
+    std::shared_ptr<Task> task, std::unordered_set<common::TaskIndex>& visited,
+    std::unordered_set<common::TaskIndex>& rec_stack) {
     if (!task) {
         return false;
     }
 
-    TaskIndex id = task->get_id();
+    common::TaskIndex id = task->get_id();
 
     if (rec_stack.find(id) != rec_stack.end()) {
         DFTRACER_UTILS_LOG_ERROR("Cycle detected at task '%s'",

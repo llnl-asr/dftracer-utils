@@ -98,8 +98,8 @@ class CoroScope {
     /// Returns the Coro's coroutine_handle for callers that need it.
     void enqueue_coro(coro::Coro& c) {
         if (!executor_->is_running()) {
-            throw DFTUtilsException(
-                ErrorCode::Pipeline,
+            throw common::DFTUtilsException(
+                common::ErrorCode::Pipeline,
                 "Cannot spawn coroutine: executor is not running");
         }
         join_handle_.track(c);
@@ -529,7 +529,7 @@ class CoroScope {
         }
         co_await child.join();
         if (error) {
-            rethrow_and_clear(error);
+            common::rethrow_and_clear(error);
         }
         co_return;
     }
@@ -593,7 +593,7 @@ inline coro::CoroTask<void> run_coro_scope(Executor* executor, Func scope_func,
     }
     co_await scope.join();
     if (error) {
-        rethrow_and_clear(error);
+        common::rethrow_and_clear(error);
     }
     co_return;
 }

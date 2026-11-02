@@ -83,8 +83,8 @@ std::shared_ptr<Task> Task::operator&(std::shared_ptr<Task> other) {
             // inputs[0] is from first parent (this), inputs[1] is from second
             // (other)
             if (inputs.size() != 2) {
-                throw DFTUtilsException(
-                    ErrorCode::InvalidArgument,
+                throw common::DFTUtilsException(
+                    common::ErrorCode::InvalidArgument,
                     "AND combiner expects exactly 2 inputs");
             }
             // Return tuple of both results

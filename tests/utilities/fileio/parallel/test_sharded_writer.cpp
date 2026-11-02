@@ -91,7 +91,7 @@ TEST_CASE("ShardedWriter - gzip_extension appends .gz to shard names") {
     };
     CHECK(runtime.submit(task(), "sharded_gz").get() == 0);
     CHECK(paths == expected);
-    for (const auto& p : expected) CHECK(fs::exists(p));
+    for (const auto& p : expected) CHECK(common::fs::exists(p));
     cleanup(expected);
 }
 

@@ -88,7 +88,7 @@ TEST_SUITE("viz_stats_fastpath") {
     TEST_CASE("fast path equals live scan over a multi-member trace") {
         const int n = 3000;
         auto dir = dftu_utils_test::make_unique_test_path("viz_stats_fast");
-        fs::create_directories(dir);
+        common::fs::create_directories(dir);
         // Not *.pfw.gz: TraceIndex scans the dir and must see only the trace.
         const std::string src = (dir / "src.raw.gz").string();
         const std::string gz = (dir / "trace.pfw.gz").string();

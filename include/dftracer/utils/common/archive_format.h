@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_COMMON_ARCHIVE_FORMAT_H
 #define DFTRACER_UTILS_COMMON_ARCHIVE_FORMAT_H
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /**
  * Enumeration of supported archive formats
@@ -20,6 +20,6 @@ inline const char* get_format_name(ArchiveFormat format) {
     }
     return "UNKNOWN";
 }
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_ARCHIVE_FORMAT_H

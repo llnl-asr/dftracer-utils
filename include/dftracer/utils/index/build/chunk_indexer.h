@@ -108,9 +108,10 @@ struct ChunkIndexerConfig {
     /// (0, 1].
     void validate() const {
         if (!(stats_share > 0.0 && stats_share <= 1.0))
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "stats_share must be in (0, 1], got " +
-                                        std::to_string(stats_share));
+            throw common::DFTUtilsException(
+                common::ErrorCode::InvalidArgument,
+                "stats_share must be in (0, 1], got " +
+                    std::to_string(stats_share));
     }
 };
 

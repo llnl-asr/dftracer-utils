@@ -6,9 +6,9 @@
 
 namespace dftracer::utils::index::schemas::dft {
 
-Result<void> add_path_counts(const Snapshot& snapshot, const FileRef& file,
-                             dstd::StringView path,
-                             dstd::StringViewMap<std::uint64_t>& into) {
+common::Result<void> add_path_counts(const Snapshot& snapshot,
+                                     const FileRef& file, dstd::StringView path,
+                                     dstd::StringViewMap<std::uint64_t>& into) {
     auto found =
         granules(snapshot, file, index::store::IndexExtension::Counts, path);
     if (!found) return dstd::Unexpected<dstd::Error>(found.error());
@@ -23,7 +23,7 @@ Result<void> add_path_counts(const Snapshot& snapshot, const FileRef& file,
     return {};
 }
 
-Result<dstd::Optional<MergedStatisticsResult>> merged_statistics(
+common::Result<dstd::Optional<MergedStatisticsResult>> merged_statistics(
     const Snapshot& snapshot, const FileRef& file) {
     auto rows = chunk_stats(snapshot, file);
     if (!rows) return dstd::Unexpected<dstd::Error>(rows.error());

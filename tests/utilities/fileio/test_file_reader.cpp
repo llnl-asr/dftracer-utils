@@ -15,7 +15,8 @@ using namespace dftu_utils_test;
 
 TEST_CASE("FileReaderUtility - Basic Operations") {
     FileReaderUtility reader;
-    fs::path test_file = make_unique_test_path("test_file_reader.txt");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_file_reader.txt");
 
     SUBCASE("Read simple text file") {
         // Create test file
@@ -31,7 +32,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
         CHECK(content.content == "Hello, World!\nThis is a test file.\n");
         CHECK(content.size() == 35);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("Read empty file") {
@@ -46,7 +47,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
         CHECK(content.content.empty());
         CHECK(content.size() == 0);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("Read file with special characters") {
@@ -63,7 +64,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
         CHECK(content.content.find("Special: !@#$%^&*()") != std::string::npos);
         CHECK(content.content.find("こんにちは") != std::string::npos);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 }
 
@@ -76,19 +77,21 @@ TEST_CASE("FileReaderUtility - Error Handling") {
     }
 
     SUBCASE("Directory instead of file") {
-        fs::path test_dir = make_unique_test_path("test_dir_reader");
-        fs::create_directory(test_dir);
+        dftracer::utils::common::fs::path test_dir =
+            make_unique_test_path("test_dir_reader");
+        dftracer::utils::common::fs::create_directory(test_dir);
 
         FileEntry entry{test_dir};
         CHECK_THROWS_AS(reader(entry).get(), std::runtime_error);
 
-        fs::remove(test_dir);
+        dftracer::utils::common::fs::remove(test_dir);
     }
 }
 
 TEST_CASE("FileReaderUtility - Different File Sizes") {
     FileReaderUtility reader;
-    fs::path test_file = make_unique_test_path("test_file_sizes.txt");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_file_sizes.txt");
 
     SUBCASE("Single byte") {
         {
@@ -102,7 +105,7 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
         CHECK(content.size() == 1);
         CHECK(content.content == "x");
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("1KB file") {
@@ -118,7 +121,7 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
 
         CHECK(content.size() == 1024);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("Large file (100KB)") {
@@ -134,13 +137,14 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
 
         CHECK(content.size() == 100 * 1024);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 }
 
 TEST_CASE("FileReaderUtility - Different Content Types") {
     FileReaderUtility reader;
-    fs::path test_file = make_unique_test_path("test_content_types.txt");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_content_types.txt");
 
     SUBCASE("Newlines only") {
         {
@@ -154,7 +158,7 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
         CHECK(content.size() == 5);
         CHECK(content.content == "\n\n\n\n\n");
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("Mixed line endings") {
@@ -172,7 +176,7 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
         CHECK(content.content.find("Line 2") != std::string::npos);
         CHECK(content.content.find("Line 3") != std::string::npos);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("No trailing newline") {
@@ -186,13 +190,13 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
 
         CHECK(content.content == "No newline at end");
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 }
 
 TEST_CASE("FileReaderUtility - Real World Scenarios") {
     FileReaderUtility reader;
-    fs::path test_file =
+    dftracer::utils::common::fs::path test_file =
         make_unique_test_path("test_real_world_file_reader.txt");
 
     SUBCASE("Log file") {
@@ -211,7 +215,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
         CHECK(content.content.find("DEBUG: Loading configuration") !=
               std::string::npos);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("CSV file") {
@@ -229,7 +233,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
         CHECK(content.content.find("id,name,value") != std::string::npos);
         CHECK(content.content.find("Alice") != std::string::npos);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("JSON file") {
@@ -248,7 +252,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
         CHECK(content.content.find("\"name\": \"test\"") != std::string::npos);
         CHECK(content.content.find("\"value\": 42") != std::string::npos);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 }
 
@@ -257,8 +261,9 @@ TEST_CASE("FileReaderUtility - Composition with DirectoryScanner") {
     DirectoryScannerUtility scanner;
 
     // Create test directory with files
-    fs::path test_dir = make_unique_test_path("test_composition_dir");
-    fs::create_directory(test_dir);
+    dftracer::utils::common::fs::path test_dir =
+        make_unique_test_path("test_composition_dir");
+    dftracer::utils::common::fs::create_directory(test_dir);
 
     {
         std::ofstream ofs(test_dir / "file1.txt");
@@ -285,5 +290,5 @@ TEST_CASE("FileReaderUtility - Composition with DirectoryScanner") {
     CHECK(files_read == 2);
 
     // Cleanup
-    fs::remove_all(test_dir);
+    dftracer::utils::common::fs::remove_all(test_dir);
 }

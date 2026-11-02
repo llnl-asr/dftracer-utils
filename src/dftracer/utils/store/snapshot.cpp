@@ -539,11 +539,13 @@ dstd::Expected<Snapshot, dstd::Error> Snapshot::open(dstd::StringView dir) {
 }
 
 dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
-    std::size_t cache_bytes = constants::store::STORE_DEFAULT_PAGE_CACHE_BYTES;
-    if (Env::get<std::string_view>(constants::store::STORE_PAGE_CACHE_BYTES_ENV)
+    std::size_t cache_bytes =
+        common::constants::store::STORE_DEFAULT_PAGE_CACHE_BYTES;
+    if (common::Env::get<std::string_view>(
+            common::constants::store::STORE_PAGE_CACHE_BYTES_ENV)
             .has_value()) {
-        auto parsed = Env::get<std::uint64_t>(
-            constants::store::STORE_PAGE_CACHE_BYTES_ENV);
+        auto parsed = common::Env::get<std::uint64_t>(
+            common::constants::store::STORE_PAGE_CACHE_BYTES_ENV);
         if (!parsed.has_value()) {
             return dstd::Unexpected<dstd::Error>(
                 dstd::Error(dstd::Condition::InvalidArgument));

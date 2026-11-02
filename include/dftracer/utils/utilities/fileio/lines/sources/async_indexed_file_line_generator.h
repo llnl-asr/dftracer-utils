@@ -37,8 +37,8 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
 inline coro::AsyncGenerator<Line> async_indexed_file_lines(
     IndexedFileLineIteratorConfig config) {
     if (!config.reader()) {
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "Reader cannot be null");
+        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                        "Reader cannot be null");
     }
 
     // Resolve end if needed
@@ -64,7 +64,8 @@ inline coro::AsyncGenerator<Line> async_indexed_file_lines(
 
     auto stream = config.reader()->stream(stream_config);
     if (!stream) {
-        throw DFTUtilsException(ErrorCode::Io, "Failed to create stream");
+        throw common::DFTUtilsException(common::ErrorCode::Io,
+                                        "Failed to create stream");
     }
 
     std::string stream_buffer;

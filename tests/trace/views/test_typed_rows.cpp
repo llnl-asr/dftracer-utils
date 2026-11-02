@@ -51,7 +51,7 @@ std::string write_access(TestEnvironment& env, const std::string& extra) {
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
@@ -133,7 +133,7 @@ TEST_SUITE("TypedRows") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         const auto events = run(rows<Event>(view_of(gz)));
         REQUIRE(events.size() == 20);
         for (const Event& e : events) {

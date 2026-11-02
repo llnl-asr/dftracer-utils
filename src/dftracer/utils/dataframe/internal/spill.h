@@ -57,7 +57,7 @@ class PartFile {
     std::vector<Series> append(const std::vector<Series>& cols);
 
    private:
-    std::unique_ptr<SpillFile> file_;
+    std::unique_ptr<common::SpillFile> file_;
 };
 
 /// A self-cleaning spill directory holding one query's spill runs.
@@ -71,13 +71,13 @@ class Dir {
     std::string run_path(int id) const;
     /// A run id no other caller of this directory has taken. Thread-safe.
     int next_run();
-    SpillCharge& charge() const noexcept { return dir_.charge(); }
+    common::SpillCharge& charge() const noexcept { return dir_.charge(); }
     /// Delete the file `path` in this directory and release its bytes from
     /// the charge.
     void remove_run(const std::string& path) const noexcept;
 
    private:
-    ScopedSpillSubdir dir_;
+    common::ScopedSpillSubdir dir_;
     std::atomic<int> runs_{0};
 };
 
@@ -97,7 +97,7 @@ class Writer {
    private:
     struct Codec;
     std::ofstream os_;
-    std::shared_ptr<SpillCharge> charge_;
+    std::shared_ptr<common::SpillCharge> charge_;
     std::uint64_t written_ = 0;
     std::string blob_;
     std::unique_ptr<Codec> codec_;

@@ -12,7 +12,7 @@
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
 #endif
 
 #include <cstddef>
@@ -48,7 +48,8 @@ struct TraceReaderConfig {
     std::string file_path;  ///< Path to trace file (.pfw.gz or plain).
     std::string index_dir;  ///< Directory containing `.dftindex` roots.
     std::size_t checkpoint_size =
-        constants::indexer::DEFAULT_CHECKPOINT_SIZE;  ///< Checkpoint interval.
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;  ///< Checkpoint
+                                                              ///< interval.
     bool auto_build_index = false;  ///< Auto-build index if missing.
 };
 
@@ -124,7 +125,7 @@ class TraceReader {
     /// record batches sized at `batch_size` rows. Emits the final
     /// partial batch on generator close. Non-normalized schema only
     /// (dynamic columns follow the first row seen).
-    coro::AsyncGenerator<common::arrow::ArrowExportResult> read_arrow(
+    coro::AsyncGenerator<arrow::ArrowExportResult> read_arrow(
         ReadConfig config = {}, std::size_t batch_size = 10000);
 #endif
 
@@ -145,7 +146,7 @@ class TraceReader {
     TraceReaderConfig config_;
     bool has_index_ = false;
     std::string index_path_;
-    ArchiveFormat format_ = ArchiveFormat::Unknown;
+    common::ArchiveFormat format_ = common::ArchiveFormat::Unknown;
     std::size_t cached_max_bytes_ = 0;
     std::size_t cached_num_lines_ = 0;
     bool metadata_cached_ = false;

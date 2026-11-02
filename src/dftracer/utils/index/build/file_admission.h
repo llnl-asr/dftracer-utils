@@ -83,12 +83,13 @@ class FileAdmission {
     };
     static SinkPlan plan_sinks(std::uint64_t budget, std::size_t workers,
                                std::size_t max_sink) noexcept {
-        namespace fa = constants::file_admission;
         workers = std::max<std::size_t>(workers, 1);
         if (budget == memory::NO_SPILL_BUDGET) return {workers, max_sink};
-        const std::uint64_t share = budget / fa::SINK_BUDGET_DIVISOR;
-        workers = static_cast<std::size_t>(
-            std::clamp<std::uint64_t>(share / fa::MIN_SINK_BYTES, 1, workers));
+        const std::uint64_t share =
+            budget / common::constants::file_admission::SINK_BUDGET_DIVISOR;
+        workers = static_cast<std::size_t>(std::clamp<std::uint64_t>(
+            share / common::constants::file_admission::MIN_SINK_BYTES, 1,
+            workers));
         const std::uint64_t each =
             std::min<std::uint64_t>(max_sink, share / workers);
         return {workers, static_cast<std::size_t>(each)};
@@ -101,15 +102,20 @@ class FileAdmission {
     static Estimate estimate(
         std::uint64_t plaintext,
         std::uint64_t max_elastic = memory::NO_SPILL_BUDGET) noexcept {
-        namespace fa = constants::file_admission;
         const std::uint64_t piece =
             ParseGate::piece_bytes(std::min<std::uint64_t>(
                 plaintext, IndexFoldDriver::PARSE_PIECE_BYTES));
         const std::uint64_t elastic = std::max(
-            std::min(plaintext * fa::ELASTIC_PERCENT / 100, max_elastic),
-            fa::MIN_ELASTIC_BYTES);
-        const std::uint64_t agg = plaintext * fa::AGG_PERCENT / 100;
-        return {fa::FIXED_BYTES + piece + agg + elastic, elastic};
+            std::min(plaintext *
+                         common::constants::file_admission::ELASTIC_PERCENT /
+                         100,
+                     max_elastic),
+            common::constants::file_admission::MIN_ELASTIC_BYTES);
+        const std::uint64_t agg =
+            plaintext * common::constants::file_admission::AGG_PERCENT / 100;
+        return {common::constants::file_admission::FIXED_BYTES + piece + agg +
+                    elastic,
+                elastic};
     }
 
     /// @p known_plaintext when the index recorded it, else @p compressed scaled
@@ -118,7 +124,7 @@ class FileAdmission {
                                             std::uint64_t compressed) noexcept {
         return known_plaintext != 0
                    ? known_plaintext
-                   : compressed * constants::file_admission::
+                   : compressed * common::constants::file_admission::
                                       PLAINTEXT_PER_COMPRESSED_BYTE;
     }
 
@@ -132,15 +138,17 @@ class FileAdmission {
         }
         const Estimate est = estimate(
             plaintext,
-            pool_cap_ / constants::file_admission::ELASTIC_POOL_DIVISOR);
+            pool_cap_ /
+                common::constants::file_admission::ELASTIC_POOL_DIVISOR);
         const std::uint64_t want = std::min(est.total, hold_cap_);
         auto got = co_await coro::reserve_async(
             *pool_, want, std::chrono::steady_clock::time_point::max());
         if (!got) {
             if (got.error() == memory::Status::Cancelled)
                 coro::throw_cancelled("file admission cancelled");
-            throw DFTUtilsException(ErrorCode::MemoryBudgetExceeded,
-                                    "a file does not fit the memory budget");
+            throw common::DFTUtilsException(
+                common::ErrorCode::MemoryBudgetExceeded,
+                "a file does not fit the memory budget");
         }
         ticket.res_ = std::move(*got);
         const std::uint64_t base = est.total - est.elastic;
@@ -164,8 +172,9 @@ class FileAdmission {
             (files_ > started ? files_ - started : 0);
         const std::size_t idle = workers_ > claimed ? workers_ - claimed : 0;
         return std::clamp<std::size_t>(
-            1 + idle / constants::file_admission::INFLATE_PARSERS_PER_WORKER, 1,
-            MAX_INFLATE_WAYS);
+            1 + idle / common::constants::file_admission::
+                           INFLATE_PARSERS_PER_WORKER,
+            1, MAX_INFLATE_WAYS);
     }
 
     std::size_t max_in_flight() const noexcept {
@@ -178,21 +187,24 @@ class FileAdmission {
     memory::Pool* open(std::uint64_t budget, std::uint64_t sink_bytes) {
         if (budget == memory::NO_SPILL_BUDGET) return nullptr;
         const std::uint64_t kept =
-            sink_bytes + budget / constants::file_admission::UNTRACKED_DIVISOR;
+            sink_bytes +
+            budget / common::constants::file_admission::UNTRACKED_DIVISOR;
         const std::uint64_t pool_bytes =
             std::min<std::uint64_t>(budget > kept ? budget - kept : budget,
                                     memory::Manager::get().budget());
         pool_cap_ = pool_bytes;
         hold_cap_ = std::max<std::uint64_t>(
             pool_bytes -
-                pool_bytes / constants::file_admission::PIECE_ROOM_DIVISOR,
+                pool_bytes /
+                    common::constants::file_admission::PIECE_ROOM_DIVISOR,
             1);
         handle_ = memory::current_pool().child(
             "index files", memory::PoolKind::Scratch,
             memory::Limits{static_cast<std::size_t>(pool_bytes)});
         if (!handle_)
-            throw DFTUtilsException(ErrorCode::MemoryBudgetExceeded,
-                                    "no pool for the files in flight");
+            throw common::DFTUtilsException(
+                common::ErrorCode::MemoryBudgetExceeded,
+                "no pool for the files in flight");
         pool_ = handle_.get();
         return pool_;
     }

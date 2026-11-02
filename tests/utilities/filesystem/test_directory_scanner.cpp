@@ -79,18 +79,22 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
     }
 
     SUBCASE("Error - directory does not exist") {
-        fs::path nonexistent = fixture.path() / "nonexistent";
+        dftracer::utils::common::fs::path nonexistent =
+            fixture.path() / "nonexistent";
         DirectoryScannerUtilityInput input{nonexistent, false};
 
-        CHECK_THROWS_AS(run_scan(*scanner, input), fs::filesystem_error);
+        CHECK_THROWS_AS(run_scan(*scanner, input),
+                        dftracer::utils::common::fs::filesystem_error);
     }
 
     SUBCASE("Error - path is not a directory") {
         fixture.create_file("regular_file.txt");
-        fs::path file_path = (fixture.path() / "regular_file.txt");
+        dftracer::utils::common::fs::path file_path =
+            (fixture.path() / "regular_file.txt");
         DirectoryScannerUtilityInput input{file_path, false};
 
-        CHECK_THROWS_AS(run_scan(*scanner, input), fs::filesystem_error);
+        CHECK_THROWS_AS(run_scan(*scanner, input),
+                        dftracer::utils::common::fs::filesystem_error);
     }
 }
 
@@ -278,7 +282,7 @@ TEST_CASE("DirectoryScannerUtility - Directory Struct") {
     }
 
     SUBCASE("Directory construction") {
-        fs::path test_path = "/test/path";
+        dftracer::utils::common::fs::path test_path = "/test/path";
         DirectoryScannerUtilityInput dir{test_path, true};
 
         CHECK(dir.path == test_path);
@@ -352,7 +356,8 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Construction") {
 
     SUBCASE("FileEntry with existing file") {
         fixture.create_file("test.txt", "content");
-        fs::path file_path = (fixture.path() / "test.txt");
+        dftracer::utils::common::fs::path file_path =
+            (fixture.path() / "test.txt");
 
         FileEntry entry{file_path};
 
@@ -364,7 +369,8 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Construction") {
 
     SUBCASE("FileEntry with existing directory") {
         fixture.create_dir("test_dir");
-        fs::path dir_path = (fixture.path() / "test_dir");
+        dftracer::utils::common::fs::path dir_path =
+            (fixture.path() / "test_dir");
 
         FileEntry entry{dir_path};
 
@@ -375,7 +381,8 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Construction") {
     }
 
     SUBCASE("FileEntry with nonexistent path") {
-        fs::path nonexistent = (fixture.path() / "nonexistent");
+        dftracer::utils::common::fs::path nonexistent =
+            (fixture.path() / "nonexistent");
 
         FileEntry entry{nonexistent};
 

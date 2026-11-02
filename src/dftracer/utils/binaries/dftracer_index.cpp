@@ -177,7 +177,7 @@ static void print_summary(double seconds, std::size_t indexed,
 }
 
 static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
-    const auto log_dir = fs::absolute(cli->directory.value).string();
+    const auto log_dir = common::fs::absolute(cli->directory.value).string();
     const auto& dimensions_str = cli->dimensions;
     const auto force_rebuild = cli->indexing.force;
     const auto checkpoint_size = cli->indexing.checkpoint_size;
@@ -341,7 +341,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     // On-disk sizes are compressed for .pfw.gz; estimate_per_file_bytes expands
     // them (PER_FILE_EXPANSION_FACTOR) to a decompressed + aggregated peak.
     const std::size_t required_bytes =
-        estimate_per_file_bytes(scanned_sizes) * scanned_sizes.size();
+        common::estimate_per_file_bytes(scanned_sizes) * scanned_sizes.size();
     cli::warn_if_memory_tight(required_bytes);
 
     auto pipeline_config =
@@ -351,7 +351,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     const std::string agg_index =
         trace::internal::determine_index_path(input_files.front(), index_dir);
-    if (force_rebuild && fs::exists(agg_index)) stale_tiers.insert(agg_index);
+    if (force_rebuild && common::fs::exists(agg_index))
+        stale_tiers.insert(agg_index);
     for (const auto& root : stale_tiers) clear_aggregation(root);
 
     auto batch_config = std::make_shared<IndexBuildBatchConfig>();

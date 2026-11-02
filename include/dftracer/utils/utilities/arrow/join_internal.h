@@ -1,11 +1,11 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_JOIN_INTERNAL_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_JOIN_INTERNAL_H
+#ifndef DFTRACER_UTILS_UTILITIES_ARROW_JOIN_INTERNAL_H
+#define DFTRACER_UTILS_UTILITIES_ARROW_JOIN_INTERNAL_H
 
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/utilities/common/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <algorithm>
@@ -19,7 +19,7 @@
 /// Shared sort/compare + value-passthrough helpers backing the Arrow relational
 /// ops (join, asof_join, interval_join, window). Internal to the arrow layer;
 /// not part of the public API.
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 inline std::optional<ColumnType> scalar_type_from_storage(
     ArrowType t) noexcept {
@@ -118,8 +118,8 @@ inline ValueCol plan_value_col(const ArrowArrayView* v, const ArrowSchema* s,
                 auto ft =
                     scalar_type_from_storage(elem->children[f]->storage_type);
                 if (!ft) {
-                    throw DFTUtilsException(
-                        ErrorCode::InvalidArgument,
+                    throw common::DFTUtilsException(
+                        common::ErrorCode::InvalidArgument,
                         "arrow: unsupported struct-list field type");
                 }
                 vc.field_types.push_back(*ft);
@@ -143,11 +143,11 @@ inline ValueCol plan_value_col(const ArrowArrayView* v, const ArrowSchema* s,
                 return vc;
             }
         }
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "arrow: unsupported list element type");
+        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                        "arrow: unsupported list element type");
     }
-    throw DFTUtilsException(ErrorCode::InvalidArgument,
-                            "arrow: unsupported value column type");
+    throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                    "arrow: unsupported value column type");
 }
 
 inline void append_scalar(RecordBatchBuilder& b, std::size_t out, ColumnType ct,
@@ -187,8 +187,9 @@ inline void append_scalar(RecordBatchBuilder& b, std::size_t out, ColumnType ct,
             break;
         }
         default:
-            throw DFTUtilsException(ErrorCode::Internal,
-                                    "arrow: unhandled scalar column type");
+            throw common::DFTUtilsException(
+                common::ErrorCode::Internal,
+                "arrow: unhandled scalar column type");
     }
 }
 
@@ -381,7 +382,7 @@ inline std::int64_t equi_partition_end(const std::vector<std::int64_t>& order,
     return j;
 }
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_ARROW_JOIN_INTERNAL_H
+#endif  // DFTRACER_UTILS_UTILITIES_ARROW_JOIN_INTERNAL_H

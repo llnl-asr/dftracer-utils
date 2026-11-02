@@ -128,7 +128,7 @@ TEST_CASE("PaddedStripedWriter - gzip -t passes and payload round-trips") {
 
     // With coalescing, the three tiny worker members pack into a single
     // stripe. File = [header stripe][one coalesced stripe][footer bytes].
-    CHECK(fs::file_size(path) == 2 * STRIPE + ftr_mem.size());
+    CHECK(common::fs::file_size(path) == 2 * STRIPE + ftr_mem.size());
 
     auto decompressed = gunzip_all(path);
     // Decompressed content = hdr + w0 + w1 + w2 + footer, with worker ordering
@@ -137,7 +137,7 @@ TEST_CASE("PaddedStripedWriter - gzip -t passes and payload round-trips") {
     CHECK(decompressed ==
           hdr_payload + w0_payload + w1_payload + w2_payload + ftr_payload);
 
-    fs::remove(path);
+    common::fs::remove(path);
 }
 
 // GzipLineWriter passes its own scope to open(), runs its compress jobs in it
@@ -187,7 +187,7 @@ TEST_CASE("PaddedStripedWriter - the caller's scope joins before close") {
         for (const auto& p : payloads) n += p.size();
         return n;
     }());
-    fs::remove(path);
+    common::fs::remove(path);
 }
 
 TEST_CASE(
@@ -248,7 +248,7 @@ TEST_CASE(
     REQUIRE(result == 0);
 
     // [header][m0][big: three stripes][m1][footer].
-    CHECK(fs::file_size(path) == 6 * STRIPE + ftr.size());
+    CHECK(common::fs::file_size(path) == 6 * STRIPE + ftr.size());
     CHECK(gunzip_all(path) == small0 + big_payload + small1 + ftr_payload);
     std::remove(path.c_str());
 }
@@ -304,11 +304,11 @@ TEST_CASE(
     // Two payloads totaling 2*mem.size() + 25 (pad overhead). Whether they
     // fit in a single stripe or spill into two depends on mem size relative
     // to STRIPE; we assert only that the file is a multiple of STRIPE.
-    CHECK(fs::file_size(path) % STRIPE == 0);
+    CHECK(common::fs::file_size(path) % STRIPE == 0);
     auto round = gunzip_all(path);
     CHECK(round == big + big);
 
-    fs::remove(path);
+    common::fs::remove(path);
 }
 
 namespace {
@@ -389,7 +389,7 @@ TEST_CASE("PaddedStripedWriter - a drop without close on an executor joins") {
     CHECK(gunzip_all(path).find(payload) != std::string::npos);
     CHECK(on_executor.load());
     runtime.shutdown();
-    fs::remove(path);
+    common::fs::remove(path);
 }
 
 TEST_CASE("PaddedStripedWriter - every stripe ends in whole gzip members") {
@@ -425,9 +425,9 @@ TEST_CASE("PaddedStripedWriter - every stripe ends in whole gzip members") {
                })
         .get();
     REQUIRE(result == 0);
-    CHECK(fs::file_size(path) == (members.size() + 1) * STRIPE);
+    CHECK(common::fs::file_size(path) == (members.size() + 1) * STRIPE);
     std::string want;
     for (const auto& p : payloads) want += p;
     CHECK(gunzip_all(path) == want);
-    fs::remove(path);
+    common::fs::remove(path);
 }

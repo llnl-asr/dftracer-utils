@@ -7,7 +7,7 @@
 #include <cstring>
 #include <string_view>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 namespace {
 
@@ -99,4 +99,4 @@ std::string symbolize_function(const void* fn) {
     return "?";
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

@@ -227,7 +227,7 @@ std::optional<DataFrame> finalize_in_place(
     std::size_t drop_keys) {
     if constexpr (std::endian::native != std::endian::little)
         return std::nullopt;  // the validity words are written as words
-    if (Env::get("DFTRACER_UTILS_GROUPBY_STITCH"))
+    if (common::Env::get("DFTRACER_UTILS_GROUPBY_STITCH"))
         return std::nullopt;  // a test switch: the stitch path as the oracle
 
     std::vector<std::size_t> live;   // partitions that hold groups
@@ -538,8 +538,8 @@ std::optional<DataFrame> group_agg_partitioned(
     const std::vector<std::string>& key_names, std::size_t drop_keys = 0) {
     // Four partitions per thread: tables small enough for the first-level
     // cache, and the final drain's rounds divide the thread count.
-    const auto threads = static_cast<std::int64_t>(
-        std::max<std::size_t>(2, dftracer::utils::hardware_concurrency()));
+    const auto threads = static_cast<std::int64_t>(std::max<std::size_t>(
+        2, dftracer::utils::common::hardware_concurrency()));
     const auto PARTITIONS = static_cast<std::size_t>(4 * threads);
     const std::int64_t n = in_keys.empty() ? 0 : in_keys[0]->length();
     if (n <= 16 * AGG_GRAIN) return std::nullopt;
@@ -741,8 +741,8 @@ std::optional<DataFrame> group_agg_by_key_hash(
             static_cast<double>(n), seen + f1 * f1 / (2.0 * (f2 + 1))));
     }
 
-    const auto threads = static_cast<std::int64_t>(
-        std::max<std::size_t>(2, dftracer::utils::hardware_concurrency()));
+    const auto threads = static_cast<std::int64_t>(std::max<std::size_t>(
+        2, dftracer::utils::common::hardware_concurrency()));
     const auto PARTITIONS = static_cast<std::size_t>(4 * threads);
     std::vector<bool> nullable(keys.size());
     for (std::size_t j = 0; j < keys.size(); ++j)

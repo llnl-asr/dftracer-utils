@@ -1,11 +1,11 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_IPC_WRITER_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_IPC_WRITER_H
+#ifndef DFTRACER_UTILS_UTILITIES_ARROW_IPC_WRITER_H
+#define DFTRACER_UTILS_UTILITIES_ARROW_IPC_WRITER_H
 
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 #include <atomic>
 #include <cstdio>
@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 /**
  * Compression type for Arrow IPC buffer-level compression.
@@ -150,7 +150,7 @@ class IpcWriter {
     coro::CoroTask<int> write_footer();
 };
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_ARROW_IPC_WRITER_H
+#endif  // DFTRACER_UTILS_UTILITIES_ARROW_IPC_WRITER_H

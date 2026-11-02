@@ -21,8 +21,8 @@ void merge_aggregation_folds(std::vector<AggFoldOutput>& outputs,
     if (min_bucket == std::numeric_limits<std::uint64_t>::max() ||
         min_bucket > max_bucket)
         return;
-    if (auto stored =
-            unwrap(tier::read_time_bounds(unwrap(index.snapshot())))) {
+    if (auto stored = common::unwrap(
+            tier::read_time_bounds(common::unwrap(index.snapshot())))) {
         min_bucket = std::min(min_bucket, stored->min_bucket);
         max_bucket = std::max(max_bucket, stored->max_bucket);
     }

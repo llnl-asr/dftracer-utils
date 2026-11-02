@@ -56,7 +56,7 @@ class QuantileStore {
     /// bytes. Integers and exact doubles are little endian. The sketch bytes
     /// keep the sketch's own byte order.
     void serialize_into(dstd::Vector<std::uint8_t>& buf) const;
-    static dstd::Expected<QuantileStore, ErrorCode> deserialize(
+    static dstd::Expected<QuantileStore, common::ErrorCode> deserialize(
         const std::uint8_t* data, std::size_t len);
 
    private:

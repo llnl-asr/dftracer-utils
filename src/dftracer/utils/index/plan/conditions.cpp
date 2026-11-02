@@ -86,9 +86,9 @@ bool trusted_bounds(const Zone& z, bool need_both) {
             lo = std::stod(z.min);
             hi = std::stod(z.max);
         } catch (const std::exception&) {
-            throw DFTUtilsException::cat(
-                ErrorCode::Indexer, "corrupt zone map: bounds [", z.min, ", ",
-                z.max, "] of a ", z.value_type, " zone are not numbers");
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Indexer, "corrupt zone map: bounds [", z.min,
+                ", ", z.max, "] of a ", z.value_type, " zone are not numbers");
         }
         if (lo > hi) return false;
     }
@@ -105,9 +105,9 @@ std::optional<std::uint64_t> timestamp_bound(const std::string& text,
     const auto parsed = std::from_chars(text.data(), end, out);
     if (parsed.ec == std::errc{} && parsed.ptr == end) return out;
     if (std::holds_alternative<std::string>(n.value.value))
-        throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
-                                     "ts compared with \"", text,
-                                     "\", which is not an integer timestamp");
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::InvalidArgument, "ts compared with \"", text,
+            "\", which is not an integer timestamp");
     return std::nullopt;
 }
 
@@ -968,8 +968,8 @@ class PluginCondition final : public Condition {
     bool file_may_match(const duql_ns::QueryNode& root) override {
         if (!ext_->vt.file_may_match) return true;
         if (!file_loaded_) {
-            file_ =
-                unwrap(index::plugin_file(*d_.snapshot, *d_.file, ext_->name));
+            file_ = common::unwrap(
+                index::plugin_file(*d_.snapshot, *d_.file, ext_->name));
             file_loaded_ = true;
         }
         return !file_ || may_match_file(root);
@@ -981,7 +981,7 @@ class PluginCondition final : public Condition {
         if (!h) return std::nullopt;
         if (!granules_) {
             granules_.emplace();
-            auto listed = unwrap(
+            auto listed = common::unwrap(
                 index::plugin_granules(*d_.snapshot, *d_.file, ext_->name));
             if (listed)
                 for (auto& [g, bytes] : *listed)
@@ -1086,7 +1086,8 @@ Conditions make_query_conditions(FileIndexData& data) {
     cs.push_back(std::make_unique<ChunkBloom>(data));
     auto registered = index::extensions::plugin_extensions();
     if (registered.empty()) return cs;
-    const auto copies = unwrap(index::plugins(*data.snapshot, *data.file));
+    const auto copies =
+        common::unwrap(index::plugins(*data.snapshot, *data.file));
     for (auto& ext : registered) {
         for (const auto& copy : copies) {
             if (std::string_view(copy.name) != ext->name) continue;

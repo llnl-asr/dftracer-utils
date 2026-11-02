@@ -31,7 +31,8 @@ std::optional<duql::Query> plugin_union_prune_query(
 /// Test seam: build a set from already-built plugins, skipping dlopen and the
 /// ABI gate. The caller keeps ownership of each struct (no destroy, no dlclose
 /// runs for it) and must outlive the set.
-Result<Plugins> build_injected_plugins(std::vector<dftu_plugin*> plugins);
+common::Result<Plugins> build_injected_plugins(
+    std::vector<dftu_plugin*> plugins);
 
 /// The fold order build() computed: a permutation of plugin indices with every
 /// name's provider before the plugins that consume it. Independent plugins keep

@@ -7,7 +7,9 @@
 
 #include <filesystem>
 
+namespace dftracer::utils::common {
 namespace fs = std::filesystem;
+}  // namespace dftracer::utils::common
 
 #else
 
@@ -71,17 +73,25 @@ namespace fs = std::filesystem;
 // include the appropriate headers and set up the namespace
 #ifdef DFTRACE_UTILS_USE_STD_FS
 #include <filesystem>
+namespace dftracer::utils::common {
 namespace fs = std::filesystem;
+}  // namespace dftracer::utils::common
 #elif defined(DFTRACE_UTILS_USE_STD_FS_INTERNAL)
 #include <filesystem>
+namespace dftracer::utils::common {
 namespace fs = std::__fs::filesystem;
+}  // namespace dftracer::utils::common
 #elif defined(DFTRACE_UTILS_USE_EXPERIMENTAL_FS)
 #include <experimental/filesystem>
+namespace dftracer::utils::common {
 namespace fs = std::experimental::filesystem;
+}  // namespace dftracer::utils::common
 #else
 // fallback to gulrak/filesystem for C++11 compatibility
 #include <ghc/filesystem.hpp>
+namespace dftracer::utils::common {
 namespace fs = ghc::filesystem;
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACE_UTILS_USE_STD_FS
 
@@ -93,7 +103,7 @@ namespace fs = ghc::filesystem;
 #include <cstdint>
 #include <ctime>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// Convert a filesystem time point to Unix seconds. Shared by the directory
 /// scanner and the indexer so scanned and stored mtimes are directly
@@ -157,6 +167,6 @@ inline void remove_file_quietly(const fs::path& path) {
     }
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_FILESYSTEM_H

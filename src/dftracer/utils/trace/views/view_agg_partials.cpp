@@ -88,20 +88,21 @@ bool roles_complete(const ViewPlan& plan) {
         auto at = snapshots.find(f.index_path);
         if (at == snapshots.end())
             at = snapshots
-                     .emplace(f.index_path,
-                              unwrap(ix::plan::open_snapshot(f.index_path)))
+                     .emplace(
+                         f.index_path,
+                         common::unwrap(ix::plan::open_snapshot(f.index_path)))
                      .first;
         const ix::Snapshot& snapshot = at->second;
         const auto file = snapshot.file(get_logical_path(f.file_path));
         if (!file || !ix::extension_current(snapshot, *file,
                                             store::IndexExtension::Zonemap))
             return false;
-        const auto spans = unwrap(ix::spans(snapshot, *file));
+        const auto spans = common::unwrap(ix::spans(snapshot, *file));
         for (std::string_view p : paths) {
             std::map<std::uint64_t,
                      dftracer::utils::index::extensions::kinds::Zone>
                 zones;
-            for (const auto& [granule, bytes] : unwrap(ix::granules(
+            for (const auto& [granule, bytes] : common::unwrap(ix::granules(
                      snapshot, *file, store::IndexExtension::Zonemap, p)))
                 if (auto z =
                         dftracer::utils::index::extensions::kinds::decode_zone(
@@ -366,7 +367,8 @@ std::vector<ValueCol> value_cols(const ViewPlan& plan,
         std::string base = agg_value_base_field(value_names[vc]);
         // The partial holds offset under its bare name.
         if (!plan_by_path(plan) &&
-            base == std::string(dftracer::utils::ARGS_PREFIX) + "offset")
+            base ==
+                std::string(dftracer::utils::common::ARGS_PREFIX) + "offset")
             base = "offset";
         std::string field = tier_field(plan, base);
         if (!answerable_field(field)) continue;  // e.g. a SetUnion text column
@@ -457,10 +459,10 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed,
             try {
                 auto it = root_of.find(f.index_path);
                 if (it == root_of.end()) {
-                    auto snapshot =
-                        unwrap(index::plan::open_snapshot(f.index_path));
+                    auto snapshot = common::unwrap(
+                        index::plan::open_snapshot(f.index_path));
                     const auto config =
-                        unwrap(agg::tier::read_config(snapshot));
+                        common::unwrap(agg::tier::read_config(snapshot));
                     if (!config && !trace)
                         return declined("an index with no aggregation config");
                     AggQuerySource src;
@@ -776,8 +778,8 @@ class Seeder {
     const dftracer::utils::index::plan::GroupResolver* resolver_ = nullptr;
 };
 
-AggQueryResult run_or_throw(Result<AggQueryResult>&& r) {
-    if (!r) throw DFTUtilsException(r.error());
+AggQueryResult run_or_throw(common::Result<AggQueryResult>&& r) {
+    if (!r) throw common::DFTUtilsException(r.error());
     return std::move(*r);
 }
 

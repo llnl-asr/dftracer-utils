@@ -38,8 +38,8 @@ MetadataCollectorUtility::operator()(
         const std::string& file_path = input.file_path;
         if (file_path.size() <= 3 ||
             file_path.substr(file_path.size() - 3) != ".gz") {
-            throw DFTUtilsException(
-                ErrorCode::InvalidArgument,
+            throw common::DFTUtilsException(
+                common::ErrorCode::InvalidArgument,
                 "Not a gzip trace: " + file_path +
                     " (dftracer traces must be gzip-compressed)");
         }
@@ -70,11 +70,11 @@ namespace {
 // the caller read. The file is not opened again.
 std::optional<internal::IndexedFile> fresh_index_record(
     const std::string& index_path, const std::string& file,
-    const dftracer::utils::InputFileStat& st) {
+    const dftracer::utils::common::InputFileStat& st) {
     namespace idx = dftracer::utils::index;
     try {
-        auto snapshot =
-            dftracer::utils::unwrap(idx::plan::open_snapshot(index_path));
+        auto snapshot = dftracer::utils::common::unwrap(
+            idx::plan::open_snapshot(index_path));
         const auto logical = idx::store::internal::get_logical_path(file);
         if (snapshot.freshness(
                 logical, idx::SourceStat{static_cast<std::uint64_t>(st.mtime),
@@ -83,14 +83,15 @@ std::optional<internal::IndexedFile> fresh_index_record(
         const auto ref = snapshot.file(logical);
         if (!ref) return std::nullopt;
         const auto meta =
-            dftracer::utils::unwrap(idx::file_metadata(snapshot, *ref));
+            dftracer::utils::common::unwrap(idx::file_metadata(snapshot, *ref));
         if (!meta || meta->checkpoint_size == 0) return std::nullopt;
         return internal::IndexedFile{
             {st.mtime, st.size},
             meta->num_lines,
             meta->max_bytes,
             meta->checkpoint_size,
-            dftracer::utils::unwrap(idx::members(snapshot, *ref)).size()};
+            dftracer::utils::common::unwrap(idx::members(snapshot, *ref))
+                .size()};
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_DEBUG("Index of %s unreadable (%s)", file.c_str(),
                                  e.what());
@@ -110,10 +111,10 @@ MetadataCollectorUtility::process_compressed(
     try {
         meta.format = dftracer::utils::index::gzip::CheckpointIndexerFactory::
             detect_format(input.file_path);
-        dftracer::utils::InputFileStat input_stat;
-        if (!dftracer::utils::stat_input(input.file_path, input_stat))
-            throw DFTUtilsException::cat(ErrorCode::Io, "cannot stat ",
-                                         input.file_path);
+        dftracer::utils::common::InputFileStat input_stat;
+        if (!dftracer::utils::common::stat_input(input.file_path, input_stat))
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Io, "cannot stat ", input.file_path);
         meta.compressed_size = input_stat.size;
 
         const std::shared_ptr<internal::IndexRoot> root =
@@ -150,7 +151,7 @@ MetadataCollectorUtility::process_compressed(
         if (!seen && !input.force_rebuild) {
             co_await root->gate.acquire(1);
             const internal::RootPermit reading(*root, 1);
-            if (input_exists(
+            if (common::input_exists(
                     dftracer::utils::index::store_of(input.index_path))) {
                 seen = fresh_index_record(input.index_path, input.file_path,
                                           input_stat);
@@ -168,7 +169,7 @@ MetadataCollectorUtility::process_compressed(
                 *root, internal::IndexRoot::ALL_PERMITS);
             if (!input.force_rebuild) seen = known();
             if (!seen) {
-                meta.has_index = input_exists(
+                meta.has_index = common::input_exists(
                     dftracer::utils::index::store_of(input.index_path));
                 std::shared_ptr<CheckpointIndexer> indexer;
                 if (!meta.has_index || input.force_rebuild) {
@@ -178,8 +179,8 @@ MetadataCollectorUtility::process_compressed(
                         dftracer::utils::index::release_root(input.index_path);
                         const std::string store =
                             dftracer::utils::index::store_of(input.index_path);
-                        fs::remove_all(store);
-                        forget_input(store);
+                        common::fs::remove_all(store);
+                        common::forget_input(store);
                     }
                     DFTRACER_UTILS_LOG_DEBUG("Building index for: %s",
                                              input.file_path.c_str());

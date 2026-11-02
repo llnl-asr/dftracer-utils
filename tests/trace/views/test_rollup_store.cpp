@@ -55,7 +55,7 @@ TEST_SUITE("RollupStore") {
         const std::string dir =
             dftu_utils_test::make_unique_test_path("dftu_rollup_store_test")
                 .string();
-        fs::remove_all(dir);
+        dftracer::utils::common::fs::remove_all(dir);
 
         auto db = open_rollup_db(dir, CacheStore::Mode::ReadWrite);
         REQUIRE(db);
@@ -79,7 +79,7 @@ TEST_SUITE("RollupStore") {
         CHECK_FALSE(rollup_exists(*db, 0x99999999));
         CHECK(read_rollup(*db, 0x99999999) == nullptr);
 
-        fs::remove_all(dir);
+        dftracer::utils::common::fs::remove_all(dir);
     }
 
     // Two ranks' partials over three distinct groups round-trip: every group's
@@ -88,7 +88,7 @@ TEST_SUITE("RollupStore") {
         const std::string dir = dftu_utils_test::make_unique_test_path(
                                     "dftu_rollup_store_multi_test")
                                     .string();
-        fs::remove_all(dir);
+        dftracer::utils::common::fs::remove_all(dir);
 
         auto db = open_rollup_db(dir, CacheStore::Mode::ReadWrite);
         REQUIRE(db);
@@ -122,6 +122,6 @@ TEST_SUITE("RollupStore") {
         CHECK(by_group["g3"].first == 1);
         CHECK(by_group["g3"].second == doctest::Approx(7));
 
-        fs::remove_all(dir);
+        dftracer::utils::common::fs::remove_all(dir);
     }
 }

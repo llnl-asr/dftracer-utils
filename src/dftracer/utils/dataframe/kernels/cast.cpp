@@ -170,8 +170,9 @@ dftu_series* parse_numbers_w(const dftu_series& v, TypeId mid) {
             } else {
                 od[i] = std::stod(text, &used);
             }
-            while (used < text.size() &&
-                   ::dftracer::utils::detail::is_ascii_space(text[used]))
+            while (
+                used < text.size() &&
+                ::dftracer::utils::common::detail::is_ascii_space(text[used]))
                 ++used;
             ok = used == text.size();
         } catch (const std::exception&) {

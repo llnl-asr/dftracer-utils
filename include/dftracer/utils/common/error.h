@@ -13,7 +13,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// Coarse error category
 enum class ErrorCode {
@@ -184,7 +184,7 @@ T unwrap(Result<T>&& r) {
     if constexpr (!std::is_void_v<T>) return std::move(*r);
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 /// DFTU_TRY: error-propagation helper for coroutines returning Result<...>.
 /// Evaluates a Result-returning `expr`; on failure it co_returns the error,

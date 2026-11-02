@@ -1,11 +1,11 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARALLEL_READER_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARALLEL_READER_H
+#ifndef DFTRACER_UTILS_UTILITIES_ARROW_PARALLEL_READER_H
+#define DFTRACER_UTILS_UTILITIES_ARROW_PARALLEL_READER_H
 
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 #include <functional>
 #include <memory>
@@ -16,7 +16,7 @@ namespace dftracer::utils {
 class CoroScope;
 }
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 using dftracer::utils::CoroScope;
 
@@ -89,7 +89,7 @@ coro::CoroTask<ParallelReadResult> read_arrow_files_streaming(
     CoroScope& scope, std::vector<std::string> paths,
     FileResultCallback callback);
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARALLEL_READER_H
+#endif  // DFTRACER_UTILS_UTILITIES_ARROW_PARALLEL_READER_H

@@ -111,7 +111,7 @@ TEST_SUITE("dftracer_view_mpi") {
         REQUIRE(env.is_valid());
         // Inputs live in their own dir so the .pfw outputs are not rescanned.
         const std::string in = env.get_dir() + "/in";
-        fs::create_directories(in);
+        dftracer::utils::common::fs::create_directories(in);
         // Two shards, cpu util means 40 and 80 -> combined mean 60 over 4.
         write_counter_file(in + "/r0.pfw.gz", "cpu", {40, 40});
         write_counter_file(in + "/r1.pfw.gz", "cpu", {80, 80});
@@ -147,7 +147,7 @@ TEST_SUITE("dftracer_view_mpi") {
         TestEnvironment env(1);
         REQUIRE(env.is_valid());
         const std::string in = env.get_dir() + "/in";
-        fs::create_directories(in);
+        dftracer::utils::common::fs::create_directories(in);
         write_counter_file(in + "/r0.pfw.gz", "cpu", {40, 40});
         write_counter_file(in + "/r1.pfw.gz", "cpu", {80, 80});
 
@@ -183,7 +183,7 @@ TEST_SUITE("dftracer_view_mpi") {
         TestEnvironment env(1);
         REQUIRE(env.is_valid());
         const std::string in = env.get_dir() + "/in";
-        fs::create_directories(in);
+        dftracer::utils::common::fs::create_directories(in);
         write_event_file(in + "/r0.pfw.gz", "io", 0, 500000);
         write_event_file(in + "/r1.pfw.gz", "io", 0, 500000);  // overlaps r0
 
@@ -216,7 +216,7 @@ TEST_SUITE("dftracer_view_mpi") {
         TestEnvironment env(1);
         REQUIRE(env.is_valid());
         const std::string in = env.get_dir() + "/in";
-        fs::create_directories(in);
+        dftracer::utils::common::fs::create_directories(in);
         write_counter_file(in + "/r0.pfw.gz", "cpu", {40, 40});
         write_counter_file(in + "/r1.pfw.gz", "cpu", {80, 80});
 

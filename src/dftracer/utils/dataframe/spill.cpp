@@ -512,7 +512,7 @@ struct ColumnPlan {
 
 }  // namespace
 
-PartFile::PartFile() : file_(unwrap(SpillFile::create())) {}
+PartFile::PartFile() : file_(common::unwrap(common::SpillFile::create())) {}
 
 PartFile::~PartFile() = default;
 
@@ -574,19 +574,19 @@ std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
     for (const ColumnPlan& cp : plans)
         for (const Piece* p : {&cp.validity, &cp.offsets, &cp.data})
             if (p->bytes != 0)
-                unwrap(file_->write_at(base + p->at, p->src, p->bytes));
+                common::unwrap(file_->write_at(base + p->at, p->src, p->bytes));
     // The last bytes may be padding: extend so the mapped pages exist.
     if (::ftruncate(file_->fd(), static_cast<off_t>(base + region_bytes)) != 0)
         throw std::runtime_error("spill: cannot extend the spill file (" +
                                  std::string(std::strerror(errno)) + "); set " +
-                                 constants::SPILL_DIR_ENV +
+                                 common::constants::SPILL_DIR_ENV +
                                  " to a directory with free space");
     void* map = ::mmap(nullptr, region_bytes, PROT_READ, MAP_SHARED,
                        file_->fd(), static_cast<off_t>(base));
     if (map == MAP_FAILED)
         throw std::runtime_error("spill: cannot map the spill file (" +
                                  std::string(std::strerror(errno)) + "); set " +
-                                 constants::SPILL_DIR_ENV +
+                                 common::constants::SPILL_DIR_ENV +
                                  " to a usable directory");
     Mapping* mapping = nullptr;
     memory::BlockRef region;
@@ -624,7 +624,8 @@ std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
     return out;
 }
 
-Dir::Dir() : dir_(unwrap(ScopedSpillSubdir::create("dftu_lazy"))) {}
+Dir::Dir()
+    : dir_(common::unwrap(common::ScopedSpillSubdir::create("dftu_lazy"))) {}
 
 Dir::~Dir() = default;
 
@@ -632,13 +633,14 @@ int Dir::next_run() { return runs_.fetch_add(1); }
 
 void Dir::remove_run(const std::string& path) const noexcept {
     std::error_code ec;
-    const std::uintmax_t size = fs::file_size(path, ec);
+    const std::uintmax_t size = common::fs::file_size(path, ec);
     std::error_code rm;
-    if (fs::remove(path, rm) && !ec) dir_.charge().release(size);
+    if (common::fs::remove(path, rm) && !ec) dir_.charge().release(size);
 }
 
 std::string Dir::run_path(int id) const {
-    return (fs::path(dir_.path()) / ("run_" + std::to_string(id) + ".bin"))
+    return (common::fs::path(dir_.path()) /
+            ("run_" + std::to_string(id) + ".bin"))
         .string();
 }
 
@@ -651,17 +653,18 @@ const ZSTD_customMem TRACKED_MEM = {
     [](void*, void* p) { dftracer::utils::memory::c_free(p); }, nullptr};
 
 bool spill_compression_on(const std::string& path) {
-    const auto v = Env::get(constants::SPILL_COMPRESS_ENV);
+    const auto v = common::Env::get(common::constants::SPILL_COMPRESS_ENV);
     const auto is = [&](std::string_view a, std::string_view b = {},
                         std::string_view c = {}) {
-        return v &&
-               (::dftracer::utils::detail::iequals(*v, a) ||
-                (!b.empty() && ::dftracer::utils::detail::iequals(*v, b)) ||
-                (!c.empty() && ::dftracer::utils::detail::iequals(*v, c)));
+        return v && (::dftracer::utils::common::detail::iequals(*v, a) ||
+                     (!b.empty() &&
+                      ::dftracer::utils::common::detail::iequals(*v, b)) ||
+                     (!c.empty() &&
+                      ::dftracer::utils::common::detail::iequals(*v, c)));
     };
     if (is("off", "0")) return false;
     if (is("on", "1", "zstd")) return true;
-    return is_network_filesystem(filesystem_kind(path));
+    return common::is_network_filesystem(common::filesystem_kind(path));
 }
 
 // A morsel smaller than this is not worth a compression call.
@@ -681,7 +684,7 @@ struct Reader::Codec {
 
 Writer::Writer(const std::string& path)
     : os_(path, std::ios::binary | std::ios::trunc),
-      charge_(ScopedSpillSubdir::charge_for(path)) {
+      charge_(common::ScopedSpillSubdir::charge_for(path)) {
     if (!os_) throw std::runtime_error("spill: cannot open run file " + path);
     if (spill_compression_on(path)) codec_ = std::make_unique<Codec>();
 }
@@ -768,7 +771,7 @@ void HashPartitions::close() {
 Reader::Reader(const std::string& path) : is_(path, std::ios::binary) {
     if (!is_) throw std::runtime_error("spill: cannot open run file " + path);
     std::error_code ec;
-    size_ = fs::file_size(path, ec);
+    size_ = common::fs::file_size(path, ec);
     if (ec) throw std::runtime_error("spill: cannot stat run file " + path);
 }
 
@@ -897,8 +900,8 @@ void write_agg_run(AggState& state, const std::string& path) {
     agg_sort_groups(state);
     std::ofstream os(path, std::ios::binary);
     if (!os) throw std::runtime_error("agg spill: cannot open run " + path);
-    const std::shared_ptr<SpillCharge> charge =
-        ScopedSpillSubdir::charge_for(path);
+    const std::shared_ptr<common::SpillCharge> charge =
+        common::ScopedSpillSubdir::charge_for(path);
     const std::int64_t ng = agg_num_groups(state);
     for (std::int64_t g = 0; g < ng; ++g) {
         const std::string blob =
@@ -920,7 +923,7 @@ AggRunReader::AggRunReader(const std::string& path)
     : is_(path, std::ios::binary) {
     if (!is_) throw std::runtime_error("agg spill: cannot open run " + path);
     std::error_code ec;
-    size_ = fs::file_size(path, ec);
+    size_ = common::fs::file_size(path, ec);
     if (ec) throw std::runtime_error("agg spill: cannot stat run " + path);
     advance();
 }

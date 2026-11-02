@@ -70,7 +70,7 @@ TEST_CASE("StripedWriter - header, chunks, footer land in single file") {
     CHECK(lines.count("worker2") == 1);
     CHECK(lines.count("END") == 1);
 
-    fs::remove(path);
+    common::fs::remove(path);
 }
 
 TEST_CASE("StripedWriter - empty chunks are no-ops") {
@@ -87,9 +87,9 @@ TEST_CASE("StripedWriter - empty chunks are no-ops") {
         co_return 0;
     };
     CHECK(runtime.submit(task(), "striped_empty").get() == 0);
-    CHECK(fs::exists(path));
-    CHECK(fs::file_size(path) == 0);
-    fs::remove(path);
+    CHECK(common::fs::exists(path));
+    CHECK(common::fs::file_size(path) == 0);
+    common::fs::remove(path);
 }
 
 TEST_CASE("StripedWriter - output_paths returns single entry") {
@@ -108,5 +108,5 @@ TEST_CASE("StripedWriter - output_paths returns single entry") {
     CHECK(runtime.submit(task(), "striped_paths").get() == 0);
     REQUIRE(paths.size() == 1);
     CHECK(paths[0] == path);
-    fs::remove(path);
+    common::fs::remove(path);
 }

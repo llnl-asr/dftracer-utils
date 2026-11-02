@@ -241,7 +241,7 @@ class WhenAnyAwaitable {
         state_->finish_wait();
         state_->awaitables.clear();
         if (state_->exception) {
-            rethrow_and_clear(state_->exception);
+            common::rethrow_and_clear(state_->exception);
         }
         if (state_->cancelled_winner) throw_cancelled("wait cancelled");
         return std::move(state_->result);
@@ -631,7 +631,7 @@ class WhenAnyTupleAwaitable {
         state_->finish_wait();
         state_->awaitables_.reset();
         if (state_->exception) {
-            rethrow_and_clear(state_->exception);
+            common::rethrow_and_clear(state_->exception);
         }
         if (state_->cancelled_winner) throw_cancelled("wait cancelled");
         return std::move(state_->result);
@@ -752,8 +752,8 @@ class TimeoutAwaitable {
 
     bool await_suspend(std::coroutine_handle<> h) {
         if (!timer_service_) {
-            throw DFTUtilsException(
-                ErrorCode::Pipeline,
+            throw common::DFTUtilsException(
+                common::ErrorCode::Pipeline,
                 "TimeoutAwaitable: TimerService not available");
         }
 
@@ -791,7 +791,8 @@ class TimeoutAwaitable {
         if (st.outcome == Outcome::Cancelled) {
             throw_cancelled("timeout cancelled");
         }
-        throw DFTUtilsException(ErrorCode::Pipeline, "Operation timed out");
+        throw common::DFTUtilsException(common::ErrorCode::Pipeline,
+                                        "Operation timed out");
     }
 
     /// Ends the wait early. Thread-safe. Does nothing once the wait is over.

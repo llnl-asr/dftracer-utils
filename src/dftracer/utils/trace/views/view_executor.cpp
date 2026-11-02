@@ -102,7 +102,8 @@ static bool all_files_fresh(const ViewPlan& plan) {
     for (const auto& f : plan.files) {
         if (f.index_path.empty()) return false;
         if (checked && *checked == f.index_path) continue;
-        if (input_exists(dftracer::utils::index::store_of(f.index_path)))
+        if (common::input_exists(
+                dftracer::utils::index::store_of(f.index_path)))
             return false;
         checked = &f.index_path;
     }
@@ -140,7 +141,7 @@ static std::string project_event(simdjson::dom::parser& parser,
     bool first = true;
     for (const auto& name : select) {
         json::JsonValue val = root.at(name);
-        if (!val.exists() && args_fallback && !has_args_prefix(name))
+        if (!val.exists() && args_fallback && !common::has_args_prefix(name))
             val = root.at("args." + name);
         if (!val.exists()) continue;
         if (!first) out += ',';
@@ -181,7 +182,7 @@ coro::CoroTask<void> build_bootstrap_artifacts(
     CoroScope& scope, std::string file,
     dftracer::utils::index::gzip::CheckpointIndexer::VisitorList visitors,
     dftracer::utils::index::gzip::GzipBuildArtifacts* arts, bool* ok,
-    std::size_t ways, dstd::SharedPtr<ScopedFd> source) {
+    std::size_t ways, dstd::SharedPtr<common::ScopedFd> source) {
     const int fd = source->get();
     if (fd < 0) co_return;
     auto built =
@@ -199,17 +200,17 @@ coro::CoroTask<void> build_bootstrap_artifacts(
 // The file's descriptor, its size and its hash: the build needs them before
 // the folds run, and the artifacts read the same descriptor.
 struct BootstrapSource {
-    dstd::SharedPtr<ScopedFd> fd;
+    dstd::SharedPtr<common::ScopedFd> fd;
     std::uint64_t size = 0;
     std::uint64_t hash = 0;
     bool ok = false;
 };
 
-BootstrapSource open_bootstrap_source(std::string_view file,
-                                      dstd::SharedPtr<ScopedFd> shared) {
+BootstrapSource open_bootstrap_source(
+    std::string_view file, dstd::SharedPtr<common::ScopedFd> shared) {
     BootstrapSource out;
     if (!shared)
-        shared = dstd::make_shared<ScopedFd>(
+        shared = dstd::make_shared<common::ScopedFd>(
             ::open(std::string(file).c_str(), O_RDONLY));
     const int fd = shared->get();
     if (fd < 0) return out;
@@ -545,7 +546,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     namespace pfw = utilities::fileio::parallel;
     // Member size defaults to the checkpoint granularity (a member == a chunk).
     constexpr std::size_t DEFAULT_FLUSH_BYTES =
-        constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     constexpr std::size_t BUFFER_HEADROOM_BYTES = 1 * 1024 * 1024;
 
     if (opts.build_index)
@@ -575,8 +576,9 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     auto opened = co_await utilities::fileio::GzipLineWriter::open(
         opts.output_path, std::move(wopts));
     if (!opened) {
-        throw DFTUtilsException(
-            ErrorCode::Io, "export_trace failed writing " + opts.output_path);
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            "export_trace failed writing " + opts.output_path);
     }
     auto writer = std::move(*opened);
 
@@ -638,8 +640,9 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     if (!close_ok) ok = false;
 
     if (!ok) {
-        throw DFTUtilsException(
-            ErrorCode::Io, "export_trace failed writing " + opts.output_path);
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            "export_trace failed writing " + opts.output_path);
     }
 
     ExportStats st;
@@ -714,7 +717,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     if (f.uncompressed_size == 0) {
         // A file never indexed has no size in the index.
         if (!f.fd)
-            f.fd = dstd::make_shared<ScopedFd>(
+            f.fd = dstd::make_shared<common::ScopedFd>(
                 ::open(f.file_path.c_str(), O_RDONLY));
         struct stat st{};
         if (f.fd->get() >= 0 && ::fstat(f.fd->get(), &st) == 0)
@@ -898,7 +901,7 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
     co_await open_bootstrap_stores(plan, stores);
 
     const std::size_t workers =
-        std::max<std::size_t>(1, available_parallelism());
+        std::max<std::size_t>(1, common::available_parallelism());
     BootstrapRun run;
     run.plan = &plan;
     run.stores = &stores;
@@ -1008,7 +1011,7 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         constexpr std::uint64_t DEFAULT_PART_SIZE = 128ull * 1024 * 1024;
         TraceWriteOptions opts;
         opts.output_path =
-            (fs::path(dftracer::utils::index::view_parts_dir(dir)) /
+            (common::fs::path(dftracer::utils::index::view_parts_dir(dir)) /
              "part.pfw.gz")
                 .string();
         opts.index_path = dir;
@@ -1121,14 +1124,16 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     const ix::Roles& roles = plan_record_schema(plan).roles;
     std::map<std::string, ix::Snapshot> snapshots;
     for (const auto& f : plan.files) {
-        if (f.index_path.empty() || !input_exists(ix::store_of(f.index_path)))
+        if (f.index_path.empty() ||
+            !common::input_exists(ix::store_of(f.index_path)))
             continue;
         try {
             auto at = snapshots.find(f.index_path);
             if (at == snapshots.end())
                 at = snapshots
                          .emplace(f.index_path,
-                                  unwrap(ix::plan::open_snapshot(f.index_path)))
+                                  common::unwrap(
+                                      ix::plan::open_snapshot(f.index_path)))
                          .first;
             const ix::Snapshot& snapshot = at->second;
             const auto file = snapshot.file(
@@ -1608,13 +1613,14 @@ dataframe::AggStatePtr decode_partials(
     dataframe::AggStatePtr state;
     for (std::string_view p : partials) {
         if (p.empty())
-            throw DFTUtilsException::cat(
-                ErrorCode::Aggregation,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Aggregation,
                 "aggregate partial: empty (missing wire tag)");
         if (static_cast<std::uint8_t>(p[0]) !=
             static_cast<std::uint8_t>(AggWireTag::AggState))
-            throw DFTUtilsException::cat(ErrorCode::Aggregation,
-                                         "aggregate partial: unknown wire tag");
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Aggregation,
+                "aggregate partial: unknown wire tag");
         dataframe::AggStatePtr st =
             dataframe::agg_deserialize(std::string(p.substr(1)));
         if (!state)

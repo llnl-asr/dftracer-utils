@@ -141,7 +141,7 @@ inline CoroTask<void> genesis_run(CoroScope& ctx, std::string root) {
 }
 
 inline void write_gz(const std::string& path, const std::string& content) {
-    fs::create_directories(fs::path(path).parent_path());
+    common::fs::create_directories(common::fs::path(path).parent_path());
     utilities::fileio::compress::GzipMemberCompressor comp(1);
     auto member = comp.compress_member(
         reinterpret_cast<const std::uint8_t*>(content.data()), content.size());

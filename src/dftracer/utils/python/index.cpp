@@ -20,7 +20,6 @@
 
 namespace idx = dftracer::utils::index;
 namespace py = dftracer::utils::python;
-using dftracer::utils::unwrap;
 
 namespace {
 
@@ -34,7 +33,8 @@ struct StaleCheck {
 // edit with a restored mtime is invisible here.
 StaleCheck stale_check(const idx::Index &index,
                        const std::vector<std::string> &paths) {
-    const idx::Snapshot snapshot = unwrap(index.snapshot());
+    const idx::Snapshot snapshot =
+        dftracer::utils::common::unwrap(index.snapshot());
 
     StaleCheck result;
     dftracer::utils::dstd::StringViewSet listed;
@@ -43,8 +43,8 @@ StaleCheck stale_check(const idx::Index &index,
         const std::string logical =
             idx::store::internal::get_logical_path(path);
         listed.insert(logical);
-        dftracer::utils::InputFileStat st;
-        if (!dftracer::utils::stat_input(path, st)) st = {};
+        dftracer::utils::common::InputFileStat st;
+        if (!dftracer::utils::common::stat_input(path, st)) st = {};
         const idx::SourceStat now{static_cast<std::uint64_t>(st.mtime),
                                   st.size};
         switch (snapshot.freshness(logical, now)) {
@@ -60,7 +60,8 @@ StaleCheck stale_check(const idx::Index &index,
         }
     }
 
-    for (const idx::FileRef &file : unwrap(snapshot.files())) {
+    for (const idx::FileRef &file :
+         dftracer::utils::common::unwrap(snapshot.files())) {
         const dftracer::utils::dstd::StringView path = file.path();
         const std::string_view logical(path.data(), path.size());
         if (listed.find(logical) == listed.end())
@@ -88,7 +89,7 @@ int Index_init(IndexObject *self, PyObject *args, PyObject *kwds) {
                                      const_cast<char **>(kwlist), &index_path))
         return -1;
     try {
-        auto opened = unwrap(idx::Index::open(
+        auto opened = dftracer::utils::common::unwrap(idx::Index::open(
             idx::store::internal::normalize_index_root(index_path)));
         delete self->index;
         self->index = new idx::Index(std::move(opened));

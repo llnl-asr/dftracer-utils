@@ -69,8 +69,8 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
                 dataframe::TypeId::String ||
             right.columns[static_cast<std::size_t>(i)].type() !=
                 dataframe::TypeId::String)
-            throw DFTUtilsException::cat(
-                ErrorCode::InvalidArgument,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument,
                 "join/compare key columns must be string-typed");
 
     const bool anti = type == JoinType::LeftAnti;

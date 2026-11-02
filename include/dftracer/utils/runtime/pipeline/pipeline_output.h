@@ -10,7 +10,7 @@
 
 namespace dftracer::utils {
 
-struct PipelineOutput : public std::unordered_map<TaskIndex, std::any> {
+struct PipelineOutput : public std::unordered_map<common::TaskIndex, std::any> {
     operator std::any() const {
         if (size() == 1) return begin()->second;
         throw PipelineError(PipelineError::OutputConversionError,
@@ -32,7 +32,7 @@ struct PipelineOutput : public std::unordered_map<TaskIndex, std::any> {
         return std::any_cast<T>(get());
     }
 
-    std::any get(TaskIndex id) const {
+    std::any get(common::TaskIndex id) const {
         auto it = find(id);
         if (it == end()) {
             throw PipelineError(
@@ -43,7 +43,7 @@ struct PipelineOutput : public std::unordered_map<TaskIndex, std::any> {
     }
 
     template <typename T>
-    T get(TaskIndex id) const {
+    T get(common::TaskIndex id) const {
         auto it = get(id);
         try {
             return std::any_cast<T>(it);

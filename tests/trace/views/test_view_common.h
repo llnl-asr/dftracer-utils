@@ -50,7 +50,7 @@ inline std::string create_mixed_trace(TestEnvironment& env, int posix_n,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 
@@ -70,7 +70,7 @@ inline std::string create_multimember_trace(TestEnvironment& env, int n,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, member_bytes);
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 
@@ -89,7 +89,7 @@ inline std::string create_trace_with_counters(TestEnvironment& env) {
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 
@@ -107,7 +107,7 @@ inline std::string create_bulk_counters(TestEnvironment& env, int n) {
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 
@@ -119,7 +119,7 @@ inline std::string create_counter_file(TestEnvironment& env,
     // Each shard gets its own dir so its index (keyed off the parent dir) does
     // not collide with the other shard's.
     std::string dir = env.get_dir() + "/" + tag;
-    fs::create_directories(dir);
+    common::fs::create_directories(dir);
     std::string pfw = dir + "/ctr.pfw";
     std::ofstream ofs(pfw);
     int ts = 1000;
@@ -131,7 +131,7 @@ inline std::string create_counter_file(TestEnvironment& env,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 

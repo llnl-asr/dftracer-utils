@@ -40,7 +40,7 @@ std::string write_trace(TestEnvironment& env, const std::string& name,
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                member_bytes));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }

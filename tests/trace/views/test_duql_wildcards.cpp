@@ -17,7 +17,9 @@ constexpr int RECORDS = 3000;
 // chunks hold a value above 92.
 std::string write_counters(TestEnvironment& env, const std::string& dir = "",
                            bool build = true) {
-    if (!dir.empty()) fs::create_directories(env.get_dir() + "/" + dir);
+    if (!dir.empty())
+        dftracer::utils::common::fs::create_directories(env.get_dir() + "/" +
+                                                        dir);
     const std::string plain = env.get_dir() + "/" +
                               (dir.empty() ? "" : dir + "/") +
                               "counters.ndjson";
@@ -36,7 +38,7 @@ std::string write_counters(TestEnvironment& env, const std::string& dir = "",
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     if (build) dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
@@ -239,7 +241,8 @@ TEST_SUITE("DuqlWildcards") {
     TEST_CASE("a pattern on a fresh genesis trace builds the catalog") {
         TestEnvironment env(10);
         const auto mk = [&](const std::string& dir, bool build) {
-            fs::create_directories(env.get_dir() + "/" + dir);
+            dftracer::utils::common::fs::create_directories(env.get_dir() +
+                                                            "/" + dir);
             const std::string plain = env.get_dir() + "/" + dir + "/g.ndjson";
             {
                 std::ofstream out(plain);
@@ -251,7 +254,7 @@ TEST_SUITE("DuqlWildcards") {
             const std::string gz = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, gz, 2048));
-            fs::remove(plain);
+            dftracer::utils::common::fs::remove(plain);
             if (build) dftracer::utils::index::Indexer::open({gz}).build();
             return view_of(gz);
         };

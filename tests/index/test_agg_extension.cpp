@@ -64,7 +64,7 @@ std::string write_trace(const std::string& dir, const std::string& name, int n,
     }
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 
@@ -232,9 +232,9 @@ TEST_SUITE("AggExtension") {
         }
         {
             const auto snapshot =
-                unwrap(index::plan::open_snapshot(index_of(gz)));
-            CHECK_FALSE(
-                unwrap(index::schemas::dft::agg::tier::read_config(snapshot)));
+                common::unwrap(index::plan::open_snapshot(index_of(gz)));
+            CHECK_FALSE(common::unwrap(
+                index::schemas::dft::agg::tier::read_config(snapshot)));
         }
         auto ix = Indexer::open({gz}, with_aggregation(1'000'000));
         ix.build();
@@ -290,8 +290,8 @@ TEST_SUITE("AggExtension") {
         plant_sentinel(a);
 
         write_trace(env.get_dir(), "b", 45, 500'000, true);
-        fs::last_write_time(b,
-                            fs::last_write_time(b) + std::chrono::seconds(10));
+        common::fs::last_write_time(
+            b, common::fs::last_write_time(b) + std::chrono::seconds(10));
 
         auto ix = Indexer::open({a, b}, with_aggregation(1'000'000));
         // Rebuilding `b` replaces its own partials and column blocks, so no
@@ -309,8 +309,8 @@ TEST_SUITE("AggExtension") {
         TestEnvironment fresh(10);
         const auto fa = fresh.get_dir() + "/a.pfw.gz";
         const auto fb = fresh.get_dir() + "/b.pfw.gz";
-        fs::copy_file(a, fa);
-        fs::copy_file(b, fb);
+        common::fs::copy_file(a, fa);
+        common::fs::copy_file(b, fb);
         Indexer::open({fa, fb}, with_aggregation(1'000'000)).build();
         CHECK(count_reads({fa, fb}) == 75);
         const auto rebuilt = counters_of({a, b});

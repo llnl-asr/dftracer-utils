@@ -40,7 +40,7 @@ inline bool rewrite_uint_field(std::string& json, std::string_view key,
     if (pos == std::string::npos) return false;
     pos += key.size();
     while (pos < json.size() &&
-           ::dftracer::utils::detail::is_ascii_space(json[pos]))
+           ::dftracer::utils::common::detail::is_ascii_space(json[pos]))
         ++pos;
     auto end_pos = pos;
     while (end_pos < json.size() &&

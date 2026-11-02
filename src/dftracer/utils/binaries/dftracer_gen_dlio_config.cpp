@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
             try {
                 index::build::ResolverInput resolver_input;
                 resolver_input.directory =
-                    fs::absolute(cli.directory.value).string();
+                    common::fs::absolute(cli.directory.value).string();
                 resolver_input.index_dir = cli.indexing.index_dir;
                 resolver_input.require_checkpoints = false;
                 const auto resolved =

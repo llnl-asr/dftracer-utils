@@ -111,8 +111,9 @@ using Rows = std::vector<std::pair<std::string, std::string>>;
 
 // Read once by the first snapshot of the process, so set before main.
 const int REFRESH_EVERY_SNAPSHOT = [] {
-    ::setenv(dftracer::utils::constants::indexer::INDEX_STORE_REFRESH_MS_ENV,
-             "0", 1);
+    ::setenv(
+        dftracer::utils::common::constants::indexer::INDEX_STORE_REFRESH_MS_ENV,
+        "0", 1);
     return 0;
 }();
 

@@ -2,14 +2,14 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/utilities/common/arrow/array_view.h>
-#include <dftracer/utils/utilities/common/arrow/partition_writer.h>
+#include <dftracer/utils/utilities/arrow/array_view.h>
+#include <dftracer/utils/utilities/arrow/partition_writer.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <iomanip>
 #include <sstream>
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 PartitionWriter::~PartitionWriter() {}
 
@@ -63,7 +63,7 @@ std::string PartitionWriter::generate_filename() const {
     std::ostringstream ss;
     ss << "part-" << std::setw(5) << std::setfill('0') << file_index_
        << ".arrow";
-    return (fs::path(output_dir_) / ss.str()).string();
+    return (common::fs::path(output_dir_) / ss.str()).string();
 }
 
 coro::CoroTask<int> PartitionWriter::open(const std::string& output_dir,
@@ -72,7 +72,7 @@ coro::CoroTask<int> PartitionWriter::open(const std::string& output_dir,
     if (is_open_) co_return -1;
 
     std::error_code ec;
-    fs::create_directories(output_dir, ec);
+    common::fs::create_directories(output_dir, ec);
     if (ec) co_return -1;
 
     output_dir_ = output_dir;
@@ -193,6 +193,6 @@ coro::CoroTask<PartitionWriteStats> PartitionWriter::close() {
     co_return stats;
 }
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC

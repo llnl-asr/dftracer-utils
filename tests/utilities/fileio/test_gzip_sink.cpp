@@ -47,7 +47,7 @@ std::string decode(const std::string& path, std::string& last_bytes) {
 
 TEST_CASE("GzipSink - pieces split mid-line") {
     auto dir = dftu_utils_test::make_unique_test_path("dftracer_test_sink");
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     const std::string path = (dir / "out.pfw.gz").string();
 
     std::string expected;
@@ -67,5 +67,5 @@ TEST_CASE("GzipSink - pieces split mid-line") {
     CHECK(decode(path, last) == expected);
     REQUIRE(last.size() >= 2);
     for (std::size_t i = 0; i + 1 < last.size(); ++i) CHECK(last[i] == '\n');
-    fs::remove_all(dir);
+    dftracer::utils::common::fs::remove_all(dir);
 }

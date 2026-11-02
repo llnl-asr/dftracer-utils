@@ -23,7 +23,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 namespace detail {
 
@@ -292,4 +292,4 @@ void ScopedSpillSubdir::remove() noexcept {
     charge_.reset();
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

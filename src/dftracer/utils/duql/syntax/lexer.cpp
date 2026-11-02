@@ -59,7 +59,7 @@ dftracer::utils::dstd::Expected<std::vector<Token>, duql::DuqlError> lex(
 
     while (true) {
         while (pos < src.size()) {
-            if (::dftracer::utils::detail::is_ascii_space(src[pos])) {
+            if (::dftracer::utils::common::detail::is_ascii_space(src[pos])) {
                 ++pos;
                 adjacent = false;
             } else if (src[pos] == '#') {

@@ -58,12 +58,12 @@ coro::CoroTask<bool> CatalogFold::finalize(
         try {
             auto at = snapshots.find(std::string_view(fs.index_path));
             if (at == snapshots.end()) {
-                const auto opened = unwrap(index::Index::open(
+                const auto opened = common::unwrap(index::Index::open(
                     index::store::internal::normalize_index_root(
                         fs.index_path)));
                 at = snapshots
                          .emplace(dstd::String(fs.index_path),
-                                  unwrap(opened.snapshot()))
+                                  common::unwrap(opened.snapshot()))
                          .first;
             }
             const index::Snapshot& snapshot = at->second;

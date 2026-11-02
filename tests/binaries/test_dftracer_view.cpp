@@ -44,7 +44,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    fs::rename(trace_gz, pfw_path);
+    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
     return pfw_path;
 }
 
@@ -58,7 +58,7 @@ std::string make_multimember_pfw_gz(dftu_utils_test::TestEnvironment& env,
     std::string mm = env.get_dir() + "/mm_" + std::to_string(id) + ".pfw.gz";
     namespace gzc = dftracer::utils::utilities::fileio::compress;
     gzc::gzip_rechunk_to_members(single, mm, member_bytes, 6).get();
-    fs::remove(single);
+    dftracer::utils::common::fs::remove(single);
     return mm;
 }
 
@@ -208,10 +208,10 @@ std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
                                    const std::string& index_dir = "") {
     namespace internal = dftracer::utils::trace::internal;
     std::string dir = env.get_dir() + "/" + tag;
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     std::string src = env.create_dft_test_gzip_file(num_events);
     std::string gz = dir + "/t.pfw.gz";
-    fs::rename(src, gz);
+    dftracer::utils::common::fs::rename(src, gz);
 
     dftracer::utils::index::IndexerOptions options;
     options.index_dir = index_dir;
@@ -345,8 +345,8 @@ TEST_SUITE("DFTracerView") {
         int rc = run_view(binary, {"--duql", R"(cat == "POSIX")", "--no-index",
                                    "-d", env.get_dir(), "-o", output});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(output + ".gz"));
-        CHECK(fs::file_size(output + ".gz") > 0);
+        REQUIRE(dftracer::utils::common::fs::exists(output + ".gz"));
+        CHECK(dftracer::utils::common::fs::file_size(output + ".gz") > 0);
     }
 
     TEST_CASE("fused index round-trips (--merge --verify)") {
@@ -362,10 +362,10 @@ TEST_SUITE("DFTracerView") {
         // Inputs in their own dir so the .pfw.gz output is not rescanned as
         // input on a subsequent run.
         std::string in = env.get_dir() + "/in";
-        fs::create_directories(in);
+        dftracer::utils::common::fs::create_directories(in);
         auto trace_gz = env.create_dft_test_gzip_file(50);
         REQUIRE(!trace_gz.empty());
-        fs::rename(trace_gz, in + "/trace_0.pfw.gz");
+        dftracer::utils::common::fs::rename(trace_gz, in + "/trace_0.pfw.gz");
 
         // Default write path builds the index during the write (fused).
         // --verify re-scans the written+indexed trace via that index and checks
@@ -375,10 +375,11 @@ TEST_SUITE("DFTracerView") {
         int rc =
             run_view(binary, {"-d", in, "--merge", "--verify", "-o", output});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(output + ".gz"));
+        REQUIRE(dftracer::utils::common::fs::exists(output + ".gz"));
         // The index was built by the write, not a separate pass: its .dftindex
         // directory must exist next to the output.
-        CHECK(fs::exists(env.get_dir() + "/.dftindex"));
+        CHECK(
+            dftracer::utils::common::fs::exists(env.get_dir() + "/.dftindex"));
     }
 
     TEST_CASE("duql with name filter") {
@@ -476,9 +477,11 @@ TEST_SUITE("DFTracerView") {
 
         // A flat directory with the same two traces for the baseline query.
         std::string both = env.get_dir() + "/both";
-        fs::create_directories(both);
-        fs::copy_file(env.get_dir() + "/sa/t.pfw.gz", both + "/a.pfw.gz");
-        fs::copy_file(env.get_dir() + "/sb/t.pfw.gz", both + "/b.pfw.gz");
+        dftracer::utils::common::fs::create_directories(both);
+        dftracer::utils::common::fs::copy_file(env.get_dir() + "/sa/t.pfw.gz",
+                                               both + "/a.pfw.gz");
+        dftracer::utils::common::fs::copy_file(env.get_dir() + "/sb/t.pfw.gz",
+                                               both + "/b.pfw.gz");
 
         std::string cap = env.get_dir() + "/cap.txt";
         std::string shard_out, direct_out;
@@ -515,7 +518,7 @@ TEST_SUITE("DFTracerView") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
         std::string dir = env.get_dir() + "/sel";
-        fs::create_directories(dir);
+        dftracer::utils::common::fs::create_directories(dir);
         std::string pfw = dir + "/t.pfw";
         {
             std::ofstream out(pfw);
@@ -524,7 +527,7 @@ TEST_SUITE("DFTracerView") {
         }
         std::string gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
 
         std::string cap = env.get_dir() + "/cap.txt";
         std::string out;
@@ -870,15 +873,17 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         std::string orig = create_pfw_gz(env, 50, 0);
         REQUIRE(!orig.empty());
-        const auto orig_size = fs::file_size(orig);
+        const auto orig_size = dftracer::utils::common::fs::file_size(orig);
 
         int rc = run_view(
             binary, {"--group-by", "cat", "--agg", "count", "--checkpoint-size",
                      "2048", "-d", env.get_dir()});
         CHECK(rc == 0);
-        CHECK(fs::file_size(orig) == orig_size);
-        CHECK_FALSE(fs::exists(env.get_dir() + "/split"));
-        CHECK_FALSE(fs::exists(env.get_dir() + "/.dftindex.split"));
+        CHECK(dftracer::utils::common::fs::file_size(orig) == orig_size);
+        CHECK_FALSE(
+            dftracer::utils::common::fs::exists(env.get_dir() + "/split"));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(env.get_dir() +
+                                                        "/.dftindex.split"));
     }
 
     // A multi-member input whose members already fit under the checkpoint size
@@ -897,8 +902,10 @@ TEST_SUITE("DFTracerView") {
             binary, {"--group-by", "cat", "--agg", "count", "--checkpoint-size",
                      "1048576", "-d", env.get_dir()});
         CHECK(rc == 0);
-        CHECK_FALSE(fs::exists(env.get_dir() + "/split"));
-        CHECK_FALSE(fs::exists(env.get_dir() + "/.dftindex.split"));
+        CHECK_FALSE(
+            dftracer::utils::common::fs::exists(env.get_dir() + "/split"));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(env.get_dir() +
+                                                        "/.dftindex.split"));
     }
 }
 

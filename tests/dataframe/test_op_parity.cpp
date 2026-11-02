@@ -57,7 +57,7 @@ const std::set<std::string>& runtime_registered_series_ops() {
     return names;
 }
 
-// Registered by utilities/common/arrow/frame_ops.cpp: the Arrow-layer
+// Registered by utilities/arrow/frame_ops.cpp: the Arrow-layer
 // relational kernels, which live above the dataframe library and so cannot be
 // .def rows. Grows only with a matching frame_ops.cpp change.
 const std::set<std::string>& runtime_registered_frame_ops() {

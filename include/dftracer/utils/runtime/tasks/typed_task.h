@@ -87,8 +87,9 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         // Default implementation - should be overridden
-        throw DFTUtilsException(ErrorCode::Internal,
-                                "TypedTask::apply() must be overridden");
+        throw common::DFTUtilsException(
+            common::ErrorCode::Internal,
+            "TypedTask::apply() must be overridden");
     }
 
     /// Version with input, no output
@@ -98,8 +99,9 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");
-        throw DFTUtilsException(ErrorCode::Internal,
-                                "TypedTask::apply() must be overridden");
+        throw common::DFTUtilsException(
+            common::ErrorCode::Internal,
+            "TypedTask::apply() must be overridden");
     }
 
     /// Version with output, no input
@@ -109,8 +111,9 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");
-        throw DFTUtilsException(ErrorCode::Internal,
-                                "TypedTask::apply() must be overridden");
+        throw common::DFTUtilsException(
+            common::ErrorCode::Internal,
+            "TypedTask::apply() must be overridden");
     }
 
     /// Version with no input or output
@@ -120,8 +123,9 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");
-        throw DFTUtilsException(ErrorCode::Internal,
-                                "TypedTask::apply() must be overridden");
+        throw common::DFTUtilsException(
+            common::ErrorCode::Internal,
+            "TypedTask::apply() must be overridden");
     }
 
    protected:

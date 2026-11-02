@@ -208,8 +208,8 @@ class GroupByCursor : public Cursor {
             for (std::size_t p = 0; p < part_out_.size(); ++p) {
                 part_out_[p].close();
                 if (!part_out_[p])
-                    throw DFTUtilsException::cat(
-                        ErrorCode::Io,
+                    throw common::DFTUtilsException::cat(
+                        common::ErrorCode::Io,
                         "group_by spill: cannot write a part file");
                 if (part_bytes_[p])
                     todo_.push_back({part_paths_[p], part_bytes_[p], 0});
@@ -242,16 +242,17 @@ class GroupByCursor : public Cursor {
             const std::string blob =
                 agg_serialize(*agg_extract_groups(state, split[p]), true);
             if (blob.size() > std::numeric_limits<std::uint32_t>::max())
-                throw DFTUtilsException::cat(
-                    ErrorCode::Io,
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io,
                     "group_by spill: a part holds over 4 GiB of group states");
             const auto len = static_cast<std::uint32_t>(blob.size());
             out[p].write(reinterpret_cast<const char*>(&len), sizeof len);
             out[p].write(blob.data(),
                          static_cast<std::streamsize>(blob.size()));
             if (!out[p])
-                throw DFTUtilsException::cat(
-                    ErrorCode::Io, "group_by spill: cannot write a part file");
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io,
+                    "group_by spill: cannot write a part file");
             bytes[p] += sizeof len + blob.size();
             dir_.charge().add(sizeof len + blob.size());
         }
@@ -264,13 +265,15 @@ class GroupByCursor : public Cursor {
                              F&& fn) {
         std::ifstream is(path, std::ios::binary);
         if (!is)
-            throw DFTUtilsException::cat(
-                ErrorCode::Io, "group_by spill: cannot open part file ", path);
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Io, "group_by spill: cannot open part file ",
+                path);
         std::error_code size_ec;
-        const std::uint64_t file_size = fs::file_size(path, size_ec);
+        const std::uint64_t file_size = common::fs::file_size(path, size_ec);
         if (size_ec)
-            throw DFTUtilsException::cat(
-                ErrorCode::Io, "group_by spill: cannot stat part file ", path);
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Io, "group_by spill: cannot stat part file ",
+                path);
         std::uint64_t consumed = 0;
         std::vector<std::string> raw;
         std::uint64_t have = 0;
@@ -292,13 +295,14 @@ class GroupByCursor : public Cursor {
         while (is.read(reinterpret_cast<char*>(&len), sizeof len)) {
             consumed += sizeof len;
             if (len > file_size - consumed)
-                throw DFTUtilsException::cat(
-                    ErrorCode::Io, "group_by spill: corrupt part file");
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io, "group_by spill: corrupt part file");
             consumed += len;
             std::string blob(len, '\0');
             if (!is.read(blob.data(), static_cast<std::streamsize>(len)))
-                throw DFTUtilsException::cat(
-                    ErrorCode::Io, "group_by spill: truncated part file");
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io,
+                    "group_by spill: truncated part file");
             have += len;
             raw.push_back(std::move(blob));
             if (have >= limit && !flush()) return;
@@ -350,8 +354,9 @@ class GroupByCursor : public Cursor {
         for (std::size_t p = 0; p < out.size(); ++p) {
             out[p].close();
             if (!out[p])
-                throw DFTUtilsException::cat(
-                    ErrorCode::Io, "group_by spill: cannot write a part file");
+                throw common::DFTUtilsException::cat(
+                    common::ErrorCode::Io,
+                    "group_by spill: cannot write a part file");
             if (bytes[p]) todo_.push_back({paths[p], bytes[p], part.depth + 1});
         }
         dir_.remove_run(part.path);

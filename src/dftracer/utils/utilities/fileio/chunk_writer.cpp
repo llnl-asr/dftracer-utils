@@ -18,8 +18,8 @@ ChunkWriter::~ChunkWriter() {
 }
 
 coro::CoroTask<void> ChunkWriter::open() {
-    if (!fs::exists(config_.output_dir)) {
-        fs::create_directories(config_.output_dir);
+    if (!common::fs::exists(config_.output_dir)) {
+        common::fs::create_directories(config_.output_dir);
     }
     GzipWriterOptions opts;
     opts.member_size = config_.member_size_bytes;
@@ -45,7 +45,7 @@ coro::CoroTask<void> ChunkWriter::open() {
                                       static_cast<std::size_t>(uc_bytes));
         }
     };
-    writer_.emplace(unwrap(
+    writer_.emplace(common::unwrap(
         co_await GzipLineWriter::open(opts.part_name(0), std::move(opts))));
     open_ = true;
 }
@@ -55,7 +55,7 @@ coro::CoroTask<void> ChunkWriter::write_line(dstd::ByteView line) {
     pending_.push_back('\n');
     total_events_++;
     if (pending_.size() >= config_.io_flush_bytes) {
-        unwrap(co_await writer_->append(pending_));
+        common::unwrap(co_await writer_->append(pending_));
         pending_.clear();
     }
 
@@ -70,10 +70,10 @@ coro::CoroTask<void> ChunkWriter::close() {
     if (!open_) co_return;
     open_ = false;
     if (!pending_.empty()) {
-        unwrap(co_await writer_->append(pending_));
+        common::unwrap(co_await writer_->append(pending_));
         pending_.clear();
     }
-    auto summary = unwrap(co_await writer_->close());
+    auto summary = common::unwrap(co_await writer_->close());
     total_bytes_ = static_cast<std::size_t>(summary.c_bytes);
     peak_bytes_ = summary.peak_bytes;
     writer_.reset();

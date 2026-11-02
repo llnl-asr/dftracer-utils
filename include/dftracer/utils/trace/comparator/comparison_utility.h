@@ -52,7 +52,7 @@ struct ComparisonUtilityOutput {
 class ComparisonUtility {
    public:
     /// Run the comparison pipeline.
-    coro::CoroTask<Result<ComparisonUtilityOutput>> operator()(
+    coro::CoroTask<common::Result<ComparisonUtilityOutput>> operator()(
         const ComparisonUtilityInput& input);
 
    private:

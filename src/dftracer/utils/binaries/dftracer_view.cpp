@@ -581,7 +581,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             co_return 1;
         }
     } else if (!recipe_path.empty()) {
-        if (!fs::exists(recipe_path)) {
+        if (!common::fs::exists(recipe_path)) {
             DFTRACER_UTILS_LOG_ERROR("Recipe file not found: %s",
                                      recipe_path.c_str());
             co_return 1;
@@ -738,7 +738,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         shard_set_root = resolve_shard_set_root(index_dir);
     if (shard_set_root.empty() && directory.empty() &&
         cli->files_args.value.size() == 1 &&
-        dftracer::utils::input_is_directory(cli->files_args.value[0]))
+        common::input_is_directory(cli->files_args.value[0]))
         shard_set_root = resolve_shard_set_root(cli->files_args.value[0]);
 
     if (!shard_set_root.empty() && !aggregate && !counters) {
@@ -753,7 +753,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     if (!shard_set_root.empty()) {
         // Self-describing: ShardedView enumerates files from each shard index.
     } else if (!directory.empty()) {
-        if (!dftracer::utils::input_exists(directory)) {
+        if (!common::input_exists(directory)) {
             DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                      directory.c_str());
             co_return 1;
@@ -847,7 +847,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     for (const auto& file_path : files) {
         std::string index_path =
             internal::determine_index_path(file_path, index_dir);
-        if (!fs::exists(dftracer::utils::index::store_dir(index_path))) {
+        if (!common::fs::exists(
+                dftracer::utils::index::store_dir(index_path))) {
             files_needing_index.push_back(file_path);
         }
     }
@@ -891,7 +892,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             co_return 1;
         }
     }
-    ScopedFile out_owner(out_file);  // closes out_file on any exit; not stdout
+    common::ScopedFile out_owner(
+        out_file);  // closes out_file on any exit; not stdout
     FILE* out_target = out_file ? out_file : stdout;
     FileSink sink(out_target);
     bool verify_failed = false;
@@ -1007,7 +1009,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                         for (int r = 0; r < transport.size(); ++r) {
                             std::string d = dftracer::utils::index::shard_root(
                                 idx_root, static_cast<std::size_t>(r));
-                            if (fs::exists(
+                            if (common::fs::exists(
                                     dftracer::utils::index::store_dir(d)))
                                 shard_dirs.push_back(std::move(d));
                         }
@@ -1050,7 +1052,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                     shard_files(files, transport.rank(), transport.size());
                 std::string idx_base = index_dir;
                 if (idx_base.empty())
-                    idx_base = fs::path(files.front()).parent_path().string();
+                    idx_base =
+                        common::fs::path(files.front()).parent_path().string();
                 std::string rank_idx =
                     idx_base + "/rank_" + std::to_string(transport.rank());
                 if (!no_auto_index) {

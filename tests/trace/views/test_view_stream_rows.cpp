@@ -38,7 +38,7 @@ std::string create_mixed_arg_trace(TestEnvironment& env) {
     // A small member size forces the x-events and y-events into separate
     // gzip members, so the scan splits them into separate batches/morsels.
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
@@ -81,7 +81,7 @@ std::string create_args_trace(TestEnvironment& env, const std::string& name,
     ofs.close();
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
@@ -125,7 +125,7 @@ std::string create_distinct_trace(TestEnvironment& env,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                          /*checkpoint_size=*/256));
     return gz;

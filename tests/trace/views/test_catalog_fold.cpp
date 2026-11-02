@@ -24,7 +24,7 @@ using Catalog = std::map<std::string, std::tuple<int, int, std::uint64_t>>;
 std::string write_gz(TestEnvironment& env, const std::string& dir,
                      const std::vector<std::string>& lines) {
     const std::string d = env.get_dir() + "/" + dir;
-    fs::create_directories(d);
+    dftracer::utils::common::fs::create_directories(d);
     const std::string plain = d + "/t.ndjson";
     {
         std::ofstream out(plain);
@@ -33,7 +33,7 @@ std::string write_gz(TestEnvironment& env, const std::string& dir,
     const std::string gz = plain + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, 2048));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     return gz;
 }
 

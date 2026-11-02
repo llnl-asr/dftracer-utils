@@ -47,8 +47,8 @@ namespace {
 template <typename T>
 T read_be_checked(std::string_view bytes) {
     if (bytes.size() < sizeof(T))
-        throw DFTUtilsException(ErrorCode::Parse,
-                                "index layout: truncated integer");
+        throw common::DFTUtilsException(common::ErrorCode::Parse,
+                                        "index layout: truncated integer");
     return dstd::read_be<T>(
         reinterpret_cast<const std::uint8_t*>(bytes.data()));
 }

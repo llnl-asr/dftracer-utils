@@ -56,7 +56,7 @@ std::string openapi_json(const Router& router) {
         b.start_object();
         std::string method;
         method.assign(r.method);
-        ::dftracer::utils::detail::lower_ascii(method);
+        ::dftracer::utils::common::detail::lower_ascii(method);
         b.escape_and_append_with_quotes(method);
         b.append_colon();
         b.start_object();

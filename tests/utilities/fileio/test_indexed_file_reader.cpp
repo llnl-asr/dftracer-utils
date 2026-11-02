@@ -26,8 +26,8 @@ TEST_SUITE("IndexedFileReader") {
             std::string db_root = determine_index_path(gz_path, "");
 
             // Ensure no index exists initially
-            if (fs::exists(db_root)) {
-                fs::remove_all(db_root);
+            if (common::fs::exists(db_root)) {
+                common::fs::remove_all(db_root);
             }
 
             IndexedFileReaderUtility reader_utility;
@@ -39,7 +39,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(fs::exists(db_root));
+            CHECK(common::fs::exists(db_root));
 
             // Verify reader can read lines
             auto stream =
@@ -64,7 +64,7 @@ TEST_SUITE("IndexedFileReader") {
                 CheckpointIndexerFactory::create(gz_path, db_root, 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
-            REQUIRE(fs::exists(db_root));
+            REQUIRE(common::fs::exists(db_root));
 
             // Process with existing index (should not rebuild)
             IndexedFileReaderUtility reader_utility;
@@ -75,7 +75,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(fs::exists(db_root));
+            CHECK(common::fs::exists(db_root));
             CHECK(reader->get_num_lines() > 0);
         }
 
@@ -89,7 +89,7 @@ TEST_SUITE("IndexedFileReader") {
                 CheckpointIndexerFactory::create(gz_path, db_root, 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
-            REQUIRE(fs::exists(db_root));
+            REQUIRE(common::fs::exists(db_root));
 
             // Sleep to ensure different timestamp
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -104,7 +104,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(fs::exists(db_root));
+            CHECK(common::fs::exists(db_root));
 
             // Reader should work
             CHECK(reader->get_num_lines() > 0);
@@ -127,7 +127,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(fs::exists(db_root));
+            CHECK(common::fs::exists(db_root));
 
             // Verify reader works
             CHECK(reader->get_num_lines() == 20);
@@ -164,7 +164,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(fs::exists(db_root));
+            CHECK(common::fs::exists(db_root));
         }
     }
 
@@ -240,7 +240,7 @@ TEST_SUITE("IndexedFileReader") {
             auto indexer = CheckpointIndexerFactory::create(gz_path, index_path,
                                                             1024, true);
             indexer->build();
-            REQUIRE(fs::exists(db_root));
+            REQUIRE(common::fs::exists(db_root));
 
             // Sleep to ensure different timestamp
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -280,7 +280,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(fs::exists(db_root));
+            CHECK(common::fs::exists(db_root));
             CHECK(reader->get_num_lines() > 0);
         }
     }

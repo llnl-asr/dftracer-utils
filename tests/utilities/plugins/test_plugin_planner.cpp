@@ -96,7 +96,7 @@ std::string make_homog_trace(dftu_utils_test::TestEnvironment& env,
     // Own subdir per trace: the index root is keyed off the parent directory,
     // so same-dir traces would share (and clobber) one index.
     std::string dir = env.get_dir() + "/" + tag;
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     std::string pfw = dir + "/trace.pfw";
     std::ofstream ofs(pfw);
     for (int i = 0; i < n; ++i)
@@ -106,7 +106,7 @@ std::string make_homog_trace(dftu_utils_test::TestEnvironment& env,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 

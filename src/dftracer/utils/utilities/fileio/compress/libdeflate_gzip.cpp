@@ -184,7 +184,7 @@ std::optional<std::vector<std::uint8_t>> GzipMemberCompressor::compress_member(
 std::optional<std::size_t> decode_truncated_member(
     const void* comp, std::size_t comp_len, std::vector<std::uint8_t>& out) {
     GzipStreamInflater gz;
-    if (!gz.init(constants::indexer::ZLIB_GZIP_WINDOW_BITS))
+    if (!gz.init(common::constants::indexer::ZLIB_GZIP_WINDOW_BITS))
         return std::nullopt;
     const auto* in = static_cast<const unsigned char*>(comp);
     std::size_t in_left = comp_len;

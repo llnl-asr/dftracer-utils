@@ -14,7 +14,7 @@ std::size_t determine_checkpoint_size(
     // Tunables:
     std::size_t max_parts = 100000000, std::size_t max_chk = (512u << 20),
     // default:
-    std::size_t window = constants::indexer::ZLIB_WINDOW_SIZE);
+    std::size_t window = common::constants::indexer::ZLIB_WINDOW_SIZE);
 
 }  // namespace dftracer::utils::index::gzip
 

@@ -14,7 +14,7 @@
 // 1970-01-01T00:00:00 UTC; a time before the epoch has the calendar of that
 // instant, not of its absolute value.
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 using CalendarWide = dstd::int128_t;
 
@@ -377,6 +377,6 @@ inline void format_time(std::string& out, const CivilTime& t,
     }
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_CALENDAR_H

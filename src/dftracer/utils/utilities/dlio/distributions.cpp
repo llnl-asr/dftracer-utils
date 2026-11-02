@@ -378,8 +378,8 @@ Sampler make_sampler(const FittedDistribution& fit,
                      std::optional<double> min_bound,
                      std::optional<double> max_bound) {
     if (!fit.valid) {
-        throw DFTUtilsException(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
             "make_sampler called with invalid FittedDistribution");
     }
     const auto p0 = fit.params[0];

@@ -249,8 +249,8 @@ TEST_CASE("C++ API - Edge cases") {
 
     SUBCASE("Non-existent file should throw") {
         // Use cross-platform non-existent path
-        fs::path non_existent =
-            fs::temp_directory_path() / "nonexistent" / "file.gz";
+        common::fs::path non_existent =
+            common::fs::temp_directory_path() / "nonexistent" / "file.gz";
         CHECK_THROWS(ReaderFactory::create(non_existent.string(),
                                            non_existent.string()));
     }
@@ -861,7 +861,7 @@ TEST_CASE("C++ API - Regression and stress tests") {
         bool success =
             dftu_utils_test::compress_file_to_gzip(txt_file, gz_file);
         REQUIRE(success);
-        fs::remove(txt_file);
+        common::fs::remove(txt_file);
 
         // Build index
         {
@@ -1469,7 +1469,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
                 gz_file, idx_file + std::to_string(ckpt_size_mb), ckpt_size);
             CHECK_NOTHROW(indexer->build());
             CHECK(indexer->get_checkpoint_size() <= ckpt_size);
-            fs::remove(idx_file + std::to_string(ckpt_size_mb));
+            common::fs::remove(idx_file + std::to_string(ckpt_size_mb));
         }
     }
 

@@ -41,14 +41,15 @@ void write_events(const std::string& gz, const char* cat, int n,
             plain, gz, member_bytes));
     else
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
 }
 
 void rewrite_events(const std::string& gz, const char* cat, int n,
                     std::size_t member_bytes = 0) {
-    const auto before = fs::last_write_time(gz);
+    const auto before = dftracer::utils::common::fs::last_write_time(gz);
     write_events(gz, cat, n, member_bytes);
-    fs::last_write_time(gz, before + std::chrono::seconds(10));
+    dftracer::utils::common::fs::last_write_time(
+        gz, before + std::chrono::seconds(10));
 }
 
 coro::CoroTask<void> build_tier(std::string gz, std::string index_dir = "") {
@@ -157,8 +158,9 @@ TEST_SUITE("ViewIndexFreshness") {
         write_events(gz, "A", MEMBER_EVENTS, MEMBER_BYTES);
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == MEMBER_EVENTS);
 
-        const auto before = fs::last_write_time(gz);
-        fs::last_write_time(gz, before + std::chrono::seconds(10));
+        const auto before = dftracer::utils::common::fs::last_write_time(gz);
+        dftracer::utils::common::fs::last_write_time(
+            gz, before + std::chrono::seconds(10));
         const auto want = static_cast<std::uint64_t>(
             st::internal::get_file_modification_time(gz));
 
@@ -176,8 +178,8 @@ TEST_SUITE("ViewIndexFreshness") {
         const std::string d1 = env.get_dir() + "/d1";
         const std::string d2 = env.get_dir() + "/d2";
         const std::string root = env.get_dir() + "/shared";
-        fs::create_directories(d1);
-        fs::create_directories(d2);
+        dftracer::utils::common::fs::create_directories(d1);
+        dftracer::utils::common::fs::create_directories(d2);
         const std::string f1 = d1 + "/a.pfw.gz";
         const std::string f2 = d2 + "/b.pfw.gz";
         write_events(f1, "A", OLD_EVENTS, 0);

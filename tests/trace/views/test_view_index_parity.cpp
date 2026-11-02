@@ -149,7 +149,7 @@ struct Fixture {
         REQUIRE(env.is_valid());
         for (int i = 0; i < FILES; ++i) {
             const std::string dir = env.get_dir() + "/f" + std::to_string(i);
-            fs::create_directories(dir);
+            dftracer::utils::common::fs::create_directories(dir);
             const std::string plain = dir + "/t.pfw";
             {
                 std::ofstream o(plain);
@@ -158,7 +158,7 @@ struct Fixture {
             const std::string out = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
-            fs::remove(plain);
+            dftracer::utils::common::fs::remove(plain);
             gz.push_back(out);
         }
         ix::IndexerOptions o;
@@ -177,7 +177,7 @@ struct Fixture {
     View view() const { return View::from_files(files()); }
 
     void delete_traces() const {
-        for (const auto& g : gz) fs::remove(g);
+        for (const auto& g : gz) dftracer::utils::common::fs::remove(g);
     }
 };
 
@@ -521,7 +521,7 @@ TEST_SUITE("ViewIndexParity") {
         }
         const std::string gz = plain + ".gz";
         REQUIRE(compress_file_to_gzip(plain, gz));
-        fs::remove(plain);
+        dftracer::utils::common::fs::remove(plain);
         ix::IndexerOptions o;
         o.index_dir = env.get_dir() + "/idx";
         ix::Indexer::open({gz}, o).build();
@@ -556,7 +556,7 @@ TEST_SUITE("ViewIndexParity") {
         std::vector<std::string> gz;
         for (int i = 0; i < 2; ++i) {
             const std::string dir = env.get_dir() + "/f" + std::to_string(i);
-            fs::create_directories(dir);
+            dftracer::utils::common::fs::create_directories(dir);
             const std::string plain = dir + "/t.pfw";
             {
                 std::ofstream o(plain);
@@ -571,7 +571,7 @@ TEST_SUITE("ViewIndexParity") {
             }
             const std::string out = plain + ".gz";
             REQUIRE(compress_file_to_gzip(plain, out));
-            fs::remove(plain);
+            dftracer::utils::common::fs::remove(plain);
             gz.push_back(out);
         }
         ix::IndexerOptions opts;
@@ -598,7 +598,7 @@ TEST_SUITE("ViewIndexParity") {
               doctest::Approx(2 * FILE_GAP + 200 + INTERVAL_US));
         CHECK(std::stod(ends.at("b|")) ==
               doctest::Approx(2 * FILE_GAP + 300 + INTERVAL_US));
-        for (const auto& g : gz) fs::remove(g);
+        for (const auto& g : gz) dftracer::utils::common::fs::remove(g);
         check_same_cells(view_cells(indexed, keys, columns, count), counts);
         check_same_cells(view_cells(indexed, keys, columns, max_te), ends);
     }
@@ -623,10 +623,10 @@ TEST_SUITE("ViewIndexParity") {
         }
         const std::string gz = plain + ".gz";
         REQUIRE(compress_file_to_gzip(plain, gz));
-        fs::remove(plain);
+        dftracer::utils::common::fs::remove(plain);
         const std::string index_dir = env.get_dir() + "/idx";
         const std::string index = determine_index_path(gz, index_dir);
-        REQUIRE_FALSE(fs::exists(index));
+        REQUIRE_FALSE(dftracer::utils::common::fs::exists(index));
 
         const std::vector<ViewFile> files{{gz, index}};
         const std::vector<GroupKey> keys{GroupKey::name()};
@@ -649,7 +649,7 @@ TEST_SUITE("ViewIndexParity") {
             {"max_dur", {{"pwrite|", 20}, {"read|", 30}}}};
 
         const df::DataFrame first = ask();
-        CHECK(fs::exists(index));
+        CHECK(dftracer::utils::common::fs::exists(index));
         const df::DataFrame next = ask();
         for (const auto& [column, cells] : want) {
             INFO(column);
@@ -684,7 +684,7 @@ TEST_SUITE("ViewIndexParity") {
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             plain, gz, MEMBER_BYTES));
-        fs::remove(plain);
+        dftracer::utils::common::fs::remove(plain);
         ix::IndexerOptions opts;
         opts.index_dir = env.get_dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
@@ -714,7 +714,7 @@ TEST_SUITE("ViewIndexParity") {
         std::vector<std::string> gz;
         for (int i = 0; i < 2; ++i) {
             const std::string dir = env.get_dir() + "/f" + std::to_string(i);
-            fs::create_directories(dir);
+            dftracer::utils::common::fs::create_directories(dir);
             const std::string plain = dir + "/t.pfw";
             {
                 std::ofstream o(plain);
@@ -723,7 +723,7 @@ TEST_SUITE("ViewIndexParity") {
             const std::string out = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
-            fs::remove(plain);
+            dftracer::utils::common::fs::remove(plain);
             gz.push_back(out);
         }
         ix::IndexerOptions opts;

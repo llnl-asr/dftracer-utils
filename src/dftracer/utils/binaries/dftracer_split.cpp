@@ -53,7 +53,8 @@ class SplitArgParse : public cli::ArgParse {
         member.checkpoint_help =
             "Gzip member size of the output files in uncompressed bytes "
             "(default: " +
-            std::to_string(constants::indexer::DEFAULT_CHECKPOINT_SIZE) +
+            std::to_string(
+                common::constants::indexer::DEFAULT_CHECKPOINT_SIZE) +
             "). Accepts units, e.g. 512KB, 4MB";
         memory.help =
             "Most memory the chunk writers hold, with units (e.g. 64GB). A "
@@ -113,12 +114,12 @@ struct FileProbe {
     bool ok = false;
     /// The probe's open descriptor of `path`, kept for the extraction when the
     /// open-file budget allows, else null.
-    dstd::SharedPtr<ScopedFd> fd;
+    dstd::SharedPtr<common::ScopedFd> fd;
 };
 
 struct FileGroup {
     std::vector<std::string> files;
-    std::vector<dstd::SharedPtr<ScopedFd>> open_files;
+    std::vector<dstd::SharedPtr<common::ScopedFd>> open_files;
     double ratio = 1.0;
 };
 
@@ -137,10 +138,10 @@ struct RechunkDir {
     const std::string& get() {
         std::lock_guard<std::mutex> lock(mu);
         if (path.empty()) {
-            path = fs::temp_directory_path() /
+            path = common::fs::temp_directory_path() /
                    ("dftracer_rechunk_" + std::to_string(std::time(nullptr)) +
                     "_" + std::to_string(getpid()));
-            fs::create_directories(path);
+            common::fs::create_directories(path);
         }
         return path;
     }
@@ -214,8 +215,8 @@ coro::CoroTask<std::size_t> hash_events(const std::string& path) {
 }  // namespace
 
 static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
-    const auto log_dir = fs::absolute(cli->directory.value).string();
-    const auto output_dir = fs::absolute(cli->output_dir).string();
+    const auto log_dir = common::fs::absolute(cli->directory.value).string();
+    const auto output_dir = common::fs::absolute(cli->output_dir).string();
     const auto& app_name = cli->app_name;
     const auto chunk_size_bytes = cli->chunk_size_bytes;
     const double chunk_size_mb =
@@ -241,8 +242,8 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     std::printf("  Memory budget: %" PRIu64 " bytes\n", memory_budget);
     std::printf("==========================================\n\n");
 
-    if (!fs::exists(output_dir)) {
-        fs::create_directories(output_dir);
+    if (!common::fs::exists(output_dir)) {
+        common::fs::create_directories(output_dir);
     }
 
     auto pipeline_config = cli::build_pipeline_config(
@@ -260,10 +261,13 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
         // path, so a symlink into the output directory from outside its
         // spelling is not caught.
         std::error_code ec;
-        const fs::path out_canonical = fs::weakly_canonical(output_dir, ec);
-        const fs::path out_walked =
-            fs::absolute(fs::path(output_dir), ec).lexically_normal();
-        auto inside = [](const fs::path& p, const fs::path& root) {
+        const common::fs::path out_canonical =
+            common::fs::weakly_canonical(output_dir, ec);
+        const common::fs::path out_walked =
+            common::fs::absolute(common::fs::path(output_dir), ec)
+                .lexically_normal();
+        auto inside = [](const common::fs::path& p,
+                         const common::fs::path& root) {
             const auto rel = p.lexically_relative(root);
             return !root.empty() && !rel.empty() && *rel.begin() != "..";
         };
@@ -323,7 +327,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
                 DFTRACER_UTILS_LOG_ERROR("Cannot open %s", probe.path.c_str());
                 co_return probe;
             }
-            ScopedFd sfd(static_cast<int>(fd));
+            common::ScopedFd sfd(static_cast<int>(fd));
             struct stat st;
             if (::fstat(sfd.get(), &st) != 0 || st.st_size == 0) {
                 co_return probe;
@@ -341,13 +345,14 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
             if (!first.exceeds_cap &&
                 open_count_ptr->fetch_add(1, std::memory_order_relaxed) <
                     open_budget) {
-                probe.fd = dstd::make_shared<ScopedFd>(std::move(sfd));
+                probe.fd = dstd::make_shared<common::ScopedFd>(std::move(sfd));
             } else {
                 sfd.reset();
             }
             if (first.exceeds_cap) {
-                std::string out = rechunk_dir_ptr->get() + "/" +
-                                  fs::path(probe.path).filename().string();
+                std::string out =
+                    rechunk_dir_ptr->get() + "/" +
+                    common::fs::path(probe.path).filename().string();
                 DFTRACER_UTILS_LOG_WARN(
                     "Input %s is a single large gzip member; rechunking to "
                     "bounded members at %s",
@@ -355,7 +360,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
                 co_await gzc::gzip_rechunk_to_members(probe.path, out,
                                                       member_size_bytes, 6);
                 probe.path = out;
-                probe.bytes = fs::file_size(out);
+                probe.bytes = common::fs::file_size(out);
             }
             probe.ok = true;
             co_return probe;
@@ -575,10 +580,10 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 
     std::printf("==========================================\n");
 
-    if (!rechunk_dir.path.empty() && fs::exists(rechunk_dir.path)) {
+    if (!rechunk_dir.path.empty() && common::fs::exists(rechunk_dir.path)) {
         DFTRACER_UTILS_LOG_INFO("Cleaning up temporary rechunk directory: %s",
                                 rechunk_dir.path.c_str());
-        fs::remove_all(rechunk_dir.path);
+        common::fs::remove_all(rechunk_dir.path);
     }
 
     co_return exit_code;

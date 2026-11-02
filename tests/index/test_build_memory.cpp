@@ -65,7 +65,7 @@ std::string write_trace(const std::string& dir, const std::string& name,
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                member_bytes));
-    fs::remove(plain);
+    common::fs::remove(plain);
     return gz;
 }
 
@@ -143,18 +143,18 @@ TEST_SUITE("IndexBuildMemory") {
         const std::uint64_t held =
             (build::FileAdmission::estimate(
                  build::FileAdmission::plaintext_estimate(
-                     0, fs::file_size(files[0])))
+                     0, common::fs::file_size(files[0])))
                  .total +
              HELD_QUANTUM - 1) /
             HELD_QUANTUM * HELD_QUANTUM;
         const std::uint64_t tight =
-            4 * constants::file_admission::MIN_SINK_BYTES *
-            constants::file_admission::SINK_BUDGET_DIVISOR;
+            4 * common::constants::file_admission::MIN_SINK_BYTES *
+            common::constants::file_admission::SINK_BUDGET_DIVISOR;
         const auto plan = build::FileAdmission::plan_sinks(
             tight, WORKERS, build::g_max_sink_bytes.load());
         const std::uint64_t room =
             tight - plan.workers * plan.sink_bytes -
-            tight / constants::file_admission::UNTRACKED_DIVISOR;
+            tight / common::constants::file_admission::UNTRACKED_DIVISOR;
         REQUIRE(room / held < WORKERS);
         const auto few = run_build(files, env.get_dir() + "/few", tight);
         const auto many = run_build(files, env.get_dir() + "/many", 32 * tight);
@@ -180,7 +180,7 @@ TEST_SUITE("IndexBuildMemory") {
                 CAPTURE(file);
                 CAPTURE(budget);
                 const auto tag =
-                    fs::path(file).stem().string() +
+                    common::fs::path(file).stem().string() +
                     std::to_string(budget == memory::NO_SPILL_BUDGET);
                 const auto serial_dir = env.get_dir() + "/serial" + tag;
                 const auto ahead_dir = env.get_dir() + "/ahead" + tag;
@@ -216,7 +216,7 @@ TEST_SUITE("IndexBuildMemory") {
             CHECK(small.metrics.files_spilled == 1);
             CHECK(small.metrics.max_spill_runs >= 1);
             CHECK(small.metrics.max_spill_runs <=
-                  constants::file_admission::MAX_SPILL_RUNS);
+                  common::constants::file_admission::MAX_SPILL_RUNS);
             const auto got = contents(index_of(files[0], dir));
             REQUIRE(got.size() == expect.size());
             CHECK(got == expect);
@@ -227,14 +227,14 @@ TEST_SUITE("IndexBuildMemory") {
         namespace ext = dftracer::utils::index::extensions;
         constexpr std::uint64_t SHARE = 1 * MIB;
         constexpr std::uint64_t TIER =
-            constants::file_admission::MAX_SPILL_TIER_BYTES;
+            common::constants::file_admission::MAX_SPILL_TIER_BYTES;
         std::uint64_t written = 0;
         std::size_t runs = 0;
         for (; written < TIER; ++runs)
             written += ext::BloomFold::run_limit(SHARE, runs);
-        CHECK(runs <= constants::file_admission::MAX_SPILL_RUNS);
+        CHECK(runs <= common::constants::file_admission::MAX_SPILL_RUNS);
         CHECK(ext::BloomFold::run_limit(SHARE, 0) ==
-              constants::file_admission::MIN_SPILL_RUN_BYTES);
+              common::constants::file_admission::MIN_SPILL_RUN_BYTES);
         CHECK(ext::BloomFold::run_limit(64 * MIB, 0) == 16 * MIB);
     }
 
@@ -261,7 +261,8 @@ TEST_SUITE("IndexBuildMemory") {
             const auto b = contents(index_of(files[0], small_dir));
             CHECK(a.size() == b.size());
             CHECK(a == b);
-            CHECK_FALSE(fs::exists(index_of(files[0], small_dir) + ".spill"));
+            CHECK_FALSE(
+                common::fs::exists(index_of(files[0], small_dir) + ".spill"));
         }
     }
 

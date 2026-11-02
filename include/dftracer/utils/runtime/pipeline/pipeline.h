@@ -119,15 +119,15 @@ class Pipeline {
     void collect_all_tasks();
 
     void collect_tasks_dfs(std::shared_ptr<Task> task,
-                           std::unordered_set<TaskIndex>& visited);
+                           std::unordered_set<common::TaskIndex>& visited);
 
     bool has_cycles_dfs(std::shared_ptr<Task> task,
-                        std::unordered_set<TaskIndex>& visited,
-                        std::unordered_set<TaskIndex>& rec_stack);
+                        std::unordered_set<common::TaskIndex>& visited,
+                        std::unordered_set<common::TaskIndex>& rec_stack);
 
     bool is_reachable_dfs(std::shared_ptr<Task> current,
                           std::shared_ptr<Task> target,
-                          std::unordered_set<TaskIndex>& visited);
+                          std::unordered_set<common::TaskIndex>& visited);
 };
 
 }  // namespace dftracer::utils

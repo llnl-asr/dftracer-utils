@@ -1,12 +1,12 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_ROUTER_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_ROUTER_H
+#ifndef DFTRACER_UTILS_UTILITIES_ARROW_PARTITION_ROUTER_H
+#define DFTRACER_UTILS_UTILITIES_ARROW_PARTITION_ROUTER_H
 
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/runtime/coro/task.h>
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
-#include <dftracer/utils/utilities/common/arrow/partition_writer.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/partition_writer.h>
 
 #include <cstdint>
 #include <functional>
@@ -16,7 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 struct RouterWriteStats {
     std::unordered_map<std::string, PartitionWriteStats> partitions;
@@ -85,7 +85,7 @@ class PartitionRouter {
     coro::CoroTask<int> route_view(ArrowExportResult& batch);
 };
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_ROUTER_H
+#endif  // DFTRACER_UTILS_UTILITIES_ARROW_PARTITION_ROUTER_H

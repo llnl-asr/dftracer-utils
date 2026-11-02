@@ -8,16 +8,16 @@ namespace dftracer::utils::utilities::fileio::parallel {
 LayoutInfo detect_layout(const std::string& path) noexcept {
     LayoutInfo info{};
     info.layout = FileLayout::Striped;
-    info.fs = filesystem_kind(path);
+    info.fs = common::filesystem_kind(path);
     info.stripe_size = 0;
     info.stripe_count = 0;
 
     // NFS lacks a cheap atomic-offset write, so shard into per-writer files.
-    if (info.fs == FilesystemKind::Nfs) {
+    if (info.fs == common::FilesystemKind::Nfs) {
         info.layout = FileLayout::Sharded;
     }
-    if (info.fs == FilesystemKind::Lustre) {
-        const StripeInfo stripe = lustre_stripe(path);
+    if (info.fs == common::FilesystemKind::Lustre) {
+        const common::StripeInfo stripe = common::lustre_stripe(path);
         info.stripe_size = stripe.size;
         info.stripe_count = stripe.count;
     }

@@ -26,7 +26,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env,
     auto trace_gz = env.create_dft_test_gzip_file(num_events);
     if (trace_gz.empty()) return "";
     std::string pfw_path = env.get_dir() + "/trace.pfw.gz";
-    fs::rename(trace_gz, pfw_path);
+    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
     return pfw_path;
 }
 

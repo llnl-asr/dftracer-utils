@@ -50,7 +50,7 @@ std::string write_nginx(const std::string& dir, int records) {
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                8 * 1024));
-    fs::remove(plain);
+    common::fs::remove(plain);
     return gz;
 }
 
@@ -402,7 +402,7 @@ TEST_SUITE("SchemaRegistry") {
     TEST_CASE("a directory of specs loads once") {
         dftu_utils_test::TestEnvironment env(1);
         const auto dir = env.get_dir() + "/specs";
-        fs::create_directories(dir);
+        common::fs::create_directories(dir);
         std::ofstream(dir + "/a.yaml") << "id: dir_a\n";
         std::ofstream(dir + "/b.json") << R"({"id":"dir_b","extends":"dir_a"})";
         std::ofstream(dir + "/notes.txt") << "not a spec";
@@ -411,7 +411,7 @@ TEST_SUITE("SchemaRegistry") {
         ix::load_schemas(dir);
 
         const auto bad = env.get_dir() + "/broken";
-        fs::create_directories(bad);
+        common::fs::create_directories(bad);
         std::ofstream(bad + "/c.yaml") << "id: dir_c\nbogus: 1\n";
         const auto what = error_of([&] { ix::load_schemas(bad); });
         CHECK(mentions(what, "c.yaml"));
@@ -457,7 +457,7 @@ TEST_SUITE("SchemaRegistry") {
         dftu_utils_test::TestEnvironment env(1);
         const auto gz = write_nginx(env.get_dir(), 3000);
         const auto index_dir = env.get_dir() + "/idx";
-        fs::create_directories(index_dir + "/schemas");
+        common::fs::create_directories(index_dir + "/schemas");
         // path_budget 1: the always-indexed field and the first other path.
         std::ofstream(index_dir + "/schemas/nginx.yaml")
             << "id: idx_nginx\n"
@@ -526,7 +526,7 @@ TEST_SUITE("SchemaDetection") {
         if (!gz) return plain;
         const auto out = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, out));
-        fs::remove(plain);
+        common::fs::remove(plain);
         return out;
     }
 

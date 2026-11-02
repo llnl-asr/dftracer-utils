@@ -12,7 +12,7 @@ namespace dftracer::utils::utilities::filesystem {
  * @brief Output structure representing a file entry.
  */
 struct FileEntry {
-    fs::path path;
+    common::fs::path path;
     std::size_t size = 0;
     /// Unix seconds; piggybacks on the size stat so staleness checks need no
     /// extra metadata op. 0 when not populated.
@@ -22,10 +22,10 @@ struct FileEntry {
 
     FileEntry() = default;
 
-    explicit FileEntry(const fs::path& p, bool populate_size = true)
+    explicit FileEntry(const common::fs::path& p, bool populate_size = true)
         : path(p), size(0), is_directory(false), is_regular_file(false) {
-        dftracer::utils::InputFileStat st;
-        if (!dftracer::utils::stat_input(p, st)) return;
+        dftracer::utils::common::InputFileStat st;
+        if (!dftracer::utils::common::stat_input(p, st)) return;
         is_directory = st.is_directory;
         is_regular_file = st.is_regular_file;
         if (populate_size && is_regular_file) {
@@ -36,7 +36,7 @@ struct FileEntry {
 
     /// The directory entry's cached type decides directories and, without
     /// sizes, regular files. Anything else costs one stat.
-    explicit FileEntry(const fs::directory_entry& entry,
+    explicit FileEntry(const common::fs::directory_entry& entry,
                        bool populate_size = true)
         : path(entry.path()),
           size(0),
@@ -51,8 +51,8 @@ struct FileEntry {
             is_regular_file = true;
             return;
         }
-        dftracer::utils::InputFileStat st;
-        if (!dftracer::utils::stat_input(path, st)) return;
+        dftracer::utils::common::InputFileStat st;
+        if (!dftracer::utils::common::stat_input(path, st)) return;
         is_directory = st.is_directory;
         is_regular_file = st.is_regular_file;
         if (populate_size && is_regular_file) {

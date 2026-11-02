@@ -8,7 +8,7 @@
 
 namespace dftracer::utils::index::store {
 
-class IndexerError : public DFTUtilsException {
+class IndexerError : public common::DFTUtilsException {
    public:
     enum Type {
         DatabaseError,
@@ -20,7 +20,8 @@ class IndexerError : public DFTUtilsException {
     };
 
     IndexerError(Type type, const std::string &message)
-        : DFTUtilsException(ErrorCode::Indexer, format_message(type, message)),
+        : common::DFTUtilsException(common::ErrorCode::Indexer,
+                                    format_message(type, message)),
           type_(type) {}
 
     inline Type type() const { return type_; }

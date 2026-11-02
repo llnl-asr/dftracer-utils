@@ -123,7 +123,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         for (const auto& file : result.all_files) {
             auto root =
                 trace::internal::determine_index_path(file, input.index_dir);
-            if (fs::exists(index::store_dir(root)))
+            if (common::fs::exists(index::store_dir(root)))
                 stale_tiers.insert(std::move(root));
         }
     for (const auto& root : stale_tiers) clear_aggregation(root);
@@ -185,18 +185,18 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         std::string build_index_dir = input.index_dir;
         std::string build_index_path = result.index_path;
         std::string staged_final_path;
-        std::optional<ScratchSession> scratch;
+        std::optional<common::ScratchSession> scratch;
         // should_stage is cheap for the common local destination and short
         // circuits before any mount probing; only a network destination reaches
         // the single-root and size checks below.
-        if (!fs::exists(index::store_dir(result.index_path)) &&
-            should_stage(result.index_path)) {
+        if (!common::fs::exists(index::store_dir(result.index_path)) &&
+            common::should_stage(result.index_path)) {
             std::set<std::string> roots;
             for (const auto& f : files_needing_work)
                 roots.insert(
                     trace::internal::determine_index_path(f, input.index_dir));
             if (roots.size() == 1) {
-                auto staged = staged_build_scratch(files_needing_work);
+                auto staged = common::staged_build_scratch(files_needing_work);
                 if (staged) {
                     staged_final_path = *roots.begin();
                     build_index_dir = staged->dir();
@@ -259,8 +259,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             agg_run.reset();
             index::release_root(build_index_path);
             index::release_root(staged_final_path);
-            publish_path(index::store_dir(build_index_path),
-                         index::store_dir(staged_final_path));
+            common::publish_path(index::store_dir(build_index_path),
+                                 index::store_dir(staged_final_path));
         }
 
         // Refresh_input queries the index for the files just indexed.
@@ -340,9 +340,9 @@ bool mentions_corruption(std::string_view text) {
 
 [[noreturn]] void throw_corrupt(const std::set<std::string>& roots,
                                 const std::string& cause, bool tier_cleared,
-                                ErrorCode code) {
-    throw DFTUtilsException(code,
-                            corrupt_index_message(roots, cause, tier_cleared));
+                                common::ErrorCode code) {
+    throw common::DFTUtilsException(
+        code, corrupt_index_message(roots, cause, tier_cleared));
 }
 
 }  // namespace
@@ -371,9 +371,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         "and aggregating again",
         roots.size(), failure.c_str());
     for (const auto& root : roots)
-        if (fs::exists(index::store_dir(root))) {
+        if (common::fs::exists(index::store_dir(root))) {
             index::release_root(root);
-            auto target = unwrap(index::Index::open(
+            auto target = common::unwrap(index::Index::open(
                 index::store::internal::normalize_index_root(root)));
             agg::tier::clear(target);
         }
@@ -384,7 +384,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         if (!mentions_corruption(e.what())) throw;
         retry_failure = e.what();
     }
-    throw_corrupt(roots, retry_failure, true, ErrorCode::Aggregation);
+    throw_corrupt(roots, retry_failure, true, common::ErrorCode::Aggregation);
 }
 
 }  // namespace dftracer::utils::index::build

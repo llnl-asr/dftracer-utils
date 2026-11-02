@@ -2,8 +2,8 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/common/arrow/array_view.h>
-#include <dftracer/utils/utilities/common/arrow/arrow.h>
+#include <dftracer/utils/utilities/arrow/array_view.h>
+#include <dftracer/utils/utilities/arrow/arrow.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 
@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-using namespace dftracer::utils::utilities::common::arrow;
+using namespace dftracer::utils::utilities::arrow;
 
 namespace {
 

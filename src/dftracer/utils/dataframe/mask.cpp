@@ -33,7 +33,7 @@ namespace {
 constexpr bool FRAME_ARGS_FALLBACK = true;
 
 [[noreturn]] void unsupported(const std::string& why) {
-    throw dftracer::utils::DFTUtilsException(
+    throw dftracer::utils::common::DFTUtilsException(
         dftracer::utils::dstd::Error{DuqlErrc::Unsupported, why});
 }
 

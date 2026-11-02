@@ -14,7 +14,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 namespace detail {
 
@@ -326,6 +326,6 @@ static_assert(parse_duration_seconds("5m") == 300.0);
 static_assert(parse_duration_seconds("1.5h") == 5400.0);
 static_assert(!parse_duration_seconds("10q").has_value());
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_STR_FORMAT_H

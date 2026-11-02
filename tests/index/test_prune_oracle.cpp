@@ -133,7 +133,7 @@ std::string write_trace(const std::string& dir, int seed, int events) {
     const std::size_t member = seed == 3 ? LARGE_MEMBER_BYTES : MEMBER_BYTES;
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, member));
-    fs::remove(plain);
+    common::fs::remove(plain);
     return gz;
 }
 
@@ -225,7 +225,7 @@ struct Corpus {
 std::vector<std::string> run_oracle(const Corpus& c) {
     std::vector<std::string> lines;
     for (const auto& trace : c.traces) {
-        const auto base = fs::path(trace).filename().string();
+        const auto base = common::fs::path(trace).filename().string();
         const auto index_path = c.index_of(trace);
         const auto snapshot = dftu_utils_test::index_snapshot(index_path);
         const auto file =
@@ -280,8 +280,8 @@ std::vector<std::string> run_oracle(const Corpus& c) {
 }
 
 std::string recording_path() {
-    return (fs::path(DFTRACER_UTILS_TEST_SOURCE_DIR) / "index" / "data" /
-            "prune_oracle.txt")
+    return (common::fs::path(DFTRACER_UTILS_TEST_SOURCE_DIR) / "index" /
+            "data" / "prune_oracle.txt")
         .string();
 }
 
@@ -467,7 +467,7 @@ TEST_CASE("explain reads the chunks a View scan reads") {
         }
     }
     CHECK(postings_removed);
-    CHECK_THROWS_AS(ix.explain("name =="), DFTUtilsException);
+    CHECK_THROWS_AS(ix.explain("name =="), common::DFTUtilsException);
 }
 
 TEST_CASE("one extension is rebuilt or dropped without the others") {
@@ -521,15 +521,15 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
         try {
             ix.drop_extension(bad);
             FAIL("expected an error");
-        } catch (const DFTUtilsException& e) {
-            CHECK(e.error().is_code(ErrorCode::InvalidArgument));
+        } catch (const common::DFTUtilsException& e) {
+            CHECK(e.error().is_code(common::ErrorCode::InvalidArgument));
         }
-        CHECK_THROWS_AS(ix.rebuild_extension(bad), DFTUtilsException);
+        CHECK_THROWS_AS(ix.rebuild_extension(bad), common::DFTUtilsException);
     }
     auto bad_options = corpus_options(corpus);
     bad_options.extensions = {"dft.stats"};
     CHECK_THROWS_AS(index::Indexer::open(corpus.traces, bad_options),
-                    DFTUtilsException);
+                    common::DFTUtilsException);
 }
 
 TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
@@ -600,7 +600,7 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
         }
         return rows;
     };
-    for (const auto& t : corpus.traces) fs::remove(t);
+    for (const auto& t : corpus.traces) common::fs::remove(t);
     const auto from_full = summary(corpus.index_of(trace));
     CHECK_FALSE(from_full.empty());
     CHECK(from_full == summary(spilled));
@@ -625,7 +625,7 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
         const auto gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    1024));
-        fs::remove(plain);
+        common::fs::remove(plain);
         traces.push_back(gz);
     }
     index::IndexerOptions opts;

@@ -59,7 +59,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     const ProgressFn* progress) {
     // Member size defaults to the checkpoint granularity (a member == a chunk).
     constexpr std::size_t DEFAULT_FLUSH_BYTES =
-        constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     constexpr std::size_t MAX_PRODUCERS = 16;
 
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
@@ -192,8 +192,9 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     auto opened = co_await utilities::fileio::GzipLineWriter::open(
         opts.output_path, std::move(wopts));
     if (!opened) {
-        throw DFTUtilsException(
-            ErrorCode::Io, "export_trace failed writing " + opts.output_path);
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            "export_trace failed writing " + opts.output_path);
     }
     auto writer = std::move(*opened);
 
@@ -291,8 +292,9 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         if (!closed) ok = false;
     }
     if (!ok || parts.empty()) {
-        throw DFTUtilsException(
-            ErrorCode::Io, "export_trace failed writing " + opts.output_path);
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            "export_trace failed writing " + opts.output_path);
     }
 
     for (auto& sl : pool) bloom.merge(*sl->bloom);
@@ -348,9 +350,10 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             failure = e.what();
         }
         if (!failure.empty()) {
-            throw DFTUtilsException(
-                ErrorCode::Io, std::string("fused index build failed for ") +
-                                   opts.output_path + ": " + failure);
+            throw common::DFTUtilsException(
+                common::ErrorCode::Io,
+                std::string("fused index build failed for ") +
+                    opts.output_path + ": " + failure);
         }
     }
 

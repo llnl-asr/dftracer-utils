@@ -52,7 +52,7 @@ void schedule_coroutine_resumption_helper(Executor* executor,
         "%s", "Coroutine resumption dropped: no executor to resume through");
 }
 
-std::size_t available_parallelism() noexcept {
+std::size_t common::available_parallelism() noexcept {
     auto* exec = Executor::current();
     return exec ? exec->get_num_threads() : 1;
 }

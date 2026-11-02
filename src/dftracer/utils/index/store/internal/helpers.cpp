@@ -26,14 +26,16 @@ namespace dftracer::utils::index::store::internal {
 // against the cwd, so the index is not portable across an absolute-layout move.
 std::string get_logical_path(std::string_view path) {
     std::error_code ec;
-    fs::path abs = fs::absolute(fs::path(std::string(path)), ec);
-    if (ec) return fs::path(std::string(path)).lexically_normal().string();
+    common::fs::path abs =
+        common::fs::absolute(common::fs::path(std::string(path)), ec);
+    if (ec)
+        return common::fs::path(std::string(path)).lexically_normal().string();
     return abs.lexically_normal().string();
 }
 
 std::string normalize_index_root(std::string_view path) {
     if (auto nested = nested_root_of(path)) return *nested;
-    fs::path input{std::string(path)};
+    common::fs::path input{std::string(path)};
     if (input.filename() == ".dftindex") {
         return input.string();
     }
@@ -48,8 +50,8 @@ std::string normalize_index_root(std::string_view path) {
 }
 
 time_t get_file_modification_time(const std::string &file_path) {
-    dftracer::utils::InputFileStat st;
-    if (!dftracer::utils::stat_input(file_path, st)) return 0;
+    dftracer::utils::common::InputFileStat st;
+    if (!dftracer::utils::common::stat_input(file_path, st)) return 0;
     return static_cast<time_t>(st.mtime);
 }
 
@@ -111,8 +113,8 @@ std::uint64_t calculate_file_hash(int fd, std::uint64_t file_size_u64) {
 }
 
 std::uint64_t file_size_bytes(const std::string &path) {
-    dftracer::utils::InputFileStat st;
-    if (dftracer::utils::stat_input(path, st) && st.is_regular_file)
+    dftracer::utils::common::InputFileStat st;
+    if (dftracer::utils::common::stat_input(path, st) && st.is_regular_file)
         return st.size;
 
     int fd = ::open(path.c_str(), O_RDONLY);

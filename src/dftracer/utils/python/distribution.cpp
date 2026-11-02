@@ -189,7 +189,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     PyObject *files_obj;
     const char *index_dir;
     Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
-        dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
+        dftracer::utils::common::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     int force_rebuild = 0;
     int build_bloom = 1;
     PyObject *bloom_dims_obj = NULL;
@@ -264,11 +264,12 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     const std::string final_root =
         dftracer::utils::index::store::internal::normalize_index_root(
             index_dir);
-    std::optional<dftracer::utils::ScratchSession> scratch;
+    std::optional<dftracer::utils::common::ScratchSession> scratch;
     std::string build_dir = index_dir;
-    if (!fs::exists(dftracer::utils::index::store_dir(final_root)) &&
-        dftracer::utils::should_stage(final_root)) {
-        auto staged = dftracer::utils::staged_build_scratch(files);
+    if (!dftracer::utils::common::fs::exists(
+            dftracer::utils::index::store_dir(final_root)) &&
+        dftracer::utils::common::should_stage(final_root)) {
+        auto staged = dftracer::utils::common::staged_build_scratch(files);
         if (staged) {
             build_dir = staged->dir();
             scratch.emplace(std::move(*staged));
@@ -360,7 +361,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
             dftracer::utils::index::store::internal::normalize_index_root(
                 build_dir));
         dftracer::utils::index::release_root(final_root);
-        dftracer::utils::publish_path(
+        dftracer::utils::common::publish_path(
             dftracer::utils::index::store_dir(
                 dftracer::utils::index::store::internal::normalize_index_root(
                     build_dir)),

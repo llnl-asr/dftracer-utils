@@ -12,14 +12,14 @@ namespace dftracer::utils::utilities::reader::internal {
 std::shared_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
                                               const std::string &index_path,
                                               std::size_t index_ckpt_size) {
-    ArchiveFormat format = FormatDetector::detect(archive_path);
+    common::ArchiveFormat format = common::FormatDetector::detect(archive_path);
 
     DFTRACER_UTILS_LOG_DEBUG(
         "ReaderFactory::create_reader - detected format: %d for file: %s",
         static_cast<int>(format), archive_path.c_str());
 
     switch (format) {
-        case ArchiveFormat::Gzip:
+        case common::ArchiveFormat::Gzip:
             return std::make_shared<GzipReader>(archive_path, index_path,
                                                 index_ckpt_size);
 

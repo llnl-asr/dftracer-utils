@@ -5,7 +5,7 @@
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /**
  * Fills the budget, hard_cap and headroom fields from the *_ENV variables of
@@ -45,6 +45,6 @@ constexpr ErrorCode error_code_of(memory::Status status) noexcept {
     return ErrorCode::Unknown;
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_MEMORY_CONFIG_H

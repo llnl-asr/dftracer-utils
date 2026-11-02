@@ -79,18 +79,21 @@ The C++ API
 -----------
 
 The logger lives in ``dftracer/utils/common/logging.h``, namespace
-``dftracer::utils::logger``:
+``dftracer::utils::common::logger``:
 
 .. code-block:: cpp
 
    #include <dftracer/utils/common/logging.h>
 
-   using namespace dftracer::utils::logger;
-
-   init();                    // reads DFTRACER_UTILS_LOG_LEVEL and the color env vars
-   set_level(Level::Debug);   // Trace | Debug | Info | Warn | Error | Off
-   set_color(ColorMode::Auto);
-   Level current = get_level();
+   // reads DFTRACER_UTILS_LOG_LEVEL and the color env vars
+   dftracer::utils::common::logger::init();
+   // Trace | Debug | Info | Warn | Error | Off
+   dftracer::utils::common::logger::set_level(
+       dftracer::utils::common::logger::Level::Debug);
+   dftracer::utils::common::logger::set_color(
+       dftracer::utils::common::logger::ColorMode::Auto);
+   dftracer::utils::common::logger::Level current =
+       dftracer::utils::common::logger::get_level();
 
 Call ``init()`` once at process startup (every ``dftracer_*`` CLI binary and
 the Python extension already do this); ``set_level``/``set_color`` can be

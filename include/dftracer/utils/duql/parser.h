@@ -27,7 +27,7 @@ struct DuqlError {
 };
 
 /// Exception wrapping a DuqlError.
-class DuqlParseError : public DFTUtilsException {
+class DuqlParseError : public common::DFTUtilsException {
    public:
     explicit DuqlParseError(DuqlError err);
     const DuqlError& error() const { return err_; }

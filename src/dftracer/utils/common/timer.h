@@ -6,7 +6,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// Nanoseconds on the steady clock. Only differences are meaningful.
 inline std::int64_t steady_now_ns() {
@@ -103,6 +103,6 @@ class ScopedTimer {
     Clock::time_point start_;
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_TIMER_H

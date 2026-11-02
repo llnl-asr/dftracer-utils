@@ -92,7 +92,7 @@ TEST_CASE("an arrow's conflicting values fail in a value position") {
     try {
         (void)on_json(q, R"({"run":1})");
         FAIL("no conflict error");
-    } catch (const dftracer::utils::DFTUtilsException& e) {
+    } catch (const dftracer::utils::common::DFTUtilsException& e) {
         const std::string what = e.what();
         CHECK(what.find("'runs'") != std::string::npos);
         CHECK(what.find("key 1") != std::string::npos);
@@ -125,7 +125,7 @@ TEST_CASE("an unbound lookup fails loudly") {
     REQUIRE(p);
     const Query q = Query::from_node(clone(*p->main.filter));
     CHECK_THROWS_AS((void)on_json(q, R"({"run":1})"),
-                    dftracer::utils::DFTUtilsException);
+                    dftracer::utils::common::DFTUtilsException);
 }
 
 TEST_CASE("a joined sub-query term leaves the scan filter") {
@@ -154,7 +154,7 @@ TEST_CASE("a joined sub-query term leaves the scan filter") {
     CHECK(joins.size() == 2);
     CHECK(sets.size() == 1);
     CHECK_THROWS_AS(make_lookup_table(*joins.front(), runs()),
-                    dftracer::utils::DFTUtilsException);
+                    dftracer::utils::common::DFTUtilsException);
 }
 
 TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
@@ -251,7 +251,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
         const df::Series b3 = df::Series::flat_i64(one_hi + 1, 1);
         const df::Series a3 = df::Series::flat_i64(one_lo + 1, 1);
         (void)lookup_column(*sl, {&k2, &a3, &b3}, 1);
-    } catch (const dftracer::utils::DFTUtilsException& e) {
+    } catch (const dftracer::utils::common::DFTUtilsException& e) {
         error = e.what();
     }
     CHECK(error.find("rows in the range") != std::string::npos);

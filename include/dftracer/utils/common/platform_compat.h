@@ -83,7 +83,7 @@
 #include <sched.h>
 #endif
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// CPUs this process may run on (its affinity mask on Linux, else the cores
 /// the machine reports), never 0. Overridable with
@@ -109,7 +109,7 @@ inline std::size_t hardware_concurrency() {
 /// the machine has; size a fan-out with this.
 std::size_t available_parallelism() noexcept;
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 // ThreadSanitizer annotations for custom synchronization primitives.
 #if defined(__SANITIZE_THREAD__)

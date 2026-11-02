@@ -45,7 +45,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    fs::rename(trace_gz, pfw_path);
+    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
     return pfw_path;
 }
 
@@ -859,7 +859,7 @@ TEST_CASE("DFTracer Server - multi-run break detection") {
     auto raw = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
     REQUIRE(!raw.empty());
     std::string pfw = env.get_dir() + "/multirun.pfw.gz";
-    fs::rename(raw, pfw);
+    dftracer::utils::common::fs::rename(raw, pfw);
 
     int port = pick_port();
     ServerProcess server;
@@ -898,7 +898,7 @@ TEST_CASE("DFTracer Server - rebuilds stale index on changed source") {
 
     auto v1 = env.create_dft_multirun_gzip_file(2, 1000000, 10000);
     REQUIRE(!v1.empty());
-    fs::rename(v1, pfw);
+    dftracer::utils::common::fs::rename(v1, pfw);
     {
         int port = pick_port();
         ServerProcess server;
@@ -916,8 +916,8 @@ TEST_CASE("DFTracer Server - rebuilds stale index on changed source") {
     // Third run added; the on-disk index is now stale.
     auto v2 = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
     REQUIRE(!v2.empty());
-    fs::remove(pfw);
-    fs::rename(v2, pfw);
+    dftracer::utils::common::fs::remove(pfw);
+    dftracer::utils::common::fs::rename(v2, pfw);
     {
         int port = pick_port();
         ServerProcess server;
@@ -1181,7 +1181,7 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
 
     auto v1 = env.create_dft_multirun_gzip_file(2, 1000000, 10000);
     REQUIRE(!v1.empty());
-    fs::rename(v1, pfw);
+    dftracer::utils::common::fs::rename(v1, pfw);
 
     // First run builds the summary (a /viz request) and writes the cache.
     {
@@ -1193,9 +1193,9 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
         CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
               std::string::npos);
     }
-    REQUIRE(fs::exists(cache));
-    const auto cache_time = fs::last_write_time(cache);
-    const auto cache_size = fs::file_size(cache);
+    REQUIRE(dftracer::utils::common::fs::exists(cache));
+    const auto cache_time = dftracer::utils::common::fs::last_write_time(cache);
+    const auto cache_size = dftracer::utils::common::fs::file_size(cache);
 
     // Second run reuses the cache; the result is unchanged. A rejected cache
     // is rebuilt and rewritten, so an untouched file shows the load worked.
@@ -1210,14 +1210,14 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
         CHECK(body.find("\"begin\":2010000") == std::string::npos);
     }
 
-    CHECK(fs::last_write_time(cache) == cache_time);
-    CHECK(fs::file_size(cache) == cache_size);
+    CHECK(dftracer::utils::common::fs::last_write_time(cache) == cache_time);
+    CHECK(dftracer::utils::common::fs::file_size(cache) == cache_size);
 
     // A changed source invalidates the cache: the new run's gap must appear.
     auto v2 = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
     REQUIRE(!v2.empty());
-    fs::remove(pfw);
-    fs::rename(v2, pfw);
+    dftracer::utils::common::fs::remove(pfw);
+    dftracer::utils::common::fs::rename(v2, pfw);
     {
         int port = pick_port();
         ServerProcess server;

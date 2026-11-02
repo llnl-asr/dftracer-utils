@@ -25,7 +25,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    fs::rename(trace_gz, pfw_path);
+    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
     return pfw_path;
 }
 
@@ -80,7 +80,8 @@ constexpr int DFTRACER_FIXTURE_EVENTS = 5;
 constexpr int PATH_FIXTURE_EVENTS = 8;
 
 bool dir_has_dftindex(const std::string& dir) {
-    for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+    for (const auto& entry :
+         dftracer::utils::common::fs::recursive_directory_iterator(dir)) {
         if (entry.path().filename() == ".dftindex") return true;
     }
     return false;
@@ -237,7 +238,7 @@ TEST_SUITE("DFTracerEventCount") {
         REQUIRE(!f.empty());
 
         std::string idx_dir = env.get_dir() + "/idx";
-        fs::create_directories(idx_dir);
+        dftracer::utils::common::fs::create_directories(idx_dir);
 
         auto output = run_event_count_capture(
             binary, {"-d", env.get_dir(), "-f", "--index-dir", idx_dir});
@@ -264,7 +265,7 @@ TEST_SUITE("DFTracerEventCount") {
             auto cold = run_event_count_capture(
                 binary, {"-d", dir.str(), "--index-dir", idx_dir});
             CHECK(parse_event_count(cold) == expected);
-            CHECK(!fs::exists(idx_dir));
+            CHECK(!dftracer::utils::common::fs::exists(idx_dir));
             CHECK(!dir_has_dftindex(dir.str()));
 
             int exit_code = -1;
@@ -272,7 +273,7 @@ TEST_SUITE("DFTracerEventCount") {
                 index_binary, {"-d", dir.str(), "--index-dir", idx_dir}, false,
                 &exit_code);
             REQUIRE(exit_code == 0);
-            REQUIRE(fs::exists(idx_dir));
+            REQUIRE(dftracer::utils::common::fs::exists(idx_dir));
 
             auto warm = run_event_count_capture(
                 binary, {"-d", dir.str(), "--index-dir", idx_dir});
@@ -318,7 +319,7 @@ TEST_SUITE("DFTracerEventCount") {
         const std::string gz = dir.file("members.pfw.gz");
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    4096));
-        fs::remove(plain);
+        dftracer::utils::common::fs::remove(plain);
         const std::string idx_dir = dir.file("idx");
 
         auto cold = run_event_count_capture(

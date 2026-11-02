@@ -56,8 +56,8 @@ ViewPlannerInput& ViewPlannerInput::with_snapshot(const index::Snapshot* s) {
     return *this;
 }
 
-coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
-    const ViewPlannerInput& input) {
+coro::CoroTask<common::Result<ViewPlannerOutput>>
+ViewPlannerUtility::operator()(const ViewPlannerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("build view");
     ViewPlannerOutput output;
 
@@ -74,7 +74,8 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
         try {
             dstd::Optional<dftracer::utils::index::Snapshot> owned;
             if (input.snapshot == nullptr)
-                owned.emplace(unwrap(plan::open_snapshot(input.index_path)));
+                owned.emplace(
+                    common::unwrap(plan::open_snapshot(input.index_path)));
             const dftracer::utils::index::Snapshot& snapshot =
                 input.snapshot != nullptr ? *input.snapshot : *owned;
             if (!input.scan_all_chunks) {
@@ -118,13 +119,13 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
             const auto file = snapshot.file(get_logical_path(input.file_path));
             if (file &&
                 (!candidate_checkpoints.empty() || input.scan_all_chunks))
-                chunk_spans =
-                    unwrap(dftracer::utils::index::spans(snapshot, *file));
+                chunk_spans = common::unwrap(
+                    dftracer::utils::index::spans(snapshot, *file));
         } catch (const std::exception& e) {
             // Fail loudly: swallowing this leaves chunk_spans empty, which
             // reads downstream as a prune and silently drops the file.
-            co_return make_error(
-                ErrorCode::Indexer,
+            co_return common::make_error(
+                common::ErrorCode::Indexer,
                 std::string("ViewPlanner: index read failed for ") +
                     input.file_path + ": " + e.what());
         }
@@ -170,8 +171,8 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
             candidate.start_byte = 0;
             candidate.end_byte = input.uncompressed_size;
         } else {
-            co_return make_error(
-                ErrorCode::Indexer,
+            co_return common::make_error(
+                common::ErrorCode::Indexer,
                 std::string("ViewPlanner: the chunk table of ") +
                     input.file_path + " has " +
                     std::to_string(chunk_spans.size()) +

@@ -89,8 +89,8 @@ namespace df = dftracer::utils::dataframe;
 namespace ix = dftracer::utils::index;
 
 [[noreturn]] void refuse(const std::string& why) {
-    throw DFTUtilsException::cat(ErrorCode::InvalidArgument, "View::duql ",
-                                 why);
+    throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
+                                         "View::duql ", why);
 }
 
 std::string joined(const std::vector<std::string>& names) {
@@ -381,11 +381,13 @@ class FoldSource final : public df::Source {
 };
 
 std::uint64_t pivot_max_columns() {
-    return Env::get<std::uint64_t>("DUQL_PIVOT_MAX_COLUMNS").value_or(1024);
+    return common::Env::get<std::uint64_t>("DUQL_PIVOT_MAX_COLUMNS")
+        .value_or(1024);
 }
 
 std::uint64_t fill_max_rows() {
-    return Env::get<std::uint64_t>("DUQL_FILL_MAX_ROWS").value_or(10'000'000);
+    return common::Env::get<std::uint64_t>("DUQL_FILL_MAX_ROWS")
+        .value_or(10'000'000);
 }
 
 std::string agg_name(duql::AggFn fn) {
@@ -869,7 +871,7 @@ bool is_count(duql::AggFn fn) {
 }
 
 std::uint64_t env_count(std::string_view name, std::uint64_t fallback) {
-    return Env::get<std::uint64_t>(name).value_or(fallback);
+    return common::Env::get<std::uint64_t>(name).value_or(fallback);
 }
 
 constexpr const char* HIT_COLUMN = "__duql_hit";

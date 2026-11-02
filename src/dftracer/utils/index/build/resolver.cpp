@@ -81,7 +81,7 @@ std::vector<std::string> indexed_paths(const Snapshot& snapshot,
                                        const FileRef& file) {
     std::vector<std::string> out;
     for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap})
-        for (auto& p : unwrap(index::paths(snapshot, file, ext)))
+        for (auto& p : common::unwrap(index::paths(snapshot, file, ext)))
             out.emplace_back(p.data(), p.size());
     return out;
 }
@@ -97,7 +97,7 @@ bool covers(const std::vector<std::string>& indexed,
 // The file's recorded schema is current and, when `wanted` is set, is it.
 bool schema_current(const Snapshot& snapshot, const FileRef& file,
                     const std::string& wanted) {
-    const auto recorded = unwrap(index::schema(snapshot, file));
+    const auto recorded = common::unwrap(index::schema(snapshot, file));
     if (!recorded) return false;
     const std::string id(recorded->data(), recorded->size());
     if (!wanted.empty() && id != wanted) return false;
@@ -139,7 +139,7 @@ index::store::ExtensionMask stale_tier(
     }
     const auto registered = index::extensions::plugin_extensions();
     if (!registered.empty()) {
-        const auto copies = unwrap(index::plugins(snapshot, file));
+        const auto copies = common::unwrap(index::plugins(snapshot, file));
         for (const auto& ext : registered) {
             const index::PluginCopy* copy = nullptr;
             for (const auto& candidate : copies)
@@ -210,7 +210,8 @@ FileDecision decide(const Snapshot& snapshot, const PendingFile& f,
     // stores the requested size verbatim, so an exact compare suffices
     // (no file read). Zero on either side means "unspecified": skip.
     if (input.require_checkpoints && input.checkpoint_size != 0) {
-        const auto metadata = unwrap(index::file_metadata(snapshot, *file));
+        const auto metadata =
+            common::unwrap(index::file_metadata(snapshot, *file));
         const std::uint64_t stored_ckpt =
             metadata ? metadata->checkpoint_size : 0;
         if (stored_ckpt != 0 && stored_ckpt != input.checkpoint_size) {
@@ -219,7 +220,7 @@ FileDecision decide(const Snapshot& snapshot, const PendingFile& f,
         }
     }
 
-    const auto recorded = unwrap(index::schema(snapshot, *file));
+    const auto recorded = common::unwrap(index::schema(snapshot, *file));
     if (recorded) d.schema.assign(recorded->data(), recorded->size());
     bool needs_agg = false;
     if (find_schema(d.schema)) {
@@ -246,7 +247,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
     if (!input.index_path.empty()) load_index_schemas(input.index_path);
 
     if (input.index_path.empty() ||
-        !fs::exists(index::store_of(input.index_path))) {
+        !common::fs::exists(index::store_of(input.index_path))) {
         for (auto& f : input.files) {
             result.needs_checkpoint.push_back(
                 FileWorkItem{f.file_index, std::move(f.file_path), {}, {}});
@@ -256,11 +257,11 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
 
     try {
         const auto snapshot =
-            unwrap(index::plan::open_snapshot(input.index_path));
+            common::unwrap(index::plan::open_snapshot(input.index_path));
 
         const std::uint64_t params = input.aggregation_config.params_hash();
-        if (auto stored =
-                unwrap(index::schemas::dft::agg::tier::read_config(snapshot))) {
+        if (auto stored = common::unwrap(
+                index::schemas::dft::agg::tier::read_config(snapshot))) {
             result.stored_time_interval_us = stored->time_interval_us;
             if (stored->params_hash != params) {
                 result.aggregation_stale = true;
@@ -272,7 +273,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
         } else {
             // Partials with no config record may have keys in another layout,
             // so they are never read and the tier is built again.
-            for (const auto& file : unwrap(snapshot.files())) {
+            for (const auto& file : common::unwrap(snapshot.files())) {
                 if (index::extension_state(snapshot, file,
                                            IndexExtension::Agg)) {
                     result.aggregation_stale = true;

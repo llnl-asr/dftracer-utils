@@ -193,8 +193,8 @@ BloomFold::AutoKeys BloomFold::select_auto_keys(
     if (file_bytes_) {
         file_bytes = *file_bytes_;
     } else {
-        dftracer::utils::InputFileStat st;
-        if (dftracer::utils::stat_input(file, st)) file_bytes = st.size;
+        dftracer::utils::common::InputFileStat st;
+        if (dftracer::utils::common::stat_input(file, st)) file_bytes = st.size;
     }
     const auto share = static_cast<std::uint64_t>(
         config_.stats_share * static_cast<double>(file_bytes));
@@ -432,11 +432,11 @@ std::size_t BloomFold::spill_runs() const {
 
 std::uint64_t BloomFold::run_limit(std::uint64_t share,
                                    std::size_t runs) noexcept {
-    namespace fa = constants::file_admission;
-    const std::uint64_t base =
-        std::max<std::uint64_t>(share / 4, fa::MIN_SPILL_RUN_BYTES);
-    const std::size_t doublings =
-        std::min(runs / fa::SPILL_RUNS_PER_DOUBLING, fa::MAX_SPILL_DOUBLINGS);
+    const std::uint64_t base = std::max<std::uint64_t>(
+        share / 4, common::constants::file_admission::MIN_SPILL_RUN_BYTES);
+    const std::size_t doublings = std::min(
+        runs / common::constants::file_admission::SPILL_RUNS_PER_DOUBLING,
+        common::constants::file_admission::MAX_SPILL_DOUBLINGS);
     return base > (std::numeric_limits<std::uint64_t>::max() >> doublings)
                ? std::numeric_limits<std::uint64_t>::max()
                : base << doublings;
@@ -670,12 +670,12 @@ coro::CoroTask<bool> BloomFold::finalize(
         try {
             auto at = snapshots.find(std::string_view(fs.index_path));
             if (at == snapshots.end()) {
-                const auto opened = unwrap(index::Index::open(
+                const auto opened = common::unwrap(index::Index::open(
                     index::store::internal::normalize_index_root(
                         fs.index_path)));
                 at = snapshots
                          .emplace(dstd::String(fs.index_path),
-                                  unwrap(opened.snapshot()))
+                                  common::unwrap(opened.snapshot()))
                          .first;
             }
             const index::Snapshot& snapshot = at->second;

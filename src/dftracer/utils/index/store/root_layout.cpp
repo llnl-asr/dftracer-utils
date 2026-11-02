@@ -7,7 +7,7 @@ namespace dftracer::utils::index {
 namespace {
 
 std::string join(std::string_view base, std::string_view leaf) {
-    return (fs::path(std::string(base)) / std::string(leaf)).string();
+    return (common::fs::path(std::string(base)) / std::string(leaf)).string();
 }
 
 }  // namespace

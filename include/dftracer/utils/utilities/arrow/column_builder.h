@@ -1,12 +1,12 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_COLUMN_BUILDER_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_COLUMN_BUILDER_H
+#ifndef DFTRACER_UTILS_UTILITIES_ARROW_COLUMN_BUILDER_H
+#define DFTRACER_UTILS_UTILITIES_ARROW_COLUMN_BUILDER_H
 
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -18,7 +18,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 /// HIST is a list<struct<lo:double, hi:double, count:uint64>> column: one raw
 /// histogram (a list of buckets) per row. STRING_LIST is a list<utf8> column
@@ -211,7 +211,7 @@ class RecordBatchBuilder {
     void mark_touched(std::size_t col_idx);
 };
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_ARROW_COLUMN_BUILDER_H
+#endif  // DFTRACER_UTILS_UTILITIES_ARROW_COLUMN_BUILDER_H

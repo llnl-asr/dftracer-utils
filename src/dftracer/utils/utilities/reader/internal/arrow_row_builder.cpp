@@ -18,10 +18,10 @@
 
 namespace dftracer::utils::utilities::reader::internal {
 
-using common::arrow::ColumnType;
-using common::arrow::RecordBatchBuilder;
 using json::JsonParser;
 using json::JsonValueHelper;
+using utilities::arrow::ColumnType;
+using utilities::arrow::RecordBatchBuilder;
 
 namespace {
 
@@ -69,7 +69,7 @@ std::int8_t get_io_cat(std::string_view func) {
                                  : static_cast<std::int8_t>(IoOther);
 }
 
-using ::dftracer::utils::detail::iequals;
+using ::dftracer::utils::common::detail::iequals;
 
 // Fields extracted from a row's "args" object in a single pass.
 struct ParsedArgs {
@@ -266,7 +266,8 @@ bool normalize_row(RecordBatchBuilder &builder, dstd::StringArena &arena,
         char lbuf[256];
         std::size_t clen = std::min(cat_sv.size(), sizeof(lbuf));
         for (std::size_t i = 0; i < clen; ++i)
-            lbuf[i] = ::dftracer::utils::detail::to_lower_ascii(cat_sv[i]);
+            lbuf[i] =
+                ::dftracer::utils::common::detail::to_lower_ascii(cat_sv[i]);
         builder.append_string(ci_cat, arena.push(lbuf, clen));
     } else {
         builder.append_null(ci_cat);

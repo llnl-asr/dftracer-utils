@@ -42,8 +42,8 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env,
     std::string src = out_dir + "/rank_0.pfw.gz";
     std::string dst =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    if (!fs::exists(src)) return "";
-    fs::rename(src, dst);
+    if (!dftracer::utils::common::fs::exists(src)) return "";
+    dftracer::utils::common::fs::rename(src, dst);
     return dst;
 }
 
@@ -124,7 +124,7 @@ std::uint64_t run_comparator_peak_rss(const std::string& binary,
 // `files` small traces, one pid per file, so the number of (pid, tid, file,
 // window) groups grows with the file count the way a real run's does.
 void write_scale_set(const std::string& dir, int files, bool variant) {
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     const char* names[] = {"read", "write", "open"};
     for (int f = 0; f < files; ++f) {
         std::string text = "[\n";
@@ -202,7 +202,7 @@ ScaleRss scale_run_rss(const std::string& binary, const std::string& work_dir,
 // writes, 3 STDIO fwrites, 2 COMPUTE steps and 5 dataloader fetches whose
 // level arg is 1 to 5. 20 events in all.
 std::string write_filter_trace(const std::string& dir) {
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     struct Kind {
         const char* cat;
         const char* name;
@@ -330,7 +330,7 @@ TEST_SUITE("DFTracerComparator") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
         const std::string traces = env.get_dir() + "/traces";
-        fs::create_directories(traces);
+        dftracer::utils::common::fs::create_directories(traces);
         // Durations near 2^50 make a floating point sum depend on the order
         // of its adds, and many files with two threads each spread the
         // events over the workers, which merge in no fixed order.
@@ -446,20 +446,21 @@ TEST_SUITE("DFTracerComparator") {
 
         std::string base_dir = env.get_dir() + "/baseline";
         std::string var_dir = env.get_dir() + "/variant";
-        fs::create_directories(base_dir);
-        fs::create_directories(var_dir);
+        dftracer::utils::common::fs::create_directories(base_dir);
+        dftracer::utils::common::fs::create_directories(var_dir);
 
         {
             dftu_utils_test::TestEnvironment base_env(100);
             auto f = base_env.create_dft_test_gzip_file(50);
             REQUIRE(!f.empty());
-            fs::rename(f, base_dir + "/trace_0.pfw.gz");
+            dftracer::utils::common::fs::rename(f,
+                                                base_dir + "/trace_0.pfw.gz");
         }
         {
             dftu_utils_test::TestEnvironment var_env(100);
             auto f = var_env.create_dft_test_gzip_file(80);
             REQUIRE(!f.empty());
-            fs::rename(f, var_dir + "/trace_0.pfw.gz");
+            dftracer::utils::common::fs::rename(f, var_dir + "/trace_0.pfw.gz");
         }
 
         std::string output = env.get_dir() + "/cmp_dir.txt";

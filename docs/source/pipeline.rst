@@ -740,8 +740,9 @@ to handle any failure. See :doc:`cpp_api/runtime`.
         auto result = co_await io::open("missing.txt", O_RDONLY);
         if (result < 0) {
             // Negative result indicates OS error; convert to exception
-            throw DFTUtilsException::cat(ErrorCode::Io, "Failed to open file: ",
-                                         std::strerror(-result));
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::Io, "Failed to open file: ",
+                std::strerror(-result));
         }
         co_return;
     });
@@ -763,8 +764,8 @@ to handle any failure. See :doc:`cpp_api/runtime`.
             // This might throw
             int result = risky_operation();
             if (result < 0) {
-                throw DFTUtilsException(ErrorCode::Internal,
-                                        "Operation failed");
+                throw common::DFTUtilsException(
+                    common::ErrorCode::Internal, "Operation failed");
             }
             co_return result;
         });

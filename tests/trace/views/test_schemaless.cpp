@@ -40,7 +40,7 @@ std::string write_gz(TestEnvironment& env, const std::string& name,
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                member_bytes));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     return gz;
 }
 
@@ -320,7 +320,7 @@ fields:
 
         CHECK_THROWS_WITH_AS((void)vc.time_scale(2.0),
                              doctest::Contains("gives its time units"),
-                             DFTUtilsException);
+                             dftracer::utils::common::DFTUtilsException);
 
         // Seconds and milliseconds come back in those units.
         const df::DataFrame tc = run(vc.call_tree().collect());
@@ -794,10 +794,11 @@ fields:
             (void)counts(u, GroupKey::rank(), "rank"),
             doctest::Contains(
                 "needs row set ranks (pid, rank); schema unranked_io"),
-            DFTUtilsException);
+            dftracer::utils::common::DFTUtilsException);
         CHECK_THROWS_WITH_AS(
             (void)counts(u, GroupKey::file_path(), "file_path"),
-            doctest::Contains("needs row set files"), DFTUtilsException);
+            doctest::Contains("needs row set files"),
+            dftracer::utils::common::DFTUtilsException);
         // Without a data row set the file records are rows too.
         const Counts by_hash = counts(u, GroupKey::fhash(), "fhash");
         CHECK(by_hash.at("f1") == 5);
@@ -841,7 +842,7 @@ fields:
         const std::string agg = write_gz(env, "agg", lines, 1024);
         const std::string agg_idx =
             determine_index_path(agg, env.get_dir() + "/agg_index");
-        REQUIRE_FALSE(fs::exists(agg_idx));
+        REQUIRE_FALSE(dftracer::utils::common::fs::exists(agg_idx));
         const View va = View::from_file(agg, agg_idx);
         CHECK(counts_by_op(va) == counts_by_op(vr));
         const auto [agg_id, agg_tier] = index_state(agg, agg_idx);
@@ -852,7 +853,7 @@ fields:
         const std::string dump = write_gz(env, "dump", lines, 1024);
         const std::string dump_idx =
             determine_index_path(dump, env.get_dir() + "/dump_index");
-        REQUIRE_FALSE(fs::exists(dump_idx));
+        REQUIRE_FALSE(dftracer::utils::common::fs::exists(dump_idx));
         StringSink sink;
         (void)View::from_file(dump, dump_idx).sink_json(sink).get();
         CHECK(sink.lines().size() == lines.size());

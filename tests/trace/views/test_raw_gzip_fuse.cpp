@@ -72,7 +72,7 @@ std::string create_meta_trace(TestEnvironment& env) {
     }
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 600);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
@@ -237,7 +237,7 @@ TEST_SUITE("RawGzipFuse") {
                        .get();
 
         std::string boot_idx = determine_index_path(gz, env.get_dir() + "/bi");
-        REQUIRE_FALSE(fs::exists(boot_idx));
+        REQUIRE_FALSE(dftracer::utils::common::fs::exists(boot_idx));
         auto boot = View::from_file(gz, boot_idx)
                         .group_by({GroupKey::cat()})
                         .agg({{AggOp::Count, "", "n"}})
@@ -264,7 +264,7 @@ TEST_SUITE("RawGzipFuse") {
         std::string gz = create_meta_trace(env);  // 2 metadata + 20 data events
 
         std::string idx = determine_index_path(gz, env.get_dir() + "/ei");
-        REQUIRE_FALSE(fs::exists(idx));
+        REQUIRE_FALSE(dftracer::utils::common::fs::exists(idx));
         StringSink boot;
         View::from_file(gz, idx).sink_json(boot).get();  // bootstrap path
 
@@ -308,7 +308,7 @@ TEST_SUITE("RawGzipFuse") {
         REQUIRE(ref.num_rows() == 1);  // only POSIX
 
         std::string fresh = determine_index_path(gz, env.get_dir() + "/ff");
-        REQUIRE_FALSE(fs::exists(fresh));
+        REQUIRE_FALSE(dftracer::utils::common::fs::exists(fresh));
         auto got = View::from_file(gz, fresh)
                        .duql(R"(cat == "POSIX")")
                        .group_by({GroupKey::cat()})
@@ -495,8 +495,8 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
           count(spilled, 4096));
     CHECK(count(runs, 0) ==
           count(held, dftracer::utils::memory::NO_SPILL_BUDGET));
-    CHECK_FALSE(fs::exists(spilled + ".spill"));
-    CHECK_FALSE(fs::exists(runs + ".spill"));
+    CHECK_FALSE(dftracer::utils::common::fs::exists(spilled + ".spill"));
+    CHECK_FALSE(dftracer::utils::common::fs::exists(runs + ".spill"));
     const auto expected = index_contents(held);
     CHECK(expected == index_contents(spilled));
     CHECK(expected == index_contents(runs));

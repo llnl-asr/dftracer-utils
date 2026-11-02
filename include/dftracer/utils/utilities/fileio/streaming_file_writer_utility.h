@@ -24,7 +24,7 @@ namespace dftracer::utils::utilities::fileio {
 class StreamingFileWriterUtility {
    private:
     std::ofstream file_;
-    fs::path path_;
+    common::fs::path path_;
     bool append_ = false;
     bool create_dirs_ = true;
     std::size_t total_bytes_ = 0;
@@ -38,18 +38,18 @@ class StreamingFileWriterUtility {
 
         // Create parent directories if requested
         if (create_dirs_ && path_.has_parent_path()) {
-            fs::path parent = path_.parent_path();
-            if (!fs::exists(parent)) {
-                fs::create_directories(parent);
+            common::fs::path parent = path_.parent_path();
+            if (!common::fs::exists(parent)) {
+                common::fs::create_directories(parent);
             }
         }
 
         // Validate parent directory exists if not creating it
         if (!create_dirs_ && path_.has_parent_path()) {
-            fs::path parent = path_.parent_path();
-            if (!fs::exists(parent)) {
-                throw DFTUtilsException(
-                    ErrorCode::NotFound,
+            common::fs::path parent = path_.parent_path();
+            if (!common::fs::exists(parent)) {
+                throw common::DFTUtilsException(
+                    common::ErrorCode::NotFound,
                     "Parent directory does not exist: " + parent.string());
             }
         }
@@ -64,8 +64,8 @@ class StreamingFileWriterUtility {
 
         file_.open(path_, mode);
         if (!file_) {
-            throw DFTUtilsException(
-                ErrorCode::Io,
+            throw common::DFTUtilsException(
+                common::ErrorCode::Io,
                 "Cannot open file for writing: " + path_.string());
         }
 
@@ -80,7 +80,8 @@ class StreamingFileWriterUtility {
      * @param append Append to existing file (default: false)
      * @param create_dirs Create parent directories (default: true)
      */
-    explicit StreamingFileWriterUtility(fs::path path, bool append = false,
+    explicit StreamingFileWriterUtility(common::fs::path path,
+                                        bool append = false,
                                         bool create_dirs = true)
         : path_(std::move(path)), append_(append), create_dirs_(create_dirs) {
         open_file();
@@ -105,8 +106,8 @@ class StreamingFileWriterUtility {
      */
     coro::CoroTask<StreamWriteResult> process(dstd::ByteView chunk) {
         if (!opened_) {
-            throw DFTUtilsException(ErrorCode::Io,
-                                    "Cannot write to closed file");
+            throw common::DFTUtilsException(common::ErrorCode::Io,
+                                            "Cannot write to closed file");
         }
 
         if (chunk.empty()) {
@@ -118,8 +119,9 @@ class StreamingFileWriterUtility {
                     static_cast<std::streamsize>(chunk.size()));
 
         if (!file_) {
-            throw DFTUtilsException(ErrorCode::Io,
-                                    "Error writing to file: " + path_.string());
+            throw common::DFTUtilsException(
+                common::ErrorCode::Io,
+                "Error writing to file: " + path_.string());
         }
 
         total_bytes_ += chunk.size();
@@ -141,7 +143,7 @@ class StreamingFileWriterUtility {
 
     std::size_t total_bytes() const { return total_bytes_; }
     std::size_t total_chunks() const { return total_chunks_; }
-    const fs::path& path() const { return path_; }
+    const common::fs::path& path() const { return path_; }
     bool is_closed() const { return !opened_; }
 };
 

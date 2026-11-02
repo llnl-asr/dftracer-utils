@@ -21,7 +21,7 @@ namespace {
 // output folder inside it would be read back as input by the next run.
 std::string input_dir(dftu_utils_test::TestEnvironment& env) {
     const std::string dir = env.get_dir() + "/in";
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     return dir;
 }
 
@@ -32,7 +32,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 
     std::string pfw_path =
         input_dir(env) + "/trace_" + std::to_string(id) + ".pfw.gz";
-    fs::rename(trace_gz, pfw_path);
+    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
     return pfw_path;
 }
 
@@ -49,7 +49,8 @@ int run_split(const std::string& binary, const std::vector<std::string>& args) {
 // decompressing each with zlib.
 int count_gz_lines_in_dir(const std::string& dir) {
     int total = 0;
-    for (const auto& entry : fs::directory_iterator(dir)) {
+    for (const auto& entry :
+         dftracer::utils::common::fs::directory_iterator(dir)) {
         if (!entry.is_regular_file()) continue;
         std::string p = entry.path().string();
         if (p.size() < 7 || p.substr(p.size() - 7) != ".pfw.gz") continue;
@@ -75,7 +76,8 @@ int count_gz_lines_in_dir(const std::string& dir) {
 // Count .pfw.gz files in a directory.
 int count_gz_files(const std::string& dir) {
     int n = 0;
-    for (const auto& entry : fs::directory_iterator(dir)) {
+    for (const auto& entry :
+         dftracer::utils::common::fs::directory_iterator(dir)) {
         if (!entry.is_regular_file()) continue;
         std::string p = entry.path().string();
         if (p.size() >= 7 && p.substr(p.size() - 7) == ".pfw.gz") ++n;
@@ -87,7 +89,8 @@ int count_gz_files(const std::string& dir) {
 // the RFC 1952 magic 1F 8B 08).
 int count_gzip_members(const std::string& dir) {
     int members = 0;
-    for (const auto& entry : fs::directory_iterator(dir)) {
+    for (const auto& entry :
+         dftracer::utils::common::fs::directory_iterator(dir)) {
         if (!entry.is_regular_file()) continue;
         std::string p = entry.path().string();
         if (p.size() < 7 || p.substr(p.size() - 7) != ".pfw.gz") continue;
@@ -103,7 +106,8 @@ int count_gzip_members(const std::string& dir) {
 
 // True when the first line of every .pfw.gz file in the directory is an event.
 bool all_files_start_with_event(const std::string& dir) {
-    for (const auto& entry : fs::directory_iterator(dir)) {
+    for (const auto& entry :
+         dftracer::utils::common::fs::directory_iterator(dir)) {
         if (!entry.is_regular_file()) continue;
         std::string p = entry.path().string();
         if (p.size() < 7 || p.substr(p.size() - 7) != ".pfw.gz") continue;
@@ -153,7 +157,7 @@ TEST_SUITE("DFTracerSplit") {
         int rc = run_split(binary, {"-d", input_dir(env), "-o", out_dir,
                                     "--disable-watchdog"});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(out_dir));
+        REQUIRE(dftracer::utils::common::fs::exists(out_dir));
         CHECK(count_gz_files(out_dir) > 0);
         CHECK(all_files_start_with_event(out_dir));
     }
@@ -178,7 +182,7 @@ TEST_SUITE("DFTracerSplit") {
                            {"-d", input_dir(env), "-o", mm, "--checkpoint-size",
                             "1048576", "--disable-watchdog"});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(mm));
+        REQUIRE(dftracer::utils::common::fs::exists(mm));
         CHECK(count_gzip_members(mm) >= 2);
 
         // A checkpoint larger than the data -> one member per output file.
@@ -187,7 +191,7 @@ TEST_SUITE("DFTracerSplit") {
                        {"-d", input_dir(env), "-o", sm, "--checkpoint-size",
                         "1073741824", "--disable-watchdog"});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(sm));
+        REQUIRE(dftracer::utils::common::fs::exists(sm));
         CHECK(count_gzip_members(sm) == count_gz_files(sm));
     }
 
@@ -206,7 +210,7 @@ TEST_SUITE("DFTracerSplit") {
         int rc = run_split(
             binary, {"-d", input_dir(env), "-o", one, "--disable-watchdog"});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(one));
+        REQUIRE(dftracer::utils::common::fs::exists(one));
 
         // 64 KB of gzip is a few MB of events; a chunk ends at a member end
         // past that, so 256 KB members give several chunk files.
@@ -215,7 +219,7 @@ TEST_SUITE("DFTracerSplit") {
                        {"-d", input_dir(env), "-o", many, "-s", "64KB",
                         "--checkpoint-size", "262144", "--disable-watchdog"});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(many));
+        REQUIRE(dftracer::utils::common::fs::exists(many));
 
         CHECK(count_gz_files(many) > count_gz_files(one));
         CHECK(count_gz_lines_in_dir(many) == count_gz_lines_in_dir(one));
@@ -243,7 +247,7 @@ TEST_SUITE("DFTracerSplit") {
         CHECK(rc != 0);
         CHECK(text.find("--chunk-size") != std::string::npos);
         CHECK(text.find("a unit is required") != std::string::npos);
-        CHECK(!fs::exists(out));
+        CHECK(!dftracer::utils::common::fs::exists(out));
     }
 
     TEST_CASE("a tiny memory budget gives the same output") {
@@ -263,14 +267,14 @@ TEST_SUITE("DFTracerSplit") {
         int rc = run_split(binary, {"-d", input_dir(env), "-o", open_dir,
                                     "--verify", "--disable-watchdog"});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(open_dir));
+        REQUIRE(dftracer::utils::common::fs::exists(open_dir));
 
         std::string tight_dir = env.get_dir() + "/split_tight";
         rc = run_split(
             binary, {"-d", input_dir(env), "-o", tight_dir, "--memory-budget",
                      "1MB", "--verify", "--disable-watchdog"});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(tight_dir));
+        REQUIRE(dftracer::utils::common::fs::exists(tight_dir));
 
         CHECK(count_gz_files(tight_dir) == count_gz_files(open_dir));
         CHECK(count_gz_lines_in_dir(tight_dir) ==
@@ -314,7 +318,7 @@ TEST_SUITE("DFTracerSplit") {
         int rc = run_split(binary, {"-d", input_dir(env), "-o", out_dir,
                                     "--disable-watchdog"});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(out_dir));
+        REQUIRE(dftracer::utils::common::fs::exists(out_dir));
 
         int total_lines = count_gz_lines_in_dir(out_dir);
         // Split output contains all events plus possible metadata lines.
@@ -339,7 +343,7 @@ TEST_SUITE("DFTracerSplit") {
         int rc = run_split(binary, {"-d", input_dir(env), "-o", out_dir,
                                     "--disable-watchdog"});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(out_dir));
+        REQUIRE(dftracer::utils::common::fs::exists(out_dir));
         CHECK(count_gz_files(out_dir) > 0);
     }
 
@@ -359,10 +363,10 @@ TEST_SUITE("DFTracerSplit") {
                                    "--disable-watchdog"}) == 0);
         const auto first = count_gz_lines_in_dir(out);
         REQUIRE(first > 0);
-        fs::remove_all(out);
+        dftracer::utils::common::fs::remove_all(out);
         REQUIRE(run_split(binary, {"-d", input_dir(env), "-o", out,
                                    "--disable-watchdog"}) == 0);
-        fs::create_directories(out + "/stale");
+        dftracer::utils::common::fs::create_directories(out + "/stale");
         REQUIRE(run_split(binary, {"-d", input_dir(env), "-o", out,
                                    "--disable-watchdog"}) == 0);
         CHECK(count_gz_lines_in_dir(out) == first);

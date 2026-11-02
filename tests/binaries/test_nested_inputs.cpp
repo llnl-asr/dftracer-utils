@@ -26,7 +26,8 @@ std::string trace(int file) {
 
 std::set<std::string> files_under(const std::string& dir) {
     std::set<std::string> out;
-    for (const auto& e : fs::recursive_directory_iterator(dir))
+    for (const auto& e :
+         dftracer::utils::common::fs::recursive_directory_iterator(dir))
         if (e.is_regular_file()) out.insert(e.path().string());
     return out;
 }
@@ -60,12 +61,12 @@ TEST_SUITE("NestedInputs") {
         const std::vector<std::string> dirs = {in + "/a", in + "/a/b",
                                                in + "/c/d/e"};
         for (std::size_t i = 0; i < dirs.size(); ++i) {
-            fs::create_directories(dirs[i]);
+            dftracer::utils::common::fs::create_directories(dirs[i]);
             dftu_utils_test::write_gz_trace(
                 dirs[i] + "/t" + std::to_string(i) + ".pfw.gz",
                 trace(static_cast<int>(i)));
         }
-        fs::create_directories(work);
+        dftracer::utils::common::fs::create_directories(work);
         const auto inputs = files_under(in);
         REQUIRE(inputs.size() == dirs.size());
         const std::string total =

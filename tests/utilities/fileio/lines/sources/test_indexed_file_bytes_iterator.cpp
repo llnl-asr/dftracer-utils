@@ -320,7 +320,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
     TEST_CASE("IndexedFileBytesIterator - Error Handling") {
         SUBCASE("Null reader") {
             CHECK_THROWS_AS(IndexedFileBytesIterator(nullptr, 0, 100),
-                            dftracer::utils::DFTUtilsException);
+                            common::DFTUtilsException);
         }
 
         SUBCASE("Invalid byte range - start >= end") {
@@ -337,9 +337,9 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
             // start >= end
             CHECK_THROWS_AS(IndexedFileBytesIterator(reader, 100, 100),
-                            dftracer::utils::DFTUtilsException);
+                            common::DFTUtilsException);
             CHECK_THROWS_AS(IndexedFileBytesIterator(reader, 100, 50),
-                            dftracer::utils::DFTUtilsException);
+                            common::DFTUtilsException);
         }
 
         SUBCASE("Calling next() when no more lines") {

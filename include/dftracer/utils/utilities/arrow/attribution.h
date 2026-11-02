@@ -1,14 +1,14 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ATTRIBUTION_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ATTRIBUTION_H
+#ifndef DFTRACER_UTILS_UTILITIES_ARROW_ATTRIBUTION_H
+#define DFTRACER_UTILS_UTILITIES_ARROW_ATTRIBUTION_H
 
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 #include <cstdint>
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 /// Rank dimension values over-represented in a selection vs baseline (Honeycomb
 /// BubbleUp). `select_col` is BOOL: true selects, false is baseline, null
@@ -22,7 +22,7 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
                             const std::uint32_t* dim_cols, std::uint32_t n_dim,
                             std::uint32_t top_k);
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ATTRIBUTION_H
+#endif  // DFTRACER_UTILS_UTILITIES_ARROW_ATTRIBUTION_H

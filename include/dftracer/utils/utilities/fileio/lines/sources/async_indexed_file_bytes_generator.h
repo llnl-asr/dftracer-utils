@@ -32,12 +32,12 @@ inline coro::AsyncGenerator<Line> async_indexed_file_bytes(
     std::shared_ptr<reader::internal::Reader> reader, std::size_t start_byte,
     std::size_t end_byte, std::size_t buffer_size = 1024 * 1024) {
     if (!reader) {
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "Reader cannot be null");
+        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                        "Reader cannot be null");
     }
     if (start_byte >= end_byte) {
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "Invalid byte range");
+        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                        "Invalid byte range");
     }
 
     auto stream =
@@ -48,7 +48,8 @@ inline coro::AsyncGenerator<Line> async_indexed_file_bytes(
                            .to(end_byte));
 
     if (!stream) {
-        throw DFTUtilsException(ErrorCode::Io, "Failed to create stream");
+        throw common::DFTUtilsException(common::ErrorCode::Io,
+                                        "Failed to create stream");
     }
 
     std::string stream_buffer;

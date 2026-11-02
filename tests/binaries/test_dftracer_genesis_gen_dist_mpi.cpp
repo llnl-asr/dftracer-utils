@@ -30,9 +30,11 @@ std::string call(const std::string& name, int ts, int dur,
     return o.str();
 }
 
-void write_run(const fs::path& root, const std::string& input, int calls) {
-    const fs::path dir = root / "app" / "sys" / input / "nodes_1" / "ppn_1";
-    fs::create_directories(dir / "compacted");
+void write_run(const dftracer::utils::common::fs::path& root,
+               const std::string& input, int calls) {
+    const dftracer::utils::common::fs::path dir =
+        root / "app" / "sys" / input / "nodes_1" / "ppn_1";
+    dftracer::utils::common::fs::create_directories(dir / "compacted");
     std::ofstream(dir / "summary.json")
         << R"({"ok":true,"app":"app","system":"sys","input":")" << input
         << R"(","nodes":1,"ppn":1,"sets":["set1"]})";
@@ -71,7 +73,7 @@ TEST_CASE("ranks split the run groups and join one output") {
     }
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_mpi");
-    const fs::path root = d.path() / "root";
+    const dftracer::utils::common::fs::path root = d.path() / "root";
     for (int i = 0; i < 6; ++i)
         write_run(root, "in" + std::to_string(i), 200 * (i + 1));
 
@@ -85,8 +87,8 @@ TEST_CASE("ranks split the run groups and join one output") {
     REQUIRE_FALSE(one.empty());
     CHECK(sorted_gz_lines(d.file("three.pfw.gz")) == one);
     for (int r = 0; r < 3; ++r)
-        CHECK_FALSE(
-            fs::exists(d.file("three.pfw.gz." + std::to_string(r) + ".part")));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(
+            d.file("three.pfw.gz." + std::to_string(r) + ".part")));
 }
 
 TEST_CASE("--shard is refused with more than one rank") {

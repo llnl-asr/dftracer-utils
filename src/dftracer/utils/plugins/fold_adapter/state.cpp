@@ -35,7 +35,8 @@ const char* err_text(const ::dftu_error& e) {
 
 const std::string& SpillDir::path() {
     if (!dir_) {
-        auto made = dftracer::utils::ScopedSpillSubdir::create("dftu_state");
+        auto made =
+            dftracer::utils::common::ScopedSpillSubdir::create("dftu_state");
         if (!made) {
             DFTRACER_UTILS_LOG_ERROR("Plugin state spill directory: %s",
                                      made.error().format().c_str());

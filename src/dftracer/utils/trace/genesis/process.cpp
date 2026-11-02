@@ -169,7 +169,7 @@ constexpr std::uint64_t SERIES_SAMPLE_BYTES =
     sizeof(std::pair<std::int64_t, double>);
 
 struct GroupError {
-    ErrorCode code = ErrorCode::Parse;
+    common::ErrorCode code = common::ErrorCode::Parse;
     std::string file;
     std::string reason;
     bool over_budget = false;
@@ -178,14 +178,15 @@ struct GroupError {
 template <class T>
 using GResult = dstd::Expected<T, GroupError>;
 
-dstd::Unexpected<GroupError> fail(std::string file, std::string reason,
-                                  ErrorCode code = ErrorCode::Parse) {
+dstd::Unexpected<GroupError> fail(
+    std::string file, std::string reason,
+    common::ErrorCode code = common::ErrorCode::Parse) {
     return dstd::Unexpected<GroupError>(
         GroupError{code, std::move(file), std::move(reason)});
 }
 
 dstd::Unexpected<GroupError> fail_from(const dstd::Error& e) {
-    return fail("", std::string(e.message()), errorcode_of(e));
+    return fail("", std::string(e.message()), common::errorcode_of(e));
 }
 
 // A group's memory is its share of the budget in four equal parts: the calls,
@@ -226,10 +227,10 @@ struct GroupMem {
 
     std::uint64_t spilled_bytes() const { return file_ ? file_->size() : 0; }
 
-    GResult<SpillFile*> spill_file() {
+    GResult<common::SpillFile*> spill_file() {
         std::lock_guard<std::mutex> lock(mu_);
         if (!file_) {
-            auto created = SpillFile::create();
+            auto created = common::SpillFile::create();
             if (!created) return fail_from(created.error());
             file_ = std::move(*created);
         }
@@ -237,11 +238,12 @@ struct GroupMem {
     }
 
     GroupError budget_error(std::string_view what) const {
-        return GroupError{ErrorCode::InvalidArgument, "",
-                          str_cat("memory budget exceeded by ", what,
-                                  " (the share of this run group is ", share,
-                                  " bytes); raise --memory-budget"),
-                          true};
+        return GroupError{
+            common::ErrorCode::InvalidArgument, "",
+            common::str_cat("memory budget exceeded by ", what,
+                            " (the share of this run group is ", share,
+                            " bytes); raise --memory-budget"),
+            true};
     }
 
     dstd::Unexpected<GroupError> over_budget(std::string_view what) const {
@@ -258,7 +260,7 @@ struct GroupMem {
     }
 
     std::mutex mu_;
-    std::unique_ptr<SpillFile> file_;
+    std::unique_ptr<common::SpillFile> file_;
 };
 
 // Charges a pool in steps, so a hot loop does not touch the shared counter for
@@ -1072,11 +1074,11 @@ class SetAcc {
         const std::int64_t end = s.ts + s.dur;
         pop(s.ts);
         if (!stack_.empty() && end > stack_.back().first) {
-            failed_ =
-                GroupError{ErrorCode::Parse, spec_->keys.papi_set,
-                           str_cat("call ", r_->strings_[s.name], " at ts ",
-                                   s.ts, " ends after its parent ",
-                                   recs_[stack_.back().second]->path)};
+            failed_ = GroupError{
+                common::ErrorCode::Parse, spec_->keys.papi_set,
+                common::str_cat("call ", r_->strings_[s.name], " at ts ", s.ts,
+                                " ends after its parent ",
+                                recs_[stack_.back().second]->path)};
             return;
         }
         if (const auto id = add(s)) stack_.emplace_back(end, *id);
@@ -1089,15 +1091,15 @@ class SetAcc {
                 procs.push_back(i);
         const auto want = spec_->keys.nodes * spec_->keys.ppn;
         if (static_cast<std::int64_t>(procs.size()) != want)
-            return fail(
-                spec_->keys.papi_set,
-                str_cat("expected ", want, " processes, found ", procs.size()));
+            return fail(spec_->keys.papi_set,
+                        common::str_cat("expected ", want, " processes, found ",
+                                        procs.size()));
         for (const auto i : procs) {
             const Proc& p = r_->procs_[i];
             if (p.start < 0 || p.end < 0)
                 return fail(spec_->keys.papi_set,
-                            str_cat("process ", p.hhash, ":", p.pid,
-                                    " lacks dftracer start or end"));
+                            common::str_cat("process ", p.hhash, ":", p.pid,
+                                            " lacks dftracer start or end"));
         }
         return {};
     }
@@ -1282,7 +1284,7 @@ coro::CoroTask<ReaderSize> reader_size(const std::string& file) {
     SlotGuard probe(probe_slots(), 1);
     const ssize_t fd = co_await io::open(file.c_str(), O_RDONLY);
     if (fd < 0) co_return out;
-    ScopedFd guard(static_cast<int>(fd));
+    common::ScopedFd guard(static_cast<int>(fd));
     struct stat st{};
     if (::fstat(guard.get(), &st) != 0) co_return out;
     out.file_bytes = static_cast<std::uint64_t>(st.st_size);
@@ -1351,18 +1353,18 @@ GResult<void> assign_sets(GroupReader& r, const RunGroup& g) {
         for (std::size_t i = 0; i < g.sets.size(); ++i) {
             if (g.sets[i].papi_counters != p.papi_names) continue;
             if (p.set >= 0)
-                return fail("", str_cat("process ", p.hhash, ":", p.pid,
-                                        " matches several sets"));
+                return fail("", common::str_cat("process ", p.hhash, ":", p.pid,
+                                                " matches several sets"));
             p.set = static_cast<int>(i);
         }
         if (p.set < 0)
-            return fail("", str_cat("process ", p.hhash, ":", p.pid,
-                                    " PAPI counters match no set"));
+            return fail("", common::str_cat("process ", p.hhash, ":", p.pid,
+                                            " PAPI counters match no set"));
     }
     return {};
 }
 
-using CallSorter = ExternalSorter<SortRec, SortLess>;
+using CallSorter = common::ExternalSorter<SortRec, SortLess>;
 
 // What a group keeps while its runs are written: the memory share, the strings
 // and processes the records name, and the sets' records.
@@ -1371,8 +1373,8 @@ using CallSorter = ExternalSorter<SortRec, SortLess>;
 std::string group_pool_name(const RunGroup& g) {
     constexpr std::size_t KEEP = 39;
     const std::string_view dir = g.dir;
-    return str_cat("genesis/",
-                   dir.size() > KEEP ? dir.substr(dir.size() - KEEP) : dir);
+    return common::str_cat(
+        "genesis/", dir.size() > KEEP ? dir.substr(dir.size() - KEEP) : dir);
 }
 
 struct GroupState {
@@ -1674,12 +1676,12 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
     mem.state->raise_limit(memory_share / 4 +
                            (mem.calls->limit() - mem.calls->reserved()));
     if (progress) progress->enter(GroupProgress::Phase::Walk);
-    std::vector<coro::SpawnFuture<Result<void>>> walks;
+    std::vector<coro::SpawnFuture<common::Result<void>>> walks;
     walks.reserve(ways);
     for (std::size_t w = 0; w < ways; ++w)
         walks.push_back(ctx.spawn([&sorters, &partials, &r, w,
                                    progress](CoroScope&)
-                                      -> coro::CoroTask<Result<void>> {
+                                      -> coro::CoroTask<common::Result<void>> {
             std::deque<SetAcc>& part_sets = partials[w];
             std::uint64_t fed = 0;
             auto walked = sorters[w].drain([&](const SortRec& s) {

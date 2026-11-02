@@ -30,7 +30,7 @@ class CheckpointIndexerFactory {
     static std::shared_ptr<CheckpointIndexer> create(
         const std::string &archive_path, const std::string &index_path = "",
         std::uint64_t checkpoint_size =
-            constants::indexer::DEFAULT_CHECKPOINT_SIZE,
+            common::constants::indexer::DEFAULT_CHECKPOINT_SIZE,
         bool force = false);
 
     /**
@@ -39,7 +39,7 @@ class CheckpointIndexerFactory {
      * @param archive_path Path to the archive file
      * @return Detected archive format
      */
-    static ArchiveFormat detect_format(const std::string &archive_path);
+    static common::ArchiveFormat detect_format(const std::string &archive_path);
 
     /**
      * Generate appropriate index file path for the given archive format
@@ -50,7 +50,7 @@ class CheckpointIndexerFactory {
      */
     static std::string generate_index_path(
         const std::string &archive_path,
-        ArchiveFormat format = ArchiveFormat::Unknown);
+        common::ArchiveFormat format = common::ArchiveFormat::Unknown);
 
    private:
     CheckpointIndexerFactory() = delete;  // Static-only class

@@ -83,10 +83,13 @@ TEST_SUITE("QueryCache") {
         CHECK(
             dftracer::utils::index::cache::CacheStore::exists(rollups_of(gz)));
         CHECK(rollup_sigs(gz).size() == 1);
-        CHECK_FALSE(fs::exists(fs::path(cache_of(gz)).parent_path() /
-                               ".dftindex-cache"));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(
+            dftracer::utils::common::fs::path(cache_of(gz)).parent_path() /
+            ".dftindex-cache"));
         auto store = dftracer::utils::store::Store::open(
-            (fs::path(determine_index_path(gz, "")) / "store").string());
+            (dftracer::utils::common::fs::path(determine_index_path(gz, "")) /
+             "store")
+                .string());
         REQUIRE(store.has_value());
         auto snapshot = store->snapshot();
         REQUIRE(snapshot.has_value());
@@ -114,12 +117,13 @@ TEST_SUITE("QueryCache") {
 
         by_cat(gz, "dur >= 0").materialize().get();
         View::from_file(gz, idx).duql(R"(name == "read")").materialize().get();
-        REQUIRE(fs::exists(fs::path(views_of(gz))));
+        REQUIRE(dftracer::utils::common::fs::exists(
+            dftracer::utils::common::fs::path(views_of(gz))));
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
 
         // Both caches are disposable. The index itself is not part of them.
-        fs::remove_all(rollups_of(gz));
-        fs::remove_all(views_of(gz));
+        dftracer::utils::common::fs::remove_all(rollups_of(gz));
+        dftracer::utils::common::fs::remove_all(views_of(gz));
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
         StringSink again;
         const auto st = View::from_file(gz, idx)
@@ -135,13 +139,15 @@ TEST_SUITE("QueryCache") {
         const auto gz = create_mixed_trace(env, 30, 20);
         const std::string idx = determine_index_path(gz, "");
         by_cat(gz, "dur >= 0").materialize().get();
-        const fs::path store = fs::path(idx) / "store";
-        REQUIRE(fs::exists(store));
+        const dftracer::utils::common::fs::path store =
+            dftracer::utils::common::fs::path(idx) / "store";
+        REQUIRE(dftracer::utils::common::fs::exists(store));
 
         // The caches outlive the index, so the root stays without its store.
-        fs::remove_all(store);
-        REQUIRE(fs::exists(fs::path(rollups_of(gz))));
-        REQUIRE_FALSE(fs::exists(store));
+        dftracer::utils::common::fs::remove_all(store);
+        REQUIRE(dftracer::utils::common::fs::exists(
+            dftracer::utils::common::fs::path(rollups_of(gz))));
+        REQUIRE_FALSE(dftracer::utils::common::fs::exists(store));
 
         StringSink rows;
         const auto st = View::from_file(gz, idx)
@@ -150,14 +156,14 @@ TEST_SUITE("QueryCache") {
                             .get();
         CHECK(rows.lines().size() == 30);
         CHECK(st.events_scanned == 50);
-        CHECK(fs::exists(store));
+        CHECK(dftracer::utils::common::fs::exists(store));
     }
 
     TEST_CASE("a rollup store that cannot be opened does not fail the query") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
         const auto want = canon(by_cat(gz, "dur >= 0").collect().get());
-        fs::create_directories(cache_of(gz));
+        dftracer::utils::common::fs::create_directories(cache_of(gz));
         std::ofstream(rollups_of(gz)) << "x";
         CHECK_NOTHROW(by_cat(gz, "dur >= 0").materialize().get());
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == want);
@@ -223,7 +229,9 @@ TEST_SUITE("QueryCache") {
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
         std::vector<std::string> views;
         std::error_code ec;
-        for (fs::directory_iterator it(fs::path(views_of(gz)), ec), end;
+        for (dftracer::utils::common::fs::directory_iterator
+                 it(dftracer::utils::common::fs::path(views_of(gz)), ec),
+             end;
              !ec && it != end; it.increment(ec))
             views.push_back(it->path().string());
         CHECK(views.empty());

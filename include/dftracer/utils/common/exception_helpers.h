@@ -4,7 +4,7 @@
 #include <exception>
 #include <utility>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// Move the stored exception out, clear the slot, then rethrow. Clearing first
 /// prevents rethrowing the same exception twice if the holder is awaited again.
@@ -14,6 +14,6 @@ namespace dftracer::utils {
     std::rethrow_exception(std::move(e));
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_EXCEPTION_HELPERS_H

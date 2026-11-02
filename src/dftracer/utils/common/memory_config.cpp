@@ -7,7 +7,7 @@
 #include <optional>
 #include <string>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 namespace {
 
@@ -29,17 +29,18 @@ Result<std::size_t> read_bytes(const char* name) {
 }  // namespace
 
 Result<memory::Config> memory_config_from_env() {
-    namespace s = constants::memory_settings;
     memory::Config config;
     struct Field {
         const char* name;
         std::size_t* target;
     };
     const Field fields[] = {
-        {s::BUDGET_ENV, &config.budget},
-        {s::HARD_LIMIT_ENV, &config.hard_cap},
-        {s::LIMIT_HEADROOM_ENV, &config.limit_headroom},
-        {s::SPILL_HEADROOM_ENV, &config.spill_headroom},
+        {constants::memory_settings::BUDGET_ENV, &config.budget},
+        {constants::memory_settings::HARD_LIMIT_ENV, &config.hard_cap},
+        {constants::memory_settings::LIMIT_HEADROOM_ENV,
+         &config.limit_headroom},
+        {constants::memory_settings::SPILL_HEADROOM_ENV,
+         &config.spill_headroom},
     };
     for (const Field& f : fields) {
         auto bytes = read_bytes(f.name);
@@ -59,11 +60,11 @@ Result<void> configure_memory_from_env() {
             return;
         }
         memory::configure(*config);
-        namespace s = constants::memory_settings;
-        auto report = Env::get<int>(s::REPORT_ENV);
-        memory::set_exit_report(report ? *report != 0 : s::DEFAULT_REPORT);
+        auto report = Env::get<int>(constants::memory_settings::REPORT_ENV);
+        memory::set_exit_report(
+            report ? *report != 0 : constants::memory_settings::DEFAULT_REPORT);
     });
     return first;
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

@@ -48,7 +48,7 @@ std::string write_records(dftu_utils_test::TestEnvironment& env,
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                8 * 1024));
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     return gz;
 }
 

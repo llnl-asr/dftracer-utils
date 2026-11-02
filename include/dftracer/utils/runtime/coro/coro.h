@@ -84,7 +84,7 @@ struct CoroPromise : FrameAllocation {
     /// Executor for global scheduling (set before enqueue).
     Executor* executor{nullptr};
 
-    TaskIndex task_id{-1};
+    common::TaskIndex task_id{-1};
 
     detail::RunContext context;
 

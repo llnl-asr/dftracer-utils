@@ -97,7 +97,7 @@ std::string create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
         gzwrite(gz, body.data(), static_cast<unsigned>(body.size()));
         gzclose(gz);
     }
-    fs::remove(plain_path);
+    dftracer::utils::common::fs::remove(plain_path);
     return gz_path;
 }
 
@@ -161,7 +161,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
         const int rc = run_binary(binary, {"-d", env.get_dir(), "-o", out});
         // Non-zero exit and no YAML produced.
         CHECK(rc != 0);
-        CHECK_FALSE(fs::exists(out));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(out));
     }
 
     TEST_CASE(
@@ -181,7 +181,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
         const int rc = run_binary(binary, {"-d", env.get_dir(), "-o", out,
                                            "--simulation-iterations", "2"});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(out));
+        REQUIRE(dftracer::utils::common::fs::exists(out));
 
         const std::string contents = read_file(out);
         // Spot-check the YAML schema. Don't pin specific distribution choice
@@ -219,7 +219,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
             run_binary(binary, {"-d", env.get_dir(), "-o", out_default,
                                 "--simulation-iterations", "2"});
         CHECK(rc_default != 0);
-        CHECK_FALSE(fs::exists(out_default));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(out_default));
 
         // A YAML event map remaps the components onto the custom events.
         const std::string map_path = env.get_dir() + "/event_map.yaml";
@@ -242,7 +242,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
             binary, {"-d", env.get_dir(), "-o", out, "--simulation-iterations",
                      "2", "--event-map", map_path});
         CHECK(rc == 0);
-        REQUIRE(fs::exists(out));
+        REQUIRE(dftracer::utils::common::fs::exists(out));
 
         const std::string contents = read_file(out);
         CHECK(contents.find("computation_time:") != std::string::npos);
@@ -283,7 +283,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
             binary, {"-d", env.get_dir(), "-o", out, "--simulation-iterations",
                      "2", "--event-map", map_path});
         CHECK(rc == 0);
-        CHECK(fs::exists(out));
+        CHECK(dftracer::utils::common::fs::exists(out));
     }
 
     TEST_CASE("malformed event map is rejected") {
@@ -308,7 +308,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
             binary, {"-d", env.get_dir(), "-o", out, "--simulation-iterations",
                      "2", "--event-map", map_path});
         CHECK(rc != 0);
-        CHECK_FALSE(fs::exists(out));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(out));
     }
 
     TEST_CASE("respects --num-workers and --prefetch-factor") {
@@ -326,6 +326,6 @@ TEST_SUITE("DFTracerGenDlioConfig") {
             binary, {"-d", env.get_dir(), "-o", out, "--num-workers", "4",
                      "--prefetch-factor", "1", "--simulation-iterations", "2"});
         CHECK(rc == 0);
-        CHECK(fs::exists(out));
+        CHECK(dftracer::utils::common::fs::exists(out));
     }
 }

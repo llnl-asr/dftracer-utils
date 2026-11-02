@@ -50,8 +50,9 @@ thread_local dftracer::utils::json::RecordParser tl_parser;
 /// Traces must be gzip. A bare .pfw is rejected rather than read, so a file
 /// that was never compressed fails at the reader instead of silently taking
 /// a path with no index, no pruning and no random access.
-void reject_unless_gzip(ArchiveFormat format, const std::string& file_path) {
-    if (format == ArchiveFormat::Gzip) return;
+void reject_unless_gzip(common::ArchiveFormat format,
+                        const std::string& file_path) {
+    if (format == common::ArchiveFormat::Gzip) return;
     throw ReaderError(ReaderError::InvalidArgument,
                       "Not a gzip trace: " + file_path +
                           " (dftracer traces must be gzip-compressed)");
@@ -204,8 +205,8 @@ coro::AsyncGenerator<Line> read_lines_indexed(
 
     if (query && !index_path.empty() &&
         range_type == internal::RangeType::ByteRange) {
-        auto snapshot =
-            unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
+        auto snapshot = common::unwrap(
+            dftracer::utils::index::plan::open_snapshot(index_path));
         // GCC 12 destroys a temporary built inside co_await twice.
         dftracer::utils::index::plan::PruneRequest prune_req{
             .index_path = index_path,
@@ -225,8 +226,8 @@ coro::AsyncGenerator<Line> read_lines_indexed(
             const auto file = snapshot.file(logical);
 
             if (file) {
-                auto spans =
-                    unwrap(dftracer::utils::index::spans(snapshot, *file));
+                auto spans = common::unwrap(
+                    dftracer::utils::index::spans(snapshot, *file));
 
                 std::vector<LineRange> ranges;
                 std::uint64_t prev_idx = UINT64_MAX;
@@ -335,8 +336,8 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
     }
 
     if (query && !index_path.empty() && !config.skip_pruning) {
-        auto snapshot =
-            unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
+        auto snapshot = common::unwrap(
+            dftracer::utils::index::plan::open_snapshot(index_path));
         // GCC 12 destroys a temporary built inside co_await twice.
         dftracer::utils::index::plan::PruneRequest prune_req{
             .index_path = index_path,
@@ -356,8 +357,8 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
             const auto file = snapshot.file(logical);
 
             if (file) {
-                auto spans =
-                    unwrap(dftracer::utils::index::spans(snapshot, *file));
+                auto spans = common::unwrap(
+                    dftracer::utils::index::spans(snapshot, *file));
 
                 std::vector<LineRange> ranges;
                 std::uint64_t prev_idx = UINT64_MAX;
@@ -433,8 +434,9 @@ void TraceReader::probe_index() {
     format_ = CheckpointIndexerFactory::detect_format(config_.file_path);
     index_path_ = dftu_internal::determine_index_path(config_.file_path,
                                                       config_.index_dir);
-    has_index_ = format_ == ArchiveFormat::Gzip &&
-                 fs::exists(dftracer::utils::index::store_dir(index_path_));
+    has_index_ =
+        format_ == common::ArchiveFormat::Gzip &&
+        common::fs::exists(dftracer::utils::index::store_dir(index_path_));
     // Do not trust an index whose source changed since it was built; fall back
     // to a raw read rather than serving stale data. Uses the shared stat-based
     // freshness predicate, so a record with no stored stat is treated as stale
@@ -443,9 +445,9 @@ void TraceReader::probe_index() {
         auto snapshot =
             dftracer::utils::index::plan::open_snapshot(index_path_);
         if (snapshot) {
-            dftracer::utils::InputFileStat st;
+            dftracer::utils::common::InputFileStat st;
             dftracer::utils::index::SourceStat now;
-            if (dftracer::utils::stat_input(config_.file_path, st)) {
+            if (dftracer::utils::common::stat_input(config_.file_path, st)) {
                 now.mtime = static_cast<std::uint64_t>(st.mtime);
                 now.size = st.size;
             }
@@ -756,7 +758,7 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
             range_type == internal::RangeType::ByteRange) {
             auto parsed = Query::from_string(config.query);
             if (!parsed) throw duql::DuqlParseError(parsed.error());
-            auto snapshot = unwrap(
+            auto snapshot = common::unwrap(
                 dftracer::utils::index::plan::open_snapshot(index_path_));
             // GCC 12 destroys a temporary built inside co_await twice.
             dftracer::utils::index::plan::PruneRequest prune_req{
@@ -782,7 +784,7 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
             if (chunk.empty()) break;
             co_yield chunk;
         }
-    } else if (format_ == ArchiveFormat::Gzip) {
+    } else if (format_ == common::ArchiveFormat::Gzip) {
         auto gen =
             fileio::lines::sources::async_streaming_gz_lines(config_.file_path);
         std::size_t byte_pos = 0;

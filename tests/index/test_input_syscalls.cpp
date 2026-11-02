@@ -109,7 +109,7 @@ std::vector<std::string> replay_args(const std::string& in, const std::string&,
 
 std::string canonical_or_empty(const std::string& path) {
     std::error_code ec;
-    auto p = fs::weakly_canonical(path, ec);
+    auto p = dftracer::utils::common::fs::weakly_canonical(path, ec);
     return ec ? std::string() : p.string();
 }
 
@@ -130,7 +130,7 @@ RunCounts run_once(const std::string& binary,
     RunCounts rc;
     rc.per_input.resize(inputs.size());
     std::error_code ec;
-    fs::remove(log_path, ec);
+    dftracer::utils::common::fs::remove(log_path, ec);
 
     dftu_utils_test::set_test_library_path(binary);
     ::setenv(PRELOAD_VAR, DFTRACER_UTILS_TEST_INTERPOSE_PATH, 1);
@@ -159,7 +159,8 @@ RunCounts run_once(const std::string& binary,
         const std::size_t n = std::stoul(line.substr(t1 + 1, t2 - t1 - 1));
         const std::string path = line.substr(t2 + 1);
         if (path.empty() || path[0] != '/') continue;
-        if (cls == "stat" && fs::path(path).filename() == "schemas")
+        if (cls == "stat" &&
+            dftracer::utils::common::fs::path(path).filename() == "schemas")
             rc.schema_lookups += n;
         auto it = canon_cache.find(path);
         if (it == canon_cache.end())
@@ -229,7 +230,7 @@ void run_tool(const Tool& tool) {
     if (tool.name == "comparator") roots.push_back(in + "_variant");
     std::vector<std::string> inputs;
     for (const auto& root : roots) {
-        fs::create_directories(root + "/sub");
+        dftracer::utils::common::fs::create_directories(root + "/sub");
         for (int i = 0; i < 4; ++i)
             inputs.push_back(root + "/trace_" + std::to_string(i) + ".pfw.gz");
         inputs.push_back(root + "/sub/trace_4.pfw.gz");
@@ -241,8 +242,8 @@ void run_tool(const Tool& tool) {
 
     const std::string idx = dir.file("idx");
     const std::string out = dir.file("out");
-    fs::create_directories(idx);
-    fs::create_directories(out);
+    dftracer::utils::common::fs::create_directories(idx);
+    dftracer::utils::common::fs::create_directories(out);
     const auto args = tool.args(in, idx, out);
 
     const auto cold =
@@ -264,8 +265,8 @@ TEST_CASE("a cold index build looks for the schemas folder once per root") {
     dftu_utils_test::ScopedTestDir dir("input_syscalls_schemas");
     const std::string in = dir.file("in");
     const std::string idx = dir.file("idx");
-    fs::create_directories(in);
-    fs::create_directories(idx);
+    dftracer::utils::common::fs::create_directories(in);
+    dftracer::utils::common::fs::create_directories(idx);
     constexpr int FILES = 24;
     std::vector<std::string> inputs;
     for (int i = 0; i < FILES; ++i) {

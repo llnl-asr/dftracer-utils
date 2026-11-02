@@ -9,7 +9,7 @@
 #include <string_view>
 #include <utility>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// The id of a string in an InternTable, or NONE. Ids of two tables must not
 /// mix.
@@ -146,6 +146,6 @@ class InternScope {
     InternTable* previous_;
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_INTERN_TABLE_H

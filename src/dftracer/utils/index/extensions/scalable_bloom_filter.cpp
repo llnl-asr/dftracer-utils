@@ -137,15 +137,15 @@ ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
     std::size_t cursor = CHAIN_HEADER_SIZE;
     for (std::uint32_t i = 0; i < count; ++i) {
         if (cursor + sizeof(std::uint32_t) > size) {
-            throw DFTUtilsException(
-                ErrorCode::Parse,
+            throw common::DFTUtilsException(
+                common::ErrorCode::Parse,
                 "ScalableBloomFilter::from_blob: truncated level header");
         }
         const std::size_t blob_size = dstd::read_u32_le(data + cursor);
         cursor += sizeof(std::uint32_t);
         if (cursor + blob_size > size) {
-            throw DFTUtilsException(
-                ErrorCode::Parse,
+            throw common::DFTUtilsException(
+                common::ErrorCode::Parse,
                 "ScalableBloomFilter::from_blob: truncated level payload");
         }
         auto filter = BloomFilter::from_blob(data + cursor, blob_size);

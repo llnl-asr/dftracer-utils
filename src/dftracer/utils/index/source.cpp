@@ -35,8 +35,8 @@ struct Member {
 };
 
 [[noreturn]] void bad(std::string_view origin, const std::string& why) {
-    throw DFTUtilsException::cat(ErrorCode::InvalidArgument, "source of ",
-                                 origin, ": ", why);
+    throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
+                                         "source of ", origin, ": ", why);
 }
 
 syn::Program parse_members(std::string_view text, std::string_view origin) {

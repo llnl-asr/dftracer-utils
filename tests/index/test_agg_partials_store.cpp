@@ -88,7 +88,7 @@ std::string write_trace(const std::string& dir, int n,
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 
@@ -120,7 +120,7 @@ struct Stored {
 };
 
 index::Snapshot open_index(const std::string& index_path) {
-    return unwrap(index::plan::open_snapshot(index_path));
+    return common::unwrap(index::plan::open_snapshot(index_path));
 }
 
 index::FileRef file_of(const index::Snapshot& snapshot,
@@ -134,7 +134,7 @@ Stored read_partials(const index::Snapshot& snapshot,
                      const index::FileRef& file,
                      const agg::AggInternTable& dictionary) {
     Stored out;
-    unwrap(index::for_each_agg_partial(
+    common::unwrap(index::for_each_agg_partial(
         snapshot, file,
         [&](std::uint32_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t, std::uint32_t, agg::PartialKind,
@@ -189,12 +189,12 @@ std::map<std::string, std::string> agg_rows(const std::string& file,
     const auto snapshot = open_index(index_path);
     const auto stored_file = file_of(snapshot, file);
     auto dictionary = agg::make_intern_table();
-    unwrap(index::agg_dictionary(snapshot, *dictionary));
+    common::unwrap(index::agg_dictionary(snapshot, *dictionary));
     const auto text = [&](std::uint32_t id) {
         return std::string(dictionary->intern.resolve(id));
     };
     std::map<std::string, std::string> rows;
-    unwrap(index::for_each_agg_partial(
+    common::unwrap(index::for_each_agg_partial(
         snapshot, stored_file,
         [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
@@ -205,7 +205,7 @@ std::map<std::string, std::string> agg_rows(const std::string& file,
                          std::string(bytes.begin(), bytes.end()));
             return true;
         }));
-    unwrap(index::for_each_agg_chunk_columns(
+    common::unwrap(index::for_each_agg_chunk_columns(
         snapshot, stored_file,
         [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
             std::ostringstream value;
@@ -276,7 +276,7 @@ TEST_SUITE("AggPartialsStore") {
             trace::internal::determine_index_path(files[0], index_dir);
         const auto snapshot = open_index(index_path);
         auto dictionary = agg::make_intern_table();
-        unwrap(index::agg_dictionary(snapshot, *dictionary));
+        common::unwrap(index::agg_dictionary(snapshot, *dictionary));
 
         std::map<Key, agg::AggPartial> all;
         std::size_t stored = 0;
@@ -284,7 +284,7 @@ TEST_SUITE("AggPartialsStore") {
         for (int n = 0; n < FILES; ++n) {
             const auto stored_file = file_of(snapshot, files[n]);
             const auto members =
-                unwrap(index::members(snapshot, stored_file)).size();
+                common::unwrap(index::members(snapshot, stored_file)).size();
             REQUIRE(members > 1);
 
             const auto file = read_partials(snapshot, stored_file, *dictionary);
@@ -331,7 +331,7 @@ TEST_SUITE("AggPartialsStore") {
         {
             const auto snapshot = open_index(index_path);
             auto dictionary = agg::make_intern_table();
-            unwrap(index::agg_dictionary(snapshot, *dictionary));
+            common::unwrap(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
                 before.push_back(
                     read_partials(snapshot, file_of(snapshot, f), *dictionary)
@@ -343,9 +343,9 @@ TEST_SUITE("AggPartialsStore") {
         // An index of an earlier build: another params hash and no partials.
         // The empty copy of each file replaces its whole tier.
         {
-            auto target = unwrap(index::Index::open(index_path));
-            const auto config =
-                unwrap(agg::tier::read_config(unwrap(target.snapshot())));
+            auto target = common::unwrap(index::Index::open(index_path));
+            const auto config = common::unwrap(
+                agg::tier::read_config(common::unwrap(target.snapshot())));
             REQUIRE(config);
             auto old = *config;
             old.params_hash ^= 1;
@@ -379,7 +379,7 @@ TEST_SUITE("AggPartialsStore") {
         {
             const auto snapshot = open_index(index_path);
             auto dictionary = agg::make_intern_table();
-            unwrap(index::agg_dictionary(snapshot, *dictionary));
+            common::unwrap(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files)
                 CHECK(read_partials(snapshot, file_of(snapshot, f), *dictionary)
                           .count == 0);
@@ -389,7 +389,7 @@ TEST_SUITE("AggPartialsStore") {
 
         const auto rebuilt = open_index(index_path);
         auto dictionary = agg::make_intern_table();
-        unwrap(index::agg_dictionary(rebuilt, *dictionary));
+        common::unwrap(index::agg_dictionary(rebuilt, *dictionary));
         for (std::size_t i = 0; i < files.size(); ++i)
             CHECK(
                 read_partials(rebuilt, file_of(rebuilt, files[i]), *dictionary)
@@ -411,7 +411,7 @@ TEST_SUITE("AggPartialsStore") {
         {
             const auto snapshot = open_index(index_path);
             auto dictionary = agg::make_intern_table();
-            unwrap(index::agg_dictionary(snapshot, *dictionary));
+            common::unwrap(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
                 before.push_back(
                     read_partials(snapshot, file_of(snapshot, f), *dictionary)
@@ -422,7 +422,7 @@ TEST_SUITE("AggPartialsStore") {
         // An index of an earlier build: no config record where it is kept now
         // and a partial whose key tail is the older 12 bytes.
         {
-            auto target = unwrap(index::Index::open(index_path));
+            auto target = common::unwrap(index::Index::open(index_path));
             REQUIRE(default_runtime()
                         .submit(index::delete_agg_meta(target, "config"))
                         .get()
@@ -458,9 +458,9 @@ TEST_SUITE("AggPartialsStore") {
         }
         {
             const auto snapshot = open_index(index_path);
-            CHECK_FALSE(unwrap(agg::tier::read_config(snapshot)));
+            CHECK_FALSE(common::unwrap(agg::tier::read_config(snapshot)));
             auto dictionary = agg::make_intern_table();
-            unwrap(index::agg_dictionary(snapshot, *dictionary));
+            common::unwrap(index::agg_dictionary(snapshot, *dictionary));
             CHECK_THROWS(read_partials(snapshot, file_of(snapshot, files[0]),
                                        *dictionary));
         }
@@ -468,9 +468,9 @@ TEST_SUITE("AggPartialsStore") {
         build_seconds(files, index_dir);
 
         const auto rebuilt = open_index(index_path);
-        CHECK(unwrap(agg::tier::read_config(rebuilt)));
+        CHECK(common::unwrap(agg::tier::read_config(rebuilt)));
         auto dictionary = agg::make_intern_table();
-        unwrap(index::agg_dictionary(rebuilt, *dictionary));
+        common::unwrap(index::agg_dictionary(rebuilt, *dictionary));
         for (std::size_t i = 0; i < files.size(); ++i)
             CHECK(
                 read_partials(rebuilt, file_of(rebuilt, files[i]), *dictionary)
@@ -555,7 +555,7 @@ TEST_SUITE("AggPartialsStore") {
     // fold has staged runs, so no write commits after that.
     TEST_CASE("a build killed after runs" * doctest::skip()) {
         fresh_process::announce();
-        const auto env_dir = Env::get<std::string_view>(CRASH_DIR_ENV);
+        const auto env_dir = common::Env::get<std::string_view>(CRASH_DIR_ENV);
         REQUIRE(env_dir.has_value());
         const std::string dir(*env_dir);
         const auto files = crash_files(dir);

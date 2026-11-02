@@ -152,7 +152,7 @@ TEST_SUITE("SerialStages") {
     TEST_CASE("a directory scan stats its files in parallel batches") {
         dftu_utils_test::TestEnvironment env(10);
         const std::string dir = env.get_dir() + "/scan";
-        fs::create_directories(dir + "/sub");
+        common::fs::create_directories(dir + "/sub");
         for (int i = 0; i < SCAN_FILES; ++i)
             write_sized_file(dir + "/f" + std::to_string(i) + ".pfw",
                              static_cast<std::size_t>(i) * 7 + 1);
@@ -162,10 +162,10 @@ TEST_SUITE("SerialStages") {
         write_sized_file(dir + "/skip.txt", 5);
 
         std::vector<std::string> expected;
-        for (const auto& e : fs::directory_iterator(dir))
+        for (const auto& e : common::fs::directory_iterator(dir))
             if (e.is_regular_file() && e.path().extension() == ".pfw")
                 expected.push_back(e.path().string());
-        for (const auto& e : fs::directory_iterator(dir + "/sub"))
+        for (const auto& e : common::fs::directory_iterator(dir + "/sub"))
             expected.push_back(e.path().string());
 
         const auto before = scan::scan_stat_batches().load();
@@ -177,7 +177,7 @@ TEST_SUITE("SerialStages") {
         for (std::size_t i = 0; i < entries.size(); ++i) {
             CHECK(entries[i].path.string() == expected[i]);
             CHECK(entries[i].is_regular_file);
-            CHECK(entries[i].size == fs::file_size(entries[i].path));
+            CHECK(entries[i].size == common::fs::file_size(entries[i].path));
             CHECK(entries[i].mtime > 0);
         }
         CHECK(batches > 2);
@@ -186,8 +186,8 @@ TEST_SUITE("SerialStages") {
     TEST_CASE("a CLI scan stats its files on the pool, not the main thread") {
         dftu_utils_test::TestEnvironment env(10);
         const std::string dir = env.get_dir() + "/cli_scan";
-        fs::create_directories(dir + "/a");
-        fs::create_directories(dir + "/b");
+        common::fs::create_directories(dir + "/a");
+        common::fs::create_directories(dir + "/b");
         for (int i = 0; i < SCAN_FILES; ++i)
             write_sized_file(
                 dir + (i % 2 ? "/a/f" : "/b/f") + std::to_string(i) + ".pfw",

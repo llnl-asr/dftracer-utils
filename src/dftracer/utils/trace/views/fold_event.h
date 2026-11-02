@@ -547,7 +547,8 @@ inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
     bool ok = false;
     simdjson::dom::element v = resolve_json_path(root, name, ok);
     const bool schema_field = !is_nested_path(name) && is_schema_field(name);
-    if (!ok && !schema_field && !dftracer::utils::has_args_prefix(name)) {
+    if (!ok && !schema_field &&
+        !dftracer::utils::common::has_args_prefix(name)) {
         simdjson::dom::element args;
         if (root["args"].get(args) == simdjson::SUCCESS)
             v = resolve_json_path(args, name, ok);

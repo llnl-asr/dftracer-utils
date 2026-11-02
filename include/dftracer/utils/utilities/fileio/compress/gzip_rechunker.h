@@ -110,18 +110,20 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
                                                     std::size_t member_size,
                                                     int level) {
     if (member_size == 0)
-        member_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        member_size = common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     if (level < 0) level = 6;
 
     ssize_t in_fd_res = co_await io::open(in_path.c_str(), O_RDONLY);
     if (in_fd_res < 0) {
-        throw DFTUtilsException(ErrorCode::Io, "Cannot open file: " + in_path);
+        throw common::DFTUtilsException(common::ErrorCode::Io,
+                                        "Cannot open file: " + in_path);
     }
-    ScopedFd in_fd(static_cast<int>(in_fd_res));
+    common::ScopedFd in_fd(static_cast<int>(in_fd_res));
 
     struct stat st;
     if (::fstat(in_fd.get(), &st) != 0) {
-        throw DFTUtilsException(ErrorCode::Io, "Cannot stat file: " + in_path);
+        throw common::DFTUtilsException(common::ErrorCode::Io,
+                                        "Cannot stat file: " + in_path);
     }
     const auto file_size = static_cast<std::uint64_t>(st.st_size);
     unsigned char magic[2] = {0, 0};
@@ -130,14 +132,15 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
 
     GzipStreamInflater gz;
     if (!plain && !gz.init(15 + 16)) {
-        throw DFTUtilsException(ErrorCode::Compression,
-                                "cannot open a gzip stream for " + in_path);
+        throw common::DFTUtilsException(
+            common::ErrorCode::Compression,
+            "cannot open a gzip stream for " + in_path);
     }
 
     GzipWriterOptions opts;
     opts.member_size = member_size;
     opts.level = level;
-    auto writer = unwrap(co_await GzipLineWriter::open(out_path, opts));
+    auto writer = common::unwrap(co_await GzipLineWriter::open(out_path, opts));
 
     std::vector<unsigned char> in(1u << 20);
     std::vector<unsigned char> out(1u << 20);
@@ -152,7 +155,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
             co_return;
         }
         carry.append(text.substr(0, nl + 1));
-        unwrap(co_await writer.append(carry));
+        common::unwrap(co_await writer.append(carry));
         carry.assign(text.substr(nl + 1));
     };
 
@@ -200,10 +203,10 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
     }
 
     if (!ok) {
-        throw DFTUtilsException(ErrorCode::Compression,
-                                "decompression failed for " + in_path);
+        throw common::DFTUtilsException(common::ErrorCode::Compression,
+                                        "decompression failed for " + in_path);
     }
-    unwrap(co_await writer.close(carry));
+    common::unwrap(co_await writer.close(carry));
 }
 
 }  // namespace dftracer::utils::utilities::fileio::compress

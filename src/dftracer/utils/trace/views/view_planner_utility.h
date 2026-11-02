@@ -59,7 +59,7 @@ struct ViewPlannerOutput {
 };
 
 struct ViewPlannerUtility {
-    coro::CoroTask<Result<ViewPlannerOutput>> operator()(
+    coro::CoroTask<common::Result<ViewPlannerOutput>> operator()(
         const ViewPlannerInput& input);
 };
 

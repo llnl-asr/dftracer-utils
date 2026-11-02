@@ -205,6 +205,6 @@ TEST_SUITE("ResultJoin") {
         b.columns.push_back(dataframe::Series::flat_f64(keys, 2));
         b.columns.push_back(dataframe::Series::flat_f64(keys, 2));
         CHECK_THROWS_AS(join_batches(b, b, 1, JoinType::Inner),
-                        dftracer::utils::DFTUtilsException);
+                        dftracer::utils::common::DFTUtilsException);
     }
 }

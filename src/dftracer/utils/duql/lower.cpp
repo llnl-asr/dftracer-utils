@@ -2863,8 +2863,8 @@ class Lowering {
                                 ? "date_part() takes a string part"
                                 : "format_time() takes a string format");
             if (info->fn == duql::Fn::DatePart) {
-                DatePart part;
-                if (!parse_date_part(text, &part))
+                common::DatePart part;
+                if (!common::parse_date_part(text, &part))
                     fail(at.span,
                          "Unknown date part '" + text +
                              "'; use year, month, day, hour, minute, "
@@ -2872,7 +2872,7 @@ class Lowering {
                              "day_of_week, day_of_year, quarter, iso_week "
                              "or iso_year");
                 t.part = static_cast<std::int32_t>(part);
-            } else if (const auto bad = invalid_time_format(text);
+            } else if (const auto bad = common::invalid_time_format(text);
                        !bad.empty()) {
                 fail(at.span, "Unknown time format directive '" +
                                   std::string(bad) + "' in format_time()");

@@ -229,7 +229,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                 co_return;
             }(std::move(gen));
 
-            CHECK_THROWS_AS(task.get(), dftracer::utils::DFTUtilsException);
+            CHECK_THROWS_AS(task.get(), common::DFTUtilsException);
         }
 
         SUBCASE("Non-existent file throws") {

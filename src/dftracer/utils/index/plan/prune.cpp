@@ -44,7 +44,7 @@ class Reads {
     explicit Reads(const PruneRequest& request)
         : request_(request), snapshot_(request.snapshot) {}
 
-    Result<const index::Snapshot*> get() {
+    common::Result<const index::Snapshot*> get() {
         if (!snapshot_) {
             auto taken = open_snapshot(request_.index_path);
             if (!taken) return dstd::Unexpected(std::move(taken).error());
@@ -60,8 +60,8 @@ class Reads {
     std::optional<index::Snapshot> owned_;
 };
 
-coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request,
-                                               Reads& reads) {
+coro::CoroTask<common::Result<PruneResult>> prune_data(
+    const PruneRequest& request, Reads& reads) {
     PruneResult result;
 
     if (request.query && !request.index_path.empty()) {
@@ -69,7 +69,8 @@ coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request,
         // A temporary built inside the co_await expression is destroyed
         // twice by GCC 12, so the input is a named local.
         const ChunkPrunerInput input{request.index_path, request.file_path,
-                                     *request.query, unwrap(reads.get())};
+                                     *request.query,
+                                     common::unwrap(reads.get())};
         auto out = co_await pruner(input);
         if (out.success) {
             result.total_chunks = out.total_checkpoints;
@@ -95,7 +96,7 @@ coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request,
         bounds;
     ankerl::unordered_dense::set<std::uint64_t> no_starts;
     try {
-        const index::Snapshot& snapshot = *unwrap(reads.get());
+        const index::Snapshot& snapshot = *common::unwrap(reads.get());
         const auto file =
             snapshot.file(store::internal::get_logical_path(request.file_path));
         if (!file) co_return result;
@@ -111,9 +112,9 @@ coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request,
                 end > 0 ? static_cast<std::uint64_t>(std::ceil(end))
                         : std::numeric_limits<std::uint64_t>::max());
     } catch (const std::exception& e) {
-        co_return make_error(ErrorCode::Indexer,
-                             "prune_file: index read failed for " +
-                                 request.file_path + ": " + e.what());
+        co_return common::make_error(common::ErrorCode::Indexer,
+                                     "prune_file: index read failed for " +
+                                         request.file_path + ": " + e.what());
     }
 
     if (result.all_chunks) {
@@ -133,14 +134,14 @@ coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request,
 
 }  // namespace
 
-Result<index::Snapshot> open_snapshot(const std::string& index_path) {
+common::Result<index::Snapshot> open_snapshot(const std::string& index_path) {
     auto opened =
         Index::open(store::internal::normalize_index_root(index_path));
     if (!opened) return dstd::Unexpected(std::move(opened).error());
     return opened->snapshot();
 }
 
-coro::CoroTask<Result<PruneResult>> prune_file(PruneRequest request) {
+coro::CoroTask<common::Result<PruneResult>> prune_file(PruneRequest request) {
     PruneResult result;
     Reads reads(request);
     if (request.metadata != MetadataUse::Records) {
@@ -155,14 +156,15 @@ coro::CoroTask<Result<PruneResult>> prune_file(PruneRequest request) {
     dstd::Optional<dstd::HashMap<std::uint64_t, store::ChunkMetadata>> meta;
     if (!request.index_path.empty()) {
         try {
-            const index::Snapshot& snapshot = *unwrap(reads.get());
+            const index::Snapshot& snapshot = *common::unwrap(reads.get());
             if (const auto file = snapshot.file(
                     store::internal::get_logical_path(request.file_path)))
-                meta = unwrap(index::chunk_meta(snapshot, *file));
+                meta = common::unwrap(index::chunk_meta(snapshot, *file));
         } catch (const std::exception& e) {
-            co_return make_error(ErrorCode::Indexer,
-                                 "prune_file: index read failed for " +
-                                     request.file_path + ": " + e.what());
+            co_return common::make_error(common::ErrorCode::Indexer,
+                                         "prune_file: index read failed for " +
+                                             request.file_path + ": " +
+                                             e.what());
         }
     }
     if (!meta) co_return PruneResult{};

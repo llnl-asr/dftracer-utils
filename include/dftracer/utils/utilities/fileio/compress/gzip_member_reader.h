@@ -33,8 +33,9 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
 
     GzipMemberDecompressor dec;
     if (!dec.valid()) {
-        throw DFTUtilsException(ErrorCode::Compression,
-                                "failed to allocate libdeflate decompressor");
+        throw common::DFTUtilsException(
+            common::ErrorCode::Compression,
+            "failed to allocate libdeflate decompressor");
     }
 
     // Both buffers grow without zero-filling: every byte is written by pread
@@ -106,8 +107,9 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
                                                           tail - head, rest)
                                 : std::nullopt;
                 if (!keep) {
-                    throw DFTUtilsException(ErrorCode::Compression,
-                                            "gzip member failed to decompress");
+                    throw common::DFTUtilsException(
+                        common::ErrorCode::Compression,
+                        "gzip member failed to decompress");
                 }
                 if (*keep > 0) {
                     co_yield std::string_view(
@@ -139,8 +141,9 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
             const ssize_t n = co_await dftracer::utils::io::pread(
                 fd, comp.get() + tail, want, static_cast<off_t>(next_read));
             if (n <= 0) {
-                throw DFTUtilsException(
-                    ErrorCode::Io, "read error while decoding gzip member");
+                throw common::DFTUtilsException(
+                    common::ErrorCode::Io,
+                    "read error while decoding gzip member");
             }
             tail += static_cast<std::size_t>(n);
             next_read += static_cast<std::uint64_t>(n);
@@ -151,8 +154,9 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
             // one.
             GzipStreamInflater zs;
             if (!zs.init(31)) {
-                throw DFTUtilsException(ErrorCode::Compression,
-                                        "failed to start a gzip stream");
+                throw common::DFTUtilsException(
+                    common::ErrorCode::Compression,
+                    "failed to start a gzip stream");
             }
             auto in =
                 std::make_unique_for_overwrite<unsigned char[]>(READ_CHUNK);
@@ -169,8 +173,8 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
                     const ssize_t n = co_await dftracer::utils::io::pread(
                         fd, in.get(), want, static_cast<off_t>(stream_read));
                     if (n <= 0) {
-                        throw DFTUtilsException(
-                            ErrorCode::Io,
+                        throw common::DFTUtilsException(
+                            common::ErrorCode::Io,
                             "read error while decoding gzip member");
                     }
                     zs.set_input(in.get(), static_cast<std::size_t>(n));
@@ -183,8 +187,9 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
                     ended = true;
                 } else if (rc != InflateStatus::Ok &&
                            rc != InflateStatus::BufError) {
-                    throw DFTUtilsException(ErrorCode::Compression,
-                                            "gzip member failed to decompress");
+                    throw common::DFTUtilsException(
+                        common::ErrorCode::Compression,
+                        "gzip member failed to decompress");
                 } else if (zs.avail_in() == 0 && stream_read >= file_size &&
                            zs.avail_out() != 0) {
                     cut = true;
@@ -195,8 +200,8 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
                     if (!ended) {
                         while (keep > 0 && out[keep - 1] != '\n') --keep;
                         if (keep == 0) {
-                            throw DFTUtilsException(
-                                ErrorCode::Compression,
+                            throw common::DFTUtilsException(
+                                common::ErrorCode::Compression,
                                 "a line is longer than the stream buffer");
                         }
                     }
@@ -208,8 +213,9 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
             }
             if (cut) {
                 if (!recover_truncated) {
-                    throw DFTUtilsException(ErrorCode::Compression,
-                                            "gzip member failed to decompress");
+                    throw common::DFTUtilsException(
+                        common::ErrorCode::Compression,
+                        "gzip member failed to decompress");
                 }
                 std::size_t keep = filled;
                 while (keep > 0 && out[keep - 1] != '\n') --keep;

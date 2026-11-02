@@ -146,8 +146,8 @@ struct SpillDirVar {
 
 TEST_CASE("spill bytes show as external") {
     SpillDirVar var;
-    const bool on_disk = !dftracer::utils::is_memory_filesystem(
-        dftracer::utils::filesystem_kind(var.dir.string()));
+    const bool on_disk = !dftracer::utils::common::is_memory_filesystem(
+        dftracer::utils::common::filesystem_kind(var.dir.string()));
     Budget budget(GLOBAL_BUDGET);
     REQUIRE(spill_slot_bytes() == 0);
 

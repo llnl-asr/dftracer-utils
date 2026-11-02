@@ -286,14 +286,14 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
                     CHECK(s.min().str() <= s.max().str());
                 } else {
                     CHECK_THROWS_AS((void)s.min(),
-                                    dftracer::utils::DFTUtilsException);
+                                    dftracer::utils::common::DFTUtilsException);
                     CHECK_THROWS_AS((void)s.max(),
-                                    dftracer::utils::DFTUtilsException);
+                                    dftracer::utils::common::DFTUtilsException);
                 }
                 CHECK_THROWS_AS((void)s.sum(),
-                                dftracer::utils::DFTUtilsException);
+                                dftracer::utils::common::DFTUtilsException);
                 CHECK_THROWS_AS((void)s.mean(),
-                                dftracer::utils::DFTUtilsException);
+                                dftracer::utils::common::DFTUtilsException);
                 CHECK(s.arg_min() == -1);
                 CHECK(s.arg_max() == -1);
                 continue;

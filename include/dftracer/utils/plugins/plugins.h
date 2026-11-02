@@ -54,7 +54,7 @@ class Plugins {
         /// from the plugins' declared provides/consumes. The first failure
         /// names the plugin and the cause; nothing is partially built and no
         /// plugin outlives the failed call.
-        Result<Plugins> build();
+        common::Result<Plugins> build();
 
        private:
         struct State;
@@ -100,7 +100,8 @@ class Plugins {
     std::vector<PluginInfo> describe() const;
 
     /// Drive every plugin as a fold over one fused, pruned scan of `view`.
-    coro::CoroTask<Result<PluginRun>> run(const trace::views::View& view) const;
+    coro::CoroTask<common::Result<PluginRun>> run(
+        const trace::views::View& view) const;
 
     /// Attach every plugin to `session` as a fused fold branch, in fold order,
     /// so they co-scan with its other branches. Call before session.execute().

@@ -34,7 +34,7 @@ namespace dftracer::utils::utilities::filesystem {
 ///   and older `.dftindex-views`): index data, rollups and materialized views.
 /// - `split/`: the default output of the `dftracer_split` CLI.
 /// - `schemas/`: record schema specs (`*.json`, `*.yaml`) beside an index.
-inline bool is_excluded_scan_dir(const fs::path& p) {
+inline bool is_excluded_scan_dir(const common::fs::path& p) {
     const std::string name = p.filename().string();
     return name.rfind(".dftindex", 0) == 0 || name == "split" ||
            name == "schemas";
@@ -88,13 +88,13 @@ inline ScanStatThreads& scan_stat_threads() {
 }
 
 struct DirectoryScannerUtilityInput {
-    fs::path path;
+    common::fs::path path;
     bool recursive = false;
     bool populate_size = true;
 
     DirectoryScannerUtilityInput() = default;
 
-    explicit DirectoryScannerUtilityInput(fs::path p, bool rec = false,
+    explicit DirectoryScannerUtilityInput(common::fs::path p, bool rec = false,
                                           bool with_size = true)
         : path(std::move(p)), recursive(rec), populate_size(with_size) {}
 
@@ -126,17 +126,17 @@ class DirectoryScannerUtility {
      */
     coro::CoroTask<std::vector<FileEntry>> operator()(
         CoroScope& ctx, const DirectoryScannerUtilityInput& input) const {
-        dftracer::utils::InputFileStat root_stat;
-        if (!dftracer::utils::stat_input(input.path, root_stat)) {
+        dftracer::utils::common::InputFileStat root_stat;
+        if (!dftracer::utils::common::stat_input(input.path, root_stat)) {
             std::error_code root_ec(errno, std::generic_category());
             if (root_ec == std::errc::no_such_file_or_directory)
-                throw fs::filesystem_error("Directory does not exist",
-                                           input.path, root_ec);
-            throw fs::filesystem_error("Cannot stat directory", input.path,
-                                       root_ec);
+                throw common::fs::filesystem_error("Directory does not exist",
+                                                   input.path, root_ec);
+            throw common::fs::filesystem_error("Cannot stat directory",
+                                               input.path, root_ec);
         }
         if (!root_stat.is_directory) {
-            throw fs::filesystem_error(
+            throw common::fs::filesystem_error(
                 "Path is not a directory", input.path,
                 std::make_error_code(std::errc::not_a_directory));
         }
@@ -149,8 +149,8 @@ class DirectoryScannerUtility {
                                              input.populate_size);
         }
 
-        std::vector<fs::directory_entry> raw_entries;
-        for (const auto& entry : fs::directory_iterator(input.path)) {
+        std::vector<common::fs::directory_entry> raw_entries;
+        for (const auto& entry : common::fs::directory_iterator(input.path)) {
             raw_entries.push_back(entry);
         }
 
@@ -182,19 +182,19 @@ class DirectoryScannerUtility {
 
     struct StatBatch {
         std::vector<FileEntry> entries;
-        std::vector<fs::path> subdirs;
+        std::vector<common::fs::path> subdirs;
     };
 
     /// Classifies and stats one slice of a directory listing. A symlink to a
     /// directory is listed, not entered.
-    static StatBatch stat_batch(const std::vector<fs::directory_entry>& listing,
-                                std::size_t begin, std::size_t end,
-                                bool populate_size) {
+    static StatBatch stat_batch(
+        const std::vector<common::fs::directory_entry>& listing,
+        std::size_t begin, std::size_t end, bool populate_size) {
         scan_stat_batches().fetch_add(1, std::memory_order_relaxed);
         scan_stat_threads().note();
         StatBatch out;
         for (std::size_t i = begin; i < end; ++i) {
-            const fs::directory_entry& entry = listing[i];
+            const common::fs::directory_entry& entry = listing[i];
             std::error_code ec;
             if (!entry.is_symlink(ec) && entry.is_directory(ec)) {
                 if (is_excluded_scan_dir(entry.path())) continue;
@@ -213,18 +213,18 @@ class DirectoryScannerUtility {
     /// @p ctx, as many at once as @p gate admits. An unreadable directory is
     /// skipped rather than aborting the scan.
     static coro::CoroTask<std::vector<FileEntry>> scan_parallel(
-        CoroScope& ctx, std::shared_ptr<coro::AdaptiveGate> gate, fs::path dir,
-        bool populate_size) {
-        std::vector<fs::directory_entry> listing;
+        CoroScope& ctx, std::shared_ptr<coro::AdaptiveGate> gate,
+        common::fs::path dir, bool populate_size) {
+        std::vector<common::fs::directory_entry> listing;
         std::error_code ec;
-        fs::directory_iterator it(dir, ec);
-        const fs::directory_iterator end;
+        common::fs::directory_iterator it(dir, ec);
+        const common::fs::directory_iterator end;
         for (; !ec && it != end; it.increment(ec)) listing.push_back(*it);
 
         std::vector<coro::SpawnFuture<StatBatch>> batches;
         batches.reserve(listing.size() / STAT_BATCH + 1);
         auto shared_listing =
-            std::make_shared<const std::vector<fs::directory_entry>>(
+            std::make_shared<const std::vector<common::fs::directory_entry>>(
                 std::move(listing));
         for (std::size_t begin = 0; begin < shared_listing->size();
              begin += STAT_BATCH) {

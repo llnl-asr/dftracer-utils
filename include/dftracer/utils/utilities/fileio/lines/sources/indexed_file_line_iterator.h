@@ -172,8 +172,8 @@ class IndexedFileLineIterator {
    private:
     void validate_and_initialize() {
         if (!config_.reader()) {
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "Reader cannot be null");
+            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                            "Reader cannot be null");
         }
 
         // Validate range based on type
@@ -192,14 +192,15 @@ class IndexedFileLineIterator {
                 config_.start(), config_.end());
 
             if (config_.start() < 1 || config_.end() < config_.start()) {
-                throw DFTUtilsException(
-                    ErrorCode::InvalidArgument,
+                throw common::DFTUtilsException(
+                    common::ErrorCode::InvalidArgument,
                     "Invalid line range (must be 1-based and start <= end)");
             }
         } else {
             if (config_.end() < config_.start()) {
-                throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                        "Invalid byte range (start <= end)");
+                throw common::DFTUtilsException(
+                    common::ErrorCode::InvalidArgument,
+                    "Invalid byte range (start <= end)");
             }
         }
 
@@ -226,7 +227,8 @@ class IndexedFileLineIterator {
 
         stream_ = config_.reader()->stream(stream_config);
         if (!stream_) {
-            throw DFTUtilsException(ErrorCode::Io, "Failed to create stream");
+            throw common::DFTUtilsException(common::ErrorCode::Io,
+                                            "Failed to create stream");
         }
     }
 
@@ -300,8 +302,8 @@ class IndexedFileLineIterator {
      */
     Line next() {
         if (!has_next()) {
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "No more lines available");
+            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                            "No more lines available");
         }
 
         // Return the buffered line

@@ -3,7 +3,7 @@
 
 #include <new>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 InternRef InternTable::create() {
     auto handle = memory::Manager::get().root().child(
@@ -38,4 +38,4 @@ InternTable* current_intern() noexcept {
 
 void enter_intern(InternTable* table) noexcept { memory::set_task_user(table); }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

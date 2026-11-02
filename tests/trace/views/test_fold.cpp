@@ -217,7 +217,7 @@ TEST_SUITE("Fold") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         {
             StringSink s;

@@ -17,7 +17,7 @@ std::string DuqlError::format() const {
 }
 
 DuqlParseError::DuqlParseError(DuqlError err)
-    : DFTUtilsException(
+    : common::DFTUtilsException(
           dftracer::utils::dstd::Error{DuqlErrc::Parse, err.format()}),
       err_(std::move(err)) {}
 

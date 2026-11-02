@@ -7,7 +7,8 @@
 
 namespace dftracer::utils {
 
-void RunLoop::enqueue(std::coroutine_handle<> handle, TaskIndex /*task_id*/) {
+void RunLoop::enqueue(std::coroutine_handle<> handle,
+                      common::TaskIndex /*task_id*/) {
     if (!handle) return;
     // Notify under the lock: once it drops, the owner can finish and destroy
     // this loop, cv included.
@@ -26,10 +27,11 @@ void RunLoop::schedule_destroy(std::coroutine_handle<> handle) {
     pending_destroy_.push_back(handle);
 }
 
-void RunLoop::mark_coro_completed(TaskIndex /*id*/) {}
+void RunLoop::mark_coro_completed(common::TaskIndex /*id*/) {}
 
 io::IoBackend& RunLoop::io_backend() {
-    throw DFTUtilsException(ErrorCode::Pipeline, "RunLoop has no I/O backend");
+    throw common::DFTUtilsException(common::ErrorCode::Pipeline,
+                                    "RunLoop has no I/O backend");
 }
 
 void RunLoop::drive_until(const std::function<bool()>& done) {
@@ -87,8 +89,8 @@ void RunLoop::drain_destroys() {
 }
 
 void RunLoop::throw_stalled() {
-    throw DFTUtilsException(
-        ErrorCode::Pipeline,
+    throw common::DFTUtilsException(
+        common::ErrorCode::Pipeline,
         "RunLoop stalled: no runnable coroutines but the awaited work has "
         "not completed. Something is waiting on a resumption that will "
         "never arrive.");

@@ -108,7 +108,7 @@ class Generator {
             if (handle_ && !handle_.done()) {
                 handle_.resume();
                 if (handle_.promise().exception_) {
-                    rethrow_and_clear(handle_.promise().exception_);
+                    common::rethrow_and_clear(handle_.promise().exception_);
                 }
             }
             return *this;
@@ -128,8 +128,8 @@ class Generator {
          */
         reference operator*() const {
             if (!handle_ || !handle_.promise().current_value_) {
-                throw DFTUtilsException(
-                    ErrorCode::InvalidArgument,
+                throw common::DFTUtilsException(
+                    common::ErrorCode::InvalidArgument,
                     "Generator iterator: no value available");
             }
             return *handle_.promise().current_value_;
@@ -207,7 +207,7 @@ class Generator {
         handle_.resume();
 
         if (handle_.promise().exception_) {
-            rethrow_and_clear(handle_.promise().exception_);
+            common::rethrow_and_clear(handle_.promise().exception_);
         }
 
         if (handle_.done()) {
@@ -234,7 +234,7 @@ class Generator {
         handle_.resume();
 
         if (handle_.promise().exception_) {
-            rethrow_and_clear(handle_.promise().exception_);
+            common::rethrow_and_clear(handle_.promise().exception_);
         }
 
         return !handle_.done();
@@ -246,8 +246,8 @@ class Generator {
      */
     const T& value() const {
         if (!handle_ || !handle_.promise().current_value_) {
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "Generator: no value available");
+            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                            "Generator: no value available");
         }
         return *handle_.promise().current_value_;
     }
@@ -269,7 +269,7 @@ class Generator {
      */
     void rethrow_if_exception() {
         if (handle_ && handle_.promise().exception_) {
-            rethrow_and_clear(handle_.promise().exception_);
+            common::rethrow_and_clear(handle_.promise().exception_);
         }
     }
 };

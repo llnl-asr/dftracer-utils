@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARROW_EXPORT_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARROW_EXPORT_H
+#ifndef DFTRACER_UTILS_UTILITIES_ARROW_ARROW_EXPORT_H
+#define DFTRACER_UTILS_UTILITIES_ARROW_ARROW_EXPORT_H
 
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <nanoarrow/nanoarrow.hpp>
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 /**
  * Move-only RAII container for a finished Arrow record batch.
@@ -49,7 +49,7 @@ class ArrowExportResult {
     nanoarrow::UniqueArray array_;
 };
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARROW_EXPORT_H
+#endif  // DFTRACER_UTILS_UTILITIES_ARROW_ARROW_EXPORT_H

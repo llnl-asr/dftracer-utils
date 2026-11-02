@@ -29,13 +29,14 @@ struct ChunkExtractorUtilityInput {
     std::vector<std::string> files;
     /// If not empty, parallel to `files`: an open descriptor of each file, read
     /// instead of opening it. A null entry opens the file.
-    std::vector<dstd::SharedPtr<ScopedFd>> open_files;
+    std::vector<dstd::SharedPtr<common::ScopedFd>> open_files;
     std::string output_dir;
     std::string app_name;
     bool compress = false;
     bool compute_hash = true;
     /// Uncompressed bytes per gzip member.
-    std::size_t member_size_bytes = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+    std::size_t member_size_bytes =
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     /// A chunk file ends at the first member boundary at or past this many
     /// uncompressed bytes.
     std::size_t chunk_size_bytes = std::numeric_limits<std::size_t>::max();
@@ -51,7 +52,7 @@ struct ChunkExtractorUtilityInput {
     }
 
     ChunkExtractorUtilityInput& with_open_files(
-        std::vector<dstd::SharedPtr<ScopedFd>> fds) {
+        std::vector<dstd::SharedPtr<common::ScopedFd>> fds) {
         open_files = std::move(fds);
         return *this;
     }

@@ -85,7 +85,7 @@ std::string write_trace(const std::string& dir) {
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 
@@ -227,11 +227,12 @@ struct Blocks {
 Blocks blocks_of(const std::string& gz, const std::string& idx) {
     Blocks out;
     const auto index_path = trace::internal::determine_index_path(gz, idx);
-    const auto snapshot = unwrap(index::plan::open_snapshot(index_path));
+    const auto snapshot =
+        common::unwrap(index::plan::open_snapshot(index_path));
     const auto file =
         snapshot.file(index::store::internal::get_logical_path(gz));
     REQUIRE(file.has_value());
-    unwrap(index::for_each_agg_chunk_columns(
+    common::unwrap(index::for_each_agg_chunk_columns(
         snapshot, *file, [&](std::uint64_t, const agg::ChunkColumns& block) {
             ++out.total;
             bool holds_counter = false;

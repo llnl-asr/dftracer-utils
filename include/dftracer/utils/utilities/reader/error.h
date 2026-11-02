@@ -8,7 +8,7 @@
 
 namespace dftracer::utils::utilities::reader {
 
-class ReaderError : public DFTUtilsException {
+class ReaderError : public common::DFTUtilsException {
    public:
     enum Type {
         DatabaseError,
@@ -21,7 +21,8 @@ class ReaderError : public DFTUtilsException {
     };
 
     ReaderError(Type type, const std::string &message)
-        : DFTUtilsException(ErrorCode::Reader, format_message(type, message)),
+        : common::DFTUtilsException(common::ErrorCode::Reader,
+                                    format_message(type, message)),
           type_(type) {}
 
     inline Type get_type() const { return type_; }

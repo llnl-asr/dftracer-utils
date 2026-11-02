@@ -13,18 +13,19 @@
 
 using namespace dftracer::utils::utilities::fileio;
 
-static fs::path create_test_dir() {
+static dftracer::utils::common::fs::path create_test_dir() {
     auto dir =
         dftu_utils_test::make_unique_test_path("dftracer_test_compressor");
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     return dir;
 }
 
 TEST_SUITE("FileCompressor") {
     TEST_CASE("FileCompressor - Basic Compression") {
         auto test_dir = create_test_dir();
-        auto cleanup_dir = std::shared_ptr<void>(
-            nullptr, [&](void*) { fs::remove_all(test_dir); });
+        auto cleanup_dir = std::shared_ptr<void>(nullptr, [&](void*) {
+            dftracer::utils::common::fs::remove_all(test_dir);
+        });
 
         SUBCASE("Compress small text file") {
             std::string test_file = (test_dir / "test_compress.txt").string();
@@ -37,7 +38,8 @@ TEST_SUITE("FileCompressor") {
             }
             ofs.close();
 
-            auto original_size = fs::file_size(test_file);
+            auto original_size =
+                dftracer::utils::common::fs::file_size(test_file);
 
             FileCompressorUtility compressor;
 
@@ -54,7 +56,7 @@ TEST_SUITE("FileCompressor") {
             CHECK(result->compressed_size < result->original_size);
             CHECK(result->compression_ratio() > 0.0);
             CHECK(result->compression_ratio() < 1.0);
-            CHECK(fs::exists(expected_output));
+            CHECK(dftracer::utils::common::fs::exists(expected_output));
         }
 
         SUBCASE("File without a final newline") {
@@ -105,14 +107,15 @@ TEST_SUITE("FileCompressor") {
 
             REQUIRE(result.has_value());
             CHECK(result->output_path == custom_output);
-            CHECK(fs::exists(custom_output));
+            CHECK(dftracer::utils::common::fs::exists(custom_output));
         }
     }
 
     TEST_CASE("FileCompressor - Compression Levels") {
         auto test_dir = create_test_dir();
-        auto cleanup_dir = std::shared_ptr<void>(
-            nullptr, [&](void*) { fs::remove_all(test_dir); });
+        auto cleanup_dir = std::shared_ptr<void>(nullptr, [&](void*) {
+            dftracer::utils::common::fs::remove_all(test_dir);
+        });
 
         SUBCASE("Different compression levels") {
             std::string test_file = (test_dir / "test_levels.txt").string();
@@ -146,8 +149,9 @@ TEST_SUITE("FileCompressor") {
 
     TEST_CASE("FileCompressor - Large Files") {
         auto test_dir = create_test_dir();
-        auto cleanup_dir = std::shared_ptr<void>(
-            nullptr, [&](void*) { fs::remove_all(test_dir); });
+        auto cleanup_dir = std::shared_ptr<void>(nullptr, [&](void*) {
+            dftracer::utils::common::fs::remove_all(test_dir);
+        });
 
         SUBCASE("Compress file with different chunk sizes") {
             std::string test_file = (test_dir / "test_chunks.txt").string();
@@ -198,8 +202,9 @@ TEST_SUITE("FileCompressor") {
 
     TEST_CASE("FileCompressor - Error Handling") {
         auto test_dir = create_test_dir();
-        auto cleanup_dir = std::shared_ptr<void>(
-            nullptr, [&](void*) { fs::remove_all(test_dir); });
+        auto cleanup_dir = std::shared_ptr<void>(nullptr, [&](void*) {
+            dftracer::utils::common::fs::remove_all(test_dir);
+        });
 
         SUBCASE("Non-existent input file") {
             FileCompressorUtility compressor;
@@ -209,10 +214,11 @@ TEST_SUITE("FileCompressor") {
             auto result = compressor(input).get();
 
             REQUIRE(!result);
-            CHECK(result.error().is_code(dftracer::utils::ErrorCode::NotFound));
+            CHECK(result.error().is_code(
+                dftracer::utils::common::ErrorCode::NotFound));
             CHECK(result.error().message().find("does not exist") !=
                   std::string::npos);
-            CHECK(!fs::exists(non_existent + ".gz"));
+            CHECK(!dftracer::utils::common::fs::exists(non_existent + ".gz"));
         }
 
         SUBCASE("Empty file") {
@@ -230,7 +236,7 @@ TEST_SUITE("FileCompressor") {
             REQUIRE(result.has_value());
             CHECK(result->original_size == 0);
             CHECK(result->compressed_size >= 0);
-            CHECK(fs::exists(output_file));
+            CHECK(dftracer::utils::common::fs::exists(output_file));
         }
 
         SUBCASE("Invalid compression level") {
@@ -247,15 +253,16 @@ TEST_SUITE("FileCompressor") {
             auto result = compressor(input).get();
 
             if (result.has_value()) {
-                CHECK(fs::exists(test_file + ".gz"));
+                CHECK(dftracer::utils::common::fs::exists(test_file + ".gz"));
             }
         }
     }
 
     TEST_CASE("FileCompressor - Binary Files") {
         auto test_dir = create_test_dir();
-        auto cleanup_dir = std::shared_ptr<void>(
-            nullptr, [&](void*) { fs::remove_all(test_dir); });
+        auto cleanup_dir = std::shared_ptr<void>(nullptr, [&](void*) {
+            dftracer::utils::common::fs::remove_all(test_dir);
+        });
 
         SUBCASE("Compress binary data") {
             std::string test_file = (test_dir / "binary.dat").string();
@@ -281,7 +288,7 @@ TEST_SUITE("FileCompressor") {
             REQUIRE(result.has_value());
             CHECK(result->original_size == data.size());
             CHECK(result->compressed_size > 0);
-            CHECK(fs::exists(output_file));
+            CHECK(dftracer::utils::common::fs::exists(output_file));
         }
     }
 }

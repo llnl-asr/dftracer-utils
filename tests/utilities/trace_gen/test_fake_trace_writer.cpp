@@ -54,8 +54,8 @@ TEST_SUITE("trace_gen::TraceWriter") {
             writer.write("]\n");
         }  // writer flushes and closes on scope exit
 
-        REQUIRE(fs::exists(gz_path));
-        CHECK(fs::file_size(gz_path) > 0);
+        REQUIRE(dftracer::utils::common::fs::exists(gz_path));
+        CHECK(dftracer::utils::common::fs::file_size(gz_path) > 0);
 
         TraceReader reader({.file_path = gz_path});
         CHECK_FALSE(reader.has_index());

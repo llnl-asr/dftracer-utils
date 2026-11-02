@@ -175,8 +175,7 @@ TEST_CASE("partition_all - empty input") {
 
 TEST_CASE("partition_all - throws on n=0") {
     std::vector<int> items{1, 2, 3};
-    CHECK_THROWS_AS(partition_all(0, items),
-                    dftracer::utils::DFTUtilsException);
+    CHECK_THROWS_AS(partition_all(0, items), common::DFTUtilsException);
 }
 
 TEST_CASE("tree_reduction_depth - various sizes") {

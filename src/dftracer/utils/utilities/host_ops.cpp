@@ -53,7 +53,7 @@ dftu_series* paths_column(const std::vector<filesystem::FileEntry>& entries,
 
 dftu_series* scan_dir(const char* root, std::int32_t root_len) {
     filesystem::DirectoryScannerUtilityInput input{
-        fs::path(to_string(root, root_len))};
+        common::fs::path(to_string(root, root_len))};
     std::vector<filesystem::FileEntry> entries;
     if (!run_sync("dftu.fs.scan_dir",
                   [&](CoroScope& scope) -> coro::CoroTask<void> {

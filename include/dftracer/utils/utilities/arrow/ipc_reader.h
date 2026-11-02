@@ -1,10 +1,10 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_IPC_READER_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_IPC_READER_H
+#ifndef DFTRACER_UTILS_UTILITIES_ARROW_IPC_READER_H
+#define DFTRACER_UTILS_UTILITIES_ARROW_IPC_READER_H
 
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 #include <cstdint>
 #include <functional>
@@ -12,16 +12,16 @@
 #include <string>
 #include <vector>
 
-namespace dftracer::utils::utilities::common::arrow::detail {
+namespace dftracer::utils::utilities::arrow::detail {
 /// Store block info separately from decoder state
 struct IpcBlock {
     std::int64_t offset;
     std::int32_t metadata_length;
     std::int64_t body_length;
 };
-}  // namespace dftracer::utils::utilities::common::arrow::detail
+}  // namespace dftracer::utils::utilities::arrow::detail
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 /**
  * RAII reader for Arrow IPC file format (.arrow).
@@ -93,7 +93,7 @@ class IpcReader {
     int read_footer();
 };
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_ARROW_IPC_READER_H
+#endif  // DFTRACER_UTILS_UTILITIES_ARROW_IPC_READER_H

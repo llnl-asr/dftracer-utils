@@ -79,12 +79,12 @@ class IndexedFileBytesIterator {
           has_buffered_line_(false),
           attempted_read_(false) {
         if (!reader_) {
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "Reader cannot be null");
+            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                            "Reader cannot be null");
         }
         if (start_byte_ >= end_byte_) {
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "Invalid byte range");
+            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                            "Invalid byte range");
         }
 
         // Resize (not reserve) to allocate the buffer with the correct size
@@ -104,7 +104,8 @@ class IndexedFileBytesIterator {
                 .from(start_byte_)
                 .to(end_byte_));
         if (!stream_) {
-            throw DFTUtilsException(ErrorCode::Io, "Failed to create stream");
+            throw common::DFTUtilsException(common::ErrorCode::Io,
+                                            "Failed to create stream");
         }
     }
 
@@ -173,8 +174,8 @@ class IndexedFileBytesIterator {
      */
     Line next() {
         if (!has_next()) {
-            throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                    "No more lines available");
+            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                            "No more lines available");
         }
 
         // Return the buffered line

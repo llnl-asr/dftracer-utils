@@ -192,7 +192,7 @@ struct ViewFile {
     /// An open read-only descriptor of the file, if the caller holds one. The
     /// first build or schema probe reads through it instead of opening the
     /// file again; the view shares it, and it closes with the last copy.
-    dstd::SharedPtr<ScopedFd> fd = nullptr;
+    dstd::SharedPtr<common::ScopedFd> fd = nullptr;
 };
 
 struct ExportStats {

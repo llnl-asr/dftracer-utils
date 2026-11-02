@@ -25,7 +25,7 @@ std::string write_records(TestEnvironment& env, const std::string& name,
     }
     const std::string gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     ix::Indexer::open({gz}).build();
     return gz;
 }

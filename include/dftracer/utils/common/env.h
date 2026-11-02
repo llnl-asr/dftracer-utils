@@ -6,7 +6,7 @@
 #include <string_view>
 #include <type_traits>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 class Env {
    public:
@@ -31,6 +31,6 @@ std::optional<int> Env::get<int>(std::string_view name);
 template <>
 std::optional<std::uint64_t> Env::get<std::uint64_t>(std::string_view name);
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_ENV_H

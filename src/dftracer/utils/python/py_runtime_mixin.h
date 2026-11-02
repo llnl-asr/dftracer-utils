@@ -105,7 +105,7 @@ bool run_blocking(F &&body) {
     PyObject *exc_type = nullptr;  // pointer read only; no Python API off-GIL
     Py_BEGIN_ALLOW_THREADS try {
         body();
-    } catch (const dftracer::utils::DFTUtilsException &e) {
+    } catch (const dftracer::utils::common::DFTUtilsException &e) {
         failed = true;
         error_msg = e.what();
         exc_type = dftracer::utils::python::py_error_type_for(e);

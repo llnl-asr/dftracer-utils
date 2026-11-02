@@ -90,7 +90,7 @@ class ChunkPruner {
     coro::CoroTask<ChunkPrunerOutput> operator()(const ChunkPrunerInput& input);
 
     /// Prune many files against the same index with one snapshot.
-    Result<ChunkPrunerBatchOutput> process_batch(
+    common::Result<ChunkPrunerBatchOutput> process_batch(
         const ChunkPrunerBatchInput& input);
 };
 

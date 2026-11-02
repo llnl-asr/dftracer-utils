@@ -74,7 +74,8 @@ struct IndexBuildResult {
 struct IndexBuildBatchConfig {
     std::vector<std::string> file_paths;
     std::string index_dir;
-    std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+    std::size_t checkpoint_size =
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t parallelism = 1;
     bool force_rebuild = false;
     /// Build the bloom/stats/dimension tier. Off skips the bloom tier, which is
@@ -114,7 +115,7 @@ struct IndexBuildBatchConfig {
     /// each file, used instead of opening it. The build takes each one out of
     /// this vector and closes it once the file is parsed. A null entry opens
     /// the file as usual.
-    std::vector<dstd::SharedPtr<ScopedFd>> input_fds;
+    std::vector<dstd::SharedPtr<common::ScopedFd>> input_fds;
 
     /// If non-empty, parallel to `file_paths`: the relative work of each file,
     /// such as its size in bytes. Runs of consecutive files are cut to equal

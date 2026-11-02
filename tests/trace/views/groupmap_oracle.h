@@ -98,7 +98,7 @@ void append_group_dim(std::string& out, const Src& src, const GroupKey& gk) {
         case GroupKey::Kind::Cat: {
             const std::size_t start = out.size();
             src.append_value(out, "cat");
-            ::dftracer::utils::detail::lower_ascii(out, start);
+            ::dftracer::utils::common::detail::lower_ascii(out, start);
             break;
         }
         case GroupKey::Kind::Pid:

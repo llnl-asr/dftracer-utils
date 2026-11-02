@@ -124,7 +124,7 @@ dstd::ByteView bytes_of(const dstd::RawBuffer<std::uint8_t>& bytes) {
 }
 
 std::uint64_t random_writer_id() {
-    const auto now = steady_now_ns();
+    const auto now = common::steady_now_ns();
     std::uint64_t seed = static_cast<std::uint64_t>(now) ^
                          (static_cast<std::uint64_t>(::getpid()) << 32U) ^
                          reinterpret_cast<std::uintptr_t>(&seed);
@@ -428,13 +428,13 @@ dstd::Expected<std::size_t, dstd::Error> move_data_files(dstd::StringView from,
             dstd::Error(dstd::Condition::Io, what + ": " + ec.message()));
     };
     std::error_code ec;
-    fs::create_directories(to_dir, ec);
+    common::fs::create_directories(to_dir, ec);
     if (ec) return io_error("store: cannot create the directory " + to_dir, ec);
 
     std::vector<std::string> names;
-    fs::directory_iterator it(from_dir, ec);
+    common::fs::directory_iterator it(from_dir, ec);
     if (ec) return io_error("store: cannot list the directory " + from_dir, ec);
-    for (; it != fs::directory_iterator(); it.increment(ec)) {
+    for (; it != common::fs::directory_iterator(); it.increment(ec)) {
         if (ec) break;
         std::error_code file_ec;
         if (!it->is_regular_file(file_ec) || file_ec) continue;
@@ -450,8 +450,8 @@ dstd::Expected<std::size_t, dstd::Error> move_data_files(dstd::StringView from,
     std::sort(names.begin(), names.end());
 
     for (const std::string& name : names) {
-        const fs::path src = fs::path(from_dir) / name;
-        fs::rename(src, fs::path(to_dir) / name, ec);
+        const common::fs::path src = common::fs::path(from_dir) / name;
+        common::fs::rename(src, common::fs::path(to_dir) / name, ec);
         if (ec) return io_error("store: cannot move " + src.string(), ec);
     }
     return names.size();

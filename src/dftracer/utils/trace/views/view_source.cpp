@@ -108,7 +108,7 @@ std::optional<std::string> pushable_field(
     if ((col == "ts" || col == "dur") && time_scale != 1.0) return std::nullopt;
     // The query DSL names a nested arg field by its bare key; a top-level field
     // is unchanged.
-    return std::string(dftracer::utils::strip_args_prefix(col));
+    return std::string(dftracer::utils::common::strip_args_prefix(col));
 }
 
 // A `col <str pred> pattern` leaf. LIKE is the same glob on both sides, so it
@@ -1180,7 +1180,7 @@ std::vector<std::string> ViewSource::row_schema() const {
             continue;
         // A flattened arg column: build_row_frame's empty-select branch
         // always names these "args.<key>", so the schemas must match.
-        out.push_back(std::string(dftracer::utils::ARGS_PREFIX) + c);
+        out.push_back(std::string(dftracer::utils::common::ARGS_PREFIX) + c);
     }
     return out;
 }
@@ -1255,8 +1255,9 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
             if (id != df::TypeId::Unknown) return df::scalar(id);
             if (harvested.empty()) harvested = scan::column_types(plan_);
             std::string_view key = detail::window_inner(name);
-            if (!by_path && key.rfind(dftracer::utils::ARGS_PREFIX, 0) == 0)
-                key.remove_prefix(dftracer::utils::ARGS_PREFIX.size());
+            if (!by_path &&
+                key.rfind(dftracer::utils::common::ARGS_PREFIX, 0) == 0)
+                key.remove_prefix(dftracer::utils::common::ARGS_PREFIX.size());
             auto it = harvested.find(std::string(key));
             return it == harvested.end() ? df::scalar(id) : it->second;
         };
@@ -1381,10 +1382,11 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     // always emits each one, null-filled where absent), matching schema().
     // An ordered scan lets workers claim at most two units each past the
     // oldest unit the cursor has not finished.
-    auto gate = v->ordered
-                    ? std::make_shared<coro::CoroSemaphore>(
-                          2 * std::max<std::size_t>(1, available_parallelism()))
-                    : nullptr;
+    auto gate =
+        v->ordered
+            ? std::make_shared<coro::CoroSemaphore>(
+                  2 * std::max<std::size_t>(1, common::available_parallelism()))
+            : nullptr;
     auto task =
         [](detail::ScanPlan vv, double ts,
            std::shared_ptr<coro::Channel<dftracer::utils::dataframe::Morsel>>
@@ -1478,10 +1480,10 @@ df::Series terminal_cell(const df::DataFrame& frame, const char* name) {
     const std::int64_t at = frame.column_index(name);
     if (at < 0 || static_cast<std::size_t>(at) >= frame.columns.size() ||
         frame.columns[static_cast<std::size_t>(at)].length() < 1)
-        throw DFTUtilsException::cat(ErrorCode::Internal,
-                                     "view terminal: the result has no '", name,
-                                     "' row (", frame.columns.size(),
-                                     " columns, ", frame.num_rows(), " rows)");
+        throw common::DFTUtilsException::cat(
+            common::ErrorCode::Internal, "view terminal: the result has no '",
+            name, "' row (", frame.columns.size(), " columns, ",
+            frame.num_rows(), " rows)");
     return frame.columns[static_cast<std::size_t>(at)].materialize();
 }
 

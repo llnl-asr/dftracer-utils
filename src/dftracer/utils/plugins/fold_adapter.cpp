@@ -33,12 +33,12 @@
 #include <sys/types.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
-#include <dftracer/utils/utilities/common/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
 #endif
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-#include <dftracer/utils/utilities/common/arrow/ipc_reader.h>
-#include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
+#include <dftracer/utils/utilities/arrow/ipc_reader.h>
+#include <dftracer/utils/utilities/arrow/ipc_writer.h>
 #endif
 
 #include <cstddef>
@@ -660,7 +660,7 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
                          [[maybe_unused]] const char* path) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (!a || !s || !path || !a->release || !s->release) return -1;
-    namespace arr = utilities::common::arrow;
+    namespace arr = utilities::arrow;
     try {
         nanoarrow::UniqueSchema schema;
         ArrowSchemaMove(s, schema.get());
@@ -698,7 +698,7 @@ int host_arrow_read_ipc(void*, [[maybe_unused]] const char* path,
                         [[maybe_unused]] ::ArrowSchema* out_schema) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (!path || !out || !out_schema) return -1;
-    namespace arr = utilities::common::arrow;
+    namespace arr = utilities::arrow;
     try {
         arr::IpcReader reader;
         if (reader.open(std::string(path)) != 0) return -1;
@@ -1114,18 +1114,19 @@ int PluginFold::close_trace_writer(::dftu_trace_writer* w) {
     int result = -1;
     try {
         fio::GzipWriterOptions opts;
-        opts.member_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
-        auto writer = unwrap(fio::GzipLineWriterBlocking::open(tw->path, opts));
+        opts.member_size = common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        auto writer =
+            common::unwrap(fio::GzipLineWriterBlocking::open(tw->path, opts));
         const std::string_view buf = tw->buffer;
         const std::size_t end = buf.rfind('\n') + 1;
         std::size_t pos = 0;
         while (pos < end) {
             std::size_t cut = buf.find('\n', pos + opts.member_size);
             cut = cut == std::string_view::npos || cut >= end ? end : cut + 1;
-            unwrap(writer.append(buf.substr(pos, cut - pos)));
+            common::unwrap(writer.append(buf.substr(pos, cut - pos)));
             pos = cut;
         }
-        unwrap(writer.close(buf.substr(end)));
+        common::unwrap(writer.close(buf.substr(end)));
         result = 0;
     } catch (...) {
         result = -1;
@@ -1217,7 +1218,8 @@ int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
                          f == "ts" || f == "dur";
         if (!c && !top)
             c = dftu_dataframe_column(
-                df, (std::string("args.") + std::string(strip_args_prefix(f)))
+                df, (std::string("args.") +
+                     std::string(common::strip_args_prefix(f)))
                         .c_str());
         if (!c) continue;
         if (!dftu_series_is_null(c, row)) {

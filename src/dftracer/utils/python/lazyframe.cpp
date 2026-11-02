@@ -853,7 +853,7 @@ PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!rt) return nullptr;
     namespace py = dftracer::utils::python;
     auto state = std::make_shared<py::StreamingState<dataframe::DataFrame>>(
-        dftracer::utils::compute_memory_budget(0));
+        dftracer::utils::common::compute_memory_budget(0));
     auto* it = reinterpret_cast<py::ArrowStreamingIteratorObject*>(
         py::ArrowStreamingIteratorType.tp_new(&py::ArrowStreamingIteratorType,
                                               nullptr, nullptr));

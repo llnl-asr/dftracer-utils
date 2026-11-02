@@ -64,7 +64,7 @@ class Watchdog {
 
     // Execution tracking
     std::chrono::steady_clock::time_point execution_start_time_;
-    std::unordered_map<TaskIndex, TaskExecution> active_tasks_;
+    std::unordered_map<common::TaskIndex, TaskExecution> active_tasks_;
     mutable std::mutex active_tasks_mutex_;
 
     // Thread management
@@ -130,14 +130,14 @@ class Watchdog {
      * @param timeout Task-specific timeout (0 = use default or no timeout)
      */
     void register_task_start(
-        TaskIndex task_id, std::shared_ptr<Task> task,
+        common::TaskIndex task_id, std::shared_ptr<Task> task,
         std::chrono::milliseconds timeout = std::chrono::milliseconds(0));
 
     /**
      * Unregister a task (called when it completes)
      * @param task_id Task identifier
      */
-    void unregister_task(TaskIndex task_id);
+    void unregister_task(common::TaskIndex task_id);
 
     /**
      * Set callback for timeout events

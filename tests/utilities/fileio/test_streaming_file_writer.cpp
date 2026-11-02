@@ -19,7 +19,8 @@ using namespace dftu_utils_test;
 using dftracer::utils::dstd::ByteView;
 
 TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
-    fs::path test_file = make_unique_test_path("test_streaming_writer.txt");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_streaming_writer.txt");
 
     SUBCASE("Write single chunk") {
         {
@@ -39,7 +40,7 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
                             std::istreambuf_iterator<char>());
         CHECK(content == "Hello, World!");
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("Write multiple chunks") {
@@ -61,7 +62,7 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
                             std::istreambuf_iterator<char>());
         CHECK(content == "First Second Third");
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("Write empty chunk") {
@@ -82,12 +83,13 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
                             std::istreambuf_iterator<char>());
         CHECK(content == "BeforeAfter");
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 }
 
 TEST_CASE("StreamingFileWriterUtility - Binary Data") {
-    fs::path test_file = make_unique_test_path("test_binary_writer.bin");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_binary_writer.bin");
 
     SUBCASE("Write binary data") {
         {
@@ -108,7 +110,7 @@ TEST_CASE("StreamingFileWriterUtility - Binary Data") {
         CHECK(content[0] == 0x00);
         CHECK(content[4] == 0xFE);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("Write null bytes") {
@@ -131,12 +133,13 @@ TEST_CASE("StreamingFileWriterUtility - Binary Data") {
         CHECK(content[1] == 0x00);
         CHECK(content[2] == 0x00);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 }
 
 TEST_CASE("StreamingFileWriterUtility - Append Mode") {
-    fs::path test_file = make_unique_test_path("test_append_writer.txt");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_append_writer.txt");
 
     // Write initial content
     {
@@ -158,13 +161,15 @@ TEST_CASE("StreamingFileWriterUtility - Append Mode") {
                         std::istreambuf_iterator<char>());
     CHECK(content == "Initial content\nAppended content\n");
 
-    fs::remove(test_file);
+    dftracer::utils::common::fs::remove(test_file);
 }
 
 TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
-    fs::path test_root = make_unique_test_path("test_nested");
-    fs::path test_dir = test_root / "dir" / "structure";
-    fs::path test_file = test_dir / "file.txt";
+    dftracer::utils::common::fs::path test_root =
+        make_unique_test_path("test_nested");
+    dftracer::utils::common::fs::path test_dir =
+        test_root / "dir" / "structure";
+    dftracer::utils::common::fs::path test_file = test_dir / "file.txt";
 
     SUBCASE("Auto-create directories") {
         {
@@ -174,10 +179,10 @@ TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
             writer.close();
         }
 
-        CHECK(fs::exists(test_file));
-        CHECK(fs::exists(test_dir));
+        CHECK(dftracer::utils::common::fs::exists(test_file));
+        CHECK(dftracer::utils::common::fs::exists(test_dir));
 
-        fs::remove_all(test_root);
+        dftracer::utils::common::fs::remove_all(test_root);
     }
 
     SUBCASE("Don't create directories") {
@@ -189,14 +194,15 @@ TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
 
 TEST_CASE("StreamingFileWriterUtility - Error Handling") {
     SUBCASE("Write to closed file") {
-        fs::path test_file = make_unique_test_path("test_closed_writer.txt");
+        dftracer::utils::common::fs::path test_file =
+            make_unique_test_path("test_closed_writer.txt");
         StreamingFileWriterUtility writer(test_file);
         writer.close();
 
         CHECK_THROWS_AS(writer.process(ByteView("Data")).get(),
                         std::runtime_error);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("Invalid path") {
@@ -209,7 +215,8 @@ TEST_CASE("StreamingFileWriterUtility - Error Handling") {
 }
 
 TEST_CASE("StreamingFileWriterUtility - Large Files") {
-    fs::path test_file = make_unique_test_path("test_large_writer.dat");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_large_writer.dat");
 
     SUBCASE("Write 1MB in chunks") {
         {
@@ -227,9 +234,9 @@ TEST_CASE("StreamingFileWriterUtility - Large Files") {
         }
 
         // Verify file size
-        CHECK(fs::file_size(test_file) == 1024 * 1024);
+        CHECK(dftracer::utils::common::fs::file_size(test_file) == 1024 * 1024);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("Write many small chunks") {
@@ -246,12 +253,13 @@ TEST_CASE("StreamingFileWriterUtility - Large Files") {
             CHECK(writer.total_chunks() == 10000);
         }
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 }
 
 TEST_CASE("StreamingFileWriterUtility - Round Trip") {
-    fs::path test_file = make_unique_test_path("test_round_trip.txt");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_round_trip.txt");
 
     SUBCASE("Write and read back") {
         std::string original_data;
@@ -273,12 +281,13 @@ TEST_CASE("StreamingFileWriterUtility - Round Trip") {
         CHECK(read_data == original_data);
         CHECK(read_data.size() == original_data.size());
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 }
 
 TEST_CASE("StreamingFileWriterUtility - Automatic Closure") {
-    fs::path test_file = make_unique_test_path("test_auto_close.txt");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_auto_close.txt");
 
     SUBCASE("Destructor closes file") {
         {
@@ -288,19 +297,20 @@ TEST_CASE("StreamingFileWriterUtility - Automatic Closure") {
         }
 
         // File should exist and be readable
-        CHECK(fs::exists(test_file));
+        CHECK(dftracer::utils::common::fs::exists(test_file));
 
         std::ifstream ifs(test_file);
         std::string content((std::istreambuf_iterator<char>(ifs)),
                             std::istreambuf_iterator<char>());
         CHECK(content == "Data");
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 }
 
 TEST_CASE("StreamingFileWriterUtility - Different Data Types") {
-    fs::path test_file = make_unique_test_path("test_data_types.txt");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_data_types.txt");
 
     SUBCASE("Write text data") {
         {
@@ -316,7 +326,7 @@ TEST_CASE("StreamingFileWriterUtility - Different Data Types") {
         CHECK(content.find("Text line 1") != std::string::npos);
         CHECK(content.find("Text line 2") != std::string::npos);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 
     SUBCASE("Write binary patterns") {
@@ -341,12 +351,13 @@ TEST_CASE("StreamingFileWriterUtility - Different Data Types") {
         CHECK(content[0] == 0xAA);
         CHECK(content[1] == 0x55);
 
-        fs::remove(test_file);
+        dftracer::utils::common::fs::remove(test_file);
     }
 }
 
 TEST_CASE("StreamingFileWriterUtility - Truncate vs Append") {
-    fs::path test_file = make_unique_test_path("test_truncate_append.txt");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_truncate_append.txt");
 
     // Write initial data
     {
@@ -370,11 +381,12 @@ TEST_CASE("StreamingFileWriterUtility - Truncate vs Append") {
         CHECK(content.find("Initial") == std::string::npos);
     }
 
-    fs::remove(test_file);
+    dftracer::utils::common::fs::remove(test_file);
 }
 
 TEST_CASE("StreamingFileWriterUtility - Path Information") {
-    fs::path test_file = make_unique_test_path("test_path_info.txt");
+    dftracer::utils::common::fs::path test_file =
+        make_unique_test_path("test_path_info.txt");
 
     {
         StreamingFileWriterUtility writer(test_file);
@@ -388,5 +400,5 @@ TEST_CASE("StreamingFileWriterUtility - Path Information") {
         CHECK(writer.path() == test_file);
     }
 
-    fs::remove(test_file);
+    dftracer::utils::common::fs::remove(test_file);
 }

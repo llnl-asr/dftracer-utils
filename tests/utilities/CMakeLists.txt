@@ -12,21 +12,21 @@
 set(UTILITIES_TEST_SOURCES
 
     # Statistics
-    common/statistics/test_log2_histogram.cpp
-    common/statistics/test_timestamp_histogram.cpp
+    statistics/test_log2_histogram.cpp
+    statistics/test_timestamp_histogram.cpp
 
     # Distribution fitting
-    common/statistics/test_distributions.cpp
-    common/statistics/test_mixture.cpp
+    statistics/test_distributions.cpp
+    statistics/test_mixture.cpp
 
     # DLIO config generation
     dlio/test_barrier_simulator.cpp
     dlio/test_trace_loader.cpp
 
     # Sketches
-    common/statistics/test_ddsketch.cpp
-    common/statistics/test_distinct_sketch.cpp
-    common/statistics/test_field_stat.cpp
+    statistics/test_ddsketch.cpp
+    statistics/test_distinct_sketch.cpp
+    statistics/test_field_stat.cpp
 
     # Indexer
     indexer/test_index_builder.cpp
@@ -111,7 +111,7 @@ set(UTILITIES_TEST_SOURCES
 # +++++++++++++++++++++++++++++++++++++++++
 
 if(DFTRACER_UTILS_ENABLE_ARROW)
-  set(ARROW_TEST_SOURCE common/arrow/test_arrow_column_builder.cpp)
+  set(ARROW_TEST_SOURCE arrow/test_arrow_column_builder.cpp)
   string(REPLACE ".cpp" "" arrow_bin_exec ${ARROW_TEST_SOURCE})
   string(REPLACE "/" "_" arrow_target "utilities_${arrow_bin_exec}")
 
@@ -140,7 +140,7 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
   set_tests_properties(utilities/${arrow_bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${arrow_workdir}")
 
-  set(ATTRIBUTION_TEST_SOURCE common/arrow/test_arrow_attribution.cpp)
+  set(ATTRIBUTION_TEST_SOURCE arrow/test_arrow_attribution.cpp)
   string(REPLACE ".cpp" "" attribution_bin_exec ${ATTRIBUTION_TEST_SOURCE})
   string(REPLACE "/" "_" attribution_target "utilities_${attribution_bin_exec}")
 
@@ -176,7 +176,7 @@ endif()
 
 if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
   # IPC Writer tests
-  set(ARROW_IPC_TEST_SOURCE common/arrow/test_arrow_ipc_writer.cpp)
+  set(ARROW_IPC_TEST_SOURCE arrow/test_arrow_ipc_writer.cpp)
   string(REPLACE ".cpp" "" arrow_ipc_bin_exec ${ARROW_IPC_TEST_SOURCE})
   string(REPLACE "/" "_" arrow_ipc_target "utilities_${arrow_ipc_bin_exec}")
 
@@ -206,7 +206,7 @@ if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
                        WORKING_DIRECTORY "${arrow_ipc_workdir}")
 
   # IPC Reader tests
-  set(ARROW_IPC_READER_SOURCE common/arrow/test_arrow_ipc_reader.cpp)
+  set(ARROW_IPC_READER_SOURCE arrow/test_arrow_ipc_reader.cpp)
   string(REPLACE ".cpp" "" arrow_ipc_reader_bin ${ARROW_IPC_READER_SOURCE})
   string(REPLACE "/" "_" arrow_ipc_reader_target "utilities_${arrow_ipc_reader_bin}")
 

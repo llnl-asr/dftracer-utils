@@ -163,8 +163,8 @@ Write an Arrow IPC file (C++)
 -----------------------------
 
 To persist columnar data as a ``.arrow`` file readable by pyarrow / polars, use
-the async ``IpcWriter`` (``dftracer/utils/utilities/common/arrow/ipc_writer.h``,
-namespace ``dftracer::utils::utilities::common::arrow``, built when
+the async ``IpcWriter`` (``dftracer/utils/utilities/arrow/ipc_writer.h``,
+namespace ``dftracer::utils::utilities::arrow``, built when
 ``DFTRACER_UTILS_ENABLE_ARROW_IPC`` is set). It consumes finished record batches
 (``ArrowExportResult``) and supports buffer-level zstd compression; the sequence
 is ``open`` then ``write_batch`` (one or more) then ``close``, and it runs on the
@@ -172,9 +172,9 @@ executor.
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
+   #include <dftracer/utils/utilities/arrow/ipc_writer.h>
 
-   using namespace dftracer::utils::utilities::common::arrow;
+   using namespace dftracer::utils::utilities::arrow;
 
    IpcWriter writer;
    co_await writer.open("out.arrow");         // DEFAULT_ARROW_IPC_COMPRESSION

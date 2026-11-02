@@ -32,7 +32,7 @@ void publish_meta(const Index& index, std::string_view name,
         "aggregation meta", [&](CoroScope&) -> coro::CoroTask<void> {
             published = co_await put_agg_meta(index, name, value);
         });
-    unwrap(std::move(published));
+    common::unwrap(std::move(published));
 }
 
 void drop_meta(const Index& index, std::string_view name) {
@@ -41,7 +41,7 @@ void drop_meta(const Index& index, std::string_view name) {
         "aggregation meta drop", [&](CoroScope&) -> coro::CoroTask<void> {
             dropped = co_await delete_agg_meta(index, name);
         });
-    unwrap(std::move(dropped));
+    common::unwrap(std::move(dropped));
 }
 
 std::optional<Config> decode_config(std::string_view value) {
@@ -108,8 +108,8 @@ void write_time_bounds(const Index& index, TimeBounds bounds) {
 }
 
 void clear(const Index& index) {
-    auto snapshot = unwrap(index.snapshot());
-    auto files = unwrap(snapshot.files());
+    auto snapshot = common::unwrap(index.snapshot());
+    auto files = common::unwrap(snapshot.files());
     dstd::Vector<dstd::StringView> paths;
     paths.reserve(files.size());
     for (const FileRef& file : files) paths.push_back(file.path());
@@ -121,7 +121,7 @@ void clear(const Index& index) {
             dropped =
                 co_await remove_extension(index, layout::Ext::Agg, listed);
         });
-    unwrap(std::move(dropped));
+    common::unwrap(std::move(dropped));
     for (const std::string_view name : META_NAMES) drop_meta(index, name);
 }
 

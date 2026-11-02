@@ -502,8 +502,9 @@ Store::State::foreign_files_locked() const {
 
 void Store::State::refresh_if_changed_locked() {
     static const std::uint64_t interval_ms =
-        Env::get<std::uint64_t>(constants::indexer::INDEX_STORE_REFRESH_MS_ENV)
-            .value_or(constants::indexer::INDEX_STORE_REFRESH_MS);
+        common::Env::get<std::uint64_t>(
+            common::constants::indexer::INDEX_STORE_REFRESH_MS_ENV)
+            .value_or(common::constants::indexer::INDEX_STORE_REFRESH_MS);
     const auto now = std::chrono::steady_clock::now();
     if (interval_ms > 0 && foreign_checked.time_since_epoch().count() != 0 &&
         now - foreign_checked < std::chrono::milliseconds(interval_ms)) {
@@ -524,7 +525,7 @@ void Store::State::refresh_if_changed_locked() {
 
 dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
 Store::State::snapshot() {
-    if (steady_now_ns() < next_look.load(std::memory_order_acquire)) {
+    if (common::steady_now_ns() < next_look.load(std::memory_order_acquire)) {
         std::shared_lock<std::shared_mutex> shared(published_mutex);
         if (published != nullptr &&
             published_version == version.load(std::memory_order_acquire)) {

@@ -65,12 +65,12 @@ inline void add_log_level_arg(argparse::ArgumentParser& p) {
 inline void apply_log_level_arg(const argparse::ArgumentParser& p) {
     const auto name = p.get<std::string>("--log-level");
     if (name.empty()) return;
-    if (auto level = logger::level_from_name(name)) {
-        logger::set_level(*level);
+    if (auto level = common::logger::level_from_name(name)) {
+        common::logger::set_level(*level);
     } else {
-        DFTRACER_UTILS_LOG_WARN("Unknown --log-level '%s'; keeping '%s'",
-                                name.c_str(),
-                                logger::level_name(logger::get_level()));
+        DFTRACER_UTILS_LOG_WARN(
+            "Unknown --log-level '%s'; keeping '%s'", name.c_str(),
+            common::logger::level_name(common::logger::get_level()));
     }
 }
 
@@ -142,8 +142,8 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     // writers wait on still runs.
     auto shutdown_guard =
         dftracer::utils::dstd::defer([] { dftracer::utils::dstd::shutdown(); });
-    dftracer::utils::logger::init();
-    if (auto configured = dftracer::utils::configure_memory_from_env();
+    dftracer::utils::common::logger::init();
+    if (auto configured = dftracer::utils::common::configure_memory_from_env();
         !configured) {
         DFTRACER_UTILS_LOG_ERROR("Error: %s",
                                  configured.error().format().c_str());
@@ -154,7 +154,7 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     CliT cli(program);
     if (!setup_and_parse(cli, argc, argv)) return 1;
     // Starts after the parse, which exits the process itself for --help.
-    dftracer::utils::InputStatScope input_stats;
+    dftracer::utils::common::InputStatScope input_stats;
     try {
         return run(cli);
     } catch (const std::exception& err) {
@@ -170,11 +170,11 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
 inline std::size_t get_bytes_arg(const argparse::ArgumentParser& p,
                                  const char* name) {
     const auto raw = p.get<std::string>(name);
-    auto parsed = dftracer::utils::parse_bytes(raw);
+    auto parsed = dftracer::utils::common::parse_bytes(raw);
     if (!parsed) {
-        throw std::runtime_error(
-            dftracer::utils::str_cat("Invalid byte size for ", name, ": '", raw,
-                                     "' (use e.g. 65536, 64KB, 1.5GB)"));
+        throw std::runtime_error(dftracer::utils::common::str_cat(
+            "Invalid byte size for ", name, ": '", raw,
+            "' (use e.g. 65536, 64KB, 1.5GB)"));
     }
     return static_cast<std::size_t>(*parsed);
 }
@@ -185,10 +185,10 @@ inline std::size_t get_bytes_arg(const argparse::ArgumentParser& p,
 inline std::size_t get_bytes_arg_with_unit(const argparse::ArgumentParser& p,
                                            const char* name) {
     const auto raw = p.get<std::string>(name);
-    auto parsed = dftracer::utils::parse_bytes(raw);
-    const auto parts = dftracer::utils::detail::split_value_unit(raw);
+    auto parsed = dftracer::utils::common::parse_bytes(raw);
+    const auto parts = dftracer::utils::common::detail::split_value_unit(raw);
     if (!parsed || !parts || parts->second.empty()) {
-        throw std::runtime_error(dftracer::utils::str_cat(
+        throw std::runtime_error(dftracer::utils::common::str_cat(
             "Invalid byte size for ", name, ": '", raw,
             "' (a unit is required, use e.g. 4MB or 512KB)"));
     }
@@ -200,7 +200,7 @@ inline std::size_t get_bytes_arg_with_unit(const argparse::ArgumentParser& p,
 inline std::int64_t get_bytes_arg_signed(const argparse::ArgumentParser& p,
                                          const char* name) {
     const auto raw = p.get<std::string>(name);
-    const auto trimmed = dftracer::utils::detail::trim_ws(raw);
+    const auto trimmed = dftracer::utils::common::detail::trim_ws(raw);
     if (!trimmed.empty() && trimmed.front() == '-') {
         return static_cast<std::int64_t>(
             std::strtoll(raw.c_str(), nullptr, 10));
@@ -214,11 +214,11 @@ inline std::int64_t get_bytes_arg_signed(const argparse::ArgumentParser& p,
 inline double get_seconds_arg(const argparse::ArgumentParser& p,
                               const char* name) {
     const auto raw = p.get<std::string>(name);
-    auto parsed = dftracer::utils::parse_duration_seconds(raw);
+    auto parsed = dftracer::utils::common::parse_duration_seconds(raw);
     if (!parsed) {
-        throw std::runtime_error(
-            dftracer::utils::str_cat("Invalid duration for ", name, ": '", raw,
-                                     "' (use e.g. 30, 30s, 5m, 1.5h)"));
+        throw std::runtime_error(dftracer::utils::common::str_cat(
+            "Invalid duration for ", name, ": '", raw,
+            "' (use e.g. 30, 30s, 5m, 1.5h)"));
     }
     return *parsed;
 }
@@ -230,11 +230,12 @@ inline double get_seconds_arg(const argparse::ArgumentParser& p,
 inline double get_duration_arg(const argparse::ArgumentParser& p,
                                const char* name, double native_per_second) {
     const auto raw = p.get<std::string>(name);
-    auto parsed = dftracer::utils::parse_duration_as(raw, native_per_second);
+    auto parsed =
+        dftracer::utils::common::parse_duration_as(raw, native_per_second);
     if (!parsed) {
-        throw std::runtime_error(
-            dftracer::utils::str_cat("Invalid duration for ", name, ": '", raw,
-                                     "' (use e.g. 5000, 5s, 500ms, 1.5h)"));
+        throw std::runtime_error(dftracer::utils::common::str_cat(
+            "Invalid duration for ", name, ": '", raw,
+            "' (use e.g. 5000, 5s, 500ms, 1.5h)"));
     }
     return *parsed;
 }
@@ -274,7 +275,7 @@ struct DirectoryArgs : CliSchema {
             DFTRACER_UTILS_LOG_ERROR("%s", "--directory is required");
             return false;
         }
-        if (!value.empty() && !dftracer::utils::input_exists(value)) {
+        if (!value.empty() && !dftracer::utils::common::input_exists(value)) {
             DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                      value.c_str());
             return false;
@@ -339,13 +340,14 @@ struct PipelineArgs : CliSchema {
                 "Number of worker threads for parallel processing "
                 "(default: number of CPU cores)")
             .scan<'d', std::size_t>()
-            .default_value(static_cast<std::size_t>(hardware_concurrency()));
+            .default_value(
+                static_cast<std::size_t>(common::hardware_concurrency()));
         p.add_argument("--io-threads")
             .help(
                 "Number of I/O threads "
                 "(default: number of CPU cores)")
             .scan<'d', std::size_t>()
-            .default_value(hardware_concurrency());
+            .default_value(common::hardware_concurrency());
         p.add_argument("--time-profiling")
             .help("Print stage timing breakdown to stderr")
             .flag();
@@ -388,7 +390,7 @@ struct IndexingArgs : CliSchema {
     std::string force_help = "Force index recreation";
     std::string checkpoint_help =
         "Checkpoint size for gzip indexing (default: " +
-        std::to_string(constants::indexer::DEFAULT_CHECKPOINT_SIZE) +
+        std::to_string(common::constants::indexer::DEFAULT_CHECKPOINT_SIZE) +
         "). Accepts units, e.g. 512KB, 4MB";
     std::string group = "Indexing";
     bool with_index_dir = true;
@@ -409,7 +411,7 @@ struct IndexingArgs : CliSchema {
             p.add_argument("--checkpoint-size")
                 .help(checkpoint_help)
                 .default_value(std::to_string(
-                    constants::indexer::DEFAULT_CHECKPOINT_SIZE));
+                    common::constants::indexer::DEFAULT_CHECKPOINT_SIZE));
         }
         if (with_force) {
             p.add_argument("-f", "--force").help(force_help).flag();
@@ -592,12 +594,12 @@ inline std::size_t open_file_budget() {
 // memory_budget_advice.
 inline void warn_if_memory_tight(std::size_t required_bytes,
                                  std::size_t available_bytes = 0) {
-    const auto advice =
-        dftracer::utils::memory_budget_advice(required_bytes, available_bytes);
+    const auto advice = dftracer::utils::common::memory_budget_advice(
+        required_bytes, available_bytes);
     if (!advice.fits) {
         DFTRACER_UTILS_LOG_WARN(
-            "%s",
-            dftracer::utils::format_memory_budget_warning(advice).c_str());
+            "%s", dftracer::utils::common::format_memory_budget_warning(advice)
+                      .c_str());
     }
 }
 
@@ -641,12 +643,12 @@ coro::CoroTask<std::vector<std::string>> collect_input_trace_files(
     OnMissing&& on_missing) {
     std::vector<std::string> out;
     for (const auto& in : inputs) {
-        if (dftracer::utils::input_is_directory(in)) {
+        if (dftracer::utils::common::input_is_directory(in)) {
             auto scanned =
                 co_await scan_directory_trace_files(ctx, in, recursive);
             out.insert(out.end(), std::make_move_iterator(scanned.begin()),
                        std::make_move_iterator(scanned.end()));
-        } else if (dftracer::utils::input_is_regular_file(in)) {
+        } else if (dftracer::utils::common::input_is_regular_file(in)) {
             out.push_back(in);
         } else {
             on_missing(in);
@@ -696,7 +698,7 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
             utilities::filesystem::PatternDirectoryScannerUtilityInput{
                 directory, utilities::filesystem::trace_file_patterns(), true});
     } else {
-        for (const auto& f : files) entries->emplace_back(fs::path(f));
+        for (const auto& f : files) entries->emplace_back(common::fs::path(f));
     }
     if (entries->empty()) co_return 0;
     dftracer::utils::index::IndexerOptions options;

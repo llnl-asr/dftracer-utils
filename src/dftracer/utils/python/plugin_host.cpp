@@ -108,7 +108,7 @@ CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
     std::vector<std::string> files;
     for (const auto& p : inputs) {
         std::error_code ec;
-        if (fs::is_directory(p, ec)) {
+        if (dftracer::utils::common::fs::is_directory(p, ec)) {
             filesystem::PatternDirectoryScannerUtilityInput in(
                 p, filesystem::trace_file_patterns(), /*recursive=*/true,
                 /*populate_size=*/false);
@@ -121,8 +121,9 @@ CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
     }
     std::sort(files.begin(), files.end());
     if (files.empty())
-        throw dftracer::utils::DFTUtilsException(
-            dftracer::utils::ErrorCode::NotFound, "no trace files found");
+        throw dftracer::utils::common::DFTUtilsException(
+            dftracer::utils::common::ErrorCode::NotFound,
+            "no trace files found");
 
     if (auto_index) {
         co_await dftracer::utils::index::build::ensure_indexes_fresh(
@@ -139,7 +140,7 @@ CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
     }
     views::View view = views::View::from_files(std::move(view_files));
     auto run = co_await plugins->run(view);
-    if (!run) throw dftracer::utils::DFTUtilsException(run.error());
+    if (!run) throw dftracer::utils::common::DFTUtilsException(run.error());
     *out = std::move(*run);
 }
 
@@ -190,7 +191,7 @@ PyObject* result_to_py(NamedResult& result) {
         return dftracer::utils::python::wrap_lazyframe(std::move(lf));
     }
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    namespace arr = dftracer::utils::utilities::common::arrow;
+    namespace arr = dftracer::utils::utilities::arrow;
     auto* owned = std::get_if<OwnedArrow>(&result);
     nanoarrow::UniqueSchema schema;
     nanoarrow::UniqueArray array;

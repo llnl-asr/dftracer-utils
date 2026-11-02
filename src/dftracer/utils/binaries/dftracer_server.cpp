@@ -36,7 +36,8 @@ class ServerArgParse : public cli::ArgParse {
     std::string bind_addr = "127.0.0.1";
     std::string auth_token;
     uint16_t port = 8080;
-    std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+    std::size_t checkpoint_size =
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t member_cache_size = 1024ull * 1024 * 1024;  // 1 GB
     std::uint64_t timeout_seconds = 0;                      // 0 = no timeout
 
@@ -76,11 +77,12 @@ class ServerArgParse : public cli::ArgParse {
             .help(
                 "Decompression checkpoint interval for auto-indexing "
                 "(default: " +
-                std::to_string(constants::indexer::DEFAULT_CHECKPOINT_SIZE) +
+                std::to_string(
+                    common::constants::indexer::DEFAULT_CHECKPOINT_SIZE) +
                 "). Accepts units, e.g. 512KB, 4MB. Smaller = finer zoom-in "
                 "seeks, larger index")
-            .default_value(
-                std::to_string(constants::indexer::DEFAULT_CHECKPOINT_SIZE));
+            .default_value(std::to_string(
+                common::constants::indexer::DEFAULT_CHECKPOINT_SIZE));
 
         parser()
             .add_argument("--member-cache-size")
@@ -124,7 +126,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
         std::fprintf(stderr, "Using trace directory for indexes: %s\n",
                      index_dir.c_str());
     } else {
-        fs::create_directories(index_dir);
+        common::fs::create_directories(index_dir);
     }
 
     // Share decoded gzip members across concurrent queries (single-flight +

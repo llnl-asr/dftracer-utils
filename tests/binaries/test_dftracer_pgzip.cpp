@@ -25,7 +25,7 @@ std::string create_plain_pfw(dftu_utils_test::TestEnvironment& env,
 
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw";
-    fs::rename(trace, pfw_path);
+    dftracer::utils::common::fs::rename(trace, pfw_path);
     return pfw_path;
 }
 
@@ -84,9 +84,9 @@ TEST_SUITE("DFTracerPgzip") {
         CHECK(rc == 0);
 
         std::string gz_path = pfw + ".gz";
-        CHECK(fs::exists(gz_path));
+        CHECK(dftracer::utils::common::fs::exists(gz_path));
         // Original plain file must be removed after successful compression.
-        CHECK(!fs::exists(pfw));
+        CHECK(!dftracer::utils::common::fs::exists(pfw));
     }
 
     TEST_CASE("compressed file is valid gzip with JSON content") {
@@ -106,7 +106,7 @@ TEST_SUITE("DFTracerPgzip") {
         CHECK(rc == 0);
 
         std::string gz_path = pfw + ".gz";
-        REQUIRE(fs::exists(gz_path));
+        REQUIRE(dftracer::utils::common::fs::exists(gz_path));
 
         auto first = dftu_utils_test::gz_first_line(gz_path);
         REQUIRE(!first.empty());
@@ -129,7 +129,7 @@ TEST_SUITE("DFTracerPgzip") {
         int rc = run_pgzip(
             binary, {"-d", env.get_dir(), "-l", "1", "--disable-watchdog"});
         CHECK(rc == 0);
-        CHECK(fs::exists(pfw + ".gz"));
+        CHECK(dftracer::utils::common::fs::exists(pfw + ".gz"));
     }
 
     TEST_CASE("compression level 9 (best) succeeds") {
@@ -148,7 +148,7 @@ TEST_SUITE("DFTracerPgzip") {
         int rc = run_pgzip(
             binary, {"-d", env.get_dir(), "-l", "9", "--disable-watchdog"});
         CHECK(rc == 0);
-        CHECK(fs::exists(pfw + ".gz"));
+        CHECK(dftracer::utils::common::fs::exists(pfw + ".gz"));
     }
 
     TEST_CASE("compress multiple files") {
@@ -168,10 +168,10 @@ TEST_SUITE("DFTracerPgzip") {
 
         int rc = run_pgzip(binary, {"-d", env.get_dir(), "--disable-watchdog"});
         CHECK(rc == 0);
-        CHECK(fs::exists(pfw0 + ".gz"));
-        CHECK(fs::exists(pfw1 + ".gz"));
-        CHECK(!fs::exists(pfw0));
-        CHECK(!fs::exists(pfw1));
+        CHECK(dftracer::utils::common::fs::exists(pfw0 + ".gz"));
+        CHECK(dftracer::utils::common::fs::exists(pfw1 + ".gz"));
+        CHECK(!dftracer::utils::common::fs::exists(pfw0));
+        CHECK(!dftracer::utils::common::fs::exists(pfw1));
     }
 
     TEST_CASE("empty directory succeeds with nothing to do") {
@@ -213,7 +213,7 @@ TEST_SUITE("DFTracerPgzip") {
                                     "--disable-watchdog"});
         CHECK(rc == 0);
         CHECK(gunzip_all(pfw + ".gz") == content);
-        CHECK(!fs::exists(pfw));
+        CHECK(!dftracer::utils::common::fs::exists(pfw));
     }
 
     TEST_CASE("empty file fails and is left in place") {
@@ -233,7 +233,7 @@ TEST_SUITE("DFTracerPgzip") {
 
         int rc = run_pgzip(binary, {"-d", env.get_dir(), "--disable-watchdog"});
         CHECK(rc != 0);
-        CHECK(fs::exists(pfw));
-        CHECK(!fs::exists(pfw + ".gz"));
+        CHECK(dftracer::utils::common::fs::exists(pfw));
+        CHECK(!dftracer::utils::common::fs::exists(pfw + ".gz"));
     }
 }

@@ -134,7 +134,8 @@ namespace {
 bool strip_bearer_prefix(std::string_view h, std::string_view& token) {
     constexpr std::string_view BEARER = "Bearer ";
     if (h.size() <= BEARER.size()) return false;
-    if (!::dftracer::utils::detail::iequals(h.substr(0, BEARER.size()), BEARER))
+    if (!::dftracer::utils::common::detail::iequals(h.substr(0, BEARER.size()),
+                                                    BEARER))
         return false;
     token = h.substr(BEARER.size());
     return true;

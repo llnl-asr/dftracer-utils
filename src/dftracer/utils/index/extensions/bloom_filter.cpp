@@ -81,8 +81,8 @@ BloomFilter::BloomFilter(std::vector<unsigned char> bits, std::size_t num_bits,
 BloomFilter BloomFilter::from_blob(const unsigned char* data,
                                    std::size_t size) {
     if (size < HEADER_SIZE) {
-        throw DFTUtilsException(
-            ErrorCode::Parse,
+        throw common::DFTUtilsException(
+            common::ErrorCode::Parse,
             "BloomFilter::from_blob: data too small for header");
     }
 
@@ -147,8 +147,8 @@ bool BloomFilter::possibly_contains(const Hashes& hashes) const {
 void BloomFilter::merge_from(const BloomFilter& other) {
     if (bits_.size() != other.bits_.size() || num_bits_ != other.num_bits_ ||
         num_hashes_ != other.num_hashes_) {
-        throw DFTUtilsException(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
             "BloomFilter::merge_from: incompatible filter parameters");
     }
 

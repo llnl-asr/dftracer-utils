@@ -26,7 +26,7 @@ class SpillDir {
     void charge(std::uint64_t bytes) noexcept;
 
    private:
-    std::optional<dftracer::utils::ScopedSpillSubdir> dir_;
+    std::optional<dftracer::utils::common::ScopedSpillSubdir> dir_;
     std::string empty_;
 };
 

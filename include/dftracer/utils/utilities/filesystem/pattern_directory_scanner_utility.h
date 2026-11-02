@@ -170,7 +170,7 @@ class PatternDirectoryScannerUtility {
         }
 
         // Exact filename match
-        fs::path p(path);
+        common::fs::path p(path);
         return p.filename().string() == pattern;
     }
 

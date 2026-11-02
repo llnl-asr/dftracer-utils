@@ -212,7 +212,7 @@ PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
         if (dsl && *dsl) {
             auto parsed = duql::Query::from_string(dsl);
             if (!parsed)
-                throw dftracer::utils::DFTUtilsException(
+                throw dftracer::utils::common::DFTUtilsException(
                     dftracer::utils::dstd::Error{duql::DuqlErrc::Parse,
                                                  parsed.error().format()});
             q.emplace(std::move(*parsed));

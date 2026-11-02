@@ -24,7 +24,7 @@ namespace {
 std::string create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
     const std::string tag = numeric_ph ? "num" : "str";
     const std::string dir = env.get_dir() + "/" + tag;
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     const std::string pfw = dir + "/meta.pfw";
     std::ofstream ofs(pfw);
     if (numeric_ph)
@@ -41,7 +41,7 @@ std::string create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
     ofs.close();
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
@@ -157,7 +157,7 @@ std::string create_threaded_trace(TestEnvironment& env) {
     const std::string gz = pfw + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 4 * 1024));
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }

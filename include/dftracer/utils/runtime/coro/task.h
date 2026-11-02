@@ -40,7 +40,7 @@ struct PromiseBase : FrameAllocation {
     /// the child's final suspend; the second one continues the awaiter.
     std::atomic<bool> handoff_{false};
     std::coroutine_handle<> continuation_{nullptr};
-    TaskIndex awaited_task_id_{-1};
+    common::TaskIndex awaited_task_id_{-1};
     Scheduler* scheduler_{nullptr};
     Executor* executor_{nullptr};
     std::atomic<bool>* cancellation_token_{nullptr};
@@ -335,8 +335,9 @@ class CoroTask {
         if (coro_handle_.done()) return false;
 
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
-        if (logger::detail::enabled(logger::Level::Trace)) [[unlikely]] {
-            p.trace_handle_ = logger::detail::coro_trace_enter(
+        if (common::logger::detail::enabled(common::logger::Level::Trace))
+            [[unlikely]] {
+            p.trace_handle_ = common::logger::detail::coro_trace_enter(
                 coro_handle_.address(), p.trace_file_, p.trace_line_);
         }
 #endif
@@ -368,7 +369,7 @@ class CoroTask {
 #endif
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
         if (coro_handle_.promise().trace_handle_) [[unlikely]] {
-            logger::detail::coro_trace_leave(
+            common::logger::detail::coro_trace_leave(
                 coro_handle_.promise().trace_handle_);
         }
 #endif
@@ -379,7 +380,7 @@ class CoroTask {
             throw_cancelled("task cancelled");
         }
         if (coro_handle_.promise().exception_) {
-            rethrow_and_clear(coro_handle_.promise().exception_);
+            common::rethrow_and_clear(coro_handle_.promise().exception_);
         }
         if constexpr (!std::is_void_v<T>) {
             return std::move(coro_handle_.promise().result_);
@@ -625,8 +626,9 @@ class CoroTask {
                     co_return co_await std::move(fall);
                 }
             }
-            throw DFTUtilsException(ErrorCode::Internal,
-                                    "Unreachable code in or_else reached");
+            throw common::DFTUtilsException(
+                common::ErrorCode::Internal,
+                "Unreachable code in or_else reached");
         }(std::move(*this), std::move(fallback));
     }
 };

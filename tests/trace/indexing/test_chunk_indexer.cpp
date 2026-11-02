@@ -46,10 +46,10 @@ static std::pair<std::string, std::size_t> create_test_trace_gz(
         ofs.close();
     }
 
-    std::size_t uncompressed_size = fs::file_size(plain_path);
+    std::size_t uncompressed_size = common::fs::file_size(plain_path);
     std::string gz_path = plain_path + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain_path, gz_path);
-    fs::remove(plain_path);
+    common::fs::remove(plain_path);
 
     return {gz_path, uncompressed_size};
 }
@@ -59,7 +59,7 @@ TEST_SUITE("ChunkIndexer") {
         std::string test_dir =
             dftu_utils_test::make_unique_test_path("test_chunk_indexer")
                 .string();
-        fs::create_directories(test_dir);
+        common::fs::create_directories(test_dir);
 
         auto [trace_file, uncompressed_size] =
             create_test_trace_gz(test_dir, 50);
@@ -111,14 +111,14 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.statistics.name_counts.count("read") == 1);
         CHECK(output.statistics.duration_count == 50);
 
-        fs::remove_all(test_dir);
+        common::fs::remove_all(test_dir);
     }
 
     TEST_CASE("ChunkIndexer - Extra dimensions with nested keys") {
         std::string test_dir =
             dftu_utils_test::make_unique_test_path("test_chunk_indexer_extra")
                 .string();
-        fs::create_directories(test_dir);
+        common::fs::create_directories(test_dir);
 
         auto [trace_file, uncompressed_size] =
             create_test_trace_gz(test_dir, 20);
@@ -157,14 +157,14 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.bloom_filters.at("io.size").possibly_contains("1024"));
         CHECK(output.bloom_filters.at("io.size").possibly_contains("2048"));
 
-        fs::remove_all(test_dir);
+        common::fs::remove_all(test_dir);
     }
 
     TEST_CASE("ChunkIndexer - Events missing some fields") {
         std::string test_dir =
             dftu_utils_test::make_unique_test_path("test_chunk_indexer_missing")
                 .string();
-        fs::create_directories(test_dir);
+        common::fs::create_directories(test_dir);
 
         std::string plain_path = test_dir + "/test_sparse.trace";
         {
@@ -178,10 +178,10 @@ TEST_SUITE("ChunkIndexer") {
             ofs.close();
         }
 
-        std::size_t uncompressed_size = fs::file_size(plain_path);
+        std::size_t uncompressed_size = common::fs::file_size(plain_path);
         std::string gz_path = plain_path + ".gz";
         dftu_utils_test::compress_file_to_gzip(plain_path, gz_path);
-        fs::remove(plain_path);
+        common::fs::remove(plain_path);
 
         ChunkIndexerConfig config;
         config.expected_entries_per_chunk = 100;
@@ -203,6 +203,6 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.bloom_filters.at("fhash").possibly_contains("def456"));
         CHECK(output.statistics.total_events == 2);
 
-        fs::remove_all(test_dir);
+        common::fs::remove_all(test_dir);
     }
 }

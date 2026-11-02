@@ -33,7 +33,7 @@ namespace {
 std::string make_x_trace(TestEnvironment& env, const std::string& tag,
                          int posix_n, int stdio_n) {
     std::string dir = env.get_dir() + "/" + tag;
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     std::string pfw = dir + "/" + tag + ".pfw";
     std::ofstream ofs(pfw);
     for (int i = 0; i < posix_n; ++i)
@@ -47,7 +47,7 @@ std::string make_x_trace(TestEnvironment& env, const std::string& tag,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
@@ -153,8 +153,8 @@ void check_merged_partials(const std::string& tag,
     merge_shard_set(root, out);
     std::string merged_idx = determine_index_path("x", out);
 
-    fs::remove(a);
-    fs::remove(b);
+    dftracer::utils::common::fs::remove(a);
+    dftracer::utils::common::fs::remove(b);
 
     dftracer::utils::trace::AggQuery sharded;
     sharded.config = config;
@@ -304,8 +304,8 @@ TEST_SUITE("ShardedView") {
         auto with_traces = canon(sharded.aggregate(configure).get());
         REQUIRE(with_traces.size() == 2);
 
-        fs::remove(a);
-        fs::remove(b);
+        dftracer::utils::common::fs::remove(a);
+        dftracer::utils::common::fs::remove(b);
         auto without_traces = canon(sharded.aggregate(configure).get());
         CHECK(without_traces == with_traces);
     }
@@ -354,10 +354,14 @@ TEST_SUITE("ShardedView") {
         build_shard_index(b);
 
         std::error_code ec;
-        const auto ro = fs::perms::owner_read | fs::perms::owner_exec |
-                        fs::perms::group_read | fs::perms::group_exec;
-        fs::permissions(ia, ro, fs::perm_options::replace, ec);
-        fs::permissions(ib, ro, fs::perm_options::replace, ec);
+        const auto ro = dftracer::utils::common::fs::perms::owner_read |
+                        dftracer::utils::common::fs::perms::owner_exec |
+                        dftracer::utils::common::fs::perms::group_read |
+                        dftracer::utils::common::fs::perms::group_exec;
+        dftracer::utils::common::fs::permissions(
+            ia, ro, dftracer::utils::common::fs::perm_options::replace, ec);
+        dftracer::utils::common::fs::permissions(
+            ib, ro, dftracer::utils::common::fs::perm_options::replace, ec);
 
         auto configure = [](View v) -> View {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
@@ -366,8 +370,12 @@ TEST_SUITE("ShardedView") {
             ShardedView::from_shard_dirs({ia, ib}).aggregate(configure).get());
 
         // Restore write perms so the environment can clean up.
-        fs::permissions(ia, fs::perms::owner_all, fs::perm_options::add, ec);
-        fs::permissions(ib, fs::perms::owner_all, fs::perm_options::add, ec);
+        dftracer::utils::common::fs::permissions(
+            ia, dftracer::utils::common::fs::perms::owner_all,
+            dftracer::utils::common::fs::perm_options::add, ec);
+        dftracer::utils::common::fs::permissions(
+            ib, dftracer::utils::common::fs::perms::owner_all,
+            dftracer::utils::common::fs::perm_options::add, ec);
 
         CHECK(got.size() == 2);
     }
@@ -385,9 +393,10 @@ TEST_SUITE("ShardedView") {
         // Copy the index into a directory that holds no traces of its own. Copy
         // rather than move so the cached read-only handle stays valid.
         std::string movedir = env.get_dir() + "/relocated";
-        fs::create_directories(movedir);
+        dftracer::utils::common::fs::create_directories(movedir);
         std::string moved = movedir + "/.dftindex";
-        fs::copy(ia, moved, fs::copy_options::recursive);
+        dftracer::utils::common::fs::copy(
+            ia, moved, dftracer::utils::common::fs::copy_options::recursive);
 
         auto scan_cfg = [](View v) -> View {
             return v.group_by({GroupKey::cat()})
@@ -441,8 +450,10 @@ TEST_SUITE("ShardedView") {
 
         CHECK(consolidate_shard_set(root) == 3);
         CHECK_FALSE(read_shard_manifest(root).has_value());
-        CHECK_FALSE(fs::exists(dftracer::utils::index::shards_dir(root)));
-        CHECK(fs::exists(dftracer::utils::index::store_dir(root)));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(
+            dftracer::utils::index::shards_dir(root)));
+        CHECK(dftracer::utils::common::fs::exists(
+            dftracer::utils::index::store_dir(root)));
         CHECK(indexed_files(root, files).size() == 3);
 
         auto got =
@@ -475,7 +486,7 @@ TEST_SUITE("ShardedView") {
             dftracer::utils::index::store_dir(shards[1]);
         const std::string held = store_b + ".held";
         std::error_code ec;
-        fs::rename(store_b, held, ec);
+        dftracer::utils::common::fs::rename(store_b, held, ec);
         REQUIRE_FALSE(ec);
         {
             std::ofstream ofs(store_b, std::ios::trunc);
@@ -484,22 +495,24 @@ TEST_SUITE("ShardedView") {
 
         CHECK_THROWS(consolidate_shard_set(root));
         CHECK(read_shard_manifest(root).has_value());
-        CHECK(fs::exists(shards[0]));
-        CHECK(fs::exists(shards[1]));
+        CHECK(dftracer::utils::common::fs::exists(shards[0]));
+        CHECK(dftracer::utils::common::fs::exists(shards[1]));
         std::size_t moved = 0;
         for (const auto& entry :
-             fs::directory_iterator(dftracer::utils::index::store_dir(root))) {
+             dftracer::utils::common::fs::directory_iterator(
+                 dftracer::utils::index::store_dir(root))) {
             if (entry.path().extension() == ".dfs") ++moved;
         }
         CHECK(moved == 1);
 
-        fs::remove(store_b, ec);
-        fs::rename(held, store_b, ec);
+        dftracer::utils::common::fs::remove(store_b, ec);
+        dftracer::utils::common::fs::rename(held, store_b, ec);
         REQUIRE_FALSE(ec);
 
         CHECK(consolidate_shard_set(root) == 2);
         CHECK_FALSE(read_shard_manifest(root).has_value());
-        CHECK_FALSE(fs::exists(dftracer::utils::index::shards_dir(root)));
+        CHECK_FALSE(dftracer::utils::common::fs::exists(
+            dftracer::utils::index::shards_dir(root)));
         CHECK(indexed_files(root, files).size() == 2);
         CHECK_THROWS(consolidate_shard_set(root));
     }
@@ -536,8 +549,8 @@ TEST_SUITE("ShardedView") {
         CHECK(read_shard_manifest(root).has_value());
         CHECK_FALSE(read_shard_manifest(out).has_value());
 
-        fs::remove(a);
-        fs::remove(b);
+        dftracer::utils::common::fs::remove(a);
+        dftracer::utils::common::fs::remove(b);
         const std::string out_idx = determine_index_path("x", out);
         auto merged =
             canon(configure(View::from_files({{a, out_idx}, {b, out_idx}}))
@@ -569,7 +582,7 @@ TEST_SUITE("ShardedView") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string root = env.get_dir() + "/set";
-        fs::create_directories(root);
+        dftracer::utils::common::fs::create_directories(root);
 
         {
             std::ofstream ofs(root + "/shards.json", std::ios::trunc);

@@ -176,7 +176,7 @@ COMPONENT_GROUPS = [
     ),
     ("reader", ["dftracer::utils::utilities::reader::"], "Trace Reader"),
     ("index", ["dftracer::utils::index::"], "Index"),
-    ("arrow", ["dftracer::utils::utilities::common::arrow::"], "Arrow Bridge"),
+    ("arrow", ["dftracer::utils::utilities::arrow::"], "Arrow Bridge"),
     (
         "utilities",
         [

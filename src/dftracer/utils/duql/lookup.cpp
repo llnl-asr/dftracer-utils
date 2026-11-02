@@ -18,7 +18,8 @@ namespace {
 namespace df = dftracer::utils::dataframe;
 
 [[noreturn]] void fail(const std::string& why) {
-    throw DFTUtilsException(ErrorCode::InvalidArgument, "View::duql " + why);
+    throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                    "View::duql " + why);
 }
 
 bool bit(const df::Series& s, std::int64_t r) {

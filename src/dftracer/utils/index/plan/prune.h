@@ -63,13 +63,13 @@ struct PruneResult {
 };
 
 /// Opens the index at `index_path` and takes one snapshot of it.
-Result<index::Snapshot> open_snapshot(const std::string& index_path);
+common::Result<index::Snapshot> open_snapshot(const std::string& index_path);
 
 /// Decides which chunks of one file a query must read: the query's
 /// Conditions first, then the time range against per-chunk time bounds, then
 /// the chunks `metadata` needs. Never drops a chunk the index cannot prove
 /// irrelevant. Fails only when per-chunk records it needs cannot be read.
-coro::CoroTask<Result<PruneResult>> prune_file(PruneRequest request);
+coro::CoroTask<common::Result<PruneResult>> prune_file(PruneRequest request);
 
 }  // namespace dftracer::utils::index::plan
 

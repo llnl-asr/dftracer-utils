@@ -194,7 +194,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
                 co_return;
             }(std::move(gen));
 
-            CHECK_THROWS_AS(task.get(), dftracer::utils::DFTUtilsException);
+            CHECK_THROWS_AS(task.get(), common::DFTUtilsException);
         }
 
         SUBCASE("Invalid byte range throws on first next()") {
@@ -217,7 +217,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
                 co_return;
             }(std::move(gen));
 
-            CHECK_THROWS_AS(task.get(), dftracer::utils::DFTUtilsException);
+            CHECK_THROWS_AS(task.get(), common::DFTUtilsException);
         }
 
         SUBCASE("Byte range beyond file size handles gracefully") {

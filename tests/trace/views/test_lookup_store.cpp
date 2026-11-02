@@ -46,7 +46,7 @@ std::string lookup_trace(TestEnvironment& env) {
     }
     const std::string gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
-    fs::remove(plain);
+    dftracer::utils::common::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
@@ -166,7 +166,7 @@ TEST_SUITE("LookupStore") {
             REQUIRE(db);
             cache::persist_lookup(*db, *sig, "rows");
         }
-        fs::remove_all(path);
+        dftracer::utils::common::fs::remove_all(path);
 
         CHECK_FALSE(
             cache::open_lookup_db(path, cache::CacheStore::Mode::ReadOnly));
@@ -187,11 +187,14 @@ TEST_SUITE("LookupStore") {
             const auto g = run(v.duql(q).lazy().collect());
             CHECK(g.num_rows() == 4);
         }
-        const fs::path store = dftracer::utils::index::store_dir(
-            dftracer::utils::index::lookups_dir(determine_index_path(gz, "")));
-        REQUIRE(fs::exists(store));
+        const dftracer::utils::common::fs::path store =
+            dftracer::utils::index::store_dir(
+                dftracer::utils::index::lookups_dir(
+                    determine_index_path(gz, "")));
+        REQUIRE(dftracer::utils::common::fs::exists(store));
         std::size_t files = 0;
-        for (const auto& entry : fs::directory_iterator(store))
+        for (const auto& entry :
+             dftracer::utils::common::fs::directory_iterator(store))
             if (entry.path().extension() == ".dfs") ++files;
         CHECK(files == 1);
     }

@@ -142,7 +142,7 @@ class FileSink : public views::ExportSink {
     void flush() override { std::fflush(f_.get()); }
 
    private:
-    dftracer::utils::ScopedFile f_;
+    dftracer::utils::common::ScopedFile f_;
 };
 
 // "fn(key)" or "fn(key, 'a', 'b')" -> transform + inner key text; false when
@@ -359,7 +359,7 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
         const char* path = PyUnicode_AsUTF8(files);
         if (!path) return -1;
         std::error_code ec;
-        if (fs::is_directory(path, ec))
+        if (dftracer::utils::common::fs::is_directory(path, ec))
             dir = path;
         else
             paths.emplace_back(path);
@@ -726,7 +726,7 @@ PyObject* tv_schema_tree(PyObject* self, PyObject*) {
 PyObject* tv_time_metric(PyObject* self, PyObject*) {
     std::string s(dftracer::utils::trace::time_metric_to_string(
         tv_of(self).time_metric()));
-    ::dftracer::utils::detail::lower_ascii(s);
+    ::dftracer::utils::common::detail::lower_ascii(s);
     return PyUnicode_FromString(s.c_str());
 }
 

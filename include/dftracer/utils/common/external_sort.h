@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// Sorts fixed-size records that do not fit in memory. Records are buffered up
 /// to `budget_bytes`; a full buffer is sorted and written as a run to a
@@ -174,6 +174,6 @@ class ExternalSorter {
     std::mutex mu_;
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_EXTERNAL_SORT_H

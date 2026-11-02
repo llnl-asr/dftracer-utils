@@ -193,7 +193,7 @@ dftu_plugin make_after_query() {
 
 std::string make_trace(dftu_utils_test::TestEnvironment& env) {
     std::string dir = env.get_dir() + "/t";
-    fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     std::string pfw = dir + "/trace.pfw";
     std::ofstream ofs(pfw);
     for (int i = 0; i < EVENTS; ++i)
@@ -204,7 +204,7 @@ std::string make_trace(dftu_utils_test::TestEnvironment& env) {
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 

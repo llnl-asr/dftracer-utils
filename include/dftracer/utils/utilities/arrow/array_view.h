@@ -1,12 +1,12 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARRAY_VIEW_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARRAY_VIEW_H
+#ifndef DFTRACER_UTILS_UTILITIES_ARROW_ARRAY_VIEW_H
+#define DFTRACER_UTILS_UTILITIES_ARROW_ARRAY_VIEW_H
 
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <nanoarrow/nanoarrow.h>
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 /// Init `view` from `schema` and bind it to `array`. On either failure the view
 /// is reset and the nanoarrow error code is returned; on success returns
@@ -28,7 +28,7 @@ inline int init_array_view(ArrowArrayView& view, ArrowSchema* schema,
     return NANOARROW_OK;
 }
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARRAY_VIEW_H
+#endif  // DFTRACER_UTILS_UTILITIES_ARROW_ARRAY_VIEW_H

@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <string>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 class FormatDetector {
    public:
     static ArchiveFormat detect(const std::string& file_path);
@@ -16,6 +16,6 @@ class FormatDetector {
    private:
     static bool has_gzip_magic(FILE* file);
 };
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_FORMAT_DETECTOR_H

@@ -76,8 +76,8 @@ class GenDistArgParse : public cli::ArgParse {
             .help(
                 "Gzip member size (default: the index checkpoint size). "
                 "Accepts units, e.g. 512KB, 32MB")
-            .default_value(
-                std::to_string(constants::indexer::DEFAULT_CHECKPOINT_SIZE));
+            .default_value(std::to_string(
+                common::constants::indexer::DEFAULT_CHECKPOINT_SIZE));
         parser()
             .add_argument("--shard")
             .help(
@@ -113,7 +113,7 @@ class GenDistArgParse : public cli::ArgParse {
             return false;
         }
         for (const auto& r : roots) {
-            if (!fs::is_directory(r)) {
+            if (!common::fs::is_directory(r)) {
                 DFTRACER_UTILS_LOG_ERROR("Not a directory: %s", r.c_str());
                 return false;
             }
@@ -167,7 +167,7 @@ std::vector<genesis::RunGroup> take_shard(std::vector<genesis::RunGroup> groups,
 
 std::string shard_tag(Shard shard) {
     if (shard.count <= 1) return "[genesis]";
-    return str_cat("[genesis ", shard.index, "/", shard.count, "]");
+    return common::str_cat("[genesis ", shard.index, "/", shard.count, "]");
 }
 
 // What one process wrote, for the summary line and the MPI join.
@@ -334,13 +334,12 @@ class Progress {
         print(now, last_group);
     }
 
-    std::int64_t elapsed_ms() const {
-        return dftracer::utils::elapsed_ms(start_ms_);
-    }
+    std::int64_t elapsed_ms() const { return common::elapsed_ms(start_ms_); }
 
     std::string prefix(std::int64_t now_ms) const {
-        return str_cat(tag_.substr(0, tag_.size() - 1), " ",
-                       clock_text(static_cast<double>(now_ms) / 1000.0), "]");
+        return common::str_cat(tag_.substr(0, tag_.size() - 1), " ",
+                               clock_text(static_cast<double>(now_ms) / 1000.0),
+                               "]");
     }
 
     void print(std::int64_t now_ms, bool last_group) {
@@ -397,7 +396,7 @@ class Progress {
             pre.c_str(), groups_.load(), total_groups_, in_phase[0],
             in_phase[1], in_phase[2], in_phase[3], in_phase[4],
             bytes_of(read, static_cast<double>(total_bytes_)).c_str(),
-            human_bytes(std::max(0.0, read_rate), "/s").c_str(),
+            common::human_bytes(std::max(0.0, read_rate), "/s").c_str(),
             count_of(sorted, calls).c_str(),
             rate_of(std::max(0.0, sort_rate)).c_str(),
             count_of(walked, calls).c_str(),
@@ -410,7 +409,7 @@ class Progress {
                               std::chrono::milliseconds(GROUP_INTERVAL).count())
             return;
         last_groups_ms_ = now_ms;
-        const std::int64_t now_ns = steady_now_ns();
+        const std::int64_t now_ns = common::steady_now_ns();
         for (std::size_t w = 0; w < workers_; ++w) {
             const Slot& s = slots_[w];
             const genesis::RunGroup* g = s.group.load();
@@ -441,7 +440,7 @@ class Progress {
     }
 
     const std::string tag_;
-    const std::int64_t start_ms_ = steady_now_ms();
+    const std::int64_t start_ms_ = common::steady_now_ms();
     const std::size_t total_groups_;
     const std::uint64_t total_bytes_;
     const std::uint64_t budget_;
@@ -534,10 +533,11 @@ coro::CoroTask<void> group_worker(
             result = {};
             memory->release(share + borrowed.exchange(0));
             const std::uint64_t larger = shares.next(share);
-            std::fprintf(stderr, "%s %s needs more than %s, retrying with %s\n",
-                         progress->tag().c_str(), group.dir.c_str(),
-                         human_bytes(static_cast<double>(share)).c_str(),
-                         human_bytes(static_cast<double>(larger)).c_str());
+            std::fprintf(
+                stderr, "%s %s needs more than %s, retrying with %s\n",
+                progress->tag().c_str(), group.dir.c_str(),
+                common::human_bytes(static_cast<double>(share)).c_str(),
+                common::human_bytes(static_cast<double>(larger)).c_str());
             share = larger;
             progress->retry(w);
             co_await memory->acquire(share);
@@ -631,11 +631,11 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
     const std::uint64_t head_budget = total / 32;
     const std::uint64_t writer_budget = total / 8 - head_budget;
     const std::uint64_t budget = total - writer_budget - head_budget;
-    const std::size_t threads = concurrent_spill_ways(
+    const std::size_t threads = common::concurrent_spill_ways(
         budget, std::min<std::size_t>(
                     std::max<std::size_t>(1, cli->pipeline.executor_threads),
                     std::max<std::size_t>(1, discovery.groups.size())));
-    const std::uint64_t base = share_spill_budget(budget, threads);
+    const std::uint64_t base = common::share_spill_budget(budget, threads);
     // Every worker's producer fills a member from the half of the writer
     // budget kept for buffers being filled, and holds up to a member and a
     // line. When those do not all fit at once, every producer can wait for
@@ -682,10 +682,11 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
                  "%s %zu run groups, %s of traces, up to %zu at a time, "
                  "%s to %s per group, members of %s\n",
                  tag.c_str(), discovery.groups.size(),
-                 human_bytes(static_cast<double>(input_bytes)).c_str(), threads,
-                 human_bytes(static_cast<double>(base)).c_str(),
-                 human_bytes(static_cast<double>(budget)).c_str(),
-                 human_bytes(static_cast<double>(member_size)).c_str());
+                 common::human_bytes(static_cast<double>(input_bytes)).c_str(),
+                 threads,
+                 common::human_bytes(static_cast<double>(base)).c_str(),
+                 common::human_bytes(static_cast<double>(budget)).c_str(),
+                 common::human_bytes(static_cast<double>(member_size)).c_str());
     Progress progress(tag, discovery.groups.size(), input_bytes, threads,
                       total);
 
@@ -741,14 +742,14 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
     bool appended = false;
     if (!io_error && closed) {
         std::error_code ec;
-        const std::uint64_t end = fs::file_size(output, ec);
+        const std::uint64_t end = common::fs::file_size(output, ec);
         const int fd = ec ? -1 : ::open(output.c_str(), O_WRONLY);
         appended = fd >= 0 && copy_into(head_path, fd, end);
         if (fd >= 0 && ::close(fd) != 0) appended = false;
     }
     {
         std::error_code ec;
-        fs::remove(head_path, ec);
+        common::fs::remove(head_path, ec);
     }
     if (io_error || !closed || !appended) {
         DFTRACER_UTILS_LOG_ERROR(
@@ -797,9 +798,9 @@ bool all_ranks(bool ok) {
 int join_parts(const std::string& output, const std::string& part, int rank,
                int size, bool ok, const Report& report) {
     std::error_code ec;
-    const std::uint64_t mine = ok ? fs::file_size(part, ec) : 0;
+    const std::uint64_t mine = ok ? common::fs::file_size(part, ec) : 0;
     if (!all_ranks(ok && !ec)) {
-        fs::remove(part, ec);
+        common::fs::remove(part, ec);
         return 1;
     }
     std::vector<std::uint64_t> sizes(static_cast<std::size_t>(size));
@@ -824,7 +825,7 @@ int join_parts(const std::string& output, const std::string& part, int rank,
         copied = fd >= 0 && copy_into(part, fd, offset);
         if (fd >= 0 && ::close(fd) != 0) copied = false;
     }
-    fs::remove(part, ec);
+    common::fs::remove(part, ec);
     copied = all_ranks(copied);
     unsigned long long counts[2] = {report.runs, report.skips};
     unsigned long long sums[2] = {0, 0};
@@ -833,7 +834,7 @@ int join_parts(const std::string& output, const std::string& part, int rank,
     if (rank != 0) return copied ? 0 : 1;
     if (!copied) {
         DFTRACER_UTILS_LOG_ERROR("Cannot write %s", output.c_str());
-        fs::remove(output, ec);
+        common::fs::remove(output, ec);
         return 1;
     }
     print_summary(
@@ -880,7 +881,7 @@ int run_mpi(GenDistArgParse& cli) {
             memory::resolve_spill_budget(0) / node_ranks());
     const Shard shard{static_cast<std::size_t>(rank),
                       static_cast<std::size_t>(size)};
-    const std::string part = str_cat(cli.output, ".", rank, ".part");
+    const std::string part = common::str_cat(cli.output, ".", rank, ".part");
     Report report;
     const int rc = run_local(cli, shard, part, &report);
     return join_parts(cli.output, part, rank, size, rc == 0, report);

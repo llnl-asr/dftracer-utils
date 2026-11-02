@@ -38,8 +38,8 @@ class EpollThreadPoolBackend : public ThreadPoolFileOps {
     void epoll_loop();
 
     IoCompletionThread completion_thread_;
-    ScopedFd epoll_fd_;
-    ScopedFd event_fd_;
+    common::ScopedFd epoll_fd_;
+    common::ScopedFd event_fd_;
 };
 
 }  // namespace dftracer::utils::io

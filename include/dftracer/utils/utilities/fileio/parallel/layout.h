@@ -13,11 +13,9 @@ enum class FileLayout {
     Striped,  ///< single file, atomic-offset pwrite; used on local and PFS
 };
 
-using dftracer::utils::FilesystemKind;
-
 struct LayoutInfo {
     FileLayout layout;
-    FilesystemKind fs;
+    common::FilesystemKind fs;
     std::size_t stripe_size;   ///< 0 if unknown/not applicable
     std::size_t stripe_count;  ///< 0 if unknown/not applicable
 };

@@ -141,7 +141,7 @@ std::string write_agg_trace(TestEnvironment& env) {
     }
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
@@ -355,7 +355,8 @@ TEST_SUITE("View") {
                     s.collect({GroupKey::cat()}, {{AggOp::Count, "", "n"}});
                 return s.join(a, *foreign, JoinType::Inner);
             });
-        CHECK_THROWS_AS(joined.collect().get(), DFTUtilsException);
+        CHECK_THROWS_AS(joined.collect().get(),
+                        dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("View - agg accepts unified F field expressions") {
@@ -415,7 +416,7 @@ TEST_SUITE("View") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         const std::string idx = determine_index_path(gz, "");
         auto out = View::from_file(gz, idx)
                        .group_by({GroupKey::name()})
@@ -457,7 +458,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         auto any = View::from_file(gz, idx)
@@ -512,7 +513,7 @@ TEST_SUITE("View") {
         CHECK_THROWS_AS(View::from_file(gz, idx)
                             .group_by({GroupKey::cat()})
                             .agg_numeric_args({AggSpec(AggOp::Hist, "level")}),
-                        DFTUtilsException);
+                        dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("View - set_union collects distinct field values per group") {
@@ -1317,10 +1318,11 @@ TEST_SUITE("View") {
         REQUIRE(!good.empty());
         std::string bad = good;
         bad[0] = static_cast<char>(0x7e);  // wrong version tag
-        CHECK_THROWS_AS(v.merge_partials({bad}), DFTUtilsException);
+        CHECK_THROWS_AS(v.merge_partials({bad}),
+                        dftracer::utils::common::DFTUtilsException);
         // A present-but-empty partial (no tag byte) is also rejected loudly.
         CHECK_THROWS_AS(v.merge_partials({std::string_view()}),
-                        DFTUtilsException);
+                        dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("View - group_by + time_bucket yields per-interval rows") {
@@ -1413,7 +1415,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         auto table = View::from_file(gz, idx)
@@ -1451,7 +1453,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         auto table = View::from_file(gz, idx)
@@ -1698,7 +1700,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         dataframe::DataFrame b =
             View::from_file(gz, idx)
@@ -1797,7 +1799,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         dataframe::DataFrame b = View::from_file(gz, idx)
                                      .time_range(0, 1000000)
@@ -1824,7 +1826,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         dataframe::DataFrame b =
             View::from_file(gz, idx)
@@ -1850,7 +1852,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         dataframe::DataFrame b = View::from_file(gz, idx)
                                      .time_range(0, 1000000)
@@ -1878,7 +1880,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         {
@@ -2012,7 +2014,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         auto counts = [&](const std::string& col, const GroupKey& gk) {
             dataframe::DataFrame b = View::from_file(gz, idx)
@@ -2075,7 +2077,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         auto counts = [&](const std::string& col, const GroupKey& gk) {
             dataframe::DataFrame b = View::from_file(gz, idx)
@@ -2122,7 +2124,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         CHECK(View::from_file(gz, idx).time_metric() == trace::TimeMetric::Ns);

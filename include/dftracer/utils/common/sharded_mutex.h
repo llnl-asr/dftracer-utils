@@ -8,7 +8,7 @@
 #include <functional>
 #include <mutex>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /**
  * ShardedMutex<T>
@@ -190,6 +190,6 @@ class ShardedMutex {
     }
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_SHARDED_MUTEX_H

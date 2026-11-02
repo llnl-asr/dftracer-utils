@@ -12,7 +12,7 @@ namespace dftracer::utils::duql::syntax {
 
 namespace {
 
-using ::dftracer::utils::detail::iequals;
+using ::dftracer::utils::common::detail::iequals;
 
 constexpr std::string_view RESERVED[] = {"and",    "or",    "not",     "in",
                                          "like",   "ilike", "between", "is",
@@ -504,7 +504,7 @@ class Parser {
         const Token& first = cur();
         const std::string kw = [&] {
             std::string w(advance().text);
-            ::dftracer::utils::detail::lower_ascii(w);
+            ::dftracer::utils::common::detail::lower_ascii(w);
             return w;
         }();
         Stage s;

@@ -3,7 +3,7 @@
 
 #include <string>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// Resolve a function pointer to a short, readable name: dladdr + demangle,
 /// reduced to the bare function name; falls back to "module+0xoffset" and then
@@ -11,6 +11,6 @@ namespace dftracer::utils {
 /// logger's coroutine tracing.
 std::string symbolize_function(const void* fn);
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_SYMBOLIZE_H

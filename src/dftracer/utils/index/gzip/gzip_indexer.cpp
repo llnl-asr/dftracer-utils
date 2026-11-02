@@ -894,7 +894,8 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
     std::vector<InflateRange> ranges =
         plan_ranges(scanned_members, slice_c_end,
                     std::max<std::uint64_t>(ckpt_size / 4, 1));
-    const std::size_t hw = std::max<std::size_t>(1, available_parallelism());
+    const std::size_t hw =
+        std::max<std::size_t>(1, common::available_parallelism());
     const std::size_t num_workers = std::min<std::size_t>(
         {ways > 0 ? ways : DEFAULT_MAX_WORKERS, ranges.size(), hw});
     // Two ranges past the workers' keep them busy while the dispatcher
@@ -995,7 +996,7 @@ build_gzip_index_artifacts(const std::string& gz_path, std::uint64_t ckpt_size,
     if (fd < 0) {
         co_return std::nullopt;
     }
-    ScopedFd owner(fd);
+    common::ScopedFd owner(fd);
     co_return co_await build_gzip_index_artifacts(fd, gz_path, ckpt_size,
                                                   visitors, scope, slice, ways);
 }
@@ -1047,8 +1048,8 @@ build_gzip_index_artifacts(int fd, const std::string& gz_path,
                 "corrupt, so the index will be empty.",
                 gz_path.c_str());
         } else {
-            throw DFTUtilsException::cat(
-                ErrorCode::InvalidArgument, "Indexer: ", gz_path,
+            throw common::DFTUtilsException::cat(
+                common::ErrorCode::InvalidArgument, "Indexer: ", gz_path,
                 " is not gzip; an index reads gzip traces only. Gzip it "
                 "first");
         }
@@ -1098,7 +1099,7 @@ GzipIndexer::GzipIndexer(const std::string& gz_path_,
             "gz_path must not be empty");
     }
 
-    if (!input_exists(gz_path)) {
+    if (!common::input_exists(gz_path)) {
         throw index::store::IndexerError(
             index::store::IndexerError::Type::FileError,
             "gz_path does not exist: " + gz_path);
@@ -1215,7 +1216,7 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
                 "Failed to write the index of " + gz_path + ": " +
                     std::string(committed.error().message()));
         }
-        snapshot.emplace(unwrap(opened->snapshot()));
+        snapshot.emplace(common::unwrap(opened->snapshot()));
     }
 
     cached_is_valid = true;
@@ -1224,7 +1225,8 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
     const auto file = snapshot->file(logical);
     store::FileMetadataResult metadata;
     if (file) {
-        if (auto stored = unwrap(index::file_metadata(*snapshot, *file)))
+        if (auto stored =
+                common::unwrap(index::file_metadata(*snapshot, *file)))
             metadata = *stored;
     }
     cached_num_lines = metadata.num_lines;
@@ -1233,7 +1235,7 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
     cached_max_bytes_ready = true;
     std::lock_guard<std::mutex> lock(cached_members_mutex);
     if (file) {
-        auto members = unwrap(index::members(*snapshot, *file));
+        auto members = common::unwrap(index::members(*snapshot, *file));
         cached_members.assign(members.begin(), members.end());
     } else {
         cached_members.clear();
@@ -1247,7 +1249,7 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
 bool GzipIndexer::is_valid() const { return cached_is_valid; }
 
 bool GzipIndexer::exists() const {
-    return fs::is_directory(index::store_dir(index_path));
+    return common::fs::is_directory(index::store_dir(index_path));
 }
 
 bool GzipIndexer::need_rebuild() const {
@@ -1259,15 +1261,15 @@ bool GzipIndexer::need_rebuild() const {
     }
 
     try {
-        auto opened = unwrap(index::Index::open(index_path));
-        auto snapshot = unwrap(opened.snapshot());
+        auto opened = common::unwrap(index::Index::open(index_path));
+        auto snapshot = common::unwrap(opened.snapshot());
         const auto file = snapshot.file(gz_path_logical_path);
         if (!file) {
             return true;
         }
         index::SourceStat now;
-        dftracer::utils::InputFileStat st;
-        if (stat_input(gz_path, st)) {
+        dftracer::utils::common::InputFileStat st;
+        if (common::stat_input(gz_path, st)) {
             now.mtime = static_cast<std::uint64_t>(st.mtime);
             now.size = st.size;
         }
@@ -1280,7 +1282,8 @@ bool GzipIndexer::need_rebuild() const {
         if (!stored_hash) {
             return true;
         }
-        const auto metadata = unwrap(index::file_metadata(snapshot, *file));
+        const auto metadata =
+            common::unwrap(index::file_metadata(snapshot, *file));
         if (!metadata || metadata->checkpoint_size == 0) {
             return true;
         }
@@ -1308,12 +1311,12 @@ void GzipIndexer::ensure_loaded() const {
     if (cached_loaded.load(std::memory_order_relaxed)) {
         return;
     }
-    auto opened = unwrap(index::Index::open(index_path));
-    auto snapshot = unwrap(opened.snapshot());
+    auto opened = common::unwrap(index::Index::open(index_path));
+    auto snapshot = common::unwrap(opened.snapshot());
     const auto file = snapshot.file(gz_path_logical_path);
     if (file) {
         store::FileMetadataResult metadata;
-        if (auto stored = unwrap(index::file_metadata(snapshot, *file)))
+        if (auto stored = common::unwrap(index::file_metadata(snapshot, *file)))
             metadata = *stored;
         cached_num_lines.store(metadata.num_lines, std::memory_order_relaxed);
         cached_num_lines_ready.store(true, std::memory_order_relaxed);
@@ -1322,7 +1325,7 @@ void GzipIndexer::ensure_loaded() const {
         cached_checkpoint_size.store(metadata.checkpoint_size,
                                      std::memory_order_relaxed);
         cached_checkpoint_size_ready.store(true, std::memory_order_relaxed);
-        auto members = unwrap(index::members(snapshot, *file));
+        auto members = common::unwrap(index::members(snapshot, *file));
         cached_members.assign(members.begin(), members.end());
         for (const auto& m : cached_members)
             if (m.kind == GzipRecordKind::Head)
@@ -1377,8 +1380,8 @@ std::string GzipIndexer::restart_window(std::uint64_t member_idx) const {
     ensure_loaded();
     std::lock_guard<std::mutex> lock(cached_members_mutex);
     if (!file_ref_) return {};
-    auto window =
-        unwrap(index::restart_window(*snapshot_, *file_ref_, member_idx));
+    auto window = common::unwrap(
+        index::restart_window(*snapshot_, *file_ref_, member_idx));
     if (!window) return {};
     return std::string(window->data(), window->size());
 }

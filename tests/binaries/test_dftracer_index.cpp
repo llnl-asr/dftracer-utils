@@ -31,7 +31,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    fs::rename(trace_gz, pfw_path);
+    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
     return pfw_path;
 }
 
@@ -85,7 +85,7 @@ TEST_SUITE("DFTracerIndex") {
         int rc = run_index(binary, {"-d", env.get_dir(), "--force"});
         CHECK(rc == 0);
 
-        CHECK(fs::exists(
+        CHECK(dftracer::utils::common::fs::exists(
             dftracer::utils::trace::internal::determine_index_path(f, "")));
     }
 
@@ -104,14 +104,15 @@ TEST_SUITE("DFTracerIndex") {
 
         // Place index files in a separate subdirectory.
         std::string idx_dir = env.get_dir() + "/idx";
-        fs::create_directories(idx_dir);
+        dftracer::utils::common::fs::create_directories(idx_dir);
 
         int rc = run_index(
             binary, {"-d", env.get_dir(), "--force", "--index-dir", idx_dir});
         CHECK(rc == 0);
 
-        CHECK(fs::exists(dftracer::utils::trace::internal::determine_index_path(
-            f, idx_dir)));
+        CHECK(dftracer::utils::common::fs::exists(
+            dftracer::utils::trace::internal::determine_index_path(f,
+                                                                   idx_dir)));
     }
 
     TEST_CASE("force rebuild runs twice without error") {
@@ -129,13 +130,13 @@ TEST_SUITE("DFTracerIndex") {
 
         int rc1 = run_index(binary, {"-d", env.get_dir(), "--force"});
         CHECK(rc1 == 0);
-        REQUIRE(fs::exists(
+        REQUIRE(dftracer::utils::common::fs::exists(
             dftracer::utils::trace::internal::determine_index_path(f, "")));
 
         // Second run with --force must overwrite successfully.
         int rc2 = run_index(binary, {"-d", env.get_dir(), "--force"});
         CHECK(rc2 == 0);
-        CHECK(fs::exists(
+        CHECK(dftracer::utils::common::fs::exists(
             dftracer::utils::trace::internal::determine_index_path(f, "")));
     }
     TEST_CASE("stats share and path budget flags") {
@@ -154,7 +155,7 @@ TEST_SUITE("DFTracerIndex") {
         CHECK(
             run_index(binary, {"-d", env.get_dir(), "--force", "--stats-share",
                                "0.2", "--path-budget", "5"}) == 0);
-        CHECK(fs::exists(
+        CHECK(dftracer::utils::common::fs::exists(
             dftracer::utils::trace::internal::determine_index_path(f, "")));
         CHECK(run_index(binary, {"-d", env.get_dir(), "--force",
                                  "--stats-share", "0"}) != 0);
@@ -245,9 +246,9 @@ TEST_SUITE("DFTracerIndex") {
         CHECK(out.find("Files processed: 1\n") != std::string::npos);
 
         ix::release_root(index_path);
-        const auto snapshot =
-            dftracer::utils::unwrap(ix::plan::open_snapshot(index_path));
-        const auto config = dftracer::utils::unwrap(
+        const auto snapshot = dftracer::utils::common::unwrap(
+            ix::plan::open_snapshot(index_path));
+        const auto config = dftracer::utils::common::unwrap(
             ix::schemas::dft::agg::tier::read_config(snapshot));
         REQUIRE(config);
         CHECK(config->time_interval_us ==
@@ -292,7 +293,7 @@ TEST_SUITE("DFTracerIndex") {
         write_plain_pfw(env.get_dir() + "/plain.pfw");
 
         CHECK(run_index(binary, {"-d", env.get_dir(), "--force"}) != 0);
-        CHECK(fs::exists(
+        CHECK(dftracer::utils::common::fs::exists(
             dftracer::utils::trace::internal::determine_index_path(good, "")));
     }
 }

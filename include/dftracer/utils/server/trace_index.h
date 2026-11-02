@@ -60,7 +60,7 @@ class TraceIndex {
     TraceIndex(const std::string& directory, const std::string& index_dir,
                std::size_t max_concurrent = 8,
                std::size_t checkpoint_size =
-                   constants::indexer::DEFAULT_CHECKPOINT_SIZE);
+                   common::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
 
     /// Scan directory and populate the file list.
     coro::CoroTask<void> initialize();

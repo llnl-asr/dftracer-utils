@@ -24,7 +24,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         namespace detail = dftracer::utils::trace::views::detail;
@@ -148,7 +148,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         auto build = [&](std::uint64_t mem) {
@@ -297,7 +297,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         auto q = [&] {

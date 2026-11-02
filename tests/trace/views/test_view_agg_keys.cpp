@@ -35,7 +35,7 @@ TEST_SUITE("View") {
         const std::string gz2 = parity_sub("two") + "/agg_engine2.pfw.gz";
         const std::string idx2 = determine_index_path(gz2, "");
         const std::string gz2a = write_agg_engine_trace(parity_sub("two"));
-        if (!fs::exists(gz2)) {
+        if (!dftracer::utils::common::fs::exists(gz2)) {
             std::string pfw2 = parity_sub("two") + "/agg_engine2.pfw";
             std::ofstream ofs(pfw2);
             const char* names[] = {"read", "write", "open"};
@@ -50,7 +50,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw2, gz2);
-            fs::remove(pfw2);
+            dftracer::utils::common::fs::remove(pfw2);
         }
         SUBCASE("group_by (pid, fhash) across two files") {
             run_both_multi({{gz2a, idx2}, {gz2, idx2}},
@@ -68,7 +68,7 @@ TEST_SUITE("View") {
         // merge into two groups ("posix", "stdio") in both paths.
         const std::string gz3 = parity_sub("cat") + "/agg_engine_cat.pfw.gz";
         const std::string idx3 = determine_index_path(gz3, "");
-        if (!fs::exists(gz3)) {
+        if (!dftracer::utils::common::fs::exists(gz3)) {
             std::string pfw3 = parity_sub("cat") + "/agg_engine_cat.pfw";
             std::ofstream ofs(pfw3);
             const char* names[] = {"read", "write", "open"};
@@ -84,7 +84,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw3, gz3);
-            fs::remove(pfw3);
+            dftracer::utils::common::fs::remove(pfw3);
         }
         SUBCASE("group_by cat, mixed case merges") {
             run_both_file(gz3, idx3, GroupKey::cat(), "cat", 0);
@@ -110,7 +110,8 @@ TEST_SUITE("View") {
         const std::string idx4 = determine_index_path(gz4, "");
         const std::string gz5 = rdir + "/agg_engine_resolved_b.pfw.gz";
         const std::string idx5 = determine_index_path(gz5, "");
-        if (!fs::exists(gz4) || !fs::exists(gz5)) {
+        if (!dftracer::utils::common::fs::exists(gz4) ||
+            !dftracer::utils::common::fs::exists(gz5)) {
             std::string pfw4 = rdir + "/agg_engine_resolved_a.pfw";
             std::ofstream ofs(pfw4);
             ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/dirA/a.h5","value":"FA1"}})"
@@ -130,7 +131,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw4, gz4);
-            fs::remove(pfw4);
+            dftracer::utils::common::fs::remove(pfw4);
 
             std::string pfw5 = rdir + "/agg_engine_resolved_b.pfw";
             std::ofstream ofs5(pfw5);
@@ -150,7 +151,7 @@ TEST_SUITE("View") {
             }
             ofs5.close();
             dftu_utils_test::compress_file_to_gzip(pfw5, gz5);
-            fs::remove(pfw5);
+            dftracer::utils::common::fs::remove(pfw5);
         }
         SUBCASE("group_by file_path across two files") {
             run_both_multi({{gz4, idx4}, {gz5, idx5}}, {GroupKey::file_path()},
@@ -184,7 +185,7 @@ TEST_SUITE("View") {
         // relabel the pid groups to the same rank strings.
         const std::string gz6 = parity_sub("rank") + "/agg_engine_rank.pfw.gz";
         const std::string idx6 = determine_index_path(gz6, "");
-        if (!fs::exists(gz6)) {
+        if (!dftracer::utils::common::fs::exists(gz6)) {
             std::string pfw6 = parity_sub("rank") + "/agg_engine_rank.pfw";
             std::ofstream ofs(pfw6);
             ofs << R"({"ph":"M","name":"PR","cat":"dftracer","pid":100,"tid":0,"args":{"name":"rank","value":"0"}})"
@@ -205,7 +206,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw6, gz6);
-            fs::remove(pfw6);
+            dftracer::utils::common::fs::remove(pfw6);
         }
         SUBCASE("group_by rank") {
             run_both_file(gz6, idx6, GroupKey::rank(), "rank", 0);
@@ -221,7 +222,7 @@ TEST_SUITE("View") {
         // grouping by x exercises the present-and-missing split.
         const std::string gz7 = parity_sub("arg") + "/agg_engine_arg.pfw.gz";
         const std::string idx7 = determine_index_path(gz7, "");
-        if (!fs::exists(gz7)) {
+        if (!dftracer::utils::common::fs::exists(gz7)) {
             std::string pfw7 = parity_sub("arg") + "/agg_engine_arg.pfw";
             std::ofstream ofs(pfw7);
             int ts = 1000;
@@ -241,7 +242,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw7, gz7);
-            fs::remove(pfw7);
+            dftracer::utils::common::fs::remove(pfw7);
         }
         SUBCASE("group_by arg x") {
             run_both_file(gz7, idx7, GroupKey::of_arg("x"), "x", 0);
@@ -600,7 +601,7 @@ TEST_SUITE("View") {
         const std::string ddir = parity_sub("samedir");
         const std::string gz8 = ddir + "/agg_engine_dir.pfw.gz";
         const std::string idx8 = determine_index_path(gz8, "");
-        if (!fs::exists(gz8)) {
+        if (!dftracer::utils::common::fs::exists(gz8)) {
             std::string pfw8 = ddir + "/agg_engine_dir.pfw";
             std::ofstream ofs(pfw8);
             ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/shared/f1.h5","value":"FS1"}})"
@@ -619,7 +620,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw8, gz8);
-            fs::remove(pfw8);
+            dftracer::utils::common::fs::remove(pfw8);
         }
         SUBCASE(
             "group_by file_path + dirname transform merges same-dir files") {
@@ -694,7 +695,7 @@ TEST_SUITE("View") {
         const std::string gz9 =
             parity_sub("argval") + "/agg_engine_argval.pfw.gz";
         const std::string idx9 = determine_index_path(gz9, "");
-        if (!fs::exists(gz9)) {
+        if (!dftracer::utils::common::fs::exists(gz9)) {
             std::string pfw9 = parity_sub("argval") + "/agg_engine_argval.pfw";
             std::ofstream ofs(pfw9);
             const char* names[] = {"read", "write"};
@@ -708,7 +709,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw9, gz9);
-            fs::remove(pfw9);
+            dftracer::utils::common::fs::remove(pfw9);
         }
         SUBCASE("group_by name + Sum/Mean/ArgMax over an arg value field") {
             auto build = [&] {
@@ -741,7 +742,7 @@ TEST_SUITE("View") {
         const std::string gz_sz =
             parity_sub("size") + "/agg_engine_size.pfw.gz";
         const std::string idx_sz = determine_index_path(gz_sz, "");
-        if (!fs::exists(gz_sz)) {
+        if (!dftracer::utils::common::fs::exists(gz_sz)) {
             std::string pfw_sz = parity_sub("size") + "/agg_engine_size.pfw";
             std::ofstream ofs(pfw_sz);
             const char* names[] = {"read", "write"};
@@ -755,7 +756,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw_sz, gz_sz);
-            fs::remove(pfw_sz);
+            dftracer::utils::common::fs::remove(pfw_sz);
         }
         SUBCASE("group_by name + Sum/Min/Max over derived size and te") {
             auto build = [&] {
@@ -792,7 +793,7 @@ TEST_SUITE("View") {
         const std::string gz_nv =
             parity_sub("nested") + "/agg_engine_nested.pfw.gz";
         const std::string idx_nv = determine_index_path(gz_nv, "");
-        if (!fs::exists(gz_nv)) {
+        if (!dftracer::utils::common::fs::exists(gz_nv)) {
             std::string pfw_nv =
                 parity_sub("nested") + "/agg_engine_nested.pfw";
             std::ofstream ofs(pfw_nv);
@@ -807,7 +808,7 @@ TEST_SUITE("View") {
             }
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw_nv, gz_nv);
-            fs::remove(pfw_nv);
+            dftracer::utils::common::fs::remove(pfw_nv);
         }
         SUBCASE("group_by name + Sum/Mean/ArgMax over a nested value path") {
             auto build = [&] {
@@ -874,7 +875,7 @@ TEST_SUITE("View") {
         const std::string dir = parity_sub("nullkey");
         const std::string gz = dir + "/agg_null_key.pfw.gz";
         const std::string idx = determine_index_path(gz, "");
-        if (!fs::exists(gz)) {
+        if (!dftracer::utils::common::fs::exists(gz)) {
             const std::string pfw = dir + "/agg_null_key.pfw";
             std::ofstream ofs(pfw);
             const char* names[] = {"read", "read", "write", "write"};
@@ -888,7 +889,7 @@ TEST_SUITE("View") {
                     << "}\n";
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw, gz);
-            fs::remove(pfw);
+            dftracer::utils::common::fs::remove(pfw);
         }
 
         using Key = std::vector<std::optional<std::string>>;

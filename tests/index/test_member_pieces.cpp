@@ -51,7 +51,7 @@ void persist(const std::string& index_root, const GzipBuildArtifacts& arts) {
 TEST_SUITE("member pieces") {
     TEST_CASE("member, head and restart records round trip with a window") {
         auto root = dftu_utils_test::make_unique_test_path("member_pieces");
-        fs::create_directories(root);
+        dftracer::utils::common::fs::create_directories(root);
 
         GzipBuildArtifacts arts;
         arts.checkpoint_size = 1000;
@@ -104,7 +104,7 @@ TEST_SUITE("member pieces") {
 
     TEST_CASE("a rebuild drops the windows of the old pieces") {
         auto root = dftu_utils_test::make_unique_test_path("member_pieces_re");
-        fs::create_directories(root);
+        dftracer::utils::common::fs::create_directories(root);
 
         GzipBuildArtifacts split;
         split.members = {record(0, 0, 0, GzipRecordKind::Head, 0),

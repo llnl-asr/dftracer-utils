@@ -14,7 +14,6 @@
 #include <string>
 #include <vector>
 
-using dftracer::utils::DFTUtilsException;
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dstd::Condition;
@@ -128,7 +127,7 @@ TEST_SUITE("query vec_mask") {
         bool threw = false;
         try {
             dataframe::evaluate_mask(q->root(), b);
-        } catch (const DFTUtilsException& e) {
+        } catch (const dftracer::utils::common::DFTUtilsException& e) {
             threw = true;
             CHECK(e.condition() == Condition::Unsupported);
             CHECK(e.domain() == duql::ERROR_DOMAIN.id);

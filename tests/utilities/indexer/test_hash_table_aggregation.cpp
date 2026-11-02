@@ -59,7 +59,7 @@ TEST_SUITE("hash_table_aggregation") {
     // populate the file dictionary, or fhash -> file_name never resolves.
     TEST_CASE("aggregation build populates the file hash table") {
         auto dir = dftu_utils_test::make_unique_test_path("hashagg");
-        fs::create_directories(dir);
+        common::fs::create_directories(dir);
         const std::string gz = (dir / "trace.pfw.gz").string();
         const std::string index_dir = (dir / "idx").string();
         write_single_member(gz, make_trace_with_fh(50));

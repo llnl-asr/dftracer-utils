@@ -41,7 +41,7 @@ std::string write_ndjson(const std::string& dir, int records) {
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                8 * 1024));
-    fs::remove(plain);
+    common::fs::remove(plain);
     return gz;
 }
 
@@ -96,7 +96,7 @@ TEST_SUITE("Schemas") {
         CHECK(index::get_schema("generic").require.empty());
         CHECK(index::get_schema("dftracer").params_hash() !=
               index::get_schema("generic").params_hash());
-        CHECK_THROWS_AS(index::get_schema("nope"), DFTUtilsException);
+        CHECK_THROWS_AS(index::get_schema("nope"), common::DFTUtilsException);
     }
 
     TEST_CASE("a file's schema is detected from its first lines") {
@@ -119,19 +119,20 @@ TEST_SUITE("Schemas") {
 
         {
             const auto snapshot =
-                unwrap(index::plan::open_snapshot(files[0].index_path));
+                common::unwrap(index::plan::open_snapshot(files[0].index_path));
             const auto file =
                 snapshot.file(istore::internal::get_logical_path(trace));
             REQUIRE(file.has_value());
             std::map<std::string, istore::PathStat> cat;
-            for (auto& [p, st] : unwrap(index::catalog(snapshot, *file)))
+            for (auto& [p, st] :
+                 common::unwrap(index::catalog(snapshot, *file)))
                 cat.emplace(std::string(p.data(), p.size()), st);
             for (const char* p :
                  {"op", "host", "lat", "io.off", "hosts.0", "hosts.1", "ok"})
                 CHECK_MESSAGE(cat.count(p), p);
             CHECK(cat.at("op").count == 4000);
             CHECK(cat.at("ok").type == istore::PathType::Bool);
-            const auto blooms = unwrap(
+            const auto blooms = common::unwrap(
                 index::paths(snapshot, *file, istore::IndexExtension::Bloom));
             const auto has = [&](const char* name) {
                 return std::any_of(
@@ -142,7 +143,8 @@ TEST_SUITE("Schemas") {
             CHECK(has("op"));
             CHECK(!has("cat"));
             // Records without a metadata phase: every chunk counts none.
-            const auto meta = unwrap(index::chunk_meta(snapshot, *file));
+            const auto meta =
+                common::unwrap(index::chunk_meta(snapshot, *file));
             REQUIRE(meta.has_value());
             CHECK(!meta->empty());
             for (const auto& [chunk, m] : *meta) CHECK(m.records == 0);
@@ -176,6 +178,6 @@ TEST_SUITE("Schemas") {
                   .status()
                   .needs_work.empty());
         CHECK_THROWS_AS(index::Indexer::open({trace}, options(dir, "nope")),
-                        DFTUtilsException);
+                        common::DFTUtilsException);
     }
 }

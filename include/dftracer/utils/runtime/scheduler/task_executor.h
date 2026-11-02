@@ -55,8 +55,8 @@ struct ExecutorConfig {
 };
 
 struct TaskInfo {
-    TaskIndex task_id;
-    TaskIndex parent_task_id;  ///< -1 for root tasks
+    common::TaskIndex task_id;
+    common::TaskIndex parent_task_id;  ///< -1 for root tasks
     std::string name;
     std::size_t worker_id;
 
@@ -72,7 +72,7 @@ struct TaskInfo {
     std::chrono::steady_clock::time_point started_at;
     std::chrono::steady_clock::time_point completed_at;
 
-    std::vector<TaskIndex> child_task_ids;
+    std::vector<common::TaskIndex> child_task_ids;
     std::atomic<std::size_t> completed_children{0};
 
     std::string error_message;
@@ -81,7 +81,7 @@ struct TaskInfo {
 };
 
 struct TaskProgress {
-    TaskIndex task_id;
+    common::TaskIndex task_id;
     std::string name;
     std::string
         state;  ///< "queued", "running", "waiting", "completed", "failed"
@@ -113,14 +113,14 @@ struct ExecutorProgress {
     struct WorkerStatus {
         std::size_t worker_id;
         bool is_idle;
-        std::optional<TaskIndex> current_task_id;
+        std::optional<common::TaskIndex> current_task_id;
         std::string current_task_name;
         std::size_t local_queue_depth;
     };
     std::vector<WorkerStatus> workers;
 
     /// (task_id, error_msg)
-    std::vector<std::pair<TaskIndex, std::string>> recent_errors;
+    std::vector<std::pair<common::TaskIndex, std::string>> recent_errors;
 };
 
 /**
@@ -140,13 +140,13 @@ class TaskExecutor : public Executor {
     /// Interrupted error, as does a queued task that shutdown() destroys.
     virtual void submit_task(std::shared_ptr<Task> task,
                              std::shared_ptr<std::any> input, TaskOwner* owner,
-                             TaskIndex parent_task_id = -1) = 0;
-    virtual TaskIndex enqueue_tracked(
+                             common::TaskIndex parent_task_id = -1) = 0;
+    virtual common::TaskIndex enqueue_tracked(
         coro::Coro coro, std::string name,
-        std::shared_ptr<std::atomic<TaskIndex>> tid_out = nullptr) = 0;
+        std::shared_ptr<std::atomic<common::TaskIndex>> tid_out = nullptr) = 0;
 
     /// Task the calling worker is running, -1 when not on a worker thread.
-    virtual TaskIndex current_worker_task_id() const = 0;
+    virtual common::TaskIndex current_worker_task_id() const = 0;
 
     /// Moves the running cap to `threads` (0 = hardware_concurrency) while work
     /// runs. A smaller cap lets fewer tasks start until running ones finish.

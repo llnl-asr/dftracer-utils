@@ -96,7 +96,7 @@ class StreamingLineReader {
         std::string actual_index_path;
         if (!index_path.empty()) {
             actual_index_path = index_path;
-            has_index = fs::exists(actual_index_path);
+            has_index = common::fs::exists(actual_index_path);
         }
 
         if (is_compressed && has_index) {
@@ -118,7 +118,7 @@ class StreamingLineReader {
      * @brief Check if file extension indicates compressed format.
      */
     static bool is_compressed_format(const std::string& file_path) {
-        fs::path p(file_path);
+        common::fs::path p(file_path);
         std::string ext = p.extension().string();
 
         return ext == ".gz";

@@ -30,7 +30,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    fs::rename(trace_gz, pfw_path);
+    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
     return pfw_path;
 }
 
@@ -125,7 +125,8 @@ std::map<std::string, std::uint64_t> parse_counts(const std::string& output) {
 
 std::map<std::string, std::uintmax_t> snapshot(const std::string& dir) {
     std::map<std::string, std::uintmax_t> files;
-    for (const auto& e : fs::recursive_directory_iterator(dir))
+    for (const auto& e :
+         dftracer::utils::common::fs::recursive_directory_iterator(dir))
         if (e.is_regular_file()) files[e.path().string()] = e.file_size();
     return files;
 }
@@ -239,8 +240,8 @@ TEST_SUITE("DFTracerStats") {
         // Rewrite the same file with more events; the index is now stale.
         auto raw = env.create_dft_test_gzip_file(300);
         REQUIRE(!raw.empty());
-        fs::remove(f);
-        fs::rename(raw, f);
+        dftracer::utils::common::fs::remove(f);
+        dftracer::utils::common::fs::rename(raw, f);
 
         long n2 = total_events(
             run_stats_capture(binary, {"-d", env.get_dir(), "--json"}, &rc));

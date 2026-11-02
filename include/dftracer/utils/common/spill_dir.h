@@ -10,7 +10,7 @@
 #include <string_view>
 #include <utility>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 /// The directory every spill file goes to: DFTRACER_UTILS_SPILL_DIR when set;
 /// else the node-local disk mount with the most free space that the user can
@@ -84,6 +84,6 @@ class ScopedSpillSubdir {
     std::shared_ptr<SpillCharge> charge_;
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_SPILL_DIR_H

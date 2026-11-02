@@ -33,9 +33,11 @@ std::string call(int pid, const std::string& name, int ts, int dur,
 }
 
 // One complete matrix-layout run under `root` with a single set.
-fs::path write_run(const fs::path& root, const std::string& input) {
-    const fs::path dir = root / "app" / "sys" / input / "nodes_1" / "ppn_1";
-    fs::create_directories(dir / "compacted");
+dftracer::utils::common::fs::path write_run(
+    const dftracer::utils::common::fs::path& root, const std::string& input) {
+    const dftracer::utils::common::fs::path dir =
+        root / "app" / "sys" / input / "nodes_1" / "ppn_1";
+    dftracer::utils::common::fs::create_directories(dir / "compacted");
     std::ofstream(dir / "summary.json")
         << R"({"ok":true,"app":"app","system":"sys","input":")" << input
         << R"(","nodes":1,"ppn":1,"sets":["set1"]})";
@@ -48,9 +50,11 @@ fs::path write_run(const fs::path& root, const std::string& input) {
 }
 
 // A run with `paths` distinct call names, so records outnumber its run record.
-void write_wide_run(const fs::path& root, const std::string& input, int paths) {
-    const fs::path dir = root / "app" / "sys" / input / "nodes_1" / "ppn_1";
-    fs::create_directories(dir / "compacted");
+void write_wide_run(const dftracer::utils::common::fs::path& root,
+                    const std::string& input, int paths) {
+    const dftracer::utils::common::fs::path dir =
+        root / "app" / "sys" / input / "nodes_1" / "ppn_1";
+    dftracer::utils::common::fs::create_directories(dir / "compacted");
     std::ofstream(dir / "summary.json")
         << R"({"ok":true,"app":"app","system":"sys","input":")" << input
         << R"(","nodes":1,"ppn":1,"sets":["set1"]})";
@@ -64,9 +68,11 @@ void write_wide_run(const fs::path& root, const std::string& input, int paths) {
 
 // A run of `depth` nested calls with long names: its path records hold about
 // depth * depth * 13 bytes of path text, from a small trace file.
-void write_deep_run(const fs::path& root, const std::string& input, int depth) {
-    const fs::path dir = root / "app" / "sys" / input / "nodes_1" / "ppn_1";
-    fs::create_directories(dir / "compacted");
+void write_deep_run(const dftracer::utils::common::fs::path& root,
+                    const std::string& input, int depth) {
+    const dftracer::utils::common::fs::path dir =
+        root / "app" / "sys" / input / "nodes_1" / "ppn_1";
+    dftracer::utils::common::fs::create_directories(dir / "compacted");
     std::ofstream(dir / "summary.json")
         << R"({"ok":true,"app":"app","system":"sys","input":")" << input
         << R"(","nodes":1,"ppn":1,"sets":["set1"]})";
@@ -142,8 +148,10 @@ TEST_CASE("a truncated run is skipped and the others are written") {
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_trunc");
     write_run(d.path() / "root", "good");
-    const fs::path bad = write_run(d.path() / "root", "bad");
-    fs::resize_file(bad, fs::file_size(bad) / 2);
+    const dftracer::utils::common::fs::path bad =
+        write_run(d.path() / "root", "bad");
+    dftracer::utils::common::fs::resize_file(
+        bad, dftracer::utils::common::fs::file_size(bad) / 2);
     std::string text;
     CHECK(run({(d.path() / "root").string(), "-o", d.file("out.pfw.gz")},
               &text) == 0);
@@ -160,7 +168,7 @@ TEST_CASE("the output path must end with .pfw.gz") {
     ScopedTestDir d("gen_dist_ext");
     write_run(d.path(), "a");
     CHECK(run({d.str(), "-o", d.file("out.jsonl")}) != 0);
-    CHECK_FALSE(fs::exists(d.file("out.jsonl")));
+    CHECK_FALSE(dftracer::utils::common::fs::exists(d.file("out.jsonl")));
 }
 
 TEST_CASE(
@@ -316,7 +324,7 @@ TEST_CASE("a run over its share is still written") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_retry");
-    const fs::path root = d.path() / "root";
+    const dftracer::utils::common::fs::path root = d.path() / "root";
     for (int i = 0; i < 6; ++i) write_run(root, "small" + std::to_string(i));
     // About 25 MB of path text: over the state of a 70 MB share, so the run
     // borrows free memory of the 140 MB for groups of a 160 MB budget or runs
@@ -341,9 +349,9 @@ TEST_CASE("the run and func records follow every counter record") {
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_layout");
     for (const std::string input : {"a", "b", "c"}) {
-        const fs::path dir =
+        const dftracer::utils::common::fs::path dir =
             d.path() / "root" / "app" / "sys" / input / "nodes_1" / "ppn_1";
-        fs::create_directories(dir / "compacted");
+        dftracer::utils::common::fs::create_directories(dir / "compacted");
         std::ofstream(dir / "summary.json")
             << R"({"ok":true,"app":"app","system":"sys","input":")" << input
             << R"(","nodes":1,"ppn":1,"sets":["set1"]})";
@@ -380,17 +388,18 @@ TEST_CASE("the run and func records follow every counter record") {
     }
     CHECK(runs == 3);
     CHECK(funcs == 3 * 40);
-    CHECK(fs::exists(out + ".head") == false);
+    CHECK(dftracer::utils::common::fs::exists(out + ".head") == false);
 }
 
 TEST_CASE("the shards of a sweep hold each run once") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_shard");
-    const fs::path root = d.path() / "root";
+    const dftracer::utils::common::fs::path root = d.path() / "root";
     for (int i = 0; i < 5; ++i) write_run(root, "in" + std::to_string(i));
-    const fs::path off = root / "app" / "sys" / "off" / "nodes_1" / "ppn_1";
-    fs::create_directories(off);
+    const dftracer::utils::common::fs::path off =
+        root / "app" / "sys" / "off" / "nodes_1" / "ppn_1";
+    dftracer::utils::common::fs::create_directories(off);
     std::ofstream(off / "summary.json") << R"({"ok":false})";
 
     std::string full_text;
@@ -432,9 +441,9 @@ TEST_CASE("the thread count does not change the output") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_threads");
-    const fs::path dir =
+    const dftracer::utils::common::fs::path dir =
         d.path() / "root" / "app" / "sys" / "in" / "nodes_1" / "ppn_4";
-    fs::create_directories(dir / "compacted");
+    dftracer::utils::common::fs::create_directories(dir / "compacted");
     std::ofstream(dir / "summary.json")
         << R"({"ok":true,"app":"app","system":"sys","input":"in","nodes":1,)"
            R"("ppn":4,"sets":["set1"]})";

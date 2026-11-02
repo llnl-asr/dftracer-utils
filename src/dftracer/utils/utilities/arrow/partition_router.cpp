@@ -3,9 +3,9 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/utilities/common/arrow/array_view.h>
-#include <dftracer/utils/utilities/common/arrow/column_builder.h>
-#include <dftracer/utils/utilities/common/arrow/partition_router.h>
+#include <dftracer/utils/utilities/arrow/array_view.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/partition_router.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <cstring>
@@ -13,7 +13,7 @@
 #include <iomanip>
 #include <sstream>
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 namespace {
 
@@ -199,7 +199,7 @@ int PartitionRouter::open(const std::string& output_dir,
     if (is_open_) return -1;
 
     std::error_code ec;
-    fs::create_directories(output_dir, ec);
+    common::fs::create_directories(output_dir, ec);
     if (ec) return -1;
 
     output_dir_ = output_dir;
@@ -218,7 +218,7 @@ std::string PartitionRouter::partition_path(
     if (partition_key.empty()) {
         return output_dir_;
     }
-    return (fs::path(output_dir_) / partition_key).string();
+    return (common::fs::path(output_dir_) / partition_key).string();
 }
 
 coro::CoroTask<PartitionWriter*> PartitionRouter::get_or_create_writer(
@@ -504,6 +504,6 @@ coro::CoroTask<RouterWriteStats> PartitionRouter::close() {
     co_return stats;
 }
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC

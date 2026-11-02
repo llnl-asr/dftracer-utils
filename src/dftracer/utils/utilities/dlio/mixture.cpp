@@ -194,8 +194,8 @@ double cdf(const FittedMixture& mix, double x) {
 Sampler make_sampler(const FittedMixture& mix, std::optional<double> min_bound,
                      std::optional<double> max_bound) {
     if (!mix.valid) {
-        throw DFTUtilsException(
-            ErrorCode::InvalidArgument,
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
             "make_sampler called with invalid FittedMixture");
     }
 

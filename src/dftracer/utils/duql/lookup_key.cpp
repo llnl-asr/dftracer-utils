@@ -95,8 +95,8 @@ const std::vector<std::int64_t>* LookupTable::find(std::string_view key) const {
 
 void conflict(const LookupTable& table, std::string_view column,
               std::string_view key) {
-    throw DFTUtilsException(
-        ErrorCode::InvalidArgument,
+    throw common::DFTUtilsException(
+        common::ErrorCode::InvalidArgument,
         "View::duql '" + table.name + "' has rows with different values of '" +
             std::string(column) + "' for key " + key_text(key) +
             "; pick one with a narrower let, or read every row with "
@@ -105,11 +105,11 @@ void conflict(const LookupTable& table, std::string_view column,
 
 void scalar_conflict(std::string_view name, std::string_view key,
                      std::size_t rows) {
-    throw DFTUtilsException(ErrorCode::InvalidArgument,
-                            "View::duql the sub-query '" + std::string(name) +
-                                "' gives " + std::to_string(rows) +
-                                " rows for key " + key_text(key) +
-                                "; a sub-query in an expression gives one row");
+    throw common::DFTUtilsException(
+        common::ErrorCode::InvalidArgument,
+        "View::duql the sub-query '" + std::string(name) + "' gives " +
+            std::to_string(rows) + " rows for key " + key_text(key) +
+            "; a sub-query in an expression gives one row");
 }
 
 namespace {
@@ -169,7 +169,8 @@ std::pair<std::int64_t, std::int64_t> kind_range(const RangeIndex& ix,
 }
 
 [[noreturn]] void range_fail(const std::string& why) {
-    throw DFTUtilsException(ErrorCode::InvalidArgument, "View::duql " + why);
+    throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
+                                    "View::duql " + why);
 }
 
 }  // namespace

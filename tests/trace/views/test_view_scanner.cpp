@@ -34,7 +34,7 @@ static std::string create_pfw_gz(TestEnvironment& env, int n) {
     ofs.close();
     std::string gz = pfw + ".gz";
     compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 
@@ -61,7 +61,7 @@ static std::string create_metadata_pfw_gz(TestEnvironment& env) {
     ofs.close();
     std::string gz = pfw + ".gz";
     compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 

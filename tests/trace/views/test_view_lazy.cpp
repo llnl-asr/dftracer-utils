@@ -302,7 +302,8 @@ TEST_SUITE("View - builder order") {
     TEST_CASE("a trace builder after a non-filter op is refused") {
         View t = base_viewer().sort_by("ts");
         CHECK_THROWS_WITH_AS(t.phase(Phase::Events),
-                             doctest::Contains("sort_by"), DFTUtilsException);
+                             doctest::Contains("sort_by"),
+                             dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("a trace builder may follow an Expr filter") {
@@ -506,7 +507,7 @@ struct FnameTrace {
         ofs.close();
         gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         idx = determine_index_path(gz, "");
         StringSink sink;
         run(View::from_file(gz, idx).sink_json(sink));
@@ -720,7 +721,7 @@ struct NestedTrace {
         ofs.close();
         gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         StringSink sink;
         run(View::from_file(gz).sink_json(sink));
     }
@@ -843,28 +844,31 @@ TEST_SUITE("View - trace terminals") {
     TEST_CASE("rejected prefixes name the first op the terminal cannot take") {
         View t = nested_viewer();
         CHECK_THROWS_WITH_AS(t.sort_by("ts").flamegraph(),
-                             doctest::Contains("sort_by"), DFTUtilsException);
+                             doctest::Contains("sort_by"),
+                             dftracer::utils::common::DFTUtilsException);
         CHECK_THROWS_WITH_AS(t.head(3).call_tree(), doctest::Contains("slice"),
-                             DFTUtilsException);
+                             dftracer::utils::common::DFTUtilsException);
         CHECK_THROWS_WITH_AS(
             t.with_column("d", col(column_at(t, "dur"))).flamegraph(),
-            doctest::Contains("with_column"), DFTUtilsException);
+            doctest::Contains("with_column"),
+            dftracer::utils::common::DFTUtilsException);
         CHECK_THROWS_WITH_AS(t.group_by({GroupKey::name()})
                                  .agg({{AggOp::Count, "", "n"}})
                                  .flamegraph(),
                              doctest::Contains("aggregates"),
-                             DFTUtilsException);
+                             dftracer::utils::common::DFTUtilsException);
         CHECK_THROWS_WITH_AS(t.group_by(std::vector<std::string>{"name"},
                                         {{Agg::Count, "", "n"}})
                                  .containment(),
                              doctest::Contains("aggregates"),
-                             DFTUtilsException);
+                             dftracer::utils::common::DFTUtilsException);
         CHECK_THROWS_WITH_AS(t.aggregate_partial(),
                              doctest::Contains("group_by or agg"),
-                             DFTUtilsException);
+                             dftracer::utils::common::DFTUtilsException);
         StringSink sink;
         CHECK_THROWS_WITH_AS(t.sort_by("ts").sink_json(sink, LAZY),
-                             doctest::Contains("sort_by"), DFTUtilsException);
+                             doctest::Contains("sort_by"),
+                             dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("containment returns both frames from one collect") {
@@ -973,7 +977,7 @@ TEST_SUITE("View - trace terminals") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dftracer::utils::common::fs::remove(pfw);
         const TypedResult t =
             run(scan::collect_typed(scan::from_file(gz), 0, 4096));
         REQUIRE(t.regular.num_rows() == 2);
@@ -1123,7 +1127,7 @@ TEST_SUITE("View - trace terminals") {
               rows_of(run(agg.collect()), {"name", "n"}));
         CHECK_THROWS_WITH_AS(nested_viewer().reconstruct_if_cached(),
                              doctest::Contains("group_by or agg"),
-                             DFTUtilsException);
+                             dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("compare applies the baseline aggregation to the variant") {
@@ -1143,7 +1147,7 @@ TEST_SUITE("View - trace terminals") {
                                        "write|8|8|"});
         CHECK_THROWS_WITH_AS(nested_viewer().compare(nested_viewer()),
                              doctest::Contains("group_by or agg"),
-                             DFTUtilsException);
+                             dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("sink_counters writes the aggregation as counter events") {
@@ -1201,7 +1205,8 @@ TEST_SUITE("View - trace terminals") {
                                    dftracer::utils::dataframe::i64(1005)));
         CHECK(run(f.collect()).num_rows() > 0);
         CHECK_THROWS_WITH_AS(f.group_by({GroupKey::name()}),
-                             doctest::Contains("filter"), DFTUtilsException);
+                             doctest::Contains("filter"),
+                             dftracer::utils::common::DFTUtilsException);
         CHECK_NOTHROW(f.phase(Phase::Events));
     }
 }
@@ -1242,15 +1247,16 @@ TEST_SUITE("View - low-level scans") {
         CHECK_THROWS_WITH_AS(
             run(t.slice(2, 5).for_each_batch(
                 [](std::size_t, const std::vector<std::string_view>&) {}, 1)),
-            doctest::Contains("head"), DFTUtilsException);
+            doctest::Contains("head"),
+            dftracer::utils::common::DFTUtilsException);
         CHECK_THROWS_WITH_AS(t.head(5).flamegraph(), doctest::Contains("slice"),
-                             DFTUtilsException);
+                             dftracer::utils::common::DFTUtilsException);
         dataframe::LazyResult<std::string> part =
             t.head(5).flamegraph_partial();
         CHECK_FALSE(run(part.collect()).empty());
         CHECK_THROWS_WITH_AS(t.slice(1, 5).flamegraph_partial(),
                              doctest::Contains("skips rows"),
-                             DFTUtilsException);
+                             dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("config reads the trace description without a filter") {
@@ -1293,7 +1299,7 @@ std::string write_args_trace(TestEnvironment& env) {
     }
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
@@ -1446,7 +1452,7 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
         }
         const std::string absent = absent_pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(absent_pfw, absent);
-        fs::remove(absent_pfw);
+        dftracer::utils::common::fs::remove(absent_pfw);
 
         for (const std::string& gz : {write_args_trace(env), absent}) {
             CAPTURE(gz);

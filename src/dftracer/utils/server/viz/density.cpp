@@ -429,7 +429,7 @@ static std::string canonicalize_group_col(std::string col,
         {"exec_hash", {"strings", "shash", "value"}},
         {"cmd_hash", {"strings", "shash", "value"}},
     };
-    col = std::string(strip_args_prefix(col));
+    col = std::string(common::strip_args_prefix(col));
     rt = std::nullopt;
     for (const auto& [field, rs] : KEYS)
         if (col == field) rt = rs;

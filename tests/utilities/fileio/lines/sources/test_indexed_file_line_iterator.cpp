@@ -328,7 +328,7 @@ TEST_SUITE("IndexedFileLineIterator") {
                                .with_line_range(0, 5);
 
             CHECK_THROWS_AS((IndexedFileLineIterator{config1}),
-                            dftracer::utils::DFTUtilsException);
+                            common::DFTUtilsException);
 
             // End < Start
             auto config2 = IndexedFileLineIteratorConfig()
@@ -336,7 +336,7 @@ TEST_SUITE("IndexedFileLineIterator") {
                                .with_line_range(10, 5);
 
             CHECK_THROWS_AS((IndexedFileLineIterator{config2}),
-                            dftracer::utils::DFTUtilsException);
+                            common::DFTUtilsException);
         }
 
         SUBCASE("Invalid byte range") {
@@ -354,7 +354,7 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_byte_range(1000, 500);
 
             CHECK_THROWS_AS((IndexedFileLineIterator{config}),
-                            dftracer::utils::DFTUtilsException);
+                            common::DFTUtilsException);
         }
 
         SUBCASE("Null reader") {
@@ -362,7 +362,7 @@ TEST_SUITE("IndexedFileLineIterator") {
                 IndexedFileLineIteratorConfig().with_line_range(1, 10);
 
             CHECK_THROWS_AS((IndexedFileLineIterator{config}),
-                            dftracer::utils::DFTUtilsException);
+                            common::DFTUtilsException);
         }
 
         SUBCASE("Calling next() when no more lines") {

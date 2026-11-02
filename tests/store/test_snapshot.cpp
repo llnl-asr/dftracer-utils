@@ -3823,8 +3823,8 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/a.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
         write_scoped_file(dir, spec, scope, 3, 500, true);
-        const char* name =
-            dftracer::utils::constants::store::STORE_PAGE_CACHE_BYTES_ENV;
+        const char* name = dftracer::utils::common::constants::store::
+            STORE_PAGE_CACHE_BYTES_ENV;
 
         ::setenv(name, "many", 1);
         auto refused = Snapshot::open(dir.str());

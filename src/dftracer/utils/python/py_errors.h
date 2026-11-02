@@ -28,10 +28,11 @@ int init_py_errors(PyObject *m);
 
 // Map a coarse ErrorCode to its Python exception type (borrowed reference).
 // Falls back to the DFTUtilsError base for UNKNOWN/INTERNAL.
-PyObject *py_error_type_for(dftracer::utils::ErrorCode code);
+PyObject *py_error_type_for(dftracer::utils::common::ErrorCode code);
 /// Domain-aware: maps a domain error (e.g. the duql domain) to its Python
 /// type, falling back to the portable-condition map.
-PyObject *py_error_type_for(const dftracer::utils::DFTUtilsException &e);
+PyObject *py_error_type_for(
+    const dftracer::utils::common::DFTUtilsException &e);
 
 // Set the current Python error from a caught C++ exception. DFTUtilsException
 // maps by its error, std::invalid_argument to DFTUtilsValueError and anything

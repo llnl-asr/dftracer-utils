@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 std::size_t compute_memory_budget(std::size_t user_override_bytes) {
     if (user_override_bytes > 0) return user_override_bytes;
@@ -86,4 +86,4 @@ std::string format_memory_budget_warning(const MemoryBudgetAdvice &advice) {
            " nodes.";
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

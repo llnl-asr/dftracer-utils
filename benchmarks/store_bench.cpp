@@ -85,7 +85,6 @@ namespace store = dftracer::utils::store;
 namespace io_fault = dftracer::utils::store::engine::io_fault;
 
 using dftracer::utils::CoroScope;
-using dftracer::utils::FilesystemKind;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::ByteView;
 using store::Batch;
@@ -133,21 +132,21 @@ constexpr std::uint64_t FOLD_VALUE_MODULUS = 1000;
 /// The parts a fold scan is split into: the whole scan, then two meshes.
 constexpr std::uint64_t FOLD_THREADS[] = {1, 4, 16};
 
-const char* filesystem_name(FilesystemKind kind) {
+const char* filesystem_name(dftracer::utils::common::FilesystemKind kind) {
     switch (kind) {
-        case FilesystemKind::Local:
+        case dftracer::utils::common::FilesystemKind::Local:
             return "local";
-        case FilesystemKind::Tmpfs:
+        case dftracer::utils::common::FilesystemKind::Tmpfs:
             return "tmpfs";
-        case FilesystemKind::Nfs:
+        case dftracer::utils::common::FilesystemKind::Nfs:
             return "nfs";
-        case FilesystemKind::Lustre:
+        case dftracer::utils::common::FilesystemKind::Lustre:
             return "lustre";
-        case FilesystemKind::Gpfs:
+        case dftracer::utils::common::FilesystemKind::Gpfs:
             return "gpfs";
-        case FilesystemKind::Beegfs:
+        case dftracer::utils::common::FilesystemKind::Beegfs:
             return "beegfs";
-        case FilesystemKind::Unknown:
+        case dftracer::utils::common::FilesystemKind::Unknown:
             break;
     }
     return "unknown";
@@ -885,7 +884,8 @@ struct Bench {
         comment_written = true;
         std::cout
             << "# extent_size=" << extent_size << " backend=" << backend
-            << " fs=" << filesystem_name(dftracer::utils::filesystem_kind(root))
+            << " fs="
+            << filesystem_name(dftracer::utils::common::filesystem_kind(root))
             << " dir=" << root << "\n"
             << "# codec="
             << (opt.codec == store::PageCodec::Zstd
@@ -896,7 +896,7 @@ struct Bench {
                " an extent whole once for its page table, a 16 MiB window"
                " of the file once it loads a second extent there, and the"
                " pages it needs through a page cache of "
-            << (dftracer::utils::constants::store::
+            << (dftracer::utils::common::constants::store::
                     STORE_DEFAULT_PAGE_CACHE_BYTES >>
                 20)
             << " MiB unless DFTRACER_UTILS_STORE_PAGE_CACHE_BYTES sets it\n"

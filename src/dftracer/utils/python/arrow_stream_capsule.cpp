@@ -18,8 +18,7 @@
 #include <optional>
 #include <string>
 
-using ArrowExportResult =
-    dftracer::utils::utilities::common::arrow::ArrowExportResult;
+using ArrowExportResult = dftracer::utils::utilities::arrow::ArrowExportResult;
 
 namespace {
 

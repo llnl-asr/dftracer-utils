@@ -48,7 +48,7 @@ class ThreadPoolExecutor : public TaskExecutor {
         std::chrono::steady_clock::time_point last_activity;
 
         // Current task info (for debugging/watchdog)
-        std::atomic<TaskIndex> current_task_id{-1};
+        std::atomic<common::TaskIndex> current_task_id{-1};
         std::string current_task_name;
         std::mutex task_name_mutex;
 
@@ -144,16 +144,16 @@ class ThreadPoolExecutor : public TaskExecutor {
     TimerService timer_service_;
 
     // Task registry for progress tracking
-    std::unordered_map<TaskIndex, TaskInfo> task_registry_;
+    std::unordered_map<common::TaskIndex, TaskInfo> task_registry_;
     mutable std::shared_mutex registry_mutex_;
 
     // Counter for tracked-coro IDs (negative to avoid collision with DAG IDs).
-    std::atomic<TaskIndex> next_coro_task_id_{-1000000};
+    std::atomic<common::TaskIndex> next_coro_task_id_{-1000000};
 
     // Run queue entry. -1 means untracked.
     struct RunQueueEntry {
         std::coroutine_handle<> handle{};
-        TaskIndex task_id{-1};
+        common::TaskIndex task_id{-1};
         long long monitor_id{-1};  // coroutine monitor id, -1 if untracked
     };
 
@@ -293,22 +293,23 @@ class ThreadPoolExecutor : public TaskExecutor {
     /// Work: a lock-free queue push and an atomic signal. task_id is a
     /// tracked-task id for registry progress, or -1 if untracked.
     void enqueue(std::coroutine_handle<> handle,
-                 TaskIndex task_id = -1) override;
+                 common::TaskIndex task_id = -1) override;
 
     /// Enqueue a Coro with progress tracking in task_registry_.
-    TaskIndex enqueue_tracked(
+    common::TaskIndex enqueue_tracked(
         coro::Coro coro, std::string name,
-        std::shared_ptr<std::atomic<TaskIndex>> tid_out = nullptr) override;
+        std::shared_ptr<std::atomic<common::TaskIndex>> tid_out =
+            nullptr) override;
 
-    void mark_coro_completed(TaskIndex id) override;
+    void mark_coro_completed(common::TaskIndex id) override;
 
     /// Submit a DAG task for execution. parent_task_id tracks the parent, or
     /// -1 for a root task.
     void submit_task(std::shared_ptr<Task> task,
                      std::shared_ptr<std::any> input, TaskOwner* owner,
-                     TaskIndex parent_task_id = -1) override;
+                     common::TaskIndex parent_task_id = -1) override;
 
-    TaskIndex current_worker_task_id() const override;
+    common::TaskIndex current_worker_task_id() const override;
 
     void drive_until(const std::function<bool()>& done) override;
 
@@ -332,7 +333,8 @@ class ThreadPoolExecutor : public TaskExecutor {
     void monitor_loop();
 
     TaskProgress build_task_progress_tree(
-        TaskIndex task_id, std::unordered_set<TaskIndex>& processed) const;
+        common::TaskIndex task_id,
+        std::unordered_set<common::TaskIndex>& processed) const;
 
     void signal_global_work();
 

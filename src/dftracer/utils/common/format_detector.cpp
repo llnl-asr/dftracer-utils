@@ -3,7 +3,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/scoped_fd.h>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 ArchiveFormat FormatDetector::detect(const std::string& file_path) {
     if (file_path.size() >= 3 &&
@@ -46,4 +46,4 @@ bool FormatDetector::has_gzip_magic(FILE* file) {
            magic[1] == constants::indexer::GZIP_MAGIC_BYTE_1;
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

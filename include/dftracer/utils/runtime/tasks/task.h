@@ -161,7 +161,9 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get task ID (pointer address)
      */
-    TaskIndex get_id() const { return reinterpret_cast<TaskIndex>(this); }
+    common::TaskIndex get_id() const {
+        return reinterpret_cast<common::TaskIndex>(this);
+    }
 
     /**
      * Get task result with automatic type casting

@@ -367,7 +367,7 @@ std::string write_trace(const std::string& dir, const std::string& name,
 std::string write_gzip(const std::string& dir, const std::string& name,
                        const std::string& text) {
     const std::string sub = dir + "/" + name;
-    fs::create_directories(sub);
+    common::fs::create_directories(sub);
     const std::string pfw = sub + "/trace.pfw";
     {
         std::ofstream file(pfw);
@@ -376,7 +376,7 @@ std::string write_gzip(const std::string& dir, const std::string& name,
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
-    fs::remove(pfw);
+    common::fs::remove(pfw);
     return gz;
 }
 

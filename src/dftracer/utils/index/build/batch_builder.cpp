@@ -50,7 +50,7 @@ struct PreparedFile {
     std::int64_t file_mtime_ns = 0;
     std::uint64_t file_size = 0;
     /// The parse worker takes the caller's open descriptor, if it passed one.
-    dstd::SharedPtr<ScopedFd> input_fd;
+    dstd::SharedPtr<common::ScopedFd> input_fd;
 };
 
 struct ParsedBloomJob {
@@ -179,7 +179,7 @@ static coro::CoroTask<void> parse_and_write_worker(
 
         for (std::size_t idx = block_begin; idx < block_end; ++idx) {
             auto& pf = (*prepared_ptr)[idx];
-            dstd::SharedPtr<ScopedFd> input_fd = std::move(pf.input_fd);
+            dstd::SharedPtr<common::ScopedFd> input_fd = std::move(pf.input_fd);
             struct stat input_stat{};
             FileAdmission::Ticket ticket;
             bool admitted = false;
@@ -189,13 +189,13 @@ static coro::CoroTask<void> parse_and_write_worker(
                 admitted = true;
             }
             if (!input_fd)
-                input_fd = dstd::make_shared<ScopedFd>(
+                input_fd = dstd::make_shared<common::ScopedFd>(
                     ::open(pf.file_path.c_str(), O_RDONLY));
             const int fd = input_fd->get();
             if (fd >= 0 && ::fstat(fd, &input_stat) == 0) {
                 pf.file_size = static_cast<std::uint64_t>(input_stat.st_size);
                 pf.file_mtime = static_cast<std::uint64_t>(input_stat.st_mtime);
-                pf.file_mtime_ns = stat_mtime_ns(input_stat);
+                pf.file_mtime_ns = common::stat_mtime_ns(input_stat);
             }
             if (!admitted)
                 ticket = co_await admission->files.admit(
@@ -212,8 +212,8 @@ static coro::CoroTask<void> parse_and_write_worker(
                 !writer->snapshot->file(pf.logical_path).has_value();
             try {
                 if (fd < 0)
-                    throw DFTUtilsException::cat(ErrorCode::Io, "cannot open ",
-                                                 pf.file_path);
+                    throw common::DFTUtilsException::cat(
+                        common::ErrorCode::Io, "cannot open ", pf.file_path);
                 pf.file_hash = index::store::internal::calculate_file_hash(
                     fd, pf.file_size);
                 job.identity = pf;

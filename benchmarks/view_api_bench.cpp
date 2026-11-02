@@ -237,9 +237,9 @@ int main(int argc, char** argv) {
         smoke ? 20'000 : (argc > 1 ? std::atoll(argv[1]) : 2'000'000);
     const std::string dir =
         !smoke && argc > 2 ? argv[2]
-                           : fs::temp_directory_path().string() +
+                           : common::fs::temp_directory_path().string() +
                                  (smoke ? "/view_bench_smoke" : "/view_bench");
-    fs::create_directories(dir);
+    common::fs::create_directories(dir);
     const std::string gz = write_trace(dir, events);
     std::printf("trace: %s (%lld events)\n", gz.c_str(),
                 static_cast<long long>(events));

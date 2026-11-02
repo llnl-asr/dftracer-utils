@@ -3,12 +3,12 @@
 
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
-#include <dftracer/utils/utilities/common/arrow/ipc_reader.h>
-#include <dftracer/utils/utilities/common/arrow/parallel_reader.h>
+#include <dftracer/utils/utilities/arrow/ipc_reader.h>
+#include <dftracer/utils/utilities/arrow/parallel_reader.h>
 
 #include <exception>
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 using dftracer::utils::coro::CoroTask;
 using dftracer::utils::coro::when_all;
@@ -106,6 +106,6 @@ CoroTask<ParallelReadResult> read_arrow_files_streaming(
     co_return summary;
 }
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC

@@ -95,7 +95,7 @@ TEST_SUITE("index kinds") {
 
     TEST_CASE("each kind answers only the leaves it can") {
         auto dir = dftu_utils_test::make_unique_test_path("kinds_conditions");
-        fs::create_directories(dir);
+        common::fs::create_directories(dir);
         const std::string trace = "/fake/kinds.pfw.gz";
         const auto index = build_index(dir.string(), trace);
 
@@ -120,7 +120,7 @@ TEST_SUITE("index kinds") {
 
     TEST_CASE("a time range keeps a chunk whose events end inside it") {
         auto dir = dftu_utils_test::make_unique_test_path("kinds_time");
-        fs::create_directories(dir);
+        common::fs::create_directories(dir);
         const std::string trace = "/fake/time.pfw.gz";
         const auto path = dir.string() + "/.dftindex";
         {
@@ -150,7 +150,7 @@ TEST_SUITE("index kinds") {
 
     TEST_CASE("a corrupt zone bound is an error, not a skipped prune") {
         auto dir = dftu_utils_test::make_unique_test_path("kinds_bad_zone");
-        fs::create_directories(dir);
+        common::fs::create_directories(dir);
         const std::string trace = "/fake/bad_zone.pfw.gz";
         const auto path = dir.string() + "/.dftindex";
         {
@@ -175,7 +175,7 @@ TEST_SUITE("index kinds") {
 
     TEST_CASE("a ts bound that is not an integer is an error") {
         auto dir = dftu_utils_test::make_unique_test_path("kinds_bad_ts");
-        fs::create_directories(dir);
+        common::fs::create_directories(dir);
         const std::string trace = "/fake/bad_ts.pfw.gz";
         const auto index = build_index(dir.string(), trace);
 

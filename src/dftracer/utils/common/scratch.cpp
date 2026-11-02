@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 namespace {
 
@@ -249,4 +249,4 @@ void publish_path(const std::string& src, const std::string& dst) {
     fs::remove_all(src, ec);
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

@@ -24,7 +24,7 @@
 #include <string_view>
 #include <system_error>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 namespace {
 
@@ -199,4 +199,4 @@ StripeInfo lustre_stripe([[maybe_unused]] const std::string& path) noexcept {
     return info;
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

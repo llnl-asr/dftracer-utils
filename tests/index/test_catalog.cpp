@@ -74,7 +74,7 @@ std::string write_members(const std::string& dir, const std::string& name,
     const auto gz = plain + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, member));
-    fs::remove(plain);
+    common::fs::remove(plain);
     return gz;
 }
 
@@ -370,8 +370,8 @@ TEST_SUITE("PathCatalog") {
             try {
                 index::Indexer::open({trace}, o);
                 FAIL("expected an error");
-            } catch (const DFTUtilsException& e) {
-                CHECK(e.error().is_code(ErrorCode::InvalidArgument));
+            } catch (const common::DFTUtilsException& e) {
+                CHECK(e.error().is_code(common::ErrorCode::InvalidArgument));
                 CHECK(std::string(e.what()).find("stats_share") !=
                       std::string::npos);
             }

@@ -24,7 +24,8 @@ struct ResolveAndBuildInput {
     std::vector<utilities::filesystem::FileEntry> entries;
     std::string index_dir;
 
-    std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+    std::size_t checkpoint_size =
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     /// Files built at once. 0 takes the threads of the process runtime, which
     /// a tool's --executor-threads sets.
     std::size_t parallelism = 0;

@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::common {
 
 Timer::Timer(bool autostart, bool verbose)
     : verbose_(verbose), running_(false) {
@@ -100,4 +100,4 @@ void Timer::print_stages(const std::string& prefix) const {
     }
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::common

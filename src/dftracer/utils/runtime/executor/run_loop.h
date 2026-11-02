@@ -31,10 +31,10 @@ class RunLoop : public Executor {
     RunLoop& operator=(const RunLoop&) = delete;
 
     void enqueue(std::coroutine_handle<> handle,
-                 TaskIndex task_id = -1) override;
+                 common::TaskIndex task_id = -1) override;
     void schedule_coroutine_resumption(std::coroutine_handle<> handle) override;
     void schedule_destroy(std::coroutine_handle<> handle) override;
-    void mark_coro_completed(TaskIndex id) override;
+    void mark_coro_completed(common::TaskIndex id) override;
 
     bool is_running() const override { return true; }
     std::size_t get_num_threads() const override { return 1; }

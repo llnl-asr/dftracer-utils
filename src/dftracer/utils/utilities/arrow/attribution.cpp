@@ -3,10 +3,10 @@
 #include <dftracer/utils/dstd/scope_exit.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <dftracer/utils/utilities/common/arrow/array_view.h>
-#include <dftracer/utils/utilities/common/arrow/attribution.h>
-#include <dftracer/utils/utilities/common/arrow/column_builder.h>
-#include <dftracer/utils/utilities/common/arrow/join_internal.h>
+#include <dftracer/utils/utilities/arrow/array_view.h>
+#include <dftracer/utils/utilities/arrow/attribution.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/join_internal.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <algorithm>
@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace dftracer::utils::utilities::common::arrow {
+namespace dftracer::utils::utilities::arrow {
 
 namespace {
 
@@ -56,35 +56,37 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
     ArrowArrayView av;
     if (init_array_view(av, const_cast<ArrowSchema*>(s),
                         const_cast<ArrowArray*>(a)) != NANOARROW_OK) {
-        throw DFTUtilsException(ErrorCode::Internal,
-                                "attribute: failed to view batch");
+        throw common::DFTUtilsException(common::ErrorCode::Internal,
+                                        "attribute: failed to view batch");
     }
     auto guard = dstd::defer([&] { ArrowArrayViewReset(&av); });
 
     const std::int64_t ncols = av.n_children;
     if (select_col >= static_cast<std::uint32_t>(ncols)) {
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "attribute: select column index out of range");
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
+            "attribute: select column index out of range");
     }
     const ArrowArrayView* sview = av.children[select_col];
     if (sview->storage_type != NANOARROW_TYPE_BOOL) {
-        throw DFTUtilsException(ErrorCode::InvalidArgument,
-                                "attribute: select column must be boolean");
+        throw common::DFTUtilsException(
+            common::ErrorCode::InvalidArgument,
+            "attribute: select column must be boolean");
     }
 
     std::vector<const ArrowArrayView*> dviews(n_dim);
     std::vector<KeyKind> dkinds(n_dim);
     for (std::uint32_t d = 0; d < n_dim; ++d) {
         if (dim_cols[d] >= static_cast<std::uint32_t>(ncols)) {
-            throw DFTUtilsException(
-                ErrorCode::InvalidArgument,
+            throw common::DFTUtilsException(
+                common::ErrorCode::InvalidArgument,
                 "attribute: dimension column index out of range");
         }
         const ArrowArrayView* v = av.children[dim_cols[d]];
         auto kk = key_kind_from_storage(v->storage_type);
         if (!kk) {
-            throw DFTUtilsException(
-                ErrorCode::InvalidArgument,
+            throw common::DFTUtilsException(
+                common::ErrorCode::InvalidArgument,
                 "attribute: unsupported dimension column type");
         }
         dviews[d] = v;
@@ -170,6 +172,6 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
     return b.finish();
 }
 
-}  // namespace dftracer::utils::utilities::common::arrow
+}  // namespace dftracer::utils::utilities::arrow
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW

@@ -253,7 +253,7 @@ class AsyncGenerator {
                 return std::nullopt;
             }
             if (handle_.promise().exception_) {
-                rethrow_and_clear(handle_.promise().exception_);
+                common::rethrow_and_clear(handle_.promise().exception_);
             }
             if (handle_.done()) {
                 return std::nullopt;
@@ -314,7 +314,7 @@ class AsyncGenerator {
 
     void rethrow_if_exception() {
         if (handle_ && handle_.promise().exception_) {
-            rethrow_and_clear(handle_.promise().exception_);
+            common::rethrow_and_clear(handle_.promise().exception_);
         }
     }
 

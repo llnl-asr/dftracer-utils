@@ -255,7 +255,7 @@ static std::optional<ComparisonConfig> build_comparison_config(
     config.resolve();
 
     if (config.executor_threads == 0) {
-        config.executor_threads = hardware_concurrency();
+        config.executor_threads = common::hardware_concurrency();
     }
 
     if (config.checkpoint_size == 0) {
@@ -340,13 +340,13 @@ static int run_comparator(const ComparatorArgParse* cli) {
                   const std::string& index_dir,
                   std::vector<std::string>& out_files,
                   std::size_t parallelism) -> coro::CoroTask<void> {
-        if (!dftracer::utils::input_exists(path)) {
+        if (!common::input_exists(path)) {
             DFTRACER_UTILS_LOG_ERROR("Path does not exist: %s", path.c_str());
             co_return;
         }
 
         ResolveAndBuildInput input;
-        if (dftracer::utils::input_is_regular_file(path)) {
+        if (common::input_is_regular_file(path)) {
             input.files.push_back(path);
         } else {
             input.directory = path;

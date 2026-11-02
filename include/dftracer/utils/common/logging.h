@@ -9,7 +9,7 @@
 #include <optional>
 #include <string_view>
 
-namespace dftracer::utils::logger {
+namespace dftracer::utils::common::logger {
 
 /// Severity, ordered low to high. Off is a threshold only (no Off messages).
 enum class Level : int {
@@ -112,19 +112,20 @@ class ScopeTracer {
 };
 
 }  // namespace detail
-}  // namespace dftracer::utils::logger
+}  // namespace dftracer::utils::common::logger
 
 /// Emission macros: compile-gated by DFTRACER_UTILS_LOGGER_LEVEL_* and runtime-
 /// gated by the current level. A disabled level costs nothing (compiled out) or
 /// one predicted branch with its arguments left unevaluated. Do not put
 /// DEBUG/TRACE in a per-event/per-byte inner loop; guard those with `#if`
 /// instead.
-#define DFTRACER_UTILS_LOG_IMPL(LVL, ...)                                     \
-    do {                                                                      \
-        if (::dftracer::utils::logger::detail::enabled(LVL)) [[unlikely]] {   \
-            ::dftracer::utils::logger::detail::write(LVL, __FILE__, __LINE__, \
-                                                     __VA_ARGS__);            \
-        }                                                                     \
+#define DFTRACER_UTILS_LOG_IMPL(LVL, ...)                            \
+    do {                                                             \
+        if (::dftracer::utils::common::logger::detail::enabled(LVL)) \
+            [[unlikely]] {                                           \
+            ::dftracer::utils::common::logger::detail::write(        \
+                LVL, __FILE__, __LINE__, __VA_ARGS__);               \
+        }                                                            \
     } while (0)
 
 #define DFTRACER_UTILS_DETAIL_CONCAT_(a, b) a##b
@@ -133,14 +134,14 @@ class ScopeTracer {
 #if defined(DFTRACER_UTILS_LOGGER_LEVEL_TRACE) && \
     (DFTRACER_UTILS_LOGGER_LEVEL_TRACE == 1)
 #define DFTRACER_UTILS_LOGGER_TRACE_ENABLED 1
-#define DFTRACER_UTILS_LOG_TRACE(...)                                \
-    DFTRACER_UTILS_LOG_IMPL(::dftracer::utils::logger::Level::Trace, \
+#define DFTRACER_UTILS_LOG_TRACE(...)                                        \
+    DFTRACER_UTILS_LOG_IMPL(::dftracer::utils::common::logger::Level::Trace, \
                             __VA_ARGS__)
 /// Trace the enclosing scope ("-> label" on entry, "<- label [ms]" on exit),
 /// only when Trace is enabled. Label defaults to the function name; extra args
 /// are printf-appended: DFTRACER_UTILS_TRACE_SCOPE("off=%zu", off).
 #define DFTRACER_UTILS_TRACE_SCOPE(...)                        \
-    ::dftracer::utils::logger::detail::ScopeTracer             \
+    ::dftracer::utils::common::logger::detail::ScopeTracer     \
     DFTRACER_UTILS_DETAIL_CONCAT(dftu_trace_scope_, __LINE__)( \
         __FILE__, __LINE__,                                    \
         static_cast<const char*>(__func__) __VA_OPT__(, ) __VA_ARGS__)
@@ -155,8 +156,8 @@ class ScopeTracer {
 #if defined(DFTRACER_UTILS_LOGGER_LEVEL_DEBUG) && \
     (DFTRACER_UTILS_LOGGER_LEVEL_DEBUG == 1)
 #define DFTRACER_UTILS_LOGGER_DEBUG_ENABLED 1
-#define DFTRACER_UTILS_LOG_DEBUG(...)                                \
-    DFTRACER_UTILS_LOG_IMPL(::dftracer::utils::logger::Level::Debug, \
+#define DFTRACER_UTILS_LOG_DEBUG(...)                                        \
+    DFTRACER_UTILS_LOG_IMPL(::dftracer::utils::common::logger::Level::Debug, \
                             __VA_ARGS__)
 #else
 #define DFTRACER_UTILS_LOGGER_DEBUG_ENABLED 0
@@ -166,8 +167,9 @@ class ScopeTracer {
 #if defined(DFTRACER_UTILS_LOGGER_LEVEL_INFO) && \
     (DFTRACER_UTILS_LOGGER_LEVEL_INFO == 1)
 #define DFTRACER_UTILS_LOGGER_INFO_ENABLED 1
-#define DFTRACER_UTILS_LOG_INFO(...) \
-    DFTRACER_UTILS_LOG_IMPL(::dftracer::utils::logger::Level::Info, __VA_ARGS__)
+#define DFTRACER_UTILS_LOG_INFO(...)                                        \
+    DFTRACER_UTILS_LOG_IMPL(::dftracer::utils::common::logger::Level::Info, \
+                            __VA_ARGS__)
 #else
 #define DFTRACER_UTILS_LOGGER_INFO_ENABLED 0
 #define DFTRACER_UTILS_LOG_INFO(...)
@@ -176,8 +178,9 @@ class ScopeTracer {
 #if defined(DFTRACER_UTILS_LOGGER_LEVEL_WARN) && \
     (DFTRACER_UTILS_LOGGER_LEVEL_WARN == 1)
 #define DFTRACER_UTILS_LOGGER_WARN_ENABLED 1
-#define DFTRACER_UTILS_LOG_WARN(...) \
-    DFTRACER_UTILS_LOG_IMPL(::dftracer::utils::logger::Level::Warn, __VA_ARGS__)
+#define DFTRACER_UTILS_LOG_WARN(...)                                        \
+    DFTRACER_UTILS_LOG_IMPL(::dftracer::utils::common::logger::Level::Warn, \
+                            __VA_ARGS__)
 #else
 #define DFTRACER_UTILS_LOGGER_WARN_ENABLED 0
 #define DFTRACER_UTILS_LOG_WARN(...)
@@ -186,8 +189,8 @@ class ScopeTracer {
 #if defined(DFTRACER_UTILS_LOGGER_LEVEL_ERROR) && \
     (DFTRACER_UTILS_LOGGER_LEVEL_ERROR == 1)
 #define DFTRACER_UTILS_LOGGER_ERROR_ENABLED 1
-#define DFTRACER_UTILS_LOG_ERROR(...)                                \
-    DFTRACER_UTILS_LOG_IMPL(::dftracer::utils::logger::Level::Error, \
+#define DFTRACER_UTILS_LOG_ERROR(...)                                        \
+    DFTRACER_UTILS_LOG_IMPL(::dftracer::utils::common::logger::Level::Error, \
                             __VA_ARGS__)
 #else
 #define DFTRACER_UTILS_LOGGER_ERROR_ENABLED 0

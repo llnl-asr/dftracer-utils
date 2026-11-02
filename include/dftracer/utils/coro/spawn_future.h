@@ -7,16 +7,16 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/parked.h>
 #include <dftracer/utils/coro/resumption_helper.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/variant.h>
 
 #include <atomic>
 #include <coroutine>
 #include <cstdint>
 #include <exception>
-#include <memory>
-#include <optional>
 #include <type_traits>
 #include <utility>
-#include <variant>
 
 namespace dftracer::utils::coro {
 
@@ -37,7 +37,7 @@ namespace dftracer::utils::coro {
 ///
 /// One heap allocation per typed spawn (shared_ptr<SharedState<T>>).
 /// `result` is stored only for non-void T; the void case uses a zero-size
-/// std::monostate so a single template serves both. The complete() overloads
+/// dstd::Monostate so a single template serves both. The complete() overloads
 /// are constrained on void-ness; both share notify_done() for the
 /// exchange-and-resume tail.
 template <typename T>
@@ -48,11 +48,11 @@ struct SharedState {
     static constexpr std::uintptr_t CANCELLED = 2;
 
     std::atomic<std::uintptr_t> flag{EMPTY};
-    [[no_unique_address]] std::conditional_t<std::is_void_v<T>, std::monostate,
-                                             std::optional<T>> result;
+    [[no_unique_address]] std::conditional_t<std::is_void_v<T>, dstd::Monostate,
+                                             dstd::Optional<T>> result;
     std::exception_ptr exception;
     Executor* executor{nullptr};
-    std::shared_ptr<std::atomic<bool>> cancel_token;
+    dstd::SharedPtr<std::atomic<bool>> cancel_token;
     /// Cancels a task spawned by a @ref Scope, which reads it at its waits.
     std::atomic<bool> cancel_flag{false};
 
@@ -113,7 +113,7 @@ class SpawnFuture {
    public:
     using result_type = T;
 
-    explicit SpawnFuture(std::shared_ptr<SharedState<T>> state)
+    explicit SpawnFuture(dstd::SharedPtr<SharedState<T>> state)
         : state_(std::move(state)) {}
 
     SpawnFuture(SpawnFuture&& other) noexcept
@@ -202,7 +202,7 @@ class SpawnFuture {
     }
 
    private:
-    std::shared_ptr<SharedState<T>> state_;
+    dstd::SharedPtr<SharedState<T>> state_;
     std::coroutine_handle<> handle_{};
     Executor* executor_ = nullptr;
     ParkNode* park_ = nullptr;

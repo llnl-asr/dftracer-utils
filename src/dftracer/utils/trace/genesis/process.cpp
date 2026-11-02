@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
@@ -1420,7 +1421,7 @@ struct ChunkRef {
 
 // The group's chunks in file order. Sequence numbers count every call, so they
 // do not depend on how the chunks are split between tasks.
-std::vector<ChunkRef> chunk_refs(const std::vector<FilePart>& parts,
+std::vector<ChunkRef> chunk_refs(const dstd::Vector<FilePart>& parts,
                                  std::uint64_t* calls) {
     std::vector<ChunkRef> out;
     std::uint64_t seq = 0;
@@ -1439,7 +1440,7 @@ std::vector<ChunkRef> chunk_refs(const std::vector<FilePart>& parts,
 // place in a lane, and hands it to `emit`. Calls of a set that already failed
 // are dropped. Each chunk's memory is freed once replayed.
 template <class Emit>
-GResult<void> replay_chunks(std::vector<FilePart>& parts,
+GResult<void> replay_chunks(dstd::Vector<FilePart>& parts,
                             const std::vector<GroupReader::IdMap>& maps,
                             const GroupReader& r,
                             const std::deque<SetAcc>& sets, GroupMem& mem,
@@ -1505,7 +1506,7 @@ constexpr std::size_t WALK_WAYS = 64;
 // are read back in parallel. Each part's merge gives the same order either
 // way, because the order is total.
 coro::CoroTask<GResult<void>> replay(
-    coro::Scope& ctx, std::vector<FilePart>& parts,
+    coro::Scope& ctx, dstd::Vector<FilePart>& parts,
     const std::vector<GroupReader::IdMap>& maps, const GroupReader& r,
     const std::deque<SetAcc>& sets, std::deque<CallSorter>& sorters,
     GroupMem& mem, GroupProgress* progress) {
@@ -1530,7 +1531,7 @@ coro::CoroTask<GResult<void>> replay(
     for (std::size_t j = 1; j < refs.size() && starts.size() < tasks; ++j)
         if (refs[j].seq >= calls / tasks * starts.size()) starts.push_back(j);
     starts.push_back(refs.size());
-    std::vector<coro::SpawnFuture<GResult<void>>> runs;
+    dstd::Vector<coro::SpawnFuture<GResult<void>>> runs;
     for (std::size_t t = 0; t + 1 < starts.size(); ++t) {
         const ChunkRef* first = refs.data() + starts[t];
         const std::size_t n = starts[t + 1] - starts[t];
@@ -1613,14 +1614,14 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     const std::uint64_t total_slots =
         std::max<std::uint64_t>(1, (memory_share / 4) / READER_BYTES);
     coro::CoroSemaphore slots(total_slots);
-    std::vector<coro::SpawnFuture<FilePart>> reads;
+    dstd::Vector<coro::SpawnFuture<FilePart>> reads;
     reads.reserve(g.files.size());
     for (const auto& f : g.files)
         reads.push_back(ctx.spawn_future(
             [f, mem_ptr = &mem, slots_ptr = &slots, total_slots, progress]() {
                 return read_file(f, mem_ptr, slots_ptr, total_slots, progress);
             }));
-    std::vector<FilePart> parts = co_await coro::when_all(std::move(reads));
+    auto parts = co_await coro::when_all(std::move(reads));
     if (progress) progress->enter(GroupProgress::Phase::Sort);
 
     std::vector<GroupReader::IdMap> maps;
@@ -1676,7 +1677,7 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     mem.state->raise_limit(memory_share / 4 +
                            (mem.calls->limit() - mem.calls->reserved()));
     if (progress) progress->enter(GroupProgress::Phase::Walk);
-    std::vector<coro::SpawnFuture<common::Result<void>>> walks;
+    dstd::Vector<coro::SpawnFuture<common::Result<void>>> walks;
     walks.reserve(ways);
     for (std::size_t w = 0; w < ways; ++w)
         walks.push_back(ctx.spawn_future(

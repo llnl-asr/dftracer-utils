@@ -4,11 +4,11 @@
 
 #include <dftracer/utils/coro/timer_service.h>
 #include <dftracer/utils/dstd/function_ref.h>
+#include <dftracer/utils/dstd/memory.h>
 
 #include <atomic>
 #include <coroutine>
 #include <cstddef>
-#include <memory>
 
 namespace dftracer::utils::coro {
 
@@ -63,7 +63,7 @@ class Executor {
     /// Token set when the executor begins to shut down. Scopes created on
     /// this executor count as cancelled once it is set. Null when the
     /// executor never cancels.
-    virtual std::shared_ptr<std::atomic<bool>> shutdown_token() const {
+    virtual dstd::SharedPtr<std::atomic<bool>> shutdown_token() const {
         return nullptr;
     }
 

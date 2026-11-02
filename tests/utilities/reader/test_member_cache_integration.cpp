@@ -3,6 +3,7 @@
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -103,7 +104,7 @@ TEST_SUITE("member_cache_integration") {
         const int readers = 16;
         std::vector<std::int64_t> counts(readers, 0);
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<std::int64_t>> tasks;
+            dstd::Vector<coro::CoroTask<std::int64_t>> tasks;
             tasks.reserve(readers);
             for (int r = 0; r < readers; ++r) {
                 tasks.push_back(

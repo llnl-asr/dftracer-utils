@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
@@ -18,19 +19,19 @@ using dftu_utils_test::run_coro;
 
 TEST_SUITE("AsyncOnce") {
     TEST_CASE("runs the producer once for concurrent callers") {
-        coro::AsyncOnce<std::shared_ptr<int>> once;
+        coro::AsyncOnce<dstd::SharedPtr<int>> once;
         std::atomic<int> calls{0};
         const int n = 32;
-        std::vector<std::shared_ptr<int>> results(n);
+        dstd::Vector<dstd::SharedPtr<int>> results(n);
 
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<std::shared_ptr<int>>> tasks;
+            dstd::Vector<coro::CoroTask<dstd::SharedPtr<int>>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(
-                    once.get([&]() -> coro::CoroTask<std::shared_ptr<int>> {
+                    once.get([&]() -> coro::CoroTask<dstd::SharedPtr<int>> {
                         calls.fetch_add(1, std::memory_order_relaxed);
                         for (int k = 0; k < 4; ++k) co_await coro::yield();
-                        co_return std::make_shared<int>(99);
+                        co_return dstd::make_shared<int>(99);
                     }));
             }
             auto out = co_await coro::when_all(std::move(tasks));

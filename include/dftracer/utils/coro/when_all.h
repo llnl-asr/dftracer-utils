@@ -8,6 +8,11 @@
 #include <dftracer/utils/coro/pool_resume.h>
 #include <dftracer/utils/coro/resumption_helper.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 
 #include <atomic>
@@ -15,11 +20,9 @@
 #include <cstddef>
 #include <exception>
 #include <memory>
-#include <optional>
 #include <tuple>
 #include <utility>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::coro {
 
@@ -56,16 +59,16 @@ struct FireAndForget {
  */
 template <typename Awaitable>
 struct WhenAllVectorState : WhenAllCompletionState {
-    std::vector<Awaitable> awaitables_;
-    /// std::vector<bool> packs neighbours into one byte, so two wrappers
+    dstd::Vector<Awaitable> awaitables_;
+    /// dstd::Vector<bool> packs neighbours into one byte, so two wrappers
     /// writing them would race. Bool results take one byte each.
     using Stored = std::conditional_t<
         std::is_same_v<typename Awaitable::result_type, bool>, unsigned char,
         typename Awaitable::result_type>;
-    std::vector<Stored> results_;
+    dstd::Vector<Stored> results_;
     ChildClaims claims_;
 
-    explicit WhenAllVectorState(std::vector<Awaitable> awaitables)
+    explicit WhenAllVectorState(dstd::Vector<Awaitable> awaitables)
         : awaitables_(std::move(awaitables)), results_(awaitables_.size()) {
         total_ = awaitables_.size();
     }
@@ -89,13 +92,13 @@ struct WhenAllVectorState : WhenAllCompletionState {
 template <typename Awaitable>
 class WhenAllVectorAwaitable {
    private:
-    std::shared_ptr<WhenAllVectorState<Awaitable>> state_;
+    dstd::SharedPtr<WhenAllVectorState<Awaitable>> state_;
 
    public:
-    using result_type = std::vector<typename Awaitable::result_type>;
+    using result_type = dstd::Vector<typename Awaitable::result_type>;
 
-    explicit WhenAllVectorAwaitable(std::vector<Awaitable> awaitables)
-        : state_(std::make_shared<WhenAllVectorState<Awaitable>>(
+    explicit WhenAllVectorAwaitable(dstd::Vector<Awaitable> awaitables)
+        : state_(dstd::make_shared<WhenAllVectorState<Awaitable>>(
               std::move(awaitables))) {}
 
     /// Always return false: wrapper coroutines are launched in
@@ -151,7 +154,7 @@ class WhenAllVectorAwaitable {
 
    private:
     void launch_wrapper() {
-        [](std::shared_ptr<WhenAllVectorState<Awaitable>> s) -> FireAndForget {
+        [](dstd::SharedPtr<WhenAllVectorState<Awaitable>> s) -> FireAndForget {
             for (;;) {
                 const std::size_t index = s->claims_.claim();
                 if (index >= s->total_) co_return;
@@ -180,7 +183,7 @@ class WhenAllVectorAwaitable {
  *
  * Usage:
  * @code
- * std::vector<TaskFuture<int>> futures;
+ * dstd::Vector<TaskFuture<int>> futures;
  * for (int i = 0; i < 100; i++) {
  *     futures.push_back(ctx.spawn([]() -> Task<int> {
  *         co_return compute();
@@ -190,7 +193,7 @@ class WhenAllVectorAwaitable {
  * @endcode
  */
 template <typename Awaitable>
-auto when_all(std::vector<Awaitable> awaitables) {
+auto when_all(dstd::Vector<Awaitable> awaitables) {
     return WhenAllVectorAwaitable<Awaitable>(std::move(awaitables));
 }
 
@@ -209,7 +212,7 @@ auto when_all(std::vector<Awaitable> awaitables) {
 template <typename Awaitable>
 auto when_all(std::initializer_list<Awaitable> awaitables) {
     return WhenAllVectorAwaitable<Awaitable>(
-        std::vector<Awaitable>(awaitables.begin(), awaitables.end()));
+        dstd::Vector<Awaitable>(awaitables.begin(), awaitables.end()));
 }
 
 // ============================================================================
@@ -219,10 +222,10 @@ auto when_all(std::initializer_list<Awaitable> awaitables) {
 template <typename Awaitable>
     requires(std::is_void_v<typename Awaitable::result_type>)
 struct WhenAllVectorState<Awaitable> : WhenAllCompletionState {
-    std::vector<Awaitable> awaitables_;
+    dstd::Vector<Awaitable> awaitables_;
     ChildClaims claims_;
 
-    explicit WhenAllVectorState(std::vector<Awaitable> awaitables)
+    explicit WhenAllVectorState(dstd::Vector<Awaitable> awaitables)
         : awaitables_(std::move(awaitables)) {
         total_ = awaitables_.size();
     }
@@ -232,13 +235,13 @@ template <typename Awaitable>
     requires(std::is_void_v<typename Awaitable::result_type>)
 class WhenAllVectorAwaitable<Awaitable> {
    private:
-    std::shared_ptr<WhenAllVectorState<Awaitable>> state_;
+    dstd::SharedPtr<WhenAllVectorState<Awaitable>> state_;
 
    public:
     using result_type = void;
 
-    explicit WhenAllVectorAwaitable(std::vector<Awaitable> awaitables)
-        : state_(std::make_shared<WhenAllVectorState<Awaitable>>(
+    explicit WhenAllVectorAwaitable(dstd::Vector<Awaitable> awaitables)
+        : state_(dstd::make_shared<WhenAllVectorState<Awaitable>>(
               std::move(awaitables))) {}
 
     /// Always return false: wrapper coroutines are launched in
@@ -288,7 +291,7 @@ class WhenAllVectorAwaitable<Awaitable> {
 
    private:
     void launch_wrapper() {
-        [](std::shared_ptr<WhenAllVectorState<Awaitable>> s) -> FireAndForget {
+        [](dstd::SharedPtr<WhenAllVectorState<Awaitable>> s) -> FireAndForget {
             for (;;) {
                 const std::size_t index = s->claims_.claim();
                 if (index >= s->total_) co_return;
@@ -309,12 +312,12 @@ class WhenAllVectorAwaitable<Awaitable> {
 };
 
 // ============================================================================
-// when_all_result_t - maps void result to std::monostate for tuple storage
+// when_all_result_t - maps void result to dstd::Monostate for tuple storage
 // ============================================================================
 
 template <typename T>
 using when_all_result_t =
-    std::conditional_t<std::is_void_v<T>, std::monostate, T>;
+    std::conditional_t<std::is_void_v<T>, dstd::Monostate, T>;
 
 // ============================================================================
 // WhenAllTupleAwaitable - Heterogeneous awaitable types (variadic/tuple)
@@ -327,9 +330,9 @@ using when_all_result_t =
  */
 template <typename... Awaitables>
 struct WhenAllTupleState : WhenAllCompletionState {
-    std::tuple<Awaitables...> awaitables_;
-    std::tuple<
-        std::optional<when_all_result_t<typename Awaitables::result_type>>...>
+    dstd::Tuple<Awaitables...> awaitables_;
+    dstd::Tuple<
+        dstd::Optional<when_all_result_t<typename Awaitables::result_type>>...>
         results_;
 
     explicit WhenAllTupleState(Awaitables&&... awaitables)
@@ -341,8 +344,8 @@ struct WhenAllTupleState : WhenAllCompletionState {
 /**
  * WhenAllTupleAwaitable - Lightweight awaitable wrapping heap-allocated state.
  *
- * Accepts heterogeneous awaitable types; returns std::tuple of their results.
- * Void result types are mapped to std::monostate in the tuple.
+ * Accepts heterogeneous awaitable types; returns dstd::Tuple of their results.
+ * Void result types are mapped to dstd::Monostate in the tuple.
  *
  * Usage:
  * @code
@@ -353,10 +356,10 @@ template <typename... Awaitables>
 class WhenAllTupleAwaitable {
    public:
     using result_type =
-        std::tuple<when_all_result_t<typename Awaitables::result_type>...>;
+        dstd::Tuple<when_all_result_t<typename Awaitables::result_type>...>;
 
     explicit WhenAllTupleAwaitable(Awaitables&&... awaitables)
-        : state_(std::make_shared<WhenAllTupleState<Awaitables...>>(
+        : state_(dstd::make_shared<WhenAllTupleState<Awaitables...>>(
               std::forward<Awaitables>(awaitables)...)) {}
 
     /// Always return false: wrapper coroutines are launched in
@@ -406,7 +409,7 @@ class WhenAllTupleAwaitable {
     }
 
    private:
-    std::shared_ptr<WhenAllTupleState<Awaitables...>> state_;
+    dstd::SharedPtr<WhenAllTupleState<Awaitables...>> state_;
 
     template <std::size_t... Is>
     result_type build_result(std::index_sequence<Is...>) {
@@ -415,16 +418,16 @@ class WhenAllTupleAwaitable {
 
     template <std::size_t I>
     void launch_one() {
-        using A = std::tuple_element_t<I, std::tuple<Awaitables...>>;
+        using A = std::tuple_element_t<I, dstd::Tuple<Awaitables...>>;
         using R = typename A::result_type;
 
-        [](std::shared_ptr<WhenAllTupleState<Awaitables...>> s)
+        [](dstd::SharedPtr<WhenAllTupleState<Awaitables...>> s)
             -> FireAndForget {
             std::exception_ptr ex;
             try {
                 if constexpr (std::is_void_v<R>) {
                     co_await std::move(std::get<I>(s->awaitables_));
-                    std::get<I>(s->results_).emplace(std::monostate{});
+                    std::get<I>(s->results_).emplace(dstd::Monostate{});
                 } else {
                     std::get<I>(s->results_)
                         .emplace(
@@ -448,8 +451,8 @@ class WhenAllTupleAwaitable {
 /**
  * when_all - Wait for all awaitables to complete (variadic/tuple version)
  *
- * Accepts 2+ heterogeneous awaitable types and returns a std::tuple of
- * their results. Void result types appear as std::monostate in the tuple.
+ * Accepts 2+ heterogeneous awaitable types and returns a dstd::Tuple of
+ * their results. Void result types appear as dstd::Monostate in the tuple.
  *
  * The requires(sizeof...(Awaitables) >= 2) constraint prevents ambiguity
  * with the single-argument vector overload.

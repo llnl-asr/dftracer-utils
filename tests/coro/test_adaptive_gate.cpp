@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
@@ -128,7 +129,7 @@ TEST_SUITE("AdaptiveGate") {
         const int n = 64;
 
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<int>> tasks;
+            dstd::Vector<coro::CoroTask<int>> tasks;
             for (int i = 0; i < n; ++i)
                 tasks.push_back(
                     gated_unit(gate, c, i, std::chrono::microseconds(200)));
@@ -152,7 +153,7 @@ TEST_SUITE("AdaptiveGate") {
             for (const auto t : {std::chrono::microseconds(100),
                                  std::chrono::microseconds(5000),
                                  std::chrono::microseconds(100)}) {
-                std::vector<coro::CoroTask<int>> tasks;
+                dstd::Vector<coro::CoroTask<int>> tasks;
                 for (int i = 0; i < phase; ++i)
                     tasks.push_back(gated_unit(gate, c, i, t));
                 const auto results = co_await coro::when_all(std::move(tasks));

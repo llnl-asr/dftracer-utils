@@ -51,11 +51,10 @@ coro::CoroTask<std::vector<std::string>> collect_partials(
         plans.reserve(end - at);
         for (std::size_t i = at; i < end; ++i)
             plans.push_back(shards[i].memory_budget(share).aggregate_partial());
-        std::vector<coro::CoroTask<std::string>> runs;
+        dstd::Vector<coro::CoroTask<std::string>> runs;
         runs.reserve(plans.size());
         for (const auto& p : plans) runs.push_back(p.collect());
-        std::vector<std::string> done =
-            co_await coro::when_all(std::move(runs));
+        auto done = co_await coro::when_all(std::move(runs));
         for (std::string& d : done) partials.push_back(std::move(d));
     }
     co_return partials;

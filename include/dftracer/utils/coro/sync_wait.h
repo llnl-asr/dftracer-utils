@@ -7,10 +7,10 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/run_on.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/optional.h>
 
 #include <exception>
-#include <future>
 #include <type_traits>
 #include <utility>
 
@@ -29,7 +29,7 @@ struct SyncWaitSlot<void> {};
 // future is ready, while set_value may still be running.
 template <class T>
 Coro sync_wait_child(CoroTask<T> task, SyncWaitSlot<T>& slot,
-                     std::exception_ptr& error, std::promise<void> done) {
+                     std::exception_ptr& error, dstd::Promise<void> done) {
     try {
         if constexpr (std::is_void_v<T>) {
             co_await std::move(task);
@@ -62,8 +62,8 @@ T sync_wait(Executor& ex, CoroTask<T> task) {
     task.handle().promise().set_executor(&ex);
     detail::SyncWaitSlot<T> slot;
     std::exception_ptr error;
-    std::promise<void> done;
-    std::future<void> finished = done.get_future();
+    dstd::Promise<void> done;
+    dstd::Future<void> finished = done.get_future();
     Coro child =
         detail::sync_wait_child(std::move(task), slot, error, std::move(done));
     child.handle().promise().executor = &ex;

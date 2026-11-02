@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/file_group.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
@@ -1182,7 +1183,7 @@ TEST_CASE("FileBuild commits from concurrent tasks and an open reader") {
         co_return committed.has_value();
     };
     const auto all = [&]() -> coro::CoroTask<int> {
-        std::vector<coro::CoroTask<bool>> tasks;
+        dstd::Vector<coro::CoroTask<bool>> tasks;
         for (int i = 0; i < FILES; ++i) tasks.push_back(one(*opened, i));
         auto results = co_await coro::when_all(std::move(tasks));
         int ok = 0;

@@ -16,6 +16,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -166,7 +167,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         Gate gate;
         auto frame = [&]() -> coro::CoroTask<void> {
             probe.entered.store(true);
-            std::vector<coro::CoroTask<void>> children;
+            dstd::Vector<coro::CoroTask<void>> children;
             children.push_back(stuck_child(&gate));
             children.push_back(stuck_child(&gate));
             try {

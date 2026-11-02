@@ -3,6 +3,12 @@
 #define DFTRACER_UTILS_CORO_TIMER_SERVICE_H
 
 #include <concurrentqueue.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/queue.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/memory/manager.h>
 
 #include <atomic>
 #include <chrono>
@@ -11,15 +17,12 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <queue>
-#include <thread>
-#include <unordered_map>
 
 namespace dftracer::utils::coro {
 
 class TimerService {
    public:
-    using Callback = std::function<void()>;
+    using Callback = dstd::Function<void()>;
     using TimerId = uint64_t;
 
     /// The id of a timeout that was not registered, so nothing fires it.
@@ -30,7 +33,7 @@ class TimerService {
         TimerId id;
         std::chrono::steady_clock::time_point expiry;
         Callback callback;
-        std::shared_ptr<std::atomic<bool>> cancelled;
+        dstd::SharedPtr<std::atomic<bool>> cancelled;
 
         bool operator>(const Timer& other) const {
             return expiry > other.expiry;
@@ -41,16 +44,14 @@ class TimerService {
         TimerId id;
         std::chrono::steady_clock::time_point expiry;
         Callback callback;
-        std::shared_ptr<std::atomic<bool>> cancelled;
+        dstd::SharedPtr<std::atomic<bool>> cancelled;
     };
 
-    std::priority_queue<Timer, std::vector<Timer>, std::greater<Timer>>
-        timer_heap_;
+    dstd::PriorityQueue<Timer, std::greater<Timer>> timer_heap_;
     moodycamel::ConcurrentQueue<TimerRequest> pending_timers_;
-    std::unordered_map<TimerId, std::shared_ptr<std::atomic<bool>>>
-        cancellation_tokens_;
+    dstd::Map<TimerId, dstd::SharedPtr<std::atomic<bool>>> cancellation_tokens_;
     mutable std::mutex tokens_mutex_;  ///< Protects cancellation_tokens_
-    std::thread timer_thread_;
+    dstd::Thread timer_thread_;
     std::mutex wake_mutex_;
     std::condition_variable wake_cv_;
     std::atomic<bool> running_{false};
@@ -74,7 +75,7 @@ class TimerService {
             return;
         }
 
-        timer_thread_ = std::thread([this]() { timer_loop(); });
+        timer_thread_ = dstd::Thread([this]() { timer_loop(); });
     }
 
     void stop() {
@@ -90,6 +91,14 @@ class TimerService {
         if (timer_thread_.joinable()) {
             timer_thread_.join();
         }
+
+        // Timers left over would never fire, and their memory is counted.
+        timer_heap_ = decltype(timer_heap_){};
+        TimerRequest req;
+        while (pending_timers_.try_dequeue(req)) {
+        }
+        std::lock_guard<std::mutex> lock(tokens_mutex_);
+        cancellation_tokens_.clear();
     }
 
     /// Stops the timer thread for good. A later start() does nothing.
@@ -110,7 +119,9 @@ class TimerService {
         auto expiry = std::chrono::steady_clock::now() + duration;
         TimerId id = next_id_.fetch_add(1, std::memory_order_relaxed);
 
-        auto cancel_token = std::make_shared<std::atomic<bool>>(false);
+        // On the general pool: the timer keeps these past the caller's pool.
+        memory::Scope scope{memory::Manager::get().general()};
+        auto cancel_token = dstd::make_shared<std::atomic<bool>>(false);
         {
             std::lock_guard<std::mutex> lock(tokens_mutex_);
             cancellation_tokens_[id] = cancel_token;
@@ -155,8 +166,11 @@ class TimerService {
             const Timer& next_timer = timer_heap_.top();
 
             if (next_timer.expiry <= now) {
-                Timer timer = timer_heap_.top();
+                Timer timer = std::move(const_cast<Timer&>(timer_heap_.top()));
                 timer_heap_.pop();
+                // An idle service holds no counted memory. Each timer already
+                // allocates its token, so one more allocation is small.
+                if (timer_heap_.empty()) timer_heap_ = decltype(timer_heap_){};
 
                 if (!timer.cancelled->load(std::memory_order_acquire) &&
                     timer.callback) {

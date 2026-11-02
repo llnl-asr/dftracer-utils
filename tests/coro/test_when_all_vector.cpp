@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
@@ -90,7 +91,7 @@ TEST_CASE("when_all vector - ready and yielding children keep their order") {
     std::atomic<int> wrong{0};
     auto body = [&wrong]() -> CoroTask<void> {
         for (int round = 0; round < ROUNDS; ++round) {
-            std::vector<CoroTask<int>> children;
+            dstd::Vector<CoroTask<int>> children;
             for (int i = 0; i < CHILDREN; ++i) {
                 children.push_back(i % 3 == 1 ? yielded_value(i)
                                               : ready_value(i));
@@ -113,7 +114,7 @@ TEST_CASE("a when_all of bool tasks keeps every result") {
     std::atomic<int> wrong{0};
     auto body = [&wrong]() -> CoroTask<void> {
         for (int round = 0; round < ROUNDS; ++round) {
-            std::vector<CoroTask<bool>> children;
+            dstd::Vector<CoroTask<bool>> children;
             for (int i = 0; i < CHILDREN; ++i) {
                 const bool value = (i + round) % 2 == 0;
                 children.push_back(i % 3 == 1 ? yielded_flag(value)
@@ -137,7 +138,7 @@ TEST_CASE("when_all vector - a failing child does not stop the others") {
     std::atomic<int> ran{0};
     std::atomic<int> caught{0};
     auto body = [&ran, &caught]() -> CoroTask<void> {
-        std::vector<CoroTask<int>> valued;
+        dstd::Vector<CoroTask<int>> valued;
         valued.push_back(ready_value(1));
         valued.push_back(failing_value(2));
         valued.push_back(yielded_value(3));
@@ -147,7 +148,7 @@ TEST_CASE("when_all vector - a failing child does not stop the others") {
         } catch (const std::runtime_error&) {
             caught.fetch_add(1);
         }
-        std::vector<CoroTask<void>> children;
+        dstd::Vector<CoroTask<void>> children;
         children.push_back(count_ready(&ran));
         children.push_back(count_yielded(&ran));
         children.push_back(count_ready(&ran));
@@ -168,7 +169,7 @@ TEST_CASE("when_all vector - the awaiter resumes after every child ended") {
     auto body = [&ran, &early]() -> CoroTask<void> {
         for (int round = 0; round < ROUNDS; ++round) {
             const int before = ran.load();
-            std::vector<CoroTask<void>> children;
+            dstd::Vector<CoroTask<void>> children;
             for (int i = 0; i < CHILDREN; ++i) {
                 children.push_back(i % 2 == 0 ? count_ready(&ran)
                                               : count_yielded(&ran));
@@ -186,12 +187,12 @@ TEST_CASE("when_any vector - the first child to end wins") {
     std::atomic<int> wrong{0};
     auto body = [&wrong]() -> CoroTask<void> {
         for (int round = 0; round < 100; ++round) {
-            std::vector<CoroTask<int>> ready;
+            dstd::Vector<CoroTask<int>> ready;
             for (int i = 0; i < 5; ++i) ready.push_back(ready_value(i + 10));
             auto first = co_await when_any(std::move(ready));
             if (first.index != 0 || first.result != 10) wrong.fetch_add(1);
 
-            std::vector<CoroTask<int>> mixed;
+            dstd::Vector<CoroTask<int>> mixed;
             mixed.push_back(yielded_value(20));
             mixed.push_back(ready_value(21));
             mixed.push_back(yielded_value(22));
@@ -209,7 +210,7 @@ TEST_CASE("when_any drops a loser that never started") {
     std::atomic<int> ran{0};
     std::atomic<std::size_t> winner{99};
     auto body = [&ran, &winner]() -> CoroTask<void> {
-        std::vector<CoroTask<int>> children;
+        dstd::Vector<CoroTask<int>> children;
         children.push_back(ready_value(1));
         for (int i = 0; i < 4; ++i) children.push_back(record_run(&ran, 2));
         auto result = co_await when_any(std::move(children));
@@ -224,7 +225,7 @@ TEST_CASE("when_any delivers the exception of a winner that threw") {
     std::atomic<int> caught{0};
     std::atomic<int> other{0};
     auto body = [&caught, &other]() -> CoroTask<void> {
-        std::vector<CoroTask<int>> children;
+        dstd::Vector<CoroTask<int>> children;
         children.push_back(failing_value(1));
         children.push_back(ready_value(2));
         try {
@@ -244,7 +245,7 @@ TEST_CASE("when_any reports a cancelled winner") {
     std::atomic<int> cancelled{0};
     std::atomic<int> other{0};
     auto body = [&cancelled, &other]() -> CoroTask<void> {
-        std::vector<CancelledAtOnce> children(2);
+        dstd::Vector<CancelledAtOnce> children(2);
         try {
             co_await when_any(std::move(children));
         } catch (const common::DFTUtilsException& e) {

@@ -4,12 +4,11 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/dstd/optional.h>
 
 #include <coroutine>
 #include <exception>
 #include <iterator>
-#include <memory>
-#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -42,7 +41,7 @@ class Generator {
      * Promise type for coroutine
      */
     struct promise_type {
-        std::optional<T> current_value_;
+        dstd::Optional<T> current_value_;
         std::exception_ptr exception_;
 
         /**

@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/join_handle.h>
 #include <dftracer/utils/coro/spawn_future.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 
 #include <atomic>
@@ -64,7 +65,7 @@ class Scope {
 
     template <class T>
     SpawnFuture<T> spawn_future(CoroTask<T> task) {
-        auto state = std::make_shared<SharedState<T>>();
+        auto state = dstd::make_shared<SharedState<T>>();
         state->executor = executor_;
         if (std::exception_ptr refused = refusal()) {
             state->complete_with_exception(std::move(refused));
@@ -80,7 +81,7 @@ class Scope {
     template <class Fn,
               class T = typename std::invoke_result_t<Fn&>::value_type>
     SpawnFuture<T> spawn_future(Fn fn) {
-        auto state = std::make_shared<SharedState<T>>();
+        auto state = dstd::make_shared<SharedState<T>>();
         state->executor = executor_;
         if (std::exception_ptr refused = refusal()) {
             state->complete_with_exception(std::move(refused));
@@ -164,7 +165,7 @@ class Scope {
     // run at once and the handler still holds the thrown object.
     template <class T>
     static Coro run_future_child(CoroTask<T> task,
-                                 std::shared_ptr<SharedState<T>> state) {
+                                 dstd::SharedPtr<SharedState<T>> state) {
         std::exception_ptr error;
         try {
             if constexpr (std::is_void_v<T>) {
@@ -182,7 +183,7 @@ class Scope {
 
     template <class Fn, class T>
     static Coro run_fn_future_child(Fn fn, Scope* scope,
-                                    std::shared_ptr<SharedState<T>> state) {
+                                    dstd::SharedPtr<SharedState<T>> state) {
         std::exception_ptr error;
         try {
             CoroTask<T> task = fn();

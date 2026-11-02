@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -136,7 +137,7 @@ class ChunkVerifierUtility {
         std::uint64_t input_hash = input_hasher_(input.metadata);
 
         // Spawn parallel event collection for each chunk
-        std::vector<coro::SpawnFuture<std::vector<EventType>>> futures;
+        dstd::Vector<coro::SpawnFuture<std::vector<EventType>>> futures;
         futures.reserve(input.chunks.size());
 
         for (const auto& chunk : input.chunks) {

@@ -4,11 +4,12 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/resumption_helper.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/vector.h>
 
+#include <array>
 #include <coroutine>
 #include <cstddef>
 #include <cstdlib>
-#include <vector>
 
 namespace dftracer::utils::coro {
 
@@ -22,21 +23,44 @@ Executor* Executor::set_current(Executor* e) noexcept {
     return old;
 }
 
-// Thread-local list of coroutine handles to destroy after the current
-// resume() returns.  FinalAwaiter pushes here instead of the shared
-// destroy_queue_ to avoid another worker freeing the frame while
-// the coroutine-suspend machinery is still accessing it.
-static thread_local std::vector<std::coroutine_handle<>> tls_pending_destroys;
+namespace {
+
+// Coroutine handles to destroy after the current resume() returns, so another
+// worker never frees a frame while its suspend is still running. The inline
+// slots keep the common drain free of allocation, and the overflow is freed
+// after each drain, so no counted block outlives it.
+struct PendingDestroys {
+    static constexpr std::size_t INLINE = 16;
+    std::array<std::coroutine_handle<>, INLINE> handles{};
+    std::size_t count = 0;
+    dstd::Vector<std::coroutine_handle<>> overflow;
+};
+
+thread_local PendingDestroys tls_pending_destroys;
+
+}  // namespace
 
 void schedule_thread_local_destroy(std::coroutine_handle<> h) {
-    tls_pending_destroys.push_back(h);
+    PendingDestroys& p = tls_pending_destroys;
+    if (p.count < PendingDestroys::INLINE) {
+        p.handles[p.count++] = h;
+    } else {
+        p.overflow.push_back(h);
+    }
 }
 
 void drain_thread_local_destroys() {
-    for (std::size_t i = 0; i < tls_pending_destroys.size(); ++i) {
-        if (auto h = tls_pending_destroys[i]) h.destroy();
+    PendingDestroys& p = tls_pending_destroys;
+    // A destroy can schedule more, so both loops read the size each round.
+    for (std::size_t i = 0; i < p.count; ++i) {
+        if (auto h = p.handles[i]) h.destroy();
     }
-    tls_pending_destroys.clear();
+    for (std::size_t i = 0; i < p.overflow.size(); ++i) {
+        if (auto h = p.overflow[i]) h.destroy();
+    }
+    p.count = 0;
+    if (!p.overflow.empty())
+        dstd::Vector<std::coroutine_handle<>>().swap(p.overflow);
 }
 
 Executor* resume_executor_for(Executor* preferred) noexcept {

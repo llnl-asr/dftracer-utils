@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/coro/scope.h>
@@ -48,7 +49,7 @@ coro::CoroTask<ParallelReadResult> read_arrow_files_parallel(
         co_return result;
     }
 
-    std::vector<coro::CoroTask<ArrowFileReadResult>> tasks;
+    dstd::Vector<coro::CoroTask<ArrowFileReadResult>> tasks;
     tasks.reserve(paths.size());
 
     for (auto& path : paths) {
@@ -77,7 +78,7 @@ coro::CoroTask<ParallelReadResult> read_arrow_files_streaming(
         co_return ParallelReadResult{};
     }
 
-    std::vector<coro::CoroTask<ArrowFileReadResult>> tasks;
+    dstd::Vector<coro::CoroTask<ArrowFileReadResult>> tasks;
     tasks.reserve(paths.size());
 
     for (auto& path : paths) {

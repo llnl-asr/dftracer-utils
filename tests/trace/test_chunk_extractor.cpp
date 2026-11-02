@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
 #include <doctest/doctest.h>
@@ -28,7 +29,7 @@ coro::CoroTask<ChunkExtractorUtilityOutput> admitted_extract(
 }
 
 struct AdmittedRun {
-    std::vector<ChunkExtractorUtilityOutput> outputs;
+    dstd::Vector<ChunkExtractorUtilityOutput> outputs;
     std::size_t peak_in_flight = 0;
     std::uint64_t peak_reserved = 0;
 };
@@ -40,7 +41,7 @@ AdmittedRun run_admitted(const std::string& file, const std::string& out_dir,
     AdmittedRun run;
     Runtime rt(4);
     auto body = [&](coro::Scope&) -> coro::CoroTask<void> {
-        std::vector<coro::CoroTask<ChunkExtractorUtilityOutput>> tasks;
+        dstd::Vector<coro::CoroTask<ChunkExtractorUtilityOutput>> tasks;
         for (std::size_t i = 0; i < groups; ++i) {
             tasks.push_back(admitted_extract(
                 &admission, ChunkExtractorUtilityInput::from_files(

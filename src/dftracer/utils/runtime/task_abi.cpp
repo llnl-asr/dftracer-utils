@@ -4,11 +4,11 @@
 #include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <memory>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -21,8 +21,8 @@ dftu_task* task_to_abi(coro::CoroTask<void>&& task) {
 
 namespace {
 
-std::vector<coro::CoroTask<void>> take(dftu_task* const* ts, std::uint32_t n) {
-    std::vector<coro::CoroTask<void>> out;
+dstd::Vector<coro::CoroTask<void>> take(dftu_task* const* ts, std::uint32_t n) {
+    dstd::Vector<coro::CoroTask<void>> out;
     out.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i) {
         auto* p = reinterpret_cast<coro::CoroTask<void>*>(ts[i]);
@@ -42,12 +42,12 @@ coro::CoroTask<void> await_one(coro::CoroTask<void>* task) {
     co_await std::move(*task);
 }
 
-coro::CoroTask<void> await_all(std::vector<coro::CoroTask<void>> inner) {
+coro::CoroTask<void> await_all(dstd::Vector<coro::CoroTask<void>> inner) {
     co_await coro::when_all(std::move(inner));
 }
 
-coro::CoroTask<void> await_any(std::vector<coro::CoroTask<void>> inner) {
-    std::vector<coro::CoroTask<int>> valued;
+coro::CoroTask<void> await_any(dstd::Vector<coro::CoroTask<void>> inner) {
+    dstd::Vector<coro::CoroTask<int>> valued;
     valued.reserve(inner.size());
     for (auto& t : inner) valued.push_back(as_valued(std::move(t)));
     co_await coro::when_any(std::move(valued));

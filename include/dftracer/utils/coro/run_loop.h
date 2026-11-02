@@ -5,11 +5,11 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/parked.h>
 #include <dftracer/utils/coro/timer_service.h>
+#include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/function_ref.h>
 
 #include <condition_variable>
 #include <coroutine>
-#include <deque>
 #include <mutex>
 
 namespace dftracer::utils::coro {
@@ -74,7 +74,7 @@ class RunLoop final : public Executor {
     std::mutex mutex_;
     std::condition_variable ready_cv_;
     ParkRegistry parked_;
-    std::deque<std::coroutine_handle<>> ready_;
+    dstd::Deque<std::coroutine_handle<>> ready_;
     TimerService timer_service_;
 };
 

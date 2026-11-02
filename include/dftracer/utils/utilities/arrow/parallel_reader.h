@@ -6,6 +6,7 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 #include <functional>
@@ -38,7 +39,7 @@ struct ArrowFileReadResult {
  * Result from reading multiple Arrow IPC files in parallel.
  */
 struct ParallelReadResult {
-    std::vector<ArrowFileReadResult> file_results;
+    dstd::Vector<ArrowFileReadResult> file_results;
     std::int64_t total_rows = 0;
     std::int64_t total_batches = 0;
     std::size_t files_read = 0;

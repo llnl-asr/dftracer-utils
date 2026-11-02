@@ -11,6 +11,8 @@
 #include <dftracer/utils/coro/monitor.h>
 #include <dftracer/utils/coro/pool_resume.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/memory/manager.h>
 
 #include <atomic>
@@ -187,7 +189,7 @@ struct invoke_res<F, void> {
 /// just the right's type when the left is void.
 template <typename A, typename B>
 struct and_value {
-    using type = std::tuple<A, B>;
+    using type = dstd::Tuple<A, B>;
 };
 
 template <typename B>
@@ -522,7 +524,7 @@ class CoroTask {
      * @code
      * auto result = co_await compute_async()
      *     .then([](int x) { return x * 2; })
-     *     .then([](int x) { return std::to_string(x); });
+     *     .then([](int x) { return dstd::to_string(x); });
      * @endcode
      */
     template <typename Func>
@@ -590,7 +592,7 @@ class CoroTask {
      * @code
      * auto result = co_await compute_async()
      *     > [](int x) { return x * 2; }
-     *     > [](int x) { return std::to_string(x); };
+     *     > [](int x) { return dstd::to_string(x); };
      * @endcode
      */
     template <typename Func>
@@ -606,7 +608,7 @@ class CoroTask {
      *
      * Usage:
      * @code
-     * auto result = co_await [](int x) { return std::to_string(x); }
+     * auto result = co_await [](int x) { return dstd::to_string(x); }
      *     < compute_async();
      * @endcode
      */

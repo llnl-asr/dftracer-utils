@@ -6,12 +6,13 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/parked.h>
 #include <dftracer/utils/coro/resumption_helper.h>
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/list.h>
 
 #include <algorithm>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <mutex>
 
 namespace dftracer::utils::coro {
@@ -123,7 +124,7 @@ class CoroSemaphore {
         if (n > capacity_) n = capacity_;
         Waiter wake_local[8];
         std::size_t wake_n = 0;
-        std::deque<Waiter> wake_overflow;
+        dstd::Deque<Waiter> wake_overflow;
         {
             std::lock_guard<std::mutex> lock(mtx_);
             available_ += n;
@@ -154,7 +155,7 @@ class CoroSemaphore {
     const std::uint64_t capacity_;
     std::mutex mtx_;
     std::uint64_t available_;
-    std::deque<Waiter> waiters_;
+    dstd::List<Waiter> waiters_;
 };
 
 }  // namespace dftracer::utils::coro

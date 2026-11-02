@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
@@ -1830,7 +1831,7 @@ TEST_CASE(
     auto parent_task = make_task(
         [](CoroScope& ctx) -> coro::CoroTask<int> {
             // Spawn 3 children that return values
-            std::vector<coro::SpawnFuture<int>> futures;
+            dstd::Vector<coro::SpawnFuture<int>> futures;
 
             for (int i = 0; i < 3; ++i) {
                 futures.push_back(
@@ -1869,7 +1870,7 @@ TEST_CASE(
     auto parent_task = make_task(
         [](CoroScope& ctx) -> coro::CoroTask<int> {
             // Spawn 3 child COROUTINES (not simple tasks)
-            std::vector<coro::SpawnFuture<int>> futures;
+            dstd::Vector<coro::SpawnFuture<int>> futures;
 
             for (int i = 0; i < 3; ++i) {
                 futures.push_back(
@@ -1959,7 +1960,7 @@ coro::CoroTask<std::string> slow_task2_func(CoroScope& task_ctx) {
 // build_special_member_call
 coro::CoroTask<std::string> when_any_cancellation_parent_func(CoroScope& ctx) {
     // Spawn tasks and collect SpawnFutures directly
-    std::vector<coro::SpawnFuture<std::string>> futures;
+    dstd::Vector<coro::SpawnFuture<std::string>> futures;
     futures.push_back(ctx.spawn(fast_task_func));
     futures.push_back(ctx.spawn(slow_task1_func));
     futures.push_back(ctx.spawn(slow_task2_func));
@@ -2020,7 +2021,7 @@ static coro::CoroTask<int> timer_service_basic_func(CoroScope& ctx) {
     });
 
     // Race them - fast task should win
-    std::vector<coro::SpawnFuture<int>> futures;
+    dstd::Vector<coro::SpawnFuture<int>> futures;
     futures.push_back(std::move(future1));
     futures.push_back(std::move(future2));
     auto result = co_await coro::when_any(std::move(futures));
@@ -2059,7 +2060,7 @@ static coro::CoroTask<std::string> fast_task_timeout_func(CoroScope& ctx) {
         co_return "timeout_expired";
     });
 
-    std::vector<coro::SpawnFuture<std::string>> futures;
+    dstd::Vector<coro::SpawnFuture<std::string>> futures;
     futures.push_back(std::move(future1));
     futures.push_back(std::move(future2));
     auto result = co_await coro::when_any(std::move(futures));
@@ -2103,7 +2104,7 @@ static coro::CoroTask<int> multi_timeout_func(CoroScope& ctx) {
     });
 
     // Race all 3 tasks - task1 should complete first
-    std::vector<coro::SpawnFuture<int>> futures;
+    dstd::Vector<coro::SpawnFuture<int>> futures;
     futures.push_back(std::move(future1));
     futures.push_back(std::move(future2));
     futures.push_back(std::move(future3));

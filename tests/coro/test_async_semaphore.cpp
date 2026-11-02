@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
@@ -25,7 +26,7 @@ TEST_SUITE("CoroSemaphore") {
         const int n = 64;
 
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<void>> tasks;
+            dstd::Vector<coro::CoroTask<void>> tasks;
             for (int i = 0; i < n; ++i) {
                 // Sizes 10..40 so several fit at once but not all.
                 std::uint64_t need = 10 + (i % 4) * 10;
@@ -76,7 +77,7 @@ TEST_SUITE("CoroSemaphore") {
         const int n = 100;
 
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<void>> tasks;
+            dstd::Vector<coro::CoroTask<void>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(
                     [](coro::CoroSemaphore& s,

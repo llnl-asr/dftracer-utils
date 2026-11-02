@@ -18,6 +18,7 @@
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 
@@ -142,7 +143,7 @@ double run_round(Runtime& rt, Strategy& strat, const Blob& blob, int members,
 
     auto task = coro::with_scope([&strat, blob_ptr, members, readers](
                                      coro::Scope&) -> coro::CoroTask<void> {
-        std::vector<coro::CoroTask<Bytes>> tasks;
+        dstd::Vector<coro::CoroTask<Bytes>> tasks;
         tasks.reserve(static_cast<std::size_t>(readers) * members);
         // Reader r requests every member -> R readers overlap on each.
         for (int r = 0; r < readers; ++r) {
@@ -181,7 +182,7 @@ double bench_mutex_wake(Runtime& rt, int rounds, int waiters) {
                     int value = 0;
                 };
                 auto e = std::make_shared<Entry>();
-                std::vector<coro::CoroTask<int>> tasks;
+                dstd::Vector<coro::CoroTask<int>> tasks;
                 tasks.reserve(waiters);
                 for (int w = 0; w < waiters; ++w) {
                     tasks.push_back(
@@ -210,7 +211,7 @@ double bench_once_wake(Runtime& rt, int rounds, int waiters) {
         [rounds, waiters](coro::Scope&) -> coro::CoroTask<void> {
             for (int r = 0; r < rounds; ++r) {
                 auto once = std::make_shared<coro::AsyncOnce<int>>();
-                std::vector<coro::CoroTask<int>> tasks;
+                dstd::Vector<coro::CoroTask<int>> tasks;
                 tasks.reserve(waiters);
                 for (int w = 0; w < waiters; ++w) {
                     tasks.push_back([](std::shared_ptr<coro::AsyncOnce<int>> o)

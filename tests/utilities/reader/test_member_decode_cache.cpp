@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
 #include <doctest/doctest.h>
@@ -47,7 +48,7 @@ TEST_SUITE("MemberDecodeCache") {
 
         std::vector<Bytes> results(n);
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<Bytes>> tasks;
+            dstd::Vector<coro::CoroTask<Bytes>> tasks;
             tasks.reserve(n);
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(cache.get_or_decode(
@@ -77,7 +78,7 @@ TEST_SUITE("MemberDecodeCache") {
         const int n = 8;
 
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<Bytes>> tasks;
+            dstd::Vector<coro::CoroTask<Bytes>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(cache.get_or_decode(
                     1, static_cast<std::uint64_t>(i),

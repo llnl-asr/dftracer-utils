@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/scope_exit.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
@@ -240,7 +241,7 @@ TEST_CASE("when_any - a spawned loser stops when cancelled") {
                             co_return 2;
                         });
 
-                    std::vector<coro::SpawnFuture<int>> futures;
+                    dstd::Vector<coro::SpawnFuture<int>> futures;
                     futures.push_back(std::move(winner));
                     futures.push_back(std::move(loser));
                     auto result = co_await coro::when_any(std::move(futures));

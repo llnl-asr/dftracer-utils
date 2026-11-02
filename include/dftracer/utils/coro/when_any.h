@@ -24,17 +24,21 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
-#include <vector>
 
 // Timer service needed for TimeoutAwaitable
 #include <dftracer/utils/coro/timer_service.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 
 namespace dftracer::utils::coro {
 
-/// Maps void result types to std::monostate for use in std::variant.
+/// Maps void result types to dstd::Monostate for use in dstd::Variant.
 template <typename T>
 using when_any_result_t =
-    std::conditional_t<std::is_void_v<T>, std::monostate, T>;
+    std::conditional_t<std::is_void_v<T>, dstd::Monostate, T>;
 
 namespace detail {
 
@@ -53,9 +57,9 @@ struct CancelAware {
         return inner.await_suspend(h);
     }
 
-    std::optional<Value> await_resume() {
+    dstd::Optional<Value> await_resume() {
         if constexpr (requires(const A& a) { a.cancelled(); }) {
-            if (inner.cancelled()) return std::nullopt;
+            if (inner.cancelled()) return dstd::nullopt;
         }
         if constexpr (std::is_void_v<typename A::result_type>) {
             inner.await_resume();
@@ -109,7 +113,7 @@ struct WhenAnyResult {
     }
 
     /// Cancellation tokens for remaining tasks
-    std::vector<std::shared_ptr<std::atomic<bool>>>
+    dstd::Vector<dstd::SharedPtr<std::atomic<bool>>>
         remaining_cancellation_tokens;
 };
 
@@ -126,12 +130,12 @@ struct WhenAnySharedState : WhenAnyCompletionState {
     std::atomic<bool> completed{false};
     WhenAnyResult<typename Awaitable::result_type> result;
     std::exception_ptr exception;
-    std::vector<std::shared_ptr<std::atomic<bool>>> cancellation_tokens;
+    dstd::Vector<dstd::SharedPtr<std::atomic<bool>>> cancellation_tokens;
     bool cancelled_winner = false;
-    std::vector<Awaitable> awaitables;
+    dstd::Vector<Awaitable> awaitables;
     ChildClaims claims;
 
-    explicit WhenAnySharedState(std::vector<Awaitable> aws)
+    explicit WhenAnySharedState(dstd::Vector<Awaitable> aws)
         : awaitables(std::move(aws)) {
         wrappers_total_ = awaitables.size();
         cancellation_tokens.reserve(awaitables.size());
@@ -192,13 +196,13 @@ template <typename Awaitable>
 class WhenAnyAwaitable {
    private:
     using SharedState = WhenAnySharedState<Awaitable>;
-    std::shared_ptr<SharedState> state_;
+    dstd::SharedPtr<SharedState> state_;
 
    public:
     using result_type = WhenAnyResult<typename Awaitable::result_type>;
 
-    explicit WhenAnyAwaitable(std::vector<Awaitable> awaitables)
-        : state_(std::make_shared<SharedState>(std::move(awaitables))) {}
+    explicit WhenAnyAwaitable(dstd::Vector<Awaitable> awaitables)
+        : state_(dstd::make_shared<SharedState>(std::move(awaitables))) {}
 
     ~WhenAnyAwaitable() = default;
 
@@ -252,7 +256,7 @@ class WhenAnyAwaitable {
     void launch_wrapper() {
         // Fire-and-forget wrapper. It takes children until none is left or one
         // suspends it, then the launcher starts another wrapper.
-        auto wrapper = [](std::shared_ptr<SharedState> state) -> coro::Coro {
+        auto wrapper = [](dstd::SharedPtr<SharedState> state) -> coro::Coro {
             for (;;) {
                 const std::size_t index = state->claims.claim();
                 // Not awaitables.size(): the awaiter clears the vector after
@@ -323,7 +327,7 @@ class WhenAnyAwaitable {
  *
  * Usage:
  * @code
- * std::vector<coro::CoroTask<int>> reads;
+ * dstd::Vector<coro::CoroTask<int>> reads;
  * reads.push_back(read_cache());
  * reads.push_back(read_disk());
  * auto result = co_await when_any(std::move(reads));
@@ -336,7 +340,7 @@ class WhenAnyAwaitable {
  * @endcode
  */
 template <typename Awaitable>
-auto when_any(std::vector<Awaitable> awaitables) {
+auto when_any(dstd::Vector<Awaitable> awaitables) {
     return WhenAnyAwaitable<Awaitable>(std::move(awaitables));
 }
 
@@ -351,7 +355,7 @@ auto when_any(std::vector<Awaitable> awaitables) {
 template <typename Awaitable>
 auto when_any(std::initializer_list<Awaitable> awaitables) {
     return WhenAnyAwaitable<Awaitable>(
-        std::vector<Awaitable>(awaitables.begin(), awaitables.end()));
+        dstd::Vector<Awaitable>(awaitables.begin(), awaitables.end()));
 }
 
 // ============================================================================
@@ -363,9 +367,9 @@ namespace detail {
 /// Helper to convert variadic awaitables to vector
 /// All awaitables must be the same type
 template <typename Awaitable, typename... Rest>
-std::vector<Awaitable> make_awaitable_vector(Awaitable&& first,
-                                             Rest&&... rest) {
-    std::vector<Awaitable> vec;
+dstd::Vector<Awaitable> make_awaitable_vector(Awaitable&& first,
+                                              Rest&&... rest) {
+    dstd::Vector<Awaitable> vec;
     vec.reserve(1 + sizeof...(Rest));
     vec.push_back(std::forward<Awaitable>(first));
     (vec.push_back(std::forward<Rest>(rest)), ...);
@@ -442,9 +446,9 @@ struct WhenAnyTupleResult {
     template <typename... As>
     friend class WhenAnyTupleAwaitable;
 
-    std::variant<when_any_result_t<typename Awaitables::result_type>...>
+    dstd::Variant<when_any_result_t<typename Awaitables::result_type>...>
         result_;
-    std::vector<std::shared_ptr<std::atomic<bool>>>
+    dstd::Vector<dstd::SharedPtr<std::atomic<bool>>>
         remaining_cancellation_tokens_;
 };
 
@@ -452,12 +456,12 @@ template <typename... Awaitables>
 struct WhenAnyTupleState : WhenAnyCompletionState {
     static constexpr std::size_t total_ = sizeof...(Awaitables);
 
-    std::optional<std::tuple<Awaitables...>> awaitables_;
+    dstd::Optional<dstd::Tuple<Awaitables...>> awaitables_;
     std::atomic<bool> completed{false};
     WhenAnyTupleResult<Awaitables...> result;
     std::exception_ptr exception;
     bool cancelled_winner = false;
-    std::vector<std::shared_ptr<std::atomic<bool>>> cancellation_tokens;
+    dstd::Vector<dstd::SharedPtr<std::atomic<bool>>> cancellation_tokens;
 
     explicit WhenAnyTupleState(Awaitables&&... aws)
         : awaitables_(std::in_place, std::forward<Awaitables>(aws)...) {
@@ -547,13 +551,13 @@ template <typename... Awaitables>
 class WhenAnyTupleAwaitable {
    private:
     using State = WhenAnyTupleState<Awaitables...>;
-    std::shared_ptr<State> state_;
+    dstd::SharedPtr<State> state_;
 
     /// Launch a fire-and-forget Coro wrapper for the I-th awaitable.
     template <std::size_t I>
     void launch_one() {
-        using A = std::tuple_element_t<I, std::tuple<Awaitables...>>;
-        auto wrapper = [](std::shared_ptr<State> state) -> coro::Coro {
+        using A = std::tuple_element_t<I, dstd::Tuple<Awaitables...>>;
+        auto wrapper = [](dstd::SharedPtr<State> state) -> coro::Coro {
             if (state->completed.load(std::memory_order_acquire) &&
                 detail::never_started(std::get<I>(*state->awaitables_))) {
                 state->on_wrapper_finished();
@@ -597,7 +601,7 @@ class WhenAnyTupleAwaitable {
     using result_type = WhenAnyTupleResult<Awaitables...>;
 
     explicit WhenAnyTupleAwaitable(Awaitables&&... aws)
-        : state_(std::make_shared<State>(std::forward<Awaitables>(aws)...)) {}
+        : state_(dstd::make_shared<State>(std::forward<Awaitables>(aws)...)) {}
 
     ~WhenAnyTupleAwaitable() = default;
 
@@ -721,7 +725,7 @@ class TimeoutAwaitable {
 
     Duration duration_;
     TimerService* timer_service_;
-    std::shared_ptr<State> state_;
+    dstd::SharedPtr<State> state_;
 
    public:
     using result_type = void;
@@ -729,13 +733,13 @@ class TimeoutAwaitable {
     explicit TimeoutAwaitable(Duration duration, TimerService* timer_service)
         : duration_(duration),
           timer_service_(timer_service),
-          state_(std::make_shared<State>()) {}
+          state_(dstd::make_shared<State>()) {}
 
     /// A copy waits on its own timer.
     TimeoutAwaitable(const TimeoutAwaitable& other)
         : duration_(other.duration_),
           timer_service_(other.timer_service_),
-          state_(std::make_shared<State>()) {}
+          state_(dstd::make_shared<State>()) {}
     TimeoutAwaitable(TimeoutAwaitable&&) noexcept = default;
     TimeoutAwaitable& operator=(const TimeoutAwaitable&) = delete;
     TimeoutAwaitable& operator=(TimeoutAwaitable&&) = delete;

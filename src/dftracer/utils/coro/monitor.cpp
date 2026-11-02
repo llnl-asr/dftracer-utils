@@ -4,10 +4,15 @@
 #include <dftracer/utils/common/sharded_mutex.h>
 #include <dftracer/utils/common/symbolize.h>
 #include <dftracer/utils/coro/monitor.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <atomic>
@@ -15,10 +20,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <vector>
 
 namespace dftracer::utils::coro {
 
@@ -59,7 +60,7 @@ struct Done {
 // (erase live + append done) takes a single lock, not two.
 struct ShardData {
     ankerl::unordered_dense::map<const void*, Live, dstd::PtrHash> live;
-    std::vector<Done> done;
+    dstd::Vector<Done> done;
 };
 
 struct Registry {
@@ -82,9 +83,9 @@ thread_local long long t_current = -1;
 thread_local int t_worker = -1;
 
 Mode parse_mode() {
-    const auto v = common::Env::get<std::string_view>("DFTRACER_UTILS_MONITOR");
+    const auto v = common::Env::get<dstd::StringView>("DFTRACER_UTILS_MONITOR");
     const auto file =
-        common::Env::get<std::string_view>("DFTRACER_UTILS_MONITOR_FILE");
+        common::Env::get<dstd::StringView>("DFTRACER_UTILS_MONITOR_FILE");
     if (!v.has_value() && !file.has_value()) return Mode::Off;
     if (v.has_value()) {
         if (*v == "tree") return Mode::Tree;
@@ -96,8 +97,9 @@ Mode parse_mode() {
 }
 
 // Resolve each resume_fn once; many coroutine instances share one function.
-std::string label(const void* fn,
-                  std::unordered_map<const void*, std::string>& cache) {
+dstd::String label(
+    const void* fn,
+    dstd::HashMap<const void*, dstd::String, dstd::PtrHash>& cache) {
     auto it = cache.find(fn);
     if (it != cache.end()) return it->second;
     return cache.emplace(fn, common::symbolize_function(fn)).first->second;
@@ -119,23 +121,23 @@ const char* kind_str(CoroKind k) {
 
 // "@t3" if the coroutine stayed on one worker, "@t3>t7" if it was registered on
 // 3 but finished on 7 (work stealing / migration). Empty if no worker known.
-std::string thread_str(int spawn_tid, int finish_tid) {
+dstd::String thread_str(int spawn_tid, int finish_tid) {
     if (spawn_tid < 0 && finish_tid < 0) return "";
     if (spawn_tid >= 0 && finish_tid >= 0 && spawn_tid != finish_tid) {
-        return " @t" + std::to_string(spawn_tid) + ">t" +
-               std::to_string(finish_tid);
+        return " @t" + dstd::to_string(spawn_tid) + ">t" +
+               dstd::to_string(finish_tid);
     }
-    return " @t" + std::to_string(finish_tid >= 0 ? finish_tid : spawn_tid);
+    return " @t" + dstd::to_string(finish_tid >= 0 ? finish_tid : spawn_tid);
 }
 
-void render_table(const std::vector<Done>& recs) {
-    std::unordered_map<const void*, std::string> cache;
+void render_table(const dstd::Vector<Done>& recs) {
+    dstd::HashMap<const void*, dstd::String, dstd::PtrHash> cache;
     struct Agg {
         long long count = 0, total = 0, min = 0, max = 0;
     };
-    std::unordered_map<std::string, Agg> by;
+    dstd::HashMap<dstd::String, Agg> by;
     for (const Done& d : recs) {
-        Agg& a = by[std::string("[") + kind_str(d.kind) + "] " +
+        Agg& a = by[dstd::String("[") + kind_str(d.kind) + "] " +
                     label(d.resume_fn, cache)];
         if (a.count == 0) {
             a.min = d.wall_us;
@@ -146,7 +148,7 @@ void render_table(const std::vector<Done>& recs) {
         a.min = std::min(a.min, d.wall_us);
         a.max = std::max(a.max, d.wall_us);
     }
-    std::vector<std::pair<std::string, Agg>> rows(by.begin(), by.end());
+    dstd::Vector<dstd::Pair<dstd::String, Agg>> rows(by.begin(), by.end());
     std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
         return a.second.total > b.second.total;
     });
@@ -164,10 +166,10 @@ void render_table(const std::vector<Done>& recs) {
 }
 
 void render_tree_node(
-    const std::vector<Done>& recs,
-    const std::unordered_map<long long, std::vector<std::size_t>>& children,
-    std::unordered_map<const void*, std::string>& cache, std::size_t idx,
-    int depth) {
+    const dstd::Vector<Done>& recs,
+    const dstd::HashMap<long long, dstd::Vector<std::size_t>>& children,
+    dstd::HashMap<const void*, dstd::String, dstd::PtrHash>& cache,
+    std::size_t idx, int depth) {
     const Done& d = recs[idx];
     std::fprintf(stderr, "%*s[%s] %s%s [%.3f ms]\n", depth * 2, "",
                  kind_str(d.kind), label(d.resume_fn, cache).c_str(),
@@ -181,11 +183,11 @@ void render_tree_node(
     }
 }
 
-void render_tree(const std::vector<Done>& recs) {
+void render_tree(const dstd::Vector<Done>& recs) {
     std::fprintf(stderr, "\n=== dftracer-utils monitor coroutine tree ===\n");
-    std::unordered_map<const void*, std::string> cache;
-    std::unordered_map<long long, std::vector<std::size_t>> children;
-    std::unordered_map<long long, std::size_t> id_to_idx;
+    dstd::HashMap<const void*, dstd::String, dstd::PtrHash> cache;
+    dstd::HashMap<long long, dstd::Vector<std::size_t>> children;
+    dstd::HashMap<long long, std::size_t> id_to_idx;
     for (std::size_t i = 0; i < recs.size(); ++i) {
         children[recs[i].parent].push_back(i);
         id_to_idx[recs[i].id] = i;
@@ -200,7 +202,7 @@ void render_tree(const std::vector<Done>& recs) {
 void at_exit_render() {
     Registry& r = registry();
     const auto now = Clock::now();
-    std::vector<Done> all;
+    dstd::Vector<Done> all;
     // Drain finished records plus any coroutines still live at exit (e.g. the
     // top-level task, completed outside the worker loop) so parents appear and
     // children nest instead of orphaning into roots.
@@ -244,9 +246,9 @@ bool monitoring_enabled() {
         r.mode = parse_mode();
         if (r.mode == Mode::Off) return false;
         const auto file =
-            common::Env::get<std::string_view>("DFTRACER_UTILS_MONITOR_FILE");
+            common::Env::get<dstd::StringView>("DFTRACER_UTILS_MONITOR_FILE");
         if (file.has_value()) {
-            r.csv.reset(std::fopen(std::string(*file).c_str(), "w"));
+            r.csv.reset(std::fopen(dstd::String(*file).c_str(), "w"));
             if (r.csv) {
                 std::fprintf(
                     r.csv.get(),
@@ -255,9 +257,9 @@ bool monitoring_enabled() {
         }
         detail::g_monitor_deep = (r.mode == Mode::Deep);
         const auto min =
-            common::Env::get<std::string_view>("DFTRACER_UTILS_MONITOR_MIN_US");
+            common::Env::get<dstd::StringView>("DFTRACER_UTILS_MONITOR_MIN_US");
         if (min.has_value()) {
-            r.min_us = std::strtoll(std::string(*min).c_str(), nullptr, 10);
+            r.min_us = std::strtoll(dstd::String(*min).c_str(), nullptr, 10);
         }
         dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches,
                                 at_exit_render);

@@ -7,6 +7,8 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/parked.h>
 #include <dftracer/utils/coro/resumption_helper.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 
 #include <atomic>
 #include <cassert>
@@ -51,13 +53,13 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
    public:
     struct ReceiveWaiterNode {
         std::coroutine_handle<> handle;
-        std::optional<T>* result{nullptr};
+        dstd::Optional<T>* result{nullptr};
         Executor* executor{nullptr};
         ReceiveWaiterNode* next{nullptr};
     };
     struct SendWaiterNode {
         std::coroutine_handle<> handle;
-        std::optional<T>* item{nullptr};
+        dstd::Optional<T>* item{nullptr};
         bool* sent{nullptr};
         Executor* executor{nullptr};
         SendWaiterNode* next{nullptr};
@@ -76,7 +78,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
        private:
         Channel* channel_;
-        std::shared_ptr<Channel> shared_;
+        dstd::SharedPtr<Channel> shared_;
 
         void release() {
             if (channel_) {
@@ -98,7 +100,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         ProducerGuard(Channel* ch, Adopt) : channel_(ch) {}
 
         /// Adopt with shared_ptr to extend channel lifetime.
-        ProducerGuard(Channel* ch, std::shared_ptr<Channel> shared, Adopt)
+        ProducerGuard(Channel* ch, dstd::SharedPtr<Channel> shared, Adopt)
             : channel_(ch), shared_(std::move(shared)) {}
 
         ~ProducerGuard() { release(); }
@@ -129,7 +131,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     class ReceiveAwaitable {
        private:
         Channel* channel_;
-        std::optional<T> result_;
+        dstd::Optional<T> result_;
         ReceiveWaiterNode waiter_{};
         bool suspended_{false};
         bool cancelled_{false};
@@ -145,13 +147,13 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
         bool await_ready() {
             if (!channel_) {
-                result_ = std::nullopt;
+                result_ = dstd::nullopt;
                 return true;
             }
 
             T item;
             if (channel_->try_receive(item)) {
-                result_ = std::optional<T>(std::move(item));
+                result_ = dstd::Optional<T>(std::move(item));
                 return true;
             }
 
@@ -159,10 +161,10 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             {
                 std::lock_guard<std::mutex> lock(channel_->state_mutex_);
                 if (channel_->try_receive_locked(item)) {
-                    result_ = std::optional<T>(std::move(item));
+                    result_ = dstd::Optional<T>(std::move(item));
                     consumed = true;
                 } else if (channel_->is_terminal_locked()) {
-                    result_ = std::nullopt;
+                    result_ = dstd::nullopt;
                     return true;
                 }
             }
@@ -180,7 +182,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         template <typename Promise>
         bool await_suspend(std::coroutine_handle<Promise> h) {
             if (!channel_) {
-                result_ = std::nullopt;
+                result_ = dstd::nullopt;
                 return false;
             }
 
@@ -208,7 +210,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             {
                 std::lock_guard<std::mutex> lock(channel_->state_mutex_);
                 if (channel_->try_receive_locked(item)) {
-                    result_ = std::optional<T>(std::move(item));
+                    result_ = dstd::Optional<T>(std::move(item));
                     consumed = true;
                     consumed_from_queue = true;
                 } else if (SendWaiterNode* sender_waiter =
@@ -224,7 +226,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                             result_ = std::move(*(sender_waiter->item));
                             consumed = true;
                         } else {
-                            result_ = std::nullopt;
+                            result_ = dstd::nullopt;
                         }
                         if (sender_waiter->sent) {
                             *(sender_waiter->sent) = true;
@@ -233,7 +235,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                     sender_handle = sender_waiter->handle;
                     sender_executor = sender_waiter->executor;
                 } else if (channel_->is_terminal_locked()) {
-                    result_ = std::nullopt;
+                    result_ = dstd::nullopt;
                     h.promise().awaiting_async_ = false;
                     if constexpr (requires(Promise& p) {
                                       p.get_root_promise();
@@ -262,7 +264,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             if (sender_handle) {
                 post_resumption(sender_executor, sender_handle);
                 if (!consumed) {
-                    result_ = std::nullopt;
+                    result_ = dstd::nullopt;
                 }
             }
 
@@ -297,7 +299,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             return false;
         }
 
-        std::optional<T> await_resume() {
+        dstd::Optional<T> await_resume() {
             if (park_) {
                 waiter_.executor->unpark(park_);
                 park_ = nullptr;
@@ -338,7 +340,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     class SendAwaitable {
        private:
         Channel* channel_;
-        std::optional<T> item_;
+        dstd::Optional<T> item_;
         bool sent_{false};
         SendWaiterNode waiter_{};
         bool suspended_{false};
@@ -665,9 +667,9 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                     if (queue_.try_dequeue(item)) {
                         mark_item_consumed();
                         release_slot_if_bounded_locked();
-                        *(waiter->result) = std::optional<T>(std::move(item));
+                        *(waiter->result) = dstd::Optional<T>(std::move(item));
                     } else {
-                        *(waiter->result) = std::nullopt;
+                        *(waiter->result) = dstd::nullopt;
                     }
                 }
                 handle = waiter->handle;
@@ -734,7 +736,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                             *(recv_waiter->result) =
                                 std::move(*(sender_waiter->item));
                         } else {
-                            *(recv_waiter->result) = std::nullopt;
+                            *(recv_waiter->result) = dstd::nullopt;
                         }
                     }
                     receiver_handle = recv_waiter->handle;
@@ -833,8 +835,8 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     /**
      * Helper to create shared_ptr Channel<T>
      */
-    static std::shared_ptr<Channel<T>> make(std::size_t capacity = 0) {
-        return std::make_shared<Channel<T>>(capacity);
+    static dstd::SharedPtr<Channel<T>> make(std::size_t capacity = 0) {
+        return dstd::make_shared<Channel<T>>(capacity);
     }
 
     /**
@@ -888,7 +890,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         return ProducerGuard(this, typename ProducerGuard::Adopt{});
     }
 
-    ProducerGuard adopt_producer(std::shared_ptr<Channel> shared) {
+    ProducerGuard adopt_producer(dstd::SharedPtr<Channel> shared) {
         return ProducerGuard(this, std::move(shared),
                              typename ProducerGuard::Adopt{});
     }
@@ -956,7 +958,8 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             ReceiveWaiterNode* waiter = pop_receive_waiter_locked();
             if (waiter) {
                 if (waiter->result) {
-                    *(waiter->result) = std::optional<T>(std::forward<U>(item));
+                    *(waiter->result) =
+                        dstd::Optional<T>(std::forward<U>(item));
                 }
                 resume_handle = waiter->handle;
                 resume_executor = waiter->executor;
@@ -1015,7 +1018,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
     ReceiveAwaitable receive() { return ReceiveAwaitable(this); }
 
-    std::optional<T> blocking_receive() {
+    dstd::Optional<T> blocking_receive() {
         T item;
         if (queue_.try_dequeue(item)) {
             mark_item_consumed();
@@ -1023,7 +1026,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                 cv_writable_.notify_one();
             }
             maybe_notify_terminal();
-            return std::optional<T>(std::move(item));
+            return dstd::Optional<T>(std::move(item));
         }
 
         std::unique_lock<std::mutex> lock(state_mutex_);
@@ -1035,10 +1038,10 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                     cv_writable_.notify_one();
                 }
                 maybe_notify_terminal();
-                return std::optional<T>(std::move(item));
+                return dstd::Optional<T>(std::move(item));
             }
             if (is_terminal_locked()) {
-                return std::nullopt;
+                return dstd::nullopt;
             }
             cv_readable_.wait(lock);
         }
@@ -1136,7 +1139,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 template <typename T>
 class ChannelProducer {
     Channel<T>* raw_{nullptr};
-    std::shared_ptr<Channel<T>> shared_;
+    dstd::SharedPtr<Channel<T>> shared_;
     bool adopted_{false};
 
    public:
@@ -1148,7 +1151,7 @@ class ChannelProducer {
     }
 
     /// Construct from shared_ptr (heap-allocated channels).
-    explicit ChannelProducer(std::shared_ptr<Channel<T>> ch)
+    explicit ChannelProducer(dstd::SharedPtr<Channel<T>> ch)
         : raw_(ch.get()), shared_(std::move(ch)) {
         if (raw_) {
             raw_->register_producer();
@@ -1226,12 +1229,12 @@ class ChannelProducer {
 template <typename T>
 class ChannelConsumer {
     Channel<T>* raw_{nullptr};
-    std::shared_ptr<Channel<T>> shared_;
+    dstd::SharedPtr<Channel<T>> shared_;
 
    public:
     explicit ChannelConsumer(Channel<T>* ch) : raw_(ch) {}
 
-    explicit ChannelConsumer(std::shared_ptr<Channel<T>> ch)
+    explicit ChannelConsumer(dstd::SharedPtr<Channel<T>> ch)
         : raw_(ch.get()), shared_(std::move(ch)) {}
 
     ~ChannelConsumer() = default;
@@ -1263,7 +1266,7 @@ class ChannelConsumer {
 
     auto receive() const { return raw_->receive(); }
 
-    std::optional<T> blocking_receive() const {
+    dstd::Optional<T> blocking_receive() const {
         return raw_->blocking_receive();
     }
 
@@ -1274,7 +1277,7 @@ class ChannelConsumer {
  * Helper to create shared_ptr Channel<T>
  */
 template <typename T>
-std::shared_ptr<Channel<T>> make_channel(std::size_t capacity) {
+dstd::SharedPtr<Channel<T>> make_channel(std::size_t capacity) {
     return Channel<T>::make(capacity);
 }
 }  // namespace dftracer::utils::coro

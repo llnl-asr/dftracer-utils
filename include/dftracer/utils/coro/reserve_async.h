@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/parked.h>
 #include <dftracer/utils/coro/timer_service.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/manager.h>
 
@@ -13,7 +14,6 @@
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
-#include <memory>
 #include <utility>
 
 namespace dftracer::utils::coro {
@@ -25,7 +25,7 @@ namespace detail {
 // of Waiting resets it. The timer holds it weakly. Resume is noexcept, so an
 // enqueue that fails for lack of memory terminates.
 struct ReserveWaitState {
-    std::shared_ptr<ReserveWaitState> self;
+    dstd::SharedPtr<ReserveWaitState> self;
     std::coroutine_handle<> handle;
     Executor* executor = nullptr;
     TimerService* timers = nullptr;
@@ -50,20 +50,20 @@ struct ReserveWaitState {
 
     static void on_grant(void* context) noexcept {
         auto* state = static_cast<ReserveWaitState*>(context);
-        std::shared_ptr<ReserveWaitState> keep = std::move(state->self);
+        dstd::SharedPtr<ReserveWaitState> keep = std::move(state->self);
         state->executor->post(state->handle);
     }
 
     void on_timeout() {
         if (!node->cancel()) return;
-        std::shared_ptr<ReserveWaitState> keep = std::move(self);
+        dstd::SharedPtr<ReserveWaitState> keep = std::move(self);
         executor->post(handle);
     }
 
     void on_cancel() {
         if (!node->cancel()) return;
         cancelled.store(true, std::memory_order_release);
-        std::shared_ptr<ReserveWaitState> keep = std::move(self);
+        dstd::SharedPtr<ReserveWaitState> keep = std::move(self);
         executor->post(handle);
     }
 
@@ -141,7 +141,7 @@ class ReserveAsync {
         try {
             TimerService& timers = *state->timers;
             timers.start();
-            std::weak_ptr<detail::ReserveWaitState> weak = state;
+            dstd::WeakPtr<detail::ReserveWaitState> weak = state;
             TimerService::TimerId id =
                 timers.register_timeout(deadline - Clock::now(), [weak] {
                     if (auto s = weak.lock()) s->on_timeout();
@@ -189,7 +189,7 @@ class ReserveAsync {
     }
 
    private:
-    std::shared_ptr<detail::ReserveWaitState> state_;
+    dstd::SharedPtr<detail::ReserveWaitState> state_;
     Executor* park_executor_ = nullptr;
     ParkNode* park_ = nullptr;
     memory::Pool* pool_;

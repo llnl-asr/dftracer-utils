@@ -140,13 +140,13 @@ TEST_SUITE("compose") {
     TEST_CASE("map lifts an op over a vector, concurrently") {
         Runtime rt;
         auto doubled = u::map(Doubler{});
-        std::vector<int> out;
+        dstd::Vector<int> out;
         rt.block_on(coro::named("map", [&]() -> coro::CoroTask<void> {
             // GCC 12.1 rejects a braced list inside co_await.
             std::vector<int> in{1, 2, 3, 4};
             out = co_await doubled(std::move(in));
         }()));
-        CHECK(out == std::vector<int>{2, 4, 6, 8});
+        CHECK(out == dstd::Vector<int>{2, 4, 6, 8});
     }
 
     TEST_CASE("map | fold is parallel map-reduce (what BatchProcessor did)") {

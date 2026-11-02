@@ -5,11 +5,11 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <tuple>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::utilities {
 
@@ -78,8 +78,8 @@ coro::CoroTask<async_result_t<A, I>> any_run(A a, B b, I in) {
 }
 
 template <typename F, typename Item, typename In>
-coro::CoroTask<std::vector<async_result_t<F, Item>>> map_run(F f, In in) {
-    std::vector<coro::CoroTask<async_result_t<F, Item>>> tasks;
+coro::CoroTask<dstd::Vector<async_result_t<F, Item>>> map_run(F f, In in) {
+    dstd::Vector<coro::CoroTask<async_result_t<F, Item>>> tasks;
     tasks.reserve(in.size());
     for (auto& x : in) tasks.push_back(f(x));
     co_return co_await coro::when_all(std::move(tasks));

@@ -38,6 +38,7 @@
 #include <dftracer/utils/dstd/hash/partition.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/budget.h>
 
@@ -5768,14 +5769,16 @@ coro::CoroTask<std::vector<DataFrame>> collect_all(
 
     // Drained together: a streamed batch feeds every root from one read, so
     // the roots run at once and split each one's spill budget between them.
-    std::vector<coro::CoroTask<DataFrame>> runs;
+    dstd::Vector<coro::CoroTask<DataFrame>> runs;
     runs.reserve(trees.size());
     for (PlannedTree& t : trees) {
         const std::uint64_t budget =
             common::share_spill_budget(t.memory_budget, trees.size());
         runs.push_back(collect_plan(finish_tree(std::move(t)), budget, 0));
     }
-    co_return co_await coro::when_all(std::move(runs));
+    auto frames = co_await coro::when_all(std::move(runs));
+    co_return std::vector<DataFrame>(std::make_move_iterator(frames.begin()),
+                                     std::make_move_iterator(frames.end()));
 }
 
 LoweredGroupAggs lower_group_aggs(const std::vector<GroupAgg>& aggs) {

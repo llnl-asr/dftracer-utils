@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -204,10 +205,9 @@ TEST_CASE("CoroTask::get on a pool worker sees the finished task's result") {
         co_return v;
     };
     auto inner = [part]() -> coro::CoroTask<std::vector<int>> {
-        std::vector<coro::CoroTask<std::vector<int>>> parts;
+        dstd::Vector<coro::CoroTask<std::vector<int>>> parts;
         for (int k = 0; k < 8; ++k) parts.push_back(part(k * 512));
-        std::vector<std::vector<int>> got =
-            co_await coro::when_all(std::move(parts));
+        auto got = co_await coro::when_all(std::move(parts));
         std::vector<int> all;
         for (auto& g : got) all.insert(all.end(), g.begin(), g.end());
         co_return all;

@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <sys/stat.h>
 
@@ -126,12 +127,12 @@ inline coro::CoroTask<bool> enumerate_gzip_member_candidates(
         (file_size + MEMBER_SCAN_RANGE - 1) / MEMBER_SCAN_RANGE);
     std::vector<std::vector<GzipHeaderHit>> hits(ranges);
     std::atomic<std::size_t> next{0};
-    std::vector<coro::CoroTask<std::uint8_t>> scans;
+    dstd::Vector<coro::CoroTask<std::uint8_t>> scans;
     const std::size_t ways = std::min(ranges, MEMBER_SCAN_WAYS);
     scans.reserve(ways);
     for (std::size_t i = 0; i < ways; ++i)
         scans.push_back(scan_member_ranges(fd, file_size, &next, &hits));
-    const std::vector<std::uint8_t> ok =
+    const dstd::Vector<std::uint8_t> ok =
         co_await coro::when_all(std::move(scans));
     if (std::find(ok.begin(), ok.end(), 0) != ok.end()) co_return false;
 

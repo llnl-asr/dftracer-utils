@@ -875,7 +875,7 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
 
 coro::CoroTask<void> bootstrap_workers(coro::Scope& scope, BootstrapRun* run,
                                        std::size_t workers) {
-    std::vector<coro::SpawnFuture<bool>> done;
+    dstd::Vector<coro::SpawnFuture<bool>> done;
     done.reserve(workers);
     for (std::size_t w = 0; w < workers; ++w)
         done.push_back(

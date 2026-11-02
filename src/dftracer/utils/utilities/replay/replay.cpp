@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/event.h>
@@ -160,7 +161,7 @@ coro::CoroTask<void> ReplayEngine::run_pipelined(
         std::min(files.size(), std::max<std::size_t>(threads, 1));
     std::atomic<std::size_t> next{0};
 
-    std::vector<coro::SpawnFuture<void>> runs;
+    dstd::Vector<coro::SpawnFuture<void>> runs;
     runs.reserve(workers);
     for (std::size_t w = 0; w < workers; ++w) {
         runs.push_back(

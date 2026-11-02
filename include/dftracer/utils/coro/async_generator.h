@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/frame.h>
 #include <dftracer/utils/coro/pool_resume.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/memory/manager.h>
 
 #include <atomic>
@@ -251,23 +252,23 @@ class AsyncGenerator {
             return !p.handoff_.exchange(true, std::memory_order_acq_rel);
         }
 
-        std::optional<T> await_resume() {
+        dstd::Optional<T> await_resume() {
             if (!handle_) {
-                return std::nullopt;
+                return dstd::nullopt;
             }
             if (handle_.promise().exception_) {
                 common::rethrow_and_clear(handle_.promise().exception_);
             }
             if (handle_.done()) {
-                return std::nullopt;
+                return dstd::nullopt;
             }
             auto& promise = handle_.promise();
             if (promise.has_value_) {
-                std::optional<T> out(std::move(*promise.value_ptr()));
+                dstd::Optional<T> out(std::move(*promise.value_ptr()));
                 promise.clear_value();
                 return out;
             }
-            return std::nullopt;
+            return dstd::nullopt;
         }
     };
 

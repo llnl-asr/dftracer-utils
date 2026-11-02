@@ -159,7 +159,7 @@ class DirectoryScannerUtility {
 
         dstd::Vector<Listed> raw_entries = list_dir(input.path.view(), true);
 
-        std::vector<coro::SpawnFuture<FileEntry>> tasks;
+        dstd::Vector<coro::SpawnFuture<FileEntry>> tasks;
         tasks.reserve(raw_entries.size());
         for (auto& entry : raw_entries) {
             tasks.push_back(
@@ -170,10 +170,11 @@ class DirectoryScannerUtility {
                                         entry_copy.kind, populate_size);
                 }));
         }
-        std::vector<FileEntry> entries =
-            co_await coro::when_all(std::move(tasks));
+        auto entries = co_await coro::when_all(std::move(tasks));
 
-        co_return entries;
+        co_return std::vector<FileEntry>(
+            std::make_move_iterator(entries.begin()),
+            std::make_move_iterator(entries.end()));
     }
 
     /// Scope-less overload: opens its own scope on the current executor.
@@ -258,7 +259,7 @@ class DirectoryScannerUtility {
         dstd::Path dir, bool populate_size) {
         dstd::Vector<Listed> listing = list_dir(dir.view(), false);
 
-        std::vector<coro::SpawnFuture<StatBatch>> batches;
+        dstd::Vector<coro::SpawnFuture<StatBatch>> batches;
         batches.reserve(listing.size() / STAT_BATCH + 1);
         auto shared_listing =
             dstd::make_shared<const dstd::Vector<Listed>>(std::move(listing));
@@ -277,7 +278,7 @@ class DirectoryScannerUtility {
         auto stated = co_await coro::when_all(std::move(batches));
 
         std::vector<FileEntry> files;
-        std::vector<coro::SpawnFuture<std::vector<FileEntry>>> subdirs;
+        dstd::Vector<coro::SpawnFuture<std::vector<FileEntry>>> subdirs;
         for (auto& batch : stated) {
             files.insert(files.end(),
                          std::make_move_iterator(batch.entries.begin()),

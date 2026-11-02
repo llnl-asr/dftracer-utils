@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -64,7 +65,7 @@ TEST_SUITE("AsyncMutex") {
         auto body = [&](coro::Scope&) -> coro::CoroTask<void> {
             co_await mutex.lock();
             // Every waiter queues before the releaser, which starts last.
-            std::vector<coro::CoroTask<void>> tasks;
+            dstd::Vector<coro::CoroTask<void>> tasks;
             tasks.reserve(WAITERS + 1);
             for (std::size_t i = 0; i < WAITERS; ++i) {
                 tasks.push_back(waiter(mutex, span, acquired));

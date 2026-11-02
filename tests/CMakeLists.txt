@@ -203,6 +203,12 @@ add_test(NAME single_runtime
 add_test(NAME coro_conditions
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_conditions.cmake)
+add_test(NAME dstd_only
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_dstd_only.cmake)
+add_test(NAME dstd_only_self
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_dstd_only.cmake)
 add_test(NAME coro_lambdas
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_lambdas.cmake)

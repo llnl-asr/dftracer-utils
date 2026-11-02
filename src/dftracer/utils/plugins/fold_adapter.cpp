@@ -14,6 +14,7 @@
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/memory/budget.h>
@@ -323,12 +324,12 @@ const dftu_io g_io = {io_open,   io_close,  io_read,      io_write, io_pread,
 }
 
 ::dftu_task* host_when_all(void* h, ::dftu_task* const* ts, std::uint32_t n) {
-    std::vector<coro::CoroTask<void>*> kids;
+    dstd::Vector<coro::CoroTask<void>*> kids;
     kids.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i) kids.push_back(as_task(ts[i]));
     return static_cast<PluginFold*>(h)->emplace_task(
-        [](std::vector<coro::CoroTask<void>*> ks) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<void>> v;
+        [](dstd::Vector<coro::CoroTask<void>*> ks) -> coro::CoroTask<void> {
+            dstd::Vector<coro::CoroTask<void>> v;
             v.reserve(ks.size());
             for (auto* k : ks) v.push_back(std::move(*k));
             co_await coro::when_all(std::move(v));
@@ -336,13 +337,13 @@ const dftu_io g_io = {io_open,   io_close,  io_read,      io_write, io_pread,
 }
 
 ::dftu_task* host_when_any(void* h, ::dftu_task* const* ts, std::uint32_t n) {
-    std::vector<coro::CoroTask<void>*> kids;
+    dstd::Vector<coro::CoroTask<void>*> kids;
     kids.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i) kids.push_back(as_task(ts[i]));
     return static_cast<PluginFold*>(h)->emplace_task(
-        [](std::vector<coro::CoroTask<void>*> ks) -> coro::CoroTask<void> {
+        [](dstd::Vector<coro::CoroTask<void>*> ks) -> coro::CoroTask<void> {
             // when_any needs a non-void result, so wrap each void child.
-            std::vector<coro::CoroTask<int>> v;
+            dstd::Vector<coro::CoroTask<int>> v;
             v.reserve(ks.size());
             for (auto* k : ks)
                 v.push_back(
@@ -918,7 +919,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     }
     if (op->kind == Kind::WhenAll) {
         // Each child writes its own disjoint slice of the concatenated output.
-        std::vector<coro::CoroTask<int>> kids;
+        dstd::Vector<coro::CoroTask<int>> kids;
         kids.reserve(op->children.size());
         std::size_t off = 0;
         for (ComposeOp* c : op->children) {
@@ -926,14 +927,14 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
             kids.push_back(eval_compose(self, c, in, slot));
             off += c->out_size;
         }
-        std::vector<int> rcs = co_await coro::when_all(std::move(kids));
+        auto rcs = co_await coro::when_all(std::move(kids));
         for (int r : rcs)
             if (r != 0) co_return r;
         co_return 0;
     }
     // WHEN_ANY: each child writes its own buffer; copy the winner into out.
     std::vector<std::vector<char>> bufs(op->children.size());
-    std::vector<coro::CoroTask<int>> kids;
+    dstd::Vector<coro::CoroTask<int>> kids;
     kids.reserve(op->children.size());
     for (std::size_t i = 0; i < op->children.size(); ++i) {
         bufs[i].resize(op->children[i]->out_size);

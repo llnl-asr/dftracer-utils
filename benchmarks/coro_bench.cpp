@@ -49,6 +49,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
@@ -157,7 +158,7 @@ Result semaphore_contended(std::size_t n) {
     return run_on_executor([n](Result &r) -> coro::CoroTask<void> {
         constexpr std::size_t workers = 2 * THREADS;
         coro::CoroSemaphore sem(THREADS / 2);
-        std::vector<coro::CoroTask<void>> tasks;
+        dstd::Vector<coro::CoroTask<void>> tasks;
         for (std::size_t i = 0; i < workers; ++i) {
             tasks.push_back(semaphore_worker(sem, n / workers));
         }
@@ -192,7 +193,7 @@ Result mutex_contended(std::size_t n) {
         constexpr std::size_t workers = 2 * THREADS;
         coro::AsyncMutex mutex;
         std::uint64_t counter = 0;
-        std::vector<coro::CoroTask<void>> tasks;
+        dstd::Vector<coro::CoroTask<void>> tasks;
         for (std::size_t i = 0; i < workers; ++i) {
             tasks.push_back(mutex_worker(mutex, counter, n / workers));
         }
@@ -215,7 +216,7 @@ Result when_all_ready(std::size_t n) {
         std::size_t sum = 0;
         Meter start = begin_meter();
         for (std::size_t i = 0; i < n; ++i) {
-            std::vector<coro::CoroTask<int>> children;
+            dstd::Vector<coro::CoroTask<int>> children;
             children.reserve(FANOUT);
             for (std::size_t k = 0; k < FANOUT; ++k) {
                 children.push_back(ready_child(1));
@@ -233,7 +234,7 @@ Result when_all_yield(std::size_t n) {
         std::size_t sum = 0;
         Meter start = begin_meter();
         for (std::size_t i = 0; i < n; ++i) {
-            std::vector<coro::CoroTask<int>> children;
+            dstd::Vector<coro::CoroTask<int>> children;
             children.reserve(FANOUT);
             for (std::size_t k = 0; k < FANOUT; ++k) {
                 children.push_back(yield_child(1));
@@ -251,7 +252,7 @@ Result when_any_ready(std::size_t n) {
         std::size_t completed = 0;
         Meter start = begin_meter();
         for (std::size_t i = 0; i < n; ++i) {
-            std::vector<coro::CoroTask<int>> children;
+            dstd::Vector<coro::CoroTask<int>> children;
             children.reserve(FANOUT);
             for (std::size_t k = 0; k < FANOUT; ++k) {
                 children.push_back(ready_child(static_cast<int>(k)));
@@ -269,7 +270,7 @@ Result when_any_loser_yield(std::size_t n) {
         std::size_t completed = 0;
         Meter start = begin_meter();
         for (std::size_t i = 0; i < n; ++i) {
-            std::vector<coro::CoroTask<int>> children;
+            dstd::Vector<coro::CoroTask<int>> children;
             children.reserve(FANOUT);
             children.push_back(ready_child(0));
             for (std::size_t k = 1; k < FANOUT; ++k) {

@@ -9,8 +9,8 @@ namespace dftracer::utils::coro {
 class Executor;
 
 /// Posts `handle` to `executor`, or to whichever executor drives this thread
-/// when it names none. Logs and drops the resume when there is neither, which
-/// would otherwise strand the coroutine.
+/// when it names none. With neither it logs and aborts, since every task
+/// carries an executor and a dropped resume would hang far from the cause.
 void post_resumption(Executor* executor, std::coroutine_handle<> handle);
 
 /// Executor a coroutine suspending right now must be resumed through:

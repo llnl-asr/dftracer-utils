@@ -8,6 +8,10 @@
 #include <coroutine>
 #include <cstddef>
 
+namespace dftracer::utils::coro {
+class Executor;
+}  // namespace dftracer::utils::coro
+
 namespace dftracer::utils::io {
 
 struct IoAwaitable;
@@ -31,6 +35,10 @@ struct IoAwaitable {
     /// Coroutine handle to resume on completion
     std::coroutine_handle<> handle_{};
 
+    /// The executor of the task that awaits this operation, recorded when it
+    /// suspends. The completion resumes the task there (task affinity).
+    coro::Executor* resume_on_ = nullptr;
+
     /// Opaque pointer to a @ref SubmitContext (backend-specific).
     /// The backend creates a heap-allocated @ref SubmitContext subclass in
     /// submit_*(), stores a pointer here. await_suspend calls
@@ -47,6 +55,10 @@ struct IoAwaitable {
     void await_suspend(std::coroutine_handle<> h) noexcept;
 
     ssize_t await_resume() const noexcept { return result_; }
+
+    /// Posts the awaiting task to its own executor, or to `fallback` (the
+    /// backend's executor) when it suspended outside any executor.
+    void resume_through(coro::Executor& fallback) noexcept;
 
     /// Create an already-completed awaitable (for sync fallback)
     static IoAwaitable ready(ssize_t result) noexcept {

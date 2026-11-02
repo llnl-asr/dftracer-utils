@@ -33,6 +33,32 @@ namespace dftracer::utils::coro {
 
 class Executor;
 
+namespace detail {
+/// True when a task that finished may resume the awaiter on this thread,
+/// because the thread runs the awaiter's executor, runs no executor, or the
+/// awaiter has none.
+bool runs_on(Executor* home) noexcept;
+/// Queues `awaiter` on `home`, the executor it runs on.
+void resume_on_home(Executor* home, std::coroutine_handle<> awaiter) noexcept;
+/// Executor::current(), for code that sees only a declaration of Executor.
+Executor* current_executor() noexcept;
+}  // namespace detail
+
+namespace this_coro {
+struct ExecutorTag {};
+/// `co_await this_coro::executor` gives the executor the task runs on.
+inline constexpr ExecutorTag executor{};
+}  // namespace this_coro
+
+namespace detail {
+struct ExecutorQuery {
+    Executor* value;
+    bool await_ready() const noexcept { return true; }
+    void await_suspend(std::coroutine_handle<>) const noexcept {}
+    Executor* await_resume() const noexcept { return value; }
+};
+}  // namespace detail
+
 struct PromiseBase : FrameAllocation {
     std::atomic<bool> awaiting_async_{false};
     /// Set (release) when the coroutine reaches its final suspend, so a thread
@@ -45,6 +71,9 @@ struct PromiseBase : FrameAllocation {
     common::TaskIndex awaited_task_id_{-1};
     Scheduler* scheduler_{nullptr};
     Executor* executor_{nullptr};
+    /// The executor the awaiter runs on. A task that ends elsewhere posts the
+    /// awaiter back to it instead of resuming it on this thread.
+    Executor* continuation_executor_{nullptr};
     std::atomic<bool>* cancellation_token_{nullptr};
     std::atomic<bool> cancel_requested_{false};
     /// Written before the awaiter is released and read after.
@@ -82,6 +111,7 @@ struct PromiseBase : FrameAllocation {
     /// afterwards, since the awaiter may destroy it.
     void complete() noexcept {
         std::coroutine_handle<> next = continuation_;
+        Executor* const home = continuation_executor_;
         const bool cancelled = cancelled_;
         auto parent_cancel = parent_cancel_;
         finished_.store(true, std::memory_order_release);
@@ -92,7 +122,11 @@ struct PromiseBase : FrameAllocation {
         if (handoff_.exchange(true, std::memory_order_acq_rel)) {
             if (cancelled && parent_cancel != nullptr && parent_cancel(next))
                 return;
-            next.resume();
+            if (detail::runs_on(home)) {
+                next.resume();
+            } else {
+                detail::resume_on_home(home, next);
+            }
         }
     }
 
@@ -227,6 +261,11 @@ class CoroTask {
             return {};
         }
 
+        detail::ExecutorQuery await_transform(this_coro::ExecutorTag) noexcept {
+            return {this->executor_ != nullptr ? this->executor_
+                                               : detail::current_executor()};
+        }
+
         /// @ref YieldAwaitable makes its own timeslice check.
         auto await_transform(coro::YieldAwaitable y) {
             return detail::InPool<coro::YieldAwaitable>{
@@ -321,10 +360,16 @@ class CoroTask {
         auto& p = coro_handle_.promise();
         p.continuation_ = awaiting_coro;
 
+        Executor* awaiter_executor = nullptr;
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* awaiting_root = awaiting_coro.promise().get_root_promise();
             p.set_root_promise(awaiting_root);
+            awaiter_executor = awaiting_coro.promise().get_executor();
         }
+        if (awaiter_executor == nullptr)
+            awaiter_executor = detail::current_executor();
+        p.continuation_executor_ = awaiter_executor;
+        if (p.executor_ == nullptr) p.executor_ = awaiter_executor;
 
         // Deep mode: capture this co_await'd child (run on the awaiter's
         // stack, so it never passes through the executor queue) and make it

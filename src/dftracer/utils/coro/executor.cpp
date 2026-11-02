@@ -3,9 +3,11 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/resumption_helper.h>
+#include <dftracer/utils/coro/task.h>
 
 #include <coroutine>
 #include <cstddef>
+#include <cstdlib>
 #include <vector>
 
 namespace dftracer::utils::coro {
@@ -46,11 +48,29 @@ void post_resumption(Executor* executor, std::coroutine_handle<> handle) {
         target->post(handle);
         return;
     }
-    // Returning quietly here strands the coroutine forever, which surfaces
-    // far from the cause as a hang.
+    // Every task carries an executor, so reaching here is a bug. Dropping
+    // the resume would strand the coroutine as a hang far from the cause.
     DFTRACER_UTILS_LOG_ERROR(
-        "%s", "Coroutine resumption dropped: no executor to resume through");
+        "%s", "Coroutine resumption has no executor to resume through");
+    std::abort();
 }
+
+namespace detail {
+
+bool runs_on(Executor* home) noexcept {
+    // A thread that runs no executor resumes the awaiter itself, as before
+    // affinity. Posting from it could reach an executor that already stopped.
+    Executor* here = Executor::current();
+    return home == nullptr || here == nullptr || home == here;
+}
+
+void resume_on_home(Executor* home, std::coroutine_handle<> awaiter) noexcept {
+    home->post(awaiter);
+}
+
+Executor* current_executor() noexcept { return Executor::current(); }
+
+}  // namespace detail
 
 }  // namespace dftracer::utils::coro
 

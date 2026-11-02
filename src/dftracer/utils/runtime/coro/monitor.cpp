@@ -4,6 +4,8 @@
 #include <dftracer/utils/common/sharded_mutex.h>
 #include <dftracer/utils/common/symbolize.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
+#include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/runtime/coro/monitor.h>
 
 #include <algorithm>
@@ -67,10 +69,7 @@ struct Registry {
     long long min_us = 0;  // hide coroutines shorter than this in the report
 };
 
-Registry& registry() {
-    static Registry r;
-    return r;
-}
+Registry& registry() { return dstd::Singleton<Registry>::get(); }
 
 std::size_t shard_key(const void* handle) { return dstd::PtrHash{}(handle); }
 
@@ -258,7 +257,8 @@ bool monitoring_enabled() {
         if (min.has_value()) {
             r.min_us = std::strtoll(std::string(*min).c_str(), nullptr, 10);
         }
-        std::atexit(at_exit_render);
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches,
+                                at_exit_render);
         return true;
     }();
     return enabled;

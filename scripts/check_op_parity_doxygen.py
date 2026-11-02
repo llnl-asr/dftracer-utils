@@ -112,6 +112,7 @@ ALLOWLIST = {
         "flat_i64",
         "flat_f64",
         "string_at",
+        "check_string_bytes",
         "share",
         "from_arrow",
         "from_borrowed",

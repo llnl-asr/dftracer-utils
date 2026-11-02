@@ -567,12 +567,13 @@ bool fast_open(AggState& st, const std::vector<PlainKey>& k,
     return true;
 }
 
-// The Welford step of FieldStat::add_double for the moment words (shift,
-// cmean, cm2) of a light cell, in the same operations in the same order so a
-// std column's bits equal the FieldStat route's. `n_prev` is the count before
-// this value and `sum` the field's sum word before it, or null when the
-// aggregates do not keep one (then a state whose moment words are all zero was
-// built from zeros, so it is centred on 0, as FieldStat centres it on sum / n).
+// The Welford step (cited at FieldStat) of FieldStat::add_double for the moment
+// words (shift, cmean, cm2) of a light cell, in the same operations in the same
+// order so a std column's bits equal the FieldStat route's. `n_prev` is the
+// count before this value and `sum` the field's sum word before it, or null
+// when the aggregates do not keep one (then a state whose moment words are all
+// zero was built from zeros, so it is centred on 0, as FieldStat centres it on
+// sum / n).
 __attribute__((always_inline)) inline void light_moments(
     std::uint64_t* mom, const std::uint64_t* sum, std::uint64_t n_prev,
     FieldStatDomain domain, std::uint64_t bits) {

@@ -141,7 +141,8 @@ struct alignas(CACHE_LINE) PaddedHead {
     std::atomic<Node*> head{nullptr};
 };
 
-// xorshift64* by Vigna, public domain.
+// xorshift64* by Vigna, public domain:
+// https://vigna.di.unimi.it/ftp/papers/xorshift.pdf
 std::uint64_t next_random(std::uint64_t& s) {
     s ^= s >> 12;
     s ^= s << 25;

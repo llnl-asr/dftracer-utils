@@ -14,6 +14,7 @@
 #include <dftracer/utils/store/writer.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <mmix_lcg.h>
 #include <sys/stat.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -669,7 +670,7 @@ TEST_SUITE("index store snapshot") {
             std::uint64_t state =
                 static_cast<std::uint64_t>(index) * 2654435761U;
             while (out.size() < 1024) {
-                state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+                state = mmix_lcg_step(state);
                 out += "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":" +
                        std::to_string(state >> 52U) +
                        ",\"file\":\"/p/lustre/run/" +

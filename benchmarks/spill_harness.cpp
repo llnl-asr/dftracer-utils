@@ -49,6 +49,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <sys/resource.h>
@@ -116,10 +117,7 @@ void check(bool ok, const char* what) {
 // splitmix64 finalizer, Sebastiano Vigna, public domain
 // (https://prng.di.unimi.it/splitmix64.c).
 std::uint64_t mix(std::uint64_t x) {
-    x += 0x9e3779b97f4a7c15ULL;
-    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
-    return x ^ (x >> 31);
+    return dftracer::utils::dstd::hash::splitmix64(x);
 }
 
 enum class Gen : std::uint8_t { Random, Skewed, Time, Float, Text };
@@ -157,7 +155,7 @@ df::DataType type_of(Gen gen) {
 Series generate(const Column& c, std::size_t salt, std::uint64_t seed,
                 std::int64_t from, std::int64_t n) {
     auto hash = [&](std::int64_t row) {
-        return mix(seed ^ (salt * 0x100000001b3ULL) ^
+        return mix(seed ^ (salt * dftracer::utils::dstd::hash::FNV1A_PRIME) ^
                    static_cast<std::uint64_t>(row));
     };
     auto count = static_cast<std::size_t>(n);

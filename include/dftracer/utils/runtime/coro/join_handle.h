@@ -11,7 +11,8 @@ namespace dftracer::utils::coro {
 
 /// Stack-allocated join barrier for Coro instances.
 ///
-/// Uses the cppcoro when_all_counter pattern.  pending_ is initialised
+/// Uses the cppcoro when_all_counter pattern (Lewis Baker, MIT,
+/// https://github.com/lewissbaker/cppcoro).  pending_ is initialised
 /// to 1 (the joiner's slot) and incremented by 1 for every tracked Coro.
 /// Each Coro's FinalAwaiter and the joiner's await_suspend each call
 /// fetch_sub(1).  Whichever decrement brings the counter to zero

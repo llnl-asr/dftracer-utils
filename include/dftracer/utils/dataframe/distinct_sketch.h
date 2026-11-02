@@ -1,10 +1,16 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_DISTINCT_SKETCH_H
 #define DFTRACER_UTILS_DATAFRAME_DISTINCT_SKETCH_H
 
-// HyperLogLog++: a mergeable distinct-count sketch.
+// A mergeable HyperLogLog distinct-count sketch.
 //
-// Based on Heule, Nunkesser and Hall (EDBT 2013), "HyperLogLog in Practice":
-// https://research.google/pubs/pub40671/
+// The sparse form and the 64-bit hash follow Heule, Nunkesser and Hall
+// (EDBT 2013), "HyperLogLog in Practice":
+// https://research.google/pubs/pub40671/ It does not use the empirical bias
+// correction of HyperLogLog++ and uses linear counting instead. The base
+// estimator and its constants (alpha = 0.7213 / (1 + 1.079 / m), linear
+// counting below 2.5 m) are from Flajolet, Fusy, Gandouet and Meunier,
+// "HyperLogLog: the analysis of a near-optimal cardinality estimation
+// algorithm", AofA 2007: https://dmtcs.episciences.org/3545
 //
 // Over plain HyperLogLog it adds the two things that matter for counting a
 // dimension left out of a grouping key:

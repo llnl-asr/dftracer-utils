@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/data_file.h>
@@ -160,9 +161,9 @@ std::string read_bytes(const std::string& path) {
 
 std::uint64_t seed_of(std::size_t kill, std::size_t variant,
                       std::size_t index) {
-    std::uint64_t seed = 0x9E3779B97F4A7C15ULL;
-    seed ^= (kill + 1) * 0xBF58476D1CE4E5B9ULL;
-    seed ^= (variant + 1) * 0x94D049BB133111EBULL;
+    std::uint64_t seed = dftracer::utils::dstd::hash::GOLDEN_RATIO;
+    seed ^= (kill + 1) * dftracer::utils::dstd::hash::SPLITMIX64_MUL1;
+    seed ^= (variant + 1) * dftracer::utils::dstd::hash::SPLITMIX64_MUL2;
     seed ^= (index + 1) * 0xD6E8FEB86659FD93ULL;
     return seed;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { colorFor, colorSlot, DENSITY_GREY } from "./color";
+import { colorFor, colorSlot, DENSITY_GREY, hslToHex } from "./color";
 
 const SEP = colorSlot("a", "b").slice(1, -1);
 
@@ -37,5 +37,19 @@ describe("colorFor overflow", () => {
     }
     // 64 distinct entities should not collapse onto the 16-slot palette.
     expect(seen.size).toBeGreaterThan(40);
+  });
+});
+
+describe("hslToHex", () => {
+  it("converts known colors", () => {
+    expect(hslToHex(0, 100, 50)).toBe("#ff0000");
+    expect(hslToHex(120, 100, 25)).toBe("#008000");
+    expect(hslToHex(240, 100, 50)).toBe("#0000ff");
+    expect(hslToHex(0, 0, 50)).toBe("#808080");
+  });
+
+  it("wraps a hue outside 0 to 360", () => {
+    expect(hslToHex(360, 100, 50)).toBe("#ff0000");
+    expect(hslToHex(-120, 100, 50)).toBe("#0000ff");
   });
 });

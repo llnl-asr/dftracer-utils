@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/join.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/vectorize.h>
@@ -69,7 +70,8 @@ std::int64_t index_of(const std::vector<std::string>& names,
 }
 
 // The hash every null key cell gets when nulls match each other.
-constexpr std::uint64_t NULL_KEY_HASH = 0x9E3779B97F4A7C15ULL;
+constexpr std::uint64_t NULL_KEY_HASH =
+    dftracer::utils::dstd::hash::GOLDEN_RATIO;
 
 // A key column as the probe reads it: the buffers resolved once, so the
 // per-row hash, null test and compare are pointer arithmetic, not calls

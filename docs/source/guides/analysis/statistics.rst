@@ -163,7 +163,9 @@ incrementally or off a set of values.
    // sketch.merge(other), sketch.bins(), sketch.serialize()
 
 ``DistinctSketch`` (``BasicDistinctSketch<Precision=13>``) - a mergeable
-HyperLogLog++ distinct-count sketch, for counting a dimension left out of a
+HyperLogLog distinct-count sketch with the sparse form and 64-bit hash of
+Heule, Nunkesser and Hall (EDBT 2013) and linear counting in place of the
+HyperLogLog++ empirical bias correction, for counting a dimension left out of a
 grouping key without keeping every value:
 
 .. code-block:: cpp

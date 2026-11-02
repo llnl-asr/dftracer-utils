@@ -112,6 +112,8 @@ class ReaderInflater {
         if (member.kind == GzipRecordKind::Head) {
             co_return start_stream(31);
         }
+        // Resuming mid-stream with a window and a bit prime follows Mark
+        // Adler's zran.c (zlib license).
         if (window.empty() || member.bits > 7) co_return false;
         unsigned char prime = 0;
         if (member.bits > 0) {

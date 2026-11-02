@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -72,10 +73,9 @@ struct Rng {
     std::uint64_t state;
     explicit Rng(std::uint64_t seed) : state(seed) {}
     std::uint64_t next() {
-        std::uint64_t z = (state += 0x9e3779b97f4a7c15ULL);
-        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-        return z ^ (z >> 31);
+        const std::uint64_t z = state;
+        state += dftracer::utils::dstd::hash::GOLDEN_RATIO;
+        return dftracer::utils::dstd::hash::splitmix64(z);
     }
     std::uint64_t below(std::uint64_t n) { return next() % n; }
 };

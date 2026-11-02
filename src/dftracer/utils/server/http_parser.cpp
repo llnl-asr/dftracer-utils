@@ -1,12 +1,12 @@
 // HTTP/1.1 request parser.
 //
 // Inspired by picohttpparser by Kazuho Oku, Tokuhiro Matsuno,
-// Daisuke Murase, Shigeo Mitsunari (MIT license).
+// Daisuke Murase, Shigeo Mitsunari (dual Perl/MIT, used under MIT).
 // https://github.com/h2o/picohttpparser
 //
 // Simplified C++ rewrite: only parses HTTP/1.x requests (not
-// responses or chunked encoding). Zero-copy — all string_views
-// point into the caller's buffer.
+// responses or chunked encoding). It copies nothing, since every string_view
+// points into the caller's buffer.
 
 #include <dftracer/utils/server/http_parser.h>
 

@@ -269,6 +269,8 @@ constexpr SmallLayout make_small_layout(std::size_t block,
         }
         side = round_up(capacity * 2, SMALL_MAX_ALIGN) + color;
     }
+    // Division by multiply as in jemalloc's div_init (BSD-2-Clause):
+    // https://github.com/jemalloc/jemalloc/blob/dev/src/div.c
     std::uint64_t magic = ((std::uint64_t{1} << 32) + block - 1) / block;
     return {static_cast<std::uint32_t>(capacity),
             static_cast<std::uint32_t>(side), static_cast<std::uint32_t>(magic),
@@ -302,6 +304,7 @@ std::uint16_t* page_ids(SpanHeader* span, std::size_t index,
 std::size_t slot_of(const SmallLayout& layout, const void* p) noexcept {
     std::uint64_t offset =
         (reinterpret_cast<std::uintptr_t>(p) & PAGE_MASK) - layout.side;
+    // Multiply-shift division by the block size, see make_small_layout.
     return static_cast<std::size_t>((offset * layout.magic) >> 32);
 }
 
@@ -910,9 +913,9 @@ void cache_empty_span(Heap& h, SpanHeader* s) noexcept {
     cache_put(0, s, backed);
 }
 
-// Warm runs first, as pac_alloc_real in jemalloc (src/pac.c, BSD-2-Clause):
-// the own class, then up to WARM_LARGER_CLASSES larger classes, and only then a
-// cold run of the own class. A larger run keeps its usable size and class.
+// Warm runs first: the own class, then up to WARM_LARGER_CLASSES larger
+// classes, and only then a cold run of the own class. A larger run keeps its
+// usable size and class.
 constexpr std::size_t WARM_LARGER_CLASSES = 2;
 
 SpanHeader* adopt_cached_run(Heap& h, std::size_t run) noexcept {

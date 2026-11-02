@@ -167,6 +167,8 @@ static std::uint64_t count_newlines(const unsigned char* p, std::size_t n) {
     return lines;
 }
 
+// Deflate random-access points follow Mark Adler's zran.c from zlib's examples
+// (zlib license): https://github.com/madler/zlib/blob/master/examples/zran.c
 constexpr std::size_t RESTART_WINDOW = 32768;
 // A streamed member goes to the dispatcher in pieces of about this size, apart
 // from its restart points, so a file in flight holds a few pieces and not a

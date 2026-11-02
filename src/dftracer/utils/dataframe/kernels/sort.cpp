@@ -161,6 +161,8 @@ Series argsort_scalar(const Series& v, bool descending) {
 // Descending inverts the key bits and keeps the index ascending, stable both
 // ways.
 
+// Float bits to an order-preserving unsigned key: Michael Herf's FloatFlip,
+// Radix Tricks (2001), MIT-style license, https://stereopsis.com/radix.html
 // A total order on floats: every NaN is one value above +infinity, and -0.0
 // is the same value as +0.0, so ties keep input order (stable) and the order
 // is a valid strict weak order, which `<` over NaN is not.

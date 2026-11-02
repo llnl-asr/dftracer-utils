@@ -1,5 +1,6 @@
 // The cases count walks, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -180,11 +181,12 @@ std::map<std::string, std::uint64_t> namespace_digests(
         ns.spec.format_version = decl.format_version;
         auto [it, fresh] =
             out.emplace(std::string(decl.name.data(), decl.name.size()),
-                        1469598103934665603ULL);
+                        dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY);
         std::uint64_t& h = it->second;
         const auto mix = [&h](std::string_view bytes) {
-            for (unsigned char c : bytes) h = (h ^ c) * 1099511628211ULL;
-            h = (h ^ 0xFF) * 1099511628211ULL;
+            for (unsigned char c : bytes)
+                h = (h ^ c) * dftracer::utils::dstd::hash::FNV1A_PRIME;
+            h = (h ^ 0xFF) * dftracer::utils::dstd::hash::FNV1A_PRIME;
         };
         auto cursor = snapshot->scan_all(ns, {}, {});
         for (; !cursor.at_end(); cursor.next()) {

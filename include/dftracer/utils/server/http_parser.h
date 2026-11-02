@@ -1,7 +1,7 @@
 // HTTP/1.1 request parser.
 //
 // Inspired by picohttpparser by Kazuho Oku, Tokuhiro Matsuno,
-// Daisuke Murase, Shigeo Mitsunari (MIT license).
+// Daisuke Murase, Shigeo Mitsunari (dual Perl/MIT, used under MIT).
 // https://github.com/h2o/picohttpparser
 
 #ifndef DFTRACER_UTILS_SERVER_HTTP_PARSER_H

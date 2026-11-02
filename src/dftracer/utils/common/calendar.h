@@ -37,7 +37,9 @@ struct CivilDate {
     std::int32_t day;
 };
 
-// Howard Hinnant's civil_from_days: days since 1970-01-01 to y/m/d.
+// Days since 1970-01-01 to y/m/d, Howard Hinnant's civil_from_days from
+// "chrono-Compatible Low-Level Date Algorithms" (public domain),
+// https://howardhinnant.github.io/date_algorithms.html
 constexpr CivilDate civil_from_days(std::int64_t z) {
     z += 719468;
     const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
@@ -53,6 +55,8 @@ constexpr CivilDate civil_from_days(std::int64_t z) {
     return CivilDate{y + (m <= 2 ? 1 : 0), m, d};
 }
 
+// y/m/d to days since 1970-01-01, Howard Hinnant's days_from_civil (public
+// domain), https://howardhinnant.github.io/date_algorithms.html
 constexpr std::int64_t days_from_civil(std::int64_t y, std::int32_t m,
                                        std::int32_t d) {
     y -= m <= 2 ? 1 : 0;

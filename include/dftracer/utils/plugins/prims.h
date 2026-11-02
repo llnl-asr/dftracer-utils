@@ -148,7 +148,8 @@ static inline uint64_t dftu_mix64(uint64_t x) {
 /** Map @p x uniformly into ``[0, n)`` without a modulo; 0 when @p n is 0.
  *
  * Daniel Lemire's multiply-shift range reduction ("A fast alternative to the
- * modulo reduction", 2016): https://lemire.me/blog/2016/06/30/
+ * modulo reduction", 2016):
+ * https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/
  */
 static inline uint64_t dftu_fastrange_u64(uint64_t x, uint64_t n) {
     return n == 0 ? 0 : dftu_mul_hi_u64(x, n);

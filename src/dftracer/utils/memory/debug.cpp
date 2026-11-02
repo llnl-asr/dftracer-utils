@@ -67,6 +67,7 @@ std::atomic<std::size_t> g_held_count{0};
 
 std::size_t hash_of(std::uintptr_t key, std::uint16_t extra = 0) noexcept {
     std::uint64_t h = (key >> 4) ^ (std::uint64_t{extra} << 48);
+    // 2^64 / golden ratio, Knuth's Fibonacci hashing (TAOCP vol. 3, 6.4).
     h *= 0x9e3779b97f4a7c15ull;
     return static_cast<std::size_t>(h >> 24);
 }

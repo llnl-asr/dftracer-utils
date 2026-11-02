@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_u64
 #include <dftracer/utils/dataframe/kernels/sort.h>          // argsort
 #include <dftracer/utils/dataframe/parallel.h>              // parallel_for
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>       // string key hashing
 #include <dftracer/utils/dstd/hash/splitmix64.h>  // row hashing
 
@@ -747,7 +748,8 @@ std::optional<DataFrame> group_agg_by_key_hash(
     std::vector<bool> nullable(keys.size());
     for (std::size_t j = 0; j < keys.size(); ++j)
         nullable[j] = keys[j]->null_count() > 0;
-    constexpr std::uint64_t NULL_KEY = 0x9E3779B97F4A7C15ULL;
+    constexpr std::uint64_t NULL_KEY =
+        dftracer::utils::dstd::hash::GOLDEN_RATIO;
 
     DataFrame src;  // the key and value columns, shared, not copied
     for (const Series* c : keys) {

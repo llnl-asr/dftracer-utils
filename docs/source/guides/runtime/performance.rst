@@ -268,11 +268,9 @@ M4 Pro (10 performance and 4 efficiency cores), best of 5, September
      - 3.1x
      - 7.2x
 
-Faster than pandas on every row, polars on every row but two (a filtered
-count per name, where the eager form gathers six columns, and a 64-group
-sum, a millisecond behind at the noise floor), and DuckDB on every row
-but the first of those, where the two are within a millisecond; the plan
-form is ahead of polars there too. A plan runs at the eager speed, or ahead of it
+``benchmarks/dataframe_vs_pandas_polars.py`` measures these ops against
+pandas, polars and DuckDB on your own host.
+A plan runs at the eager speed, or ahead of it
 where projection pushdown reads fewer columns; ``lazy`` p99 is the
 streaming sketch quantile, exact to about 1e-3. Every engine's result
 matches ours on every row. DuckDB's numbers are for a result

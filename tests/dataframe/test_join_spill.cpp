@@ -9,6 +9,7 @@
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <mmix_lcg.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -35,7 +36,7 @@ DataFrame run(CoroTask<DataFrame> t) {
 struct Rng {
     std::uint64_t x;
     std::uint64_t next(std::uint64_t m) {
-        x = x * 6364136223846793005ULL + 1442695040888963407ULL;
+        x = mmix_lcg_step(x);
         return (x >> 33) % m;
     }
 };

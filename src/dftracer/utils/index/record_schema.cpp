@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/calendar.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
@@ -1152,16 +1153,7 @@ std::optional<std::int64_t> iso8601_micros(std::string_view s) {
         at += colon ? 6 : 5;
     }
     if (at != s.size()) return std::nullopt;
-    // Days from 1970-01-01 of a civil date (Howard Hinnant, public domain).
-    const int yy = *y - (*mo <= 2);
-    const int era = (yy >= 0 ? yy : yy - 399) / 400;
-    const unsigned yoe = static_cast<unsigned>(yy - era * 400);
-    const unsigned doy =
-        (153 * static_cast<unsigned>(*mo + (*mo > 2 ? -3 : 9)) + 2) / 5 +
-        static_cast<unsigned>(*dd) - 1;
-    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    const std::int64_t days =
-        static_cast<std::int64_t>(era) * 146097 + doe - 719468;
+    const std::int64_t days = common::days_from_civil(*y, *mo, *dd);
     const std::int64_t secs =
         days * 86400 + *hh * 3600 + *mi * 60 + *ss - offset;
     return secs * 1000000 + frac;

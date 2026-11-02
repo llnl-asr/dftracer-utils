@@ -7,12 +7,12 @@
 
 # dftracer-utils
 
-Tools for reading, indexing, querying and analyzing [DFTracer](https://github.com/hariharan-devarajan/dftracer)
+Tools for reading, indexing, querying and analyzing [DFTracer](https://github.com/llnl-asr/dftracer)
 traces: a Python query API over a SIMD columnar DataFrame engine, a plugin
 ABI for analyses that ride the scan, and the CLI utilities around them.
 
 [![CI](https://github.com/llnl-asr/dftracer-utils/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/llnl-asr/dftracer-utils/actions/workflows/ci.yml)
-[![Coverage Status](https://coveralls.io/repos/github/llnl/dftracer-utils/badge.svg?branch=develop)](https://coveralls.io/github/llnl/dftracer-utils?branch=develop)
+[![Coverage Status](https://coveralls.io/repos/github/llnl-asr/dftracer-utils/badge.svg?branch=develop)](https://coveralls.io/github/llnl-asr/dftracer-utils?branch=develop)
 [![Documentation Status](https://readthedocs.org/projects/dftracer-utils/badge/?version=latest)](https://dftracer.readthedocs.io/projects/utils/)
 
 ## Quickstart
@@ -123,4 +123,4 @@ See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
 
 SPDX-License-Identifier: MIT
 
-LLNL-CODE-2024514 — Applied Storage Research (ASR)
+LLNL-CODE-2024514, Applied Storage Research (ASR)

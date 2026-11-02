@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/duql/overlap.h>
 #include <doctest/doctest.h>
+#include <mmix_lcg.h>
 #include <testing_utilities.h>
 
 #include <chrono>
@@ -17,7 +18,7 @@ namespace {
 struct Rng {
     std::uint64_t x;
     std::uint64_t next(std::uint64_t m) {
-        x = x * 6364136223846793005ULL + 1442695040888963407ULL;
+        x = mmix_lcg_step(x);
         return (x >> 33) % m;
     }
 };

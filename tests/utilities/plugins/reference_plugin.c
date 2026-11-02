@@ -1,9 +1,8 @@
 /* Conformance plugin: touches every dftu.svc.* service slot from real C,
  * plus the provider-schema-types and plan-node surfaces, and reports one
- * pass/fail line per service through dftu_svc_result. Modeled on DuckDB's
- * reference-extension-c: a single artifact proving the whole ABI is
- * reachable and usable, not merely that its headers compile as C
- * (c_abi_guard already covers that).
+ * pass/fail line per service through dftu_svc_result. A single artifact
+ * proving the whole ABI is reachable and usable, not merely that its headers
+ * compile as C (c_abi_guard already covers that).
  *
  * Config: "workdir" (required) - a scratch directory for the io/writer/
  * trace/arrow files this plugin writes. "force_missing" (optional) - a

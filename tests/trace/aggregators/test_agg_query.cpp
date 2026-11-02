@@ -21,6 +21,7 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
+#include <mmix_lcg.h>
 #include <testing_utilities.h>
 #include <trace/aggregators/aggregation_oracle.h>
 
@@ -118,7 +119,7 @@ class Acc {
 };
 
 std::uint64_t next(std::uint64_t& s) {
-    s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+    s = mmix_lcg_step(s);
     return s >> 17;
 }
 

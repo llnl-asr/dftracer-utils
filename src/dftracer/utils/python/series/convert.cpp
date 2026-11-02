@@ -3,9 +3,11 @@
 #include <dftracer/utils/python/series_detail.h>  // Python.h first
 #include <datetime.h>
 // clang-format on
+#include <dftracer/utils/common/calendar.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 
 #include <algorithm>
@@ -42,32 +44,6 @@ constexpr std::int64_t US_PER_DAY = 86'400'000'000LL;
 bool datetime_ready() {
     if (!PyDateTimeAPI) PyDateTime_IMPORT;
     return PyDateTimeAPI != nullptr;
-}
-
-// Days since 1970-01-01 to a proleptic Gregorian date (H. Hinnant,
-// "chrono-Compatible Low-Level Date Algorithms", public domain).
-void civil_from_days(std::int64_t z, std::int64_t& y, int& m, int& d) {
-    z += 719468;
-    const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-    const auto doe = static_cast<unsigned>(z - era * 146097);
-    const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    y = static_cast<std::int64_t>(yoe) + era * 400;
-    const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    const unsigned mp = (5 * doy + 2) / 153;
-    d = static_cast<int>(doy - (153 * mp + 2) / 5 + 1);
-    m = static_cast<int>(mp < 10 ? mp + 3 : mp - 9);
-    y += m <= 2;
-}
-
-std::int64_t days_from_civil(std::int64_t y, int m, int d) {
-    y -= m <= 2;
-    const std::int64_t era = (y >= 0 ? y : y - 399) / 400;
-    const auto yoe = static_cast<unsigned>(y - era * 400);
-    const unsigned doy =
-        (153U * static_cast<unsigned>(m > 2 ? m - 3 : m + 9) + 2) / 5 +
-        static_cast<unsigned>(d) - 1;
-    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + static_cast<std::int64_t>(doe) - 719468;
 }
 
 std::int64_t floor_div(std::int64_t a, std::int64_t b) {
@@ -272,11 +248,9 @@ PyObject* decimal_cell(const Node& n, std::int64_t i) {
 }
 
 PyObject* date_cell(std::int64_t days) {
-    std::int64_t y = 0;
-    int m = 0, d = 0;
-    civil_from_days(days, y, m, d);
-    if (y < 1 || y > 9999) return range_error("date out of range");
-    return PyDate_FromDate(static_cast<int>(y), m, d);
+    const auto c = common::civil_from_days(days);
+    if (c.year < 1 || c.year > 9999) return range_error("date out of range");
+    return PyDate_FromDate(static_cast<int>(c.year), c.month, c.day);
 }
 
 PyObject* timestamp_cell(const Node& n, std::int64_t v) {
@@ -284,20 +258,19 @@ PyObject* timestamp_cell(const Node& n, std::int64_t v) {
     if (!to_micros(v, n.unit, us)) return range_error("timestamp out of range");
     const std::int64_t days = floor_div(us, US_PER_DAY);
     const std::int64_t rem = floor_mod(us, US_PER_DAY);
-    std::int64_t y = 0;
-    int m = 0, d = 0;
-    civil_from_days(days, y, m, d);
-    if (y < 1 || y > 9999) return range_error("timestamp out of range");
+    const auto c = common::civil_from_days(days);
+    if (c.year < 1 || c.year > 9999)
+        return range_error("timestamp out of range");
     const int hh = static_cast<int>(rem / 3'600'000'000LL);
     const int mi = static_cast<int>(rem / 60'000'000LL % 60);
     const int ss = static_cast<int>(rem / 1'000'000LL % 60);
     const int uu = static_cast<int>(rem % 1'000'000LL);
     if (n.zone.empty())
-        return PyDateTime_FromDateAndTime(static_cast<int>(y), m, d, hh, mi, ss,
-                                          uu);
+        return PyDateTime_FromDateAndTime(static_cast<int>(c.year), c.month,
+                                          c.day, hh, mi, ss, uu);
     PyObject* utc = PyDateTimeAPI->DateTime_FromDateAndTime(
-        static_cast<int>(y), m, d, hh, mi, ss, uu, PyDateTime_TimeZone_UTC,
-        PyDateTimeAPI->DateTimeType);
+        static_cast<int>(c.year), c.month, c.day, hh, mi, ss, uu,
+        PyDateTime_TimeZone_UTC, PyDateTimeAPI->DateTimeType);
     if (!utc || n.zone == "UTC") return utc;
     PyObject* zone = zone_of(n.zone);
     PyObject* out =
@@ -760,8 +733,11 @@ inline std::uint64_t quick_hash(const char* p, std::size_t n) {
             (static_cast<std::uint64_t>(static_cast<std::uint8_t>(p[n - 1]))
              << 16);
     }
+    // 0xFF51AFD7ED558CCD is the MurmurHash3 fmix64 multiplier (Austin Appleby,
+    // public domain, https://github.com/aappleby/smhasher).
     std::uint64_t h =
-        (a ^ (b * 0x9E3779B97F4A7C15ULL) ^ n) * 0xFF51AFD7ED558CCDULL;
+        (a ^ (b * dftracer::utils::dstd::hash::GOLDEN_RATIO) ^ n) *
+        0xFF51AFD7ED558CCDULL;
     return h ^ (h >> 32);
 }
 
@@ -1279,15 +1255,15 @@ PyObject* build_datetimes(PyObject** items, Py_ssize_t n, Bits& bits) {
         if (aware && *aware != off.has_value())
             return bad_value("cannot mix naive and timezone-aware datetimes");
         aware = off.has_value();
-        std::int64_t us =
-            days_from_civil(PyDateTime_GET_YEAR(v), PyDateTime_GET_MONTH(v),
-                            PyDateTime_GET_DAY(v)) *
-                US_PER_DAY +
-            (PyDateTime_DATE_GET_HOUR(v) * 3600LL +
-             PyDateTime_DATE_GET_MINUTE(v) * 60LL +
-             PyDateTime_DATE_GET_SECOND(v)) *
-                1'000'000LL +
-            PyDateTime_DATE_GET_MICROSECOND(v);
+        std::int64_t us = common::days_from_civil(PyDateTime_GET_YEAR(v),
+                                                  PyDateTime_GET_MONTH(v),
+                                                  PyDateTime_GET_DAY(v)) *
+                              US_PER_DAY +
+                          (PyDateTime_DATE_GET_HOUR(v) * 3600LL +
+                           PyDateTime_DATE_GET_MINUTE(v) * 60LL +
+                           PyDateTime_DATE_GET_SECOND(v)) *
+                              1'000'000LL +
+                          PyDateTime_DATE_GET_MICROSECOND(v);
         if (off) {
             us -= *off;
             const std::string name = zone_name(v, *off);
@@ -1312,7 +1288,7 @@ PyObject* build_dates(PyObject** items, Py_ssize_t n, Bits& bits) {
             continue;
         }
         days[static_cast<std::size_t>(i)] =
-            static_cast<std::int32_t>(days_from_civil(
+            static_cast<std::int32_t>(common::days_from_civil(
                 PyDateTime_GET_YEAR(items[i]), PyDateTime_GET_MONTH(items[i]),
                 PyDateTime_GET_DAY(items[i])));
     }

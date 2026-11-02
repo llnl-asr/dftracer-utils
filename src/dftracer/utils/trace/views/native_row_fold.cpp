@@ -474,6 +474,8 @@ struct IdCodeTable {
 
     // Code of `id`; a new id gets `next` and `fresh` is set.
     std::int32_t find_or_add(std::uint32_t id, std::int32_t next, bool& fresh) {
+        // 0x9E3779B1 is the prime near 2^32 / golden ratio, Knuth's
+        // multiplicative hashing (TAOCP vol. 3, 6.4).
         std::size_t i = (id * 0x9E3779B1u) & mask;
         for (;; i = (i + 1) & mask) {
             if (stamps[i] != stamp) {

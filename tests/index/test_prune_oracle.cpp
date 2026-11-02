@@ -23,6 +23,7 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <mmix_lcg.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -62,7 +63,7 @@ constexpr std::size_t SCAN_BUFFER_BYTES = MEMBER_BYTES;
 struct Lcg {
     std::uint64_t s;
     std::uint64_t next() {
-        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+        s = mmix_lcg_step(s);
         return s >> 33;
     }
 };

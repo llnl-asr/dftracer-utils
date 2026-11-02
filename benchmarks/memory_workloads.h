@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
@@ -38,12 +39,7 @@ constexpr std::uint64_t GENESIS_SHARE = 256ULL * 1024 * 1024;
 constexpr std::int64_t RANKS = 4;
 
 inline std::uint64_t mix(std::uint64_t x) {
-    x ^= x >> 33;
-    x *= 0xff51afd7ed558ccdULL;
-    x ^= x >> 33;
-    x *= 0xc4ceb9fe1a85ec53ULL;
-    x ^= x >> 33;
-    return x;
+    return dftracer::utils::dstd::hash::fnv1a_mix(x);
 }
 
 class GenCursor : public df::Cursor {

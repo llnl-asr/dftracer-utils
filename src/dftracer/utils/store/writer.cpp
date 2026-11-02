@@ -1,6 +1,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/varint.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/store/extent_size.h>
@@ -109,7 +110,7 @@ std::uint64_t random_bits() {
                          (static_cast<std::uint64_t>(::getpid()) << 32U) ^
                          reinterpret_cast<std::uintptr_t>(&seed) ^
                          (counter.fetch_add(1, std::memory_order_relaxed) *
-                          0x9E3779B97F4A7C15ULL);
+                          dstd::hash::GOLDEN_RATIO);
     std::mt19937_64 rng(seed);
     return rng() ^ (rng() << 32U);
 }

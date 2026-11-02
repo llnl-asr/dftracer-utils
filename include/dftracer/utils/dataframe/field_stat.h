@@ -63,6 +63,13 @@ struct FieldNum {
 /// combination. The shared aggregation atom for the dataframe engine, the View,
 /// and the aggregation tier.
 ///
+/// Update after B. P. Welford, "Note on a method for calculating corrected sums
+/// of squares and products", Technometrics 4(3), 1962 (JSTOR 1266577). Merge
+/// after T. F. Chan, G. H. Golub and R. J. LeVeque, "Updating formulae and a
+/// pairwise algorithm for computing sample variances", Stanford STAN-CS-79-773,
+/// 1979. Higher moments after P. Pebay, SAND2008-6212,
+/// https://www.osti.gov/biblio/1028931
+///
 /// The double sum/min/max/moments are always maintained (variance/skew/kurtosis
 /// are inherently double). In addition, when every value has been a same-domain
 /// integer, exact int64/uint64 sum/min/max are tracked so a Sum/Min/Max of an
@@ -330,7 +337,8 @@ struct FieldStat {
             if (x < min) min = x;
             if (x > max) max = x;
         }
-        // Welford/Pebay single-value update of the central moments.
+        // Welford/Pebay single-value update of the central moments (see
+        // FieldStat).
         double hi, lo;
         centre(hi, lo);  // before sum and n change
         if (n == 0) {
@@ -352,8 +360,8 @@ struct FieldStat {
         cm3 += term1 * dn * (nn - 2.0) - 3.0 * dn * cm2;
         cm2 += term1;
     }
-    /// Chan/Pebay combination of the central moments of this state and `o`;
-    /// `n` is still the count before the merge.
+    /// Chan/Pebay combination (see FieldStat) of the central moments of this
+    /// state and `o`; `n` is still the count before the merge.
     void merge_moments(const FieldStat& o) {
         const double na = static_cast<double>(n);
         const double nb = static_cast<double>(o.n);
@@ -395,8 +403,9 @@ struct FieldStat {
 /// covar and the regressions. Each running mean is a pair `shift + cmean` (see
 /// FieldStat), and `cxx`, `cyy`, `cxy` are the sums of (x - mx)^2, (y - my)^2
 /// and (x - mx)(y - my). A row updates it with the Welford step; two states
-/// merge with the Chan combination, which is associative, so any split of the
-/// rows into merged partitions gives the one-pass result.
+/// merge with the Chan combination (both as cited at FieldStat), which is
+/// associative, so any split of the rows into merged partitions gives the
+/// one-pass result.
 struct CoStat {
     std::uint64_t n = 0;
     double shx = 0, cmx = 0;

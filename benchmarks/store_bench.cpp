@@ -46,6 +46,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/executor/executor.h>
@@ -473,9 +474,10 @@ class ValuePool {
 
     const std::string& for_key(const std::uint8_t* key,
                                std::size_t size) const {
-        std::uint64_t hash = 1469598103934665603ULL;
+        std::uint64_t hash =
+            dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
         for (std::size_t i = 0; i < size; ++i) {
-            hash = (hash ^ key[i]) * 1099511628211ULL;
+            hash = (hash ^ key[i]) * dftracer::utils::dstd::hash::FNV1A_PRIME;
         }
         return values_[static_cast<std::size_t>(hash % values_.size())];
     }

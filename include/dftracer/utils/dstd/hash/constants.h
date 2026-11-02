@@ -5,7 +5,9 @@
 
 namespace dftracer::utils::dstd::hash {
 
-/// 64-bit golden ratio. The 32-bit variant (0x9e3779b9) mixes poorly when
+/// 2^64 divided by the golden ratio, as in Knuth's Fibonacci hashing (TAOCP
+/// vol. 3, 6.4) and the SplitMix64 increment (Sebastiano Vigna, public domain,
+/// https://prng.di.unimi.it/splitmix64.c). The 32-bit variant mixes poorly when
 /// size_t is 64-bit, so prefer this everywhere hashes are combined or seeded.
 inline constexpr std::uint64_t GOLDEN_RATIO = 0x9e3779b97f4a7c15ULL;
 

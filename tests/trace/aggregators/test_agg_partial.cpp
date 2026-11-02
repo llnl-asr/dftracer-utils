@@ -10,6 +10,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/memory/heap.h>
 #include <doctest/doctest.h>
+#include <mmix_lcg.h>
 #include <trace/aggregators/aggregation_oracle.h>
 
 #include <algorithm>
@@ -90,7 +91,7 @@ class Acc {
 using Key = std::pair<std::string, std::string>;
 
 std::uint64_t next(std::uint64_t& s) {
-    s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+    s = mmix_lcg_step(s);
     return s >> 17;
 }
 

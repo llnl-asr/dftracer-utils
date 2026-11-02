@@ -163,7 +163,8 @@ class StatsView {
                          static_cast<std::uint64_t>(i64_at(ctmax, i)));
         }
 
-        // Combine per-group M2 into a global Welford M2:
+        // Combine per-group M2 into a global Welford M2 (Chan et al., cited at
+        // FieldStat in dataframe/field_stat.h):
         //   M2 = sum_i ( var_i*n_i + n_i*(mean_i - grand_mean)^2 ).
         const double grand_mean = st.duration_mean();
         for (std::int64_t i = 0; i < c.num_rows(); ++i) {

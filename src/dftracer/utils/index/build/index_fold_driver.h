@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_FOLD_DRIVER_H
 
 #include <dftracer/utils/common/test_probes.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -468,8 +469,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         std::uint64_t digest = 0;
         for (std::size_t n = 0; n < intern_->entry_count(); ++n) {
             const std::uint32_t id = intern_->entry_id(n);
-            digest = digest * 1099511628211ull + id;
-            digest = digest * 1099511628211ull +
+            digest = digest * dstd::hash::FNV1A_PRIME + id;
+            digest = digest * dstd::hash::FNV1A_PRIME +
                      std::hash<std::string_view>{}(intern_->resolve(id));
         }
         g_intern_order_digest.fetch_xor(digest);

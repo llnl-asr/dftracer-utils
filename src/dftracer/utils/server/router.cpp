@@ -130,7 +130,7 @@ void Router::post(const std::string& path, RouteHandler handler, RouteDoc doc) {
 
 namespace {
 
-// RFC 6750: the auth scheme name is case-insensitive.
+// RFC 9110 section 11.1: the auth scheme name is case-insensitive.
 bool strip_bearer_prefix(std::string_view h, std::string_view& token) {
     constexpr std::string_view BEARER = "Bearer ";
     if (h.size() <= BEARER.size()) return false;
@@ -192,9 +192,8 @@ coro::CoroTask<HttpResponse> Router::handle(const HttpRequest& req) {
         }
     }
 
-    // Try prefix matches for parameterized routes
-    // (e.g., "/api/files/:file/info" matches "/api/files/foo/info")
-    // For now, use exact match only — parameterized routes can be added later.
+    // Routes match exactly. Parameterized routes such as
+    // "/api/files/:file/info" are not supported.
 
     co_return HttpResponse::not_found();
 }

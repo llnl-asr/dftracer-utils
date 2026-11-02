@@ -38,7 +38,7 @@ Runtime dependencies
      - https://github.com/zlib-ng/zlib-ng
    * - Zstandard (zstd)
      - ``BSD-3-Clause OR GPL-2.0-only``
-     - https://github.com/facebook/zstd
+     - https://github.com/meta/zstd
    * - libdeflate
      - ``MIT``
      - https://github.com/ebiggers/libdeflate

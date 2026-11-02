@@ -16,6 +16,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -84,12 +85,7 @@ constexpr std::uint64_t BOUND_BUDGETS = 3;
 #endif
 
 std::uint64_t mix(std::uint64_t x) {
-    x ^= x >> 33;
-    x *= 0xff51afd7ed558ccdULL;
-    x ^= x >> 33;
-    x *= 0xc4ceb9fe1a85ec53ULL;
-    x ^= x >> 33;
-    return x;
+    return dftracer::utils::dstd::hash::fnv1a_mix(x);
 }
 
 // Columns: k (a key with about `keys` distinct values), t (increasing), v

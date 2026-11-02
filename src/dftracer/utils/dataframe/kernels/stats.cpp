@@ -152,6 +152,8 @@ double kurtosis(const Series& v) {
 namespace {
 
 // The order-preserving bit pattern of a double (the sort kernels' key).
+// FloatFlip by Michael Herf, Radix Tricks (2001), MIT-style license,
+// https://stereopsis.com/radix.html
 std::uint64_t sortable_key(double f) {
     std::uint64_t u = std::bit_cast<std::uint64_t>(f);
     return u ^ ((u >> 63) ? ~0ULL : 0x8000000000000000ULL);

@@ -291,7 +291,7 @@ The mitigations above come from hard-won community experience. The most useful
 starting points:
 
 - Seastar, `Lambda Coroutine Fiasco <https://github.com/scylladb/seastar/blob/master/doc/lambda-coroutine-fiasco.md>`_
-- Arthur O'Dwyer, `ways to get dangling references with coroutines <https://quuxplusone.github.io/blog/2019/07/10/ways-to-get-dangling-references-with-coroutines/>`_
+- Arthur O'Dwyer, `C++2a Coroutines and dangling references <https://quuxplusone.github.io/blog/2019/07/10/ways-to-get-dangling-references-with-coroutines/>`_
 - Lewis Baker, `Understanding Symmetric Transfer <https://lewissbaker.github.io/2020/05/11/understanding_symmetric_transfer>`_
 - CppCon 2023, Francesco Zoffoli, `Problems and Solutions Using Coroutines in a Modern Codebase <https://isocpp.org/blog/2023/09/cppcon-2023-problems-and-solutions-using-coroutines-in-a-modern-codebase-fr>`_
 - CppCoreGuidelines `CP.51 <https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#rcoro-capture>`_ / `CP.52 <https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#rcoro-locks>`_ / `CP.53 <https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#rcoro-reference-parameters>`_

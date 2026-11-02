@@ -1,3 +1,4 @@
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
@@ -531,7 +532,7 @@ void BloomCore::observe_metadata(ChunkState& chunk,
 BloomCore::EventCache::NameSlot& BloomCore::EventCache::name_slot(
     std::uint32_t name_id, std::uint32_t cat_id) {
     const std::uint64_t key = (std::uint64_t{name_id} << 32) | cat_id;
-    NameSlot& slot = names_[(key * 0x9E3779B97F4A7C15ULL) >> 56];
+    NameSlot& slot = names_[(key * dstd::hash::GOLDEN_RATIO) >> 56];
     if (slot.epoch != epoch_ || slot.key != key) {
         slot = NameSlot{};
         slot.key = key;
@@ -542,9 +543,11 @@ BloomCore::EventCache::NameSlot& BloomCore::EventCache::name_slot(
 
 BloomCore::EventCache::PidSlot& BloomCore::EventCache::pid_slot(
     std::uint64_t pid, std::uint64_t tid) {
-    PidSlot& slot =
-        pids_[((pid * 0x9E3779B97F4A7C15ULL) ^ (tid * 0xC2B2AE3D27D4EB4FULL)) >>
-              56];
+    // 0xC2B2AE3D27D4EB4F is xxHash's PRIME64_2 (Yann Collet, BSD-2-Clause,
+    // https://github.com/Cyan4973/xxHash).
+    PidSlot& slot = pids_[((pid * dstd::hash::GOLDEN_RATIO) ^
+                           (tid * 0xC2B2AE3D27D4EB4FULL)) >>
+                          56];
     if (slot.epoch != epoch_ || slot.pid != pid || slot.tid != tid) {
         slot = PidSlot{};
         slot.pid = pid;

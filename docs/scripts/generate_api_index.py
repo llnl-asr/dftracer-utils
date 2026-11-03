@@ -47,9 +47,7 @@ GUIDE_PAGES: dict[str, str] = {
     "coro": "coro",
     "io": "io",
     "task_graph": "task_graph",
-    "utilities.arrow": "arrow",
     "index": "indexer",
-    "utilities.reader": "reader",
     "utilities.composites.dft.aggregators": "dft_aggregators",
     "utilities.composites.dft.indexing": "dft_indexing",
 }

@@ -1,9 +1,9 @@
-:description: Compute percentiles, histograms, and fitted distributions over trace durations from a DDSketch built during the scan.
+:description: Compute percentiles and histograms over trace durations from a DDSketch built during the scan.
 
 Distributions, percentiles, and sketches
 =========================================
 
-Beyond counts and means: percentiles, histograms, and fitted distributions over
+Beyond counts and means: percentiles and histograms over
 trace durations (or any numeric field). Percentiles and histograms come from a
 DDSketch computed during the scan, so they are exact to a bounded relative
 accuracy without buffering every value.
@@ -140,13 +140,11 @@ you can compute a percentile or moment on a result column without another scan.
 
 See :doc:`../data/series` for the full reducer list.
 
-Sketches and distribution fitting (C++)
----------------------------------------
+Sketches (C++)
+--------------
 
 The sketches live in ``dftracer/utils/dataframe/`` (namespace
-``dftracer::utils::dataframe``). The distribution fitters live in
-``dftracer/utils/utilities/dlio/`` (namespace
-``dftracer::utils::utilities::dlio``). Use them to accumulate a distribution
+``dftracer::utils::dataframe``). Use them to accumulate a distribution
 incrementally or off a set of values.
 
 ``DDSketch`` - relative-accuracy quantile sketch, mergeable across threads:
@@ -196,18 +194,6 @@ promotes to a dense register array; two sketches only merge at the same
    hist.add(size_bytes);
    double p90 = hist.approx_percentile(0.90);
    std::string chart = hist.render_ascii(40, "bytes");
-
-``distributions.h`` fits parametric distributions (Normal, Lognormal, Gamma,
-Exponential, Weibull) and picks the best by KS statistic:
-
-.. code-block:: cpp
-
-   #include <dftracer/utils/utilities/dlio/distributions.h>
-
-   using namespace dftracer::utils::utilities::dlio;
-
-   std::vector<FittedDistribution> fits = fit_all_single_distributions(data);
-   std::optional<FittedDistribution> best = best_fit_by_ks(fits);
 
 These are C++ / native primitives. Python exposes the aggregate-level percentiles
 and ``Series`` reducers above rather than the sketch objects; for a fitted

@@ -28,5 +28,4 @@ Composition among the indexer types:
 .. include:: /cpp_api/_generated/index.extensions.rst.inc
 .. include:: /cpp_api/_generated/index.schemas.rst.inc
 .. include:: /cpp_api/_generated/index.schemas.dft.agg.rst.inc
-.. include:: /cpp_api/_generated/index.build.rst.inc
 .. include:: /cpp_api/_generated/index.plan.rst.inc

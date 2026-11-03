@@ -178,7 +178,7 @@ process names, ``PR``, ``CM``). A default View reads its source's ``data``,
 which for dftracer traces leaves the metadata records out. A scan of every
 record (``View::all()``) also reads every chunk that holds a metadata record.
 A
-``phase("metadata")`` query, and a ``TraceReader`` query, which matches
+``phase("metadata")`` query, and a raw-line query, which matches
 metadata lines as well as events, judge metadata by the record names and
 fields ``dft.metadata`` keeps per chunk: ``name == "rename"`` reads no chunk
 for its FH records, since no metadata record has that name, while

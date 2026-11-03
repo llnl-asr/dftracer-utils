@@ -175,23 +175,16 @@ COMPONENT_GROUPS = [
         ["dftracer::utils::trace::"],
         "Trace Domain",
     ),
-    ("reader", ["dftracer::utils::utilities::reader::"], "Trace Reader"),
     ("index", ["dftracer::utils::index::"], "Index"),
-    ("arrow", ["dftracer::utils::utilities::arrow::"], "Arrow Bridge"),
     (
         "utilities",
         [
-            "dftracer::utils::utilities::fileio",
             "dftracer::utils::utilities::filesystem::",
             "dftracer::utils::utilities::hash::",
-            "dftracer::utils::utilities::text::",
-            "dftracer::utils::utilities::replay::",
-            "dftracer::utils::utilities::dlio::",
             "dftracer::utils::utilities::common::statistics::",
         ],
         "Utilities",
     ),
-    ("server", ["dftracer::utils::server::"], "HTTP Server"),
 ]
 
 

@@ -32,13 +32,11 @@ layer that composes all below it.
 
    dataframe
    duql
-   arrow
 
 .. toctree::
    :maxdepth: 1
    :caption: Traces
 
-   reader
    indexer
    trace
 
@@ -47,5 +45,4 @@ layer that composes all below it.
    :caption: Extending and serving
 
    plugins
-   server
    utilities

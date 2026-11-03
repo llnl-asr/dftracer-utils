@@ -749,7 +749,7 @@ dftracer_replay
     # Replay only POSIX read operations
     dftracer_replay ./traces --filter-category POSIX --filter-function read
 
-For detailed usage, see :doc:`utilities/replay`.
+For detailed usage, see :doc:`guides/tools/replay`.
 
 dftracer_gen_fake_trace
 -----------------------

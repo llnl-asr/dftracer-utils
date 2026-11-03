@@ -8,7 +8,6 @@ Unified indexing and reading infrastructure for compressed trace files. Builds a
 .. code-block:: cpp
 
    #include <dftracer/utils/index/indexer.h>
-   #include <dftracer/utils/utilities/reader/trace_reader.h>
 
 Overview
 --------
@@ -95,75 +94,6 @@ Call ``release_root`` before you delete or rebuild a root, so a later open sees 
    if (state == Freshness::Current) {
        auto file = snapshot->file("trace.pfw.gz");
    }
-
-TraceReader
------------
-
-Unified reader for gzip-compressed trace files (``.pfw.gz``). Auto-selects between sequential decompression and indexed random access based on ``.dftindex`` presence.
-
-Two methods cover all reading modes:
-
-- ``read_lines(ReadConfig)`` - returns parsed ``Line`` objects (``string_view``, zero-copy)
-- ``read_raw(ReadConfig)`` - returns raw byte spans (``std::span<const char>``)
-
-``ReadConfig`` controls range (line or byte), alignment, and buffering.
-
-.. code-block:: cpp
-
-   #include <dftracer/utils/utilities/reader/trace_reader.h>
-
-   using namespace dftracer::utils::utilities::reader;
-
-   TraceReader reader({.file_path = "trace.pfw.gz"});
-
-   // Read all lines (default)
-   auto gen = reader.read_lines();
-   while (auto line = co_await gen.next()) {
-       // line->content is string_view, valid until next iteration
-   }
-
-   // Line range
-   ReadConfig rc;
-   rc.start_line = 100;
-   rc.end_line = 200;
-   auto range = reader.read_lines(rc);
-
-   // Raw bytes - line-aligned, multi-line chunks (fastest for bulk processing)
-   auto raw = reader.read_raw();
-   while (auto chunk = co_await raw.next()) {
-       // chunk is std::span<const char>
-   }
-
-   // Raw bytes - single line per yield
-   ReadConfig single;
-   single.line_aligned = true;
-   single.multi_line = false;
-   auto line_bytes = reader.read_raw(single);
-
-   // Raw bytes - no line awareness
-   ReadConfig raw_cfg;
-   raw_cfg.line_aligned = false;
-   auto bytes = reader.read_raw(raw_cfg);
-
-   // Byte range
-   ReadConfig byte_range;
-   byte_range.start_byte = 0;
-   byte_range.end_byte = 1024 * 1024;
-   auto chunk_gen = reader.read_raw(byte_range);
-
-**ReadConfig to StreamType mapping:**
-
-.. list-table::
-   :header-rows: 1
-
-   * - ``read_raw`` flags
-     - Internal StreamType
-   * - ``line_aligned=true, multi_line=true`` (default)
-     - ``MULTI_LINES_BYTES``
-   * - ``line_aligned=true, multi_line=false``
-     - ``LINE_BYTES``
-   * - ``line_aligned=false``
-     - ``BYTES``
 
 IndexVisitor
 ------------
@@ -270,9 +200,8 @@ and ``rowset(name)`` returns a stored row set as a DataFrame.
 
 **TraceViewer:**
 
-The Python bindings read trace data through ``TraceViewer`` (a lazy
-builder over the index), not through a Python ``TraceReader``
-- ``TraceReader`` is a C++-only class (see above).
+The Python bindings read trace data through ``TraceViewer``, a lazy
+builder over the index.
 
 .. code-block:: python
 

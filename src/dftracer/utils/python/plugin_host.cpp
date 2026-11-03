@@ -63,9 +63,6 @@ using dftracer::utils::plugins::PluginRun;
 using dftracer::utils::plugins::Plugins;
 using dftracer::utils::python::parse_seq;
 using dftracer::utils::python::parse_string_seq;
-namespace internal = dftracer::utils::trace::internal;
-namespace views = dftracer::utils::trace::views;
-namespace filesystem = dftracer::utils::utilities::filesystem;
 
 }  // namespace
 
@@ -116,10 +113,11 @@ coro::CoroTask<void> run_host_scan(
         const auto is_dir = dftracer::utils::dstd::fs::is_directory(
             dftracer::utils::dstd::PathView(p));
         if (is_dir && *is_dir) {
-            filesystem::PatternDirectoryScannerUtilityInput in(
-                p, filesystem::trace_file_patterns(), /*recursive=*/true,
+            utilities::filesystem::PatternDirectoryScannerUtilityInput in(
+                p, utilities::filesystem::trace_file_patterns(),
+                /*recursive=*/true,
                 /*populate_size=*/false);
-            filesystem::PatternDirectoryScannerUtility scanner;
+            utilities::filesystem::PatternDirectoryScannerUtility scanner;
             auto entries = co_await scanner(scope, in);
             for (auto& e : entries) files.emplace_back(e.path.str());
         } else {
@@ -143,15 +141,16 @@ coro::CoroTask<void> run_host_scan(
             "", std::move(to_check), std::move(index_dir_arg));
     }
 
-    dftracer::utils::dstd::Vector<views::ViewFile> view_files;
+    dftracer::utils::dstd::Vector<trace::views::ViewFile> view_files;
     view_files.reserve(files.size());
     for (const auto& f : files) {
-        views::ViewFile vf;
+        trace::views::ViewFile vf;
         vf.file_path.assign(f.data(), f.size());
-        vf.index_path = internal::determine_index_path(f, index_dir);
+        vf.index_path = trace::internal::determine_index_path(f, index_dir);
         view_files.push_back(std::move(vf));
     }
-    views::View view = views::View::from_files(std::move(view_files));
+    trace::views::View view =
+        trace::views::View::from_files(std::move(view_files));
     auto run = co_await plugins->run(view);
     if (!run) throw dftracer::utils::common::DFTUtilsException(run.error());
     *out = std::move(*run);
@@ -183,9 +182,8 @@ PyObject* result_to_py(NamedResult& result) {
         // Adopt the handle's columns into a native DataFrame (shared buffers,
         // zero-copy) and hand it back as a _DataFrame; the OwnedDataFrame frees
         // the emptied handle.
-        namespace df_ns = dftracer::utils::dataframe;
         dftu_dataframe* h = frame->handle;
-        df_ns::DataFrame df;
+        dataframe::DataFrame df;
         std::int32_t n = dftu_dataframe_num_columns(h);
         df.names.reserve(static_cast<std::size_t>(n));
         df.columns.reserve(static_cast<std::size_t>(n));
@@ -193,7 +191,7 @@ PyObject* result_to_py(NamedResult& result) {
             const char* nm = dftu_dataframe_column_name(h, i);
             df.names.emplace_back(nm ? nm : "");
             df.columns.emplace_back(
-                df_ns::Series{dftu_dataframe_column(h, nm)});
+                dataframe::Series{dftu_dataframe_column(h, nm)});
         }
         return dftracer::utils::python::wrap_dataframe(std::move(df));
     }
@@ -201,20 +199,19 @@ PyObject* result_to_py(NamedResult& result) {
         // Move the plan out into the native Python LazyFrame wrapper; the
         // OwnedLazyFrame frees the emptied handle. The plan must be
         // self-contained (see the emit_lazyframe contract).
-        namespace df_ns = dftracer::utils::dataframe;
-        df_ns::LazyFrame lf =
-            std::move(df_ns::lazyframe_handle_unwrap(lazy->handle));
+        dataframe::LazyFrame lf =
+            std::move(dataframe::lazyframe_handle_unwrap(lazy->handle));
         return dftracer::utils::python::wrap_lazyframe(std::move(lf));
     }
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    namespace arr = dftracer::utils::utilities::arrow;
     auto* owned = std::get_if<OwnedArrow>(&result);
     nanoarrow::UniqueSchema schema;
     nanoarrow::UniqueArray array;
     ArrowSchemaMove(&owned->schema, schema.get());
     ArrowArrayMove(&owned->array, array.get());
     return dftracer::utils::python::arrow_result_to_table(
-        arr::ArrowExportResult(std::move(schema), std::move(array)));
+        utilities::arrow::ArrowExportResult(std::move(schema),
+                                            std::move(array)));
 #else
     PyErr_SetString(PyExc_RuntimeError,
                     "plugin emitted an Arrow result but the extension was "

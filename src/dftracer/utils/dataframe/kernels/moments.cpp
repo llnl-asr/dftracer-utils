@@ -11,35 +11,37 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
 double SumImpl(const double* x, std::size_t n) {
-    const hn::ScalableTag<double> d;
-    const std::size_t lanes = hn::Lanes(d);
-    auto acc = hn::Zero(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    auto acc = hwy::HWY_NAMESPACE::Zero(d);
     std::size_t i = 0;
-    for (; i + lanes <= n; i += lanes) acc = hn::Add(acc, hn::LoadU(d, x + i));
-    double s = hn::ReduceSum(d, acc);
+    for (; i + lanes <= n; i += lanes)
+        acc = hwy::HWY_NAMESPACE::Add(acc, hwy::HWY_NAMESPACE::LoadU(d, x + i));
+    double s = hwy::HWY_NAMESPACE::ReduceSum(d, acc);
     for (; i < n; ++i) s += x[i];
     return s;
 }
 
 void CentralImpl(const double* x, std::size_t n, double mean, double* out) {
-    const hn::ScalableTag<double> d;
-    const std::size_t lanes = hn::Lanes(d);
-    const auto vm = hn::Set(d, mean);
-    auto a2 = hn::Zero(d), a3 = hn::Zero(d), a4 = hn::Zero(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto vm = hwy::HWY_NAMESPACE::Set(d, mean);
+    auto a2 = hwy::HWY_NAMESPACE::Zero(d), a3 = hwy::HWY_NAMESPACE::Zero(d),
+         a4 = hwy::HWY_NAMESPACE::Zero(d);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes) {
-        const auto dd = hn::Sub(hn::LoadU(d, x + i), vm);
-        const auto d2 = hn::Mul(dd, dd);
-        a2 = hn::Add(a2, d2);
-        a3 = hn::Add(a3, hn::Mul(d2, dd));
-        a4 = hn::Add(a4, hn::Mul(d2, d2));
+        const auto dd =
+            hwy::HWY_NAMESPACE::Sub(hwy::HWY_NAMESPACE::LoadU(d, x + i), vm);
+        const auto d2 = hwy::HWY_NAMESPACE::Mul(dd, dd);
+        a2 = hwy::HWY_NAMESPACE::Add(a2, d2);
+        a3 = hwy::HWY_NAMESPACE::Add(a3, hwy::HWY_NAMESPACE::Mul(d2, dd));
+        a4 = hwy::HWY_NAMESPACE::Add(a4, hwy::HWY_NAMESPACE::Mul(d2, d2));
     }
-    double m2 = hn::ReduceSum(d, a2);
-    double m3 = hn::ReduceSum(d, a3);
-    double m4 = hn::ReduceSum(d, a4);
+    double m2 = hwy::HWY_NAMESPACE::ReduceSum(d, a2);
+    double m3 = hwy::HWY_NAMESPACE::ReduceSum(d, a3);
+    double m4 = hwy::HWY_NAMESPACE::ReduceSum(d, a4);
     for (; i < n; ++i) {
         const double dd = x[i] - mean;
         const double d2 = dd * dd;

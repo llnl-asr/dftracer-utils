@@ -138,7 +138,6 @@ static coro::CoroTask<int> run_verify(
                              abs_path.c_str());
                 continue;
             }
-            namespace kinds = dftracer::utils::index::extensions::kinds;
 
             std::size_t file_size = metadata.uncompressed_size;
             std::size_t num_ckpts = metadata.num_checkpoints;
@@ -185,7 +184,8 @@ static coro::CoroTask<int> run_verify(
                     index::put_path_granule(
                         *build, IndexExtension::Bloom, dim,
                         output.checkpoint_idx,
-                        kinds::encode_bloom(blob, bloom.num_entries()));
+                        index::extensions::kinds::encode_bloom(
+                            blob, bloom.num_entries()));
 
                     auto it = file_blooms.find(dim);
                     if (it == file_blooms.end()) {
@@ -201,9 +201,9 @@ static coro::CoroTask<int> run_verify(
 
             for (auto& [dim, bloom] : file_blooms) {
                 auto blob = bloom.serialize();
-                index::put_path_file(
-                    *build, IndexExtension::Bloom, dim,
-                    kinds::encode_bloom(blob, bloom.num_entries()));
+                index::put_path_file(*build, IndexExtension::Bloom, dim,
+                                     index::extensions::kinds::encode_bloom(
+                                         blob, bloom.num_entries()));
             }
             for (const auto& dim : all_dimensions)
                 index::put_path(*build, IndexExtension::Bloom, dim);

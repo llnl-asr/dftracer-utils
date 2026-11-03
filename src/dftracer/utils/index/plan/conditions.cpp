@@ -28,13 +28,12 @@
 
 namespace dftracer::utils::index::plan {
 
-namespace duql_ns = duql;
 using index::extensions::kinds::Zone;
 
 namespace {
 
 // A literal as the index keys it; a bool is 1 or 0, as the build records it.
-dstd::String literal_to_string(const duql_ns::LiteralNode& lit) {
+dstd::String literal_to_string(const duql::LiteralNode& lit) {
     return std::visit(
         [](auto&& v) -> dstd::String {
             using T = std::decay_t<decltype(v)>;
@@ -63,19 +62,19 @@ int compare_values(const dstd::String& a, const dstd::String& b,
     // Exact across integer and double text, so `x < 1.5` against an int zone
     // is not read as `x < 1`.
     if (is_numeric_type(vtype)) {
-        const auto na = duql_ns::parse_number(a);
-        const auto nb = duql_ns::parse_number(b);
+        const auto na = duql::parse_number(a);
+        const auto nb = duql::parse_number(b);
         if (na && nb)
-            if (const auto c = duql_ns::compare_numbers(*na, *nb)) return *c;
+            if (const auto c = duql::compare_numbers(*na, *nb)) return *c;
     }
     if (a < b) return -1;
     if (a > b) return 1;
     return 0;
 }
 
-bool is_range_op(duql_ns::CompareOp op) {
-    return op == duql_ns::CompareOp::Gt || op == duql_ns::CompareOp::Ge ||
-           op == duql_ns::CompareOp::Lt || op == duql_ns::CompareOp::Le;
+bool is_range_op(duql::CompareOp op) {
+    return op == duql::CompareOp::Gt || op == duql::CompareOp::Ge ||
+           op == duql::CompareOp::Lt || op == duql::CompareOp::Le;
 }
 
 // Bounds of a zone that can be trusted: both present and, for numbers,
@@ -100,7 +99,7 @@ bool trusted_bounds(const Zone& z, bool need_both) {
 // non-negative integer (a fraction, a negative number) leaves it out. A string
 // that is not an integer is a malformed query.
 dstd::Optional<std::uint64_t> timestamp_bound(const dstd::String& text,
-                                              const duql_ns::CompareNode& n) {
+                                              const duql::CompareNode& n) {
     std::uint64_t out = 0;
     const char* end = text.data() + text.size();
     const auto parsed = dstd::from_chars(text.data(), end, out);
@@ -112,17 +111,17 @@ dstd::Optional<std::uint64_t> timestamp_bound(const dstd::String& text,
     return dstd::nullopt;
 }
 
-bool zone_may_match(const Zone& z, duql_ns::CompareOp op,
+bool zone_may_match(const Zone& z, duql::CompareOp op,
                     const dstd::String& val) {
     if (!trusted_bounds(z, false)) return true;
     switch (op) {
-        case duql_ns::CompareOp::Gt:
+        case duql::CompareOp::Gt:
             return compare_values(z.max, val, z.value_type) > 0;
-        case duql_ns::CompareOp::Ge:
+        case duql::CompareOp::Ge:
             return compare_values(z.max, val, z.value_type) >= 0;
-        case duql_ns::CompareOp::Lt:
+        case duql::CompareOp::Lt:
             return compare_values(z.min, val, z.value_type) < 0;
-        case duql_ns::CompareOp::Le:
+        case duql::CompareOp::Le:
             return compare_values(z.min, val, z.value_type) <= 0;
         default:
             return true;
@@ -130,17 +129,17 @@ bool zone_may_match(const Zone& z, duql_ns::CompareOp op,
 }
 
 // The dual of zone_may_match: every value in the zone satisfies `op val`.
-bool zone_all_match(const Zone& z, duql_ns::CompareOp op,
+bool zone_all_match(const Zone& z, duql::CompareOp op,
                     const dstd::String& val) {
     if (!trusted_bounds(z, true)) return false;
     switch (op) {
-        case duql_ns::CompareOp::Gt:
+        case duql::CompareOp::Gt:
             return compare_values(z.min, val, z.value_type) > 0;
-        case duql_ns::CompareOp::Ge:
+        case duql::CompareOp::Ge:
             return compare_values(z.min, val, z.value_type) >= 0;
-        case duql_ns::CompareOp::Lt:
+        case duql::CompareOp::Lt:
             return compare_values(z.max, val, z.value_type) < 0;
-        case duql_ns::CompareOp::Le:
+        case duql::CompareOp::Le:
             return compare_values(z.max, val, z.value_type) <= 0;
         default:
             return false;
@@ -151,18 +150,18 @@ bool zone_all_match(const Zone& z, duql_ns::CompareOp op,
 bool absent(const Zone& z) { return z.present && *z.present == 0; }
 
 // Zero records in the queried range means the chunk can be skipped.
-bool histogram_has_events(const Zone& z, duql_ns::CompareOp op,
+bool histogram_has_events(const Zone& z, duql::CompareOp op,
                           std::uint64_t ts_val) {
     if (!z.histogram || z.histogram->empty()) return true;
     const auto& hist = *z.histogram;
     switch (op) {
-        case duql_ns::CompareOp::Gt:
+        case duql::CompareOp::Gt:
             return hist.count_in_range(ts_val + 1, UINT64_MAX) > 0;
-        case duql_ns::CompareOp::Ge:
+        case duql::CompareOp::Ge:
             return hist.count_in_range(ts_val, UINT64_MAX) > 0;
-        case duql_ns::CompareOp::Lt:
+        case duql::CompareOp::Lt:
             return hist.count_in_range(0, ts_val) > 0;
-        case duql_ns::CompareOp::Le:
+        case duql::CompareOp::Le:
             return hist.count_in_range(0, ts_val + 1) > 0;
         default:
             return true;
@@ -203,20 +202,20 @@ ChunkSet difference(const ChunkSet& a, const ChunkSet& b) {
 }
 
 // Paths named by equality-shaped leaves, the only ones the file blooms test.
-void collect_equality_paths(const duql_ns::QueryNode& node,
+void collect_equality_paths(const duql::QueryNode& node,
                             dstd::StringViewSet& out) {
     std::visit(
         [&out](auto&& n) {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, duql_ns::CompareNode>) {
-                if (n.op == duql_ns::CompareOp::Eq) out.insert(n.field.path);
-            } else if constexpr (std::is_same_v<T, duql_ns::InNode>) {
+            if constexpr (std::is_same_v<T, duql::CompareNode>) {
+                if (n.op == duql::CompareOp::Eq) out.insert(n.field.path);
+            } else if constexpr (std::is_same_v<T, duql::InNode>) {
                 out.insert(n.field.path);
-            } else if constexpr (std::is_same_v<T, duql_ns::AndNode> ||
-                                 std::is_same_v<T, duql_ns::OrNode>) {
+            } else if constexpr (std::is_same_v<T, duql::AndNode> ||
+                                 std::is_same_v<T, duql::OrNode>) {
                 collect_equality_paths(*n.left, out);
                 collect_equality_paths(*n.right, out);
-            } else if constexpr (std::is_same_v<T, duql_ns::NotNode>) {
+            } else if constexpr (std::is_same_v<T, duql::NotNode>) {
                 collect_equality_paths(*n.operand, out);
             }
         },
@@ -251,43 +250,43 @@ bool path_may_exist(const Paths& paths, const dstd::String& path) {
 // Whether some record name satisfies `leaf`, a leaf on `name`; a pattern
 // leaf counts as satisfiable.
 bool name_may_match(const dstd::Vector<dstd::String>& names,
-                    const duql_ns::QueryNode& leaf) {
-    auto text = [](const duql_ns::LiteralNode& lit) -> const dstd::String* {
+                    const duql::QueryNode& leaf) {
+    auto text = [](const duql::LiteralNode& lit) -> const dstd::String* {
         return std::get_if<dstd::String>(&lit.value);
     };
     return std::visit(
         [&](auto&& n) -> bool {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, duql_ns::CompareNode>) {
+            if constexpr (std::is_same_v<T, duql::CompareNode>) {
                 const dstd::String* v = text(n.value);
                 if (!v) return false;
                 for (const auto& name : names) {
                     const int c = name.compare(dstd::StringView(*v));
                     switch (n.op) {
-                        case duql_ns::CompareOp::Eq:
+                        case duql::CompareOp::Eq:
                             if (c == 0) return true;
                             break;
-                        case duql_ns::CompareOp::Ne:
+                        case duql::CompareOp::Ne:
                             if (c != 0) return true;
                             break;
-                        case duql_ns::CompareOp::Gt:
+                        case duql::CompareOp::Gt:
                             if (c > 0) return true;
                             break;
-                        case duql_ns::CompareOp::Lt:
+                        case duql::CompareOp::Lt:
                             if (c < 0) return true;
                             break;
-                        case duql_ns::CompareOp::Ge:
+                        case duql::CompareOp::Ge:
                             if (c >= 0) return true;
                             break;
-                        case duql_ns::CompareOp::Le:
+                        case duql::CompareOp::Le:
                             if (c <= 0) return true;
                             break;
                     }
                 }
                 return false;
-            } else if constexpr (std::is_same_v<T, duql_ns::InNode> ||
-                                 std::is_same_v<T, duql_ns::NotInNode>) {
-                constexpr bool in = std::is_same_v<T, duql_ns::InNode>;
+            } else if constexpr (std::is_same_v<T, duql::InNode> ||
+                                 std::is_same_v<T, duql::NotInNode>) {
+                constexpr bool in = std::is_same_v<T, duql::InNode>;
                 for (const auto& name : names) {
                     bool listed = false;
                     for (const auto& e : n.values.elements) {
@@ -304,14 +303,14 @@ bool name_may_match(const dstd::Vector<dstd::String>& names,
         leaf.data);
 }
 
-const duql_ns::FieldNode* leaf_field(const duql_ns::QueryNode& leaf) {
+const duql::FieldNode* leaf_field(const duql::QueryNode& leaf) {
     return std::visit(
-        [](auto&& n) -> const duql_ns::FieldNode* {
+        [](auto&& n) -> const duql::FieldNode* {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, duql_ns::CompareNode> ||
-                          std::is_same_v<T, duql_ns::InNode> ||
-                          std::is_same_v<T, duql_ns::NotInNode> ||
-                          std::is_same_v<T, duql_ns::MatchNode>)
+            if constexpr (std::is_same_v<T, duql::CompareNode> ||
+                          std::is_same_v<T, duql::InNode> ||
+                          std::is_same_v<T, duql::NotInNode> ||
+                          std::is_same_v<T, duql::MatchNode>)
                 return &n.field;
             else
                 return nullptr;
@@ -332,9 +331,9 @@ class MetadataRecords final : public Condition {
         return IndexExtension::Metadata;
     }
 
-    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+    dstd::Optional<ChunkSet> may_match(const duql::QueryNode& leaf,
                                        const ChunkSet& candidates) override {
-        const duql_ns::FieldNode* field = leaf_field(leaf);
+        const duql::FieldNode* field = leaf_field(leaf);
         if (!field) return dstd::nullopt;
         ChunkSet out;
         for (auto c : candidates) {
@@ -348,7 +347,7 @@ class MetadataRecords final : public Condition {
 
    private:
     static bool may_hold(const index::store::ChunkMetadata& m,
-                         const duql_ns::QueryNode& leaf,
+                         const duql::QueryNode& leaf,
                          const dstd::String& path) {
         if (m.records == 0) return false;
         if (m.paths && !path_may_exist(*m.paths, path)) return false;
@@ -367,13 +366,13 @@ class FileBloom final : public Condition {
    public:
     explicit FileBloom(FileIndexData& d) : d_(d) {}
     IndexExtension extension() const override { return IndexExtension::Bloom; }
-    bool file_may_match(const duql_ns::QueryNode& root) override {
+    bool file_may_match(const duql::QueryNode& root) override {
         dstd::StringViewSet paths;
         collect_equality_paths(root, paths);
         if (paths.empty()) return true;
         return may_match_file(root);
     }
-    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode&,
+    dstd::Optional<ChunkSet> may_match(const duql::QueryNode&,
                                        const ChunkSet&) override {
         return dstd::nullopt;
     }
@@ -384,24 +383,24 @@ class FileBloom final : public Condition {
         return !bf || bf->possibly_contains(val);
     }
 
-    bool may_match_file(const duql_ns::QueryNode& node) {
+    bool may_match_file(const duql::QueryNode& node) {
         return std::visit(
             [this](auto&& n) -> bool {
                 using T = std::decay_t<decltype(n)>;
-                if constexpr (std::is_same_v<T, duql_ns::CompareNode>) {
-                    if (n.op != duql_ns::CompareOp::Eq) return true;
+                if constexpr (std::is_same_v<T, duql::CompareNode>) {
+                    if (n.op != duql::CompareOp::Eq) return true;
                     return may_contain(dstd::String(n.field.path),
                                        literal_to_string(n.value));
-                } else if constexpr (std::is_same_v<T, duql_ns::InNode>) {
+                } else if constexpr (std::is_same_v<T, duql::InNode>) {
                     if (n.values.elements.size() > SEMI_JOIN_CAP) return true;
                     for (const auto& elem : n.values.elements)
                         if (may_contain(dstd::String(n.field.path),
                                         literal_to_string(elem)))
                             return true;
                     return false;
-                } else if constexpr (std::is_same_v<T, duql_ns::AndNode>) {
+                } else if constexpr (std::is_same_v<T, duql::AndNode>) {
                     return may_match_file(*n.left) && may_match_file(*n.right);
-                } else if constexpr (std::is_same_v<T, duql_ns::OrNode>) {
+                } else if constexpr (std::is_same_v<T, duql::OrNode>) {
                     return may_match_file(*n.left) || may_match_file(*n.right);
                 } else {
                     return true;
@@ -415,12 +414,12 @@ class FileBloom final : public Condition {
 
 // The path of an `exists(path)` leaf in the catalog's form (`a.0`, not
 // `a[0]`), or nullopt for any other leaf.
-dstd::Optional<dstd::String> exists_path(const duql_ns::QueryNode& node) {
-    const auto* leaf = std::get_if<duql_ns::ExprLeaf>(&node.data);
+dstd::Optional<dstd::String> exists_path(const duql::QueryNode& node) {
+    const auto* leaf = std::get_if<duql::ExprLeaf>(&node.data);
     if (!leaf) return dstd::nullopt;
-    const auto* call = std::get_if<duql_ns::TCall>(&leaf->term->node);
-    if (!call || call->fn != duql_ns::Fn::Exists) return dstd::nullopt;
-    const auto* field = std::get_if<duql_ns::TField>(&call->args[0]->node);
+    const auto* call = std::get_if<duql::TCall>(&leaf->term->node);
+    if (!call || call->fn != duql::Fn::Exists) return dstd::nullopt;
+    const auto* field = std::get_if<duql::TField>(&call->args[0]->node);
     if (!field) return dstd::nullopt;
     dstd::String out;
     for (const char c : field->base) {
@@ -446,19 +445,19 @@ class CatalogPresence final : public Condition {
     IndexExtension extension() const override {
         return IndexExtension::Catalog;
     }
-    bool file_may_match(const duql_ns::QueryNode& root) override {
+    bool file_may_match(const duql::QueryNode& root) override {
         return may_match_file(root);
     }
-    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode&,
+    dstd::Optional<ChunkSet> may_match(const duql::QueryNode&,
                                        const ChunkSet&) override {
         return dstd::nullopt;
     }
 
    private:
-    bool may_match_file(const duql_ns::QueryNode& node) {
-        if (const auto* a = std::get_if<duql_ns::AndNode>(&node.data))
+    bool may_match_file(const duql::QueryNode& node) {
+        if (const auto* a = std::get_if<duql::AndNode>(&node.data))
             return may_match_file(*a->left) && may_match_file(*a->right);
-        if (const auto* o = std::get_if<duql_ns::OrNode>(&node.data))
+        if (const auto* o = std::get_if<duql::OrNode>(&node.data))
             return may_match_file(*o->left) || may_match_file(*o->right);
         const auto path = exists_path(node);
         return !path || may_exist(*path);
@@ -482,10 +481,10 @@ class Postings final : public Condition {
         return IndexExtension::Postings;
     }
     bool exact() const override { return true; }
-    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+    dstd::Optional<ChunkSet> may_match(const duql::QueryNode& leaf,
                                        const ChunkSet&) override {
-        if (const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data)) {
-            if (n->op != duql_ns::CompareOp::Eq) return dstd::nullopt;
+        if (const auto* n = std::get_if<duql::CompareNode>(&leaf.data)) {
+            if (n->op != duql::CompareOp::Eq) return dstd::nullopt;
             const auto val = literal_to_string(n->value);
             const auto contains =
                 d_.posting_contains(dstd::String(n->field.path), val);
@@ -496,7 +495,7 @@ class Postings final : public Condition {
             if (chunks.empty()) return dstd::nullopt;
             return chunks;
         }
-        if (const auto* n = std::get_if<duql_ns::InNode>(&leaf.data)) {
+        if (const auto* n = std::get_if<duql::InNode>(&leaf.data)) {
             ChunkSet out;
             for (const auto& elem : n->values.elements) {
                 const auto val = literal_to_string(elem);
@@ -523,11 +522,10 @@ class Counts final : public Condition {
     explicit Counts(FileIndexData& d) : d_(d) {}
     IndexExtension extension() const override { return IndexExtension::Counts; }
 
-    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+    dstd::Optional<ChunkSet> may_match(const duql::QueryNode& leaf,
                                        const ChunkSet& candidates) override {
-        if (const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data)) {
-            if (n->op != duql_ns::CompareOp::Eq &&
-                n->op != duql_ns::CompareOp::Ne)
+        if (const auto* n = std::get_if<duql::CompareNode>(&leaf.data)) {
+            if (n->op != duql::CompareOp::Eq && n->op != duql::CompareOp::Ne)
                 return dstd::nullopt;
             const auto& counts = d_.counts(dstd::String(n->field.path));
             const auto val = literal_to_string(n->value);
@@ -536,7 +534,7 @@ class Counts final : public Condition {
                 const auto* vc = values(counts, ckpt);
                 if (!vc) {
                     out.insert(ckpt);
-                } else if (n->op == duql_ns::CompareOp::Eq) {
+                } else if (n->op == duql::CompareOp::Eq) {
                     if (vc->count(val) > 0) out.insert(ckpt);
                 } else if (!(vc->size() == 1 && vc->count(val) > 0)) {
                     // A chunk whose only value is `val` holds no event != val.
@@ -545,7 +543,7 @@ class Counts final : public Condition {
             }
             return out;
         }
-        if (const auto* n = std::get_if<duql_ns::InNode>(&leaf.data)) {
+        if (const auto* n = std::get_if<duql::InNode>(&leaf.data)) {
             const auto& counts = d_.counts(dstd::String(n->field.path));
             ChunkSet out;
             for (auto ckpt : candidates) {
@@ -563,7 +561,7 @@ class Counts final : public Condition {
             }
             return out;
         }
-        if (const auto* n = std::get_if<duql_ns::NotInNode>(&leaf.data)) {
+        if (const auto* n = std::get_if<duql::NotInNode>(&leaf.data)) {
             const auto& counts = d_.counts(dstd::String(n->field.path));
             ChunkSet out;
             for (auto ckpt : candidates) {
@@ -575,24 +573,22 @@ class Counts final : public Condition {
         return dstd::nullopt;
     }
 
-    dstd::Optional<ChunkSet> all_match(
-        const duql_ns::QueryNode& leaf) override {
-        if (const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data)) {
-            if (n->op != duql_ns::CompareOp::Eq &&
-                n->op != duql_ns::CompareOp::Ne)
+    dstd::Optional<ChunkSet> all_match(const duql::QueryNode& leaf) override {
+        if (const auto* n = std::get_if<duql::CompareNode>(&leaf.data)) {
+            if (n->op != duql::CompareOp::Eq && n->op != duql::CompareOp::Ne)
                 return dstd::nullopt;
             const auto val = literal_to_string(n->value);
             return proven(dstd::String(n->field.path), [&](const auto& vc) {
-                return n->op == duql_ns::CompareOp::Eq
+                return n->op == duql::CompareOp::Eq
                            ? vc.size() == 1 && vc.count(val) > 0
                            : vc.count(val) == 0;
             });
         }
-        if (const auto* n = std::get_if<duql_ns::InNode>(&leaf.data))
+        if (const auto* n = std::get_if<duql::InNode>(&leaf.data))
             return proven(dstd::String(n->field.path), [&](const auto& vc) {
                 return !vc.empty() && all_listed(vc, n->values);
             });
-        if (const auto* n = std::get_if<duql_ns::NotInNode>(&leaf.data))
+        if (const auto* n = std::get_if<duql::NotInNode>(&leaf.data))
             return proven(dstd::String(n->field.path), [&](const auto& vc) {
                 return !vc.empty() && none_listed(vc, n->values);
             });
@@ -607,7 +603,7 @@ class Counts final : public Condition {
     }
 
     static bool all_listed(const dstd::StringViewMap<std::uint64_t>& vc,
-                           const duql_ns::ArrayNode& list) {
+                           const duql::ArrayNode& list) {
         for (const auto& entry : vc) {
             const dstd::StringView value = entry.first;
             bool listed = false;
@@ -622,7 +618,7 @@ class Counts final : public Condition {
     }
 
     static bool none_listed(const dstd::StringViewMap<std::uint64_t>& vc,
-                            const duql_ns::ArrayNode& list) {
+                            const duql::ArrayNode& list) {
         for (const auto& elem : list.elements)
             if (vc.count(literal_to_string(elem)) > 0) return false;
         return true;
@@ -652,18 +648,18 @@ class Zonemap final : public Condition {
         return IndexExtension::Zonemap;
     }
 
-    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+    dstd::Optional<ChunkSet> may_match(const duql::QueryNode& leaf,
                                        const ChunkSet& candidates) override {
         if (const auto path = exists_path(leaf))
             return exists_chunks(*path, candidates);
-        if (const auto* in = std::get_if<duql_ns::InNode>(&leaf.data))
+        if (const auto* in = std::get_if<duql::InNode>(&leaf.data))
             return in_list(*in, candidates);
-        const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data);
+        const auto* n = std::get_if<duql::CompareNode>(&leaf.data);
         if (!n) return dstd::nullopt;
         // Equality is bounded only on the args fields: a fixed field's text
         // may spell a value differently from the query.
         const bool bounds_equality =
-            n->op == duql_ns::CompareOp::Eq && !d_.fixed_field(n->field.path);
+            n->op == duql::CompareOp::Eq && !d_.fixed_field(n->field.path);
         if (!is_range_op(n->op) && !bounds_equality) return dstd::nullopt;
         const auto& zones = d_.zones(dstd::String(n->field.path));
         const auto val = literal_to_string(n->value);
@@ -681,8 +677,8 @@ class Zonemap final : public Condition {
             if (absent(z)) continue;
             const bool in_range =
                 bounds_equality
-                    ? zone_may_match(z, duql_ns::CompareOp::Ge, val) &&
-                          zone_may_match(z, duql_ns::CompareOp::Le, val)
+                    ? zone_may_match(z, duql::CompareOp::Ge, val) &&
+                          zone_may_match(z, duql::CompareOp::Le, val)
                     : zone_may_match(z, n->op, val);
             if (!in_range) continue;
             if (ts_val && !histogram_has_events(z, n->op, *ts_val)) continue;
@@ -691,9 +687,8 @@ class Zonemap final : public Condition {
         return out;
     }
 
-    dstd::Optional<ChunkSet> all_match(
-        const duql_ns::QueryNode& leaf) override {
-        const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data);
+    dstd::Optional<ChunkSet> all_match(const duql::QueryNode& leaf) override {
+        const auto* n = std::get_if<duql::CompareNode>(&leaf.data);
         if (!n || !is_range_op(n->op)) return dstd::nullopt;
         const auto val = literal_to_string(n->value);
         ChunkSet out;
@@ -707,7 +702,7 @@ class Zonemap final : public Condition {
    private:
     // A chunk may hold a listed value when one lies in its range; bounded,
     // as equality is, only on the args fields.
-    dstd::Optional<ChunkSet> in_list(const duql_ns::InNode& in,
+    dstd::Optional<ChunkSet> in_list(const duql::InNode& in,
                                      const ChunkSet& candidates) {
         if (d_.fixed_field(in.field.path)) return dstd::nullopt;
         dstd::Vector<dstd::String> vals;
@@ -724,8 +719,8 @@ class Zonemap final : public Condition {
             }
             if (absent(it->second)) continue;
             for (const auto& v : vals)
-                if (zone_may_match(it->second, duql_ns::CompareOp::Ge, v) &&
-                    zone_may_match(it->second, duql_ns::CompareOp::Le, v)) {
+                if (zone_may_match(it->second, duql::CompareOp::Ge, v) &&
+                    zone_may_match(it->second, duql::CompareOp::Le, v)) {
                     out.insert(ckpt);
                     break;
                 }
@@ -773,15 +768,15 @@ class ChunkBloom final : public Condition {
    public:
     explicit ChunkBloom(FileIndexData& d) : d_(d) {}
     IndexExtension extension() const override { return IndexExtension::Bloom; }
-    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+    dstd::Optional<ChunkSet> may_match(const duql::QueryNode& leaf,
                                        const ChunkSet& candidates) override {
         dstd::Vector<dstd::String> vals;
         dstd::String path;
-        if (const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data)) {
-            if (n->op != duql_ns::CompareOp::Eq) return dstd::nullopt;
+        if (const auto* n = std::get_if<duql::CompareNode>(&leaf.data)) {
+            if (n->op != duql::CompareOp::Eq) return dstd::nullopt;
             path = n->field.path;
             vals.push_back(literal_to_string(n->value));
-        } else if (const auto* in = std::get_if<duql_ns::InNode>(&leaf.data)) {
+        } else if (const auto* in = std::get_if<duql::InNode>(&leaf.data)) {
             path = in->field.path;
             for (const auto& elem : in->values.elements)
                 vals.push_back(literal_to_string(elem));
@@ -812,16 +807,16 @@ class ChunkBloom final : public Condition {
 // A leaf the conditions test, `exists(p)` included; an any() leaf left
 // unexpanded (a very wide array) proves nothing, since its path's evidence
 // describes the whole value.
-bool is_leaf(const duql_ns::QueryNode& node) {
+bool is_leaf(const duql::QueryNode& node) {
     if (exists_path(node)) return true;
     const auto* field = leaf_field(node);
-    return (std::holds_alternative<duql_ns::CompareNode>(node.data) ||
-            std::holds_alternative<duql_ns::InNode>(node.data) ||
-            std::holds_alternative<duql_ns::NotInNode>(node.data)) &&
+    return (std::holds_alternative<duql::CompareNode>(node.data) ||
+            std::holds_alternative<duql::InNode>(node.data) ||
+            std::holds_alternative<duql::NotInNode>(node.data)) &&
            !(field && field->any) && !too_wide(node);
 }
 
-ChunkSet eval_leaf(const duql_ns::QueryNode& leaf, const Conditions& cs,
+ChunkSet eval_leaf(const duql::QueryNode& leaf, const Conditions& cs,
                    const ChunkSet& universe) {
     dstd::Optional<ChunkSet> acc;
     for (const auto& c : cs) {
@@ -833,22 +828,22 @@ ChunkSet eval_leaf(const duql_ns::QueryNode& leaf, const Conditions& cs,
     return acc ? std::move(*acc) : universe;
 }
 
-ChunkSet eval_all_match(const duql_ns::QueryNode& node, const Conditions& cs,
+ChunkSet eval_all_match(const duql::QueryNode& node, const Conditions& cs,
                         const ChunkSet& universe);
 
-ChunkSet eval_node(const duql_ns::QueryNode& node, const Conditions& cs,
+ChunkSet eval_node(const duql::QueryNode& node, const Conditions& cs,
                    const ChunkSet& universe) {
     if (is_leaf(node)) return eval_leaf(node, cs, universe);
-    if (const auto* n = std::get_if<duql_ns::AndNode>(&node.data))
+    if (const auto* n = std::get_if<duql::AndNode>(&node.data))
         return intersect(eval_node(*n->left, cs, universe),
                          eval_node(*n->right, cs, universe));
-    if (const auto* n = std::get_if<duql_ns::OrNode>(&node.data)) {
+    if (const auto* n = std::get_if<duql::OrNode>(&node.data)) {
         auto left = eval_node(*n->left, cs, universe);
         auto right = eval_node(*n->right, cs, universe);
         left.insert(right.begin(), right.end());
         return left;
     }
-    if (const auto* n = std::get_if<duql_ns::NotNode>(&node.data))
+    if (const auto* n = std::get_if<duql::NotNode>(&node.data))
         // A chunk may hold an event matching `not p` unless every event in
         // it matches `p`; complementing the may-match set would drop chunks
         // holding events on both sides of `p`.
@@ -856,7 +851,7 @@ ChunkSet eval_node(const duql_ns::QueryNode& node, const Conditions& cs,
     return universe;  // a pattern match proves nothing
 }
 
-ChunkSet eval_all_match(const duql_ns::QueryNode& node, const Conditions& cs,
+ChunkSet eval_all_match(const duql::QueryNode& node, const Conditions& cs,
                         const ChunkSet& universe) {
     if (is_leaf(node)) {
         ChunkSet out;
@@ -864,10 +859,10 @@ ChunkSet eval_all_match(const duql_ns::QueryNode& node, const Conditions& cs,
             if (auto s = c->all_match(node)) out.insert(s->begin(), s->end());
         return out;
     }
-    if (const auto* n = std::get_if<duql_ns::AndNode>(&node.data))
+    if (const auto* n = std::get_if<duql::AndNode>(&node.data))
         return intersect(eval_all_match(*n->left, cs, universe),
                          eval_all_match(*n->right, cs, universe));
-    if (const auto* n = std::get_if<duql_ns::OrNode>(&node.data)) {
+    if (const auto* n = std::get_if<duql::OrNode>(&node.data)) {
         // An under-approximation: a chunk where the two sides cover every
         // event between them is left out.
         auto left = eval_all_match(*n->left, cs, universe);
@@ -875,17 +870,17 @@ ChunkSet eval_all_match(const duql_ns::QueryNode& node, const Conditions& cs,
         left.insert(right.begin(), right.end());
         return left;
     }
-    if (const auto* n = std::get_if<duql_ns::NotNode>(&node.data))
+    if (const auto* n = std::get_if<duql::NotNode>(&node.data))
         return difference(universe, eval_node(*n->operand, cs, universe));
     return {};
 }
 
 }  // namespace
 
-bool too_wide(const duql_ns::QueryNode& node) {
-    if (const auto* n = std::get_if<duql_ns::InNode>(&node.data))
+bool too_wide(const duql::QueryNode& node) {
+    if (const auto* n = std::get_if<duql::InNode>(&node.data))
         return n->values.elements.size() > SEMI_JOIN_CAP;
-    if (const auto* n = std::get_if<duql_ns::NotInNode>(&node.data))
+    if (const auto* n = std::get_if<duql::NotInNode>(&node.data))
         return n->values.elements.size() > SEMI_JOIN_CAP;
     return false;
 }
@@ -894,7 +889,7 @@ namespace {
 
 // A literal as a dftu_value; false for a uint64 past int64, which the ABI
 // cannot carry. A string value borrows `lit`.
-bool to_value(const duql_ns::LiteralNode& lit, ::dftu_value& out) {
+bool to_value(const duql::LiteralNode& lit, ::dftu_value& out) {
     return std::visit(
         [&out](auto&& v) -> bool {
             using T = std::decay_t<decltype(v)>;
@@ -924,35 +919,35 @@ bool to_value(const duql_ns::LiteralNode& lit, ::dftu_value& out) {
         lit.value);
 }
 
-std::int32_t compare_op(duql_ns::CompareOp op) {
+std::int32_t compare_op(duql::CompareOp op) {
     switch (op) {
-        case duql_ns::CompareOp::Eq:
+        case duql::CompareOp::Eq:
             return DFTU_INDEX_EQ;
-        case duql_ns::CompareOp::Ne:
+        case duql::CompareOp::Ne:
             return DFTU_INDEX_NE;
-        case duql_ns::CompareOp::Lt:
+        case duql::CompareOp::Lt:
             return DFTU_INDEX_LT;
-        case duql_ns::CompareOp::Le:
+        case duql::CompareOp::Le:
             return DFTU_INDEX_LE;
-        case duql_ns::CompareOp::Gt:
+        case duql::CompareOp::Gt:
             return DFTU_INDEX_GT;
-        case duql_ns::CompareOp::Ge:
+        case duql::CompareOp::Ge:
             return DFTU_INDEX_GE;
     }
     return DFTU_INDEX_EQ;
 }
 
-std::int32_t match_op(duql_ns::MatchOp op) {
+std::int32_t match_op(duql::MatchOp op) {
     switch (op) {
-        case duql_ns::MatchOp::Like:
+        case duql::MatchOp::Like:
             return DFTU_INDEX_LIKE;
-        case duql_ns::MatchOp::Ilike:
+        case duql::MatchOp::Ilike:
             return DFTU_INDEX_ILIKE;
-        case duql_ns::MatchOp::Regex:
+        case duql::MatchOp::Regex:
             return DFTU_INDEX_REGEX;
-        case duql_ns::MatchOp::Iregex:
+        case duql::MatchOp::Iregex:
             return DFTU_INDEX_IREGEX;
-        case duql_ns::MatchOp::Icontains:
+        case duql::MatchOp::Icontains:
             return DFTU_INDEX_ICONTAINS;
     }
     return DFTU_INDEX_LIKE;
@@ -974,7 +969,7 @@ class PluginCondition final : public Condition {
     IndexExtension extension() const override { return IndexExtension::Plugin; }
     dstd::String name() const override { return ext_->name; }
 
-    bool file_may_match(const duql_ns::QueryNode& root) override {
+    bool file_may_match(const duql::QueryNode& root) override {
         if (!ext_->vt.file_may_match) return true;
         if (!file_loaded_) {
             file_ = common::unwrap(
@@ -984,7 +979,7 @@ class PluginCondition final : public Condition {
         return !file_ || may_match_file(root);
     }
 
-    dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
+    dstd::Optional<ChunkSet> may_match(const duql::QueryNode& leaf,
                                        const ChunkSet& candidates) override {
         void* h = compile(leaf);
         if (!h) return dstd::nullopt;
@@ -1009,12 +1004,12 @@ class PluginCondition final : public Condition {
     }
 
    private:
-    bool may_match_file(const duql_ns::QueryNode& node) {
-        if (const auto* a = std::get_if<duql_ns::AndNode>(&node.data))
+    bool may_match_file(const duql::QueryNode& node) {
+        if (const auto* a = std::get_if<duql::AndNode>(&node.data))
             return may_match_file(*a->left) && may_match_file(*a->right);
-        if (const auto* o = std::get_if<duql_ns::OrNode>(&node.data))
+        if (const auto* o = std::get_if<duql::OrNode>(&node.data))
             return may_match_file(*o->left) || may_match_file(*o->right);
-        if (std::holds_alternative<duql_ns::NotNode>(node.data)) return true;
+        if (std::holds_alternative<duql::NotNode>(node.data)) return true;
         void* h = compile(node);
         return !h ||
                ext_->vt.file_may_match(
@@ -1023,18 +1018,18 @@ class PluginCondition final : public Condition {
     }
 
     // NULL when the leaf cannot be passed or the plugin has no evidence.
-    void* compile(const duql_ns::QueryNode& leaf) {
+    void* compile(const duql::QueryNode& leaf) {
         auto [it, inserted] = compiled_.try_emplace(&leaf, nullptr);
         if (inserted) it->second = compile_leaf(leaf);
         return it->second;
     }
 
-    void* compile_leaf(const duql_ns::QueryNode& leaf) {
+    void* compile_leaf(const duql::QueryNode& leaf) {
         ::dftu_index_leaf l{};
         ::dftu_value value{};
         dstd::Vector<::dftu_value> items;
-        const duql_ns::FieldNode* field = nullptr;
-        auto array = [&](const duql_ns::ArrayNode& values) {
+        const duql::FieldNode* field = nullptr;
+        auto array = [&](const duql::ArrayNode& values) {
             items.resize(values.elements.size());
             for (std::size_t i = 0; i < items.size(); ++i)
                 if (!to_value(values.elements[i], items[i])) return false;
@@ -1043,21 +1038,19 @@ class PluginCondition final : public Condition {
             value.as.items = items.data();
             return true;
         };
-        if (const auto* cmp = std::get_if<duql_ns::CompareNode>(&leaf.data)) {
+        if (const auto* cmp = std::get_if<duql::CompareNode>(&leaf.data)) {
             if (!to_value(cmp->value, value)) return nullptr;
             field = &cmp->field;
             l.op = compare_op(cmp->op);
-        } else if (const auto* in = std::get_if<duql_ns::InNode>(&leaf.data)) {
+        } else if (const auto* in = std::get_if<duql::InNode>(&leaf.data)) {
             if (!array(in->values)) return nullptr;
             field = &in->field;
             l.op = DFTU_INDEX_IN;
-        } else if (const auto* nin =
-                       std::get_if<duql_ns::NotInNode>(&leaf.data)) {
+        } else if (const auto* nin = std::get_if<duql::NotInNode>(&leaf.data)) {
             if (!array(nin->values)) return nullptr;
             field = &nin->field;
             l.op = DFTU_INDEX_NOT_IN;
-        } else if (const auto* mt =
-                       std::get_if<duql_ns::MatchNode>(&leaf.data)) {
+        } else if (const auto* mt = std::get_if<duql::MatchNode>(&leaf.data)) {
             if (mt->negated) return nullptr;
             value.kind = DFTU_VAL_STR;
             value.count = static_cast<std::uint32_t>(mt->pattern.size());
@@ -1076,7 +1069,7 @@ class PluginCondition final : public Condition {
 
     FileIndexData& d_;
     index::extensions::PluginExtensionPtr ext_;
-    dstd::HashMap<const duql_ns::QueryNode*, void*> compiled_;
+    dstd::HashMap<const duql::QueryNode*, void*> compiled_;
     dstd::Optional<dstd::HashMap<std::uint64_t, dstd::String>> granules_;
     dstd::Optional<dstd::String> file_;
     bool file_loaded_ = false;
@@ -1110,14 +1103,13 @@ Conditions make_query_conditions(FileIndexData& data) {
     return cs;
 }
 
-bool file_may_match(const duql_ns::QueryNode& root,
-                    const Conditions& conditions) {
+bool file_may_match(const duql::QueryNode& root, const Conditions& conditions) {
     for (const auto& c : conditions)
         if (!c->file_may_match(root)) return false;
     return true;
 }
 
-ChunkSet evaluate(const duql_ns::QueryNode& root, const Conditions& conditions,
+ChunkSet evaluate(const duql::QueryNode& root, const Conditions& conditions,
                   const ChunkSet& universe) {
     return eval_node(root, conditions, universe);
 }

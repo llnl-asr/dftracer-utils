@@ -14,8 +14,6 @@
 #include <algorithm>
 #include <utility>
 
-namespace dataframe = dftracer::utils::dataframe;
-
 namespace dftracer::utils::trace::views::detail {
 
 AggSchema make_agg_schema(const ViewPlan& plan) {

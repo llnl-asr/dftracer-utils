@@ -15,8 +15,6 @@
 // PyMethodDef table back in series.cpp.
 namespace dftracer::utils::python::series_detail {
 
-namespace dataframe = dftracer::utils::dataframe;
-
 using dataframe::Series;
 using dataframe::TypeId;
 

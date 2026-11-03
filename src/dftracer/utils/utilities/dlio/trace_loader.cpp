@@ -20,8 +20,6 @@ namespace dftracer::utils::utilities::dlio {
 
 namespace {
 
-namespace agg = dftracer::utils::index::schemas::dft::agg;
-
 constexpr double US_TO_S = 1e-6;
 
 inline bool matches(dstd::StringView a, dstd::StringView b) { return a == b; }
@@ -59,7 +57,7 @@ void apply_minmax(ComponentAccumulator& acc, double min_us, double max_us) {
 // entry. When quantiles are available we draw `n` samples via inverse-CDF for
 // within-bucket variance; otherwise we replicate the per-call mean. `n` is
 // clamped to `max_samples` if non-zero.
-void synthesize_samples(const agg::AggPartial& partial,
+void synthesize_samples(const index::schemas::dft::agg::AggPartial& partial,
                         std::uint64_t max_samples, std::mt19937_64& rng,
                         dstd::Vector<double>& out) {
     if (partial.count == 0) return;
@@ -110,10 +108,10 @@ dstd::Vector<dstd::Vector<double>> flatten_per_rank(
 
 }  // namespace
 
-AggregatedTraces load_aggregated_traces(dstd::StringView index_path,
-                                        const dstd::Vector<dstd::String>& files,
-                                        const agg::AggregationConfig& config,
-                                        const TraceLoaderOptions& options) {
+AggregatedTraces load_aggregated_traces(
+    dstd::StringView index_path, const dstd::Vector<dstd::String>& files,
+    const index::schemas::dft::agg::AggregationConfig& config,
+    const TraceLoaderOptions& options) {
     AggregatedTraces out;
     out.time_interval_us = config.time_interval_us;
 
@@ -173,7 +171,7 @@ AggregatedTraces load_aggregated_traces(dstd::StringView index_path,
 
     for (const auto* row : rows) {
         const trace::AggKey& key = row->first;
-        const agg::AggPartial& partial = row->second;
+        const index::schemas::dft::agg::AggPartial& partial = row->second;
         const dstd::StringView cat = result.text(key.cat);
         const dstd::StringView name = result.text(key.name);
 

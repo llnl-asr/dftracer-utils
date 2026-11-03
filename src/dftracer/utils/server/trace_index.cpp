@@ -55,21 +55,20 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
     const dftracer::utils::index::Snapshot& snapshot,
     const dftracer::utils::index::FileRef& file,
     const dftracer::utils::index::RecordSchema& schema) {
-    namespace ix = dftracer::utils::index;
-    if (schema.decoder == ix::Decoder::Path) {
-        ix::gzip::TimeBounds bounds;
+    if (schema.decoder == index::Decoder::Path) {
+        index::gzip::TimeBounds bounds;
         const auto& roles = schema.roles;
         if (roles.time.empty()) return bounds;
-        const auto time =
-            ix::extensions::kinds::file_value_range(snapshot, file, roles.time);
+        const auto time = index::extensions::kinds::file_value_range(
+            snapshot, file, roles.time);
         if (!time) return bounds;
-        const double time_us = ix::micros_per(roles.time_unit);
+        const double time_us = index::micros_per(roles.time_unit);
         double end = time->second * time_us;
         if (!roles.duration.empty())
-            if (const auto dur = ix::extensions::kinds::file_value_range(
+            if (const auto dur = index::extensions::kinds::file_value_range(
                     snapshot, file, roles.duration);
                 dur && dur->second > 0)
-                end += dur->second * ix::micros_per(roles.duration_unit);
+                end += dur->second * index::micros_per(roles.duration_unit);
         bounds.valid = true;
         bounds.min_timestamp_us = static_cast<std::uint64_t>(
             std::llround(std::max(0.0, time->first * time_us)));
@@ -80,7 +79,7 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
     auto bounds = dftracer::utils::index::extensions::kinds::file_time_bounds(
         snapshot, file);
     if (!bounds.valid || bounds.min_timestamp_us != 0) return bounds;
-    const auto stats = common::unwrap(ix::scalar_stats(snapshot, file));
+    const auto stats = common::unwrap(index::scalar_stats(snapshot, file));
     if (stats &&
         stats->stats.min_nonzero_timestamp_us <= bounds.max_timestamp_us)
         bounds.min_timestamp_us = stats->stats.min_nonzero_timestamp_us;
@@ -91,22 +90,21 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
 // indexed, its stat changed, or the index holds a path that is not listed.
 bool index_is_stale(dstd::StringView root,
                     const dstd::Vector<dstd::String>& paths) {
-    namespace ix = dftracer::utils::index;
-    const auto snapshot = common::unwrap(ix::plan::open_snapshot(root));
+    const auto snapshot = common::unwrap(index::plan::open_snapshot(root));
     dstd::HashSet<dstd::StringView> listed;
     dstd::Vector<dstd::String> logical_paths;
     logical_paths.reserve(paths.size());
     for (const auto& path : paths) {
-        logical_paths.push_back(ix::store::internal::get_logical_path(path));
+        logical_paths.push_back(index::store::internal::get_logical_path(path));
         listed.insert(logical_paths.back());
         common::InputFileStat st;
-        ix::SourceStat now;
+        index::SourceStat now;
         if (common::stat_input(path, st)) {
             now.mtime = static_cast<std::uint64_t>(st.mtime);
             now.size = st.size;
         }
         if (snapshot.freshness(logical_paths.back(), now) !=
-            ix::Freshness::Current)
+            index::Freshness::Current)
             return true;
     }
     for (const auto& file : common::unwrap(snapshot.files()))
@@ -657,11 +655,10 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             DFTRACER_UTILS_LOG_WARN("TraceIndex: %s", e.what());
                         }
 
-                        namespace ix = dftracer::utils::index;
-                        dstd::Optional<ix::Snapshot> snapshot;
+                        dstd::Optional<index::Snapshot> snapshot;
                         try {
-                            snapshot.emplace(
-                                common::unwrap(ix::plan::open_snapshot(ipath)));
+                            snapshot.emplace(common::unwrap(
+                                index::plan::open_snapshot(ipath)));
                         } catch (const std::exception&) {
                         }
 
@@ -670,13 +667,13 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             bool bloom_ok = false;
                             if (snapshot) {
                                 const auto file = snapshot->file(
-                                    ix::store::internal::get_logical_path(
+                                    index::store::internal::get_logical_path(
                                         info->path));
                                 bloom_ok =
                                     file &&
-                                    ix::extension_current(
+                                    index::extension_current(
                                         *snapshot, *file,
-                                        ix::store::IndexExtension::Stats);
+                                        index::store::IndexExtension::Stats);
                             }
                             if (bloom_ok) {
                                 info->index_path = ipath;
@@ -724,26 +721,25 @@ coro::CoroTask<void> TraceIndex::initialize() {
 
                                     if (info->has_bloom_data) {
                                         try {
-                                            namespace ix =
-                                                dftracer::utils::index;
                                             const auto snapshot =
                                                 common::unwrap(
-                                                    ix::plan::open_snapshot(
+                                                    index::plan::open_snapshot(
                                                         info->index_path));
                                             const auto file = snapshot.file(
-                                                ix::store::internal::
+                                                index::store::internal::
                                                     get_logical_path(
                                                         info->path));
                                             if (file) {
-                                                ix::load_index_schemas(
+                                                index::load_index_schemas(
                                                     info->index_path);
-                                                const auto* schema =
-                                                    ix::plan::recorded_schema(
+                                                const auto* schema = index::
+                                                    plan::recorded_schema(
                                                         snapshot, info->path);
                                                 if (!schema)
                                                     schema =
-                                                        &ix::detect_file_schema(
-                                                            info->path);
+                                                        &index::
+                                                            detect_file_schema(
+                                                                info->path);
                                                 (*schemas_ptr)[fi] = schema;
                                                 auto bounds = timeline_bounds(
                                                     snapshot, *file, *schema);
@@ -1020,15 +1016,14 @@ dstd::SharedPtr<const TraceIndex::FileChunkMeta> TraceIndex::chunk_meta(
     dstd::SharedPtr<const FileChunkMeta> meta;  // null == known-unavailable
     if (!file.index_path.empty()) {
         try {
-            namespace ix = dftracer::utils::index;
             const auto snapshot =
-                common::unwrap(ix::plan::open_snapshot(file.index_path));
-            const auto ref =
-                snapshot.file(ix::store::internal::get_logical_path(file.path));
+                common::unwrap(index::plan::open_snapshot(file.index_path));
+            const auto ref = snapshot.file(
+                index::store::internal::get_logical_path(file.path));
             if (ref) {
                 auto m = dstd::make_shared<FileChunkMeta>();
-                m->spans = common::unwrap(ix::spans(snapshot, *ref));
-                m->stats = common::unwrap(ix::chunk_stats(snapshot, *ref));
+                m->spans = common::unwrap(index::spans(snapshot, *ref));
+                m->stats = common::unwrap(index::chunk_stats(snapshot, *ref));
                 meta = std::move(m);
             }
         } catch (const std::exception& e) {

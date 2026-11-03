@@ -28,44 +28,48 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
-#define DF_DEFINE_BINOP(NAME, HWYOP, SCALAROP)                             \
-    template <class T>                                                     \
-    void NAME(const void* av, const void* bv, void* ov, std::size_t n) {   \
-        const T* a = static_cast<const T*>(av);                            \
-        const T* b = static_cast<const T*>(bv);                            \
-        T* out = static_cast<T*>(ov);                                      \
-        const hn::ScalableTag<T> d;                                        \
-        const std::size_t lanes = hn::Lanes(d);                            \
-        std::size_t i = 0;                                                 \
-        for (; i + lanes <= n; i += lanes)                                 \
-            hn::StoreU(HWYOP(hn::LoadU(d, a + i), hn::LoadU(d, b + i)), d, \
-                       out + i);                                           \
-        for (; i < n; ++i) out[i] = SCALAROP;                              \
+#define DF_DEFINE_BINOP(NAME, HWYOP, SCALAROP)                           \
+    template <class T>                                                   \
+    void NAME(const void* av, const void* bv, void* ov, std::size_t n) { \
+        const T* a = static_cast<const T*>(av);                          \
+        const T* b = static_cast<const T*>(bv);                          \
+        T* out = static_cast<T*>(ov);                                    \
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;                      \
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);          \
+        std::size_t i = 0;                                               \
+        for (; i + lanes <= n; i += lanes)                               \
+            hwy::HWY_NAMESPACE::StoreU(                                  \
+                HWYOP(hwy::HWY_NAMESPACE::LoadU(d, a + i),               \
+                      hwy::HWY_NAMESPACE::LoadU(d, b + i)),              \
+                d, out + i);                                             \
+        for (; i < n; ++i) out[i] = SCALAROP;                            \
     }
 
-DF_DEFINE_BINOP(AddImpl, hn::Add, a[i] + b[i])
-DF_DEFINE_BINOP(SubImpl, hn::Sub, a[i] - b[i])
-DF_DEFINE_BINOP(MulImpl, hn::Mul, a[i] * b[i])
+DF_DEFINE_BINOP(AddImpl, hwy::HWY_NAMESPACE::Add, a[i] + b[i])
+DF_DEFINE_BINOP(SubImpl, hwy::HWY_NAMESPACE::Sub, a[i] - b[i])
+DF_DEFINE_BINOP(MulImpl, hwy::HWY_NAMESPACE::Mul, a[i] * b[i])
 
 #undef DF_DEFINE_BINOP
 
-// Division: floats use the SIMD hn::Div; integers have no SIMD divide, so a
-// scalar loop with a divide-by-zero guard (result 0). The DSL promotes to
-// double before dividing, so the integer path is a defensive fallback.
+// Division: floats use the SIMD hwy::HWY_NAMESPACE::Div; integers have no SIMD
+// divide, so a scalar loop with a divide-by-zero guard (result 0). The DSL
+// promotes to double before dividing, so the integer path is a defensive
+// fallback.
 template <class T>
 void DivImpl(const void* av, const void* bv, void* ov, std::size_t n) {
     const T* a = static_cast<const T*>(av);
     const T* b = static_cast<const T*>(bv);
     T* out = static_cast<T*>(ov);
     if constexpr (std::is_floating_point_v<T>) {
-        const hn::ScalableTag<T> d;
-        const std::size_t lanes = hn::Lanes(d);
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
         std::size_t i = 0;
         for (; i + lanes <= n; i += lanes)
-            hn::StoreU(hn::Div(hn::LoadU(d, a + i), hn::LoadU(d, b + i)), d,
-                       out + i);
+            hwy::HWY_NAMESPACE::StoreU(
+                hwy::HWY_NAMESPACE::Div(hwy::HWY_NAMESPACE::LoadU(d, a + i),
+                                        hwy::HWY_NAMESPACE::LoadU(d, b + i)),
+                d, out + i);
         for (; i < n; ++i) out[i] = a[i] / b[i];
     } else {
         for (std::size_t i = 0; i < n; ++i)
@@ -75,24 +79,25 @@ void DivImpl(const void* av, const void* bv, void* ov, std::size_t n) {
 
 // Broadcast a scalar across the column. The scalar is converted to the column
 // type T, so every numeric type is represented exactly (no double round-trip).
-#define DF_DEFINE_SCALAR(NAME, HWYOP, SCALAROP)                          \
-    template <class T>                                                   \
-    void NAME(const void* av, dftu_scalar sc, void* ov, std::size_t n) { \
-        const T* a = static_cast<const T*>(av);                          \
-        T* out = static_cast<T*>(ov);                                    \
-        const T s = scalar_as<T>(sc);                                    \
-        const hn::ScalableTag<T> d;                                      \
-        const auto vs = hn::Set(d, s);                                   \
-        const std::size_t lanes = hn::Lanes(d);                          \
-        std::size_t i = 0;                                               \
-        for (; i + lanes <= n; i += lanes)                               \
-            hn::StoreU(HWYOP(hn::LoadU(d, a + i), vs), d, out + i);      \
-        for (; i < n; ++i) out[i] = SCALAROP;                            \
+#define DF_DEFINE_SCALAR(NAME, HWYOP, SCALAROP)                              \
+    template <class T>                                                       \
+    void NAME(const void* av, dftu_scalar sc, void* ov, std::size_t n) {     \
+        const T* a = static_cast<const T*>(av);                              \
+        T* out = static_cast<T*>(ov);                                        \
+        const T s = scalar_as<T>(sc);                                        \
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;                          \
+        const auto vs = hwy::HWY_NAMESPACE::Set(d, s);                       \
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);              \
+        std::size_t i = 0;                                                   \
+        for (; i + lanes <= n; i += lanes)                                   \
+            hwy::HWY_NAMESPACE::StoreU(                                      \
+                HWYOP(hwy::HWY_NAMESPACE::LoadU(d, a + i), vs), d, out + i); \
+        for (; i < n; ++i) out[i] = SCALAROP;                                \
     }
 
-DF_DEFINE_SCALAR(AddSImpl, hn::Add, a[i] + s)
-DF_DEFINE_SCALAR(SubSImpl, hn::Sub, a[i] - s)
-DF_DEFINE_SCALAR(MulSImpl, hn::Mul, a[i] * s)
+DF_DEFINE_SCALAR(AddSImpl, hwy::HWY_NAMESPACE::Add, a[i] + s)
+DF_DEFINE_SCALAR(SubSImpl, hwy::HWY_NAMESPACE::Sub, a[i] - s)
+DF_DEFINE_SCALAR(MulSImpl, hwy::HWY_NAMESPACE::Mul, a[i] * s)
 
 #undef DF_DEFINE_SCALAR
 
@@ -103,12 +108,15 @@ void DivSImpl(const void* av, dftu_scalar sc, void* ov, std::size_t n) {
     T* out = static_cast<T*>(ov);
     const T s = scalar_as<T>(sc);
     if constexpr (std::is_floating_point_v<T>) {
-        const hn::ScalableTag<T> d;
-        const auto vs = hn::Set(d, s);
-        const std::size_t lanes = hn::Lanes(d);
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+        const auto vs = hwy::HWY_NAMESPACE::Set(d, s);
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
         std::size_t i = 0;
         for (; i + lanes <= n; i += lanes)
-            hn::StoreU(hn::Div(hn::LoadU(d, a + i), vs), d, out + i);
+            hwy::HWY_NAMESPACE::StoreU(
+                hwy::HWY_NAMESPACE::Div(hwy::HWY_NAMESPACE::LoadU(d, a + i),
+                                        vs),
+                d, out + i);
         for (; i < n; ++i) out[i] = a[i] / s;
     } else {
         for (std::size_t i = 0; i < n; ++i)

@@ -29,8 +29,6 @@
 #include <unistd.h>
 #endif
 
-namespace mp = dftu::memory_probe;
-
 namespace {
 
 constexpr std::size_t RUNS = 5;
@@ -156,7 +154,8 @@ std::uint64_t parse_status(const Buffer& b) {
     while (pos < text.size()) {
         std::size_t eol = text.find('\n', pos);
         if (eol == dftracer::utils::dstd::StringView::npos) eol = text.size();
-        if (const auto v = mp::detail::kib_field(b.data + pos, "RssAnon:"))
+        if (const auto v =
+                dftu::memory_probe::detail::kib_field(b.data + pos, "RssAnon:"))
             return v;
         pos = eol + 1;
     }
@@ -212,7 +211,7 @@ bool run_platform(std::size_t reads, dftracer::utils::dstd::Vector<Row>& rows) {
             "probe cgroup anon+shmem (reads /proc/self/cgroup too)", reads,
             [] {
                 std::uint64_t v = 0;
-                return mp::detail::cgroup_anon_bytes(v) ? v : 0;
+                return dftu::memory_probe::detail::cgroup_anon_bytes(v) ? v : 0;
             },
             rows);
         ok &= measure_file("memory.stat anon+shmem", dir + "/memory.stat",
@@ -240,7 +239,8 @@ int main(int argc, char** argv) {
     dftracer::utils::dstd::Vector<Row> rows;
     bool ok = run_platform(reads, rows);
     ok &= measure(
-        "memory_probe::read()", reads, [] { return mp::read().anon; }, rows);
+        "memory_probe::read()", reads,
+        [] { return dftu::memory_probe::read().anon; }, rows);
 
     std::printf("median of %zu runs of %zu reads\n", RUNS, reads);
     std::printf("%-62s %12s %22s\n", "read", "ns per read",

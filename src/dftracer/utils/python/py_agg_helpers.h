@@ -35,7 +35,6 @@ inline double parse_double(dftracer::utils::dstd::StringView text) {
 // throws std::out_of_range on a bad op, std::invalid_argument on a bad param.
 inline dftracer::utils::dataframe::GroupAgg group_agg_from_spec(
     const dftracer::utils::dstd::String& spec) {
-    namespace dataframe = dftracer::utils::dataframe;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> parts;
     std::size_t start = 0;
     while (true) {

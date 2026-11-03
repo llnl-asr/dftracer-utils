@@ -36,8 +36,6 @@ namespace dftracer::utils::trace::views::detail {
 
 namespace {
 
-namespace df = dftracer::utils::dataframe;
-
 bool is_top_level(dstd::StringView f) {
     return f == "name" || f == "cat" || f == "pid" || f == "tid" || f == "ts" ||
            f == "dur" || f == "ph";
@@ -231,7 +229,7 @@ char infer_kind(const dstd::Vector<Scalar>& vals) {
     return 's';
 }
 
-df::Series column_of(const dstd::Vector<Scalar>& vals, char kind) {
+dataframe::Series column_of(const dstd::Vector<Scalar>& vals, char kind) {
     const auto n = static_cast<std::int64_t>(vals.size());
     dstd::Vector<bool> present(vals.size(), false);
     if (kind == 'i' || kind == 'f') {
@@ -250,8 +248,8 @@ df::Series column_of(const dstd::Vector<Scalar>& vals, char kind) {
         }
         auto vbits = validity_of(present);
         const std::uint8_t* valid = vbits.empty() ? nullptr : vbits.data();
-        return kind == 'i' ? df::Series::flat_i64(is.data(), n, valid)
-                           : df::Series::flat_f64(ds.data(), n, valid);
+        return kind == 'i' ? dataframe::Series::flat_i64(is.data(), n, valid)
+                           : dataframe::Series::flat_f64(ds.data(), n, valid);
     }
     if (kind == 'b') {
         dstd::Vector<std::uint8_t> bits((vals.size() + 7) / 8, 0);
@@ -262,8 +260,8 @@ df::Series column_of(const dstd::Vector<Scalar>& vals, char kind) {
                 bits[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
         }
         auto vbits = validity_of(present);
-        return df::Series::flat(df::TypeId::Bool, bits.data(), n,
-                                vbits.empty() ? nullptr : vbits.data());
+        return dataframe::Series::flat(dataframe::TypeId::Bool, bits.data(), n,
+                                       vbits.empty() ? nullptr : vbits.data());
     }
     dstd::Deque<dstd::String> owned;
     dstd::Vector<dstd::StringView> text(vals.size());
@@ -298,8 +296,8 @@ df::Series column_of(const dstd::Vector<Scalar>& vals, char kind) {
         text[r] = t;
     }
     auto vbits = validity_of(present);
-    return df::Series::strings(dstd::Span<const dstd::StringView>(text),
-                               vbits.empty() ? nullptr : vbits.data());
+    return dataframe::Series::strings(dstd::Span<const dstd::StringView>(text),
+                                      vbits.empty() ? nullptr : vbits.data());
 }
 
 // The array at `path` as JSON text, or nullopt when the event holds no
@@ -333,9 +331,9 @@ dstd::Optional<dstd::String> array_text(
     return std::get<dstd::String>(std::move(cell->value));
 }
 
-df::Series list_column(EventRows evs,
-                       const dftracer::utils::dstd::StringIntern& intern,
-                       dstd::StringView spec, dstd::StringView path) {
+dataframe::Series list_column(EventRows evs,
+                              const dftracer::utils::dstd::StringIntern& intern,
+                              dstd::StringView spec, dstd::StringView path) {
     dstd::Vector<dstd::Pair<dstd::String, char>> fields;
     const bool fixed_struct = spec.starts_with('{');
     if (fixed_struct) {
@@ -379,10 +377,10 @@ df::Series list_column(EventRows evs,
         offsets.push_back(static_cast<std::int32_t>(elems.size()));
         rows.push_back(static_cast<std::int64_t>(r));
     }
-    df::Series values;
+    dataframe::Series values;
     if (fixed_struct) {
         dstd::Vector<dstd::String> names;
-        dstd::Vector<df::Series> cols;
+        dstd::Vector<dataframe::Series> cols;
         for (const auto& [name, kind] : fields) {
             dstd::Vector<Scalar> vals(objects.size());
             for (std::size_t e = 0; e < objects.size(); ++e)
@@ -391,11 +389,12 @@ df::Series list_column(EventRows evs,
             names.emplace_back(name.data(), name.size());
             cols.push_back(column_of(vals, kind));
         }
-        values = df::Series::structs(std::move(names), std::move(cols));
+        values = dataframe::Series::structs(std::move(names), std::move(cols));
     } else {
         values = column_of(elems, spec == "a" ? infer_kind(elems) : spec[0]);
     }
-    df::Series list = df::Series::list(offsets, std::move(values));
+    dataframe::Series list =
+        dataframe::Series::list(offsets, std::move(values));
     if (null_row) return list.take(rows);
     return list;
 }
@@ -407,8 +406,8 @@ const FoldEvent::ArgValue* find_arg(const FoldEvent& ev, std::uint32_t keyid) {
     return nullptr;
 }
 
-df::Series u64_column(EventRows evs, std::uint64_t FoldEvent::* field,
-                      double scale = 1.0) {
+dataframe::Series u64_column(EventRows evs, std::uint64_t FoldEvent::* field,
+                             double scale = 1.0) {
     dstd::Vector<std::uint64_t> vals;
     vals.reserve(evs.size());
     if (scale == 1.0)
@@ -417,15 +416,16 @@ df::Series u64_column(EventRows evs, std::uint64_t FoldEvent::* field,
         for (const auto& ev : evs)
             vals.push_back(static_cast<std::uint64_t>(
                 static_cast<double>(ev.*field) * scale + 0.5));
-    if (vals.empty()) return df::Series::flat(df::TypeId::Uint64, nullptr, 0);
+    if (vals.empty())
+        return dataframe::Series::flat(dataframe::TypeId::Uint64, nullptr, 0);
     const void* p = vals.data();
-    return df::Series::from_borrowed(df::TypeId::Uint64, p, vals.size(),
-                                     std::move(vals));
+    return dataframe::Series::from_borrowed(dataframe::TypeId::Uint64, p,
+                                            vals.size(), std::move(vals));
 }
 
 // The duration of each event, scaled: null where the record carried no
 // numeric dur, as number_typed("dur") reports it.
-df::Series dur_column(EventRows evs, double time_scale) {
+dataframe::Series dur_column(EventRows evs, double time_scale) {
     dstd::Vector<std::uint64_t> vals;
     dstd::Vector<bool> present;
     vals.reserve(evs.size());
@@ -440,12 +440,13 @@ df::Series dur_column(EventRows evs, double time_scale) {
         vals.push_back(ev.has_dur ? scaled(ev.dur) : 0);
         present.push_back(ev.has_dur);
     }
-    if (vals.empty()) return df::Series::flat(df::TypeId::Uint64, nullptr, 0);
+    if (vals.empty())
+        return dataframe::Series::flat(dataframe::TypeId::Uint64, nullptr, 0);
     auto vbits = validity_of(present);
     const void* p = vals.data();
-    return df::Series::from_borrowed(df::TypeId::Uint64, p, vals.size(),
-                                     std::move(vals),
-                                     vbits.empty() ? nullptr : vbits.data());
+    return dataframe::Series::from_borrowed(
+        dataframe::TypeId::Uint64, p, vals.size(), std::move(vals),
+        vbits.empty() ? nullptr : vbits.data());
 }
 
 // First-seen id -> code table, reused per worker. A slot is live when its
@@ -499,7 +500,7 @@ class ChunkViews {
     explicit ChunkViews(const dftracer::utils::dstd::StringIntern& intern)
         : intern_(intern) {}
 
-    void append(df::ViewBuilder& b, std::uint32_t id) {
+    void append(dataframe::ViewBuilder& b, std::uint32_t id) {
         const auto loc = intern_.locate(id);
         if (loc.len <= 12) {
             return b.append_inline(
@@ -509,14 +510,15 @@ class ChunkViews {
     }
 
    private:
-    std::int32_t buffer_of(df::ViewBuilder& b, std::uint32_t chunk) {
+    std::int32_t buffer_of(dataframe::ViewBuilder& b, std::uint32_t chunk) {
         if (have_last_ && chunk == last_chunk_) return last_index_;
         for (const auto& [c, index] : seen_)
             if (c == chunk) return remember(chunk, index);
         auto owner = intern_.chunk(chunk);
         const auto* data = reinterpret_cast<const std::uint8_t*>(owner->data());
         const auto size = owner->size();
-        const auto index = b.add_buffer(df::borrow_buffer(data, size, owner));
+        const auto index =
+            b.add_buffer(dataframe::borrow_buffer(data, size, owner));
         seen_.emplace_back(chunk, index);
         return remember(chunk, index);
     }
@@ -537,15 +539,16 @@ class ChunkViews {
 
 // A column over a buffer that holds every row's bytes back to back; row r
 // ends at ends[r]. The buffer is shared, so the column copies no bytes.
-df::Series text_view_column(const dstd::SharedPtr<dstd::String>& data,
-                            const dstd::Vector<std::size_t>& ends,
-                            const dstd::Vector<bool>& present, bool json) {
-    df::ViewBuilder b;
+dataframe::Series text_view_column(const dstd::SharedPtr<dstd::String>& data,
+                                   const dstd::Vector<std::size_t>& ends,
+                                   const dstd::Vector<bool>& present,
+                                   bool json) {
+    dataframe::ViewBuilder b;
     b.reserve(static_cast<std::int64_t>(ends.size()));
     std::int32_t index = 0;
     if (!data->empty())
-        index =
-            b.add_buffer(df::borrow_buffer(data->data(), data->size(), data));
+        index = b.add_buffer(
+            dataframe::borrow_buffer(data->data(), data->size(), data));
     std::size_t begin = 0;
     for (std::size_t r = 0; r < ends.size(); ++r) {
         if (!present[r])
@@ -555,13 +558,14 @@ df::Series text_view_column(const dstd::SharedPtr<dstd::String>& data,
                      index);
         begin = ends[r];
     }
-    return b.finish(df::TypeId::String, json);
+    return b.finish(dataframe::TypeId::String, json);
 }
 
 }  // namespace
 
-df::Series interned_column(dstd::Span<const std::uint32_t> ids,
-                           const dftracer::utils::dstd::StringIntern& intern) {
+dataframe::Series interned_column(
+    dstd::Span<const std::uint32_t> ids,
+    const dftracer::utils::dstd::StringIntern& intern) {
     constexpr auto NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
     const std::size_t n = ids.size();
     const std::size_t cap = n / 4;
@@ -597,18 +601,18 @@ df::Series interned_column(dstd::Span<const std::uint32_t> ids,
             codes[r] = code;
         }
         if (fits && !distinct.empty()) {
-            df::ViewBuilder values;
+            dataframe::ViewBuilder values;
             values.reserve(static_cast<std::int64_t>(distinct.size()));
             for (std::uint32_t id : distinct) views.append(values, id);
             dstd::Vector<std::uint8_t> vbits;
             if (!all_valid) vbits = validity_of(present);
-            return df::dictionary_from_codes(
-                codes, values.finish(df::TypeId::String, false),
+            return dataframe::dictionary_from_codes(
+                codes, values.finish(dataframe::TypeId::String, false),
                 vbits.empty() ? nullptr : vbits.data());
         }
     }
 
-    df::ViewBuilder b;
+    dataframe::ViewBuilder b;
     b.reserve(static_cast<std::int64_t>(n));
     for (std::uint32_t id : ids) {
         if (id == NO_ID)
@@ -616,7 +620,7 @@ df::Series interned_column(dstd::Span<const std::uint32_t> ids,
         else
             views.append(b, id);
     }
-    return b.finish(df::TypeId::String, false);
+    return b.finish(dataframe::TypeId::String, false);
 }
 
 namespace {
@@ -628,8 +632,9 @@ dstd::Vector<std::uint32_t> ids_of(EventRows evs,
     return ids;
 }
 
-df::Series str_id_column(EventRows evs, std::uint32_t FoldEvent::* field,
-                         const dftracer::utils::dstd::StringIntern& intern) {
+dataframe::Series str_id_column(
+    EventRows evs, std::uint32_t FoldEvent::* field,
+    const dftracer::utils::dstd::StringIntern& intern) {
     return interned_column(ids_of(evs, field), intern);
 }
 
@@ -653,7 +658,7 @@ dstd::String number_text(const FoldEvent::ArgValue& v) {
 }
 
 // The column of `vals` (one per row, null when absent) as `type`.
-df::Series typed_arg_column(
+dataframe::Series typed_arg_column(
     const dstd::Vector<const FoldEvent::ArgValue*>& vals, ArgType::Kind kind,
     std::size_t present_count,
     const dftracer::utils::dstd::StringIntern& intern) {
@@ -704,8 +709,8 @@ df::Series typed_arg_column(
                 if (vals[r]) out[r] = arg_double(*vals[r]);
             {
                 const void* data = out.data();
-                return df::Series::from_borrowed(df::TypeId::Float64, data, n,
-                                                 std::move(out), valid);
+                return dataframe::Series::from_borrowed(
+                    dataframe::TypeId::Float64, data, n, std::move(out), valid);
             }
         }
         case Kind::Uint: {
@@ -714,8 +719,8 @@ df::Series typed_arg_column(
                 if (vals[r]) out[r] = arg_uint(*vals[r]);
             {
                 const void* data = out.data();
-                return df::Series::from_borrowed(df::TypeId::Uint64, data, n,
-                                                 std::move(out), valid);
+                return dataframe::Series::from_borrowed(
+                    dataframe::TypeId::Uint64, data, n, std::move(out), valid);
             }
         }
         case Kind::Int: {
@@ -724,21 +729,21 @@ df::Series typed_arg_column(
                 if (vals[r]) out[r] = std::get<std::int64_t>(*vals[r]);
             {
                 const void* data = out.data();
-                return df::Series::from_borrowed(df::TypeId::Int64, data, n,
-                                                 std::move(out), valid);
+                return dataframe::Series::from_borrowed(
+                    dataframe::TypeId::Int64, data, n, std::move(out), valid);
             }
         }
     }
-    return df::Series::nulls(df::TypeId::Int64, n);
+    return dataframe::Series::nulls(dataframe::TypeId::Int64, n);
 }
 
 // Build one arg column, typed as ArgType says; a row lacking the key is null.
 // A nested/extra field is captured under its full name and a flat arg under
 // its bare key, so `keyid` (full) is tried first and `keyid_alt` (bare) as a
 // fallback, matching PodSource::find_arg; pass NO_ID for no fallback.
-df::Series arg_column(EventRows evs, std::uint32_t keyid,
-                      std::uint32_t keyid_alt,
-                      const dftracer::utils::dstd::StringIntern& intern) {
+dataframe::Series arg_column(
+    EventRows evs, std::uint32_t keyid, std::uint32_t keyid_alt,
+    const dftracer::utils::dstd::StringIntern& intern) {
     dstd::Vector<const FoldEvent::ArgValue*> vals;
     vals.reserve(evs.size());
     ArgType type;
@@ -759,7 +764,8 @@ df::Series arg_column(EventRows evs, std::uint32_t keyid,
 // typed and filled exactly as arg_column(evs, key, NO_ID) would.
 void append_all_arg_columns(EventRows evs,
                             const dftracer::utils::dstd::StringIntern& intern,
-                            df::DataFrame& out, dstd::StringView prefix) {
+                            dataframe::DataFrame& out,
+                            dstd::StringView prefix) {
     struct Col {
         std::uint32_t key = 0;
         ArgKinds kinds;
@@ -811,9 +817,9 @@ void append_all_arg_columns(EventRows evs,
     }
 }
 
-df::Series top_column(EventRows evs, dstd::StringView name,
-                      const dftracer::utils::dstd::StringIntern& intern,
-                      double time_scale) {
+dataframe::Series top_column(EventRows evs, dstd::StringView name,
+                             const dftracer::utils::dstd::StringIntern& intern,
+                             double time_scale) {
     if (name == "name") return str_id_column(evs, &FoldEvent::name_id, intern);
     if (name == "cat") return str_id_column(evs, &FoldEvent::cat_id, intern);
     if (name == "pid") return u64_column(evs, &FoldEvent::pid);
@@ -825,12 +831,13 @@ df::Series top_column(EventRows evs, dstd::StringView name,
     vals.reserve(evs.size());
     for (const auto& ev : evs)
         vals.push_back(static_cast<std::int64_t>(ev.phase));
-    return df::Series::flat(df::TypeId::Int64, vals.data(),
-                            static_cast<std::int64_t>(vals.size()));
+    return dataframe::Series::flat(dataframe::TypeId::Int64, vals.data(),
+                                   static_cast<std::int64_t>(vals.size()));
 }
 
-df::Series hash_column(EventRows evs, dstd::StringView f,
-                       const dftracer::utils::dstd::StringIntern& intern) {
+dataframe::Series hash_column(
+    EventRows evs, dstd::StringView f,
+    const dftracer::utils::dstd::StringIntern& intern) {
     return f == "fhash" ? str_id_column(evs, &FoldEvent::fhash_id, intern)
                         : str_id_column(evs, &FoldEvent::hhash_id, intern);
 }
@@ -838,8 +845,8 @@ df::Series hash_column(EventRows evs, dstd::StringView f,
 // The dfanalyzer I/O category enum value per event, from the event name. Kept
 // an Int64 (the enum's integer, matching the engine agg path's i64 form) so
 // the group-by collapses and renders it identically to a numeric key.
-df::Series iocat_column(EventRows evs,
-                        const dftracer::utils::dstd::StringIntern& intern) {
+dataframe::Series iocat_column(
+    EventRows evs, const dftracer::utils::dstd::StringIntern& intern) {
     dstd::Vector<std::int64_t> vals;
     vals.reserve(evs.size());
     for (const auto& ev : evs) {
@@ -850,14 +857,15 @@ df::Series iocat_column(EventRows evs,
         vals.push_back(static_cast<std::int64_t>(
             static_cast<int>(trace::internal::io_category(name))));
     }
-    return df::Series::flat(df::TypeId::Int64, vals.data(),
-                            static_cast<std::int64_t>(vals.size()));
+    return dataframe::Series::flat(dataframe::TypeId::Int64, vals.data(),
+                                   static_cast<std::int64_t>(vals.size()));
 }
 
 // The acc_pat group key: the constant "0" String for every event, matching the
 // engine agg path (a constant '0'). A single-group, byte-identical key.
-df::Series accpat_column(EventRows evs) {
-    return df::Series::strings(dstd::Vector<dstd::String>(evs.size(), "0"));
+dataframe::Series accpat_column(EventRows evs) {
+    return dataframe::Series::strings(
+        dstd::Vector<dstd::String>(evs.size(), "0"));
 }
 
 // `field` of `src` as canonical JSON text; false when absent or null.
@@ -895,7 +903,7 @@ bool append_json_key(const PodSource& src, dstd::String& out,
 // A group-key string column (see AGG_KEY_ARG_PREFIX): null where the event
 // lacks the value or holds JSON null, so a missing key never merges with "".
 // A `json` key column holds canonical JSON text.
-df::Series group_key_str_column(
+dataframe::Series group_key_str_column(
     EventRows evs, const dftracer::utils::dstd::StringIntern& intern,
     dstd::StringView field, bool arg_only, bool json) {
     auto data = dstd::make_shared<dstd::String>();
@@ -936,8 +944,9 @@ df::Series group_key_str_column(
 // contribute nothing). The "size" pseudo-field resolves to the io-cat-derived
 // byte size (derived_size_t), falling back to a literal numeric "size" arg, so
 // the discovered "size" metric matches fold_numeric_args_t.
-df::Series num_arg_column(EventRows evs, dstd::StringView name,
-                          const dftracer::utils::dstd::StringIntern& intern) {
+dataframe::Series num_arg_column(
+    EventRows evs, dstd::StringView name,
+    const dftracer::utils::dstd::StringIntern& intern) {
     const bool is_size = name == "size";
     const std::uint32_t keyid =
         const_cast<dftracer::utils::dstd::StringIntern&>(intern).get_or_insert(
@@ -968,8 +977,8 @@ df::Series num_arg_column(EventRows evs, dstd::StringView name,
         }
     }
     auto vbits = validity_of(present);
-    return df::Series::flat(df::TypeId::Float64, vals.data(), n,
-                            vbits.empty() ? nullptr : vbits.data());
+    return dataframe::Series::flat(dataframe::TypeId::Float64, vals.data(), n,
+                                   vbits.empty() ? nullptr : vbits.data());
 }
 
 // One fold-derived field as a Uint64 value column for the agg engine's value
@@ -978,7 +987,7 @@ df::Series num_arg_column(EventRows evs, dstd::StringView name,
 // (derived_size_t), "te" is ts+dur (null when the event has no dur, matching
 // number_typed("dur")). ts/dur are read RAW; a non-identity time_scale is
 // reapplied on the engine side (SCALED_TE_COL), never baked in here.
-df::Series derived_agg_column(
+dataframe::Series derived_agg_column(
     EventRows evs, dstd::StringView name,
     const dftracer::utils::dstd::StringIntern& intern) {
     const bool is_size = name == "size";
@@ -1005,8 +1014,8 @@ df::Series derived_agg_column(
         }
     }
     auto vbits = validity_of(present);
-    return df::Series::flat(df::TypeId::Uint64, vals.data(), n,
-                            vbits.empty() ? nullptr : vbits.data());
+    return dataframe::Series::flat(dataframe::TypeId::Uint64, vals.data(), n,
+                                   vbits.empty() ? nullptr : vbits.data());
 }
 
 // An agg-engine token, built the same way for every record_schema.
@@ -1017,18 +1026,18 @@ bool is_path_token(dstd::StringView sel) {
            is_derived_agg_field(sel, f);
 }
 
-df::Series window_mask_column(EventRows evs, const WindowSel& w) {
+dataframe::Series window_mask_column(EventRows evs, const WindowSel& w) {
     const std::int64_t n = static_cast<std::int64_t>(evs.size());
     dstd::Vector<std::int64_t> ones(evs.size(), 1);
     dstd::Vector<bool> present;
     present.reserve(evs.size());
     for (const auto& ev : evs) present.push_back(ev.ts >= w.lo && ev.ts < w.hi);
     auto vbits = validity_of(present);
-    return df::Series::flat_i64(ones.data(), n,
-                                vbits.empty() ? nullptr : vbits.data());
+    return dataframe::Series::flat_i64(ones.data(), n,
+                                       vbits.empty() ? nullptr : vbits.data());
 }
 
-df::Series clip_column(EventRows evs, const WindowSel& w) {
+dataframe::Series clip_column(EventRows evs, const WindowSel& w) {
     const bool is_ts = w.rest == "ts";
     const std::int64_t n = static_cast<std::int64_t>(evs.size());
     dstd::Vector<std::uint64_t> vals;
@@ -1047,8 +1056,8 @@ df::Series clip_column(EventRows evs, const WindowSel& w) {
         present.push_back(ev.has_dur);
     }
     auto vbits = validity_of(present);
-    return df::Series::flat(df::TypeId::Uint64, vals.data(), n,
-                            vbits.empty() ? nullptr : vbits.data());
+    return dataframe::Series::flat(dataframe::TypeId::Uint64, vals.data(), n,
+                                   vbits.empty() ? nullptr : vbits.data());
 }
 
 bool any_hash_present(EventRows evs, std::uint32_t FoldEvent::* field) {
@@ -1174,46 +1183,46 @@ dstd::String canonical_row_column_name(dstd::StringView sel, bool by_path) {
 dataframe::TypeId row_column_type(dstd::StringView sel, bool by_path) {
     WindowSel w;
     if (parse_window_sel(sel, WINDOW_PREFIX, w))
-        return w.rest.empty() ? df::TypeId::Int64
+        return w.rest.empty() ? dataframe::TypeId::Int64
                               : row_column_type(w.rest, by_path);
-    if (parse_window_sel(sel, CLIP_PREFIX, w)) return df::TypeId::Uint64;
+    if (parse_window_sel(sel, CLIP_PREFIX, w)) return dataframe::TypeId::Uint64;
     dstd::StringView spec;
     dstd::StringView path;
-    if (parse_list_sel(sel, spec, path)) return df::TypeId::List;
-    if (by_path && !is_path_token(sel)) return df::TypeId::Unknown;
+    if (parse_list_sel(sel, spec, path)) return dataframe::TypeId::List;
+    if (by_path && !is_path_token(sel)) return dataframe::TypeId::Unknown;
     dstd::StringView f;
     bool arg_only = false;
     dstd::StringView num_name;
     dstd::StringView deriv_name;
-    if (is_agg_key_field(sel, f, arg_only)) return df::TypeId::String;
-    if (is_num_arg_field(sel, num_name)) return df::TypeId::Float64;
-    if (is_derived_agg_field(sel, deriv_name)) return df::TypeId::Uint64;
+    if (is_agg_key_field(sel, f, arg_only)) return dataframe::TypeId::String;
+    if (is_num_arg_field(sel, num_name)) return dataframe::TypeId::Float64;
+    if (is_derived_agg_field(sel, deriv_name)) return dataframe::TypeId::Uint64;
     if (is_top_level(sel)) {
-        if (sel == "name" || sel == "cat") return df::TypeId::String;
-        if (sel == "ph") return df::TypeId::Int64;
-        return df::TypeId::Uint64;  // pid, tid, ts, dur
+        if (sel == "name" || sel == "cat") return dataframe::TypeId::String;
+        if (sel == "ph") return dataframe::TypeId::Int64;
+        return dataframe::TypeId::Uint64;  // pid, tid, ts, dur
     }
-    if (is_iocat_field(sel)) return df::TypeId::Int64;
-    if (is_accpat_field(sel)) return df::TypeId::String;
+    if (is_iocat_field(sel)) return dataframe::TypeId::Int64;
+    if (is_accpat_field(sel)) return dataframe::TypeId::String;
     const dstd::StringView key = common::strip_args_prefix(sel);
-    if (is_hash_field(key)) return df::TypeId::String;
-    return df::TypeId::Unknown;  // a flattened arg: type is data-dependent
+    if (is_hash_field(key)) return dataframe::TypeId::String;
+    return dataframe::TypeId::Unknown;  // a flattened arg: type is
+                                        // data-dependent
 }
 
 namespace {
 
-df::Series select_column(EventRows evs,
-                         const dftracer::utils::dstd::StringIntern& intern,
-                         const dstd::String& sel, double time_scale,
-                         bool by_path) {
+dataframe::Series select_column(
+    EventRows evs, const dftracer::utils::dstd::StringIntern& intern,
+    const dstd::String& sel, double time_scale, bool by_path) {
     WindowSel win;
     if (parse_window_sel(sel, WINDOW_PREFIX, win)) {
-        df::Series mask = window_mask_column(evs, win);
+        dataframe::Series mask = window_mask_column(evs, win);
         if (win.rest.empty()) return mask;
-        df::Series col = select_column(evs, intern, dstd::String(win.rest),
-                                       time_scale, by_path);
+        dataframe::Series col = select_column(
+            evs, intern, dstd::String(win.rest), time_scale, by_path);
         return col.where(mask.valid_mask(),
-                         df::Series::nulls(col.type(), col.length()));
+                         dataframe::Series::nulls(col.type(), col.length()));
     }
     if (parse_window_sel(sel, CLIP_PREFIX, win)) return clip_column(evs, win);
     dstd::StringView list_spec;
@@ -1311,7 +1320,7 @@ RowKeySource row_key_source(dstd::StringView sel, bool by_path) {
 dataframe::DataFrame build_row_frame(
     EventRows evs, const dftracer::utils::dstd::StringIntern& intern,
     const dstd::Vector<dstd::String>& select, double time_scale, bool by_path) {
-    df::DataFrame out;
+    dataframe::DataFrame out;
     const dftracer::utils::dstd::StringIntern* intern_ = &intern;
     const dstd::Vector<dstd::String>& select_ = select;
 
@@ -1352,7 +1361,6 @@ dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>>
 build_dyn_numeric_columns(EventRows evs,
                           const dftracer::utils::dstd::StringIntern& intern,
                           const dstd::Vector<dstd::String>& select) {
-    namespace agg = dftracer::utils::index::schemas::dft::agg;
     // A windowed select holds only the events that start in the window.
     dstd::Optional<WindowSel> win;
     for (const dstd::String& sel : select) {
@@ -1363,7 +1371,7 @@ build_dyn_numeric_columns(EventRows evs,
             break;
         }
     }
-    dstd::Optional<df::Series> keep;
+    dstd::Optional<dataframe::Series> keep;
     if (win) keep = window_mask_column(evs, *win).valid_mask();
     // Discover the numeric-arg names present in this batch, matching
     // fold_numeric_args_t: the io-cat-derived "size" plus every non-reserved,
@@ -1375,16 +1383,19 @@ build_dyn_numeric_columns(EventRows evs,
         PodSource src(ev, intern);
         if (derived_size_t(src)) names.insert("size");
         src.for_each_numeric_arg([&](dstd::StringView key, double) {
-            if (agg::is_reserved_arg(key) || agg::is_preagg_suffix(key)) return;
+            if (index::schemas::dft::agg::is_reserved_arg(key) ||
+                index::schemas::dft::agg::is_preagg_suffix(key))
+                return;
             names.insert(dstd::String(key));
         });
     }
     dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>> out;
     out.reserve(names.size());
     for (const dstd::String& name : names) {
-        df::Series col = num_arg_column(evs, name, intern);
+        dataframe::Series col = num_arg_column(evs, name, intern);
         if (keep)
-            col = col.where(*keep, df::Series::nulls(col.type(), col.length()));
+            col = col.where(*keep,
+                            dataframe::Series::nulls(col.type(), col.length()));
         auto& entry = out.emplace_back(AGG_NUM_ARG_PREFIX, std::move(col));
         entry.first.append(name);
     }

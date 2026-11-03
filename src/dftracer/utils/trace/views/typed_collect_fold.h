@@ -117,17 +117,16 @@ class TypedCollectFold : public Fold {
 
         dftracer::utils::dataframe::DataFrame to_frame(
             const dftracer::utils::dstd::StringIntern& intern) && {
-            namespace df = dftracer::utils::dataframe;
             // from_borrowed moves the vector in and borrows its buffer; a
             // vector move keeps that buffer, so data() taken first stays valid.
             // An empty column takes the copy path instead: from_borrowed does
             // not release its owner for a zero-byte buffer, so borrowing would
             // leak.
-            auto column = [](auto&& v, df::TypeId type) {
-                if (v.empty()) return df::Series::flat(type, nullptr, 0);
+            auto column = [](auto&& v, dataframe::TypeId type) {
+                if (v.empty()) return dataframe::Series::flat(type, nullptr, 0);
                 const void* p = v.data();
-                return df::Series::from_borrowed(type, p, v.size(),
-                                                 std::move(v));
+                return dataframe::Series::from_borrowed(type, p, v.size(),
+                                                        std::move(v));
             };
             // A record without a numeric dur has no duration (null row), as
             // a row-frame dur column reports it.
@@ -143,30 +142,34 @@ class TypedCollectFold : public Fold {
                 if (!any_missing) v.clear();
                 return v;
             };
-            df::DataFrame out;
+            dataframe::DataFrame out;
             out.names.emplace_back("name");
             out.columns.push_back(interned_column(name_id, intern));
             out.names.emplace_back("cat");
             out.columns.push_back(interned_column(cat_id, intern));
             out.names.emplace_back("pid");
-            out.columns.push_back(column(std::move(pid), df::TypeId::Uint64));
+            out.columns.push_back(
+                column(std::move(pid), dataframe::TypeId::Uint64));
             out.names.emplace_back("tid");
-            out.columns.push_back(column(std::move(tid), df::TypeId::Uint64));
+            out.columns.push_back(
+                column(std::move(tid), dataframe::TypeId::Uint64));
             out.names.emplace_back("ts");
-            out.columns.push_back(column(std::move(ts), df::TypeId::Uint64));
+            out.columns.push_back(
+                column(std::move(ts), dataframe::TypeId::Uint64));
             out.names.emplace_back("dur");
             dstd::Vector<std::uint8_t> bits = dur_cell_validity(has_dur);
             if (dur.empty()) {
-                out.columns.push_back(
-                    df::Series::flat(df::TypeId::Uint64, nullptr, 0));
+                out.columns.push_back(dataframe::Series::flat(
+                    dataframe::TypeId::Uint64, nullptr, 0));
             } else {
                 const void* p = dur.data();
-                out.columns.push_back(df::Series::from_borrowed(
-                    df::TypeId::Uint64, p, dur.size(), std::move(dur),
+                out.columns.push_back(dataframe::Series::from_borrowed(
+                    dataframe::TypeId::Uint64, p, dur.size(), std::move(dur),
                     bits.empty() ? nullptr : bits.data()));
             }
             out.names.emplace_back("ph");
-            out.columns.push_back(column(std::move(ph), df::TypeId::Int64));
+            out.columns.push_back(
+                column(std::move(ph), dataframe::TypeId::Int64));
             return out;
         }
     };

@@ -39,7 +39,6 @@
 
 namespace dftracer::utils::utilities::reader {
 
-namespace dftu_internal = trace::internal;
 using dftracer::utils::index::gzip::CheckpointIndexerFactory;
 using duql::Query;
 using json::JsonValue;
@@ -436,8 +435,8 @@ TraceReader::TraceReader(TraceReaderConfig config)
 
 void TraceReader::probe_index() {
     format_ = CheckpointIndexerFactory::detect_format(config_.file_path);
-    index_path_ = dftu_internal::determine_index_path(config_.file_path,
-                                                      config_.index_dir);
+    index_path_ = trace::internal::determine_index_path(config_.file_path,
+                                                        config_.index_dir);
     has_index_ = format_ == common::ArchiveFormat::Gzip &&
                  common::unwrap(dstd::fs::exists(dstd::PathView(
                      dftracer::utils::index::store_dir(index_path_))));

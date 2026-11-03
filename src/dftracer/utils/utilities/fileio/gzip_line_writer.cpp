@@ -30,9 +30,6 @@
 
 namespace dftracer::utils::utilities::fileio {
 
-namespace pfw = parallel;
-namespace cmp = compress;
-
 dstd::String gzip_part_path(dstd::StringView base, int idx, bool multi) {
     if (!multi) return dstd::String(base);
     const std::size_t pos = base.rfind(".pfw");
@@ -167,14 +164,14 @@ struct GzipLineWriter::Impl {
     dstd::Map<std::uint64_t, Done> ready;
     std::uint64_t next_write = 0;
     dstd::Optional<dstd::Error> error;
-    dstd::Vector<dstd::UniquePtr<cmp::GzipMemberCompressor>> pool;
+    dstd::Vector<dstd::UniquePtr<compress::GzipMemberCompressor>> pool;
 
     std::atomic<std::size_t> in_flight{0};
     std::atomic<std::size_t> peak{0};
 
     // Writer step state; touched only under drain_mu, or after join.
-    dstd::UniquePtr<pfw::ParallelWriter> writer;
-    pfw::FileLayout layout = pfw::FileLayout::Striped;
+    dstd::UniquePtr<parallel::ParallelWriter> writer;
+    parallel::FileLayout layout = parallel::FileLayout::Striped;
     dstd::String cur_path;
     std::size_t part = 0;
     std::uint64_t member_idx = 0;
@@ -221,7 +218,7 @@ struct GzipLineWriter::Impl {
                        ? opts.part_name(part)
                        : gzip_part_path(base, static_cast<int>(part), multi());
         created.push_back(cur_path);
-        auto cw = pfw::make_writer_for_path(
+        auto cw = parallel::make_writer_for_path(
             {cur_path, unordered() ? workers : 1, opts.member_size,
              BUFFER_HEADROOM_BYTES, opts.compress});
         writer = std::move(cw.writer);
@@ -280,10 +277,10 @@ struct GzipLineWriter::Impl {
         if (!writer) co_return true;
         bool ok = co_await write_extra(opts.part_footer, false);
         ok = co_await writer->close() == 0 && ok;
-        if (ok && layout == pfw::FileLayout::Sharded) {
+        if (ok && layout == parallel::FileLayout::Sharded) {
             // GCC 12 destroys a temporary built inside co_await twice.
             const dstd::Vector<dstd::String> shards = writer->output_paths();
-            ok = co_await pfw::merge_shards(cur_path, shards) == 0;
+            ok = co_await parallel::merge_shards(cur_path, shards) == 0;
         }
         writer.reset();
         if (!ok) {
@@ -370,7 +367,7 @@ struct GzipLineWriter::Impl {
         drain_mu.unlock();
     }
 
-    dstd::UniquePtr<cmp::GzipMemberCompressor> take_compressor() {
+    dstd::UniquePtr<compress::GzipMemberCompressor> take_compressor() {
         {
             std::lock_guard<std::mutex> lk(mu);
             if (!pool.empty()) {
@@ -379,10 +376,10 @@ struct GzipLineWriter::Impl {
                 return c;
             }
         }
-        return dstd::make_unique<cmp::GzipMemberCompressor>(opts.level);
+        return dstd::make_unique<compress::GzipMemberCompressor>(opts.level);
     }
 
-    void give_compressor(dstd::UniquePtr<cmp::GzipMemberCompressor> c) {
+    void give_compressor(dstd::UniquePtr<compress::GzipMemberCompressor> c) {
         std::lock_guard<std::mutex> lk(mu);
         pool.push_back(std::move(c));
     }

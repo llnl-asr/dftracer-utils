@@ -39,8 +39,6 @@
 #endif
 
 using namespace dftracer::utils;
-namespace genesis = dftracer::utils::trace::genesis;
-namespace fileio = dftracer::utils::utilities::fileio;
 
 // Part `index` of `count` of the run groups.
 struct Shard {
@@ -143,8 +141,8 @@ namespace {
 // The groups of `shard`: largest first, each group goes to the part with the
 // fewest trace bytes so far (the lowest part on a tie), so the parts are even
 // and every process that sees the same groups picks the same ones.
-dstd::Vector<genesis::RunGroup> take_shard(
-    dstd::Vector<genesis::RunGroup> groups, Shard shard) {
+dstd::Vector<trace::genesis::RunGroup> take_shard(
+    dstd::Vector<trace::genesis::RunGroup> groups, Shard shard) {
     dstd::Vector<std::size_t> order(groups.size());
     for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
     dstd::stable_sort(
@@ -152,7 +150,7 @@ dstd::Vector<genesis::RunGroup> take_shard(
             return groups[a].compressed_bytes > groups[b].compressed_bytes;
         });
     dstd::Vector<std::uint64_t> load(shard.count, 0);
-    dstd::Vector<genesis::RunGroup> mine;
+    dstd::Vector<trace::genesis::RunGroup> mine;
     for (const std::size_t i : order) {
         const auto part = static_cast<std::size_t>(
             std::min_element(load.begin(), load.end()) - load.begin());
@@ -245,7 +243,7 @@ dstd::String rate_of(double per_second) {
     return buf;
 }
 
-using Phase = genesis::GroupProgress::Phase;
+using Phase = trace::genesis::GroupProgress::Phase;
 constexpr std::size_t PHASES = 5;
 
 const char* phase_name(Phase p) {
@@ -266,9 +264,9 @@ const char* phase_name(Phase p) {
 
 // The group one worker processes, and the counters process_group updates.
 struct Slot {
-    std::atomic<const genesis::RunGroup*> group{nullptr};
+    std::atomic<const trace::genesis::RunGroup*> group{nullptr};
     std::atomic<std::int64_t> start_ms{0};
-    genesis::GroupProgress live;
+    trace::genesis::GroupProgress live;
 };
 
 // Prints the progress of the run to stderr. Whatever updates a count (a
@@ -298,7 +296,8 @@ class Progress {
     const dstd::String& tag() const { return tag_; }
 
     // The counters for worker `w`, which starts `group`.
-    genesis::GroupProgress* begin(std::size_t w, const genesis::RunGroup* g) {
+    trace::genesis::GroupProgress* begin(std::size_t w,
+                                         const trace::genesis::RunGroup* g) {
         Slot& s = slots_[w];
         s.live.reset();
         s.start_ms.store(elapsed_ms());
@@ -312,7 +311,7 @@ class Progress {
 
     void end(std::size_t w, std::size_t runs) {
         Slot& s = slots_[w];
-        const genesis::RunGroup* g = s.group.exchange(nullptr);
+        const trace::genesis::RunGroup* g = s.group.exchange(nullptr);
         if (g) done_bytes_.fetch_add(g->compressed_bytes);
         done_calls_.fetch_add(s.live.calls.load());
         runs_.fetch_add(runs);
@@ -347,7 +346,7 @@ class Progress {
         std::size_t in_phase[PHASES] = {};
         for (std::size_t w = 0; w < workers_; ++w) {
             const Slot& s = slots_[w];
-            const genesis::RunGroup* g = s.group.load();
+            const trace::genesis::RunGroup* g = s.group.load();
             if (!g) continue;
             const Phase ph = s.live.phase.load(std::memory_order_relaxed);
             ++in_phase[static_cast<std::size_t>(ph)];
@@ -409,7 +408,7 @@ class Progress {
         const std::int64_t now_ns = common::steady_now_ns();
         for (std::size_t w = 0; w < workers_; ++w) {
             const Slot& s = slots_[w];
-            const genesis::RunGroup* g = s.group.load();
+            const trace::genesis::RunGroup* g = s.group.load();
             if (!g) continue;
             const std::int64_t ran = now_ms - s.start_ms.load();
             if (ran < std::chrono::milliseconds(SLOW_GROUP).count()) continue;
@@ -458,7 +457,7 @@ class Progress {
 
 struct WorkerTotals {
     std::size_t runs = 0;
-    dstd::Vector<genesis::Skip> skips;
+    dstd::Vector<trace::genesis::Skip> skips;
     bool io_error = false;
 };
 
@@ -476,7 +475,7 @@ struct Shares {
     std::uint64_t base;
     std::uint64_t input_bytes;
 
-    std::uint64_t first(const genesis::RunGroup& g) const {
+    std::uint64_t first(const trace::genesis::RunGroup& g) const {
         if (input_bytes == 0) return base;
         const double part = static_cast<double>(budget) *
                             (static_cast<double>(g.compressed_bytes) /
@@ -497,9 +496,11 @@ struct Shares {
 // its group holds its share of `memory` until its runs are written.
 coro::CoroTask<void> group_worker(
     coro::Scope& ctx, coro::ChannelConsumer<std::size_t> in,
-    fileio::GzipLineWriter* writer, fileio::GzipLineWriter* head_writer,
-    const dstd::Vector<genesis::RunGroup>* groups, coro::CoroSemaphore* memory,
-    Shares shares, WorkerTotals* totals, Progress* progress, std::size_t w) {
+    utilities::fileio::GzipLineWriter* writer,
+    utilities::fileio::GzipLineWriter* head_writer,
+    const dstd::Vector<trace::genesis::RunGroup>* groups,
+    coro::CoroSemaphore* memory, Shares shares, WorkerTotals* totals,
+    Progress* progress, std::size_t w) {
     auto prod = writer->producer();
     auto head_prod = head_writer->producer();
     if (!prod || !head_prod) {
@@ -511,7 +512,7 @@ coro::CoroTask<void> group_worker(
     // Free memory of the budget lent to the group being processed, returned
     // with its share; only a group that cannot borrow runs again.
     std::atomic<std::uint64_t> borrowed{0};
-    const genesis::BorrowFn borrow =
+    const trace::genesis::BorrowFn borrow =
         [memory, &borrowed](std::uint64_t n) -> std::uint64_t {
         if (!memory->try_acquire(n)) return 0;
         borrowed.fetch_add(n);
@@ -520,12 +521,12 @@ coro::CoroTask<void> group_worker(
     for (;;) {
         auto i = co_await in.receive();
         if (!i) break;
-        const genesis::RunGroup& group = (*groups)[*i];
+        const trace::genesis::RunGroup& group = (*groups)[*i];
         std::uint64_t share = shares.first(group);
-        genesis::GroupProgress* live = progress->begin(w, &group);
+        trace::genesis::GroupProgress* live = progress->begin(w, &group);
         co_await memory->acquire(share);
-        auto result =
-            co_await genesis::process_group(ctx, group, share, live, &borrow);
+        auto result = co_await trace::genesis::process_group(ctx, group, share,
+                                                             live, &borrow);
         while (result.over_budget && share < shares.budget) {
             result = {};
             memory->release(share + borrowed.exchange(0));
@@ -538,8 +539,8 @@ coro::CoroTask<void> group_worker(
             share = larger;
             progress->retry(w);
             co_await memory->acquire(share);
-            result = co_await genesis::process_group(ctx, group, share, live,
-                                                     &borrow);
+            result = co_await trace::genesis::process_group(ctx, group, share,
+                                                            live, &borrow);
         }
         progress->writing(w);
         for (auto& run : result.runs) {
@@ -617,7 +618,8 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
     // discover takes owned paths
     dstd::Vector<dstd::String> roots;
     for (const auto root : cli->roots) roots.emplace_back(root);
-    genesis::Discovery discovery = co_await genesis::discover(ctx, roots);
+    trace::genesis::Discovery discovery =
+        co_await trace::genesis::discover(ctx, roots);
     if (shard.count > 1) {
         discovery.groups = take_shard(std::move(discovery.groups), shard);
         // Every part sees the same discovery, so only the first reports it.
@@ -648,14 +650,14 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
     };
     const std::size_t member_size = member_size_of(writer_budget);
     auto open_writer = [&](dstd::StringView path, std::uint64_t bytes)
-        -> coro::CoroTask<dstd::Optional<fileio::GzipLineWriter>> {
-        fileio::GzipWriterOptions opts;
+        -> coro::CoroTask<dstd::Optional<utilities::fileio::GzipLineWriter>> {
+        utilities::fileio::GzipWriterOptions opts;
         opts.member_size = member_size_of(bytes);
         opts.workers = std::max<std::size_t>(1, cli->pipeline.executor_threads);
         opts.memory_budget = bytes;
         opts.ordered = false;
-        auto opened = co_await fileio::GzipLineWriter::open(dstd::String(path),
-                                                            std::move(opts));
+        auto opened = co_await utilities::fileio::GzipLineWriter::open(
+            dstd::String(path), std::move(opts));
         if (!opened) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Cannot write %s: %s", binaries::c_str(path),
@@ -671,8 +673,8 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
     if (!head_opened) co_return 1;
     auto body_opened = co_await open_writer(output, writer_budget);
     if (!body_opened) co_return 1;
-    fileio::GzipLineWriter writer = std::move(*body_opened);
-    fileio::GzipLineWriter head_writer = std::move(*head_opened);
+    utilities::fileio::GzipLineWriter writer = std::move(*body_opened);
+    utilities::fileio::GzipLineWriter head_writer = std::move(*head_opened);
 
     std::uint64_t input_bytes = 0;
     for (const auto& g : discovery.groups) input_bytes += g.compressed_bytes;
@@ -731,7 +733,7 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
 
     bool io_error = false;
     std::size_t runs = 0;
-    dstd::Vector<genesis::Skip> skips = std::move(discovery.skips);
+    dstd::Vector<trace::genesis::Skip> skips = std::move(discovery.skips);
     for (auto& t : totals) {
         io_error = io_error || t.io_error;
         runs += t.runs;

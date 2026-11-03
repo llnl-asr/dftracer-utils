@@ -15,18 +15,16 @@ namespace dftracer::utils::duql {
 
 namespace {
 
-namespace df = dataframe;
-
-bool is_int64_safe(df::TypeId t) {
-    return t == df::TypeId::Int8 || t == df::TypeId::Int16 ||
-           t == df::TypeId::Int32 || t == df::TypeId::Int64 ||
-           t == df::TypeId::Uint8 || t == df::TypeId::Uint16 ||
-           t == df::TypeId::Uint32;
+bool is_int64_safe(dataframe::TypeId t) {
+    return t == dataframe::TypeId::Int8 || t == dataframe::TypeId::Int16 ||
+           t == dataframe::TypeId::Int32 || t == dataframe::TypeId::Int64 ||
+           t == dataframe::TypeId::Uint8 || t == dataframe::TypeId::Uint16 ||
+           t == dataframe::TypeId::Uint32;
 }
 
-bool is_number(df::TypeId t) {
-    return is_int64_safe(t) || t == df::TypeId::Uint64 ||
-           t == df::TypeId::Float32 || t == df::TypeId::Float64;
+bool is_number(dataframe::TypeId t) {
+    return is_int64_safe(t) || t == dataframe::TypeId::Uint64 ||
+           t == dataframe::TypeId::Float32 || t == dataframe::TypeId::Float64;
 }
 
 template <class T>
@@ -36,7 +34,7 @@ struct Numbers {
 };
 
 template <class T, class U>
-void copy_column(const df::Series& s, Numbers<T>& out) {
+void copy_column(const dataframe::Series& s, Numbers<T>& out) {
     const U* p = s.data<U>();
     for (std::int64_t i = 0; i < s.length(); ++i) {
         const auto at = static_cast<std::size_t>(i);
@@ -46,40 +44,40 @@ void copy_column(const df::Series& s, Numbers<T>& out) {
 }
 
 template <class T>
-Numbers<T> read_numbers(const df::Series& s, const char* what) {
+Numbers<T> read_numbers(const dataframe::Series& s, const char* what) {
     if (!is_number(s.type()))
         throw std::invalid_argument(
             (dstd::String("overlap: the ") + what + " is " +
-             dstd::String(df::type_name(s.type())) + ", not a number")
+             dstd::String(dataframe::type_name(s.type())) + ", not a number")
                 .c_str());
     const auto n = static_cast<std::size_t>(s.length());
     Numbers<T> out{dstd::Vector<T>(n), dstd::Vector<std::uint8_t>(n)};
     switch (s.type()) {
-        case df::TypeId::Int8:
+        case dataframe::TypeId::Int8:
             copy_column<T, std::int8_t>(s, out);
             break;
-        case df::TypeId::Int16:
+        case dataframe::TypeId::Int16:
             copy_column<T, std::int16_t>(s, out);
             break;
-        case df::TypeId::Int32:
+        case dataframe::TypeId::Int32:
             copy_column<T, std::int32_t>(s, out);
             break;
-        case df::TypeId::Int64:
+        case dataframe::TypeId::Int64:
             copy_column<T, std::int64_t>(s, out);
             break;
-        case df::TypeId::Uint8:
+        case dataframe::TypeId::Uint8:
             copy_column<T, std::uint8_t>(s, out);
             break;
-        case df::TypeId::Uint16:
+        case dataframe::TypeId::Uint16:
             copy_column<T, std::uint16_t>(s, out);
             break;
-        case df::TypeId::Uint32:
+        case dataframe::TypeId::Uint32:
             copy_column<T, std::uint32_t>(s, out);
             break;
-        case df::TypeId::Uint64:
+        case dataframe::TypeId::Uint64:
             copy_column<T, std::uint64_t>(s, out);
             break;
-        case df::TypeId::Float32:
+        case dataframe::TypeId::Float32:
             copy_column<T, float>(s, out);
             break;
         default:
@@ -135,10 +133,10 @@ Intervals<T> read_intervals(const OverlapColumns& c) {
     return out;
 }
 
-bool row_key(dstd::String& out, const dstd::Vector<df::Series>& keys,
+bool row_key(dstd::String& out, const dstd::Vector<dataframe::Series>& keys,
              std::int64_t r) {
     out.clear();
-    for (const df::Series& k : keys)
+    for (const dataframe::Series& k : keys)
         if (!append_cell_key(out, k, r)) return false;
     return true;
 }

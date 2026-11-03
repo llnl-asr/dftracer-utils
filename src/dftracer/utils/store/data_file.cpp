@@ -38,8 +38,6 @@ namespace dftracer::utils::store::engine {
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
-
 constexpr dstd::StringView FILE_MAGIC = "DFTUSTR0";
 constexpr dstd::StringView TRAILER_MAGIC = "DFTUEND0";
 constexpr dstd::StringView RECORD_MAGIC = "DFTUREC0";
@@ -1814,8 +1812,6 @@ DataFileReader::all_extent_refs() const {
 }
 
 namespace {
-
-namespace dstd = dftracer::utils::dstd;
 
 /// One entry of a segment block: u32 extent index, u64 sequence, u64 offset,
 /// u32 length, u32 crc, u32 offset in the extent, u32 segment length, u64 entry

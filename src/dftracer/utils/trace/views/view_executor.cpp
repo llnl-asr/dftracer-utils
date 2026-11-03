@@ -287,15 +287,14 @@ struct BootstrapBuild {
 BootstrapBuild open_bootstrap_build(BootstrapRoot& root, dstd::StringView file,
                                     std::uint64_t mtime,
                                     const BootstrapSource& source) {
-    namespace idx = dftracer::utils::index;
     BootstrapBuild out;
     if (!root.index) {
         out.failure = root.index_error;
         return out;
     }
     auto started =
-        root.index->build(idx::store::internal::get_logical_path(file),
-                          idx::SourceStat{mtime, source.size, source.hash});
+        root.index->build(index::store::internal::get_logical_path(file),
+                          index::SourceStat{mtime, source.size, source.hash});
     if (started)
         out.build.emplace(std::move(*started));
     else
@@ -310,12 +309,11 @@ void fill_bootstrap_file(
     const dftracer::utils::index::RecordSchema& schema,
     dftracer::utils::index::extensions::BloomFold& bloom,
     dftracer::utils::index::extensions::RowSetFold& rowsets) {
-    namespace idx = dftracer::utils::index;
-    idx::gzip::persist_gzip_index_artifacts(build, arts);
+    index::gzip::persist_gzip_index_artifacts(build, arts);
     // The new members renumber the chunks the old copies describe.
-    idx::clear_chunk_copies(build);
-    idx::put_profile(build, schema.id);
-    build.finish(idx::store::IndexExtension::Profile, schema.params_hash());
+    index::clear_chunk_copies(build);
+    index::put_profile(build, schema.id);
+    build.finish(index::store::IndexExtension::Profile, schema.params_hash());
     bloom.write(build);
     rowsets.write(build);
 }
@@ -394,7 +392,6 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
 // so anything else falls through to the streaming scanner path.
 coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
                                           ExportSink& sink) {
-    namespace gzi = dftracer::utils::index::gzip;
     if (!export_bootstrap_eligible(plan)) co_return false;
 
     BootstrapStores stores;
@@ -436,9 +433,9 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
                                            !schema.data.empty() &&
                                            !plan_by_path(plan));
 
-        gzi::GzipBuildArtifacts arts;
+        index::gzip::GzipBuildArtifacts arts;
         bool ok = false;
-        gzi::CheckpointIndexer::VisitorList visitors;
+        index::gzip::CheckpointIndexer::VisitorList visitors;
         visitors.emplace_back(driver);
         visitors.emplace_back(writer);
         co_await coro::with_scope([&](coro::Scope& scope) {
@@ -545,7 +542,6 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
 
 coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
                                              const TraceWriteOptions& opts) {
-    namespace pfw = utilities::fileio::parallel;
     // Member size defaults to the checkpoint granularity (a member == a chunk).
     constexpr std::size_t DEFAULT_FLUSH_BYTES =
         common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
@@ -561,7 +557,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
 
     const std::size_t baseline = std::max<std::size_t>(1, opts.num_workers);
     const auto sizing =
-        pfw::make_writer_for_path(
+        utilities::fileio::parallel::make_writer_for_path(
             {dstd::String(opts.output_path), baseline,
              opts.member_size ? opts.member_size : DEFAULT_FLUSH_BYTES,
              BUFFER_HEADROOM_BYTES, opts.compress})
@@ -712,7 +708,6 @@ struct BootstrapRun {
 coro::CoroTask<BootstrapFile> bootstrap_file(
     BootstrapRun* run, ViewFile f, BootstrapRoot* root,
     dftracer::utils::index::build::FileGroup* group) {
-    namespace gzi = dftracer::utils::index::gzip;
     const ViewPlan* plan = run->plan;
     BootstrapFile out;
     std::uint64_t compressed = 0;
@@ -782,9 +777,9 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     driver.share_buffers(run->buffers);
     driver.set_parse_gate(run->admission->gate());
 
-    gzi::GzipBuildArtifacts arts;
+    index::gzip::GzipBuildArtifacts arts;
     bool built = false;
-    gzi::CheckpointIndexer::VisitorList visitors;
+    index::gzip::CheckpointIndexer::VisitorList visitors;
     visitors.emplace_back(driver);
     co_await coro::with_scope([&](coro::Scope& scope) {
         return build_bootstrap_artifacts(
@@ -1126,14 +1121,13 @@ coro::CoroTask<bool> try_serve_aggregate_no_scan(const ViewPlan& plan,
 // missing/locked index leaves the origin at 0 (absolute).
 ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     if (!plan.bucket_origin_min || plan.time_bucket_us == 0) return plan;
-    namespace ix = dftracer::utils::index;
     std::uint64_t global_min = std::numeric_limits<std::uint64_t>::max();
     const bool by_path = plan_by_path(plan);
-    const ix::Roles& roles = plan_record_schema(plan).roles;
-    dstd::Map<dstd::String, ix::Snapshot> snapshots;
+    const index::Roles& roles = plan_record_schema(plan).roles;
+    dstd::Map<dstd::String, index::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         if (f.index_path.empty() ||
-            !common::input_exists(ix::store_of(f.index_path)))
+            !common::input_exists(index::store_of(f.index_path)))
             continue;
         try {
             auto at = snapshots.find(f.index_path);
@@ -1141,21 +1135,21 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
                 at = snapshots
                          .emplace(f.index_path,
                                   common::unwrap(
-                                      ix::plan::open_snapshot(f.index_path)))
+                                      index::plan::open_snapshot(f.index_path)))
                          .first;
-            const ix::Snapshot& snapshot = at->second;
+            const index::Snapshot& snapshot = at->second;
             const auto file = snapshot.file(
                 dftracer::utils::index::store::internal::get_logical_path(
                     f.file_path));
             if (!file) continue;
             if (by_path) {
-                const auto r = ix::extensions::kinds::file_value_range(
+                const auto r = index::extensions::kinds::file_value_range(
                     snapshot, *file, roles.time);
                 if (r && r->first >= 0)
                     global_min = std::min(
                         global_min,
                         static_cast<std::uint64_t>(std::llround(
-                            r->first * ix::micros_per(roles.time_unit))));
+                            r->first * index::micros_per(roles.time_unit))));
                 continue;
             }
             const auto b =

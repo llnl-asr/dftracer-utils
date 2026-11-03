@@ -78,15 +78,14 @@
 #include <cstdlib>
 #include <stdexcept>
 
-namespace df = dftracer::utils::dataframe;
-namespace coro = dftracer::utils::coro;
+using namespace dftracer::utils;
 
 namespace {
 
 using Clock = std::chrono::steady_clock;
-using df::DataFrame;
-using df::LazyFrame;
-using df::Series;
+using dataframe::DataFrame;
+using dataframe::LazyFrame;
+using dataframe::Series;
 
 constexpr std::uint64_t MIB = std::uint64_t{1} << 20;
 constexpr std::uint64_t GIB = std::uint64_t{1} << 30;
@@ -137,7 +136,7 @@ struct Shape {
     std::uint64_t seed = 0;
 };
 
-df::DataType type_of(Gen gen) {
+dataframe::DataType type_of(Gen gen) {
     const std::int64_t i = 0;
     const double f = 0;
     switch (gen) {
@@ -210,20 +209,22 @@ Series generate(const Column& c, std::size_t salt, std::uint64_t seed,
 
 // Generates each morsel from (seed, column, row), so the data never lives in
 // memory as a whole and any morsel size gives the same rows.
-class GenSource : public df::Source {
+class GenSource : public dataframe::Source {
    public:
     explicit GenSource(Shape shape)
         : shape_(dftracer::utils::dstd::make_shared<const Shape>(
               std::move(shape))) {}
 
-    df::Schema schema() const override {
-        df::Schema out;
+    dataframe::Schema schema() const override {
+        dataframe::Schema out;
         for (const Column& c : shape_->columns)
-            out.fields.push_back(df::Field{c.name, type_of(c.gen), true});
+            out.fields.push_back(
+                dataframe::Field{c.name, type_of(c.gen), true});
         return out;
     }
 
-    df::ScanResult scan(const df::ScanRequest& req) const override {
+    dataframe::ScanResult scan(
+        const dataframe::ScanRequest& req) const override {
         dftracer::utils::dstd::Vector<std::size_t> picked;
         if (req.projection.empty()) {
             for (std::size_t c = 0; c < shape_->columns.size(); ++c)
@@ -238,26 +239,26 @@ class GenSource : public df::Source {
                     static_cast<std::size_t>(it - shape_->columns.begin()));
             }
         }
-        df::ScanResult r;
+        dataframe::ScanResult r;
         r.cursor =
             dftracer::utils::dstd::make_unique<Rows>(shape_, std::move(picked));
-        r.filters.assign(req.filters.size(), df::Pushed::No);
+        r.filters.assign(req.filters.size(), dataframe::Pushed::No);
         return r;
     }
 
    private:
-    class Rows : public df::Cursor {
+    class Rows : public dataframe::Cursor {
        public:
         Rows(dftracer::utils::dstd::SharedPtr<const Shape> shape,
              dftracer::utils::dstd::Vector<std::size_t> picked)
             : shape_(std::move(shape)), picked_(std::move(picked)) {}
 
-        coro::CoroTask<dftracer::utils::dstd::Optional<df::Morsel>> next(
+        coro::CoroTask<dftracer::utils::dstd::Optional<dataframe::Morsel>> next(
             std::int64_t max_rows) override {
             if (pos_ >= shape_->rows) co_return dftracer::utils::dstd::nullopt;
             const std::int64_t want = max_rows > 0 ? max_rows : MORSEL_ROWS;
             const std::int64_t n = std::min(want, shape_->rows - pos_);
-            df::Morsel m;
+            dataframe::Morsel m;
             m.rows = n;
             for (std::size_t c : picked_)
                 m.columns.push_back(
@@ -312,7 +313,7 @@ LazyFrame window_lag(const LazyFrame& plan) {
     specs[0].value = "v";
     specs[0].out = "lag_v";
     specs[0].param.offset = 1;
-    df::OpArgs args;
+    dataframe::OpArgs args;
     args.strlist(1, part, 1).strlist(2, order, 1).winlist(3, specs);
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names =
         plan.schema();
@@ -334,8 +335,9 @@ bool at_most_groups(std::int64_t out, const Inputs& in) {
 }
 
 dftracer::utils::dstd::Vector<Case> make_cases() {
-    dftracer::utils::dstd::Vector<df::GroupAgg> aggs{
-        {df::Agg::Sum, "v", "sum_v"}, {df::Agg::Count, "v", "count_v"}};
+    dftracer::utils::dstd::Vector<dataframe::GroupAgg> aggs{
+        {dataframe::Agg::Sum, "v", "sum_v"},
+        {dataframe::Agg::Count, "v", "count_v"}};
     dftracer::utils::dstd::Vector<Case> cases;
     auto add =
         [&cases](
@@ -401,7 +403,7 @@ dftracer::utils::dstd::Vector<Case> make_cases() {
                                        std::max<std::int64_t>(in.rows / 2, 1),
                                        SEED + 3});
             return in.main().asof(right, "t", {"p"},
-                                  df::AsofDirection::Backward);
+                                  dataframe::AsofDirection::Backward);
         },
         all_rows);
     add(

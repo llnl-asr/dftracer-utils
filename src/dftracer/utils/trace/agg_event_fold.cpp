@@ -12,8 +12,6 @@
 
 namespace dftracer::utils::trace {
 
-namespace agg = index::schemas::dft::agg;
-
 namespace {
 
 constexpr char EXTRA_SEP = '\x1f';
@@ -106,8 +104,9 @@ std::uint32_t AggEventFolder::extra_id(const Acc& acc) {
 void AggEventFolder::add_event(
     const views::detail::FoldEvent& ev,
     const dstd::HashSet<AggGroup, AggGroupHash>* wanted) {
-    const agg::PodAccessor acc(ev, r_.read, r_.read_metric_ids);
-    if (!agg::partial_holds(acc)) return;
+    const index::schemas::dft::agg::PodAccessor acc(ev, r_.read,
+                                                    r_.read_metric_ids);
+    if (!index::schemas::dft::agg::partial_holds(acc)) return;
     if (ev.ts < r_.q.ts_begin || ev.ts >= r_.q.ts_end) return;
     if (!r_.pids.empty() &&
         !std::binary_search(r_.pids.begin(), r_.pids.end(), ev.pid))
@@ -119,7 +118,7 @@ void AggEventFolder::add_event(
     const std::uint32_t host = read_host(ev.hhash_id);
     if (host == AGG_REJECT) return;
     const std::uint32_t extra = extra_id(acc);
-    const AggKind kind = agg::partial_kind(acc);
+    const AggKind kind = index::schemas::dft::agg::partial_kind(acc);
     if (wanted != nullptr &&
         wanted->find(AggGroup{cat, name, host, extra, kind}) == wanted->end())
         return;
@@ -133,7 +132,9 @@ void AggEventFolder::add_event(
     if (r_.q.by_tid) key.tid = ev.tid;
     if (r_.q.by_file) {
         const auto fhash = acc.arg_string("fhash");
-        key.file = fhash.empty() ? 0 : agg::agg_hash_of_hex(fhash);
+        key.file = fhash.empty()
+                       ? 0
+                       : index::schemas::dft::agg::agg_hash_of_hex(fhash);
         if (!fhash.empty() && !dstd::hash::parse_hex64(fhash))
             key.file_text = r_.strings.get_or_insert(fhash);
     }
@@ -142,9 +143,11 @@ void AggEventFolder::add_event(
 
     auto it = rows_.find(key);
     if (it == rows_.end())
-        it = rows_.emplace(key, agg::AggPartial(r_.q.config.sketch_accuracy))
+        it = rows_
+                 .emplace(key, index::schemas::dft::agg::AggPartial(
+                                   r_.q.config.sketch_accuracy))
                  .first;
-    agg::fold_into_partial(it->second, acc, r_.read_cfg);
+    index::schemas::dft::agg::fold_into_partial(it->second, acc, r_.read_cfg);
     ++stats_.events_read;
 }
 

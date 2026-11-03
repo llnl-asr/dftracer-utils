@@ -38,9 +38,6 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;
-namespace df = dftracer::utils::dataframe;
-namespace compress = dftracer::utils::utilities::fileio::compress;
-namespace scan = dftracer::utils::trace::views::detail::scan;
 
 namespace {
 
@@ -72,7 +69,7 @@ T run(coro::CoroTask<T> t) {
 dstd::String write_trace(const dstd::String& dir, std::int64_t events) {
     const dstd::String gz = dir + "/bench.pfw.gz";
     require_ok(dstd::fs::write_file(gz, {}), "write_file");
-    compress::GzipMemberCompressor comp(6);
+    utilities::fileio::compress::GzipMemberCompressor comp(6);
     const char* names[] = {"read", "write", "open", "close", "fread", "fwrite"};
     const char* cats[] = {"POSIX", "POSIX", "POSIX", "POSIX", "STDIO", "STDIO"};
     std::mt19937_64 rng(7);
@@ -115,7 +112,7 @@ dstd::String write_trace(const dstd::String& dir, std::int64_t events) {
 dstd::String write_clustered(const dstd::String& dir, std::int64_t events) {
     const dstd::String gz = dir + "/clustered.pfw.gz";
     require_ok(dstd::fs::write_file(gz, {}), "write_file");
-    compress::GzipMemberCompressor comp(6);
+    utilities::fileio::compress::GzipMemberCompressor comp(6);
     dstd::String chunk;
     auto flush = [&] {
         if (chunk.empty()) return;
@@ -147,7 +144,7 @@ dstd::String write_clustered(const dstd::String& dir, std::int64_t events) {
 dstd::String write_generic(const dstd::String& dir, std::int64_t records) {
     const dstd::String gz = dir + "/bench.ndjson.gz";
     require_ok(dstd::fs::write_file(gz, {}), "write_file");
-    compress::GzipMemberCompressor comp(6);
+    utilities::fileio::compress::GzipMemberCompressor comp(6);
     const char* ops[] = {"read", "write", "open", "close"};
     std::mt19937_64 rng(7);
     dstd::String chunk;
@@ -190,11 +187,12 @@ struct GenericRow {
     index::Field<std::int64_t, "io.size"> size;
 };
 
-std::int64_t int_at(const df::DataFrame& f, std::size_t c, std::int64_t r) {
+std::int64_t int_at(const dataframe::DataFrame& f, std::size_t c,
+                    std::int64_t r) {
     const auto& col = f.columns[c];
-    if (col.type() == df::TypeId::Uint64)
+    if (col.type() == dataframe::TypeId::Uint64)
         return static_cast<std::int64_t>(col.data<std::uint64_t>()[r]);
-    if (col.type() == df::TypeId::Float64)
+    if (col.type() == dataframe::TypeId::Float64)
         return static_cast<std::int64_t>(col.data<double>()[r]);
     return col.data<std::int64_t>()[r];
 }
@@ -205,9 +203,9 @@ template <class Row, class Fill>
 dstd::Vector<Row> rows_via_collect(const View& v,
                                    const dstd::Vector<dstd::String>& names,
                                    Fill fill) {
-    df::DataFrame f = run(v.select(names).collect());
+    dataframe::DataFrame f = run(v.select(names).collect());
     for (auto& c : f.columns)
-        if (c.type() != df::TypeId::String) c = c.materialize();
+        if (c.type() != dataframe::TypeId::String) c = c.materialize();
     dstd::Vector<std::size_t> at;
     for (const auto& n : names)
         at.push_back(static_cast<std::size_t>(
@@ -273,7 +271,8 @@ int main(int argc, char** argv) {
     run(View::from_file(gz).agg({{AggOp::Count, "", "n"}}).collect());
 
     const View tv = View::from_file(gz);
-    const scan::ScanPlan base = scan::from_file(gz);
+    const trace::views::detail::scan::ScanPlan base =
+        trace::views::detail::scan::from_file(gz);
     const auto cols = tv.schema();
     auto at = [&](const char* name) {
         return static_cast<std::int32_t>(
@@ -298,7 +297,7 @@ int main(int argc, char** argv) {
         [&] {
             rows_via_collect<EventRow>(
                 tv, {"name", "dur", "args.size"},
-                [](const df::DataFrame& f,
+                [](const dataframe::DataFrame& f,
                    const dstd::Vector<std::size_t>& col_idx, std::int64_t r,
                    EventRow& row) {
                     row.name.value =
@@ -313,7 +312,7 @@ int main(int argc, char** argv) {
         [&] {
             rows_via_collect<GenericRow>(
                 gv, {"op", "lat", "io.size"},
-                [](const df::DataFrame& f,
+                [](const dataframe::DataFrame& f,
                    const dstd::Vector<std::size_t>& col_idx, std::int64_t r,
                    GenericRow& row) {
                     row.op.value =
@@ -326,10 +325,12 @@ int main(int argc, char** argv) {
     add(
         "agg name: count, sum dur",
         [&] {
-            scan::ScanPlan p =
-                scan::agg(scan::group_by(base, {GroupKey::name()}),
-                          {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "s"}});
-            run(scan::collect_frame(p));
+            trace::views::detail::scan::ScanPlan p =
+                trace::views::detail::scan::agg(
+                    trace::views::detail::scan::group_by(base,
+                                                         {GroupKey::name()}),
+                    {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "s"}});
+            run(trace::views::detail::scan::collect_frame(p));
         },
         [&] {
             run(tv.group_by({GroupKey::name()})
@@ -339,14 +340,17 @@ int main(int argc, char** argv) {
     add(
         "filter + agg pid, top 5",
         [&] {
-            scan::ScanPlan p = scan::topk(
-                scan::agg(
-                    scan::group_by(scan::filter(base, duql::parse_or_throw(
-                                                          R"(cat == "POSIX")")),
-                                   {GroupKey::pid()}),
-                    {{AggOp::Mean, "dur", "m"}}),
-                "m", 5);
-            run(scan::collect_frame(p));
+            trace::views::detail::scan::ScanPlan p =
+                trace::views::detail::scan::topk(
+                    trace::views::detail::scan::agg(
+                        trace::views::detail::scan::group_by(
+                            trace::views::detail::scan::filter(
+                                base,
+                                duql::parse_or_throw(R"(cat == "POSIX")")),
+                            {GroupKey::pid()}),
+                        {{AggOp::Mean, "dur", "m"}}),
+                    "m", 5);
+            run(trace::views::detail::scan::collect_frame(p));
         },
         [&] {
             run(tv.duql(R"(cat == "POSIX")")
@@ -359,11 +363,13 @@ int main(int argc, char** argv) {
     add(
         "time bucket 10ms",
         [&] {
-            scan::ScanPlan p =
-                scan::agg(scan::group_by(scan::time_bucket(base, 10000),
-                                         {GroupKey::cat()}),
-                          {{AggOp::Count, "", "n"}});
-            run(scan::collect_frame(p));
+            trace::views::detail::scan::ScanPlan p =
+                trace::views::detail::scan::agg(
+                    trace::views::detail::scan::group_by(
+                        trace::views::detail::scan::time_bucket(base, 10000),
+                        {GroupKey::cat()}),
+                    {{AggOp::Count, "", "n"}});
+            run(trace::views::detail::scan::collect_frame(p));
         },
         [&] {
             run(tv.time_bucket(10000)
@@ -374,10 +380,12 @@ int main(int argc, char** argv) {
     add(
         "row query, select",
         [&] {
-            scan::ScanPlan p = scan::select(
-                scan::filter(base, duql::parse_or_throw(R"(name == "fwrite")")),
-                {"name", "dur", "args.size"});
-            run(scan::collect_frame(p));
+            trace::views::detail::scan::ScanPlan p =
+                trace::views::detail::scan::select(
+                    trace::views::detail::scan::filter(
+                        base, duql::parse_or_throw(R"(name == "fwrite")")),
+                    {"name", "dur", "args.size"});
+            run(trace::views::detail::scan::collect_frame(p));
         },
         [&] {
             run(tv.duql(R"(name == "fwrite")")
@@ -387,46 +395,53 @@ int main(int argc, char** argv) {
     add(
         "flamegraph",
         [&] {
-            scan::ScanPlan p =
-                scan::filter(base, duql::parse_or_throw(R"(cat == "POSIX")"));
-            run(scan::flamegraph(p, {"pid", "tid"}, "ts", "dur", "name", {}));
+            trace::views::detail::scan::ScanPlan p =
+                trace::views::detail::scan::filter(
+                    base, duql::parse_or_throw(R"(cat == "POSIX")"));
+            run(trace::views::detail::scan::flamegraph(p, {"pid", "tid"}, "ts",
+                                                       "dur", "name", {}));
         },
         [&] { run(tv.duql(R"(cat == "POSIX")").flamegraph().collect()); });
     add(
         "generic group_by (absorbed)",
         [&] {
-            scan::ScanPlan p =
-                scan::agg(scan::group_by(base, {GroupKey::name()}),
-                          {{AggOp::Sum, "dur", "s"}});
-            run(scan::collect_frame(p));
+            trace::views::detail::scan::ScanPlan p =
+                trace::views::detail::scan::agg(
+                    trace::views::detail::scan::group_by(base,
+                                                         {GroupKey::name()}),
+                    {{AggOp::Sum, "dur", "s"}});
+            run(trace::views::detail::scan::collect_frame(p));
         },
         [&] {
             run(tv.group_by(dstd::Vector<dstd::String>{"name"},
-                            {{df::Agg::Sum, "dur", "s"}})
+                            {{dataframe::Agg::Sum, "dur", "s"}})
                     .collect());
         });
     add(
         "expression key vs engine over rows",
         [&] {
-            df::LazyFrame lf = scan::collect(base);
-            run(lf.with_column("big", df::col(at("dur")) > std::int64_t{250})
+            dataframe::LazyFrame lf = trace::views::detail::scan::collect(base);
+            run(lf.with_column("big",
+                               dataframe::col(at("dur")) > std::int64_t{250})
                     .group_by(dstd::Vector<dstd::String>{"big"},
-                              {{df::Agg::Count, "", "n"}})
+                              {{dataframe::Agg::Count, "", "n"}})
                     .collect());
         },
         [&] {
-            run(tv.with_column("big", df::col(at("dur")) > std::int64_t{250})
+            run(tv.with_column("big",
+                               dataframe::col(at("dur")) > std::int64_t{250})
                     .group_by(dstd::Vector<dstd::String>{"big"},
-                              {{df::Agg::Count, "", "n"}})
+                              {{dataframe::Agg::Count, "", "n"}})
                     .collect());
         });
     add(
         "duql pipeline vs View calls",
         [&] {
             run(tv.duql(R"(cat == "POSIX")")
-                    .with_column("ms", df::expr_arith(
-                                           df::ArithOp::Div, df::col(at("dur")),
-                                           df::lit(std::int64_t{1000})))
+                    .with_column("ms", dataframe::expr_arith(
+                                           dataframe::ArithOp::Div,
+                                           dataframe::col(at("dur")),
+                                           dataframe::lit(std::int64_t{1000})))
                     .sort_by_multi({"ms"}, dstd::Vector<bool>{true})
                     .head(5)
                     .collect());
@@ -440,9 +455,10 @@ int main(int argc, char** argv) {
         "duql take vs View calls",
         [&] {
             run(tv.duql(R"(cat == "POSIX")")
-                    .with_column("x", df::expr_arith(df::ArithOp::Mul,
-                                                     df::col(at("dur")),
-                                                     df::lit(std::int64_t{2})))
+                    .with_column("x", dataframe::expr_arith(
+                                          dataframe::ArithOp::Mul,
+                                          dataframe::col(at("dur")),
+                                          dataframe::lit(std::int64_t{2})))
                     .head(1000)
                     .select({"ts", "dur"})
                     .collect());
@@ -466,12 +482,13 @@ int main(int argc, char** argv) {
         "duql frame group vs LazyFrame calls",
         [&] {
             const View o = tv.duql("derive q = 1");
-            run(o.with_column(
-                     "k", df::expr_arith(df::ArithOp::Mod, df::col(at("dur")),
-                                         df::lit(std::int64_t{7})))
-                    .group_by(
-                        dstd::Vector<dstd::String>{"k"},
-                        {{df::Agg::Count, "", "n"}, {df::Agg::Last, "ts", "l"}})
+            run(o.with_column("k", dataframe::expr_arith(
+                                       dataframe::ArithOp::Mod,
+                                       dataframe::col(at("dur")),
+                                       dataframe::lit(std::int64_t{7})))
+                    .group_by(dstd::Vector<dstd::String>{"k"},
+                              {{dataframe::Agg::Count, "", "n"},
+                               {dataframe::Agg::Last, "ts", "l"}})
                     .sort_by_multi({"k"}, dstd::Vector<bool>{false})
                     .collect());
         },
@@ -482,7 +499,7 @@ int main(int argc, char** argv) {
     add(
         "duql window vs frame_op",
         [&] {
-            const df::LazyFrame lf =
+            const dataframe::LazyFrame lf =
                 tv.duql("derive q = 1").lazy().with_row_index("__pos");
             const char* part = "name";
             const char* order = "__pos";
@@ -497,7 +514,7 @@ int main(int argc, char** argv) {
             specs[1].value = "dur";
             specs[1].out = "p";
             specs[1].param.offset = 1;
-            df::OpArgs a;
+            dataframe::OpArgs a;
             a.strlist(1, &part, 1).strlist(2, &order, 1).winlist(3, specs);
             dstd::Vector<dstd::String> names = lf.schema();
             names.emplace_back("r");
@@ -512,12 +529,12 @@ int main(int argc, char** argv) {
     add(
         "duql semi-join vs two-step",
         [&] {
-            const df::DataFrame keys = run(
+            const dataframe::DataFrame keys = run(
                 tv.duql(
                       R"(where name == "fwrite" and dur > 495 | select fname)")
                     .collect());
             dstd::String list;
-            const df::Series c = keys.columns[0].materialize();
+            const dataframe::Series c = keys.columns[0].materialize();
             for (std::int64_t r = 0; r < keys.num_rows(); ++r) {
                 list += (list.empty() ? "\"" : ", \"") +
                         dstd::String(c.string_at(r)) + "\"";
@@ -544,11 +561,11 @@ int main(int argc, char** argv) {
     add(
         "duql lookup vs LazyFrame join",
         [&] {
-            const df::LazyFrame side =
+            const dataframe::LazyFrame side =
                 tv.duql("group fname { mx = max(size) }").lazy();
             run(tv.duql(R"(where cat == "STDIO" | select name, f = fname)")
                     .lazy()
-                    .join(side, {"f"}, {"fname"}, df::JoinHow::Left)
+                    .join(side, {"f"}, {"fname"}, dataframe::JoinHow::Left)
                     .collect());
         },
         [&] {
@@ -564,9 +581,9 @@ int main(int argc, char** argv) {
             run(tv.duql("select name, f = fname")
                     .lazy()
                     .group_by(dstd::Vector<dstd::String>{"name", "f"},
-                              {{df::Agg::Count, "", "n"}})
+                              {{dataframe::Agg::Count, "", "n"}})
                     .group_by(dstd::Vector<dstd::String>{"name"},
-                              {{df::Agg::Count, "", "d"}})
+                              {{dataframe::Agg::Count, "", "d"}})
                     .sort_by("name")
                     .collect());
         },
@@ -584,9 +601,9 @@ int main(int argc, char** argv) {
             run(s.execute());
         },
         [&] {
-            run(df::collect_all(tv.containment(),
-                                tv.group_by({GroupKey::name()})
-                                    .agg({{AggOp::Count, "", "n"}})));
+            run(dataframe::collect_all(tv.containment(),
+                                       tv.group_by({GroupKey::name()})
+                                           .agg({{AggOp::Count, "", "n"}})));
         });
     add(
         "4 plans: separate vs collect_all",
@@ -601,14 +618,14 @@ int main(int argc, char** argv) {
                     .collect());
         },
         [&] {
-            run(df::collect_all({tv.group_by({GroupKey::name()})
-                                     .agg({{AggOp::Count, "", "n"}})
-                                     .lazy(),
-                                 tv.duql(R"(cat == "STDIO")").lazy(),
-                                 tv.duql("dur > 400").lazy(),
-                                 tv.group_by({GroupKey::pid()})
-                                     .agg({{AggOp::Max, "dur", "mx"}})
-                                     .lazy()}));
+            run(dataframe::collect_all({tv.group_by({GroupKey::name()})
+                                            .agg({{AggOp::Count, "", "n"}})
+                                            .lazy(),
+                                        tv.duql(R"(cat == "STDIO")").lazy(),
+                                        tv.duql("dur > 400").lazy(),
+                                        tv.group_by({GroupKey::pid()})
+                                            .agg({{AggOp::Max, "dur", "mx"}})
+                                            .lazy()}));
         });
 
     bool regressed = false;

@@ -8,17 +8,15 @@ namespace dftracer::utils::index::plan {
 
 namespace {
 
-namespace df = dftracer::utils::dataframe;
-
-dstd::String cell_text(const df::Series& s, std::int64_t r) {
+dstd::String cell_text(const dataframe::Series& s, std::int64_t r) {
     switch (s.type()) {
-        case df::TypeId::String:
+        case dataframe::TypeId::String:
             return dstd::String(s.string_at(r));
-        case df::TypeId::Int64:
+        case dataframe::TypeId::Int64:
             return dstd::to_string(s.data<std::int64_t>()[r]);
-        case df::TypeId::Uint64:
+        case dataframe::TypeId::Uint64:
             return dstd::to_string(s.data<std::uint64_t>()[r]);
-        case df::TypeId::Float64:
+        case dataframe::TypeId::Float64:
             return dstd::to_string(s.data<double>()[r]);
         default:
             return {};
@@ -38,9 +36,9 @@ GroupResolver::GroupResolver(const dstd::Vector<RowSetFile>& files,
             const auto k = f->column_index(c.key);
             const auto v = f->column_index(c.value);
             if (k >= 0 && v >= 0) {
-                const df::Series keys =
+                const dataframe::Series keys =
                     f->columns[static_cast<std::size_t>(k)].materialize();
-                const df::Series vals =
+                const dataframe::Series vals =
                     f->columns[static_cast<std::size_t>(v)].materialize();
                 for (std::int64_t r = 0; r < f->num_rows(); ++r)
                     if (!keys.is_null(r) && !vals.is_null(r))

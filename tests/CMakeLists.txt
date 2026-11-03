@@ -175,6 +175,12 @@ add_test(
     "bad=$(grep -rnE '^[[:space:]]*using namespace' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/'); if [ -n \"$bad\" ]; then echo \"using namespace in a header; qualify the names and put the directive in the .cpp:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
+  NAME no_namespace_aliases
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '^[[:space:]]*namespace[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/'); if [ -n \"$bad\" ]; then echo \"namespace alias; write the area name after using namespace dftracer::utils (CLAUDE.md: no namespace aliases):\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(
   NAME store_no_upward
   COMMAND
     sh -c

@@ -130,8 +130,7 @@ double col_cell_double(const dftracer::utils::dataframe::Series& c,
 
 void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
                               const ViewPlan& plan, ExportSink& sink) {
-    namespace df = dftracer::utils::dataframe;
-    df::DataFrame f = finalize_engine_result(state, plan);
+    dataframe::DataFrame f = finalize_engine_result(state, plan);
 
     dstd::Vector<dstd::String> group_cols;
     if (plan.time_bucket_us > 0) group_cols.push_back("time_bucket");
@@ -184,7 +183,8 @@ void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
     for (std::int64_t r = 0; r < nrows; ++r) {
         dstd::Vector<dstd::Optional<dstd::String>> keys(group_cols.size());
         for (std::size_t k = 0; k < group_cols.size(); ++k) {
-            const df::Series& c = f.columns[static_cast<std::size_t>(gi[k])];
+            const dataframe::Series& c =
+                f.columns[static_cast<std::size_t>(gi[k])];
             if (!c.is_null(r)) keys[k] = dstd::String(c.string_at(r));
         }
         dstd::Vector<dstd::String> value_cols;
@@ -197,7 +197,8 @@ void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
         // Sparse per group: emit only the args this group actually saw,
         // matching emit_group_counter iterating a.dyn.
         for (std::size_t k = 0; k < dyn_cols.size(); ++k) {
-            const df::Series& c = f.columns[static_cast<std::size_t>(di[k])];
+            const dataframe::Series& c =
+                f.columns[static_cast<std::size_t>(di[k])];
             if (c.is_null(r)) continue;
             const double v = col_cell_double(c, r);
             if (std::isnan(v)) continue;

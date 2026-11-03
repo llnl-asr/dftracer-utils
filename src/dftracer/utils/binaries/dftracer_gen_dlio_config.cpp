@@ -27,8 +27,6 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
-namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace dlio = dftracer::utils::utilities::dlio;
 
 namespace {
 
@@ -131,35 +129,36 @@ class GenDlioConfigArgParse : public binaries::ArgParse {
     }
 };
 
-dstd::Optional<dlio::BestModel> fit_best_model(
+dstd::Optional<utilities::dlio::BestModel> fit_best_model(
     const dstd::Vector<double>& data) {
     if (data.empty()) return dstd::nullopt;
-    const auto singles = dlio::fit_all_single_distributions(data);
-    dstd::Vector<dlio::FittedMixture> mixtures;
+    const auto singles = utilities::dlio::fit_all_single_distributions(data);
+    dstd::Vector<utilities::dlio::FittedMixture> mixtures;
     if (data.size() >= 20) {
-        mixtures.push_back(dlio::fit_gaussian_mixture(data, 2));
-        mixtures.push_back(dlio::fit_gaussian_mixture(data, 3));
+        mixtures.push_back(utilities::dlio::fit_gaussian_mixture(data, 2));
+        mixtures.push_back(utilities::dlio::fit_gaussian_mixture(data, 3));
     }
-    const auto best = dlio::select_best_model(singles, mixtures);
+    const auto best = utilities::dlio::select_best_model(singles, mixtures);
     if (!best) return dstd::nullopt;
     return best->model;
 }
 
-const char* model_label(const dlio::BestModel& m) {
+const char* model_label(const utilities::dlio::BestModel& m) {
     return std::visit(
         [](const auto& v) -> const char* {
             using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, dlio::FittedDistribution>) {
+            if constexpr (std::is_same_v<T,
+                                         utilities::dlio::FittedDistribution>) {
                 switch (v.kind) {
-                    case dlio::DistributionKind::Normal:
+                    case utilities::dlio::DistributionKind::Normal:
                         return "Normal";
-                    case dlio::DistributionKind::Lognormal:
+                    case utilities::dlio::DistributionKind::Lognormal:
                         return "Lognormal";
-                    case dlio::DistributionKind::Gamma:
+                    case utilities::dlio::DistributionKind::Gamma:
                         return "Gamma";
-                    case dlio::DistributionKind::Exponential:
+                    case utilities::dlio::DistributionKind::Exponential:
                         return "Exponential";
-                    case dlio::DistributionKind::Weibull:
+                    case utilities::dlio::DistributionKind::Weibull:
                         return "Weibull";
                 }
                 return "Unknown";
@@ -179,7 +178,7 @@ int main(int argc, char** argv) {
         "and aggregates the input directory automatically; no separate "
         "aggregation step is required.",
         [](GenDlioConfigArgParse& cli) -> int {
-            agg::AggregationConfig agg_config;
+            index::schemas::dft::agg::AggregationConfig agg_config;
             agg_config.time_interval_us =
                 static_cast<std::uint64_t>(cli.time_interval * 1000.0);
             agg_config.compute_statistics = true;
@@ -189,7 +188,8 @@ int main(int argc, char** argv) {
             agg_config.sketch_accuracy = 0.01;
             agg_config.percentiles = {0.25, 0.5, 0.75, 0.90};
 
-            const agg::AggregationConfig query_config = agg_config;
+            const index::schemas::dft::agg::AggregationConfig query_config =
+                agg_config;
 
             const auto scanned = binaries::ensure_indexes_fresh_blocking(
                 "DLIO Config Generator", cli.pipeline, cli.inputs.directory, {},
@@ -207,20 +207,20 @@ int main(int argc, char** argv) {
 
             // --- Load aggregated traces
             // ---------------------------------------------
-            dlio::TraceLoaderOptions loader_opts;
+            utilities::dlio::TraceLoaderOptions loader_opts;
             loader_opts.max_samples_per_entry = cli.max_samples_per_entry;
             loader_opts.seed = cli.seed;
             // Remap component (cat, name) selectors from the event map, if any.
             if (!cli.event_map.empty()) {
                 try {
-                    dlio::load_event_map(dstd::String(cli.event_map),
-                                         loader_opts);
+                    utilities::dlio::load_event_map(dstd::String(cli.event_map),
+                                                    loader_opts);
                 } catch (const std::exception& e) {
                     DFTRACER_UTILS_LOG_ERROR("%s", e.what());
                     return 1;
                 }
             }
-            dlio::AggregatedTraces traces;
+            utilities::dlio::AggregatedTraces traces;
             try {
                 index::build::ResolverInput resolver_input;
                 resolver_input.directory = dstd::String(
@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
                     index::build::Resolver{}(resolver_input).get();
                 dstd::Vector<dstd::String> files;
                 for (const auto& f : resolved.all_files) files.emplace_back(f);
-                traces = dlio::load_aggregated_traces(
+                traces = utilities::dlio::load_aggregated_traces(
                     index_path, files, query_config, loader_opts);
             } catch (const std::exception& e) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to query the aggregation: %s",
@@ -284,10 +284,10 @@ int main(int argc, char** argv) {
 
             // --- Optimize max_bound percentile via simulator
             // -------------------------
-            auto ctx = dlio::make_simulator_context(traces, cli.num_workers,
-                                                    cli.prefetch_factor);
+            auto ctx = utilities::dlio::make_simulator_context(
+                traces, cli.num_workers, cli.prefetch_factor);
 
-            dlio::OptimizerOptions opts;
+            utilities::dlio::OptimizerOptions opts;
             opts.max_iterations = cli.simulation_iterations;
             opts.target_e2e_error = cli.target_e2e_error;
             opts.target_cdf_similarity = cli.target_cdf_similarity;
@@ -298,7 +298,7 @@ int main(int argc, char** argv) {
             opts.initial_percentile = cli.max_bound_percentile;
             opts.base_seed = cli.seed;
 
-            auto opt = dlio::optimize_max_bound_percentile(
+            auto opt = utilities::dlio::optimize_max_bound_percentile(
                 ctx, *comp_model, traces.computation_times, opts);
             std::printf(
                 "  Optimizer: iters=%d, best_percentile=%.2f%%, "
@@ -311,24 +311,25 @@ int main(int argc, char** argv) {
             auto comp_sorted = traces.computation_times;
             std::sort(comp_sorted.begin(), comp_sorted.end());
             const double comp_max_bound =
-                dlio::percentile(comp_sorted, opt.best_percentile);
+                utilities::dlio::percentile(comp_sorted, opt.best_percentile);
 
             double prep_max_bound = 0.0;
             if (prep_model) {
                 auto prep_sorted = traces.preprocess_times;
                 std::sort(prep_sorted.begin(), prep_sorted.end());
-                prep_max_bound =
-                    dlio::percentile(prep_sorted, opt.best_percentile);
+                prep_max_bound = utilities::dlio::percentile(
+                    prep_sorted, opt.best_percentile);
             }
 
             // --- Emit YAML
             // -----------------------------------------------------------
-            dlio::DlioTimingBlock comp_block{*comp_model, comp_max_bound};
-            dstd::Optional<dlio::DlioTimingBlock> prep_block_storage;
-            const dlio::DlioTimingBlock* prep_block_ptr = nullptr;
+            utilities::dlio::DlioTimingBlock comp_block{*comp_model,
+                                                        comp_max_bound};
+            dstd::Optional<utilities::dlio::DlioTimingBlock> prep_block_storage;
+            const utilities::dlio::DlioTimingBlock* prep_block_ptr = nullptr;
             if (prep_model) {
-                prep_block_storage =
-                    dlio::DlioTimingBlock{*prep_model, prep_max_bound};
+                prep_block_storage = utilities::dlio::DlioTimingBlock{
+                    *prep_model, prep_max_bound};
                 prep_block_ptr = &(*prep_block_storage);
             }
 
@@ -340,7 +341,7 @@ int main(int argc, char** argv) {
                 return 1;
             }
             dstd::String yaml =
-                dlio::render_dlio_yaml(&comp_block, prep_block_ptr);
+                utilities::dlio::render_dlio_yaml(&comp_block, prep_block_ptr);
             yaml += "\n";
             const bool wrote = std::fwrite(yaml.data(), 1, yaml.size(),
                                            out.get()) == yaml.size();

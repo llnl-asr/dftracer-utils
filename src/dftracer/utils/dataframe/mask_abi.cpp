@@ -9,7 +9,7 @@
 #include <exception>
 #include <stdexcept>
 
-namespace dataframe = dftracer::utils::dataframe;
+using namespace dftracer::utils;
 
 namespace {}  // namespace
 

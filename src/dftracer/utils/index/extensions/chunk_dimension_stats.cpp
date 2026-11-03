@@ -143,8 +143,7 @@ ChunkDimensionStats::compress_value_counts(std::size_t cap_bytes) const {
     auto raw = serialize_value_counts();
     if (raw.empty()) return dstd::nullopt;
 
-    namespace compress = dftracer::utils::utilities::fileio::compress;
-    compress::GzipMemberCompressor compressor;
+    utilities::fileio::compress::GzipMemberCompressor compressor;
     if (!compressor.valid()) return dstd::nullopt;
 
     auto member = compressor.compress_member(raw.data(), raw.size());
@@ -196,8 +195,7 @@ ChunkDimensionStats::decompress_value_counts(const std::uint8_t* data,
 
     std::uint32_t decoded_len = dstd::read_u32_le(data);
 
-    namespace compress = dftracer::utils::utilities::fileio::compress;
-    compress::GzipMemberDecompressor decompressor;
+    utilities::fileio::compress::GzipMemberDecompressor decompressor;
     if (!decompressor.valid()) return {};
 
     dstd::Vector<std::uint8_t> decompressed(decoded_len);

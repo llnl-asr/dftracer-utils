@@ -27,7 +27,6 @@
 
 namespace dftracer::utils::trace {
 
-namespace hash = dftracer::utils::utilities::hash;
 using namespace utilities::fileio::lines;
 
 coro::CoroTask<MetadataCollectorUtilityOutput>
@@ -74,26 +73,26 @@ namespace {
 dstd::Optional<internal::IndexedFile> fresh_index_record(
     const dstd::String& index_path, const dstd::String& file,
     const dftracer::utils::common::InputFileStat& st) {
-    namespace idx = dftracer::utils::index;
     try {
         auto snapshot = dftracer::utils::common::unwrap(
-            idx::plan::open_snapshot(index_path));
-        const auto logical = idx::store::internal::get_logical_path(file);
+            index::plan::open_snapshot(index_path));
+        const auto logical = index::store::internal::get_logical_path(file);
         if (snapshot.freshness(
-                logical, idx::SourceStat{static_cast<std::uint64_t>(st.mtime),
-                                         st.size}) != idx::Freshness::Current)
+                logical, index::SourceStat{static_cast<std::uint64_t>(st.mtime),
+                                           st.size}) !=
+            index::Freshness::Current)
             return dstd::nullopt;
         const auto ref = snapshot.file(logical);
         if (!ref) return dstd::nullopt;
-        const auto meta =
-            dftracer::utils::common::unwrap(idx::file_metadata(snapshot, *ref));
+        const auto meta = dftracer::utils::common::unwrap(
+            index::file_metadata(snapshot, *ref));
         if (!meta || meta->checkpoint_size == 0) return dstd::nullopt;
         return internal::IndexedFile{
             {st.mtime, st.size},
             meta->num_lines,
             meta->max_bytes,
             meta->checkpoint_size,
-            dftracer::utils::common::unwrap(idx::members(snapshot, *ref))
+            dftracer::utils::common::unwrap(index::members(snapshot, *ref))
                 .size()};
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_DEBUG("Index of %s unreadable (%s)", file.c_str(),

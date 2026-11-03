@@ -38,8 +38,7 @@
 #include <tuple>
 #include <type_traits>
 
-namespace dataframe = dftracer::utils::dataframe;
-namespace duql = dftracer::utils::duql;
+using namespace dftracer::utils;
 
 namespace dftracer::utils::dataframe {
 

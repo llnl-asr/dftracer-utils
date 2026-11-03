@@ -84,8 +84,6 @@ struct ParallelInflateMsg {
 
 using ParallelChan = dftracer::utils::coro::Channel<ParallelInflateMsg>;
 
-namespace compress = dftracer::utils::utilities::fileio::compress;
-
 using Bytes = dftracer::utils::dstd::RawBuffer<unsigned char>;
 
 static void drop_front(Bytes& b, std::size_t n) noexcept {
@@ -100,8 +98,8 @@ static void drop_front(Bytes& b, std::size_t n) noexcept {
 // Peak memory is one member.
 static dftracer::utils::coro::CoroTask<dstd::Optional<std::uint64_t>>
 decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
-                 const compress::GzipMemberDecompressor& dec, Bytes& out,
-                 Bytes& comp, std::size_t& out_len, bool& truncated,
+                 const utilities::fileio::compress::GzipMemberDecompressor& dec,
+                 Bytes& out, Bytes& comp, std::size_t& out_len, bool& truncated,
                  std::size_t max_out, bool& too_big) {
     truncated = false;
     too_big = false;
@@ -109,13 +107,15 @@ decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
     if (out.size() < (1u << 20)) out.resize(1u << 20);
     comp.clear();
     std::uint64_t next_read = c_off;
-    compress::DecompressResult res{};
+    utilities::fileio::compress::DecompressResult res{};
     while (true) {
         if (!comp.empty()) {
-            const compress::GzipDecode status = dec.decompress_status(
-                comp.data(), comp.size(), out.data(), out.size(), res);
-            if (status == compress::GzipDecode::Ok) break;
-            if (status == compress::GzipDecode::InsufficientSpace) {
+            const utilities::fileio::compress::GzipDecode status =
+                dec.decompress_status(comp.data(), comp.size(), out.data(),
+                                      out.size(), res);
+            if (status == utilities::fileio::compress::GzipDecode::Ok) break;
+            if (status ==
+                utilities::fileio::compress::GzipDecode::InsufficientSpace) {
                 if (out.size() >= max_out) {
                     too_big = true;
                     co_return dstd::nullopt;
@@ -128,8 +128,8 @@ decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
         if (next_read >= file_size) {
             if (comp.empty()) co_return dstd::nullopt;
             dstd::Vector<std::uint8_t> cut;
-            auto keep = compress::decode_truncated_member(comp.data(),
-                                                          comp.size(), cut);
+            auto keep = utilities::fileio::compress::decode_truncated_member(
+                comp.data(), comp.size(), cut);
             if (!keep) co_return dstd::nullopt;
             out.resize(cut.size());
             std::memcpy(out.data(), cut.data(), cut.size());
@@ -262,7 +262,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
     const std::size_t split_at = static_cast<std::size_t>(
         std::max<std::uint64_t>(ckpt_size, RESTART_WINDOW));
 
-    compress::GzipStreamInflater gz;
+    utilities::fileio::compress::GzipStreamInflater gz;
     if (!gz.init(31)) co_return false;
 
     Bytes in(READ_CHUNK);
@@ -337,14 +337,14 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
         const std::size_t old = piece.size();
         piece.resize(old + OUT_STEP);
         gz.set_output(piece.data() + old, OUT_STEP);
-        const compress::InflateStatus rc =
-            gz.inflate(compress::InflateFlush::Block);
+        const utilities::fileio::compress::InflateStatus rc =
+            gz.inflate(utilities::fileio::compress::InflateFlush::Block);
         piece.resize(old + (OUT_STEP - gz.avail_out()));
         since_restart += piece.size() - old;
 
-        if (rc == compress::InflateStatus::StreamEnd) break;
-        if (rc != compress::InflateStatus::Ok &&
-            rc != compress::InflateStatus::BufError) {
+        if (rc == utilities::fileio::compress::InflateStatus::StreamEnd) break;
+        if (rc != utilities::fileio::compress::InflateStatus::Ok &&
+            rc != utilities::fileio::compress::InflateStatus::BufError) {
             co_return false;
         }
         if (gz.avail_in() == 0 && next_read >= file_size &&
@@ -430,7 +430,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
     dftracer::utils::coro::ChannelProducer<ParallelInflateMsg> producer) {
     auto guard = producer.guard();
 
-    compress::GzipMemberDecompressor dec;
+    utilities::fileio::compress::GzipMemberDecompressor dec;
     if (!dec.valid()) co_return false;
 
     InflateBuffer buf = buffers.take();

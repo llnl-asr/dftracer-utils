@@ -24,12 +24,13 @@
 #include <cstdio>
 #include <cstdlib>
 
-namespace df = dftracer::utils::dataframe;
-using df::DataFrame;
-using df::GroupwiseOp;
-using df::LazyFrame;
-using df::RankMethod;
-using df::Series;
+using namespace dftracer::utils;
+
+using dataframe::DataFrame;
+using dataframe::GroupwiseOp;
+using dataframe::LazyFrame;
+using dataframe::RankMethod;
+using dataframe::Series;
 
 namespace {
 
@@ -100,8 +101,8 @@ int main(int argc, char** argv) {
             collect(frame.lazy().group_by(keys).transform(
                 c.op, c.n, RankMethod::Average, true));
             auto t1 = std::chrono::steady_clock::now();
-            collect(df::composed_group_transform(frame.lazy(), keys, c.op, c.n,
-                                                 RankMethod::Average, true));
+            collect(dataframe::composed_group_transform(
+                frame.lazy(), keys, c.op, c.n, RankMethod::Average, true));
             auto t2 = std::chrono::steady_clock::now();
             native.push_back(
                 std::chrono::duration<double, std::milli>(t1 - t0).count());

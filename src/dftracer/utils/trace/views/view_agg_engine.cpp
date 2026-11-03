@@ -37,8 +37,6 @@
 
 namespace dftracer::utils::trace::views::detail {
 
-namespace dataframe = dftracer::utils::dataframe;
-
 // Hidden columns the shared derivation materializes on top of the base frame.
 // Both the streaming path (prepare_engine_group's with_column exprs) and the
 // fused fold (build_agg_input_frame) key/scale on these exact names.

@@ -515,13 +515,12 @@ namespace detail {
 
 dstd::Optional<Query> plugin_union_prune_query(
     const dstd::Vector<const char*>& plan_queries) {
-    namespace q = duql;
     if (plan_queries.empty()) return dstd::nullopt;
     dstd::Vector<dstd::StringView> distinct;
     for (const char* s : plan_queries) {
         if (!s || !*s) return dstd::nullopt;
         dstd::StringView sv{s};
-        if (!q::try_parse(sv)) {
+        if (!duql::try_parse(sv)) {
             DFTRACER_UTILS_LOG_DEBUG(
                 "Plugin plan_duql '%s' failed to parse; scanning all", s);
             return dstd::nullopt;
@@ -529,7 +528,7 @@ dstd::Optional<Query> plugin_union_prune_query(
         if (std::find(distinct.begin(), distinct.end(), sv) == distinct.end())
             distinct.emplace_back(sv);
     }
-    if (distinct.size() == 1) return q::try_parse(distinct.front());
+    if (distinct.size() == 1) return duql::try_parse(distinct.front());
     dstd::String uni;
     for (const auto& d : distinct) {
         if (!uni.empty()) uni += " or ";
@@ -537,7 +536,7 @@ dstd::Optional<Query> plugin_union_prune_query(
         uni += d;
         uni += ')';
     }
-    return q::try_parse(uni);
+    return duql::try_parse(uni);
 }
 
 }  // namespace detail
@@ -663,7 +662,6 @@ coro::CoroTask<dstd::Result<PluginRun>> Plugins::run(const View& view) const {
 
 trace::views::Deferred<PluginRun> Plugins::attach(
     trace::views::ViewSession& session) const {
-    namespace views = trace::views;
     // Captured by the factory closures (owned by the session through execute)
     // so it outlives the scan.
     auto shared = dstd::make_shared<SharedResultRegistry>();
@@ -690,7 +688,7 @@ trace::views::Deferred<PluginRun> Plugins::attach(
         session.attach_fold_factory(
             [plugin, shared, named, name,
              states](dftracer::utils::dstd::StringIntern& intern)
-                -> dstd::UniquePtr<views::detail::Fold> {
+                -> dstd::UniquePtr<trace::views::detail::Fold> {
                 return dstd::make_unique<PluginFold>(
                     plugin, intern, shared.get(), named, name, 0, states);
             },

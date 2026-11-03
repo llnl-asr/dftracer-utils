@@ -69,14 +69,14 @@
 #include <random>
 #include <stdexcept>
 
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils;
 
 namespace {
 
 using Clock = std::chrono::steady_clock;
-using df::DataFrame;
-using df::Series;
-using df::TypeId;
+using dataframe::DataFrame;
+using dataframe::Series;
+using dataframe::TypeId;
 
 constexpr std::size_t MIB = std::size_t{1} << 20;
 constexpr std::uint64_t SEED = 42;
@@ -360,7 +360,7 @@ double arrow_round_trip(const Scale& s) {
     std::int64_t rows = 0;
     auto start = Clock::now();
     for (std::size_t i = 0; i < s.arrow_ops; ++i) {
-        df::OwnedArrow out = frame.to_arrow();
+        dataframe::OwnedArrow out = frame.to_arrow();
         DataFrame back = DataFrame::from_arrow(out.schema(), out.array());
         rows += back.num_rows() * static_cast<std::int64_t>(back.num_columns());
     }
@@ -404,8 +404,8 @@ double sort_by(const Scale& s) {
 
 double group_by_sum(const Scale& s) {
     DataFrame frame = key_frame(s.op_rows, 10000);
-    dftracer::utils::dstd::Vector<df::GroupAgg> aggs{
-        {df::Agg::Sum, "v", "sum_v"}};
+    dftracer::utils::dstd::Vector<dataframe::GroupAgg> aggs{
+        {dataframe::Agg::Sum, "v", "sum_v"}};
     return repeat_op(s.group_reps, [&] {
         DataFrame out = frame.group_by("g", aggs);
         check(out.num_rows() > 0 && out.num_rows() <= 10000, "group rows");

@@ -28,11 +28,10 @@ namespace dftracer::utils::duql {
 
 namespace {
 
-namespace df = dftracer::utils::dataframe;
-using df::CmpOp;
-using df::Expr;
-using df::LogicalOp;
-using df::TypeId;
+using dataframe::CmpOp;
+using dataframe::Expr;
+using dataframe::LogicalOp;
+using dataframe::TypeId;
 
 // ANY: a column whose type the plan does not know (no catalog); each batch
 // gives it its own, and the kernels dispatch on that.
@@ -135,12 +134,12 @@ class Vectorizer {
     }
 
     static V null() { return {}; }
-    static V boolean(bool b) { return {df::expr_lit_bool(b), K::Bool}; }
+    static V boolean(bool b) { return {dataframe::expr_lit_bool(b), K::Bool}; }
     static Expr as(const V& v, K k) {
-        return v.k == K::Nul ? df::expr_lit_null(type_of(k)) : v.e;
+        return v.k == K::Nul ? dataframe::expr_lit_null(type_of(k)) : v.e;
     }
     static Expr as_bool(const V& v) {
-        return v.k == K::Bool ? v.e : df::expr_lit_null(TypeId::Bool);
+        return v.k == K::Bool ? v.e : dataframe::expr_lit_null(TypeId::Bool);
     }
 
     dstd::Optional<std::size_t> column(dstd::StringView name) const {
@@ -186,19 +185,19 @@ class Vectorizer {
                 if constexpr (std::is_same_v<T, TNull>)
                     return null();
                 else if constexpr (std::is_same_v<T, bool>)
-                    return {df::expr_lit_bool(v), K::Bool, &c};
+                    return {dataframe::expr_lit_bool(v), K::Bool, &c};
                 else if constexpr (std::is_same_v<T, std::int64_t>)
-                    return {df::expr_lit(v), K::Int, &c};
+                    return {dataframe::expr_lit(v), K::Int, &c};
                 else if constexpr (std::is_same_v<T, std::uint64_t>) {
                     if (v > static_cast<std::uint64_t>(
                                 std::numeric_limits<std::int64_t>::max()))
                         no_kernel("an integer literal above int64");
-                    return {df::expr_lit(static_cast<std::int64_t>(v)), K::Int,
-                            &c};
+                    return {dataframe::expr_lit(static_cast<std::int64_t>(v)),
+                            K::Int, &c};
                 } else if constexpr (std::is_same_v<T, double>)
-                    return {df::expr_lit(v), K::Float, &c};
+                    return {dataframe::expr_lit(v), K::Float, &c};
                 else
-                    return {df::expr_lit_str(v), K::Str, &c};
+                    return {dataframe::expr_lit_str(v), K::Str, &c};
             },
             c.value);
     }
@@ -210,13 +209,13 @@ class Vectorizer {
         const VectorColumn& col = columns_[*c];
         if (col.json)
             fail("'" + dstd::String(col.name) + "' is a json field", true);
-        V v{df::expr_col(static_cast<std::int32_t>(*c)),
+        V v{dataframe::expr_col(static_cast<std::int32_t>(*c)),
             column_kind(col.type.id)};
-        const df::DataType* type = &col.type;
+        const dataframe::DataType* type = &col.type;
         v.elem = element(*type);
         for (std::size_t i = consumed; i < f.steps.size(); ++i) {
             if (v.k != K::List || !f.steps[i].index) return null();
-            v.e = df::expr_list_get(v.e, *f.steps[i].index);
+            v.e = dataframe::expr_list_get(v.e, *f.steps[i].index);
             type = &type->fields.front().type;
             v.k = kind_of(type->id);
             v.elem = element(*type);
@@ -225,7 +224,7 @@ class Vectorizer {
         return v;
     }
 
-    static K element(const df::DataType& t) {
+    static K element(const dataframe::DataType& t) {
         if (kind_of(t.id) != K::List || t.fields.empty()) return K::Other;
         return kind_of(t.fields.front().type.id);
     }
@@ -239,17 +238,18 @@ class Vectorizer {
         const auto c = field_column(*f, consumed);
         if (!c || consumed != f->steps.size()) return boolean(false);
         if (!columns_[*c].record) return boolean(true);
-        return {df::expr_is_null(df::expr_col(static_cast<std::int32_t>(*c)),
-                                 false),
+        return {dataframe::expr_is_null(
+                    dataframe::expr_col(static_cast<std::int32_t>(*c)), false),
                 K::Bool};
     }
 
     V node(const TUnary& u) {
         const V v = (*this)(*u.operand);
         if (u.op == TermOp::Not)
-            return v.k == K::Bool ? V{df::expr_not(v.e), K::Bool} : null();
+            return v.k == K::Bool ? V{dataframe::expr_not(v.e), K::Bool}
+                                  : null();
         if (!number_like(v.k)) return null();
-        return {df::expr_neg(v.e), v.k == K::Uint ? K::Int : v.k};
+        return {dataframe::expr_neg(v.e), v.k == K::Uint ? K::Int : v.k};
     }
 
     static K arith_kind(TermOp op, K a, K b) {
@@ -258,20 +258,20 @@ class Vectorizer {
         return K::Int;
     }
 
-    static df::ArithOp arith_op(TermOp op) {
+    static dataframe::ArithOp arith_op(TermOp op) {
         switch (op) {
             case TermOp::Add:
-                return df::ArithOp::Add;
+                return dataframe::ArithOp::Add;
             case TermOp::Sub:
-                return df::ArithOp::Sub;
+                return dataframe::ArithOp::Sub;
             case TermOp::Mul:
-                return df::ArithOp::Mul;
+                return dataframe::ArithOp::Mul;
             case TermOp::Div:
-                return df::ArithOp::Div;
+                return dataframe::ArithOp::Div;
             case TermOp::Idiv:
-                return df::ArithOp::FloorDiv;
+                return dataframe::ArithOp::FloorDiv;
             default:
-                return df::ArithOp::Mod;
+                return dataframe::ArithOp::Mod;
         }
     }
 
@@ -308,19 +308,20 @@ class Vectorizer {
         if (b.constant && a.k == b.k && (a.k == K::Int || a.k == K::Float)) {
             const auto& c = b.constant->value;
             const dftu_scalar s =
-                a.k == K::Float ? df::detail::expr_scalar_d(std::get<double>(c))
-                                : df::detail::expr_scalar_i(
-                                      std::holds_alternative<std::int64_t>(c)
-                                          ? std::get<std::int64_t>(c)
-                                          : static_cast<std::int64_t>(
-                                                std::get<std::uint64_t>(c)));
-            return {df::expr_cmp(op, a.e, s), K::Bool};
+                a.k == K::Float
+                    ? dataframe::detail::expr_scalar_d(std::get<double>(c))
+                    : dataframe::detail::expr_scalar_i(
+                          std::holds_alternative<std::int64_t>(c)
+                              ? std::get<std::int64_t>(c)
+                              : static_cast<std::int64_t>(
+                                    std::get<std::uint64_t>(c)));
+            return {dataframe::expr_cmp(op, a.e, s), K::Bool};
         }
-        return {df::expr_cmp_expr(op, a.e, b.e), K::Bool};
+        return {dataframe::expr_cmp_expr(op, a.e, b.e), K::Bool};
     }
 
     static V both(LogicalOp op, const V& a, const V& b) {
-        return {df::expr_logical(op, as_bool(a), as_bool(b)), K::Bool};
+        return {dataframe::expr_logical(op, as_bool(a), as_bool(b)), K::Bool};
     }
 
     // One kind for the operands of a value-choosing form, or a compile error.
@@ -359,7 +360,7 @@ class Vectorizer {
         }
         if (auto op = cmp_op(b.op)) return compare(*op, l, r);
         if (!number_like(l.k) || !number_like(r.k)) return null();
-        return {df::expr_arith(arith_op(b.op), l.e, r.e),
+        return {dataframe::expr_arith(arith_op(b.op), l.e, r.e),
                 l.k == K::Any || r.k == K::Any ? K::Any
                                                : arith_kind(b.op, l.k, r.k)};
     }
@@ -371,24 +372,24 @@ class Vectorizer {
             if (v.k != K::Nul) args.push_back(v.e);
         if (args.empty()) return null();
         if (args.size() == 1) return {args.front(), k};
-        return {df::expr_coalesce(args), k};
+        return {dataframe::expr_coalesce(args), k};
     }
 
     V node(const TBetween& b) {
         const V v = (*this)(*b.subject);
         const V t = both(LogicalOp::And, compare(CmpOp::Ge, v, (*this)(*b.low)),
                          compare(CmpOp::Le, v, (*this)(*b.high)));
-        return b.negated ? V{df::expr_not(t.e), K::Bool} : t;
+        return b.negated ? V{dataframe::expr_not(t.e), K::Bool} : t;
     }
 
     V node(const TIs& is) {
         if (is.missing) {
             const V p = present(*is.subject);
-            return is.negated ? p : V{df::expr_not(p.e), K::Bool};
+            return is.negated ? p : V{dataframe::expr_not(p.e), K::Bool};
         }
         const V v = (*this)(*is.subject);
         if (v.k == K::Nul) return boolean(!is.negated);
-        return {df::expr_is_null(v.e, !is.negated), K::Bool};
+        return {dataframe::expr_is_null(v.e, !is.negated), K::Bool};
     }
 
     V node(const TIn& in) {
@@ -404,21 +405,23 @@ class Vectorizer {
         Expr any_compared;
         for (const V& x : items) {
             const Expr eq = compare(CmpOp::Eq, v, x).e;
-            const Expr hit = df::expr_coalesce({eq, df::expr_lit_bool(false)});
-            const Expr known = df::expr_is_null(eq, false);
-            any_equal = any_equal.valid()
-                            ? df::expr_logical(LogicalOp::Or, any_equal, hit)
-                            : hit;
-            any_compared =
-                any_compared.valid()
-                    ? df::expr_logical(LogicalOp::Or, any_compared, known)
-                    : known;
+            const Expr hit =
+                dataframe::expr_coalesce({eq, dataframe::expr_lit_bool(false)});
+            const Expr known = dataframe::expr_is_null(eq, false);
+            any_equal = any_equal.valid() ? dataframe::expr_logical(
+                                                LogicalOp::Or, any_equal, hit)
+                                          : hit;
+            any_compared = any_compared.valid()
+                               ? dataframe::expr_logical(LogicalOp::Or,
+                                                         any_compared, known)
+                               : known;
         }
-        Expr t = df::expr_select(
-            any_equal, df::expr_lit_bool(true),
-            df::expr_select(any_compared, df::expr_lit_bool(false),
-                            df::expr_lit_null(TypeId::Bool)));
-        return {in.negated ? df::expr_not(t) : t, K::Bool};
+        Expr t = dataframe::expr_select(
+            any_equal, dataframe::expr_lit_bool(true),
+            dataframe::expr_select(any_compared,
+                                   dataframe::expr_lit_bool(false),
+                                   dataframe::expr_lit_null(TypeId::Bool)));
+        return {in.negated ? dataframe::expr_not(t) : t, K::Bool};
     }
 
     V node(const TIndex& x) {
@@ -442,7 +445,8 @@ class Vectorizer {
     V node(const TQuant& q) {
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].quant == &q)
-                return {df::expr_col(static_cast<std::int32_t>(i)), K::Bool};
+                return {dataframe::expr_col(static_cast<std::int32_t>(i)),
+                        K::Bool};
         fail(dstd::String(q.all ? "all" : "any") +
                  "() runs on a list column only through quantify()",
              true);
@@ -453,7 +457,7 @@ class Vectorizer {
             if (columns_[i].lookup == &l) {
                 const K k = kind_of(columns_[i].type.id);
                 if (k == K::Other || k == K::List) return null();
-                return {df::expr_col(static_cast<std::int32_t>(i)), k};
+                return {dataframe::expr_col(static_cast<std::int32_t>(i)), k};
             }
         fail("a lookup into '" + l.name +
                  "' runs on columns only through lookup()",
@@ -466,7 +470,8 @@ class Vectorizer {
         if (!c || c->fn != Fn::ParseJson) return nullptr;
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].call == c) {
-                json_ = {df::expr_col(static_cast<std::int32_t>(i)), K::Str};
+                json_ = {dataframe::expr_col(static_cast<std::int32_t>(i)),
+                         K::Str};
                 return &json_;
             }
         return nullptr;
@@ -488,7 +493,7 @@ class Vectorizer {
                 "parse_json() gives a json value, which only json() "
                 "and a whole select or derive item read here",
                 true);
-        V v{df::expr_col(static_cast<std::int32_t>(i)),
+        V v{dataframe::expr_col(static_cast<std::int32_t>(i)),
             kind_of(columns_[i].type.id)};
         v.elem = element(columns_[i].type);
         if (v.k == K::Other) return null();
@@ -507,8 +512,8 @@ class Vectorizer {
     V node(const TMatch& m) {
         const V v = (*this)(*m.subject);
         if (v.k != K::Str || !m.compiled) return null();
-        const Expr t = df::expr_str_pattern(v.e, m.compiled);
-        return {m.negated ? df::expr_not(t) : t, K::Bool};
+        const Expr t = dataframe::expr_str_pattern(v.e, m.compiled);
+        return {m.negated ? dataframe::expr_not(t) : t, K::Bool};
     }
 
     // contains() over a list literal: whether `p` equals an item, unknown
@@ -519,15 +524,17 @@ class Vectorizer {
         for (const auto& item : l.items) {
             const V x = (*this)(*item);
             if (x.k == K::Nul || !comparable(p.k, x.k)) continue;
-            const Expr hit = df::expr_coalesce(
-                {compare(CmpOp::Eq, p, x).e, df::expr_lit_bool(false)});
-            any = any.valid() ? df::expr_logical(LogicalOp::Or, any, hit) : hit;
+            const Expr hit = dataframe::expr_coalesce(
+                {compare(CmpOp::Eq, p, x).e, dataframe::expr_lit_bool(false)});
+            any = any.valid() ? dataframe::expr_logical(LogicalOp::Or, any, hit)
+                              : hit;
         }
-        if (!any.valid()) any = df::expr_lit_bool(false);
+        if (!any.valid()) any = dataframe::expr_lit_bool(false);
         if (p.constant) return {any, K::Bool};
-        return {df::expr_select(df::expr_is_null(p.e, true),
-                                df::expr_lit_null(TypeId::Bool), any),
-                K::Bool};
+        return {
+            dataframe::expr_select(dataframe::expr_is_null(p.e, true),
+                                   dataframe::expr_lit_null(TypeId::Bool), any),
+            K::Bool};
     }
 
     // A function runs on operands of known types only; one the plan types
@@ -568,7 +575,9 @@ class Vectorizer {
             case K::Uint:
             case K::Float:
             case K::Bool:
-                return {df::expr_convert(df::ConvertOp::String, v.e), K::Str};
+                return {
+                    dataframe::expr_convert(dataframe::ConvertOp::String, v.e),
+                    K::Str};
             default:
                 return null();
         }
@@ -576,14 +585,15 @@ class Vectorizer {
 
     // `cond` as a Bool that is false where it is unknown.
     static Expr yes(const V& cond) {
-        if (cond.k != K::Bool) return df::expr_lit_bool(false);
-        return df::expr_coalesce({cond.e, df::expr_lit_bool(false)});
+        if (cond.k != K::Bool) return dataframe::expr_lit_bool(false);
+        return dataframe::expr_coalesce(
+            {cond.e, dataframe::expr_lit_bool(false)});
     }
 
     V choose(const V& cond, const V& a, const V& b) {
         const K k = common({a, b}, "if()");
         if (k == K::Nul) return null();
-        return {df::expr_select(yes(cond), as(a, k), as(b, k)), k};
+        return {dataframe::expr_select(yes(cond), as(a, k), as(b, k)), k};
     }
 
     V node(const TCall& c) {
@@ -607,22 +617,25 @@ class Vectorizer {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
                 if (v.k == K::Float)
-                    return {df::expr_unary(df::UnaryOp::Abs, v.e), K::Float};
+                    return {dataframe::expr_unary(dataframe::UnaryOp::Abs, v.e),
+                            K::Float};
                 if (v.k == K::Uint) return v;
-                return {
-                    df::expr_select(df::expr_cmp(CmpOp::Lt, v.e,
-                                                 df::detail::expr_scalar_i(0)),
-                                    df::expr_neg(v.e), v.e),
-                    K::Int};
+                return {dataframe::expr_select(
+                            dataframe::expr_cmp(
+                                CmpOp::Lt, v.e,
+                                dataframe::detail::expr_scalar_i(0)),
+                            dataframe::expr_neg(v.e), v.e),
+                        K::Int};
             }
             case Fn::Floor:
             case Fn::Ceil: {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
                 if (v.k != K::Float) return v;
-                return {df::expr_unary(c.fn == Fn::Floor ? df::UnaryOp::Floor
-                                                         : df::UnaryOp::Ceil,
-                                       v.e),
+                return {dataframe::expr_unary(c.fn == Fn::Floor
+                                                  ? dataframe::UnaryOp::Floor
+                                                  : dataframe::UnaryOp::Ceil,
+                                              v.e),
                         K::Float};
             }
             case Fn::Round: {
@@ -634,12 +647,12 @@ class Vectorizer {
                     if (!numeric(v.k)) return null();
                     const auto n = const_int(d);
                     if (!n)
-                        return {df::expr_round_col(v.e, d.e),
+                        return {dataframe::expr_round_col(v.e, d.e),
                                 v.k == K::Float ? K::Float : K::Int};
                     digits = *n;
                 }
                 if (!numeric(v.k)) return null();
-                return {df::expr_round(v.e, digits),
+                return {dataframe::expr_round(v.e, digits),
                         v.k == K::Float ? K::Float : K::Int};
             }
             case Fn::Min:
@@ -661,26 +674,29 @@ class Vectorizer {
                     k = k == K::Nul || k == v.k ? v.k : K::Float;
                     args.push_back(v.e);
                 }
-                return {df::expr_extreme(args, c.fn == Fn::Min), k};
+                return {dataframe::expr_extreme(args, c.fn == Fn::Min), k};
             }
             case Fn::Log:
             case Fn::Exp: {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
-                return {c.fn == Fn::Log ? df::expr_log(v.e)
-                                        : df::expr_unary(df::UnaryOp::Exp, v.e),
+                return {c.fn == Fn::Log ? dataframe::expr_log(v.e)
+                                        : dataframe::expr_unary(
+                                              dataframe::UnaryOp::Exp, v.e),
                         K::Float};
             }
             case Fn::Pow: {
                 const V a = arg(c, 0);
                 const V b = arg(c, 1);
                 if (!numeric(a.k) || !numeric(b.k)) return null();
-                return {df::expr_pow(a.e, b.e), K::Float};
+                return {dataframe::expr_pow(a.e, b.e), K::Float};
             }
             case Fn::Len: {
                 const V v = arg(c, 0);
-                if (v.k == K::Str) return {df::expr_str_len(v.e, true), K::Int};
-                if (v.k == K::List) return {df::expr_list_len(v.e), K::Int};
+                if (v.k == K::Str)
+                    return {dataframe::expr_str_len(v.e, true), K::Int};
+                if (v.k == K::List)
+                    return {dataframe::expr_list_len(v.e), K::Int};
                 return null();
             }
             case Fn::Concat: {
@@ -691,19 +707,19 @@ class Vectorizer {
                     args.push_back(t.e);
                 }
                 if (args.size() == 1) return {args.front(), K::Str};
-                return {df::expr_concat(args), K::Str};
+                return {dataframe::expr_concat(args), K::Str};
             }
             case Fn::Lower:
             case Fn::Upper:
             case Fn::Trim: {
                 const V v = arg(c, 0);
                 if (v.k != K::Str) return null();
-                return {
-                    df::expr_str_map(c.fn == Fn::Lower   ? df::StrMapOp::Lower
-                                     : c.fn == Fn::Upper ? df::StrMapOp::Upper
-                                                         : df::StrMapOp::Strip,
-                                     v.e),
-                    K::Str};
+                return {dataframe::expr_str_map(
+                            c.fn == Fn::Lower   ? dataframe::StrMapOp::Lower
+                            : c.fn == Fn::Upper ? dataframe::StrMapOp::Upper
+                                                : dataframe::StrMapOp::Strip,
+                            v.e),
+                        K::Str};
             }
             case Fn::StartsWith:
             case Fn::EndsWith: {
@@ -711,11 +727,11 @@ class Vectorizer {
                 const V p = arg(c, 1);
                 if (v.k != K::Str || p.k != K::Str) return null();
                 const auto op = c.fn == Fn::StartsWith
-                                    ? df::StrPredOp::StartsWith
-                                    : df::StrPredOp::EndsWith;
+                                    ? dataframe::StrPredOp::StartsWith
+                                    : dataframe::StrPredOp::EndsWith;
                 if (const auto* n = const_str(p))
-                    return {df::expr_str_pred(op, v.e, *n), K::Bool};
-                return {df::expr_str_pred_col(op, v.e, p.e), K::Bool};
+                    return {dataframe::expr_str_pred(op, v.e, *n), K::Bool};
+                return {dataframe::expr_str_pred_col(op, v.e, p.e), K::Bool};
             }
             case Fn::Contains: {
                 if (const auto* l = std::get_if<TList>(&c.args[0]->node))
@@ -726,21 +742,21 @@ class Vectorizer {
                 if (v.k == K::Str) {
                     if (p.k != K::Str) return null();
                     if (const auto* n = const_str(p))
-                        return {
-                            df::expr_str_pred(df::StrPredOp::Contains, v.e, *n),
-                            K::Bool};
-                    return {df::expr_str_pred_col(df::StrPredOp::Contains, v.e,
-                                                  p.e),
+                        return {dataframe::expr_str_pred(
+                                    dataframe::StrPredOp::Contains, v.e, *n),
+                                K::Bool};
+                    return {dataframe::expr_str_pred_col(
+                                dataframe::StrPredOp::Contains, v.e, p.e),
                             K::Bool};
                 }
                 if (v.k != K::List) return null();
                 if (const auto i = const_int(p))
-                    return {df::expr_list_contains(
-                                v.e, df::detail::expr_scalar_i(*i)),
+                    return {dataframe::expr_list_contains(
+                                v.e, dataframe::detail::expr_scalar_i(*i)),
                             K::Bool};
                 if (p.constant && p.k == K::Float)
-                    return {df::expr_list_contains(
-                                v.e, df::detail::expr_scalar_d(
+                    return {dataframe::expr_list_contains(
+                                v.e, dataframe::detail::expr_scalar_d(
                                          std::get<double>(p.constant->value))),
                             K::Bool};
                 no_kernel("contains() of a list with a non-numeric literal");
@@ -758,9 +774,9 @@ class Vectorizer {
                 const auto start = const_int(s);
                 const auto n = l ? const_int(*l) : dstd::nullopt;
                 if (!start || (l && !n)) {
-                    return {
-                        df::expr_str_substr_col(v.e, s.e, l ? &l->e : nullptr),
-                        K::Str};
+                    return {dataframe::expr_str_substr_col(v.e, s.e,
+                                                           l ? &l->e : nullptr),
+                            K::Str};
                 }
                 std::int64_t len = -1;
                 if (l) {
@@ -768,7 +784,7 @@ class Vectorizer {
                     len = *n;
                 }
                 if (*start < 0) return null();
-                return {df::expr_str_substr(v.e, *start, len), K::Str};
+                return {dataframe::expr_str_substr(v.e, *start, len), K::Str};
             }
             case Fn::Replace: {
                 const V v = arg(c, 0);
@@ -779,22 +795,23 @@ class Vectorizer {
                 const dstd::String* f = const_str(from);
                 const dstd::String* t = const_str(to);
                 if (!f || !t)
-                    return {df::expr_str_replace_col(v.e, from.e, to.e),
+                    return {dataframe::expr_str_replace_col(v.e, from.e, to.e),
                             K::Str};
                 if (f->empty()) return v;
-                return {df::expr_str_replace(v.e, *f, *t, true), K::Str};
+                return {dataframe::expr_str_replace(v.e, *f, *t, true), K::Str};
             }
             case Fn::First:
             case Fn::Last: {
                 const V v = arg(c, 0);
                 if (v.k != K::List || v.elem == K::Other) return null();
-                return {df::expr_list_get(v.e, c.fn == Fn::First ? 0 : -1),
-                        v.elem};
+                return {
+                    dataframe::expr_list_get(v.e, c.fn == Fn::First ? 0 : -1),
+                    v.elem};
             }
             case Fn::Sum: {
                 const V v = arg(c, 0);
                 if (v.k != K::List || !numeric(v.elem)) return null();
-                return {df::expr_list_sum(v.e),
+                return {dataframe::expr_list_sum(v.e),
                         v.elem == K::Float ? K::Float : K::Int};
             }
             case Fn::Json: {
@@ -803,17 +820,20 @@ class Vectorizer {
                     std::size_t consumed = 0;
                     const auto i = field_column(*f, consumed);
                     if (i && consumed == f->steps.size() && columns_[*i].json)
-                        return {df::expr_col(static_cast<std::int32_t>(*i)),
-                                K::Str};
+                        return {
+                            dataframe::expr_col(static_cast<std::int32_t>(*i)),
+                            K::Str};
                 }
                 const V v = arg(c, 0);
                 if (v.k == K::Nul)
                     return std::holds_alternative<TField>(c.args[0]->node)
                                ? null()
-                               : V{df::expr_lit_str("null"), K::Str};
+                               : V{dataframe::expr_lit_str("null"), K::Str};
                 if (v.k == K::List || v.k == K::Other)
                     no_kernel("json() of a list");
-                return {df::expr_convert(df::ConvertOp::Json, v.e), K::Str};
+                return {
+                    dataframe::expr_convert(dataframe::ConvertOp::Json, v.e),
+                    K::Str};
             }
             case Fn::Type: {
                 const V v = arg(c, 0);
@@ -834,11 +854,11 @@ class Vectorizer {
                         name = "array";
                         break;
                     default:
-                        return {df::expr_lit_str("null"), K::Str};
+                        return {dataframe::expr_lit_str("null"), K::Str};
                 }
-                return {df::expr_select(df::expr_is_null(v.e),
-                                        df::expr_lit_str("null"),
-                                        df::expr_lit_str(name)),
+                return {dataframe::expr_select(dataframe::expr_is_null(v.e),
+                                               dataframe::expr_lit_str("null"),
+                                               dataframe::expr_lit_str(name)),
                         K::Str};
             }
             case Fn::Int:
@@ -849,8 +869,9 @@ class Vectorizer {
                 const bool i = c.fn == Fn::Int;
                 if (i && v.k == K::Int) return v;
                 if (!i && v.k == K::Float) return v;
-                return {df::expr_convert(
-                            i ? df::ConvertOp::Int : df::ConvertOp::Float, v.e),
+                return {dataframe::expr_convert(i ? dataframe::ConvertOp::Int
+                                                  : dataframe::ConvertOp::Float,
+                                                v.e),
                         i ? K::Int : K::Float};
             }
             case Fn::String:
@@ -876,32 +897,35 @@ class Vectorizer {
                     if (!numeric(g.k)) return null();
                     const auto n = const_int(g);
                     if (!n)
-                        return {df::expr_str_extract_col(v.e, c.pattern, g.e),
+                        return {dataframe::expr_str_extract_col(v.e, c.pattern,
+                                                                g.e),
                                 K::Str};
                     if (*n < 0) return null();
                     group = *n;
                 }
-                return {df::expr_str_extract(v.e, c.pattern, group), K::Str};
+                return {dataframe::expr_str_extract(v.e, c.pattern, group),
+                        K::Str};
             }
             case Fn::RegexReplace: {
                 const V v = arg(c, 0);
                 if (v.k != K::Str || !c.pattern || !c.substitution)
                     return null();
-                return {
-                    df::expr_str_regex_replace(v.e, c.pattern, *c.substitution),
-                    K::Str};
+                return {dataframe::expr_str_regex_replace(v.e, c.pattern,
+                                                          *c.substitution),
+                        K::Str};
             }
             case Fn::DatePart: {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
-                return {df::expr_date_part(v.e, c.part, c.ns_per_unit), K::Int};
+                return {dataframe::expr_date_part(v.e, c.part, c.ns_per_unit),
+                        K::Int};
             }
             case Fn::FormatTime: {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
                 const auto* fmt = std::get_if<TConst>(&c.args[1]->node);
                 return {
-                    df::expr_format_time(
+                    dataframe::expr_format_time(
                         v.e, std::get<dstd::String>(fmt->value), c.ns_per_unit),
                     K::Str};
             }
@@ -917,7 +941,7 @@ dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
     bool args_fallback) {
     try {
         V v = Vectorizer(columns, args_fallback).whole(t);
-        if (v.k == K::Nul) return df::expr_lit_null(TypeId::Bool);
+        if (v.k == K::Nul) return dataframe::expr_lit_null(TypeId::Bool);
         return std::move(v.e);
     } catch (const Failure& f) {
         return dftracer::utils::dstd::Unexpected(f.error);
@@ -936,16 +960,16 @@ bool is_null_term(const Term& t, const dstd::Vector<VectorColumn>& columns,
 namespace {
 
 // The key columns of `l` for `rows` rows: each key term evaluated, FLAT.
-dstd::Vector<df::Series> key_columns(
-    const TLookup& l, const dstd::Vector<const df::Series*>& inputs,
+dstd::Vector<dataframe::Series> key_columns(
+    const TLookup& l, const dstd::Vector<const dataframe::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, std::int64_t rows,
     bool args_fallback) {
-    dstd::Vector<df::Series> out;
+    dstd::Vector<dataframe::Series> out;
     for (const auto& k : l.keys) {
         const V v = Vectorizer(columns, args_fallback)(*k);
         out.push_back(v.k == K::Nul || v.k == K::Other || v.k == K::List
-                          ? df::Series::nulls(TypeId::Bool, rows)
-                          : df::eval(v.e, inputs).materialize());
+                          ? dataframe::Series::nulls(TypeId::Bool, rows)
+                          : dataframe::eval(v.e, inputs).materialize());
     }
     return out;
 }
@@ -964,9 +988,9 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
     try {
         bound(l);
-        const dstd::Vector<df::Series> keys =
+        const dstd::Vector<dataframe::Series> keys =
             key_columns(l, inputs, columns, rows, args_fallback);
-        dstd::Vector<const df::Series*> ptrs;
+        dstd::Vector<const dataframe::Series*> ptrs;
         for (const auto& k : keys) ptrs.push_back(&k);
         return lookup_column(l, ptrs, rows);
     } catch (const Failure& f) {
@@ -978,23 +1002,24 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
     const TQuant& q, const dstd::Vector<const dataframe::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
-    const df::Series unknown = df::Series::nulls(TypeId::Bool, rows);
+    const dataframe::Series unknown =
+        dataframe::Series::nulls(TypeId::Bool, rows);
     try {
         // Each row's elements are values[starts[r], starts[r + 1]).
-        df::Series values;
+        dataframe::Series values;
         dstd::Vector<std::int64_t> starts;
         dstd::Vector<std::uint8_t> present(static_cast<std::size_t>(rows), 0);
         if (const auto* l = std::get_if<TLookup>(&q.subject->node);
             l && l->all) {
             const LookupTable& t = bound(*l);
-            const dstd::Vector<df::Series> keys =
+            const dstd::Vector<dataframe::Series> keys =
                 key_columns(*l, inputs, columns, rows, args_fallback);
-            dstd::Vector<const df::Series*> ptrs;
+            dstd::Vector<const dataframe::Series*> ptrs;
             for (const auto& k : keys) ptrs.push_back(&k);
             Matches m = match(t, ptrs, rows);
             const auto n = static_cast<std::int64_t>(m.rows.size());
             values = t.value ? t.frame->columns[*t.value].take(m.rows)
-                             : df::Series::nulls(TypeId::String, n);
+                             : dataframe::Series::nulls(TypeId::String, n);
             starts = std::move(m.offsets);
             for (std::int64_t r = 0; r < rows; ++r)
                 present[static_cast<std::size_t>(r)] =
@@ -1003,10 +1028,11 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
         } else {
             const V subject = Vectorizer(columns, args_fallback)(*q.subject);
             if (subject.k != K::List) return unknown.share();
-            df::Series list = df::eval(subject.e, inputs).materialize();
+            dataframe::Series list =
+                dataframe::eval(subject.e, inputs).materialize();
             const std::int32_t* off = list.offsets();
             if (!off) return unknown.share();
-            const df::Series child = list.child(0);
+            const dataframe::Series child = list.child(0);
             const auto n = static_cast<std::int64_t>(off[rows] - off[0]);
             if (off[0] == 0 && child.length() == n) {
                 values = child.share();
@@ -1028,13 +1054,13 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
                 parent.push_back(r);
         const auto n = static_cast<std::int64_t>(parent.size());
 
-        dstd::Vector<df::Series> owned;
+        dstd::Vector<dataframe::Series> owned;
         dstd::Vector<VectorColumn> cols;
         owned.push_back(std::move(values));
         cols.push_back({".", owned.back().data_type()});
         if (owned.front().type() == TypeId::Struct)
             for (std::int64_t i = 0; i < owned.front().num_children(); ++i) {
-                df::Series field = owned.front().child(i);
+                dataframe::Series field = owned.front().child(i);
                 cols.push_back(
                     {dstd::String(".").append(owned.front().field_name(i)),
                      field.data_type()});
@@ -1059,13 +1085,14 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
             owned.push_back(reads(columns[i]) ? inputs[i]->take(parent)
                                               : inputs[i]->share());
         }
-        dstd::Vector<const df::Series*> frame;
+        dstd::Vector<const dataframe::Series*> frame;
         for (const auto& c : owned) frame.push_back(&c);
         const V cond = Vectorizer(cols, args_fallback)(*q.cond);
         dstd::Vector<std::uint8_t> yes(static_cast<std::size_t>(n), 0);
         dstd::Vector<std::uint8_t> known(static_cast<std::size_t>(n), 0);
         if (cond.k == K::Bool && n > 0) {
-            const df::Series t = df::eval(cond.e, frame).materialize();
+            const dataframe::Series t =
+                dataframe::eval(cond.e, frame).materialize();
             const auto* bits = t.data<std::uint8_t>();
             for (std::int64_t e = 0; e < n; ++e) {
                 if (t.is_null(e)) continue;
@@ -1095,7 +1122,8 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
             if (hit != q.all) out[static_cast<std::size_t>(r) >> 3] |= bit;
             valid[static_cast<std::size_t>(r) >> 3] |= bit;
         }
-        return df::Series::flat(TypeId::Bool, out.data(), rows, valid.data());
+        return dataframe::Series::flat(TypeId::Bool, out.data(), rows,
+                                       valid.data());
     } catch (const Failure& f) {
         return dftracer::utils::dstd::Unexpected(f.error);
     }
@@ -1106,7 +1134,7 @@ vectorize_condition(const Term& t, const dstd::Vector<VectorColumn>& columns,
                     bool args_fallback) {
     try {
         V v = Vectorizer(columns, args_fallback)(t);
-        if (v.k != K::Bool) return df::expr_lit_null(TypeId::Bool);
+        if (v.k != K::Bool) return dataframe::expr_lit_null(TypeId::Bool);
         return std::move(v.e);
     } catch (const Failure& f) {
         return dftracer::utils::dstd::Unexpected(f.error);
@@ -1115,19 +1143,19 @@ vectorize_condition(const Term& t, const dstd::Vector<VectorColumn>& columns,
 
 namespace {
 
-bool is_list_type(const df::DataType& t) {
+bool is_list_type(const dataframe::DataType& t) {
     return (t.id == TypeId::List || t.id == TypeId::LargeList) &&
            !t.fields.empty();
 }
 
 // A LIST column's offsets and elements.
 struct ListParts {
-    df::Series list;
-    df::Series child;
+    dataframe::Series list;
+    dataframe::Series child;
     dstd::Vector<std::int64_t> off;
 };
 
-dstd::Optional<ListParts> list_parts(const df::Series& s) {
+dstd::Optional<ListParts> list_parts(const dataframe::Series& s) {
     ListParts p{s.is_flat() ? s.share() : s.materialize(), {}, {}};
     const std::int64_t n = p.list.length();
     if (const auto* o = p.list.offsets()) {
@@ -1143,10 +1171,11 @@ dstd::Optional<ListParts> list_parts(const df::Series& s) {
 
 // A LIST column of `rows[offsets[r], offsets[r + 1])` of `values`, null
 // where `valid` is false.
-df::Series make_list(const dstd::Vector<std::int64_t>& offsets,
-                     df::Series values, const dstd::Vector<bool>& valid) {
+dataframe::Series make_list(const dstd::Vector<std::int64_t>& offsets,
+                            dataframe::Series values,
+                            const dstd::Vector<bool>& valid) {
     dstd::Vector<std::int32_t> off(offsets.begin(), offsets.end());
-    df::Series out = df::Series::list(off, std::move(values));
+    dataframe::Series out = dataframe::Series::list(off, std::move(values));
     if (std::all_of(valid.begin(), valid.end(), [](bool v) { return v; }))
         return out;
     dstd::Vector<std::int64_t> rows(valid.size());
@@ -1155,11 +1184,12 @@ df::Series make_list(const dstd::Vector<std::int64_t>& offsets,
     return out.take(rows);
 }
 
-df::Series flat_of(const df::Series& s) {
+dataframe::Series flat_of(const dataframe::Series& s) {
     return s.is_flat() ? s.share() : s.materialize();
 }
 
-dstd::Optional<std::int64_t> int_at(const df::Series& s, std::int64_t r) {
+dstd::Optional<std::int64_t> int_at(const dataframe::Series& s,
+                                    std::int64_t r) {
     if (s.is_null(r)) return dstd::nullopt;
     return s.data<std::int64_t>()[r];
 }
@@ -1169,13 +1199,13 @@ std::int64_t clamp_at(std::int64_t i, std::int64_t size) {
     return std::min(i, size);
 }
 
-df::Series slice_column(const dstd::Vector<df::Series>& args) {
+dataframe::Series slice_column(const dstd::Vector<dataframe::Series>& args) {
     auto p = list_parts(args[0]);
     const std::int64_t n = args[0].length();
-    const df::Series from = args[1].cast(TypeId::Int64).materialize();
-    const df::Series to = args.size() > 2
-                              ? args[2].cast(TypeId::Int64).materialize()
-                              : df::Series::nulls(TypeId::Int64, n);
+    const dataframe::Series from = args[1].cast(TypeId::Int64).materialize();
+    const dataframe::Series to =
+        args.size() > 2 ? args[2].cast(TypeId::Int64).materialize()
+                        : dataframe::Series::nulls(TypeId::Int64, n);
     dstd::Vector<std::int64_t> offsets{0};
     dstd::Vector<std::int64_t> take;
     dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
@@ -1196,7 +1226,7 @@ df::Series slice_column(const dstd::Vector<df::Series>& args) {
     return make_list(offsets, p->child.take(take), valid);
 }
 
-df::Series flatten_column(const df::Series& arg) {
+dataframe::Series flatten_column(const dataframe::Series& arg) {
     auto p = list_parts(arg);
     const std::int64_t n = arg.length();
     auto inner = list_parts(p->child);
@@ -1224,12 +1254,12 @@ df::Series flatten_column(const df::Series& arg) {
 }
 
 // The object's fields as (key, column), in the byte order of the keys.
-dstd::Vector<dstd::Pair<dstd::String, df::Series>> object_fields(
-    const dstd::Vector<df::Series>& args,
+dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>> object_fields(
+    const dstd::Vector<dataframe::Series>& args,
     const dstd::Vector<dstd::String>& keys) {
-    dstd::Vector<dstd::Pair<dstd::String, df::Series>> out;
+    dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>> out;
     if (args.size() == 1 && args[0].type() == TypeId::Struct) {
-        const df::Series st = flat_of(args[0]);
+        const dataframe::Series st = flat_of(args[0]);
         for (std::int64_t i = 0; i < st.num_children(); ++i)
             out.emplace_back(st.field_name(i), flat_of(st.child(i)));
     } else {
@@ -1242,9 +1272,9 @@ dstd::Vector<dstd::Pair<dstd::String, df::Series>> object_fields(
     return out;
 }
 
-df::Series members_column(const dstd::Vector<df::Series>& args,
-                          const dstd::Vector<dstd::String>& keys, bool names,
-                          const df::DataType& type) {
+dataframe::Series members_column(const dstd::Vector<dataframe::Series>& args,
+                                 const dstd::Vector<dstd::String>& keys,
+                                 bool names, const dataframe::DataType& type) {
     const std::int64_t n = args.empty() ? 0 : args[0].length();
     const auto fields = object_fields(args, keys);
     const bool whole = args.size() == 1 && args[0].type() == TypeId::Struct;
@@ -1268,13 +1298,13 @@ df::Series members_column(const dstd::Vector<df::Series>& args,
         for (const auto& f : fields) all.push_back(f.first);
         return make_list(
             offsets,
-            df::Series::strings(dstd::Span<const dstd::StringView>(all))
+            dataframe::Series::strings(dstd::Span<const dstd::StringView>(all))
                 .take(take),
             valid);
     }
     const TypeId elem = type.fields.front().type.id;
-    dstd::Vector<df::DataFrame> frames(fields.size());
-    dstd::Vector<const df::DataFrame*> ptrs;
+    dstd::Vector<dataframe::DataFrame> frames(fields.size());
+    dstd::Vector<const dataframe::DataFrame*> ptrs;
     for (std::size_t k = 0; k < fields.size(); ++k) {
         frames[k].names.push_back("v");
         frames[k].columns.push_back(fields[k].second.type() == elem
@@ -1282,12 +1312,13 @@ df::Series members_column(const dstd::Vector<df::Series>& args,
                                         : fields[k].second.cast(elem));
         ptrs.push_back(&frames[k]);
     }
-    df::Series values = df::concat(ptrs).columns.front().take(take);
+    dataframe::Series values =
+        dataframe::concat(ptrs).columns.front().take(take);
     return make_list(offsets, std::move(values), valid);
 }
 
-df::Series parse_column(const df::Series& arg) {
-    const df::Series s = flat_of(arg);
+dataframe::Series parse_column(const dataframe::Series& arg) {
+    const dataframe::Series s = flat_of(arg);
     const std::int64_t n = s.length();
     dftracer::utils::json::RecordParser parser;
     dstd::Vector<dstd::String> text(static_cast<std::size_t>(n));
@@ -1303,12 +1334,13 @@ df::Series parse_column(const df::Series& arg) {
             static_cast<std::uint8_t>(1u << (r & 7));
     }
     const dstd::Vector<dstd::StringView> views(text.begin(), text.end());
-    return df::Series::strings(views, bits.data());
+    return dataframe::Series::strings(views, bits.data());
 }
 
-df::Series split_column(const df::Series& arg, const df::Series& sep_arg) {
-    const df::Series s = flat_of(arg);
-    const df::Series sep = flat_of(sep_arg);
+dataframe::Series split_column(const dataframe::Series& arg,
+                               const dataframe::Series& sep_arg) {
+    const dataframe::Series s = flat_of(arg);
+    const dataframe::Series sep = flat_of(sep_arg);
     const std::int64_t n = s.length();
     dstd::Vector<std::int64_t> offsets{0};
     dstd::Vector<dstd::StringView> parts;
@@ -1328,7 +1360,7 @@ df::Series split_column(const df::Series& arg, const df::Series& sep_arg) {
         }
         offsets.push_back(static_cast<std::int64_t>(parts.size()));
     }
-    return make_list(offsets, df::Series::strings(parts), valid);
+    return make_list(offsets, dataframe::Series::strings(parts), valid);
 }
 
 using Cell = dstd::Variant<Number, bool, dstd::StringView>;
@@ -1349,7 +1381,7 @@ bool scalar_kind(K k) { return numeric(k) || k == K::Str || k == K::Bool; }
 // The cells of a column of one scalar kind, read without converting a row.
 class Cells {
    public:
-    explicit Cells(const df::Series& s)
+    explicit Cells(const dataframe::Series& s)
         : k_(kind_of(s.type())), s_(prepare(s, k_)) {}
 
     bool null(std::int64_t i) const { return s_.is_null(i); }
@@ -1371,9 +1403,9 @@ class Cells {
 
    private:
     K k_;
-    df::Series s_;
+    dataframe::Series s_;
 
-    static df::Series prepare(const df::Series& s, K k) {
+    static dataframe::Series prepare(const dataframe::Series& s, K k) {
         if (k == K::Int) return flat_of(s.cast(TypeId::Int64));
         if (k == K::Float) return flat_of(s.cast(TypeId::Float64));
         return flat_of(s);
@@ -1381,7 +1413,7 @@ class Cells {
 };
 
 // The element at each row's index, 0-based and from the end when negative.
-df::Series index_column(const dstd::Vector<df::Series>& args) {
+dataframe::Series index_column(const dstd::Vector<dataframe::Series>& args) {
     auto p = list_parts(args[0]);
     const std::int64_t n = args[0].length();
     const Cells at(args[1]);
@@ -1407,7 +1439,8 @@ df::Series index_column(const dstd::Vector<df::Series>& args) {
     return p->child.take(take);
 }
 
-df::Series index_of_column(const df::Series& arg, const df::Series& value) {
+dataframe::Series index_of_column(const dataframe::Series& arg,
+                                  const dataframe::Series& value) {
     auto p = list_parts(arg);
     const std::int64_t n = arg.length();
     const Cells elems(p->child);
@@ -1429,12 +1462,12 @@ df::Series index_of_column(const df::Series& arg, const df::Series& value) {
             break;
         }
     }
-    return df::Series::flat(TypeId::Int64, out.data(), n, bits.data());
+    return dataframe::Series::flat(TypeId::Int64, out.data(), n, bits.data());
 }
 
 // Each row's elements ascending, nulls last; null where a present element
 // does not compare with the first.
-df::Series sort_column(const df::Series& arg) {
+dataframe::Series sort_column(const dataframe::Series& arg) {
     auto p = list_parts(arg);
     const std::int64_t n = arg.length();
     const Cells cells(p->child);
@@ -1472,7 +1505,7 @@ df::Series sort_column(const df::Series& arg) {
 }
 
 // The first of each run of equal elements, in order; nulls are equal.
-df::Series unique_column(const df::Series& arg) {
+dataframe::Series unique_column(const dataframe::Series& arg) {
     auto p = list_parts(arg);
     const std::int64_t n = arg.length();
     const Cells cells(p->child);
@@ -1504,12 +1537,13 @@ df::Series unique_column(const df::Series& arg) {
 
 // The string elements joined by the separator, nulls skipped; null where an
 // element is not a string.
-df::Series join_column(const df::Series& arg, const df::Series& sep_arg) {
+dataframe::Series join_column(const dataframe::Series& arg,
+                              const dataframe::Series& sep_arg) {
     auto p = list_parts(arg);
     const std::int64_t n = arg.length();
-    const df::Series elems = flat_of(p->child);
+    const dataframe::Series elems = flat_of(p->child);
     const bool strings = kind_of(elems.type()) == K::Str;
-    const df::Series sep = flat_of(sep_arg);
+    const dataframe::Series sep = flat_of(sep_arg);
     dstd::String buf;
     dstd::Vector<dstd::Pair<std::size_t, std::size_t>> spans(
         static_cast<std::size_t>(n));
@@ -1542,12 +1576,12 @@ df::Series join_column(const df::Series& arg, const df::Series& sep_arg) {
     dstd::Vector<dstd::StringView> views;
     views.reserve(spans.size());
     for (const auto& [b, e] : spans) views.emplace_back(buf.data() + b, e - b);
-    return df::Series::strings(views, bits.data());
+    return dataframe::Series::strings(views, bits.data());
 }
 
 // One list per row of the items' values at that row.
-df::Series list_column(const dstd::Vector<df::Series>& items, std::int64_t n,
-                       const df::DataType& type) {
+dataframe::Series list_column(const dstd::Vector<dataframe::Series>& items,
+                              std::int64_t n, const dataframe::DataType& type) {
     const TypeId elem = type.fields.front().type.id;
     const auto m = static_cast<std::int64_t>(items.size());
     dstd::Vector<std::int64_t> offsets(static_cast<std::size_t>(n) + 1, 0);
@@ -1555,13 +1589,13 @@ df::Series list_column(const dstd::Vector<df::Series>& items, std::int64_t n,
         offsets[static_cast<std::size_t>(r)] = r * m;
     const dstd::Vector<bool> valid(static_cast<std::size_t>(n), true);
     if (items.empty())
-        return make_list(offsets, df::Series::nulls(elem, 0), valid);
-    dstd::Vector<df::DataFrame> frames(items.size());
-    dstd::Vector<const df::DataFrame*> ptrs;
+        return make_list(offsets, dataframe::Series::nulls(elem, 0), valid);
+    dstd::Vector<dataframe::DataFrame> frames(items.size());
+    dstd::Vector<const dataframe::DataFrame*> ptrs;
     for (std::size_t k = 0; k < items.size(); ++k) {
-        const df::Series s = items[k].null_count() == n
-                                 ? df::Series::nulls(elem, n)
-                                 : flat_of(items[k]);
+        const dataframe::Series s = items[k].null_count() == n
+                                        ? dataframe::Series::nulls(elem, n)
+                                        : flat_of(items[k]);
         frames[k].names.push_back("v");
         frames[k].columns.push_back(s.type() == elem ? s.share()
                                                      : s.cast(elem));
@@ -1571,8 +1605,8 @@ df::Series list_column(const dstd::Vector<df::Series>& items, std::int64_t n,
     take.reserve(static_cast<std::size_t>(n * m));
     for (std::int64_t r = 0; r < n; ++r)
         for (std::int64_t k = 0; k < m; ++k) take.push_back(k * n + r);
-    return make_list(offsets, df::concat(ptrs).columns.front().take(take),
-                     valid);
+    return make_list(offsets,
+                     dataframe::concat(ptrs).columns.front().take(take), valid);
 }
 
 }  // namespace
@@ -1591,9 +1625,9 @@ bool is_column_term(const Term& t) {
            std::holds_alternative<TList>(t.node);
 }
 
-dstd::Optional<df::DataType> call_type(const Term& t,
-                                       const dstd::Vector<df::DataType>& args) {
-    auto integer = [](const df::DataType& d) {
+dstd::Optional<dataframe::DataType> call_type(
+    const Term& t, const dstd::Vector<dataframe::DataType>& args) {
+    auto integer = [](const dataframe::DataType& d) {
         return kind_of(d.id) == K::Int || kind_of(d.id) == K::Uint;
     };
     if (std::holds_alternative<TIndex>(t.node)) {
@@ -1601,7 +1635,8 @@ dstd::Optional<df::DataType> call_type(const Term& t,
         return args[0].fields.front().type;
     }
     if (std::holds_alternative<TList>(t.node)) {
-        if (args.empty()) return df::list_of(df::scalar(TypeId::Int64));
+        if (args.empty())
+            return dataframe::list_of(dataframe::scalar(TypeId::Int64));
         K k = K::Nul;
         for (const auto& a : args) {
             if (a.id == TypeId::Unknown) continue;
@@ -1614,15 +1649,15 @@ dstd::Optional<df::DataType> call_type(const Term& t,
         }
         switch (k) {
             case K::Int:
-                return df::list_of(df::scalar(TypeId::Int64));
+                return dataframe::list_of(dataframe::scalar(TypeId::Int64));
             case K::Uint:
-                return df::list_of(df::scalar(TypeId::Uint64));
+                return dataframe::list_of(dataframe::scalar(TypeId::Uint64));
             case K::Float:
-                return df::list_of(df::scalar(TypeId::Float64));
+                return dataframe::list_of(dataframe::scalar(TypeId::Float64));
             case K::Str:
-                return df::list_of(df::scalar(TypeId::String));
+                return dataframe::list_of(dataframe::scalar(TypeId::String));
             default:
-                return df::list_of(df::scalar(TypeId::Bool));
+                return dataframe::list_of(dataframe::scalar(TypeId::Bool));
         }
     }
     const TCall& c = std::get<TCall>(t.node);
@@ -1631,18 +1666,18 @@ dstd::Optional<df::DataType> call_type(const Term& t,
             if (!is_list_type(args[0])) return dstd::nullopt;
             for (std::size_t i = 1; i < args.size(); ++i)
                 if (!integer(args[i])) return dstd::nullopt;
-            return df::list_of(args[0].fields.front().type);
+            return dataframe::list_of(args[0].fields.front().type);
         case Fn::Flatten: {
             if (!is_list_type(args[0])) return dstd::nullopt;
-            const df::DataType& elem = args[0].fields.front().type;
-            return df::list_of(is_list_type(elem) ? elem.fields.front().type
-                                                  : elem);
+            const dataframe::DataType& elem = args[0].fields.front().type;
+            return dataframe::list_of(
+                is_list_type(elem) ? elem.fields.front().type : elem);
         }
         case Fn::Keys:
             if (args.empty()) return dstd::nullopt;
-            return df::list_of(df::scalar(TypeId::String));
+            return dataframe::list_of(dataframe::scalar(TypeId::String));
         case Fn::Values: {
-            dstd::Vector<df::DataType> fields = args;
+            dstd::Vector<dataframe::DataType> fields = args;
             if (args.size() == 1 && args[0].id == TypeId::Struct) {
                 fields.clear();
                 for (const auto& f : args[0].fields) fields.push_back(f.type);
@@ -1663,21 +1698,21 @@ dstd::Optional<df::DataType> call_type(const Term& t,
             if (k == K::Other || k == K::List)
                 throw std::invalid_argument(
                     "values() reads a field that holds a list or object");
-            return df::list_of(df::scalar(type_of(k)));
+            return dataframe::list_of(dataframe::scalar(type_of(k)));
         }
         case Fn::ParseJson:
             if (kind_of(args[0].id) != K::Str) return dstd::nullopt;
-            return df::scalar(TypeId::String);
+            return dataframe::scalar(TypeId::String);
         case Fn::Split:
             if (kind_of(args[0].id) != K::Str || kind_of(args[1].id) != K::Str)
                 return dstd::nullopt;
-            return df::list_of(df::scalar(TypeId::String));
+            return dataframe::list_of(dataframe::scalar(TypeId::String));
         case Fn::IndexOf:
             if (!is_list_type(args[0]) ||
                 !scalar_kind(kind_of(args[0].fields.front().type.id)) ||
                 !scalar_kind(kind_of(args[1].id)))
                 return dstd::nullopt;
-            return df::scalar(TypeId::Int64);
+            return dataframe::scalar(TypeId::Int64);
         case Fn::Sort:
         case Fn::Unique:
             if (!is_list_type(args[0])) return dstd::nullopt;
@@ -1686,19 +1721,21 @@ dstd::Optional<df::DataType> call_type(const Term& t,
                     (dstd::String(fn_info(c.fn).name) +
                      "() reads an array of arrays or objects")
                         .c_str());
-            return df::list_of(args[0].fields.front().type);
+            return dataframe::list_of(args[0].fields.front().type);
         case Fn::Join:
             if (!is_list_type(args[0]) || kind_of(args[1].id) != K::Str)
                 return dstd::nullopt;
-            return df::scalar(TypeId::String);
+            return dataframe::scalar(TypeId::String);
         default:
             return dstd::nullopt;
     }
 }
 
-df::Series call_column(const Term& t, const dstd::Vector<df::Series>& args,
-                       const dstd::Vector<dstd::String>& keys,
-                       const df::DataType& type, std::int64_t rows) {
+dataframe::Series call_column(const Term& t,
+                              const dstd::Vector<dataframe::Series>& args,
+                              const dstd::Vector<dstd::String>& keys,
+                              const dataframe::DataType& type,
+                              std::int64_t rows) {
     if (std::holds_alternative<TIndex>(t.node)) return index_column(args);
     if (std::holds_alternative<TList>(t.node))
         return list_column(args, rows, type);
@@ -1724,7 +1761,7 @@ df::Series call_column(const Term& t, const dstd::Vector<df::Series>& args,
         case Fn::Join:
             return join_column(args[0], args[1]);
         default:
-            return df::Series::nulls(type.id, rows);
+            return dataframe::Series::nulls(type.id, rows);
     }
 }
 

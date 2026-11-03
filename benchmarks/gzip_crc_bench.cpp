@@ -21,7 +21,7 @@
 #include <cstdlib>
 #include <random>
 
-namespace gzc = dftracer::utils::utilities::fileio::compress;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
     const int rounds = argc > 2 ? std::atoi(argv[2]) : 5;
     const dftracer::utils::dstd::String text = hex_lines(mb << 20);
 
-    gzc::GzipMemberCompressor c(6);
+    utilities::fileio::compress::GzipMemberCompressor c(6);
     dftracer::utils::dstd::Vector<std::uint8_t> gz;
     if (!c.compress_member_into(gz, text.data(), text.size())) return 1;
 
@@ -88,16 +88,17 @@ int main(int argc, char** argv) {
         [](const dftracer::utils::dstd::Vector<std::uint8_t>& in,
            dftracer::utils::dstd::Vector<unsigned char>& out,
            std::size_t& total) {
-            gzc::GzipStreamInflater inf;
+            utilities::fileio::compress::GzipStreamInflater inf;
             inf.init(31);
             inf.set_input(in.data(), in.size());
-            gzc::InflateStatus rc;
+            utilities::fileio::compress::InflateStatus rc;
             do {
                 inf.set_output(out.data(), out.size());
                 rc = inf.inflate();
                 total += out.size() - inf.avail_out();
-            } while (rc == gzc::InflateStatus::Ok);
-            if (rc != gzc::InflateStatus::StreamEnd) std::exit(2);
+            } while (rc == utilities::fileio::compress::InflateStatus::Ok);
+            if (rc != utilities::fileio::compress::InflateStatus::StreamEnd)
+                std::exit(2);
         };
 
     double best_zlib = 1e9;
@@ -123,7 +124,8 @@ int main(int argc, char** argv) {
             zng_crc32_z(0, reinterpret_cast<const std::uint8_t*>(text.data()),
                         text.size()));
         auto t1 = std::chrono::steady_clock::now();
-        sink += gzc::gzip_crc32(0, text.data(), text.size());
+        sink += utilities::fileio::compress::gzip_crc32(0, text.data(),
+                                                        text.size());
         auto t2 = std::chrono::steady_clock::now();
         crc_zlib =
             std::min(crc_zlib, std::chrono::duration<double>(t1 - t0).count());

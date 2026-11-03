@@ -15,37 +15,44 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
 // Bitwise AND/OR/NOT over the packed bool bitmap, one u8 vector at a time; the
 // trailing bytes are handled scalar. Output bytes are identical to the scalar
 // byte loop, so tail-bit handling stays with the caller (NOT still masks).
 void AndBytes(const std::uint8_t* a, const std::uint8_t* b, std::uint8_t* o,
               std::size_t n) {
-    const hn::ScalableTag<std::uint8_t> d;
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes)
-        hn::StoreU(hn::And(hn::LoadU(d, a + i), hn::LoadU(d, b + i)), d, o + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::LoadU(d, a + i),
+                                    hwy::HWY_NAMESPACE::LoadU(d, b + i)),
+            d, o + i);
     for (; i < n; ++i) o[i] = static_cast<std::uint8_t>(a[i] & b[i]);
 }
 
 void OrBytes(const std::uint8_t* a, const std::uint8_t* b, std::uint8_t* o,
              std::size_t n) {
-    const hn::ScalableTag<std::uint8_t> d;
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes)
-        hn::StoreU(hn::Or(hn::LoadU(d, a + i), hn::LoadU(d, b + i)), d, o + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::Or(hwy::HWY_NAMESPACE::LoadU(d, a + i),
+                                   hwy::HWY_NAMESPACE::LoadU(d, b + i)),
+            d, o + i);
     for (; i < n; ++i) o[i] = static_cast<std::uint8_t>(a[i] | b[i]);
 }
 
 void NotBytes(const std::uint8_t* a, std::uint8_t* o, std::size_t n) {
-    const hn::ScalableTag<std::uint8_t> d;
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes)
-        hn::StoreU(hn::Not(hn::LoadU(d, a + i)), d, o + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::Not(hwy::HWY_NAMESPACE::LoadU(d, a + i)), d,
+            o + i);
     for (; i < n; ++i) o[i] = static_cast<std::uint8_t>(~a[i]);
 }
 

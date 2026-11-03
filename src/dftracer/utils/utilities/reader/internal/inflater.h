@@ -25,8 +25,6 @@
 
 namespace dftracer::utils::utilities::reader::internal {
 
-namespace compress = dftracer::utils::utilities::fileio::compress;
-
 /**
  * Random-access gzip reader backed by libdeflate.
  *
@@ -275,14 +273,14 @@ class ReaderInflater {
             }
             const std::size_t space = member_owned_.size() - filled;
             zs_.set_output(member_owned_.data() + filled, space);
-            const compress::InflateStatus rc = zs_.inflate();
+            const utilities::fileio::compress::InflateStatus rc = zs_.inflate();
             filled += space - zs_.avail_out();
-            if (rc == compress::InflateStatus::StreamEnd) {
+            if (rc == utilities::fileio::compress::InflateStatus::StreamEnd) {
                 ended = true;
                 break;
             }
-            if (rc != compress::InflateStatus::Ok &&
-                rc != compress::InflateStatus::BufError) {
+            if (rc != utilities::fileio::compress::InflateStatus::Ok &&
+                rc != utilities::fileio::compress::InflateStatus::BufError) {
                 co_return false;
             }
             if (zs_.avail_in() == 0 && next_read_ >= file_size_ &&
@@ -403,14 +401,17 @@ class ReaderInflater {
         member_data_ = nullptr;
         if (comp_off_ >= file_size_) co_return true;  // clean EOF
 
-        compress::DecompressResult res{};
+        utilities::fileio::compress::DecompressResult res{};
         while (true) {
             if (!comp_.empty()) {
-                const compress::GzipDecode status = dec_.decompress_status(
-                    comp_.data(), comp_.size(), member_owned_.data(),
-                    member_owned_.size(), res);
-                if (status == compress::GzipDecode::Ok) break;
-                if (status == compress::GzipDecode::InsufficientSpace) {
+                const utilities::fileio::compress::GzipDecode status =
+                    dec_.decompress_status(comp_.data(), comp_.size(),
+                                           member_owned_.data(),
+                                           member_owned_.size(), res);
+                if (status == utilities::fileio::compress::GzipDecode::Ok)
+                    break;
+                if (status == utilities::fileio::compress::GzipDecode::
+                                  InsufficientSpace) {
                     if (member_owned_.size() >= bound_) {
                         if (!begin_member_stream()) co_return false;
                         co_return co_await decode_next_stream(fd, offset);
@@ -425,8 +426,9 @@ class ReaderInflater {
             if (next_read_ >= file_size_) {
                 // The last member was cut short: keep its complete lines.
                 dstd::Vector<std::uint8_t> kept;
-                auto keep = compress::decode_truncated_member(
-                    comp_.data(), comp_.size(), kept);
+                auto keep =
+                    utilities::fileio::compress::decode_truncated_member(
+                        comp_.data(), comp_.size(), kept);
                 if (!keep) co_return false;
                 member_owned_.resize(*keep);
                 std::memcpy(member_owned_.data(), kept.data(), *keep);
@@ -469,19 +471,22 @@ class ReaderInflater {
         int fd, std::uint64_t off, std::uint64_t file_size, std::size_t max_out,
         bool& too_big) {
         too_big = false;
-        compress::GzipMemberDecompressor dec;
+        utilities::fileio::compress::GzipMemberDecompressor dec;
         if (!dec.valid()) co_return dstd::nullopt;
         dstd::Vector<unsigned char> comp;
         dstd::Vector<std::uint8_t> out(INIT_OUT);
         std::uint64_t next_read = off;
-        compress::DecompressResult res{};
+        utilities::fileio::compress::DecompressResult res{};
 
         while (true) {
             if (!comp.empty()) {
-                const compress::GzipDecode status = dec.decompress_status(
-                    comp.data(), comp.size(), out.data(), out.size(), res);
-                if (status == compress::GzipDecode::Ok) break;
-                if (status == compress::GzipDecode::InsufficientSpace) {
+                const utilities::fileio::compress::GzipDecode status =
+                    dec.decompress_status(comp.data(), comp.size(), out.data(),
+                                          out.size(), res);
+                if (status == utilities::fileio::compress::GzipDecode::Ok)
+                    break;
+                if (status == utilities::fileio::compress::GzipDecode::
+                                  InsufficientSpace) {
                     if (out.size() >= max_out) {
                         too_big = true;
                         co_return dstd::nullopt;
@@ -492,8 +497,9 @@ class ReaderInflater {
             }
             if (next_read >= file_size) {
                 // The last member was cut short: keep its complete lines.
-                auto keep = compress::decode_truncated_member(comp.data(),
-                                                              comp.size(), out);
+                auto keep =
+                    utilities::fileio::compress::decode_truncated_member(
+                        comp.data(), comp.size(), out);
                 if (!keep) co_return dstd::nullopt;
                 out.resize(*keep);
                 co_return DecodedMember{std::move(out), comp.size()};
@@ -514,7 +520,7 @@ class ReaderInflater {
         co_return DecodedMember{std::move(out), res.in_bytes};
     }
 
-    compress::GzipMemberDecompressor dec_;
+    utilities::fileio::compress::GzipMemberDecompressor dec_;
     dstd::RawBuffer<unsigned char> comp_;
     dstd::RawBuffer<unsigned char> member_owned_;
     MemberDecodeCache::Bytes member_shared_;
@@ -526,7 +532,7 @@ class ReaderInflater {
     std::uint64_t file_size_ = 0;
     bool exhausted_ = false;
 
-    compress::GzipStreamInflater zs_;
+    utilities::fileio::compress::GzipStreamInflater zs_;
     dstd::Vector<unsigned char> tail_;
     std::uint64_t stream_base_ = 0;
     bool stream_open_ = false;

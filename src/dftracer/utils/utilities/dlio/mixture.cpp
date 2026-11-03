@@ -14,8 +14,6 @@
 
 namespace dftracer::utils::utilities::dlio {
 
-namespace bm = boost::math;
-
 namespace {
 
 constexpr double INV_SQRT_2PI = 0.3989422804014327;  // 1 / sqrt(2*pi)
@@ -187,9 +185,10 @@ double pdf(const FittedMixture& mix, double x) {
 double cdf(const FittedMixture& mix, double x) {
     double c = 0.0;
     for (std::size_t k = 0; k < mix.weights.size(); ++k) {
-        c += mix.weights[k] * bm::cdf(bm::normal(mix.components[k].mean,
-                                                 mix.components[k].stddev),
-                                      x);
+        c += mix.weights[k] *
+             boost::math::cdf(boost::math::normal(mix.components[k].mean,
+                                                  mix.components[k].stddev),
+                              x);
     }
     return c;
 }

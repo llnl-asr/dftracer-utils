@@ -213,15 +213,12 @@ std::size_t consolidate_shard_set(const dstd::String& root) {
 
 namespace {
 
-namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace idx = dftracer::utils::index;
-
 // Copies the partials and column blocks of one file, re-keying their
 // dictionary ids into the consolidated table.
-void copy_agg_data(const idx::Snapshot& source_db,
-                   const idx::FileRef& source_file, idx::FileBuild& build,
-                   const agg::AggInternTable& source,
-                   agg::AggInternTable& target) {
+void copy_agg_data(const index::Snapshot& source_db,
+                   const index::FileRef& source_file, index::FileBuild& build,
+                   const index::schemas::dft::agg::AggInternTable& source,
+                   index::schemas::dft::agg::AggInternTable& target) {
     dstd::Vector<std::uint32_t> referenced;
     const auto remap = [&](std::uint32_t id) {
         const std::uint32_t mapped =
@@ -229,18 +226,19 @@ void copy_agg_data(const idx::Snapshot& source_db,
         referenced.push_back(mapped);
         return mapped;
     };
-    common::unwrap(idx::for_each_agg_partial(
+    common::unwrap(index::for_each_agg_partial(
         source_db, source_file,
         [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
-            std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
+            std::uint32_t host, std::uint32_t extra,
+            index::schemas::dft::agg::PartialKind kind,
             dstd::Span<const std::uint8_t> body) {
-            auto parsed = agg::AggPartial::deserialize(
+            auto parsed = index::schemas::dft::agg::AggPartial::deserialize(
                 dstd::Span<const std::uint8_t>(body.data(), body.size()));
             if (!parsed)
                 throw common::DFTUtilsException(
                     common::ErrorCode::Parse,
                     "aggregation partial: malformed record");
-            idx::put_agg_partial(
+            index::put_agg_partial(
                 build, chunk, remap(cat), remap(name), remap(host),
                 remap(extra), static_cast<std::uint8_t>(kind),
                 dstd::StringView(reinterpret_cast<const char*>(body.data()),
@@ -251,14 +249,16 @@ void copy_agg_data(const idx::Snapshot& source_db,
     // A column block keeps a block-local table of dictionary ids, which is
     // rewritten before the copy.
     dstd::Vector<std::uint8_t> bytes;
-    common::unwrap(idx::for_each_agg_chunk_columns(
+    common::unwrap(index::for_each_agg_chunk_columns(
         source_db, source_file,
-        [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
-            agg::ChunkColumns mapped = block;
+        [&](std::uint64_t chunk,
+            const index::schemas::dft::agg::ChunkColumns& block) {
+            index::schemas::dft::agg::ChunkColumns mapped = block;
             for (std::uint32_t& id : mapped.ids) id = remap(id);
             bytes.clear();
-            agg::encode_chunk_columns(mapped, mapped.columns.size(), bytes);
-            idx::put_agg_chunk_columns(
+            index::schemas::dft::agg::encode_chunk_columns(
+                mapped, mapped.columns.size(), bytes);
+            index::put_agg_chunk_columns(
                 build, chunk,
                 dstd::StringView(reinterpret_cast<const char*>(bytes.data()),
                                  bytes.size()));
@@ -269,7 +269,7 @@ void copy_agg_data(const idx::Snapshot& source_db,
     referenced.erase(std::unique(referenced.begin(), referenced.end()),
                      referenced.end());
     for (const std::uint32_t id : referenced)
-        idx::put_agg_dictionary_entry(build, id, target.intern.resolve(id));
+        index::put_agg_dictionary_entry(build, id, target.intern.resolve(id));
 }
 
 }  // namespace
@@ -286,28 +286,29 @@ std::size_t merge_shard_set(const dstd::String& root,
 
     const dstd::String out_idx = internal::determine_index_path("x", out_root);
 
-    agg::AggInternTable out_intern;
+    index::schemas::dft::agg::AggInternTable out_intern;
     std::size_t files = 0;
-    dstd::Optional<agg::tier::Config> config;
+    dstd::Optional<index::schemas::dft::agg::tier::Config> config;
 
     default_runtime().block_on(
         coro::named("shard merge", [&]() -> coro::CoroTask<void> {
-            idx::Index out = common::unwrap(idx::Index::open(out_idx));
+            index::Index out = common::unwrap(index::Index::open(out_idx));
 
             for (const auto& shard : manifest->shards) {
                 if (shard.empty()) continue;
                 const dstd::String idx(
                     (dstd::PathView(root) / shard.path).str());
-                auto snapshot = common::unwrap(idx::plan::open_snapshot(idx));
-                agg::AggInternTable shard_intern;
-                common::unwrap(idx::agg_dictionary(snapshot, shard_intern));
+                auto snapshot = common::unwrap(index::plan::open_snapshot(idx));
+                index::schemas::dft::agg::AggInternTable shard_intern;
+                common::unwrap(index::agg_dictionary(snapshot, shard_intern));
 
-                const auto shard_config =
-                    common::unwrap(agg::tier::read_config(snapshot));
+                const auto shard_config = common::unwrap(
+                    index::schemas::dft::agg::tier::read_config(snapshot));
                 if (shard_config) {
                     if (!config) {
                         config = shard_config;
-                        agg::tier::write_config(out, *config);
+                        index::schemas::dft::agg::tier::write_config(out,
+                                                                     *config);
                     } else if (config->params_hash !=
                                shard_config->params_hash) {
                         throw common::DFTUtilsException(
@@ -324,14 +325,14 @@ std::size_t merge_shard_set(const dstd::String& root,
 
                     if (config &&
                         snapshot.extension(
-                            file, idx::store::IndexExtension::Agg,
-                            config->params_hash) == idx::Freshness::Current) {
+                            file, index::store::IndexExtension::Agg,
+                            config->params_hash) == index::Freshness::Current) {
                         copy_agg_data(snapshot, file, build, shard_intern,
                                       out_intern);
-                        build.finish(idx::store::IndexExtension::Agg,
+                        build.finish(index::store::IndexExtension::Agg,
                                      config->params_hash);
                     }
-                    build.finish(idx::store::IndexExtension::Members, 0);
+                    build.finish(index::store::IndexExtension::Members, 0);
                     common::unwrap(co_await build.commit());
                     ++files;
                 }

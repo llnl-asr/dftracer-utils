@@ -20,11 +20,9 @@
 
 namespace dftracer::utils::index {
 
-namespace kv = dftracer::utils::store;
-
 struct FileRef::Data {
     dstd::String path;
-    kv::ScopeKey scope;
+    dftracer::utils::store::ScopeKey scope;
     SourceStat stat;
 };
 
@@ -32,26 +30,27 @@ struct Index::Impl {
     dstd::String root;
     dstd::String store_dir;
     std::mutex mutex;
-    dstd::Optional<kv::Store> store;
+    dstd::Optional<dftracer::utils::store::Store> store;
 
     /// Opens the store, which creates its directory.
-    dstd::Expected<kv::Store, dstd::Error> open_store();
+    dstd::Expected<dftracer::utils::store::Store, dstd::Error> open_store();
     /// The store when it exists on disk, else nothing.
-    dstd::Expected<dstd::Optional<kv::Store>, dstd::Error> find_store();
+    dstd::Expected<dstd::Optional<dftracer::utils::store::Store>, dstd::Error>
+    find_store();
 };
 
 struct Snapshot::Impl {
     /// Empty when the index has no store directory yet.
-    dstd::Optional<kv::Snapshot> snap;
+    dstd::Optional<dftracer::utils::store::Snapshot> snap;
 };
 
 struct FileBuild::Impl {
     static constexpr std::size_t EXTENSION_SLOTS = 16;
 
     struct Copy {
-        kv::Namespace ns;
+        dftracer::utils::store::Namespace ns;
         /// Opened by the first put, and again by the first put after a stage.
-        dstd::Optional<kv::Batch> batch;
+        dstd::Optional<dftracer::utils::store::Batch> batch;
         std::uint64_t params_hash = 0;
         /// Puts since the last stage, and puts the stages already committed.
         std::size_t puts = 0;
@@ -61,8 +60,8 @@ struct FileBuild::Impl {
     };
 
     dstd::String root;
-    kv::Store store;
-    kv::ScopeKey scope;
+    dftracer::utils::store::Store store;
+    dftracer::utils::store::ScopeKey scope;
     /// Held by the fold task that puts and stages a spilled run, so two tasks
     /// never write the copies below at once.
     coro::AsyncMutex write_mutex;
@@ -71,7 +70,7 @@ struct FileBuild::Impl {
     /// The position in `copies` of each built-in extension, or -1.
     std::array<std::int16_t, EXTENSION_SLOTS> ext_copy;
     /// Extensions whose copy of the file the commit drops.
-    dstd::Vector<kv::Namespace> cleared;
+    dstd::Vector<dftracer::utils::store::Namespace> cleared;
     /// Also drop every copy of the file the build did not write, but the ones
     /// named in `kept`.
     bool drop_unwritten = false;
@@ -80,16 +79,16 @@ struct FileBuild::Impl {
     dstd::Optional<dstd::Error> error;
     bool committed = false;
 
-    Impl(dstd::String index_root, kv::Store s, kv::ScopeKey key,
-         const SourceStat& stat);
+    Impl(dstd::String index_root, dftracer::utils::store::Store s,
+         dftracer::utils::store::ScopeKey key, const SourceStat& stat);
 
-    Copy* copy_of(const kv::NamespaceSpec& spec);
+    Copy* copy_of(const dftracer::utils::store::NamespaceSpec& spec);
     Copy* copy_of(store::IndexExtension ext);
     void put_to(Copy* copy, dstd::ByteView key, dstd::ByteView value);
 
     /// Writes the batches and appends the publish targets of the build.
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> prepare(
-        Impl& build, dstd::Vector<kv::Publish>& targets);
+        Impl& build, dstd::Vector<dftracer::utils::store::Publish>& targets);
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_task(
         dstd::SharedPtr<Impl> self);
     static coro::CoroTask<dstd::Vector<dstd::Optional<dstd::Error>>>
@@ -99,32 +98,42 @@ struct FileBuild::Impl {
 /// The state behind the public index classes, for tables.cpp and index.cpp.
 /// Not public: no other area may use it.
 struct IndexAccess {
-    static FileRef make_file(dstd::String path, kv::ScopeKey scope,
+    static FileRef make_file(dstd::String path,
+                             dftracer::utils::store::ScopeKey scope,
                              const SourceStat& stat);
-    static Snapshot make_snapshot(dstd::Optional<kv::Snapshot> snap);
-    static FileBuild make_build(dstd::String root, kv::Store store,
-                                kv::ScopeKey scope, const SourceStat& stat);
+    static Snapshot make_snapshot(
+        dstd::Optional<dftracer::utils::store::Snapshot> snap);
+    static FileBuild make_build(dstd::String root,
+                                dftracer::utils::store::Store store,
+                                dftracer::utils::store::ScopeKey scope,
+                                const SourceStat& stat);
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> remove_task(
         dstd::SharedPtr<Index::Impl> impl, dstd::String path);
 
     /// Null when the snapshot has no store.
-    static const kv::Snapshot* store_snapshot(const Snapshot& snapshot);
-    static const kv::ScopeKey& scope(const FileRef& file);
+    static const dftracer::utils::store::Snapshot* store_snapshot(
+        const Snapshot& snapshot);
+    static const dftracer::utils::store::ScopeKey& scope(const FileRef& file);
 
-    static void put(FileBuild& build, const kv::NamespaceSpec& spec,
+    static void put(FileBuild& build,
+                    const dftracer::utils::store::NamespaceSpec& spec,
                     dstd::ByteView key, dstd::ByteView value);
     /// As above for a built-in extension, which finds its copy without
     /// building the spec.
     static void put(FileBuild& build, store::IndexExtension ext,
                     dstd::ByteView key, dstd::ByteView value);
-    static void finish(FileBuild& build, const kv::NamespaceSpec& spec,
+    static void finish(FileBuild& build,
+                       const dftracer::utils::store::NamespaceSpec& spec,
                        std::uint64_t params_hash);
-    static void fail(FileBuild& build, const kv::NamespaceSpec& spec,
+    static void fail(FileBuild& build,
+                     const dftracer::utils::store::NamespaceSpec& spec,
                      std::uint64_t params_hash);
     static void record_error(FileBuild& build, dstd::Error error);
-    static void drop_unwritten(FileBuild& build,
-                               dstd::Span<const kv::NamespaceSpec> kept);
-    static void clear(FileBuild& build, const kv::NamespaceSpec& spec);
+    static void drop_unwritten(
+        FileBuild& build,
+        dstd::Span<const dftracer::utils::store::NamespaceSpec> kept);
+    static void clear(FileBuild& build,
+                      const dftracer::utils::store::NamespaceSpec& spec);
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> stage(
         FileBuild& build);
     static coro::AsyncMutex& write_mutex(FileBuild& build);
@@ -132,16 +141,18 @@ struct IndexAccess {
     commit_group(dstd::Span<FileBuild* const> builds);
     /// Erases the keys in [begin, end) of a copy the build holds. A copy it
     /// does not hold needs no erasing.
-    static void erase(FileBuild& build, const kv::NamespaceSpec& spec,
+    static void erase(FileBuild& build,
+                      const dftracer::utils::store::NamespaceSpec& spec,
                       dstd::ByteView begin, dstd::ByteView end);
 
     static const dstd::String& root(const Index& index);
     /// Opens the store, which creates its directory.
-    static dstd::Expected<kv::Store, dstd::Error> open_store(
-        const Index& index);
+    static dstd::Expected<dftracer::utils::store::Store, dstd::Error>
+    open_store(const Index& index);
     /// The store when it exists on disk, else nothing.
-    static dstd::Expected<dstd::Optional<kv::Store>, dstd::Error> find_store(
-        const Index& index);
+    static dstd::Expected<dstd::Optional<dftracer::utils::store::Store>,
+                          dstd::Error>
+    find_store(const Index& index);
 };
 
 }  // namespace dftracer::utils::index

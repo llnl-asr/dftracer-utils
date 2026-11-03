@@ -23,7 +23,8 @@
 #include <cstdio>
 #include <cstdlib>
 
-namespace duql = dftracer::utils::duql;
+using namespace dftracer::utils;
+
 using dftracer::utils::json::JsonValue;
 
 namespace {
@@ -173,32 +174,34 @@ int main(int argc, char** argv) {
         std::printf("%-44s %10.1f %10.1f %8zu%s\n", text, json_ns, map_ns, kept,
                     kept == kept_map ? "" : " (map differs)");
     }
-    namespace df = dftracer::utils::dataframe;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> names;
     names.reserve(n);
     for (std::size_t i = 0; i < n; ++i) names.push_back(NAMES[i % 12]);
-    const df::Series col = df::Series::strings(names);
+    const dataframe::Series col = dataframe::Series::strings(names);
     struct Kernel {
         const char* label;
-        df::Series (df::Series::*fn)(dftracer::utils::dstd::StringView) const;
+        dataframe::Series (dataframe::Series::*fn)(
+            dftracer::utils::dstd::StringView) const;
         const char* pattern;
     };
     const Kernel kernels[] = {
-        {"str_starts_with MPI_ (control)", &df::Series::str_starts_with,
+        {"str_starts_with MPI_ (control)", &dataframe::Series::str_starts_with,
          "MPI_"},
-        {"str_contains Memcpy (control)", &df::Series::str_contains, "Memcpy"},
-        {"str_like MPI_%", &df::Series::str_like, "MPI_%"},
-        {"str_like %p%e%d%", &df::Series::str_like, "%p%e%d%"},
-        {"str_like _write", &df::Series::str_like, "_write"},
-        {"str_search (read|write)64", &df::Series::str_search,
+        {"str_contains Memcpy (control)", &dataframe::Series::str_contains,
+         "Memcpy"},
+        {"str_like MPI_%", &dataframe::Series::str_like, "MPI_%"},
+        {"str_like %p%e%d%", &dataframe::Series::str_like, "%p%e%d%"},
+        {"str_like _write", &dataframe::Series::str_like, "_write"},
+        {"str_search (read|write)64", &dataframe::Series::str_search,
          "(read|write)64"},
-        {"str_search cuda.*Async", &df::Series::str_search, "cuda.*Async"},
-        {"str_matches MPI_.*", &df::Series::str_matches, "MPI_.*"},
+        {"str_search cuda.*Async", &dataframe::Series::str_search,
+         "cuda.*Async"},
+        {"str_matches MPI_.*", &dataframe::Series::str_matches, "MPI_.*"},
     };
     std::printf("\n%-44s %10s\n", "DataFrame kernel", "ns/row");
     for (const Kernel& k : kernels) {
         const double ns = ns_per_record(n, rounds, [&] {
-            const df::Series m = (col.*k.fn)(k.pattern);
+            const dataframe::Series m = (col.*k.fn)(k.pattern);
             if (!m.handle()) std::abort();
         });
         std::printf("%-44s %10.1f\n", k.label, ns);
@@ -216,32 +219,34 @@ int main(int argc, char** argv) {
     }
     std::printf("\n%-44s %10s\n", "DataFrame expr string predicate", "ns/row");
     for (const auto& [label, op, lit] :
-         {dftracer::utils::dstd::Tuple{"starts_with", df::StrPredOp::StartsWith,
-                                       "MPI_"},
-          dftracer::utils::dstd::Tuple{"contains", df::StrPredOp::Contains,
-                                       "Memcpy"}}) {
-        const dftracer::utils::dstd::Vector<const df::Series*> in0{&col};
-        const df::Expr lit_e = df::expr_str_pred(op, df::expr_col(0), lit);
+         {dftracer::utils::dstd::Tuple{
+              "starts_with", dataframe::StrPredOp::StartsWith, "MPI_"},
+          dftracer::utils::dstd::Tuple{
+              "contains", dataframe::StrPredOp::Contains, "Memcpy"}}) {
+        const dftracer::utils::dstd::Vector<const dataframe::Series*> in0{&col};
+        const dataframe::Expr lit_e =
+            dataframe::expr_str_pred(op, dataframe::expr_col(0), lit);
         const double lit_ns = ns_per_record(n, rounds, [&] {
-            if (!df::eval(lit_e, in0).handle()) std::abort();
+            if (!dataframe::eval(lit_e, in0).handle()) std::abort();
         });
         std::printf("%-12s %-31s %10.1f\n", label, "literal needle", lit_ns);
         std::fill(same_needles.begin(), same_needles.end(), lit);
-        const df::Series same = df::Series::strings(same_needles);
-        const df::Series varied = df::Series::strings(varied_needles);
-        const df::Expr col_e =
-            df::expr_str_pred_col(op, df::expr_col(0), df::expr_col(1));
-        const dftracer::utils::dstd::Vector<const df::Series*> in_same{&col,
-                                                                       &same};
-        const dftracer::utils::dstd::Vector<const df::Series*> in_varied{
+        const dataframe::Series same = dataframe::Series::strings(same_needles);
+        const dataframe::Series varied =
+            dataframe::Series::strings(varied_needles);
+        const dataframe::Expr col_e = dataframe::expr_str_pred_col(
+            op, dataframe::expr_col(0), dataframe::expr_col(1));
+        const dftracer::utils::dstd::Vector<const dataframe::Series*> in_same{
+            &col, &same};
+        const dftracer::utils::dstd::Vector<const dataframe::Series*> in_varied{
             &col, &varied};
         const double same_ns = ns_per_record(n, rounds, [&] {
-            if (!df::eval(col_e, in_same).handle()) std::abort();
+            if (!dataframe::eval(col_e, in_same).handle()) std::abort();
         });
         std::printf("%-12s %-31s %10.1f\n", label, "column needle, same",
                     same_ns);
         const double var_ns = ns_per_record(n, rounds, [&] {
-            if (!df::eval(col_e, in_varied).handle()) std::abort();
+            if (!dataframe::eval(col_e, in_varied).handle()) std::abort();
         });
         std::printf("%-12s %-31s %10.1f\n", label, "column needle, varied",
                     var_ns);
@@ -277,16 +282,16 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < m; ++i)
             own.push_back(long_path(static_cast<std::uint32_t>(i), len));
         for (const auto& v : own) views.push_back(v);
-        const df::Series longs = df::Series::strings(views);
+        const dataframe::Series longs = dataframe::Series::strings(views);
         for (const auto& [label, fn, pattern] :
              {dftracer::utils::dstd::Tuple{"str_search /scratch/.*\\.h5$",
-                                           &df::Series::str_search,
+                                           &dataframe::Series::str_search,
                                            "/scratch/.*\\.h5$"},
               dftracer::utils::dstd::Tuple{"str_matches .*/scratch/.*",
-                                           &df::Series::str_matches,
+                                           &dataframe::Series::str_matches,
                                            ".*/scratch/.*"}}) {
             const double ns = ns_per_record(m, rounds, [&] {
-                const df::Series r = (longs.*fn)(pattern);
+                const dataframe::Series r = (longs.*fn)(pattern);
                 if (!r.handle()) std::abort();
             });
             std::printf("%-34s %5zu B %10.1f\n", label, len, ns);

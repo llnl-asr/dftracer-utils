@@ -176,16 +176,16 @@ struct FileIndex {
 // One snapshot per index root. A root with no store opens empty and holds no
 // file, so the file is read whole. A damaged index throws and fails the call.
 FileIndex find_file_index(Snapshots& snapshots, const ViewFile& f) {
-    namespace ix = dftracer::utils::index;
     auto at = snapshots.find(f.index_path);
     if (at == snapshots.end())
         at = snapshots
-                 .emplace(f.index_path,
-                          common::unwrap(ix::plan::open_snapshot(f.index_path)))
+                 .emplace(
+                     f.index_path,
+                     common::unwrap(index::plan::open_snapshot(f.index_path)))
                  .first;
     return {
         &at->second,
-        at->second.file(ix::store::internal::get_logical_path(f.file_path))};
+        at->second.file(index::store::internal::get_logical_path(f.file_path))};
 }
 
 struct ConfirmedFiles {
@@ -219,9 +219,6 @@ ConfirmedFiles& confirmed_files() {
 // the first read. Concurrent callers may both rebuild one file; the index
 // writes serialize.
 void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
-    namespace ib = dftracer::utils::index::build;
-    namespace ix = dftracer::utils::index;
-    namespace st = dftracer::utils::index::store;
     struct Pending {
         dstd::String key;
         dstd::String file;
@@ -247,7 +244,7 @@ void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
             if (!dftracer::utils::common::stat_input(f.file_path, file_stat))
                 continue;
             const dstd::String logical =
-                st::internal::get_logical_path(f.file_path);
+                index::store::internal::get_logical_path(f.file_path);
             dstd::String key(logical.data(), logical.size());
             key += '\n';
             key += dstd::to_string(static_cast<long long>(file_stat.mtime));
@@ -262,7 +259,7 @@ void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
             if (missing_roots.contains(dstd::StringView(f.index_path)))
                 continue;
             if (!snapshots.contains(f.index_path) &&
-                !common::input_exists(ix::store_of(f.index_path))) {
+                !common::input_exists(index::store_of(f.index_path))) {
                 missing_roots.insert(dstd::String(f.index_path));
                 continue;
             }
@@ -275,7 +272,7 @@ void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
             dstd::String schema;
             if (found.file) {
                 const auto meta = common::unwrap(
-                    ix::file_metadata(*found.snapshot, *found.file));
+                    index::file_metadata(*found.snapshot, *found.file));
                 const std::uint64_t recorded = meta ? meta->checkpoint_size : 0;
                 const bool same_ckpt = f.checkpoint_size == 0 ||
                                        recorded == 0 ||
@@ -283,15 +280,15 @@ void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
                 if (same_ckpt &&
                     found.snapshot->freshness(
                         logical,
-                        ix::SourceStat{
+                        index::SourceStat{
                             static_cast<std::uint64_t>(file_stat.mtime),
-                            file_stat.size}) == ix::Freshness::Current) {
+                            file_stat.size}) == index::Freshness::Current) {
                     confirmed.push_back(std::move(key));
                     continue;
                 }
                 if (const auto recorded_schema = common::unwrap(
-                        ix::schema(*found.snapshot, *found.file))) {
-                    ix::get_schema(*recorded_schema);
+                        index::schema(*found.snapshot, *found.file))) {
+                    index::get_schema(*recorded_schema);
                     schema.assign(recorded_schema->data(),
                                   recorded_schema->size());
                 }
@@ -302,16 +299,16 @@ void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
         for (auto& k : confirmed) confirmed_files().keys().insert(std::move(k));
     }
     for (auto& [group, pending] : groups) {
-        ib::ResolveAndBuildInput in;
+        index::build::ResolveAndBuildInput in;
         in.index_dir = group.root;
         in.checkpoint_size = group.checkpoint_size;
         in.schema = group.schema;
         in.require_checkpoints = true;
         for (const auto& p : pending)
             in.files.emplace_back(dstd::StringView(p.file));
-        ib::ResolverResult result = default_runtime().block_on(
+        index::build::ResolverResult result = default_runtime().block_on(
             coro::named("view_index_freshness",
-                        ib::resolve_and_build_index(std::move(in))));
+                        index::build::resolve_and_build_index(std::move(in))));
         if (!result.failures.empty())
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Io, "index of ",
@@ -468,10 +465,8 @@ ColTypeMap harvest_column_types(const dstd::Vector<ViewFile>& files) {
             [&](std::int64_t begin, std::int64_t end) {
                 ColTypeMap local;
                 for (std::int64_t i = begin; i < end; ++i) {
-                    namespace ix = dftracer::utils::index;
-                    namespace st = ix::store;
-                    const ix::Snapshot snapshot =
-                        common::unwrap(ix::plan::open_snapshot(
+                    const index::Snapshot snapshot =
+                        common::unwrap(index::plan::open_snapshot(
                             roots[static_cast<std::size_t>(i)]));
                     for (const dstd::String& logical :
                          root_files[static_cast<std::size_t>(i)]) {
@@ -479,15 +474,15 @@ ColTypeMap harvest_column_types(const dstd::Vector<ViewFile>& files) {
                         if (!file) continue;
                         ColTypeMap one;
                         for (auto& [path, t] : common::unwrap(
-                                 ix::file_column_types(snapshot, *file))) {
+                                 index::file_column_types(snapshot, *file))) {
                             dstd::StringView name(path.data(), path.size());
                             if (name.starts_with("args."))
                                 name.remove_prefix(5);
                             auto [at, fresh] =
                                 one.emplace(dstd::String(name), t);
                             if (!fresh)
-                                at->second =
-                                    st::merge_column_type(at->second, t);
+                                at->second = index::store::merge_column_type(
+                                    at->second, t);
                         }
                         fold_col_map(local, one);
                     }
@@ -507,22 +502,21 @@ ColTypeMap harvest_column_types(const dstd::Vector<ViewFile>& files) {
 // even before an index has seen them; an ISO-8601 time is its microseconds.
 void overlay_declared(ColTypeMap& m,
                       const dftracer::utils::index::RecordSchema& schema) {
-    namespace ix = dftracer::utils::index;
-    using CT = ix::store::ColumnType;
+    using CT = index::store::ColumnType;
     for (const auto& f : schema.fields) {
         CT t = CT::String;
         switch (f.type) {
-            case ix::FieldType::Bool:
-            case ix::FieldType::Int:
+            case index::FieldType::Bool:
+            case index::FieldType::Int:
                 t = CT::Int64;
                 break;
-            case ix::FieldType::Float:
+            case index::FieldType::Float:
                 t = CT::Float64;
                 break;
-            case ix::FieldType::String:
-                t = f.role == ix::Role::Time ? CT::Int64 : CT::String;
+            case index::FieldType::String:
+                t = f.role == index::Role::Time ? CT::Int64 : CT::String;
                 break;
-            case ix::FieldType::Json:
+            case index::FieldType::Json:
                 t = CT::Json;
                 break;
         }
@@ -579,29 +573,27 @@ const char* path_type_name(dftracer::utils::index::store::PathType t) {
 }  // namespace
 
 dstd::Optional<dstd::String> file_without_catalog(const ScanPlan& plan_) {
-    namespace st = dftracer::utils::index::store;
     Snapshots snapshots;
     for (const auto& f : plan_->files) {
         if (f.index_path.empty()) return f.file_path;
         const FileIndex found = find_file_index(snapshots, f);
-        if (!found.file ||
-            !dftracer::utils::index::extension_state(
-                *found.snapshot, *found.file, st::IndexExtension::Catalog))
+        if (!found.file || !dftracer::utils::index::extension_state(
+                               *found.snapshot, *found.file,
+                               index::store::IndexExtension::Catalog))
             return f.file_path;
     }
     return dstd::nullopt;
 }
 
 void ensure_catalog(const ScanPlan& plan_) {
-    namespace st = dftracer::utils::index::store;
     Snapshots snapshots;
     auto only = dstd::make_shared<detail::ViewPlan>();
     for (const auto& f : plan_->files) {
         if (f.index_path.empty()) continue;
         const FileIndex found = find_file_index(snapshots, f);
-        if (!found.file ||
-            !dftracer::utils::index::extension_current(
-                *found.snapshot, *found.file, st::IndexExtension::Catalog))
+        if (!found.file || !dftracer::utils::index::extension_current(
+                               *found.snapshot, *found.file,
+                               index::store::IndexExtension::Catalog))
             only->files.push_back(f);
     }
     snapshots.clear();
@@ -625,8 +617,7 @@ dstd::Vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {
 }
 
 dstd::Vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
-    namespace st = dftracer::utils::index::store;
-    dstd::Map<dstd::String, st::PathStat> merged;
+    dstd::Map<dstd::String, index::store::PathStat> merged;
     Snapshots snapshots;
     for (const auto& f : plan_->files) {
         if (f.index_path.empty()) continue;
@@ -638,18 +629,17 @@ dstd::Vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
             auto [pos, inserted] = merged.try_emplace(
                 dstd::String(path.data(), path.size()), stat);
             if (inserted) continue;
-            pos->second.type = st::join(pos->second.type, stat.type);
+            pos->second.type = index::store::join(pos->second.type, stat.type);
             pos->second.count += stat.count;
         }
     }
     dstd::Map<dstd::String, SchemaLeaf> leaves;
     for (auto& [path, stat] : merged)
-        if (stat.type != st::PathType::Object &&
-            stat.type != st::PathType::Array)
+        if (stat.type != index::store::PathType::Object &&
+            stat.type != index::store::PathType::Array)
             leaves[path] =
                 SchemaLeaf{path, path_type_name(stat.type), stat.count, {}, {}};
-    namespace ix = dftracer::utils::index;
-    const ix::RecordSchema& schema = detail::plan_record_schema(*plan_);
+    const index::RecordSchema& schema = detail::plan_record_schema(*plan_);
     for (const auto& f : schema.fields) {
         auto [pos, inserted] =
             leaves.try_emplace(dstd::String(f.path.data(), f.path.size()));
@@ -658,14 +648,14 @@ dstd::Vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
             leaf.path = f.path;
             const dstd::String below = f.path + ".";
             const bool has_leaves =
-                f.type == ix::FieldType::Json &&
+                f.type == index::FieldType::Json &&
                 std::any_of(merged.begin(), merged.end(), [&](const auto& kv) {
                     return kv.first.starts_with(below);
                 });
             if (!has_leaves) leaf.count = 0;
         }
         leaf.field = f.name;
-        leaf.declared_type = dstd::String(ix::field_type_name(f.type));
+        leaf.declared_type = dstd::String(index::field_type_name(f.type));
     }
     dstd::Vector<SchemaLeaf> out;
     out.reserve(leaves.size());
@@ -717,25 +707,25 @@ dstd::SharedPtr<const detail::JsonColumns> json_columns(
 
 dstd::HashMap<dstd::String, dataframe::DataType> column_types(
     const ScanPlan& plan_) {
-    namespace df = dftracer::utils::dataframe;
     using CT = dftracer::utils::index::store::ColumnType;
     ColTypeMap m = harvest_plan_types(plan_);
-    dstd::HashMap<dstd::String, df::DataType> out;
+    dstd::HashMap<dstd::String, dataframe::DataType> out;
     out.reserve(m.size());
     for (auto& [name, t] : m) {
-        df::DataType type = df::scalar(df::TypeId::Unknown);
+        dataframe::DataType type =
+            dataframe::scalar(dataframe::TypeId::Unknown);
         switch (t) {
             case CT::Int64:
-                type.id = df::TypeId::Int64;
+                type.id = dataframe::TypeId::Int64;
                 break;
             case CT::Float64:
-                type.id = df::TypeId::Float64;
+                type.id = dataframe::TypeId::Float64;
                 break;
             case CT::String:
-                type.id = df::TypeId::String;
+                type.id = dataframe::TypeId::String;
                 break;
             case CT::Json:
-                type.id = df::TypeId::String;
+                type.id = dataframe::TypeId::String;
                 type.set_json(true);
                 break;
             case CT::Unknown:

@@ -287,17 +287,18 @@ static PyObject *CheckpointIndexer_has_bloom(CheckpointIndexerObject *self,
         Py_RETURN_FALSE;
     }
     try {
-        namespace index = dftracer::utils::index;
-        auto opened = index::Index::open(idx);
+        auto opened = dftracer::utils::index::Index::open(idx);
         if (opened) {
             auto snapshot = opened->snapshot();
             if (snapshot) {
                 const dftracer::utils::dstd::String logical =
-                    index::store::internal::get_logical_path(gz);
+                    dftracer::utils::index::store::internal::get_logical_path(
+                        gz);
                 const auto file = snapshot->file(logical);
-                if (file && index::extension_current(
-                                *snapshot, *file,
-                                index::store::IndexExtension::Stats)) {
+                if (file &&
+                    dftracer::utils::index::extension_current(
+                        *snapshot, *file,
+                        dftracer::utils::index::store::IndexExtension::Stats)) {
                     Py_RETURN_TRUE;
                 }
             }

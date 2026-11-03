@@ -169,8 +169,6 @@ static coro::CoroTask<void> parse_and_write_worker(
     const dstd::Vector<std::uint64_t>* costs_ptr,
     const IndexBuildBatchConfig::ProgressFn* progress_ptr, Admission* admission,
     BlockWriter* writer) {
-    namespace gzip_indexer = index::gzip;
-
     index::build::FileGroup group;
     while (true) {
         const auto block =
@@ -230,7 +228,6 @@ static coro::CoroTask<void> parse_and_write_worker(
                         dstd::String(started.error().message());
                 } else {
                     build.emplace(std::move(*started));
-                    namespace views = trace::views::detail;
                     index::gzip::CheckpointIndexer::VisitorList visitors;
                     const auto s0 = std::chrono::steady_clock::now();
                     const index::RecordSchema& schema =
@@ -250,7 +247,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                     const auto file_config =
                         index::build::for_schema(bloom_config, schema);
 
-                    dstd::Vector<views::Fold*> fold_ptrs;
+                    dstd::Vector<trace::views::detail::Fold*> fold_ptrs;
                     dstd::Optional<index::build::IndexFoldDriver> driver;
                     {
                         job.intern = dstd::make_unique<
@@ -295,7 +292,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                     }
 
                     auto arts =
-                        co_await gzip_indexer::build_gzip_index_artifacts(
+                        co_await index::gzip::build_gzip_index_artifacts(
                             fd, pf.file_path, checkpoint_size, visitors, scope,
                             nullptr, admission->files.inflate_ways());
                     if (!arts) {

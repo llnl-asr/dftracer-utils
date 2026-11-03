@@ -46,7 +46,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace dataframe = dftracer::utils::dataframe;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -208,8 +208,6 @@ PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
             &aggs_obj, &select_obj, &order_by, &descending, &limit_obj))
         return nullptr;
 
-    namespace duql = dftracer::utils::duql;
-    namespace dataframe = dftracer::utils::dataframe;
     try {
         DataFrame bat = to_dataframe(b);
         dataframe::QueryPlan plan;

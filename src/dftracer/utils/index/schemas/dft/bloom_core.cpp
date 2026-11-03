@@ -39,7 +39,6 @@ constexpr std::array<dstd::StringView, BloomCore::FdCount> FIXED_DIM_NAMES = {
     DIM_NAME,  DIM_CAT,   DIM_PID,   DIM_TID, DIM_PID_TID,
     DIM_HHASH, DIM_FHASH, DIM_SHASH, DIM_TS,  DIM_DUR};
 
-namespace kinds = index::extensions::kinds;
 using index::store::IndexExtension;
 
 // The build a file's tier records go into.
@@ -97,7 +96,7 @@ void put_bloom(Tier& t, std::uint64_t checkpoint_idx, dstd::StringView path,
                dstd::Vector<unsigned char>& blob) {
     bf.serialize_into(blob);
     t.path_granule(IndexExtension::Bloom, path, checkpoint_idx,
-                   kinds::encode_bloom(
+                   index::extensions::kinds::encode_bloom(
                        blob, static_cast<std::uint64_t>(bf.num_entries())));
 }
 
@@ -106,7 +105,7 @@ void put_file_bloom(Tier& t, dstd::StringView path,
                     dstd::Vector<unsigned char>& blob) {
     bf.serialize_into(blob);
     t.path_file(IndexExtension::Bloom, path,
-                kinds::encode_bloom(
+                index::extensions::kinds::encode_bloom(
                     blob, static_cast<std::uint64_t>(bf.num_entries())));
 }
 
@@ -129,7 +128,7 @@ void put_dimension(Tier& t, std::uint64_t checkpoint_idx,
     const std::uint64_t present = always_present ? observed : ds.present;
     const bool absent = extra && present == 0;
     if (zones && (absent || !ds.min_value.empty() || !ds.max_value.empty())) {
-        kinds::Zone zone;
+        index::extensions::kinds::Zone zone;
         zone.value_type = ds.value_type;
         zone.min = ds.min_value;
         zone.max = ds.max_value;
@@ -138,11 +137,12 @@ void put_dimension(Tier& t, std::uint64_t checkpoint_idx,
         if (ds.dimension == DIM_TS && !stats.timestamp_histogram.empty())
             zone.histogram = stats.timestamp_histogram;
         t.path_granule(IndexExtension::Zonemap, ds.dimension, checkpoint_idx,
-                       kinds::encode_zone(zone));
+                       index::extensions::kinds::encode_zone(zone));
     }
     if (counts && compressed)
-        t.path_granule(IndexExtension::Counts, ds.dimension, checkpoint_idx,
-                       kinds::encode_counts({observed, *compressed}));
+        t.path_granule(
+            IndexExtension::Counts, ds.dimension, checkpoint_idx,
+            index::extensions::kinds::encode_counts({observed, *compressed}));
 }
 
 void write_chunk_to(Tier& t, std::uint64_t checkpoint_idx,
@@ -204,21 +204,22 @@ void write_chunk_to(Tier& t, std::uint64_t checkpoint_idx,
     if (zones && observed > 0 &&
         chunk.statistics.min_timestamp_us <=
             chunk.statistics.max_timestamp_us) {
-        kinds::Zone te;
+        index::extensions::kinds::Zone te;
         te.value_type = "uint";
         te.min = dstd::to_string(chunk.statistics.min_timestamp_us);
         te.max = dstd::to_string(chunk.statistics.max_timestamp_us);
         te.observed = observed;
         te.present = observed;
         t.path_granule(IndexExtension::Zonemap, DIM_TE, checkpoint_idx,
-                       kinds::encode_zone(te));
+                       index::extensions::kinds::encode_zone(te));
     }
 
     // Postings hash the value, so postings written by concurrent workers or
     // sinks agree.
     if (m.has(IndexExtension::Postings))
         for (const auto& [name, _] : chunk.statistics.name_counts)
-            t.posting_granule(DIM_NAME, kinds::value_hash(name),
+            t.posting_granule(DIM_NAME,
+                              index::extensions::kinds::value_hash(name),
                               checkpoint_idx);
 }
 
@@ -266,7 +267,7 @@ BloomCore::ChunkStatistics finish_file_to(
     if (m.has(IndexExtension::Postings)) {
         t.path(IndexExtension::Postings, DIM_NAME);
         for (const auto& [name, _] : acc.statistics.name_counts)
-            t.posting(DIM_NAME, kinds::value_hash(name));
+            t.posting(DIM_NAME, index::extensions::kinds::value_hash(name));
     }
 
     for (const auto& [path, stat] : catalog) t.catalog_path(path, stat);

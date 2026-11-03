@@ -20,14 +20,13 @@ namespace dftracer::utils::trace::views::detail {
 // read|write, so aggregates match dfanalyzer.
 template <class Src>
 dstd::Optional<double> derived_size_t(const Src& src) {
-    namespace dfi = trace::internal;
     auto as_i64 = [&](dstd::StringView k) -> dstd::Optional<std::int64_t> {
         if (auto n = src.number(k)) return static_cast<std::int64_t>(*n);
         return dstd::nullopt;
     };
-    auto s = dfi::derive_io_size(src.value("cat"), src.value("name"),
-                                 as_i64("size_sum"), as_i64("ret"),
-                                 as_i64("image_size"));
+    auto s = trace::internal::derive_io_size(
+        src.value("cat"), src.value("name"), as_i64("size_sum"), as_i64("ret"),
+        as_i64("image_size"));
     return s ? dstd::Optional<double>(static_cast<double>(*s)) : dstd::nullopt;
 }
 

@@ -17,8 +17,7 @@
 
 #include <cstdint>
 
-namespace idx = dftracer::utils::index;
-namespace py = dftracer::utils::python;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -31,9 +30,9 @@ struct StaleCheck {
 // Stat-only: mtime and size are the only signals O(1) to read, so a same-size
 // edit with a restored mtime is invisible here.
 StaleCheck stale_check(
-    const idx::Index &index,
+    const index::Index &index,
     const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> &paths) {
-    const idx::Snapshot snapshot =
+    const index::Snapshot snapshot =
         dftracer::utils::common::unwrap(index.snapshot());
 
     StaleCheck result;
@@ -41,26 +40,26 @@ StaleCheck stale_check(
     listed.reserve(paths.size());
     for (const dftracer::utils::dstd::String &path : paths) {
         const dftracer::utils::dstd::String logical =
-            idx::store::internal::get_logical_path(path);
+            index::store::internal::get_logical_path(path);
         listed.insert(dftracer::utils::dstd::String(logical));
         dftracer::utils::common::InputFileStat st;
         if (!dftracer::utils::common::stat_input(path, st)) st = {};
-        const idx::SourceStat now{static_cast<std::uint64_t>(st.mtime),
-                                  st.size};
+        const index::SourceStat now{static_cast<std::uint64_t>(st.mtime),
+                                    st.size};
         switch (snapshot.freshness(logical, now)) {
-            case idx::Freshness::Current:
+            case index::Freshness::Current:
                 break;
-            case idx::Freshness::Missing:
+            case index::Freshness::Missing:
                 result.added.push_back(path);
                 break;
-            case idx::Freshness::Stale:
-            case idx::Freshness::Failed:
+            case index::Freshness::Stale:
+            case index::Freshness::Failed:
                 result.changed.push_back(path);
                 break;
         }
     }
 
-    for (const idx::FileRef &file :
+    for (const index::FileRef &file :
          dftracer::utils::common::unwrap(snapshot.files())) {
         const dftracer::utils::dstd::StringView path = file.path();
         const dftracer::utils::dstd::StringView logical(path.data(),
@@ -90,12 +89,12 @@ int Index_init(IndexObject *self, PyObject *args, PyObject *kwds) {
                                      const_cast<char **>(kwlist), &index_path))
         return -1;
     try {
-        auto opened = dftracer::utils::common::unwrap(idx::Index::open(
-            idx::store::internal::normalize_index_root(index_path)));
+        auto opened = dftracer::utils::common::unwrap(index::Index::open(
+            index::store::internal::normalize_index_root(index_path)));
         delete self->index;
-        self->index = new idx::Index(std::move(opened));
+        self->index = new index::Index(std::move(opened));
     } catch (const std::exception &e) {
-        py::set_typed_py_error(e);
+        python::set_typed_py_error(e);
         return -1;
     }
     return 0;
@@ -153,11 +152,11 @@ PyObject *Index_write_agg_config(IndexObject *self, PyObject *args) {
     }
     PyObject *config_obj = nullptr;
     if (!PyArg_ParseTuple(args, "O", &config_obj)) return nullptr;
-    const auto config = py::agg_config_from_py(config_obj);
+    const auto config = python::agg_config_from_py(config_obj);
     if (!run_blocking([&] {
-            idx::schemas::dft::agg::tier::write_config(
+            index::schemas::dft::agg::tier::write_config(
                 *self->index,
-                idx::schemas::dft::agg::tier::Config{
+                index::schemas::dft::agg::tier::Config{
                     config.time_interval_us, config.params_hash(),
                     config.group_by_file, config.extra_group_keys});
         }))

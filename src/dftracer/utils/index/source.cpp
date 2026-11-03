@@ -15,8 +15,6 @@ namespace dftracer::utils::index {
 
 namespace {
 
-namespace syn = duql::syntax;
-
 std::int64_t ns_per(TimeUnit unit) {
     switch (unit) {
         case TimeUnit::Ns:
@@ -41,8 +39,10 @@ struct Member {
                                          "source of ", origin, ": ", why);
 }
 
-syn::Program parse_members(dstd::StringView text, dstd::StringView origin) {
-    auto tree = syn::parse("source s {\n" + dstd::String(text) + "\n}");
+duql::syntax::Program parse_members(dstd::StringView text,
+                                    dstd::StringView origin) {
+    auto tree =
+        duql::syntax::parse("source s {\n" + dstd::String(text) + "\n}");
     if (!tree) bad(origin, tree.error().format());
     return std::move(*tree);
 }
@@ -51,8 +51,8 @@ syn::Program parse_members(dstd::StringView text, dstd::StringView origin) {
 dstd::Vector<Member> members(dstd::StringView text, dstd::StringView origin) {
     dstd::Vector<Member> out;
     if (text.empty()) return out;
-    syn::Program tree = parse_members(text, origin);
-    const auto& decl = std::get<syn::SourceDecl>(tree.decls.front());
+    duql::syntax::Program tree = parse_members(text, origin);
+    const auto& decl = std::get<duql::syntax::SourceDecl>(tree.decls.front());
     auto add = [&](dstd::String name, dstd::String member) {
         for (const auto& m : out)
             if (m.name == name) bad(origin, "'" + name + "' is declared twice");
@@ -64,11 +64,12 @@ dstd::Vector<Member> members(dstd::StringView text, dstd::StringView origin) {
         if (r.name == "data") {
             const auto& p = *r.pipeline;
             if (!p.sources.empty() || p.stages.size() != 1 ||
-                !std::holds_alternative<syn::Where>(p.stages.front().node))
+                !std::holds_alternative<duql::syntax::Where>(
+                    p.stages.front().node))
                 bad(origin, "'data' must be one 'where'");
         }
         add(dstd::String(r.name),
-            dstd::String(r.name + " = " + syn::to_text(*r.pipeline)));
+            dstd::String(r.name + " = " + duql::syntax::to_text(*r.pipeline)));
     }
     for (const auto& d : decl.defs) {
         dstd::String params;
@@ -83,9 +84,11 @@ dstd::Vector<Member> members(dstd::StringView text, dstd::StringView origin) {
         add(dstd::String(d.name),
             dstd::String(
                 "def " + d.name + params + " = " +
-                (std::holds_alternative<syn::PipelinePtr>(d.body)
-                     ? syn::to_text(*std::get<syn::PipelinePtr>(d.body))
-                     : syn::to_text(*std::get<syn::ExprPtr>(d.body)))));
+                (std::holds_alternative<duql::syntax::PipelinePtr>(d.body)
+                     ? duql::syntax::to_text(
+                           *std::get<duql::syntax::PipelinePtr>(d.body))
+                     : duql::syntax::to_text(
+                           *std::get<duql::syntax::ExprPtr>(d.body)))));
     }
     return out;
 }
@@ -155,20 +158,21 @@ void check_source(const RecordSchema& schema, dstd::StringView origin) {
 
 dstd::String data_condition(const RecordSchema& schema) {
     if (schema.source.empty()) return {};
-    syn::Program tree = parse_members(schema.source, schema.id);
-    for (const auto& r : std::get<syn::SourceDecl>(tree.decls.front()).rowsets)
+    duql::syntax::Program tree = parse_members(schema.source, schema.id);
+    for (const auto& r :
+         std::get<duql::syntax::SourceDecl>(tree.decls.front()).rowsets)
         if (r.name == "data")
-            return dstd::String(syn::to_text(
-                *std::get<syn::Where>(r.pipeline->stages.front().node)
+            return dstd::String(duql::syntax::to_text(
+                *std::get<duql::syntax::Where>(r.pipeline->stages.front().node)
                      .condition));
     return {};
 }
 
 bool source_args_fallback(const RecordSchema& schema) {
     if (schema.source.empty()) return false;
-    syn::Program tree = parse_members(schema.source, schema.id);
+    duql::syntax::Program tree = parse_members(schema.source, schema.id);
     return duql::args_fallback(
-        std::get<syn::SourceDecl>(tree.decls.front()).defs);
+        std::get<duql::syntax::SourceDecl>(tree.decls.front()).defs);
 }
 
 dstd::Vector<IndexedRowSet> indexed_rowsets(const RecordSchema& schema) {

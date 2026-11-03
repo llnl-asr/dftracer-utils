@@ -21,27 +21,29 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
 // Vectorized lo <= x <= hi, packed into `out`. Bits are built 64 at a time so
 // every block store lands on a byte boundary regardless of the lane count; the
 // tail is packed scalar. Mirrors compare_simd's compare_bits.
 template <class T>
 void between_bits(const T* p, std::int64_t n, T lo, T hi, std::uint8_t* out) {
-    const hn::ScalableTag<T> d;
-    const std::size_t lanes = hn::Lanes(d);
-    const auto vlo = hn::Set(d, lo);
-    const auto vhi = hn::Set(d, hi);
+    const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto vlo = hwy::HWY_NAMESPACE::Set(d, lo);
+    const auto vhi = hwy::HWY_NAMESPACE::Set(d, hi);
     const std::uint64_t lane_mask =
         lanes >= 64 ? ~std::uint64_t{0} : ((std::uint64_t{1} << lanes) - 1);
     std::int64_t i = 0;
     for (; i + 64 <= n; i += 64) {
         std::uint64_t bits = 0;
         for (std::size_t c = 0; c < 64; c += lanes) {
-            const auto v = hn::LoadU(d, p + i + static_cast<std::int64_t>(c));
-            const auto m = hn::And(hn::Ge(v, vlo), hn::Le(v, vhi));
+            const auto v = hwy::HWY_NAMESPACE::LoadU(
+                d, p + i + static_cast<std::int64_t>(c));
+            const auto m = hwy::HWY_NAMESPACE::And(
+                hwy::HWY_NAMESPACE::Ge(v, vlo), hwy::HWY_NAMESPACE::Le(v, vhi));
             std::uint64_t cb = 0;
-            hn::StoreMaskBits(d, m, reinterpret_cast<std::uint8_t*>(&cb));
+            hwy::HWY_NAMESPACE::StoreMaskBits(
+                d, m, reinterpret_cast<std::uint8_t*>(&cb));
             bits |= (cb & lane_mask) << c;
         }
         std::memcpy(out + (i >> 3), &bits, 8);
@@ -113,19 +115,26 @@ void BetweenU8(const void* p, std::int64_t n, dftu_scalar lo, dftu_scalar hi,
 // Two accumulators over a fused multiply-add break the serial dependency of the
 // scalar dot loop; the horizontal ReduceSum folds them at the end.
 double dot_f64(const double* a, const double* b, std::int64_t n) {
-    const hn::ScalableTag<double> d;
-    const std::int64_t lanes = static_cast<std::int64_t>(hn::Lanes(d));
-    auto acc0 = hn::Zero(d);
-    auto acc1 = hn::Zero(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> d;
+    const std::int64_t lanes =
+        static_cast<std::int64_t>(hwy::HWY_NAMESPACE::Lanes(d));
+    auto acc0 = hwy::HWY_NAMESPACE::Zero(d);
+    auto acc1 = hwy::HWY_NAMESPACE::Zero(d);
     std::int64_t i = 0;
     for (; i + 2 * lanes <= n; i += 2 * lanes) {
-        acc0 = hn::MulAdd(hn::LoadU(d, a + i), hn::LoadU(d, b + i), acc0);
-        acc1 = hn::MulAdd(hn::LoadU(d, a + i + lanes),
-                          hn::LoadU(d, b + i + lanes), acc1);
+        acc0 = hwy::HWY_NAMESPACE::MulAdd(hwy::HWY_NAMESPACE::LoadU(d, a + i),
+                                          hwy::HWY_NAMESPACE::LoadU(d, b + i),
+                                          acc0);
+        acc1 = hwy::HWY_NAMESPACE::MulAdd(
+            hwy::HWY_NAMESPACE::LoadU(d, a + i + lanes),
+            hwy::HWY_NAMESPACE::LoadU(d, b + i + lanes), acc1);
     }
     for (; i + lanes <= n; i += lanes)
-        acc0 = hn::MulAdd(hn::LoadU(d, a + i), hn::LoadU(d, b + i), acc0);
-    double s = hn::ReduceSum(d, hn::Add(acc0, acc1));
+        acc0 = hwy::HWY_NAMESPACE::MulAdd(hwy::HWY_NAMESPACE::LoadU(d, a + i),
+                                          hwy::HWY_NAMESPACE::LoadU(d, b + i),
+                                          acc0);
+    double s =
+        hwy::HWY_NAMESPACE::ReduceSum(d, hwy::HWY_NAMESPACE::Add(acc0, acc1));
     for (; i < n; ++i) s += a[i] * b[i];
     return s;
 }

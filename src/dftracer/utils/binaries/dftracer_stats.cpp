@@ -1200,9 +1200,7 @@ static coro::CoroTask<void> process_index_group(
     std::atomic<std::size_t>* failed_ptr,
     StatisticsQueryType report_type_for_reader) {
     try {
-        namespace stats_ns = dftracer::utils::trace::statistics;
-
-        stats_ns::StatNeeds needs;
+        trace::statistics::StatNeeds needs;
         needs.names = report_type_for_reader == StatisticsQueryType::Names ||
                       report_type_for_reader == StatisticsQueryType::TopNNames;
         needs.pid_tids =
@@ -1294,16 +1292,17 @@ static coro::CoroTask<void> process_index_group(
                 view_files.push_back(view_file(rf->file_path, *index_path_ptr));
                 total_chunks += num_chunks_of(rf->file_index);
             }
-            auto sv = stats_ns::StatsView::from_files(std::move(view_files));
+            auto sv =
+                trace::statistics::StatsView::from_files(std::move(view_files));
             // Persist the rollups once so later runs read them instead of
             // rescanning; idempotent, so a warm index skips to collect.
             co_await sv.materialize(needs);
-            stats_ns::ViewStats vs = co_await sv.collect(needs);
+            trace::statistics::ViewStats vs = co_await sv.collect(needs);
             TraceStatistics stats;
             stats.index_path.assign(index_path_ptr->data(),
                                     index_path_ptr->size());
             stats.num_chunks = total_chunks;
-            stats_ns::fill_chunk_statistics(stats.merged, vs);
+            trace::statistics::fill_chunk_statistics(stats.merged, vs);
             std::lock_guard<std::mutex> lock(*total_mutex_ptr);
             total_ptr->merged.merge_from(stats.merged);
             total_ptr->num_chunks += stats.num_chunks;
@@ -1318,11 +1317,11 @@ static coro::CoroTask<void> process_index_group(
             stats.index_path.assign(index_path_ptr->data(),
                                     index_path_ptr->size());
             stats.num_chunks = num_chunks_of(rf->file_index);
-            auto sv = stats_ns::StatsView::from_file(
+            auto sv = trace::statistics::StatsView::from_file(
                 dstd::String(rf->file_path), dstd::String(*index_path_ptr));
             co_await sv.materialize(needs);
-            stats_ns::ViewStats vs = co_await sv.collect(needs);
-            stats_ns::fill_chunk_statistics(stats.merged, vs);
+            trace::statistics::ViewStats vs = co_await sv.collect(needs);
+            trace::statistics::fill_chunk_statistics(stats.merged, vs);
             stats.success = true;
             std::lock_guard<std::mutex> lock(*stats_mutex_ptr);
             indexed_stats_ptr->emplace_back(rf->file_index, std::move(stats));

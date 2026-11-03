@@ -8,9 +8,10 @@
 #include <cstddef>
 #include <new>
 
+using namespace dftracer::utils;
+
 namespace {
 
-namespace memory = dftracer::utils::memory;
 using memory::Pool;
 using memory::PoolHandle;
 

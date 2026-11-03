@@ -295,12 +295,11 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     // its exact mtime/size makes the resolver accept it as fresh; any later
     // edit trips the stale check and rebuilds.
     {
-        namespace idx = dftracer::utils::index;
-        using idx::store::IndexExtension;
+        using index::store::IndexExtension;
         dstd::String failure;
         try {
-            auto index = idx::Index::open(
-                idx::store::internal::normalize_index_root(index_path));
+            auto index = index::Index::open(
+                index::store::internal::normalize_index_root(index_path));
             if (!index) failure = dstd::String(index.error().message());
             // BloomFold::finalize below writes the dft.index data; until then
             // the parts have members but no bloom tier, which a later scan
@@ -308,16 +307,16 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             for (const auto& part : parts) {
                 if (!failure.empty()) break;
                 auto logical =
-                    idx::store::internal::get_logical_path(part.path);
+                    index::store::internal::get_logical_path(part.path);
                 const auto hash =
-                    idx::store::internal::calculate_file_hash(part.path);
+                    index::store::internal::calculate_file_hash(part.path);
                 const auto mtime = static_cast<std::uint64_t>(
-                    idx::store::internal::get_file_modification_time(
+                    index::store::internal::get_file_modification_time(
                         part.path));
                 const auto bytes =
-                    idx::store::internal::file_size_bytes(part.path);
-                auto build =
-                    index->build(logical, idx::SourceStat{mtime, bytes, hash});
+                    index::store::internal::file_size_bytes(part.path);
+                auto build = index->build(
+                    logical, index::SourceStat{mtime, bytes, hash});
                 if (!build) {
                     failure = dstd::String(build.error().message());
                     break;
@@ -328,11 +327,11 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
                       IndexExtension::Stats})
                     build->clear(ext);
                 for (const auto& m : part.members)
-                    idx::put_gzip_member(*build, m);
-                idx::put_file_metadata(*build, member_size, part.total_lines,
-                                       part.total_uc, false);
+                    index::put_gzip_member(*build, m);
+                index::put_file_metadata(*build, member_size, part.total_lines,
+                                         part.total_uc, false);
                 build->finish(IndexExtension::Members, 0);
-                idx::put_profile(*build, schema.id);
+                index::put_profile(*build, schema.id);
                 build->finish(IndexExtension::Profile, schema.params_hash());
                 auto committed = co_await build->commit();
                 if (!committed)

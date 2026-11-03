@@ -273,8 +273,6 @@ void ComparisonConfig::resolve() {
 dstd::Optional<ComparisonConfig> ComparisonConfig::from_preset(
     const dstd::String& preset, const dstd::String& baseline,
     const dstd::String& variant) {
-    namespace ops = dftracer::utils::trace::internal::posix_ops;
-
     if (preset != "dlio") return dstd::nullopt;
 
     ComparisonConfig cfg;
@@ -344,10 +342,14 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_preset(
     cfg.nodes.push_back(
         node("POSIX/STDIO I/O", R"(cat in ["POSIX", "STDIO"])",
              {
-                 node("Read", ops::name_in_query(ops::READ)),
-                 node("Write", ops::name_in_query(ops::WRITE)),
-                 node("Metadata", ops::name_in_query(ops::METADATA)),
-                 node("Sync", ops::name_in_query(ops::SYNC)),
+                 node("Read", trace::internal::posix_ops::name_in_query(
+                                  trace::internal::posix_ops::READ)),
+                 node("Write", trace::internal::posix_ops::name_in_query(
+                                   trace::internal::posix_ops::WRITE)),
+                 node("Metadata", trace::internal::posix_ops::name_in_query(
+                                      trace::internal::posix_ops::METADATA)),
+                 node("Sync", trace::internal::posix_ops::name_in_query(
+                                  trace::internal::posix_ops::SYNC)),
              }));
 
     cfg.nodes.push_back(node("Communication", R"(cat == "comm")"));

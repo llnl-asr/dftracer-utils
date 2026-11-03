@@ -81,7 +81,7 @@
 #include <thread>
 #include <vector>
 
-namespace mem = dftracer::utils::memory;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -116,8 +116,12 @@ struct Outcome {
 };
 
 struct HeapPolicy {
-    static void *allocate(std::size_t n) { return mem::page_allocate(n, 16); }
-    static void release(void *p, std::size_t n) { mem::page_deallocate(p, n); }
+    static void *allocate(std::size_t n) {
+        return memory::page_allocate(n, 16);
+    }
+    static void release(void *p, std::size_t n) {
+        memory::page_deallocate(p, n);
+    }
 };
 
 struct MallocPolicy {
@@ -306,11 +310,11 @@ Outcome mixed_case(const Scale &scale) {
 
 template <class A>
 Outcome mixed_budget_case(const Scale &scale, std::size_t budget) {
-    mem::Config config;
+    memory::Config config;
     config.budget = budget;
-    mem::configure(config);
+    memory::configure(config);
     Outcome outcome = mixed_case<A>(scale);
-    mem::configure(mem::Config{});
+    memory::configure(memory::Config{});
     return outcome;
 }
 
@@ -584,9 +588,9 @@ int smoke() {
     int failures = 0;
     for (const Case &c : cases) {
         for (bool heap : {false, true}) {
-            std::size_t live_before = mem::page_stats().live;
+            std::size_t live_before = memory::page_stats().live;
             Outcome outcome = c.run(heap, SMOKE_SCALE);
-            std::size_t live_after = mem::page_stats().live;
+            std::size_t live_after = memory::page_stats().live;
             bool ran = outcome.ns_per_op > 0.0;
             bool freed = !heap || live_after == live_before;
             std::printf("smoke %-28s %-6s %s\n", c.name.c_str(),
@@ -603,18 +607,18 @@ int run_one(const dftracer::utils::dstd::String &name,
     bool heap = alloc == "heap";
     for (const Case &c : make_cases()) {
         if (c.name != name) continue;
-        std::size_t live_before = mem::page_stats().live;
+        std::size_t live_before = memory::page_stats().live;
         std::uint64_t instr_before = dftu::bench::instructions_retired();
         Outcome outcome = c.run(heap, FULL_SCALE);
         std::uint64_t instr_after = dftu::bench::instructions_retired();
-        if (heap && mem::page_stats().live != live_before) {
+        if (heap && memory::page_stats().live != live_before) {
             std::fprintf(stderr, "live bytes did not return to start\n");
             return 1;
         }
         std::printf(
             "RESULT %.3f %.3f %zu\n", outcome.ns_per_op,
             static_cast<double>(instr_after - instr_before) / outcome.ops,
-            heap ? mem::page_stats().reserved : std::size_t{0});
+            heap ? memory::page_stats().reserved : std::size_t{0});
         return 0;
     }
     std::fprintf(stderr, "unknown case: %s\n", name.c_str());

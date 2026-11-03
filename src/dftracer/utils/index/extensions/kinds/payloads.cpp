@@ -9,8 +9,6 @@
 
 namespace dftracer::utils::index::extensions::kinds {
 
-namespace codec = index::store::internal;
-
 namespace {
 constexpr std::uint8_t HAS_PRESENT = 1;
 constexpr std::uint8_t HAS_HISTOGRAM = 2;
@@ -18,25 +16,25 @@ constexpr std::uint8_t HAS_HISTOGRAM = 2;
 
 dstd::String encode_zone(const Zone& zone) {
     dstd::String out;
-    codec::append_string(out, zone.value_type);
-    codec::append_string(out, zone.min);
-    codec::append_string(out, zone.max);
+    index::store::internal::append_string(out, zone.value_type);
+    index::store::internal::append_string(out, zone.min);
+    index::store::internal::append_string(out, zone.max);
     dstd::append_u64_be(out, zone.observed);
     std::uint8_t flags = 0;
     if (zone.present) flags |= HAS_PRESENT;
     if (zone.histogram && !zone.histogram->empty()) flags |= HAS_HISTOGRAM;
-    codec::append_u8(out, flags);
+    index::store::internal::append_u8(out, flags);
     if (zone.present) dstd::append_u64_be(out, *zone.present);
     if (flags & HAS_HISTOGRAM) {
         const auto hist = zone.histogram->serialize();
-        codec::append_blob(out, hist);
+        index::store::internal::append_blob(out, hist);
     }
     return out;
 }
 
 dstd::Optional<Zone> decode_zone(dstd::StringView bytes) {
     try {
-        codec::Cursor cursor(bytes);
+        index::store::internal::Cursor cursor(bytes);
         Zone zone;
         zone.value_type = cursor.str();
         zone.min = cursor.str();
@@ -59,14 +57,15 @@ dstd::Optional<Zone> decode_zone(dstd::StringView bytes) {
 dstd::String encode_counts(const CountsGranule& counts) {
     dstd::String out;
     dstd::append_u64_be(out, counts.observed);
-    codec::append_u8(out, counts.compressed ? 1 : 0);
-    if (counts.compressed) codec::append_blob(out, *counts.compressed);
+    index::store::internal::append_u8(out, counts.compressed ? 1 : 0);
+    if (counts.compressed)
+        index::store::internal::append_blob(out, *counts.compressed);
     return out;
 }
 
 dstd::Optional<CountsGranule> decode_counts(dstd::StringView bytes) {
     try {
-        codec::Cursor cursor(bytes);
+        index::store::internal::Cursor cursor(bytes);
         CountsGranule counts;
         counts.observed = cursor.u64();
         if (cursor.u8() != 0) {

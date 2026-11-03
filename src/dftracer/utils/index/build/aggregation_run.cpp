@@ -14,26 +14,26 @@
 
 namespace dftracer::utils::index::build {
 
-namespace agg = index::schemas::dft::agg;
-
 AggRun::AggRun(dstd::String path,
                IndexBuildBatchConfig::AggFoldFactory agg_factory)
     : index_path(std::move(path)), factory(std::move(agg_factory)) {}
 
-AggRun start_aggregation(dstd::StringView index_path,
-                         const agg::AggregationConfig& config) {
+AggRun start_aggregation(
+    dstd::StringView index_path,
+    const index::schemas::dft::agg::AggregationConfig& config) {
     auto target = common::unwrap(index::Index::open(
         index::store::internal::normalize_index_root(index_path)));
-    auto intern = agg::intern_for_index(index_path);
+    auto intern = index::schemas::dft::agg::intern_for_index(index_path);
     common::unwrap(agg_dictionary(common::unwrap(target.snapshot()), *intern));
-    agg::tier::write_config(target,
-                            {config.time_interval_us, config.params_hash(),
-                             config.group_by_file, config.extra_group_keys});
-    auto cfg = dstd::make_shared<agg::AggregationConfig>(config);
+    index::schemas::dft::agg::tier::write_config(
+        target, {config.time_interval_us, config.params_hash(),
+                 config.group_by_file, config.extra_group_keys});
+    auto cfg =
+        dstd::make_shared<index::schemas::dft::agg::AggregationConfig>(config);
     auto factory = [cfg,
                     intern](dftracer::utils::dstd::StringIntern& build_intern) {
-        return dstd::make_unique<agg::AggregationFold>(build_intern, intern,
-                                                       *cfg);
+        return dstd::make_unique<index::schemas::dft::agg::AggregationFold>(
+            build_intern, intern, *cfg);
     };
     return AggRun(dstd::String(index_path), std::move(factory));
 }
@@ -41,7 +41,8 @@ AggRun start_aggregation(dstd::StringView index_path,
 void finish_aggregation(AggRun& run, IndexBuildBatchResult& batch) {
     auto target = common::unwrap(index::Index::open(
         index::store::internal::normalize_index_root(run.index_path)));
-    agg::merge_aggregation_folds(batch.agg_outputs, target);
+    index::schemas::dft::agg::merge_aggregation_folds(batch.agg_outputs,
+                                                      target);
 }
 
 void clear_aggregation(const dstd::String& index_path) {
@@ -49,7 +50,7 @@ void clear_aggregation(const dstd::String& index_path) {
                             index_path.c_str());
     auto target = common::unwrap(index::Index::open(
         index::store::internal::normalize_index_root(index_path)));
-    agg::tier::clear(target);
+    index::schemas::dft::agg::tier::clear(target);
 }
 
 }  // namespace dftracer::utils::index::build

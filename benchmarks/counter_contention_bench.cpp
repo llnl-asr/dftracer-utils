@@ -58,8 +58,6 @@
 #include <cstdlib>
 
 using namespace dftracer::utils;
-namespace df = dftracer::utils::dataframe;
-namespace mp = dftu::memory_probe;
 using namespace dftu::memory_workloads;
 
 namespace {
@@ -147,10 +145,10 @@ std::uint64_t next_random(std::uint64_t& s) {
 }
 
 void group_by(const Sizes& s) {
-    const df::LazyFrame plan =
+    const dataframe::LazyFrame plan =
         gen(s.frame_rows, s.frame_rows, 1)
             .group_by(dstd::Vector<dstd::String>{"k", "v"},
-                      {df::GroupAgg{df::Agg::Sum, "t", "t_sum"}});
+                      {dataframe::GroupAgg{dataframe::Agg::Sum, "t", "t_sum"}});
     default_runtime()
         .submit(drain_count(plan.memory_budget(PLAN_BUDGET)))
         .get();
@@ -180,7 +178,7 @@ dstd::String prepare_genesis(const dstd::String& dir, const Sizes& s) {
 }
 
 struct SizeMix {
-    std::array<std::uint64_t, mp::HISTOGRAM_BUCKETS> counts{};
+    std::array<std::uint64_t, dftu::memory_probe::HISTOGRAM_BUCKETS> counts{};
     std::uint64_t total = 0;
 };
 
@@ -195,13 +193,13 @@ SizeMix collect_mix(const Sizes& s) {
         (dstd::fs::temp_directory() / "counter_contention_bench").str());
     const dstd::String root = prepare_genesis(dir, s);
     SizeMix mix_out;
-    std::array<std::uint64_t, mp::HISTOGRAM_BUCKETS> before{};
+    std::array<std::uint64_t, dftu::memory_probe::HISTOGRAM_BUCKETS> before{};
     for (std::size_t b = 0; b < before.size(); ++b)
-        before[b] = mp::histogram_count(b);
+        before[b] = dftu::memory_probe::histogram_count(b);
     group_by(s);
     genesis(root);
     for (std::size_t b = 0; b < before.size(); ++b) {
-        mix_out.counts[b] = mp::histogram_count(b) - before[b];
+        mix_out.counts[b] = dftu::memory_probe::histogram_count(b) - before[b];
         mix_out.total += mix_out.counts[b];
     }
     (void)dstd::fs::remove_all(dir);

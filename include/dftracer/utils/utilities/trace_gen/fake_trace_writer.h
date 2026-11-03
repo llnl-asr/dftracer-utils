@@ -95,8 +95,6 @@ inline std::uint64_t jitter(std::mt19937_64& rng, std::uint64_t base) {
     return static_cast<std::uint64_t>(static_cast<double>(base) * dist(rng));
 }
 
-namespace dft = trace;
-
 /// Metadata event: {"name":"HH"/"FH"/"SH","ph":4,"type":1,
 ///                  "args":{"hhash":"...","name":"...","value":"..."}}
 /// Hash and tracer-bookkeeping metadata is the DFTRACER layer.
@@ -104,9 +102,10 @@ inline void emit_metadata(TraceWriter& w, dstd::StringView kind,
                           dstd::StringView hhash,
                           dstd::StringView resolved_name,
                           dstd::StringView hash_value) {
-    static constexpr int PH_M = dft::phase_to_int(dft::RecordPhase::Metadata);
+    static constexpr int PH_M =
+        trace::phase_to_int(trace::RecordPhase::Metadata);
     static constexpr int TY_DFT =
-        dft::event_type_to_int(dft::EventType::Dftracer);
+        trace::event_type_to_int(trace::EventType::Dftracer);
     dstd::String buf;
     buf.reserve(256);
     buf += R"({"name":")";
@@ -140,7 +139,7 @@ struct EventArgs {
     dstd::String fhash;
     dstd::String cmd_hash;
     /// Instrumentation layer. Unknown lets emit_event infer it from cat.
-    dft::EventType type = dft::EventType::Unknown;
+    trace::EventType type = trace::EventType::Unknown;
     /// Optional extra args appended verbatim (no leading comma)
     dstd::String extra;
 };
@@ -160,9 +159,9 @@ inline void emit_event(TraceWriter& w, const EventArgs& a) {
     buf += R"(","cat":")";
     json::append_json_escaped(buf, a.cat);
 
-    dft::EventType ty = a.type != dft::EventType::Unknown
-                            ? a.type
-                            : dft::event_type_from_cat(a.cat);
+    trace::EventType ty = a.type != trace::EventType::Unknown
+                              ? a.type
+                              : trace::event_type_from_cat(a.cat);
     std::snprintf(
         num_buf, sizeof(num_buf),
         R"(","pid":%llu,"tid":%llu,"ts":%llu,"dur":%llu,"ph":%d,"type":%d)",
@@ -170,8 +169,8 @@ inline void emit_event(TraceWriter& w, const EventArgs& a) {
         static_cast<unsigned long long>(a.tid),
         static_cast<unsigned long long>(a.ts),
         static_cast<unsigned long long>(a.dur),
-        dft::phase_to_int(dft::RecordPhase::Complete),
-        dft::event_type_to_int(ty));
+        trace::phase_to_int(trace::RecordPhase::Complete),
+        trace::event_type_to_int(ty));
     buf += num_buf;
 
     buf += R"(,"args":{)";

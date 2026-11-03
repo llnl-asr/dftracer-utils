@@ -44,8 +44,6 @@
 
 namespace dftracer::utils::trace::views {
 
-namespace scan = detail::scan;
-
 bool ViewCursor::has_nested_column() const {
     if (!nested_) {
         nested_ = std::any_of(
@@ -87,14 +85,11 @@ ViewCursor::next(std::int64_t max_rows) {
 
 namespace {
 
-namespace df = dftracer::utils::dataframe;
-namespace q = dftracer::utils::duql;
-
 // What a source can push for one predicate: the query, plus whether it is the
 // predicate exactly or merely a superset of it (a superset prunes I/O but must
 // be re-applied by the engine).
 struct Pushable {
-    q::Expr expr;
+    duql::Expr expr;
     bool exact;
 };
 
@@ -137,12 +132,13 @@ dstd::Optional<dstd::String> pushable_field(
 // stay with the engine: the DSL regex searches, and rewriting anchors is not
 // worth a wrong answer.
 dstd::Optional<Pushable> translate_str_pred(
-    const df::Expr& e, const dstd::Vector<dstd::String>& fnames,
+    const dataframe::Expr& e, const dstd::Vector<dstd::String>& fnames,
     double time_scale) {
     std::int32_t ci = -1;
-    df::StrPredOp op{};
+    dataframe::StrPredOp op{};
     dstd::StringView pattern;
-    if (!df::expr_as_col_str_pred(e, &ci, &op, &pattern)) return dstd::nullopt;
+    if (!dataframe::expr_as_col_str_pred(e, &ci, &op, &pattern))
+        return dstd::nullopt;
     dstd::Optional<dstd::String> field = pushable_field(ci, fnames, time_scale);
     if (!field) return dstd::nullopt;
     auto escape_like = [](dstd::StringView s) {
@@ -155,22 +151,23 @@ dstd::Optional<Pushable> translate_str_pred(
         return out;
     };
     switch (op) {
-        case df::StrPredOp::Contains:
+        case dataframe::StrPredOp::Contains:
             return Pushable{
-                q::field_match(*field, q::MatchOp::Icontains, pattern), false};
-        case df::StrPredOp::StartsWith:
-            return Pushable{q::field_match(*field, q::MatchOp::Like,
-                                           escape_like(pattern) + "%"),
+                duql::field_match(*field, duql::MatchOp::Icontains, pattern),
+                false};
+        case dataframe::StrPredOp::StartsWith:
+            return Pushable{duql::field_match(*field, duql::MatchOp::Like,
+                                              escape_like(pattern) + "%"),
                             true};
-        case df::StrPredOp::EndsWith:
-            return Pushable{q::field_match(*field, q::MatchOp::Like,
-                                           "%" + escape_like(pattern)),
+        case dataframe::StrPredOp::EndsWith:
+            return Pushable{duql::field_match(*field, duql::MatchOp::Like,
+                                              "%" + escape_like(pattern)),
                             true};
-        case df::StrPredOp::Like:
-            return Pushable{q::field_match(*field, q::MatchOp::Like, pattern),
-                            true};
-        case df::StrPredOp::Matches:
-        case df::StrPredOp::Search:
+        case dataframe::StrPredOp::Like:
+            return Pushable{
+                duql::field_match(*field, duql::MatchOp::Like, pattern), true};
+        case dataframe::StrPredOp::Matches:
+        case dataframe::StrPredOp::Search:
             return dstd::nullopt;
     }
     return dstd::nullopt;
@@ -179,19 +176,19 @@ dstd::Optional<Pushable> translate_str_pred(
 // The integer value set of `values` as int64, for any integer width; nullopt
 // for a non-integer type or a Uint64 the int64 domain cannot hold.
 dstd::Optional<dstd::Vector<std::int64_t>> int_values(
-    const df::Series& column) {
-    const df::Series values =
+    const dataframe::Series& column) {
+    const dataframe::Series values =
         column.is_flat() ? column.share() : column.materialize();
     switch (values.type()) {
-        case df::TypeId::Int8:
-        case df::TypeId::Int16:
-        case df::TypeId::Int32:
-        case df::TypeId::Int64:
-        case df::TypeId::Uint8:
-        case df::TypeId::Uint16:
-        case df::TypeId::Uint32:
+        case dataframe::TypeId::Int8:
+        case dataframe::TypeId::Int16:
+        case dataframe::TypeId::Int32:
+        case dataframe::TypeId::Int64:
+        case dataframe::TypeId::Uint8:
+        case dataframe::TypeId::Uint16:
+        case dataframe::TypeId::Uint32:
             break;
-        case df::TypeId::Uint64: {
+        case dataframe::TypeId::Uint64: {
             const std::uint64_t* u = values.data<std::uint64_t>();
             for (std::int64_t i = 0; i < values.length(); ++i)
                 if (u[i] > static_cast<std::uint64_t>(
@@ -199,34 +196,34 @@ dstd::Optional<dstd::Vector<std::int64_t>> int_values(
                     return dstd::nullopt;
             break;
         }
-        case df::TypeId::Unknown:
-        case df::TypeId::Bool:
-        case df::TypeId::Float16:
-        case df::TypeId::Float32:
-        case df::TypeId::Float64:
-        case df::TypeId::String:
-        case df::TypeId::LargeString:
-        case df::TypeId::Binary:
-        case df::TypeId::LargeBinary:
-        case df::TypeId::FixedSizeBinary:
-        case df::TypeId::Date32:
-        case df::TypeId::Date64:
-        case df::TypeId::Timestamp:
-        case df::TypeId::Time32:
-        case df::TypeId::Time64:
-        case df::TypeId::Duration:
-        case df::TypeId::Decimal128:
-        case df::TypeId::Decimal256:
-        case df::TypeId::List:
-        case df::TypeId::LargeList:
-        case df::TypeId::Struct:
-        case df::TypeId::FixedSizeList:
-        case df::TypeId::Map:
+        case dataframe::TypeId::Unknown:
+        case dataframe::TypeId::Bool:
+        case dataframe::TypeId::Float16:
+        case dataframe::TypeId::Float32:
+        case dataframe::TypeId::Float64:
+        case dataframe::TypeId::String:
+        case dataframe::TypeId::LargeString:
+        case dataframe::TypeId::Binary:
+        case dataframe::TypeId::LargeBinary:
+        case dataframe::TypeId::FixedSizeBinary:
+        case dataframe::TypeId::Date32:
+        case dataframe::TypeId::Date64:
+        case dataframe::TypeId::Timestamp:
+        case dataframe::TypeId::Time32:
+        case dataframe::TypeId::Time64:
+        case dataframe::TypeId::Duration:
+        case dataframe::TypeId::Decimal128:
+        case dataframe::TypeId::Decimal256:
+        case dataframe::TypeId::List:
+        case dataframe::TypeId::LargeList:
+        case dataframe::TypeId::Struct:
+        case dataframe::TypeId::FixedSizeList:
+        case dataframe::TypeId::Map:
             return dstd::nullopt;
     }
-    df::Series as64 = values.type() == df::TypeId::Int64
-                          ? values.share()
-                          : values.cast(df::TypeId::Int64);
+    dataframe::Series as64 = values.type() == dataframe::TypeId::Int64
+                                 ? values.share()
+                                 : values.cast(dataframe::TypeId::Int64);
     if (!as64.valid() || as64.null_count() != 0) return dstd::nullopt;
     return dstd::Vector<std::int64_t>(
         as64.data<std::int64_t>(), as64.data<std::int64_t>() + as64.length());
@@ -234,22 +231,22 @@ dstd::Optional<dstd::Vector<std::int64_t>> int_values(
 
 // A `col is_in values` leaf: exact for an integer or String value set.
 dstd::Optional<Pushable> translate_is_in(
-    const df::Expr& e, const dstd::Vector<dstd::String>& fnames,
+    const dataframe::Expr& e, const dstd::Vector<dstd::String>& fnames,
     double time_scale) {
     std::int32_t ci = -1;
-    df::Series values;
-    if (!df::expr_as_col_is_in(e, &ci, &values)) return dstd::nullopt;
+    dataframe::Series values;
+    if (!dataframe::expr_as_col_is_in(e, &ci, &values)) return dstd::nullopt;
     dstd::Optional<dstd::String> field = pushable_field(ci, fnames, time_scale);
     if (!field) return dstd::nullopt;
     if (values.null_count() != 0) return dstd::nullopt;
     if (dstd::Optional<dstd::Vector<std::int64_t>> v = int_values(values))
-        return Pushable{q::field_in(*field, *v), true};
-    if (values.type() == df::TypeId::String) {
+        return Pushable{duql::field_in(*field, *v), true};
+    if (values.type() == dataframe::TypeId::String) {
         dstd::Vector<dstd::String> v;
         v.reserve(static_cast<std::size_t>(values.length()));
         for (std::int64_t i = 0; i < values.length(); ++i)
             v.emplace_back(values.string_at(i));
-        return Pushable{q::field_in(*field, v), true};
+        return Pushable{duql::field_in(*field, v), true};
     }
     return dstd::nullopt;
 }
@@ -257,59 +254,59 @@ dstd::Optional<Pushable> translate_is_in(
 // Translate a `col <cmp> scalar` LazyFrame predicate into an index-pushable
 // query on the named event field. nullopt for anything else (col-vs-col,
 // arithmetic), which the engine applies itself.
-dstd::Optional<q::Expr> translate_leaf(const df::Expr& e,
-                                       const dstd::Vector<dstd::String>& fnames,
-                                       double time_scale) {
+dstd::Optional<duql::Expr> translate_leaf(
+    const dataframe::Expr& e, const dstd::Vector<dstd::String>& fnames,
+    double time_scale) {
     std::int32_t ci = -1;
-    df::CmpOp op{};
-    df::Scalar rhs;
-    if (!df::expr_as_col_cmp(e, &ci, &op, &rhs)) return dstd::nullopt;
+    dataframe::CmpOp op{};
+    dataframe::Scalar rhs;
+    if (!dataframe::expr_as_col_cmp(e, &ci, &op, &rhs)) return dstd::nullopt;
     dstd::Optional<dstd::String> pushed =
         pushable_field(ci, fnames, time_scale);
     if (!pushed) return dstd::nullopt;
     const dstd::String field = std::move(*pushed);
 
-    q::CompareOp qop;
+    duql::CompareOp qop;
     switch (op) {
-        case df::CmpOp::Gt:
-            qop = q::CompareOp::Gt;
+        case dataframe::CmpOp::Gt:
+            qop = duql::CompareOp::Gt;
             break;
-        case df::CmpOp::Ge:
-            qop = q::CompareOp::Ge;
+        case dataframe::CmpOp::Ge:
+            qop = duql::CompareOp::Ge;
             break;
-        case df::CmpOp::Lt:
-            qop = q::CompareOp::Lt;
+        case dataframe::CmpOp::Lt:
+            qop = duql::CompareOp::Lt;
             break;
-        case df::CmpOp::Le:
-            qop = q::CompareOp::Le;
+        case dataframe::CmpOp::Le:
+            qop = duql::CompareOp::Le;
             break;
-        case df::CmpOp::Eq:
-            qop = q::CompareOp::Eq;
+        case dataframe::CmpOp::Eq:
+            qop = duql::CompareOp::Eq;
             break;
-        case df::CmpOp::Ne:
-            qop = q::CompareOp::Ne;
+        case dataframe::CmpOp::Ne:
+            qop = duql::CompareOp::Ne;
             break;
     }
 
-    q::LiteralNode lit;
+    duql::LiteralNode lit;
     switch (rhs.tag()) {
         case DFTU_SCALAR_TAG_I64:
-            lit = q::LiteralNode{rhs.i64()};
+            lit = duql::LiteralNode{rhs.i64()};
             break;
         case DFTU_SCALAR_TAG_U64:
-            lit = q::LiteralNode{rhs.u64()};
+            lit = duql::LiteralNode{rhs.u64()};
             break;
         case DFTU_SCALAR_TAG_STR:
-            lit = q::LiteralNode{dstd::String(rhs.str())};
+            lit = duql::LiteralNode{dstd::String(rhs.str())};
             break;
         case DFTU_SCALAR_TAG_F64:
-            lit = q::LiteralNode{rhs.f64()};
+            lit = duql::LiteralNode{rhs.f64()};
             break;
         default:
             return dstd::nullopt;
     }
 
-    return q::field_cmp(field, qop, std::move(lit));
+    return duql::field_cmp(field, qop, std::move(lit));
 }
 
 // The whole predicate tree, pushing as much of it as is sound:
@@ -322,37 +319,37 @@ dstd::Optional<q::Expr> translate_leaf(const df::Expr& e,
 //   NOT - the operand must translate EXACTLY. Negating a superset yields a
 //         subset, which drops rows.
 dstd::Optional<Pushable> translate_pred(
-    const df::Expr& e, const dstd::Vector<dstd::String>& fnames,
+    const dataframe::Expr& e, const dstd::Vector<dstd::String>& fnames,
     double time_scale) {
-    df::LogicalOp lop{};
-    df::Expr lhs, rhs;
-    if (df::expr_as_logical(e, &lop, &lhs, &rhs)) {
+    dataframe::LogicalOp lop{};
+    dataframe::Expr lhs, rhs;
+    if (dataframe::expr_as_logical(e, &lop, &lhs, &rhs)) {
         dstd::Optional<Pushable> a = translate_pred(lhs, fnames, time_scale);
         dstd::Optional<Pushable> b = translate_pred(rhs, fnames, time_scale);
-        if (lop == df::LogicalOp::And) {
+        if (lop == dataframe::LogicalOp::And) {
             if (a && b)
                 return Pushable{
-                    q::all_of(std::move(a->expr), std::move(b->expr)),
+                    duql::all_of(std::move(a->expr), std::move(b->expr)),
                     a->exact && b->exact};
             if (a) return Pushable{std::move(a->expr), false};
             if (b) return Pushable{std::move(b->expr), false};
             return dstd::nullopt;
         }
         if (!a || !b) return dstd::nullopt;
-        return Pushable{q::any_of(std::move(a->expr), std::move(b->expr)),
+        return Pushable{duql::any_of(std::move(a->expr), std::move(b->expr)),
                         a->exact && b->exact};
     }
 
-    df::Expr inner;
-    if (df::expr_as_not(e, &inner)) {
+    dataframe::Expr inner;
+    if (dataframe::expr_as_not(e, &inner)) {
         dstd::Optional<Pushable> a = translate_pred(inner, fnames, time_scale);
         if (!a || !a->exact) return dstd::nullopt;
-        return Pushable{q::negate(std::move(a->expr)), true};
+        return Pushable{duql::negate(std::move(a->expr)), true};
     }
 
     if (auto sp = translate_str_pred(e, fnames, time_scale)) return sp;
     if (auto in = translate_is_in(e, fnames, time_scale)) return in;
-    dstd::Optional<q::Expr> leaf = translate_leaf(e, fnames, time_scale);
+    dstd::Optional<duql::Expr> leaf = translate_leaf(e, fnames, time_scale);
     if (!leaf) return dstd::nullopt;
     return Pushable{std::move(*leaf), true};
 }
@@ -511,27 +508,26 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         bool any = false;
         dstd::Map<dstd::String, dftracer::utils::index::Snapshot> snapshots;
         for (const ViewFile& f : files_) {
-            namespace ip = dftracer::utils::index::plan;
             // One snapshot per index for the whole call. A failed open leaves
             // none, and prune_file reports it.
             const dftracer::utils::index::Snapshot* snapshot = nullptr;
             if (!f.index_path.empty()) {
                 auto at = snapshots.find(f.index_path);
                 if (at == snapshots.end())
-                    if (auto taken = ip::open_snapshot(f.index_path))
+                    if (auto taken = index::plan::open_snapshot(f.index_path))
                         at = snapshots.emplace(f.index_path, std::move(*taken))
                                  .first;
                 if (at != snapshots.end()) snapshot = &at->second;
             }
             // GCC 12 destroys a temporary built inside co_await twice.
-            ip::PruneRequest prune_req{
+            index::plan::PruneRequest prune_req{
                 .index_path = dstd::String(dstd::StringView(f.index_path)),
                 .file_path = dstd::String(dstd::StringView(f.file_path)),
                 .query = &built.value(),
                 .snapshot = snapshot,
-                .metadata = metadata_rows_ ? ip::MetadataUse::Records
-                                           : ip::MetadataUse::None};
-            auto out = co_await ip::prune_file(std::move(prune_req));
+                .metadata = metadata_rows_ ? index::plan::MetadataUse::Records
+                                           : index::plan::MetadataUse::None};
+            auto out = co_await index::plan::prune_file(std::move(prune_req));
             if (!out->file_may_match) {
                 dyn_prune_->exclude_file(f.file_path);
                 any = true;
@@ -644,17 +640,17 @@ bool is_fixed_numeric_field(const dstd::String& name) {
     return name == "ts" || name == "dur" || name == "pid" || name == "tid";
 }
 
-dstd::Optional<AggOp> simple_agg_op(df::Agg op) {
+dstd::Optional<AggOp> simple_agg_op(dataframe::Agg op) {
     switch (op) {
-        case df::Agg::Count:
+        case dataframe::Agg::Count:
             return AggOp::Count;
-        case df::Agg::Sum:
+        case dataframe::Agg::Sum:
             return AggOp::Sum;
-        case df::Agg::Min:
+        case dataframe::Agg::Min:
             return AggOp::Min;
-        case df::Agg::Max:
+        case dataframe::Agg::Max:
             return AggOp::Max;
-        case df::Agg::Mean:
+        case dataframe::Agg::Mean:
             return AggOp::Mean;
         default:
             return dstd::nullopt;
@@ -663,8 +659,8 @@ dstd::Optional<AggOp> simple_agg_op(df::Agg op) {
 
 // The source column a bare column reference reads, or nullopt.
 dstd::Optional<dstd::String> column_of(
-    const df::Expr& e, const dstd::Vector<dstd::String>& names) {
-    const std::int32_t ci = df::expr_col_index(e);
+    const dataframe::Expr& e, const dstd::Vector<dstd::String>& names) {
+    const std::int32_t ci = dataframe::expr_col_index(e);
     if (ci < 0 || static_cast<std::size_t>(ci) >= names.size())
         return dstd::nullopt;
     return names[static_cast<std::size_t>(ci)];
@@ -672,10 +668,10 @@ dstd::Optional<dstd::String> column_of(
 
 }  // namespace
 
-dstd::Optional<df::SourceApplication> ViewSource::apply_filter(
-    const df::Expr& predicate) const {
+dstd::Optional<dataframe::SourceApplication> ViewSource::apply_filter(
+    const dataframe::Expr& predicate) const {
     if (distinct_ || !can_stream_rows()) return dstd::nullopt;
-    const std::uint64_t fp = df::expr_fingerprint(predicate);
+    const std::uint64_t fp = dataframe::expr_fingerprint(predicate);
     if (std::find(applied_filters_.begin(), applied_filters_.end(), fp) !=
         applied_filters_.end())
         return dstd::nullopt;
@@ -685,34 +681,35 @@ dstd::Optional<df::SourceApplication> ViewSource::apply_filter(
     auto built = std::move(pushed->expr).build();
     if (!built.has_value()) return dstd::nullopt;
     auto next = dstd::make_shared<ViewSource>(
-        scan::filter(plan_, std::move(built.value())), emit_dyn_);
+        detail::scan::filter(plan_, std::move(built.value())), emit_dyn_);
     next->applied_filters_ = applied_filters_;
     next->applied_filters_.push_back(fp);
     next->absorb_aggregation_ = absorb_aggregation_;
-    return df::SourceApplication{
-        std::move(next),
-        pushed->exact ? df::ApplyStatus::Exact : df::ApplyStatus::Inexact};
+    return dataframe::SourceApplication{
+        std::move(next), pushed->exact ? dataframe::ApplyStatus::Exact
+                                       : dataframe::ApplyStatus::Inexact};
 }
 
-dstd::Optional<df::SourceApplication> ViewSource::apply_projection(
-    const dstd::Vector<df::NamedExpr>& exprs) const {
+dstd::Optional<dataframe::SourceApplication> ViewSource::apply_projection(
+    const dstd::Vector<dataframe::NamedExpr>& exprs) const {
     if (distinct_ || !can_stream_rows()) return dstd::nullopt;
     const dstd::Vector<dstd::String> current = trace_names(names());
     dstd::Vector<dstd::String> cols;
     cols.reserve(exprs.size());
-    for (const df::NamedExpr& e : exprs) {
+    for (const dataframe::NamedExpr& e : exprs) {
         dstd::Optional<dstd::String> c = column_of(e.expr, current);
         if (!c || dstd::StringView(*c) != dstd::StringView(e.name))
             return dstd::nullopt;
         cols.push_back(std::move(*c));
     }
     if (cols == current) return dstd::nullopt;
-    auto next =
-        dstd::make_shared<ViewSource>(scan::select(plan_, cols), emit_dyn_);
+    auto next = dstd::make_shared<ViewSource>(detail::scan::select(plan_, cols),
+                                              emit_dyn_);
     next->applied_filters_ = applied_filters_;
     next->absorb_aggregation_ = absorb_aggregation_;
     if (!same_names(next->names(), cols)) return dstd::nullopt;
-    return df::SourceApplication{std::move(next), df::ApplyStatus::Exact};
+    return dataframe::SourceApplication{std::move(next),
+                                        dataframe::ApplyStatus::Exact};
 }
 
 namespace {
@@ -721,26 +718,27 @@ namespace {
 // column is rebuilt as a list), as a computed column over the columns it
 // reads, or dstd::nullopt when it reads none it can name.
 dstd::Optional<detail::ComputedColumn> computed_from(
-    dstd::String name, const df::Expr& e,
+    dstd::String name, const dataframe::Expr& e,
     const dstd::Vector<dstd::String>& current) {
     detail::ComputedColumn c;
     c.name = std::move(name);
     dstd::Vector<std::int32_t> at(current.size(), -1);
     for (std::size_t i = 0; i < current.size(); ++i) {
-        if (!df::expr_references(e, static_cast<std::int32_t>(i))) continue;
+        if (!dataframe::expr_references(e, static_cast<std::int32_t>(i)))
+            continue;
         at[i] = static_cast<std::int32_t>(c.inputs.size());
         c.inputs.push_back(current[i]);
     }
-    if (df::expr_max_col(e) >= static_cast<std::int32_t>(current.size()))
+    if (dataframe::expr_max_col(e) >= static_cast<std::int32_t>(current.size()))
         return dstd::nullopt;
-    c.expr = df::expr_remap_cols(e, at);
+    c.expr = dataframe::expr_remap_cols(e, at);
     return c;
 }
 
 }  // namespace
 
-dstd::Optional<df::SourceApplication> ViewSource::apply_aggregation(
-    const df::AggregateSpec& spec) const {
+dstd::Optional<dataframe::SourceApplication> ViewSource::apply_aggregation(
+    const dataframe::AggregateSpec& spec) const {
     const detail::ViewPlan& p = *plan_;
     if (distinct_ || output_ != TraceOutput::Events || !absorb_aggregation_ ||
         !detail::is_row_query(*plan_) || p.auto_numeric_metrics)
@@ -752,7 +750,7 @@ dstd::Optional<df::SourceApplication> ViewSource::apply_aggregation(
     dstd::Vector<detail::ComputedColumn> computed;
     dstd::Vector<dstd::String> raw_reads;
     dstd::Vector<dstd::String> expected;
-    for (const df::NamedExpr& k : spec.keys) {
+    for (const dataframe::NamedExpr& k : spec.keys) {
         dstd::Optional<dstd::String> c = column_of(k.expr, current);
         if (c && dstd::StringView(*c) == dstd::StringView(k.name))
             if (dstd::Optional<GroupKey> key = fixed_group_key(*c)) {
@@ -770,7 +768,7 @@ dstd::Optional<df::SourceApplication> ViewSource::apply_aggregation(
     }
     dstd::Vector<AggSpec> aggs;
     for (std::size_t i = 0; i < spec.aggs.size(); ++i) {
-        const df::AggregateExpr& a = spec.aggs[i];
+        const dataframe::AggregateExpr& a = spec.aggs[i];
         dstd::Optional<AggOp> op = simple_agg_op(a.op);
         if (!op || a.by.valid() || a.out.empty()) return dstd::nullopt;
         dstd::String field;
@@ -803,21 +801,23 @@ dstd::Optional<df::SourceApplication> ViewSource::apply_aggregation(
     }
     // A row select here only narrowed the scan to what the aggregation reads;
     // on an aggregation the view would read it as an output projection.
-    detail::ScanPlan grouped = scan::select(plan_, {});
+    detail::ScanPlan grouped = detail::scan::select(plan_, {});
     if (!computed.empty()) {
         auto plan = dstd::make_shared<detail::ViewPlan>(*grouped);
         plan->computed = std::move(computed);
         plan->schema.reset();
         grouped = std::move(plan);
     }
-    if (!keys.empty()) grouped = scan::group_by(grouped, std::move(keys));
-    grouped = scan::agg(grouped, std::move(aggs));
+    if (!keys.empty())
+        grouped = detail::scan::group_by(grouped, std::move(keys));
+    grouped = detail::scan::agg(grouped, std::move(aggs));
     auto next = dstd::make_shared<ViewSource>(std::move(grouped), emit_dyn_);
     if (!same_names(next->names(), expected)) return dstd::nullopt;
-    return df::SourceApplication{std::move(next), df::ApplyStatus::Exact};
+    return dataframe::SourceApplication{std::move(next),
+                                        dataframe::ApplyStatus::Exact};
 }
 
-dstd::Optional<df::SourceApplication> ViewSource::apply_distinct(
+dstd::Optional<dataframe::SourceApplication> ViewSource::apply_distinct(
     const dstd::Vector<dstd::String>& subset) const {
     const detail::ViewPlan& p = *plan_;
     if (distinct_ || emit_dyn_ || !absorb_aggregation_ ||
@@ -845,7 +845,8 @@ dstd::Optional<df::SourceApplication> ViewSource::apply_distinct(
     next->absorb_aggregation_ = absorb_aggregation_;
     next->distinct_ = true;
     next->distinct_key_idx_ = std::move(key_idx);
-    return df::SourceApplication{std::move(next), df::ApplyStatus::Exact};
+    return dataframe::SourceApplication{std::move(next),
+                                        dataframe::ApplyStatus::Exact};
 }
 
 bool ViewSource::static_schema() const {
@@ -901,11 +902,12 @@ ViewSession ViewSource::base_session(const detail::ViewPlan& p) {
 namespace {
 
 // A zero-copy view of `f`, for members that read the same output.
-df::DataFrame shared_frame(const df::DataFrame& f) {
-    df::DataFrame out;
+dataframe::DataFrame shared_frame(const dataframe::DataFrame& f) {
+    dataframe::DataFrame out;
     out.names = f.names;
     out.columns.reserve(f.columns.size());
-    for (const df::Series& c : f.columns) out.columns.push_back(c.share());
+    for (const dataframe::Series& c : f.columns)
+        out.columns.push_back(c.share());
     return out;
 }
 
@@ -916,7 +918,7 @@ bool is_containment(TraceOutput o) {
 
 }  // namespace
 
-dstd::Vector<dstd::Function<df::DataFrame(const ExportStats&)>>
+dstd::Vector<dstd::Function<dataframe::DataFrame(const ExportStats&)>>
 ViewSource::add_branches(ViewSession& session,
                          const dstd::Vector<const ViewSource*>& members,
                          const dstd::Vector<bool>& skip) {
@@ -925,7 +927,7 @@ ViewSource::add_branches(ViewSession& session,
     struct Tree {
         detail::ScanPlan plan;
         const ContainmentArgs* args;
-        dstd::SharedPtr<df::DataFrame> call_tree, flamegraph;
+        dstd::SharedPtr<dataframe::DataFrame> call_tree, flamegraph;
         dstd::SharedPtr<dstd::String> partial;
     };
     dstd::Vector<Tree> trees;
@@ -942,9 +944,9 @@ ViewSource::add_branches(ViewSession& session,
         }
         tree_of[i] = static_cast<std::size_t>(it - trees.begin());
         if (m.output_ == TraceOutput::CallTree && !it->call_tree)
-            it->call_tree = dstd::make_shared<df::DataFrame>();
+            it->call_tree = dstd::make_shared<dataframe::DataFrame>();
         if (m.output_ == TraceOutput::Flamegraph && !it->flamegraph)
-            it->flamegraph = dstd::make_shared<df::DataFrame>();
+            it->flamegraph = dstd::make_shared<dataframe::DataFrame>();
         if (m.output_ == TraceOutput::FlamegraphPartial && !it->partial)
             it->partial = dstd::make_shared<dstd::String>();
     }
@@ -953,14 +955,14 @@ ViewSource::add_branches(ViewSession& session,
                                        t.args->dur, t.args->name, t.args->group,
                                        t.call_tree, t.flamegraph, t.partial);
 
-    dstd::Vector<dstd::Function<df::DataFrame(const ExportStats&)>> out(
+    dstd::Vector<dstd::Function<dataframe::DataFrame(const ExportStats&)>> out(
         members.size());
     for (std::size_t i = 0; i < members.size(); ++i) {
         if (skip[i]) continue;
         const ViewSource& m = *members[i];
         switch (m.output_) {
             case TraceOutput::Events: {
-                Deferred<df::DataFrame> h =
+                Deferred<dataframe::DataFrame> h =
                     detail::is_row_query(*m.plan_)
                         ? session.collect_events(m.plan_)
                         : session.collect(m.plan_);
@@ -994,7 +996,7 @@ ViewSource::add_branches(ViewSession& session,
                 out[i] = [publish =
                               std::move(publish)](const ExportStats& stats) {
                     publish(stats);
-                    return df::DataFrame{};
+                    return dataframe::DataFrame{};
                 };
                 break;
             }
@@ -1022,8 +1024,9 @@ coro::CoroTask<ViewSource::Batch> ViewSource::run_batch(
     dstd::Vector<const ViewSource*> raw;
     raw.reserve(members.size());
     for (const auto& m : members) raw.push_back(m.get());
-    dstd::Vector<dstd::Function<df::DataFrame(const ExportStats&)>> resolve =
-        add_branches(session, raw, dstd::Vector<bool>(raw.size(), false));
+    dstd::Vector<dstd::Function<dataframe::DataFrame(const ExportStats&)>>
+        resolve =
+            add_branches(session, raw, dstd::Vector<bool>(raw.size(), false));
     out.stats = co_await session.execute();
     out.frames.reserve(resolve.size());
     for (auto& r : resolve) out.frames.push_back(r(out.stats));
@@ -1035,12 +1038,13 @@ namespace {
 // `f` laid out as the declared `schema`: its columns in schema order, a
 // declared column the rows lack as nulls, then any column the schema does not
 // declare, so a batch member matches the schema its plan was built against.
-df::DataFrame declared(df::DataFrame f, const df::Schema& schema) {
+dataframe::DataFrame declared(dataframe::DataFrame f,
+                              const dataframe::Schema& schema) {
     if (schema.fields.empty()) return f;
-    df::DataFrame out;
+    dataframe::DataFrame out;
     const std::int64_t n = f.num_rows();
     dstd::Vector<bool> used(f.names.size(), false);
-    for (const df::Field& field : schema.fields) {
+    for (const dataframe::Field& field : schema.fields) {
         const auto it = std::find(f.names.begin(), f.names.end(), field.name);
         out.names.push_back(field.name);
         if (it != f.names.end()) {
@@ -1049,11 +1053,12 @@ df::DataFrame declared(df::DataFrame f, const df::Schema& schema) {
             out.columns.push_back(std::move(f.columns[at]));
             continue;
         }
-        const df::TypeId t = field.type.id;
-        const bool scalar = t != df::TypeId::Unknown && t != df::TypeId::List &&
-                            t != df::TypeId::Struct;
-        out.columns.push_back(
-            df::Series::nulls(scalar ? t : df::TypeId::String, n));
+        const dataframe::TypeId t = field.type.id;
+        const bool scalar = t != dataframe::TypeId::Unknown &&
+                            t != dataframe::TypeId::List &&
+                            t != dataframe::TypeId::Struct;
+        out.columns.push_back(dataframe::Series::nulls(
+            scalar ? t : dataframe::TypeId::String, n));
     }
     for (std::size_t c = 0; c < f.names.size(); ++c)
         if (!used[c]) {
@@ -1068,22 +1073,24 @@ df::DataFrame declared(df::DataFrame f, const df::Schema& schema) {
 // fails before its folds exist.
 coro::CoroTask<void> run_open_batch(
     dstd::SharedPtr<ViewSession> session,
-    dstd::Vector<dstd::Function<df::DataFrame(const ExportStats&)>> frames,
-    dstd::Vector<df::Schema> schemas,
-    dstd::Vector<dstd::SharedPtr<coro::Channel<df::Morsel>>> channels,
+    dstd::Vector<dstd::Function<dataframe::DataFrame(const ExportStats&)>>
+        frames,
+    dstd::Vector<dataframe::Schema> schemas,
+    dstd::Vector<dstd::SharedPtr<coro::Channel<dataframe::Morsel>>> channels,
     dstd::Vector<dstd::SharedPtr<coro::CoroSemaphore>> budgets) {
-    dstd::Vector<dstd::UniquePtr<coro::Channel<df::Morsel>::ProducerGuard>>
+    dstd::Vector<
+        dstd::UniquePtr<coro::Channel<dataframe::Morsel>::ProducerGuard>>
         guards;
     guards.reserve(channels.size());
     for (auto& ch : channels)
         guards.push_back(
-            dstd::make_unique<coro::Channel<df::Morsel>::ProducerGuard>(
+            dstd::make_unique<coro::Channel<dataframe::Morsel>::ProducerGuard>(
                 ch.get()));
     const ExportStats stats = co_await session->execute();
     for (std::size_t i = 0; i < frames.size(); ++i) {
         if (!frames[i]) continue;
-        df::DataFrame f = declared(frames[i](stats), schemas[i]);
-        df::Morsel m;
+        dataframe::DataFrame f = declared(frames[i](stats), schemas[i]);
+        dataframe::Morsel m;
         m.rows = f.num_rows();
         m.columns = std::move(f.columns);
         const std::uint64_t bytes = detail::morsel_bytes(m);
@@ -1094,9 +1101,10 @@ coro::CoroTask<void> run_open_batch(
 
 }  // namespace
 
-dstd::Optional<dstd::Vector<dstd::UniquePtr<df::Cursor>>>
-ViewSource::open_batch(dstd::Vector<dstd::SharedPtr<const df::Source>> members,
-                       std::uint64_t memory_budget) const {
+dstd::Optional<dstd::Vector<dstd::UniquePtr<dataframe::Cursor>>>
+ViewSource::open_batch(
+    dstd::Vector<dstd::SharedPtr<const dataframe::Source>> members,
+    std::uint64_t memory_budget) const {
     dstd::Vector<const ViewSource*> views;
     views.reserve(members.size());
     for (const auto& m : members) {
@@ -1117,12 +1125,12 @@ ViewSource::open_batch(dstd::Vector<dstd::SharedPtr<const df::Source>> members,
 
     auto session =
         dstd::make_shared<ViewSession>(base_session(*views.front()->plan_));
-    dstd::Vector<dstd::SharedPtr<coro::Channel<df::Morsel>>> channels;
+    dstd::Vector<dstd::SharedPtr<coro::Channel<dataframe::Morsel>>> channels;
     dstd::Vector<dstd::SharedPtr<coro::CoroSemaphore>> budgets;
     dstd::Vector<dstd::SharedPtr<std::atomic<bool>>> dropped;
     dstd::Vector<bool> streamed(views.size(), false);
     for (std::size_t i = 0; i < views.size(); ++i) {
-        channels.push_back(coro::make_channel<df::Morsel>(0));
+        channels.push_back(coro::make_channel<dataframe::Morsel>(0));
         budgets.push_back(
             dstd::make_shared<coro::CoroSemaphore>(memory_budget));
         dropped.push_back(dstd::make_shared<std::atomic<bool>>(false));
@@ -1133,15 +1141,15 @@ ViewSource::open_batch(dstd::Vector<dstd::SharedPtr<const df::Source>> members,
             streamed[i] = true;
         }
     }
-    dstd::Vector<dstd::Function<df::DataFrame(const ExportStats&)>> frames =
-        add_branches(*session, views, streamed);
-    dstd::Vector<df::Schema> schemas;
+    dstd::Vector<dstd::Function<dataframe::DataFrame(const ExportStats&)>>
+        frames = add_branches(*session, views, streamed);
+    dstd::Vector<dataframe::Schema> schemas;
     for (const ViewSource* v : views) schemas.push_back(v->schema());
 
     dstd::SharedFuture<void> producer =
         spawn_on_current_executor(run_open_batch(
             session, std::move(frames), std::move(schemas), channels, budgets));
-    dstd::Vector<dstd::UniquePtr<df::Cursor>> cursors;
+    dstd::Vector<dstd::UniquePtr<dataframe::Cursor>> cursors;
     cursors.reserve(views.size());
     for (std::size_t i = 0; i < views.size(); ++i)
         cursors.push_back(dstd::make_unique<StreamViewCursor>(
@@ -1151,13 +1159,13 @@ ViewSource::open_batch(dstd::Vector<dstd::SharedPtr<const df::Source>> members,
     return cursors;
 }
 
-coro::CoroTask<dstd::Vector<df::DataFrame>> ViewSource::collect_batch(
-    dstd::Vector<dstd::SharedPtr<const df::Source>> members) const {
+coro::CoroTask<dstd::Vector<dataframe::DataFrame>> ViewSource::collect_batch(
+    dstd::Vector<dstd::SharedPtr<const dataframe::Source>> members) const {
     dstd::Vector<dstd::SharedPtr<const ViewSource>> views;
     views.reserve(members.size());
     for (auto& m : members)
         views.push_back(std::static_pointer_cast<const ViewSource>(m));
-    dstd::Vector<df::Schema> schemas;
+    dstd::Vector<dataframe::Schema> schemas;
     for (const auto& v : views) schemas.push_back(v->schema());
     Batch b = co_await run_batch(std::move(views));
     for (std::size_t i = 0; i < b.frames.size(); ++i)
@@ -1177,8 +1185,9 @@ bool ViewSource::can_stream_rows() const {
     if (!detail::plan_by_path(p) && p.select.empty() &&
         (p.all_records || p.phase == Phase::Metadata))
         return false;
-    // scan::collect() always strips sort/topk/offset/limit before building a
-    // ViewSource; these checks stay as a defensive guard for any other caller.
+    // detail::scan::collect() always strips sort/topk/offset/limit before
+    // building a ViewSource; these checks stay as a defensive guard for any
+    // other caller.
     return p.sort_col.empty() && p.topk_col.empty() && p.offset == 0 &&
            p.limit == 0;
 }
@@ -1188,12 +1197,12 @@ bool ViewSource::can_stream_rows() const {
 // a scan - best-effort, may omit an arg key not yet indexed.
 dstd::Vector<dstd::String> ViewSource::row_schema() const {
     // Path-decoded records: every column is a catalog path, as written.
-    if (detail::plan_by_path(*plan_)) return scan::columns(plan_);
+    if (detail::plan_by_path(*plan_)) return detail::scan::columns(plan_);
     static const char* const TOP_LEVEL[] = {"name", "cat", "pid", "tid",
                                             "ts",   "dur", "ph"};
     dstd::Vector<dstd::String> out(std::begin(TOP_LEVEL), std::end(TOP_LEVEL));
 
-    dstd::Vector<dstd::String> cols = scan::columns(plan_);  // sorted
+    dstd::Vector<dstd::String> cols = detail::scan::columns(plan_);  // sorted
     const bool has_fhash =
         std::binary_search(cols.begin(), cols.end(), dstd::String("fhash"));
     const bool has_hhash =
@@ -1220,19 +1229,19 @@ dftracer::utils::dataframe::Schema ViewSource::schema() const {
 
 namespace {
 
-df::Schema fixed_schema(
-    std::initializer_list<dstd::Pair<const char*, df::TypeId>> cols) {
-    df::Schema s;
+dataframe::Schema fixed_schema(
+    std::initializer_list<dstd::Pair<const char*, dataframe::TypeId>> cols) {
+    dataframe::Schema s;
     for (const auto& [name, type] : cols)
-        s.fields.push_back(df::Field{name, df::scalar(type), true});
+        s.fields.push_back(
+            dataframe::Field{name, dataframe::scalar(type), true});
     return s;
 }
 
 }  // namespace
 
 dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
-    namespace df = dftracer::utils::dataframe;
-    using T = df::TypeId;
+    using T = dataframe::TypeId;
     switch (output_) {
         case TraceOutput::Events:
             break;
@@ -1256,7 +1265,7 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
         case TraceOutput::AggregatePartial:
             return fixed_schema({{"partial", T::Binary}});
         case TraceOutput::Branch:
-            return df::Schema{};
+            return dataframe::Schema{};
         case TraceOutput::ExportJson:
             return fixed_schema({{"events_matched", T::Int64},
                                  {"events_scanned", T::Int64},
@@ -1269,24 +1278,25 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
                                  {"truncated", T::Bool},
                                  {"served_from_mv", T::Bool}});
     }
-    df::Schema s;
+    dataframe::Schema s;
     if (can_stream_rows() || static_schema()) {
         // row_column_type() reports TypeId::Unknown for a flattened arg
         // column, since it is data-dependent and the function has no index
         // access; fill those in from the same harvest columns()/schema() use,
         // so name and type cannot disagree.
         const bool by_path = detail::plan_by_path(*plan_);
-        dstd::HashMap<dstd::String, df::DataType> harvested;
+        dstd::HashMap<dstd::String, dataframe::DataType> harvested;
         auto resolve = [&](dstd::StringView name) {
-            const df::TypeId id = detail::row_column_type(name, by_path);
-            if (id != df::TypeId::Unknown) return df::scalar(id);
-            if (harvested.empty()) harvested = scan::column_types(plan_);
+            const dataframe::TypeId id = detail::row_column_type(name, by_path);
+            if (id != dataframe::TypeId::Unknown) return dataframe::scalar(id);
+            if (harvested.empty())
+                harvested = detail::scan::column_types(plan_);
             dstd::StringView key = detail::window_inner(name);
             if (!by_path &&
                 key.rfind(dftracer::utils::common::ARGS_PREFIX, 0) == 0)
                 key.remove_prefix(dftracer::utils::common::ARGS_PREFIX.size());
             auto it = harvested.find(dstd::String(key));
-            return it == harvested.end() ? df::scalar(id) : it->second;
+            return it == harvested.end() ? dataframe::scalar(id) : it->second;
         };
         // A non-empty select fixes every streamed morsel's columns to exactly
         // this list (see open_stream()), so the schema must match it, not the
@@ -1299,17 +1309,18 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
             for (const dstd::String& sel : plan_->select) {
                 dstd::String col_name =
                     detail::canonical_row_column_name(sel, by_path);
-                const df::DataType type = resolve(col_name);
-                s.fields.push_back(df::Field{std::move(col_name), type, true});
+                const dataframe::DataType type = resolve(col_name);
+                s.fields.push_back(
+                    dataframe::Field{std::move(col_name), type, true});
             }
         } else {
             dstd::Vector<dstd::String> names = row_schema();
             s.fields.reserve(names.size() + plan_->named_columns.size());
             for (const dstd::String& name : names)
                 s.fields.push_back(
-                    df::Field{dstd::String(name), resolve(name), true});
-            for (const df::Field& f : plan_->named_columns) {
-                df::Field named = f;
+                    dataframe::Field{dstd::String(name), resolve(name), true});
+            for (const dataframe::Field& f : plan_->named_columns) {
+                dataframe::Field named = f;
                 named.name = detail::canonical_row_column_name(f.name, by_path);
                 if (std::find(names.begin(), names.end(),
                               dstd::StringView(named.name)) == names.end())
@@ -1323,18 +1334,18 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
     // the stream cannot serve, or a plan still carrying an output select read
     // them from the result instead.
     if (!detail::is_row_query(*plan_) && plan_->select.empty())
-        if (dstd::Optional<df::Schema> planned =
+        if (dstd::Optional<dataframe::Schema> planned =
                 detail::aggregated_output_schema(*plan_))
             return *planned;
-    const df::DataFrame& buf = *buffer();
+    const dataframe::DataFrame& buf = *buffer();
     s.fields.reserve(buf.columns.size());
     for (std::size_t i = 0; i < buf.columns.size(); ++i)
         s.fields.push_back(
-            df::Field{buf.names[i], buf.columns[i].data_type(), true});
+            dataframe::Field{buf.names[i], buf.columns[i].data_type(), true});
     return s;
 }
 
-coro::CoroTask<df::DataFrame> ViewSource::run_alone() const {
+coro::CoroTask<dataframe::DataFrame> ViewSource::run_alone() const {
     const ContainmentArgs& t = tree_;
     switch (output_) {
         case TraceOutput::Events:
@@ -1343,24 +1354,25 @@ coro::CoroTask<df::DataFrame> ViewSource::run_alone() const {
                     *plan_, distinct_key_idx_);
             break;
         case TraceOutput::CallTree:
-            co_return co_await scan::call_tree(plan_, t.partition, t.ts, t.dur,
-                                               t.name);
+            co_return co_await detail::scan::call_tree(plan_, t.partition, t.ts,
+                                                       t.dur, t.name);
         case TraceOutput::Flamegraph:
-            co_return co_await scan::flamegraph(plan_, t.partition, t.ts, t.dur,
-                                                t.name, t.group);
+            co_return co_await detail::scan::flamegraph(
+                plan_, t.partition, t.ts, t.dur, t.name, t.group);
         // Each awaited result is named first: GCC 12 destroys a temporary
         // built inside co_await twice.
         case TraceOutput::FlamegraphPartial: {
-            auto partial = co_await scan::flamegraph_partial(
+            auto partial = co_await detail::scan::flamegraph_partial(
                 plan_, t.partition, t.ts, t.dur, t.name, t.group);
             co_return detail::partial_frame(std::move(partial));
         }
         case TraceOutput::AggregatePartial: {
-            auto partial = co_await scan::aggregate_partial(plan_);
+            auto partial = co_await detail::scan::aggregate_partial(plan_);
             co_return detail::partial_frame(std::move(partial));
         }
         case TraceOutput::ExportJson: {
-            const ExportStats stats = co_await scan::export_json(plan_, *sink_);
+            const ExportStats stats =
+                co_await detail::scan::export_json(plan_, *sink_);
             sink_->flush();
             co_return detail::stats_frame(stats);
         }
@@ -1368,10 +1380,10 @@ coro::CoroTask<df::DataFrame> ViewSource::run_alone() const {
             ViewSession session = ViewSession(plan_);
             dstd::Function<void(const ExportStats&)> publish = branch_(session);
             publish(co_await session.execute());
-            co_return df::DataFrame{};
+            co_return dataframe::DataFrame{};
         }
     }
-    co_return co_await scan::collect_frame(plan_);
+    co_return co_await detail::scan::collect_frame(plan_);
 }
 
 const dftracer::utils::dataframe::DataFrame* ViewSource::as_frame() const {
@@ -1399,7 +1411,7 @@ dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     // it. Composed, never overwritten, so a caller's own cancel_when survives.
     auto stop = dstd::make_shared<std::atomic<bool>>(false);
     detail::ScanPlan scan_view =
-        scan::cancel_when(v, [stop, prev = v->cancelled] {
+        detail::scan::cancel_when(v, [stop, prev = v->cancelled] {
             return stop->load(std::memory_order_relaxed) || (prev && (*prev)());
         });
 
@@ -1423,12 +1435,12 @@ dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
            dstd::SharedPtr<dftracer::utils::dstd::StringIntern> iv,
            dstd::SharedPtr<detail::DynamicPrune> dp, bool emit_dyn,
            dstd::SharedPtr<coro::CoroSemaphore> gt) -> coro::CoroTask<void> {
-        detail::StreamRowFold fold(ch, sem, iv, vv->select, ts,
-                                   detail::metadata_rows(*vv), emit_dyn,
-                                   nullptr, nullptr, detail::plan_by_path(*vv),
-                                   gt != nullptr, scan::json_columns(*vv));
+        detail::StreamRowFold fold(
+            ch, sem, iv, vv->select, ts, detail::metadata_rows(*vv), emit_dyn,
+            nullptr, nullptr, detail::plan_by_path(*vv), gt != nullptr,
+            detail::scan::json_columns(*vv));
         std::array<detail::Fold*, 1> folds{&fold};
-        co_await scan::run_folds(vv, folds, *iv, dp.get(), gt.get());
+        co_await detail::scan::run_folds(vv, folds, *iv, dp.get(), gt.get());
     }(scan_view, time_scale, channel, budget, intern, dyn_prune, emit_dyn_,
                                                     gate);
 
@@ -1461,8 +1473,8 @@ dftracer::utils::dataframe::ScanResult ViewSource::scan(
     }
 
     // Streamable row query: translate each simple predicate into the scan
-    // plan query (Exact) and push projection into scan::select so the fold
-    // harvests only those columns.
+    // plan query (Exact) and push projection into detail::scan::select so the
+    // fold harvests only those columns.
     const dstd::Vector<dstd::String> fnames =
         trace_names(req.projection.empty() ? names() : req.projection);
     const double time_scale = plan_->time_scale;
@@ -1473,16 +1485,16 @@ dftracer::utils::dataframe::ScanResult ViewSource::scan(
         if (!pushed) continue;
         auto built = std::move(pushed->expr).build();
         if (!built.has_value()) continue;
-        v = scan::filter(v, std::move(built.value()));
+        v = detail::scan::filter(v, std::move(built.value()));
         r.filters[i] = pushed->exact
                            ? dftracer::utils::dataframe::Pushed::Exact
                            : dftracer::utils::dataframe::Pushed::Inexact;
     }
-    if (!req.projection.empty()) v = scan::select(v, fnames);
+    if (!req.projection.empty()) v = detail::scan::select(v, fnames);
     // The scan's own gate then bounds the units in flight, not the core count.
     if (req.memory_budget != 0 &&
         (v->memory_budget == 0 || req.memory_budget < v->memory_budget))
-        v = scan::memory_budget(v, req.memory_budget);
+        v = detail::scan::memory_budget(v, req.memory_budget);
 
     r.cursor = open_stream(v, req.memory_budget, fnames);
     return r;
@@ -1490,14 +1502,14 @@ dftracer::utils::dataframe::ScanResult ViewSource::scan(
 
 namespace detail {
 
-df::DataFrame partial_frame(dstd::StringView partial) {
+dataframe::DataFrame partial_frame(dstd::StringView partial) {
     const std::int32_t offsets[2] = {0,
                                      static_cast<std::int32_t>(partial.size())};
-    df::DataFrame f;
+    dataframe::DataFrame f;
     f.names = {"partial"};
-    f.columns.push_back(df::Series{
-        dftu_series_new_string(static_cast<dftu_dtype>(df::TypeId::Binary),
-                               offsets, partial.data(), 1, nullptr)});
+    f.columns.push_back(dataframe::Series{dftu_series_new_string(
+        static_cast<dftu_dtype>(dataframe::TypeId::Binary), offsets,
+        partial.data(), 1, nullptr)});
     return f;
 }
 
@@ -1505,7 +1517,8 @@ namespace {
 
 // The column `name` of a one-row terminal frame. A frame without it, or with
 // no row, did not come from that terminal.
-df::Series terminal_cell(const df::DataFrame& frame, const char* name) {
+dataframe::Series terminal_cell(const dataframe::DataFrame& frame,
+                                const char* name) {
     const std::int64_t at = frame.column_index(name);
     if (at < 0 || static_cast<std::size_t>(at) >= frame.columns.size() ||
         frame.columns[static_cast<std::size_t>(at)].length() < 1)
@@ -1518,21 +1531,22 @@ df::Series terminal_cell(const df::DataFrame& frame, const char* name) {
 
 }  // namespace
 
-dstd::String partial_of(const df::DataFrame& frame) {
+dstd::String partial_of(const dataframe::DataFrame& frame) {
     return dstd::String(terminal_cell(frame, "partial").string_at(0));
 }
 
-df::DataFrame stats_frame(const ExportStats& stats) {
-    df::DataFrame f;
+dataframe::DataFrame stats_frame(const ExportStats& stats) {
+    dataframe::DataFrame f;
     auto count = [&](const char* name, std::uint64_t v) {
         const auto x = static_cast<std::int64_t>(v);
         f.names.emplace_back(name);
-        f.columns.push_back(df::Series::flat_i64(&x, 1));
+        f.columns.push_back(dataframe::Series::flat_i64(&x, 1));
     };
     auto flag = [&](const char* name, bool v) {
         const std::uint8_t bits = v ? 1 : 0;
         f.names.emplace_back(name);
-        f.columns.push_back(df::Series::flat(df::TypeId::Bool, &bits, 1));
+        f.columns.push_back(
+            dataframe::Series::flat(dataframe::TypeId::Bool, &bits, 1));
     };
     count("events_matched", stats.events_matched);
     count("events_scanned", stats.events_scanned);
@@ -1547,7 +1561,7 @@ df::DataFrame stats_frame(const ExportStats& stats) {
     return f;
 }
 
-ExportStats stats_of(const df::DataFrame& frame) {
+ExportStats stats_of(const dataframe::DataFrame& frame) {
     auto count = [&](const char* name) {
         return static_cast<std::uint64_t>(
             terminal_cell(frame, name).data<std::int64_t>()[0]);

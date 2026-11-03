@@ -8,9 +8,6 @@
 
 namespace dftracer::utils::trace::views::detail {
 
-namespace dataframe = dftracer::utils::dataframe;
-namespace dstd = dftracer::utils::dstd;
-
 IndexRuleFold::Rules::Rules(const ViewPlan& p, AggQuery q,
                             dftracer::utils::dstd::StringIntern& read,
                             bool filter)

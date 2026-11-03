@@ -31,8 +31,6 @@
 
 namespace dftracer::utils::index::cache {
 
-namespace json = json;
-
 namespace {
 
 constexpr const char* MANIFEST_NAME = "manifest";
@@ -384,16 +382,17 @@ trace::views::ViewFile view_file(const dstd::String& file,
 // the same view root inside the index root and to its own root elsewhere.
 dstd::Vector<trace::views::ViewFile> gather_view_files(
     const dstd::String& dir) {
-    namespace dfti = trace::internal;
     dstd::Vector<trace::views::ViewFile> out;
-    const dstd::String view_idx = dfti::determine_index_path(dir, "");
+    const dstd::String view_idx =
+        trace::internal::determine_index_path(dir, "");
     const dstd::String parts = index::view_parts_dir(dir);
     for (const auto& t : view_trace_files(parts))
         out.push_back(view_file(t, view_idx));
     for (const dstd::Path& sub_path :
          list_kind(parts, dstd::fs::FileKind::Directory)) {
         const dstd::String sub(sub_path.str());
-        const dstd::String sidx = dfti::determine_index_path(sub, "");
+        const dstd::String sidx =
+            trace::internal::determine_index_path(sub, "");
         for (const auto& t : view_trace_files(sub))
             out.push_back(view_file(t, sidx));
     }

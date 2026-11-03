@@ -26,8 +26,8 @@
 #include <cstring>
 #include <mutex>
 
-namespace fileio = dftracer::utils::utilities::fileio;
-namespace compress = dftracer::utils::utilities::fileio::compress;
+using namespace dftracer::utils;
+
 using Clock = std::chrono::steady_clock;
 
 namespace {
@@ -72,11 +72,12 @@ std::uint64_t run_writer(
         appends,
     const dftracer::utils::dstd::String& path, std::size_t member, int level,
     bool comp) {
-    fileio::GzipWriterOptions o;
+    utilities::fileio::GzipWriterOptions o;
     o.member_size = member;
     o.level = level;
     o.compress = comp;
-    auto w = fileio::GzipLineWriterBlocking::open(path, std::move(o));
+    auto w =
+        utilities::fileio::GzipLineWriterBlocking::open(path, std::move(o));
     if (!w) {
         std::fprintf(stderr, "open failed\n");
         std::exit(1);
@@ -107,7 +108,7 @@ std::uint64_t run_pgzip(const dftracer::utils::dstd::String& data,
     std::uint64_t out_bytes = 0;
 
     auto worker = [&] {
-        compress::GzipMemberCompressor c(6);
+        utilities::fileio::compress::GzipMemberCompressor c(6);
         dftracer::utils::dstd::Vector<std::uint8_t> scratch;
         for (;;) {
             std::size_t i;

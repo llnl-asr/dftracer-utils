@@ -16,13 +16,7 @@
 
 namespace dftracer::utils::index {
 
-namespace decoding = store::internal::decoding;
-namespace encoding = store::internal::encoding;
-namespace layout = store::layout;
-namespace store_layout = store::store_layout;
-namespace agg = schemas::dft::agg;
-
-using layout::Ext;
+using store::layout::Ext;
 
 namespace store {
 
@@ -71,9 +65,6 @@ ColumnType seen_column_type(std::uint8_t seen) {
 
 namespace {
 
-namespace sk = layout::stats_kind;
-namespace pk = layout::path_kind;
-
 // A key is [kind][tail]. Its namespace names the extension and its scope
 // names the file.
 dstd::String kind_key(std::uint8_t kind) {
@@ -102,7 +93,7 @@ dstd::String path_prefix(std::uint8_t kind, dstd::StringView path) {
 }
 
 dstd::String path_granule_key(dstd::StringView path, std::uint64_t granule) {
-    dstd::String key = path_prefix(pk::DATA, path);
+    dstd::String key = path_prefix(store::layout::path_kind::DATA, path);
     dstd::append_u32_be(key, static_cast<std::uint32_t>(granule));
     return key;
 }
@@ -110,7 +101,7 @@ dstd::String path_granule_key(dstd::StringView path, std::uint64_t granule) {
 dstd::String agg_partial_key(std::uint64_t chunk, std::uint32_t cat_id,
                              std::uint32_t name_id, std::uint32_t host_id,
                              std::uint32_t extra_id, std::uint8_t kind) {
-    dstd::String key = granule_key(layout::agg_kind::PARTIAL, chunk);
+    dstd::String key = granule_key(store::layout::agg_kind::PARTIAL, chunk);
     dstd::append_u32_be(key, cat_id);
     dstd::append_u32_be(key, name_id);
     dstd::append_u32_be(key, host_id);
@@ -128,7 +119,7 @@ dstd::String own(dstd::StringView bytes) {
 }
 
 std::uint32_t tail_u32(dstd::StringView key, std::size_t offset) {
-    return layout::read_u32(key.substr(offset));
+    return store::layout::read_u32(key.substr(offset));
 }
 
 dstd::Unexpected<dstd::Error> parse_error(const std::exception& error) {
@@ -136,30 +127,35 @@ dstd::Unexpected<dstd::Error> parse_error(const std::exception& error) {
         dstd::Error(dstd::Condition::Parse, error.what()));
 }
 
-kv::Namespace read_ns(const kv::NamespaceSpec& spec) {
-    kv::Namespace ns;
+dftracer::utils::store::Namespace read_ns(
+    const dftracer::utils::store::NamespaceSpec& spec) {
+    dftracer::utils::store::Namespace ns;
     ns.spec = spec;
     return ns;
 }
 
-kv::Namespace read_ns(Ext ext) { return read_ns(ext_spec(ext)); }
+dftracer::utils::store::Namespace read_ns(Ext ext) {
+    return read_ns(ext_spec(ext));
+}
 
 bool ready(const Snapshot& snapshot, const FileRef& file, Ext ext) {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return false;
     return snap->copy_info(read_ns(ext), IndexAccess::scope(file)).state ==
-           kv::ScopeState::Ready;
+           dftracer::utils::store::ScopeState::Ready;
 }
 
 /// Calls fn(key, value) for each record under `prefix`. fn returns false to
 /// stop. A decoder that throws becomes a Parse error.
 template <class Fn>
 dstd::Result<void> scan_payloads(const Snapshot& snapshot, const FileRef& file,
-                                 const kv::Namespace& ns,
+                                 const dftracer::utils::store::Namespace& ns,
                                  dstd::StringView prefix, Fn&& fn) {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return {};
-    kv::Cursor cursor =
+    dftracer::utils::store::Cursor cursor =
         snap->scan(ns, IndexAccess::scope(file), dstd::ByteView(prefix));
     for (; !cursor.at_end(); cursor.next()) {
         auto value = cursor.value();
@@ -181,11 +177,12 @@ dstd::Result<void> scan_payloads(const Snapshot& snapshot, const FileRef& file,
 /// returns false to stop.
 template <class Fn>
 dstd::Result<void> scan_keys(const Snapshot& snapshot, const FileRef& file,
-                             const kv::Namespace& ns, dstd::StringView prefix,
-                             Fn&& fn) {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+                             const dftracer::utils::store::Namespace& ns,
+                             dstd::StringView prefix, Fn&& fn) {
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return {};
-    kv::Cursor cursor =
+    dftracer::utils::store::Cursor cursor =
         snap->scan(ns, IndexAccess::scope(file), dstd::ByteView(prefix));
     for (; !cursor.at_end(); cursor.next()) {
         if (!fn(as_text(cursor.key()))) break;
@@ -197,10 +194,12 @@ dstd::Result<void> scan_keys(const Snapshot& snapshot, const FileRef& file,
 /// fn(value) of the record at `key`. Empty when the key is absent.
 template <class Fn>
 auto get_decoded(const Snapshot& snapshot, const FileRef& file,
-                 const kv::Namespace& ns, const dstd::String& key, Fn&& fn)
+                 const dftracer::utils::store::Namespace& ns,
+                 const dstd::String& key, Fn&& fn)
     -> dstd::Result<dstd::Optional<decltype(fn(dstd::StringView{}))>> {
     using Out = decltype(fn(dstd::StringView{}));
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return dstd::Optional<Out>{};
     auto found = snap->get(ns, IndexAccess::scope(file), dstd::ByteView(key));
     if (!found) return dstd::Unexpected<dstd::Error>(found.error());
@@ -222,12 +221,12 @@ dstd::Result<dstd::Optional<dstd::String>> get_string(const Snapshot& snapshot,
 
 /// The highest format version of each plugin namespace the store declares.
 dstd::Result<dstd::Map<dstd::String, std::uint32_t>> plugin_versions(
-    const kv::Snapshot& snap) {
-    const dstd::StringView prefix(store_layout::PLUGIN_NAMESPACE_PREFIX);
+    const dftracer::utils::store::Snapshot& snap) {
+    const dstd::StringView prefix(store::store_layout::PLUGIN_NAMESPACE_PREFIX);
     auto declared = snap.namespaces();
     if (!declared) return dstd::Unexpected<dstd::Error>(declared.error());
     dstd::Map<dstd::String, std::uint32_t> versions;
-    for (const kv::NamespaceDecl& entry : *declared) {
+    for (const dftracer::utils::store::NamespaceDecl& entry : *declared) {
         const dstd::StringView name(entry.name.data(), entry.name.size());
         if (!name.starts_with(prefix)) continue;
         std::uint32_t& known =
@@ -238,20 +237,26 @@ dstd::Result<dstd::Map<dstd::String, std::uint32_t>> plugin_versions(
 }
 
 /// The plugin namespace the file holds a copy of. Nullopt when it holds none.
-dstd::Result<dstd::Optional<kv::Namespace>> plugin_namespace(
-    const Snapshot& snapshot, const FileRef& file, dstd::StringView name) {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
-    if (snap == nullptr) return dstd::Optional<kv::Namespace>{};
+dstd::Result<dstd::Optional<dftracer::utils::store::Namespace>>
+plugin_namespace(const Snapshot& snapshot, const FileRef& file,
+                 dstd::StringView name) {
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
+    if (snap == nullptr)
+        return dstd::Optional<dftracer::utils::store::Namespace>{};
     auto versions = plugin_versions(*snap);
     if (!versions) return dstd::Unexpected<dstd::Error>(versions.error());
     const auto known = versions->find(dstd::String(name));
-    if (known == versions->end()) return dstd::Optional<kv::Namespace>{};
-    const kv::Namespace ns = read_ns(plugin_spec(name, known->second));
-    const kv::CopyInfo info = snap->copy_info(ns, IndexAccess::scope(file));
-    if (info.state != kv::ScopeState::Ready &&
-        info.state != kv::ScopeState::Failed)
-        return dstd::Optional<kv::Namespace>{};
-    return dstd::Optional<kv::Namespace>(ns);
+    if (known == versions->end())
+        return dstd::Optional<dftracer::utils::store::Namespace>{};
+    const dftracer::utils::store::Namespace ns =
+        read_ns(plugin_spec(name, known->second));
+    const dftracer::utils::store::CopyInfo info =
+        snap->copy_info(ns, IndexAccess::scope(file));
+    if (info.state != dftracer::utils::store::ScopeState::Ready &&
+        info.state != dftracer::utils::store::ScopeState::Failed)
+        return dstd::Optional<dftracer::utils::store::Namespace>{};
+    return dstd::Optional<dftracer::utils::store::Namespace>(ns);
 }
 
 void put_value(FileBuild& build, Ext ext, const dstd::String& key,
@@ -275,9 +280,9 @@ constexpr std::uint32_t AGG_META_VERSION = 0;
 
 bool builtin_ext(Ext ext) { return ext != Ext::Plugin; }
 
-kv::NamespaceSpec agg_meta_spec(dstd::StringView name) {
-    kv::NamespaceSpec spec;
-    const dstd::String full = store_layout::agg_meta_namespace_name(
+dftracer::utils::store::NamespaceSpec agg_meta_spec(dstd::StringView name) {
+    dftracer::utils::store::NamespaceSpec spec;
+    const dstd::String full = store::store_layout::agg_meta_namespace_name(
         dstd::StringView(name.data(), name.size()));
     spec.name.assign(full.data(), full.size());
     spec.format_version = AGG_META_VERSION;
@@ -289,10 +294,11 @@ dstd::Result<void> invalid_result(dstd::StringView message) {
         dstd::Error(dstd::Condition::InvalidArgument, message));
 }
 
-dstd::Expected<agg::ChunkColumns, dstd::Error> decode_block(
+dstd::Expected<schemas::dft::agg::ChunkColumns, dstd::Error> decode_block(
     dstd::StringView body) {
-    auto block = agg::decode_chunk_columns(dstd::Span<const std::uint8_t>(
-        reinterpret_cast<const std::uint8_t*>(body.data()), body.size()));
+    auto block =
+        schemas::dft::agg::decode_chunk_columns(dstd::Span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(body.data()), body.size()));
     if (!block)
         return dstd::Unexpected<dstd::Error>(dstd::Error(
             dstd::Condition::Parse, "chunk columns: malformed record"));
@@ -301,7 +307,7 @@ dstd::Expected<agg::ChunkColumns, dstd::Error> decode_block(
 
 /// An id the file holds no entry for gets the empty text.
 void fill_texts(const dstd::HashMap<std::uint32_t, dstd::String>& texts,
-                agg::ChunkColumns& block) {
+                schemas::dft::agg::ChunkColumns& block) {
     block.texts.resize(block.ids.size());
     for (std::size_t i = 0; i < block.ids.size(); ++i) {
         const auto at = texts.find(block.ids[i]);
@@ -312,17 +318,17 @@ void fill_texts(const dstd::HashMap<std::uint32_t, dstd::String>& texts,
 }  // namespace
 
 dftracer::utils::store::NamespaceSpec ext_spec(store::IndexExtension ext) {
-    kv::NamespaceSpec spec;
-    const dstd::String name = store_layout::namespace_name(ext);
+    dftracer::utils::store::NamespaceSpec spec;
+    const dstd::String name = store::store_layout::namespace_name(ext);
     spec.name.assign(name.data(), name.size());
-    spec.format_version = layout::ext_version(ext);
+    spec.format_version = store::layout::ext_version(ext);
     return spec;
 }
 
 dftracer::utils::store::NamespaceSpec plugin_spec(dstd::StringView name,
                                                   std::uint32_t version) {
-    kv::NamespaceSpec spec;
-    const dstd::String full = store_layout::plugin_namespace_name(name);
+    dftracer::utils::store::NamespaceSpec spec;
+    const dstd::String full = store::store_layout::plugin_namespace_name(name);
     spec.name.assign(full.data(), full.size());
     spec.format_version = version;
     return spec;
@@ -334,9 +340,10 @@ dstd::Result<dstd::Vector<gzip::GzipMemberRecord>> members(
     if (!ready(snapshot, file, Ext::Members)) return out;
     auto scanned = scan_payloads(
         snapshot, file, read_ns(Ext::Members),
-        kind_key(layout::members::MEMBER),
+        kind_key(store::layout::members::MEMBER),
         [&](dstd::StringView key, dstd::StringView body) {
-            out.push_back(decoding::decode_gzip_member(tail_u32(key, 1), body));
+            out.push_back(store::internal::decoding::decode_gzip_member(
+                tail_u32(key, 1), body));
             return true;
         });
     if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
@@ -359,26 +366,29 @@ dstd::Result<dstd::Vector<gzip::ChunkSpan>> spans(const Snapshot& snapshot,
 dstd::Result<dstd::Optional<dstd::String>> restart_window(
     const Snapshot& snapshot, const FileRef& file, std::uint64_t member_idx) {
     return get_string(snapshot, file, Ext::Members,
-                      granule_key(layout::members::RESTART, member_idx));
+                      granule_key(store::layout::members::RESTART, member_idx));
 }
 
 dstd::Result<dstd::Optional<store::FileMetadataResult>> file_metadata(
     const Snapshot& snapshot, const FileRef& file) {
-    return get_decoded(snapshot, file, read_ns(Ext::Members),
-                       file_key(layout::members::METADATA),
-                       [](dstd::StringView body) {
-                           return decoding::decode_metadata_record(body);
-                       });
+    return get_decoded(
+        snapshot, file, read_ns(Ext::Members),
+        file_key(store::layout::members::METADATA), [](dstd::StringView body) {
+            return store::internal::decoding::decode_metadata_record(body);
+        });
 }
 
 dstd::Result<dstd::Vector<schemas::dft::ChunkStatisticsResult>> chunk_stats(
     const Snapshot& snapshot, const FileRef& file) {
     dstd::Vector<schemas::dft::ChunkStatisticsResult> out;
     auto scanned = scan_payloads(
-        snapshot, file, read_ns(Ext::Stats), kind_key(sk::CHUNK_STATS),
+        snapshot, file, read_ns(Ext::Stats),
+        kind_key(store::layout::stats_kind::CHUNK_STATS),
         [&](dstd::StringView key, dstd::StringView body) {
-            out.push_back({tail_u32(key, 1),
-                           decoding::decode_chunk_statistics_value(body)});
+            out.push_back(
+                {tail_u32(key, 1),
+                 store::internal::decoding::decode_chunk_statistics_value(
+                     body)});
             return true;
         });
     if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
@@ -388,7 +398,8 @@ dstd::Result<dstd::Vector<schemas::dft::ChunkStatisticsResult>> chunk_stats(
 dstd::Result<dstd::Optional<schemas::dft::MergedStatisticsResult>> scalar_stats(
     const Snapshot& snapshot, const FileRef& file) {
     return get_decoded(
-        snapshot, file, read_ns(Ext::Stats), file_key(sk::FILE_SCALAR_STATS),
+        snapshot, file, read_ns(Ext::Stats),
+        file_key(store::layout::stats_kind::FILE_SCALAR_STATS),
         [](dstd::StringView body) {
             return store::internal::decode_file_scalar_stats_value(body);
         });
@@ -396,11 +407,12 @@ dstd::Result<dstd::Optional<schemas::dft::MergedStatisticsResult>> scalar_stats(
 
 dstd::Result<dstd::Optional<dstd::StringViewMap<std::uint64_t>>> pid_tid_counts(
     const Snapshot& snapshot, const FileRef& file) {
-    return get_decoded(snapshot, file, read_ns(Ext::Stats),
-                       file_key(sk::FILE_PID_TID_COUNTS),
-                       [](dstd::StringView body) {
-                           return decoding::decode_count_map_value(body);
-                       });
+    return get_decoded(
+        snapshot, file, read_ns(Ext::Stats),
+        file_key(store::layout::stats_kind::FILE_PID_TID_COUNTS),
+        [](dstd::StringView body) {
+            return store::internal::decoding::decode_count_map_value(body);
+        });
 }
 
 dstd::Result<dstd::Optional<dstd::HashMap<std::uint64_t, store::ChunkMetadata>>>
@@ -410,9 +422,9 @@ chunk_meta(const Snapshot& snapshot, const FileRef& file) {
     Map out;
     auto scanned = scan_payloads(
         snapshot, file, read_ns(Ext::Metadata),
-        kind_key(layout::metadata_kind::CHUNK),
+        kind_key(store::layout::metadata_kind::CHUNK),
         [&](dstd::StringView key, dstd::StringView body) {
-            if (auto metadata = layout::decode_chunk_metadata(body))
+            if (auto metadata = store::layout::decode_chunk_metadata(body))
                 out.emplace(tail_u32(key, 1), std::move(*metadata));
             return true;
         });
@@ -425,9 +437,9 @@ dstd::Result<dstd::Vector<dstd::Pair<dstd::String, store::PathStat>>> catalog(
     dstd::Vector<dstd::Pair<dstd::String, store::PathStat>> out;
     auto scanned =
         scan_payloads(snapshot, file, read_ns(Ext::Catalog),
-                      kind_key(layout::catalog_kind::PATH),
+                      kind_key(store::layout::catalog_kind::PATH),
                       [&](dstd::StringView key, dstd::StringView body) {
-                          if (auto stat = layout::decode_path_stat(body))
+                          if (auto stat = store::layout::decode_path_stat(body))
                               out.emplace_back(own(key.substr(1)), *stat);
                           return true;
                       });
@@ -440,7 +452,7 @@ dstd::Result<dstd::Optional<dstd::String>> schema(const Snapshot& snapshot,
     if (!ready(snapshot, file, Ext::Profile))
         return dstd::Optional<dstd::String>{};
     return get_string(snapshot, file, Ext::Profile,
-                      file_key(layout::profile_kind::ID));
+                      file_key(store::layout::profile_kind::ID));
 }
 
 dstd::Result<dstd::Optional<dstd::String>> rowset(const Snapshot& snapshot,
@@ -449,7 +461,7 @@ dstd::Result<dstd::Optional<dstd::String>> rowset(const Snapshot& snapshot,
     if (!ready(snapshot, file, Ext::Rowset))
         return dstd::Optional<dstd::String>{};
     return get_string(snapshot, file, Ext::Rowset,
-                      path_prefix(layout::rowset_kind::FRAME, name));
+                      path_prefix(store::layout::rowset_kind::FRAME, name));
 }
 
 dstd::Result<dstd::Vector<dstd::String>> paths(const Snapshot& snapshot,
@@ -457,7 +469,8 @@ dstd::Result<dstd::Vector<dstd::String>> paths(const Snapshot& snapshot,
                                                store::IndexExtension ext) {
     dstd::Vector<dstd::String> out;
     if (ext == Ext::Plugin) return out;
-    auto scanned = scan_keys(snapshot, file, read_ns(ext), kind_key(pk::PATHS),
+    auto scanned = scan_keys(snapshot, file, read_ns(ext),
+                             kind_key(store::layout::path_kind::PATHS),
                              [&](dstd::StringView key) {
                                  out.push_back(own(key.substr(1)));
                                  return true;
@@ -472,7 +485,8 @@ dstd::Result<GranuleList> granules(const Snapshot& snapshot,
                                    dstd::StringView path) {
     GranuleList out;
     if (ext == Ext::Plugin) return out;
-    const dstd::String prefix = path_prefix(pk::DATA, path);
+    const dstd::String prefix =
+        path_prefix(store::layout::path_kind::DATA, path);
     auto scanned = scan_payloads(
         snapshot, file, read_ns(ext), prefix,
         [&](dstd::StringView key, dstd::StringView body) {
@@ -489,7 +503,8 @@ dstd::Result<dstd::Optional<dstd::String>> path_file(const Snapshot& snapshot,
                                                      store::IndexExtension ext,
                                                      dstd::StringView path) {
     if (ext == Ext::Plugin) return dstd::Optional<dstd::String>{};
-    return get_string(snapshot, file, ext, file_key(pk::FILE, path));
+    return get_string(snapshot, file, ext,
+                      file_key(store::layout::path_kind::FILE, path));
 }
 
 dstd::Result<bool> has_postings(const Snapshot& snapshot, const FileRef& file,
@@ -497,7 +512,8 @@ dstd::Result<bool> has_postings(const Snapshot& snapshot, const FileRef& file,
     bool found = false;
     auto scanned =
         scan_keys(snapshot, file, read_ns(Ext::Postings),
-                  path_prefix(pk::IN_FILE, path), [&](dstd::StringView) {
+                  path_prefix(store::layout::path_kind::IN_FILE, path),
+                  [&](dstd::StringView) {
                       found = true;
                       return false;
                   });
@@ -508,9 +524,10 @@ dstd::Result<bool> has_postings(const Snapshot& snapshot, const FileRef& file,
 dstd::Result<bool> has_posting(const Snapshot& snapshot, const FileRef& file,
                                dstd::StringView path,
                                std::uint64_t value_hash) {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return false;
-    dstd::String key = path_prefix(pk::IN_FILE, path);
+    dstd::String key = path_prefix(store::layout::path_kind::IN_FILE, path);
     dstd::append_u64_be(key, value_hash);
     auto found = snap->get(read_ns(Ext::Postings), IndexAccess::scope(file),
                            dstd::ByteView(key));
@@ -522,7 +539,8 @@ dstd::Result<dstd::Vector<std::uint64_t>> posting_granules(
     const Snapshot& snapshot, const FileRef& file, dstd::StringView path,
     std::uint64_t value_hash) {
     dstd::Vector<std::uint64_t> out;
-    dstd::String prefix = path_prefix(pk::IN_GRANULE, path);
+    dstd::String prefix =
+        path_prefix(store::layout::path_kind::IN_GRANULE, path);
     dstd::append_u64_be(prefix, value_hash);
     auto scanned =
         scan_keys(snapshot, file, read_ns(Ext::Postings), prefix,
@@ -538,18 +556,20 @@ dstd::Result<dstd::Vector<std::uint64_t>> posting_granules(
 dstd::Result<dstd::Vector<PluginCopy>> plugins(const Snapshot& snapshot,
                                                const FileRef& file) {
     dstd::Vector<PluginCopy> out;
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return out;
     auto versions = plugin_versions(*snap);
     if (!versions) return dstd::Unexpected<dstd::Error>(versions.error());
     for (const auto& [name, version] : *versions) {
-        const kv::CopyInfo info = snap->copy_info(
+        const dftracer::utils::store::CopyInfo info = snap->copy_info(
             read_ns(plugin_spec(name, version)), IndexAccess::scope(file));
-        if (info.state != kv::ScopeState::Ready &&
-            info.state != kv::ScopeState::Failed)
+        if (info.state != dftracer::utils::store::ScopeState::Ready &&
+            info.state != dftracer::utils::store::ScopeState::Failed)
             continue;
-        out.push_back({own(name), version, info.params_hash,
-                       info.state == kv::ScopeState::Ready});
+        out.push_back(
+            {own(name), version, info.params_hash,
+             info.state == dftracer::utils::store::ScopeState::Ready});
     }
     return out;
 }
@@ -572,7 +592,8 @@ dstd::Result<dstd::Optional<GranuleList>> plugin_granules(
     if (!ns) return dstd::Unexpected<dstd::Error>(ns.error());
     if (!*ns) return dstd::Optional<GranuleList>{};
     GranuleList out;
-    const dstd::String prefix = path_prefix(pk::DATA, name);
+    const dstd::String prefix =
+        path_prefix(store::layout::path_kind::DATA, name);
     auto scanned = scan_payloads(
         snapshot, file, **ns, prefix,
         [&](dstd::StringView key, dstd::StringView body) {
@@ -590,7 +611,8 @@ dstd::Result<dstd::Optional<dstd::String>> plugin_file(const Snapshot& snapshot,
     auto ns = plugin_namespace(snapshot, file, name);
     if (!ns) return dstd::Unexpected<dstd::Error>(ns.error());
     if (!*ns) return dstd::Optional<dstd::String>{};
-    return get_decoded(snapshot, file, **ns, file_key(pk::FILE, name),
+    return get_decoded(snapshot, file, **ns,
+                       file_key(store::layout::path_kind::FILE, name),
                        [](dstd::StringView body) { return own(body); });
 }
 
@@ -600,7 +622,7 @@ dstd::Result<void> for_each_agg_partial(const Snapshot& snapshot,
     constexpr std::size_t RECORD_BYTES =
         5 * sizeof(std::uint32_t) + sizeof(std::uint8_t);
     dstd::Optional<dstd::Error> failed;
-    const dstd::String prefix = kind_key(layout::agg_kind::PARTIAL);
+    const dstd::String prefix = kind_key(store::layout::agg_kind::PARTIAL);
     auto scanned = scan_payloads(
         snapshot, file, read_ns(Ext::Agg), prefix,
         [&](dstd::StringView key, dstd::StringView body) {
@@ -611,8 +633,8 @@ dstd::Result<void> for_each_agg_partial(const Snapshot& snapshot,
                 return false;
             }
             const auto kind = static_cast<std::uint8_t>(tail[RECORD_BYTES - 1]);
-            if (kind >
-                static_cast<std::uint8_t>(agg::PartialKind::Aggregated)) {
+            if (kind > static_cast<std::uint8_t>(
+                           schemas::dft::agg::PartialKind::Aggregated)) {
                 failed = dstd::Error(dstd::Condition::Parse,
                                      "aggregation partial: unknown kind");
                 return false;
@@ -622,7 +644,7 @@ dstd::Result<void> for_each_agg_partial(const Snapshot& snapshot,
                 body.size());
             return fn(tail_u32(tail, 0), tail_u32(tail, 4), tail_u32(tail, 8),
                       tail_u32(tail, 12), tail_u32(tail, 16),
-                      static_cast<agg::PartialKind>(kind), bytes);
+                      static_cast<schemas::dft::agg::PartialKind>(kind), bytes);
         });
     if (failed) return dstd::Unexpected<dstd::Error>(*failed);
     if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
@@ -634,7 +656,7 @@ dstd::Result<void> for_each_agg_chunk_columns(const Snapshot& snapshot,
                                               const AggChunkColumnsFn& fn) {
     constexpr std::size_t RECORD_BYTES = sizeof(std::uint32_t);
     dstd::Optional<dstd::Error> failed;
-    const dstd::String prefix = kind_key(layout::agg_kind::COLUMNS);
+    const dstd::String prefix = kind_key(store::layout::agg_kind::COLUMNS);
     dstd::HashMap<std::uint32_t, dstd::String> texts;
     bool texts_read = false;
     auto scanned = scan_payloads(
@@ -667,15 +689,18 @@ dstd::Result<void> for_each_agg_chunk_columns(const Snapshot& snapshot,
     return {};
 }
 
-dstd::Result<dstd::Optional<agg::ChunkColumns>> agg_chunk_columns(
+dstd::Result<dstd::Optional<schemas::dft::agg::ChunkColumns>> agg_chunk_columns(
     const Snapshot& snapshot, const FileRef& file, std::uint64_t chunk) {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
-    if (snap == nullptr) return dstd::Optional<agg::ChunkColumns>{};
-    const dstd::String key = granule_key(layout::agg_kind::COLUMNS, chunk);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
+    if (snap == nullptr)
+        return dstd::Optional<schemas::dft::agg::ChunkColumns>{};
+    const dstd::String key =
+        granule_key(store::layout::agg_kind::COLUMNS, chunk);
     auto found = snap->get(read_ns(Ext::Agg), IndexAccess::scope(file),
                            dstd::ByteView(key));
     if (!found) return dstd::Unexpected<dstd::Error>(found.error());
-    if (!*found) return dstd::Optional<agg::ChunkColumns>{};
+    if (!*found) return dstd::Optional<schemas::dft::agg::ChunkColumns>{};
     auto block = decode_block(as_text((*found)->bytes()));
     if (!block) return dstd::Unexpected<dstd::Error>(block.error());
     block->chunk = chunk;
@@ -683,14 +708,14 @@ dstd::Result<dstd::Optional<agg::ChunkColumns>> agg_chunk_columns(
     auto loaded = agg_file_texts(snapshot, file, texts);
     if (!loaded) return dstd::Unexpected<dstd::Error>(loaded.error());
     fill_texts(texts, *block);
-    return dstd::Optional<agg::ChunkColumns>(std::move(*block));
+    return dstd::Optional<schemas::dft::agg::ChunkColumns>(std::move(*block));
 }
 
 dstd::Result<void> agg_file_texts(
     const Snapshot& snapshot, const FileRef& file,
     dstd::HashMap<std::uint32_t, dstd::String>& texts) {
     dstd::Optional<dstd::Error> failed;
-    const dstd::String prefix = kind_key(layout::agg_kind::DICT);
+    const dstd::String prefix = kind_key(store::layout::agg_kind::DICT);
     auto scanned = scan_payloads(
         snapshot, file, read_ns(Ext::Agg), prefix,
         [&](dstd::StringView key, dstd::StringView text) {
@@ -708,13 +733,14 @@ dstd::Result<void> agg_file_texts(
 }
 
 dstd::Result<void> agg_dictionary(const Snapshot& snapshot,
-                                  agg::AggInternTable& table) {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+                                  schemas::dft::agg::AggInternTable& table) {
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return {};
-    const dstd::String begin = kind_key(layout::agg_kind::DICT);
-    const dstd::String end = layout::prefix_end(begin);
-    kv::Cursor cursor = snap->scan_all(read_ns(Ext::Agg), dstd::ByteView(begin),
-                                       dstd::ByteView(end));
+    const dstd::String begin = kind_key(store::layout::agg_kind::DICT);
+    const dstd::String end = store::layout::prefix_end(begin);
+    dftracer::utils::store::Cursor cursor = snap->scan_all(
+        read_ns(Ext::Agg), dstd::ByteView(begin), dstd::ByteView(end));
     dstd::Optional<dstd::Error> failed;
     for (; !cursor.at_end(); cursor.next()) {
         auto value = cursor.value();
@@ -743,11 +769,14 @@ dstd::Result<void> agg_dictionary(const Snapshot& snapshot,
 
 dstd::Result<dstd::Optional<dstd::String>> agg_meta(const Snapshot& snapshot,
                                                     dstd::StringView name) {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return dstd::Optional<dstd::String>{};
-    const dstd::String key = file_key(
-        layout::agg_kind::META, dstd::StringView(name.data(), name.size()));
-    auto found = snap->get(read_ns(agg_meta_spec(name)), kv::ScopeKey::root(),
+    const dstd::String key =
+        file_key(store::layout::agg_kind::META,
+                 dstd::StringView(name.data(), name.size()));
+    auto found = snap->get(read_ns(agg_meta_spec(name)),
+                           dftracer::utils::store::ScopeKey::root(),
                            dstd::ByteView(key));
     if (!found) return dstd::Unexpected<dstd::Error>(found.error());
     if (!*found) return dstd::Optional<dstd::String>{};
@@ -756,9 +785,10 @@ dstd::Result<dstd::Optional<dstd::String>> agg_meta(const Snapshot& snapshot,
 
 dstd::Optional<std::uint64_t> file_hash(const Snapshot& snapshot,
                                         const FileRef& file) {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return dstd::Optional<std::uint64_t>{};
-    const kv::CopyInfo info =
+    const dftracer::utils::store::CopyInfo info =
         snap->copy_info(read_ns(Ext::Members), IndexAccess::scope(file));
     if (info.sources.empty()) return dstd::Optional<std::uint64_t>{};
     return dstd::Optional<std::uint64_t>(info.sources[0].hash);
@@ -767,16 +797,17 @@ dstd::Optional<std::uint64_t> file_hash(const Snapshot& snapshot,
 dstd::Optional<store::ExtensionState> extension_state(
     const Snapshot& snapshot, const FileRef& file, store::IndexExtension ext) {
     if (!builtin_ext(ext)) return dstd::Optional<store::ExtensionState>{};
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return dstd::Optional<store::ExtensionState>{};
-    const kv::CopyInfo info =
+    const dftracer::utils::store::CopyInfo info =
         snap->copy_info(read_ns(ext), IndexAccess::scope(file));
-    if (info.state != kv::ScopeState::Ready &&
-        info.state != kv::ScopeState::Failed)
+    if (info.state != dftracer::utils::store::ScopeState::Ready &&
+        info.state != dftracer::utils::store::ScopeState::Failed)
         return dstd::Optional<store::ExtensionState>{};
-    return dstd::Optional<store::ExtensionState>(
-        store::ExtensionState{layout::ext_version(ext), info.params_hash,
-                              info.state == kv::ScopeState::Ready});
+    return dstd::Optional<store::ExtensionState>(store::ExtensionState{
+        store::layout::ext_version(ext), info.params_hash,
+        info.state == dftracer::utils::store::ScopeState::Ready});
 }
 
 bool extension_current(const Snapshot& snapshot, const FileRef& file,
@@ -801,72 +832,78 @@ file_column_types(const Snapshot& snapshot, const FileRef& file) {
 void put_file_metadata(FileBuild& build, std::uint64_t checkpoint_size,
                        std::uint64_t total_lines, std::uint64_t total_uc_size,
                        bool truncated) {
-    put_value(build, Ext::Members, file_key(layout::members::METADATA),
-              encoding::encode_metadata_record(
+    put_value(build, Ext::Members, file_key(store::layout::members::METADATA),
+              store::internal::encoding::encode_metadata_record(
                   checkpoint_size, total_lines, total_uc_size,
-                  truncated ? encoding::METADATA_FLAG_TRUNCATED : 0));
+                  truncated ? store::internal::encoding::METADATA_FLAG_TRUNCATED
+                            : 0));
 }
 
 void put_gzip_member(FileBuild& build, const gzip::GzipMemberRecord& member) {
     put_value(build, Ext::Members,
-              granule_key(layout::members::MEMBER, member.member_idx),
-              encoding::encode_gzip_member_value(member));
+              granule_key(store::layout::members::MEMBER, member.member_idx),
+              store::internal::encoding::encode_gzip_member_value(member));
 }
 
 void put_restart_window(FileBuild& build, std::uint64_t member_idx,
                         dstd::StringView window) {
     put_value(build, Ext::Members,
-              granule_key(layout::members::RESTART, member_idx), window);
+              granule_key(store::layout::members::RESTART, member_idx), window);
 }
 
 void put_chunk_statistics(FileBuild& build, std::uint64_t checkpoint_idx,
                           const schemas::dft::ChunkStatistics& stats) {
-    put_value(build, Ext::Stats, granule_key(sk::CHUNK_STATS, checkpoint_idx),
-              encoding::encode_chunk_statistics_value(stats));
+    put_value(
+        build, Ext::Stats,
+        granule_key(store::layout::stats_kind::CHUNK_STATS, checkpoint_idx),
+        store::internal::encoding::encode_chunk_statistics_value(stats));
 }
 
 void put_chunk_metadata(FileBuild& build, std::uint64_t checkpoint_idx,
                         const store::ChunkMetadata& metadata) {
     put_value(build, Ext::Metadata,
-              granule_key(layout::metadata_kind::CHUNK, checkpoint_idx),
-              layout::encode_chunk_metadata(metadata));
+              granule_key(store::layout::metadata_kind::CHUNK, checkpoint_idx),
+              store::layout::encode_chunk_metadata(metadata));
 }
 
 void put_file_scalar_stats(FileBuild& build,
                            const schemas::dft::ChunkStatistics& stats,
                            std::uint64_t num_chunks) {
     put_value(
-        build, Ext::Stats, file_key(sk::FILE_SCALAR_STATS),
+        build, Ext::Stats,
+        file_key(store::layout::stats_kind::FILE_SCALAR_STATS),
         store::internal::encode_file_scalar_stats_value(stats, num_chunks));
 }
 
 void put_file_pid_tid_counts(FileBuild& build,
                              const dstd::StringViewMap<std::uint64_t>& counts) {
-    put_value(build, Ext::Stats, file_key(sk::FILE_PID_TID_COUNTS),
-              encoding::encode_count_map_value(counts));
+    put_value(build, Ext::Stats,
+              file_key(store::layout::stats_kind::FILE_PID_TID_COUNTS),
+              store::internal::encoding::encode_count_map_value(counts));
 }
 
 void put_profile(FileBuild& build, dstd::StringView profile_id) {
-    put_value(build, Ext::Profile, file_key(layout::profile_kind::ID),
+    put_value(build, Ext::Profile, file_key(store::layout::profile_kind::ID),
               profile_id);
 }
 
 void put_catalog_path(FileBuild& build, dstd::StringView path,
                       const store::PathStat& stat) {
-    put_value(build, Ext::Catalog, file_key(layout::catalog_kind::PATH, path),
-              layout::encode_path_stat(stat));
+    put_value(build, Ext::Catalog,
+              file_key(store::layout::catalog_kind::PATH, path),
+              store::layout::encode_path_stat(stat));
 }
 
 void put_rowset(FileBuild& build, dstd::StringView name,
                 dstd::StringView frame) {
-    put_value(build, Ext::Rowset, path_prefix(layout::rowset_kind::FRAME, name),
-              frame);
+    put_value(build, Ext::Rowset,
+              path_prefix(store::layout::rowset_kind::FRAME, name), frame);
 }
 
 void put_path(FileBuild& build, store::IndexExtension ext,
               dstd::StringView path) {
     if (!builtin(build, ext)) return;
-    put_bare(build, ext, file_key(pk::PATHS, path));
+    put_bare(build, ext, file_key(store::layout::path_kind::PATHS, path));
 }
 
 void put_path_granule(FileBuild& build, store::IndexExtension ext,
@@ -879,7 +916,7 @@ void put_path_granule(FileBuild& build, store::IndexExtension ext,
 void erase_path(FileBuild& build, store::IndexExtension ext,
                 dstd::StringView path) {
     if (!builtin(build, ext)) return;
-    const kv::NamespaceSpec& spec = ext_spec(ext);
+    const dftracer::utils::store::NamespaceSpec& spec = ext_spec(ext);
     // A key is NUL free, so one NUL past it bounds exactly that key.
     const auto erase_key = [&](dstd::String key) {
         dstd::String end = key;
@@ -887,29 +924,30 @@ void erase_path(FileBuild& build, store::IndexExtension ext,
         IndexAccess::erase(build, spec, dstd::ByteView(key),
                            dstd::ByteView(end));
     };
-    erase_key(file_key(pk::PATHS, path));
-    erase_key(file_key(pk::FILE, path));
-    const dstd::String data = path_prefix(pk::DATA, path);
-    const dstd::String end = layout::prefix_end(data);
+    erase_key(file_key(store::layout::path_kind::PATHS, path));
+    erase_key(file_key(store::layout::path_kind::FILE, path));
+    const dstd::String data = path_prefix(store::layout::path_kind::DATA, path);
+    const dstd::String end = store::layout::prefix_end(data);
     IndexAccess::erase(build, spec, dstd::ByteView(data), dstd::ByteView(end));
 }
 
 void put_path_file(FileBuild& build, store::IndexExtension ext,
                    dstd::StringView path, dstd::StringView payload) {
     if (!builtin(build, ext)) return;
-    put_value(build, ext, file_key(pk::FILE, path), payload);
+    put_value(build, ext, file_key(store::layout::path_kind::FILE, path),
+              payload);
 }
 
 void put_posting(FileBuild& build, dstd::StringView path,
                  std::uint64_t value_hash) {
-    dstd::String key = path_prefix(pk::IN_FILE, path);
+    dstd::String key = path_prefix(store::layout::path_kind::IN_FILE, path);
     dstd::append_u64_be(key, value_hash);
     put_bare(build, Ext::Postings, key);
 }
 
 void put_posting_granule(FileBuild& build, dstd::StringView path,
                          std::uint64_t value_hash, std::uint64_t granule) {
-    dstd::String key = path_prefix(pk::IN_GRANULE, path);
+    dstd::String key = path_prefix(store::layout::path_kind::IN_GRANULE, path);
     dstd::append_u64_be(key, value_hash);
     dstd::append_u32_be(key, static_cast<std::uint32_t>(granule));
     put_bare(build, Ext::Postings, key);
@@ -936,20 +974,21 @@ void put_agg_partial_value(FileBuild& build, std::uint64_t chunk,
 
 void put_agg_chunk_columns_value(FileBuild& build, std::uint64_t chunk,
                                  dstd::StringView value) {
-    const dstd::String key = granule_key(layout::agg_kind::COLUMNS, chunk);
+    const dstd::String key =
+        granule_key(store::layout::agg_kind::COLUMNS, chunk);
     IndexAccess::put(build, Ext::Agg, dstd::ByteView(key),
                      dstd::ByteView(value.data(), value.size()));
 }
 
 void put_agg_chunk_columns(FileBuild& build, std::uint64_t chunk,
                            dstd::StringView payload) {
-    put_value(build, Ext::Agg, granule_key(layout::agg_kind::COLUMNS, chunk),
-              payload);
+    put_value(build, Ext::Agg,
+              granule_key(store::layout::agg_kind::COLUMNS, chunk), payload);
 }
 
 void put_agg_dictionary_entry(FileBuild& build, std::uint32_t id,
                               dstd::StringView text) {
-    dstd::String key = file_key(layout::agg_kind::DICT);
+    dstd::String key = file_key(store::layout::agg_kind::DICT);
     dstd::append_u32_be(key, id);
     put_value(build, Ext::Agg, key, text);
 }
@@ -960,8 +999,9 @@ template <class Granules, class File>
 void write_plugin(FileBuild& build, dstd::StringView name,
                   std::uint32_t version, std::uint64_t params_hash,
                   const Granules& granules, const File& file) {
-    const kv::NamespaceSpec spec = plugin_spec(name, version);
-    const dstd::String listed = file_key(pk::PATHS, name);
+    const dftracer::utils::store::NamespaceSpec spec =
+        plugin_spec(name, version);
+    const dstd::String listed = file_key(store::layout::path_kind::PATHS, name);
     IndexAccess::put(build, spec, dstd::ByteView(listed), dstd::ByteView());
     for (const auto& [granule, payload] : granules) {
         const dstd::String key = path_granule_key(name, granule);
@@ -969,7 +1009,7 @@ void write_plugin(FileBuild& build, dstd::StringView name,
                          dstd::ByteView(payload.data(), payload.size()));
     }
     if (file) {
-        const dstd::String key = file_key(pk::FILE, name);
+        const dstd::String key = file_key(store::layout::path_kind::FILE, name);
         IndexAccess::put(build, spec, dstd::ByteView(key),
                          dstd::ByteView(file->data(), file->size()));
     }
@@ -998,11 +1038,12 @@ void fail_plugin(FileBuild& build, dstd::StringView name, std::uint32_t version,
 
 void clear_unwritten(FileBuild& build,
                      dstd::Span<const store::IndexExtension> keep) {
-    dstd::Vector<kv::NamespaceSpec> specs;
+    dstd::Vector<dftracer::utils::store::NamespaceSpec> specs;
     for (const store::IndexExtension ext : keep)
         if (builtin_ext(ext)) specs.push_back(ext_spec(ext));
     IndexAccess::drop_unwritten(
-        build, dstd::Span<const kv::NamespaceSpec>(specs.data(), specs.size()));
+        build, dstd::Span<const dftracer::utils::store::NamespaceSpec>(
+                   specs.data(), specs.size()));
 }
 
 void clear_chunk_copies(FileBuild& build) {
@@ -1033,22 +1074,24 @@ coro::CoroTask<dstd::Result<void>> put_agg_meta(const Index& index,
                                                 dstd::StringView payload) {
     auto opened = IndexAccess::open_store(index);
     if (!opened) co_return dstd::Unexpected<dstd::Error>(opened.error());
-    kv::Store store = std::move(*opened);
+    dftracer::utils::store::Store store = std::move(*opened);
     auto registered = store.ns(agg_meta_spec(name));
     if (!registered)
         co_return dstd::Unexpected<dstd::Error>(registered.error());
-    const kv::Namespace ns = *registered;
-    const kv::ScopeKey scope = kv::ScopeKey::root();
-    const dstd::String key = file_key(
-        layout::agg_kind::META, dstd::StringView(name.data(), name.size()));
-    kv::Batch batch = store.building_batch(ns, scope);
+    const dftracer::utils::store::Namespace ns = *registered;
+    const dftracer::utils::store::ScopeKey scope =
+        dftracer::utils::store::ScopeKey::root();
+    const dstd::String key =
+        file_key(store::layout::agg_kind::META,
+                 dstd::StringView(name.data(), name.size()));
+    dftracer::utils::store::Batch batch = store.building_batch(ns, scope);
     batch.put(dstd::ByteView(key),
               dstd::ByteView(payload.data(), payload.size()));
     auto written = co_await store.commit(std::move(batch));
     if (!written) co_return dstd::Unexpected<dstd::Error>(written.error());
-    const kv::Publish target{&ns, &scope, 0, nullptr};
-    auto published =
-        co_await store.publish(dstd::Span<const kv::Publish>(&target, 1));
+    const dftracer::utils::store::Publish target{&ns, &scope, 0, nullptr};
+    auto published = co_await store.publish(
+        dstd::Span<const dftracer::utils::store::Publish>(&target, 1));
     if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
     co_return dstd::Result<void>{};
 }
@@ -1058,20 +1101,23 @@ coro::CoroTask<dstd::Result<void>> delete_agg_meta(const Index& index,
     auto found = IndexAccess::find_store(index);
     if (!found) co_return dstd::Unexpected<dstd::Error>(found.error());
     if (!*found) co_return dstd::Result<void>{};
-    kv::Store store = **found;
+    dftracer::utils::store::Store store = **found;
     auto registered = store.ns(agg_meta_spec(name));
     if (!registered)
         co_return dstd::Unexpected<dstd::Error>(registered.error());
-    const kv::Namespace ns = *registered;
-    const kv::ScopeKey scope = kv::ScopeKey::root();
+    const dftracer::utils::store::Namespace ns = *registered;
+    const dftracer::utils::store::ScopeKey scope =
+        dftracer::utils::store::ScopeKey::root();
     auto taken = store.snapshot();
     if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
-    if (taken->copy_info(ns, scope).state == kv::ScopeState::Absent)
+    if (taken->copy_info(ns, scope).state ==
+        dftracer::utils::store::ScopeState::Absent)
         co_return dstd::Result<void>{};
-    const kv::Publish target{&ns, &scope, 0, nullptr,
-                             kv::Publish::Change::Dropped};
-    auto published =
-        co_await store.publish(dstd::Span<const kv::Publish>(&target, 1));
+    const dftracer::utils::store::Publish target{
+        &ns, &scope, 0, nullptr,
+        dftracer::utils::store::Publish::Change::Dropped};
+    auto published = co_await store.publish(
+        dstd::Span<const dftracer::utils::store::Publish>(&target, 1));
     if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
     co_return dstd::Result<void>{};
 }
@@ -1084,30 +1130,34 @@ coro::CoroTask<dstd::Result<void>> remove_extension(
     auto found = IndexAccess::find_store(index);
     if (!found) co_return dstd::Unexpected<dstd::Error>(found.error());
     if (!*found) co_return dstd::Result<void>{};
-    kv::Store store = **found;
+    dftracer::utils::store::Store store = **found;
     auto registered = store.ns(ext_spec(ext));
     if (!registered)
         co_return dstd::Unexpected<dstd::Error>(registered.error());
-    const kv::Namespace ns = *registered;
+    const dftracer::utils::store::Namespace ns = *registered;
     auto taken = store.snapshot();
     if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
-    dstd::Vector<kv::ScopeKey> scopes;
+    dstd::Vector<dftracer::utils::store::ScopeKey> scopes;
     scopes.reserve(paths.size());
     for (const dstd::StringView path : paths) {
-        kv::ScopeKey scope = kv::ScopeKey::file(path);
-        if (taken->copy_info(ns, scope).state == kv::ScopeState::Absent)
+        dftracer::utils::store::ScopeKey scope =
+            dftracer::utils::store::ScopeKey::file(path);
+        if (taken->copy_info(ns, scope).state ==
+            dftracer::utils::store::ScopeState::Absent)
             continue;
         scopes.push_back(std::move(scope));
     }
     if (scopes.empty()) co_return dstd::Result<void>{};
-    dstd::Vector<kv::Publish> targets;
+    dstd::Vector<dftracer::utils::store::Publish> targets;
     targets.reserve(scopes.size());
-    for (const kv::ScopeKey& scope : scopes) {
-        targets.push_back(
-            kv::Publish{&ns, &scope, 0, nullptr, kv::Publish::Change::Dropped});
+    for (const dftracer::utils::store::ScopeKey& scope : scopes) {
+        targets.push_back(dftracer::utils::store::Publish{
+            &ns, &scope, 0, nullptr,
+            dftracer::utils::store::Publish::Change::Dropped});
     }
     auto published = co_await store.publish(
-        dstd::Span<const kv::Publish>(targets.data(), targets.size()));
+        dstd::Span<const dftracer::utils::store::Publish>(targets.data(),
+                                                          targets.size()));
     if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
     co_return dstd::Result<void>{};
 }
@@ -1118,7 +1168,7 @@ coro::CoroTask<dstd::Result<void>> remove_plugin(
     auto found = IndexAccess::find_store(index);
     if (!found) co_return dstd::Unexpected<dstd::Error>(found.error());
     if (!*found) co_return dstd::Result<void>{};
-    kv::Store store = **found;
+    dftracer::utils::store::Store store = **found;
     auto taken = store.snapshot();
     if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
     auto versions = plugin_versions(*taken);
@@ -1128,24 +1178,28 @@ coro::CoroTask<dstd::Result<void>> remove_plugin(
     auto registered = store.ns(plugin_spec(name, known->second));
     if (!registered)
         co_return dstd::Unexpected<dstd::Error>(registered.error());
-    const kv::Namespace ns = *registered;
-    dstd::Vector<kv::ScopeKey> scopes;
+    const dftracer::utils::store::Namespace ns = *registered;
+    dstd::Vector<dftracer::utils::store::ScopeKey> scopes;
     scopes.reserve(paths.size());
     for (const dstd::StringView path : paths) {
-        kv::ScopeKey scope = kv::ScopeKey::file(path);
-        if (taken->copy_info(ns, scope).state == kv::ScopeState::Absent)
+        dftracer::utils::store::ScopeKey scope =
+            dftracer::utils::store::ScopeKey::file(path);
+        if (taken->copy_info(ns, scope).state ==
+            dftracer::utils::store::ScopeState::Absent)
             continue;
         scopes.push_back(std::move(scope));
     }
     if (scopes.empty()) co_return dstd::Result<void>{};
-    dstd::Vector<kv::Publish> targets;
+    dstd::Vector<dftracer::utils::store::Publish> targets;
     targets.reserve(scopes.size());
-    for (const kv::ScopeKey& scope : scopes) {
-        targets.push_back(
-            kv::Publish{&ns, &scope, 0, nullptr, kv::Publish::Change::Dropped});
+    for (const dftracer::utils::store::ScopeKey& scope : scopes) {
+        targets.push_back(dftracer::utils::store::Publish{
+            &ns, &scope, 0, nullptr,
+            dftracer::utils::store::Publish::Change::Dropped});
     }
     auto published = co_await store.publish(
-        dstd::Span<const kv::Publish>(targets.data(), targets.size()));
+        dstd::Span<const dftracer::utils::store::Publish>(targets.data(),
+                                                          targets.size()));
     if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
     co_return dstd::Result<void>{};
 }

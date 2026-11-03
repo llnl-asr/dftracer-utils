@@ -82,12 +82,9 @@
 #include <random>
 #include <utility>
 
-namespace {
+using namespace dftracer::utils;
 
-namespace coro = dftracer::utils::coro;
-namespace dstd = dftracer::utils::dstd;
-namespace store = dftracer::utils::store;
-namespace io_fault = dftracer::utils::store::engine::io_fault;
+namespace {
 
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::ByteView;
@@ -410,16 +407,16 @@ std::uint64_t nanos_between(std::chrono::steady_clock::time_point from,
             .count());
 }
 
-std::uint64_t indexed(const io_fault::Counts& counts,
-                      io_fault::WriteKind kind) {
-    return static_cast<std::size_t>(kind) < io_fault::KINDS
+std::uint64_t indexed(const store::engine::io_fault::Counts& counts,
+                      store::engine::io_fault::WriteKind kind) {
+    return static_cast<std::size_t>(kind) < store::engine::io_fault::KINDS
                ? counts.bytes[static_cast<std::size_t>(kind)]
                : 0;
 }
 
-std::uint64_t total_bytes(const io_fault::Counts& counts) {
+std::uint64_t total_bytes(const store::engine::io_fault::Counts& counts) {
     std::uint64_t total = 0;
-    for (std::size_t at = 0; at < io_fault::KINDS; ++at) {
+    for (std::size_t at = 0; at < store::engine::io_fault::KINDS; ++at) {
         total += counts.bytes[at];
     }
     return total;
@@ -644,7 +641,7 @@ struct WriteRow {
     /// of these are the close time that `seconds` holds.
     double seconds_flushed = 0;
     double seconds_compacted = 0;
-    io_fault::Counts counts;
+    store::engine::io_fault::Counts counts;
     std::uint64_t busy = 0;
     std::uint64_t commits = 0;
     std::uint64_t keys = 0;
@@ -1006,26 +1003,27 @@ void Bench::print_write_row(const WriteRow& row) {
     const double commits_per_s =
         seconds > 0 ? static_cast<double>(row.commits) / seconds : 0;
     const auto& counts = row.counts;
-    const auto writes_of = [&counts](io_fault::WriteKind kind) {
+    const auto writes_of = [&counts](store::engine::io_fault::WriteKind kind) {
         return counts.writes[static_cast<std::size_t>(kind)];
     };
     const dstd::String line = dftracer::utils::common::str_cat(
         row.mode, '\t', row.threads, '\t', row.payload, '\t', fixed(seconds, 6),
         '\t', fixed(gib_per_s, 4), '\t', fixed(row.seconds_flushed, 6), '\t',
         fixed(row.seconds_compacted, 6), '\t',
-        writes_of(io_fault::WriteKind::Extent), '\t',
-        indexed(counts, io_fault::WriteKind::Extent), '\t',
-        writes_of(io_fault::WriteKind::Big), '\t',
-        indexed(counts, io_fault::WriteKind::Big), '\t',
-        writes_of(io_fault::WriteKind::Record), '\t',
-        indexed(counts, io_fault::WriteKind::Record), '\t',
-        writes_of(io_fault::WriteKind::Header), '\t',
-        indexed(counts, io_fault::WriteKind::Header), '\t',
-        indexed(counts, io_fault::WriteKind::Footer), '\t',
-        indexed(counts, io_fault::WriteKind::Trailer), '\t', counts.syncs, '\t',
-        total, '\t', fixed(write_amp, 4), '\t', row.disk_bytes, '\t',
-        fixed(disk_amp, 4), '\t', row.busy, '\t',
-        counts.max_bytes[static_cast<std::size_t>(io_fault::WriteKind::Extent)],
+        writes_of(store::engine::io_fault::WriteKind::Extent), '\t',
+        indexed(counts, store::engine::io_fault::WriteKind::Extent), '\t',
+        writes_of(store::engine::io_fault::WriteKind::Big), '\t',
+        indexed(counts, store::engine::io_fault::WriteKind::Big), '\t',
+        writes_of(store::engine::io_fault::WriteKind::Record), '\t',
+        indexed(counts, store::engine::io_fault::WriteKind::Record), '\t',
+        writes_of(store::engine::io_fault::WriteKind::Header), '\t',
+        indexed(counts, store::engine::io_fault::WriteKind::Header), '\t',
+        indexed(counts, store::engine::io_fault::WriteKind::Footer), '\t',
+        indexed(counts, store::engine::io_fault::WriteKind::Trailer), '\t',
+        counts.syncs, '\t', total, '\t', fixed(write_amp, 4), '\t',
+        row.disk_bytes, '\t', fixed(disk_amp, 4), '\t', row.busy, '\t',
+        counts.max_bytes[static_cast<std::size_t>(
+            store::engine::io_fault::WriteKind::Extent)],
         '\t', fixed(commits_per_s, 1));
     std::cout << line << '\n';
 }
@@ -1094,15 +1092,15 @@ bool Bench::report_single_thread_open(const dstd::String& dir,
 bool Bench::check_write_row(const WriteRow& row) {
     const auto& counts = row.counts;
     const std::size_t extent =
-        static_cast<std::size_t>(io_fault::WriteKind::Extent);
+        static_cast<std::size_t>(store::engine::io_fault::WriteKind::Extent);
     const std::size_t record =
-        static_cast<std::size_t>(io_fault::WriteKind::Record);
+        static_cast<std::size_t>(store::engine::io_fault::WriteKind::Record);
     const std::size_t header =
-        static_cast<std::size_t>(io_fault::WriteKind::Header);
+        static_cast<std::size_t>(store::engine::io_fault::WriteKind::Header);
     const std::size_t footer =
-        static_cast<std::size_t>(io_fault::WriteKind::Footer);
+        static_cast<std::size_t>(store::engine::io_fault::WriteKind::Footer);
     const std::size_t trailer =
-        static_cast<std::size_t>(io_fault::WriteKind::Trailer);
+        static_cast<std::size_t>(store::engine::io_fault::WriteKind::Trailer);
     bool ok = true;
     const auto require = [&](bool condition, const char* what) {
         if (!condition) {
@@ -1208,7 +1206,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
 
     const ValuePool values(workload.value_bytes, opt.trace_values);
     std::atomic<int> errors{0};
-    io_fault::start_counting();
+    store::engine::io_fault::start_counting();
     const auto started = std::chrono::steady_clock::now();
     runtime.block_on(coro::named(
         "store_bench write",
@@ -1248,7 +1246,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
         })));
     close_writers(runtime, writers, errors);
     const auto stopped = std::chrono::steady_clock::now();
-    row.counts = io_fault::stop_counting();
+    row.counts = store::engine::io_fault::stop_counting();
     row.seconds = seconds_between(started, stopped);
     row.seconds_flushed = row.seconds;
     row.seconds_compacted = row.seconds;

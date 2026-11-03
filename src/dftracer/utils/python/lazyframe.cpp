@@ -36,7 +36,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace dataframe = dftracer::utils::dataframe;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -858,13 +858,12 @@ PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
-    namespace py = dftracer::utils::python;
     auto state = dftracer::utils::dstd::make_shared<
-        py::StreamingState<dataframe::DataFrame>>(
+        python::StreamingState<dataframe::DataFrame>>(
         dftracer::utils::common::compute_memory_budget(0));
-    auto* it = reinterpret_cast<py::ArrowStreamingIteratorObject*>(
-        py::ArrowStreamingIteratorType.tp_new(&py::ArrowStreamingIteratorType,
-                                              nullptr, nullptr));
+    auto* it = reinterpret_cast<python::ArrowStreamingIteratorObject*>(
+        python::ArrowStreamingIteratorType.tp_new(
+            &python::ArrowStreamingIteratorType, nullptr, nullptr));
     if (!it) return nullptr;
     it->cpp_state->state = state;
     it->cpp_state->pull_df = [state]() { return state->pull(); };

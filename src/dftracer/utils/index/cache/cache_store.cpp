@@ -27,8 +27,6 @@
 
 namespace dftracer::utils::index::cache {
 
-namespace kv = dftracer::utils::store;
-
 namespace {
 
 constexpr std::uint64_t DEFAULT_CACHE_MAX_BYTES = std::uint64_t{2} << 30;
@@ -37,31 +35,31 @@ constexpr dstd::StringView USAGE_NAMESPACE = "cache.usage";
 constexpr std::uint32_t NAMESPACE_VERSION = 1;
 constexpr dstd::StringView USAGE_KEY = "u";
 
-kv::NamespaceSpec spec_of(dstd::StringView name) {
-    kv::NamespaceSpec spec;
+store::NamespaceSpec spec_of(dstd::StringView name) {
+    store::NamespaceSpec spec;
     spec.name.assign(name.data(), name.size());
     spec.format_version = NAMESPACE_VERSION;
     return spec;
 }
 
-const kv::NamespaceSpec& data_spec() {
-    static const kv::NamespaceSpec spec = spec_of(DATA_NAMESPACE);
+const store::NamespaceSpec& data_spec() {
+    static const store::NamespaceSpec spec = spec_of(DATA_NAMESPACE);
     return spec;
 }
 
-const kv::NamespaceSpec& usage_spec() {
-    static const kv::NamespaceSpec spec = spec_of(USAGE_NAMESPACE);
+const store::NamespaceSpec& usage_spec() {
+    static const store::NamespaceSpec spec = spec_of(USAGE_NAMESPACE);
     return spec;
 }
 
-kv::ScopeKey scope_of(std::uint64_t sig) {
+store::ScopeKey scope_of(std::uint64_t sig) {
     char hex[dstd::hash::HEX64_DIGITS];
     dstd::hash::format_hex64(sig, hex);
-    return kv::ScopeKey::file(dstd::StringView(hex, sizeof(hex)));
+    return store::ScopeKey::file(dstd::StringView(hex, sizeof(hex)));
 }
 
-dstd::Optional<std::uint64_t> sig_of(const kv::ScopeKey& scope) {
-    if (scope.kind != kv::ScopeKind::File || scope.paths.size() != 1)
+dstd::Optional<std::uint64_t> sig_of(const store::ScopeKey& scope) {
+    if (scope.kind != store::ScopeKind::File || scope.paths.size() != 1)
         return dstd::nullopt;
     const dstd::String& path = scope.paths[0];
     return dstd::hash::parse_hex64(dstd::StringView(path.data(), path.size()));
@@ -118,7 +116,7 @@ dstd::Expected<void, dstd::Error> wait(
 /// when shutdown clears them, before the store closes the writers they hold
 /// and before the process runtime stops.
 struct CacheRoots {
-    using Held = dstd::Map<dstd::String, kv::Store>;
+    using Held = dstd::Map<dstd::String, store::Store>;
 
     std::mutex mutex;
     Held roots;
@@ -133,7 +131,7 @@ struct CacheRoots {
 CacheRoots& cache_roots() {
     CacheRoots& roots = dstd::Singleton<CacheRoots>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        kv::Store::register_shutdown_close();
+        store::Store::register_shutdown_close();
         dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores, [] {
             dstd::Singleton<CacheRoots>::get().clear();
         });
@@ -167,7 +165,7 @@ dstd::SharedPtr<CacheStore> CacheStore::open(dstd::StringView path, Mode mode) {
         } else if (!exists(path)) {
             return nullptr;
         }
-        dstd::Optional<kv::Store> store;
+        dstd::Optional<store::Store> store;
         {
             CacheRoots& all = cache_roots();
             std::lock_guard<std::mutex> lock(all.mutex);
@@ -188,7 +186,7 @@ dstd::SharedPtr<CacheStore> CacheStore::open(dstd::StringView path, Mode mode) {
             }
             if (held == all.roots.end()) {
                 const dstd::String dir = store_dir(path);
-                auto opened = kv::Store::open(dstd::StringView(dir));
+                auto opened = store::Store::open(dstd::StringView(dir));
                 if (!opened) return nullptr;
                 held = all.roots.emplace(path, std::move(*opened)).first;
             }
@@ -204,14 +202,14 @@ dstd::SharedPtr<CacheStore> CacheStore::open(dstd::StringView path, Mode mode) {
     }
 }
 
-CacheStore::CacheStore(kv::Store store, kv::Namespace data, kv::Namespace usage,
-                       bool writable)
+CacheStore::CacheStore(store::Store store, store::Namespace data,
+                       store::Namespace usage, bool writable)
     : store_(std::move(store)),
       data_(std::move(data)),
       usage_(std::move(usage)),
       writable_(writable) {}
 
-kv::Snapshot CacheStore::snapshot() const {
+store::Snapshot CacheStore::snapshot() const {
     auto taken = store_.snapshot();
     if (!taken) throw_io("cache snapshot", taken.error());
     return std::move(*taken);
@@ -219,7 +217,7 @@ kv::Snapshot CacheStore::snapshot() const {
 
 dstd::Optional<dstd::String> CacheStore::get(std::uint64_t sig,
                                              dstd::StringView key) const {
-    const kv::Snapshot held = snapshot();
+    const store::Snapshot held = snapshot();
     auto found = held.get(data_, scope_of(sig), view_of(key));
     if (!found) throw_io("cache read", found.error());
     if (!*found) return dstd::nullopt;
@@ -229,7 +227,7 @@ dstd::Optional<dstd::String> CacheStore::get(std::uint64_t sig,
 void CacheStore::scan(
     std::uint64_t sig, dstd::StringView prefix,
     const dstd::Function<void(dstd::StringView, dstd::StringView)>& fn) const {
-    const kv::Snapshot held = snapshot();
+    const store::Snapshot held = snapshot();
     auto cursor = held.scan(data_, scope_of(sig), view_of(prefix));
     for (; !cursor.at_end(); cursor.next()) {
         auto value = cursor.value();
@@ -243,7 +241,7 @@ void CacheStore::scan_all(
     dstd::StringView begin, dstd::StringView end,
     const dstd::Function<bool(std::uint64_t, dstd::StringView,
                               dstd::StringView)>& fn) const {
-    const kv::Snapshot held = snapshot();
+    const store::Snapshot held = snapshot();
     auto cursor = held.scan_all(data_, view_of(begin), view_of(end));
     for (; !cursor.at_end(); cursor.next()) {
         const auto sig = sig_of(cursor.scope());
@@ -257,7 +255,7 @@ void CacheStore::scan_all(
 
 dstd::Vector<CacheStore::Usage> CacheStore::usage() const {
     dstd::Vector<Usage> out;
-    const kv::Snapshot held = snapshot();
+    const store::Snapshot held = snapshot();
     auto cursor = held.scan_all(usage_, dstd::ByteView{}, dstd::ByteView{});
     for (; !cursor.at_end(); cursor.next()) {
         const auto sig = sig_of(cursor.scope());
@@ -278,13 +276,13 @@ void CacheStore::put(
     if (!writable_)
         throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
                                         "cache write: the store is read-only");
-    const kv::ScopeKey scope = scope_of(sig);
-    kv::Batch data = store_.batch(data_, scope);
+    const store::ScopeKey scope = scope_of(sig);
+    store::Batch data = store_.batch(data_, scope);
     for (const auto& [key, value] : entries)
         data.put_ref(view_of(key), view_of(value));
     check("cache write", wait(store_.commit(std::move(data))));
     const dstd::String usage = usage_value(bytes, now_micros());
-    kv::Batch record = store_.batch(usage_, scope);
+    store::Batch record = store_.batch(usage_, scope);
     record.put_ref(view_of(USAGE_KEY), view_of(usage));
     check("cache usage write", wait(store_.commit(std::move(record))));
     check("cache flush", wait(store_.flush()));
@@ -293,14 +291,14 @@ void CacheStore::put(
 
 void CacheStore::touch(std::uint64_t sig) {
     if (!writable_) return;
-    const kv::Snapshot held = snapshot();
-    const kv::ScopeKey scope = scope_of(sig);
+    const store::Snapshot held = snapshot();
+    const store::ScopeKey scope = scope_of(sig);
     auto found = held.get(usage_, scope, view_of(USAGE_KEY));
     if (!found) throw_io("cache usage read", found.error());
     if (!*found || (**found).bytes().size() != USAGE_BYTES) return;
     const dstd::String usage =
         usage_value(u64_at((**found).bytes(), 0), now_micros());
-    kv::Batch record = store_.batch(usage_, scope);
+    store::Batch record = store_.batch(usage_, scope);
     record.put_ref(view_of(USAGE_KEY), view_of(usage));
     check("cache usage write", wait(store_.commit(std::move(record))));
 }
@@ -316,7 +314,7 @@ void CacheStore::evict(std::uint64_t keep) {
                   return a.last_used < b.last_used;
               });
     auto remove = [&](const Usage& e) {
-        const kv::ScopeKey scope = scope_of(e.sig);
+        const store::ScopeKey scope = scope_of(e.sig);
         check("cache eviction", store_.drop(data_, scope));
         check("cache eviction", store_.drop(usage_, scope));
         total -= e.bytes;

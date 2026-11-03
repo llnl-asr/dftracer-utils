@@ -39,7 +39,6 @@ using ExtractInput = trace::ChunkExtractorUtilityInput;
 using ExtractResult = trace::ChunkExtractorUtilityOutput;
 // keep std: Task decodes a vector input parameter only as std::vector
 using ExtractChunksOutput = std::vector<ExtractResult>;
-namespace gzc = utilities::fileio::compress;
 
 class SplitArgParse : public binaries::ArgParse {
    public:
@@ -337,9 +336,11 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
                 co_return probe;
             }
             probe.bytes = static_cast<std::uint64_t>(st.st_size);
-            const gzc::FirstMember first = co_await gzc::gzip_first_member(
-                sfd.get(), probe.bytes, gzc::RECHUNK_MEMBER_CAP,
-                RATIO_SAMPLE_BYTES);
+            const utilities::fileio::compress::FirstMember first =
+                co_await utilities::fileio::compress::gzip_first_member(
+                    sfd.get(), probe.bytes,
+                    utilities::fileio::compress::RECHUNK_MEMBER_CAP,
+                    RATIO_SAMPLE_BYTES);
             if (first.compressed > 0) {
                 probe.ratio =
                     std::clamp(static_cast<double>(first.uncompressed) /
@@ -362,9 +363,9 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
                     "Input %s is a single large gzip member; rechunking to "
                     "bounded members at %s",
                     probe.path.c_str(), out.c_str());
-                co_await gzc::gzip_rechunk_to_members(dstd::String(probe.path),
-                                                      dstd::String(out),
-                                                      member_size_bytes, 6);
+                co_await utilities::fileio::compress::gzip_rechunk_to_members(
+                    dstd::String(probe.path), dstd::String(out),
+                    member_size_bytes, 6);
                 probe.path = out;
                 probe.bytes =
                     common::unwrap(dstd::fs::file_size(dstd::PathView(out)));

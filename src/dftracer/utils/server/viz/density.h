@@ -523,7 +523,6 @@ inline void fold_counter_density(simdjson::dom::element root, double begin,
 
     auto args = root["args"];
     if (args.error() || !args.is_object()) return;
-    namespace agg = dftracer::utils::index::schemas::dft::agg;
     for (auto field : args.get_object()) {
         double val = 0;
         auto v = field.value;
@@ -539,7 +538,8 @@ inline void fold_counter_density(simdjson::dom::element root, double begin,
         // it exactly: skip metadata (hhash/fhash/dur/ret/offset/dftu_cnt) and
         // the pre-aggregated *_sum/_min/_max fields an already-aggregated trace
         // carries. Keeps junk lanes (dftu_cnt, ts, ...) out.
-        if (agg::is_reserved_arg(field.key) || agg::is_preagg_suffix(field.key))
+        if (index::schemas::dft::agg::is_reserved_arg(field.key) ||
+            index::schemas::dft::agg::is_preagg_suffix(field.key))
             continue;
         dstd::String series(name);
         series.push_back('.');

@@ -15,8 +15,6 @@ namespace dftracer::utils::store::engine {
 
 namespace {
 
-namespace dstd = dftracer::utils::dstd;
-
 constexpr dstd::StringView RECORD_MAGIC = "DFTUREC0";
 constexpr std::size_t RECORD_HEADER_BYTES = 40;
 constexpr std::size_t MIN_SCOPE_PATH_BYTES = 1;

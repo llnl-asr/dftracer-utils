@@ -25,8 +25,6 @@
 
 namespace dftracer::utils::index::cache {
 
-namespace rdb = index::store;
-
 namespace {
 
 constexpr dstd::StringView VALUE_KEY = "\x01";
@@ -75,7 +73,7 @@ dstd::Optional<std::uint64_t> lookup_signature(
         }
         const index::Snapshot& snapshot = *it->second;
         const dstd::String logical =
-            rdb::internal::get_logical_path(f->file_path);
+            index::store::internal::get_logical_path(f->file_path);
         common::InputFileStat now;
         dftracer::utils::common::stat_input(f->file_path, now);
         const SourceStat now_stat{static_cast<std::uint64_t>(now.mtime),

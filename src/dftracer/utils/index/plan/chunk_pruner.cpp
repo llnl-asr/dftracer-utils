@@ -41,8 +41,6 @@ void load_chunks(FileIndexData& ctx) {
     }
 }
 
-namespace q = dftracer::utils::duql;
-
 // Array positions an any() leaf is expanded over, per file; wider arrays keep
 // the leaf as is, which prunes nothing, to bound the work per chunk.
 constexpr std::size_t MAX_ANY_POSITIONS = 256;
@@ -86,45 +84,47 @@ Positions any_positions(const Snapshot& snapshot, const FileRef& file,
 }
 
 template <class Leaf>
-q::QueryNodePtr expand_field_leaf(const Leaf& leaf,
-                                  const Positions& positions) {
-    if (!leaf.field.any) return q::make_node(Leaf(leaf));
+duql::QueryNodePtr expand_field_leaf(const Leaf& leaf,
+                                     const Positions& positions) {
+    if (!leaf.field.any) return duql::make_node(Leaf(leaf));
     const auto& paths = positions.at(leaf.field.path);
-    if (paths.size() > MAX_ANY_POSITIONS) return q::make_node(Leaf(leaf));
+    if (paths.size() > MAX_ANY_POSITIONS) return duql::make_node(Leaf(leaf));
     auto at = [&](const dstd::String& path) {
         Leaf copy(leaf);
-        copy.field = q::FieldNode{path};
-        return q::make_node(std::move(copy));
+        copy.field = duql::FieldNode{path};
+        return duql::make_node(std::move(copy));
     };
     // No position: the plain path, which the catalog check rules out.
     if (paths.empty()) return at(leaf.field.path);
-    q::QueryNodePtr out = at(paths.front());
+    duql::QueryNodePtr out = at(paths.front());
     for (std::size_t i = 1; i < paths.size(); ++i)
-        out = q::make_node(q::OrNode{std::move(out), at(paths[i])});
+        out = duql::make_node(duql::OrNode{std::move(out), at(paths[i])});
     return out;
 }
 
 template <class Leaf>
-q::QueryNodePtr expand_leaf(const Leaf& leaf, const Positions& positions) {
-    if constexpr (std::is_same_v<Leaf, q::ExprLeaf>) {
-        return q::make_node(Leaf(leaf));
+duql::QueryNodePtr expand_leaf(const Leaf& leaf, const Positions& positions) {
+    if constexpr (std::is_same_v<Leaf, duql::ExprLeaf>) {
+        return duql::make_node(Leaf(leaf));
     } else {
         return expand_field_leaf(leaf, positions);
     }
 }
 
-q::QueryNodePtr expand(const q::QueryNode& node, const Positions& positions) {
+duql::QueryNodePtr expand(const duql::QueryNode& node,
+                          const Positions& positions) {
     return std::visit(
-        [&](auto&& n) -> q::QueryNodePtr {
+        [&](auto&& n) -> duql::QueryNodePtr {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, q::AndNode>) {
-                return q::make_node(q::AndNode{expand(*n.left, positions),
-                                               expand(*n.right, positions)});
-            } else if constexpr (std::is_same_v<T, q::OrNode>) {
-                return q::make_node(q::OrNode{expand(*n.left, positions),
-                                              expand(*n.right, positions)});
-            } else if constexpr (std::is_same_v<T, q::NotNode>) {
-                return q::make_node(q::NotNode{expand(*n.operand, positions)});
+            if constexpr (std::is_same_v<T, duql::AndNode>) {
+                return duql::make_node(duql::AndNode{
+                    expand(*n.left, positions), expand(*n.right, positions)});
+            } else if constexpr (std::is_same_v<T, duql::OrNode>) {
+                return duql::make_node(duql::OrNode{
+                    expand(*n.left, positions), expand(*n.right, positions)});
+            } else if constexpr (std::is_same_v<T, duql::NotNode>) {
+                return duql::make_node(
+                    duql::NotNode{expand(*n.operand, positions)});
             } else {
                 return expand_leaf(n, positions);
             }
@@ -138,9 +138,9 @@ q::QueryNodePtr expand(const q::QueryNode& node, const Positions& positions) {
 dstd::Optional<Query> expand_any(const Snapshot& snapshot, const FileRef& file,
                                  const Query& query) {
     if (query.any_paths().empty()) return dstd::nullopt;
-    q::QueryNodePtr root =
+    duql::QueryNodePtr root =
         expand(query.root(), any_positions(snapshot, file, query));
-    return q::Query::from_node(std::move(root));
+    return duql::Query::from_node(std::move(root));
 }
 
 ChunkPrunerOutput prune_file_chunks(const Snapshot& snapshot,

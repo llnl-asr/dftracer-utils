@@ -24,13 +24,13 @@
 #include <hwy/foreach_target.h>  // must precede highway.h
 #include <hwy/highway.h>
 // math-inl.h is an -inl.h: it participates in foreach_target and must follow
-// highway.h. Provides the vectorized transcendentals hn::Exp / hn::Log.
+// highway.h. Provides the vectorized transcendentals hwy::HWY_NAMESPACE::Exp /
+// hwy::HWY_NAMESPACE::Log.
 #include <hwy/contrib/math/math-inl.h>
 
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
 template <class T>
 void AbsImpl(const void* av, void* ov, std::size_t n) {
@@ -39,11 +39,13 @@ void AbsImpl(const void* av, void* ov, std::size_t n) {
     if constexpr (std::is_unsigned_v<T>) {
         for (std::size_t i = 0; i < n; ++i) out[i] = a[i];
     } else {
-        const hn::ScalableTag<T> d;
-        const std::size_t lanes = hn::Lanes(d);
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
         std::size_t i = 0;
         for (; i + lanes <= n; i += lanes)
-            hn::StoreU(hn::Abs(hn::LoadU(d, a + i)), d, out + i);
+            hwy::HWY_NAMESPACE::StoreU(
+                hwy::HWY_NAMESPACE::Abs(hwy::HWY_NAMESPACE::LoadU(d, a + i)), d,
+                out + i);
         for (; i < n; ++i) out[i] = a[i] < 0 ? static_cast<T>(-a[i]) : a[i];
     }
 }
@@ -55,13 +57,18 @@ void ClipImpl(const void* av, dftu_scalar lo, dftu_scalar hi, void* ov,
     T* out = static_cast<T*>(ov);
     const T l = scalar_value<T>(lo);
     const T h = scalar_value<T>(hi);
-    const hn::ScalableTag<T> d;
-    const auto vl = hn::Set(d, l);
-    const auto vh = hn::Set(d, h);
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+    const auto vl = hwy::HWY_NAMESPACE::Set(d, l);
+    const auto vh = hwy::HWY_NAMESPACE::Set(d, h);
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes)
-        hn::StoreU(hn::Min(hn::Max(hn::LoadU(d, a + i), vl), vh), d, out + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::Min(
+                hwy::HWY_NAMESPACE::Max(hwy::HWY_NAMESPACE::LoadU(d, a + i),
+                                        vl),
+                vh),
+            d, out + i);
     for (; i < n; ++i) out[i] = a[i] < l ? l : (a[i] > h ? h : a[i]);
 }
 
@@ -70,11 +77,13 @@ void RoundImpl(const void* av, void* ov, std::size_t n) {
     const T* a = static_cast<const T*>(av);
     T* out = static_cast<T*>(ov);
     if constexpr (std::is_floating_point_v<T>) {
-        const hn::ScalableTag<T> d;
-        const std::size_t lanes = hn::Lanes(d);
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
         std::size_t i = 0;
         for (; i + lanes <= n; i += lanes)
-            hn::StoreU(hn::Round(hn::LoadU(d, a + i)), d, out + i);
+            hwy::HWY_NAMESPACE::StoreU(
+                hwy::HWY_NAMESPACE::Round(hwy::HWY_NAMESPACE::LoadU(d, a + i)),
+                d, out + i);
         for (; i < n; ++i) out[i] = static_cast<T>(std::nearbyint(a[i]));
     } else {
         for (std::size_t i = 0; i < n; ++i) out[i] = a[i];
@@ -87,15 +96,15 @@ void RoundModeImpl(const void* av, void* ov, std::size_t n) {
     const T* a = static_cast<const T*>(av);
     T* out = static_cast<T*>(ov);
     if constexpr (std::is_floating_point_v<T>) {
-        const hn::ScalableTag<T> d;
-        const std::size_t lanes = hn::Lanes(d);
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
         std::size_t i = 0;
         for (; i + lanes <= n; i += lanes) {
-            const auto v = hn::LoadU(d, a + i);
-            const auto r = MODE == 0   ? hn::Ceil(v)
-                           : MODE == 1 ? hn::Floor(v)
-                                       : hn::Trunc(v);
-            hn::StoreU(r, d, out + i);
+            const auto v = hwy::HWY_NAMESPACE::LoadU(d, a + i);
+            const auto r = MODE == 0   ? hwy::HWY_NAMESPACE::Ceil(v)
+                           : MODE == 1 ? hwy::HWY_NAMESPACE::Floor(v)
+                                       : hwy::HWY_NAMESPACE::Trunc(v);
+            hwy::HWY_NAMESPACE::StoreU(r, d, out + i);
         }
         for (; i < n; ++i)
             out[i] = static_cast<T>(MODE == 0   ? std::ceil(a[i])
@@ -122,17 +131,20 @@ template <class T>
 void SignImpl(const void* av, void* ov, std::size_t n) {
     const T* a = static_cast<const T*>(av);
     T* out = static_cast<T*>(ov);
-    const hn::ScalableTag<T> d;
-    const std::size_t lanes = hn::Lanes(d);
-    const auto zero = hn::Zero(d);
-    const auto one = hn::Set(d, T{1});
+    const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto zero = hwy::HWY_NAMESPACE::Zero(d);
+    const auto one = hwy::HWY_NAMESPACE::Set(d, T{1});
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes) {
-        const auto v = hn::LoadU(d, a + i);
-        auto r = hn::IfThenElseZero(hn::Gt(v, zero), one);
+        const auto v = hwy::HWY_NAMESPACE::LoadU(d, a + i);
+        auto r = hwy::HWY_NAMESPACE::IfThenElseZero(
+            hwy::HWY_NAMESPACE::Gt(v, zero), one);
         if constexpr (!std::is_unsigned_v<T>)
-            r = hn::Sub(r, hn::IfThenElseZero(hn::Lt(v, zero), one));
-        hn::StoreU(r, d, out + i);
+            r = hwy::HWY_NAMESPACE::Sub(
+                r, hwy::HWY_NAMESPACE::IfThenElseZero(
+                       hwy::HWY_NAMESPACE::Lt(v, zero), one));
+        hwy::HWY_NAMESPACE::StoreU(r, d, out + i);
     }
     for (; i < n; ++i) {
         if constexpr (std::is_unsigned_v<T>)
@@ -150,42 +162,50 @@ void NegateImpl(const void* av, void* ov, std::size_t n) {
         for (std::size_t i = 0; i < n; ++i)
             out[i] = static_cast<T>(T{0} - a[i]);
     } else {
-        const hn::ScalableTag<T> d;
-        const std::size_t lanes = hn::Lanes(d);
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
         std::size_t i = 0;
         for (; i + lanes <= n; i += lanes)
-            hn::StoreU(hn::Neg(hn::LoadU(d, a + i)), d, out + i);
+            hwy::HWY_NAMESPACE::StoreU(
+                hwy::HWY_NAMESPACE::Neg(hwy::HWY_NAMESPACE::LoadU(d, a + i)), d,
+                out + i);
         for (; i < n; ++i) out[i] = static_cast<T>(-a[i]);
     }
 }
 
 // In-place SIMD sqrt over a Float64 buffer (input already widened to double).
 void SqrtF64Impl(double* p, std::size_t n) {
-    const hn::ScalableTag<double> d;
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes)
-        hn::StoreU(hn::Sqrt(hn::LoadU(d, p + i)), d, p + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::Sqrt(hwy::HWY_NAMESPACE::LoadU(d, p + i)), d,
+            p + i);
     for (; i < n; ++i) p[i] = std::sqrt(p[i]);
 }
 
 // In-place SIMD exp/log over a Float64 buffer (input already widened to
 // double). Highway's Exp/Log are accurate to <= 4 ULP versus libm.
 void ExpF64Impl(double* p, std::size_t n) {
-    const hn::ScalableTag<double> d;
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes)
-        hn::StoreU(hn::Exp(d, hn::LoadU(d, p + i)), d, p + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::Exp(d, hwy::HWY_NAMESPACE::LoadU(d, p + i)), d,
+            p + i);
     for (; i < n; ++i) p[i] = std::exp(p[i]);
 }
 
 void LogF64Impl(double* p, std::size_t n) {
-    const hn::ScalableTag<double> d;
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes)
-        hn::StoreU(hn::Log(d, hn::LoadU(d, p + i)), d, p + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::Log(d, hwy::HWY_NAMESPACE::LoadU(d, p + i)), d,
+            p + i);
     for (; i < n; ++i) p[i] = std::log(p[i]);
 }
 
@@ -232,19 +252,21 @@ void FillImpl(const void* av, const std::uint8_t* valid, dftu_scalar s,
         if (n) std::memcpy(out, in, n * sizeof(T));
         return;
     }
-    const hn::ScalableTag<T> d;
-    const std::size_t lanes = hn::Lanes(d);
-    const auto vfill = hn::Set(d, fv);
+    const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto vfill = hwy::HWY_NAMESPACE::Set(d, fv);
     std::size_t i = 0;
     for (; i + 64 <= n; i += 64) {
         std::uint64_t w;
         std::memcpy(&w, valid + (i >> 3), 8);
         for (std::size_t c = 0; c < 64; c += lanes) {
             std::uint64_t sub = w >> c;
-            const auto m =
-                hn::LoadMaskBits(d, reinterpret_cast<std::uint8_t*>(&sub));
-            hn::StoreU(hn::IfThenElse(m, hn::LoadU(d, in + i + c), vfill), d,
-                       out + i + c);
+            const auto m = hwy::HWY_NAMESPACE::LoadMaskBits(
+                d, reinterpret_cast<std::uint8_t*>(&sub));
+            hwy::HWY_NAMESPACE::StoreU(
+                hwy::HWY_NAMESPACE::IfThenElse(
+                    m, hwy::HWY_NAMESPACE::LoadU(d, in + i + c), vfill),
+                d, out + i + c);
         }
     }
     for (; i < n; ++i) out[i] = ((valid[i >> 3] >> (i & 7)) & 1) ? in[i] : fv;
@@ -257,8 +279,9 @@ void FillImpl(const void* av, const std::uint8_t* valid, dftu_scalar s,
 template <int S, class D, class V, class OpF>
 HWY_INLINE void scan_step(D d, V& v, OpF op, V id) {
     if constexpr (S < HWY_MAX_LANES_D(D)) {
-        const V sh =
-            hn::IfThenElse(hn::FirstN(d, S), id, hn::ShiftLeftLanes<S>(d, v));
+        const V sh = hwy::HWY_NAMESPACE::IfThenElse(
+            hwy::HWY_NAMESPACE::FirstN(d, S), id,
+            hwy::HWY_NAMESPACE::ShiftLeftLanes<S>(d, v));
         v = op(v, sh);
     }
 }
@@ -293,23 +316,26 @@ void CumSumImpl(const void* av, void* ov, std::size_t n) {
     // shift on x86, so a wider in-vector scan is silently wrong on AVX2 and
     // fails to compile on AVX-512 (ShiftLeftBytes asserts kBytes <= 16). The
     // per-chunk carry loop below stitches the 128-bit chunks together.
-    const hn::CappedTag<T, 16 / sizeof(T)> d;
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::CappedTag<T, 16 / sizeof(T)> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     if (lanes < SCAN_SIMD_MIN_LANES) {
         T carry = T{0};
         for (std::size_t i = 0; i < n; ++i)
             out[i] = carry = static_cast<T>(carry + in[i]);
         return;
     }
-    const auto add = [](auto a, auto b) { return hn::Add(a, b); };
-    const auto vid = hn::Zero(d);
+    const auto add = [](auto a, auto b) {
+        return hwy::HWY_NAMESPACE::Add(a, b);
+    };
+    const auto vid = hwy::HWY_NAMESPACE::Zero(d);
     T carry = T{0};
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes) {
-        auto v = inclusive_scan(d, hn::LoadU(d, in + i), add, vid);
-        v = hn::Add(v, hn::Set(d, carry));
-        hn::StoreU(v, d, out + i);
-        carry = hn::ExtractLane(v, lanes - 1);
+        auto v =
+            inclusive_scan(d, hwy::HWY_NAMESPACE::LoadU(d, in + i), add, vid);
+        v = hwy::HWY_NAMESPACE::Add(v, hwy::HWY_NAMESPACE::Set(d, carry));
+        hwy::HWY_NAMESPACE::StoreU(v, d, out + i);
+        carry = hwy::HWY_NAMESPACE::ExtractLane(v, lanes - 1);
     }
     for (; i < n; ++i) out[i] = carry = static_cast<T>(carry + in[i]);
 }
@@ -319,23 +345,26 @@ void CumProdImpl(const void* av, void* ov, std::size_t n) {
     const T* in = static_cast<const T*>(av);
     T* out = static_cast<T*>(ov);
     // 128-bit cap: see CumSumImpl (ShiftLeftLanes is per-128-bit-block).
-    const hn::CappedTag<T, 16 / sizeof(T)> d;
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::CappedTag<T, 16 / sizeof(T)> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     if (lanes < SCAN_SIMD_MIN_LANES) {
         T carry = T{1};
         for (std::size_t i = 0; i < n; ++i)
             out[i] = carry = static_cast<T>(carry * in[i]);
         return;
     }
-    const auto mul = [](auto a, auto b) { return hn::Mul(a, b); };
-    const auto vid = hn::Set(d, T{1});
+    const auto mul = [](auto a, auto b) {
+        return hwy::HWY_NAMESPACE::Mul(a, b);
+    };
+    const auto vid = hwy::HWY_NAMESPACE::Set(d, T{1});
     T carry = T{1};
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes) {
-        auto v = inclusive_scan(d, hn::LoadU(d, in + i), mul, vid);
-        v = hn::Mul(v, hn::Set(d, carry));
-        hn::StoreU(v, d, out + i);
-        carry = hn::ExtractLane(v, lanes - 1);
+        auto v =
+            inclusive_scan(d, hwy::HWY_NAMESPACE::LoadU(d, in + i), mul, vid);
+        v = hwy::HWY_NAMESPACE::Mul(v, hwy::HWY_NAMESPACE::Set(d, carry));
+        hwy::HWY_NAMESPACE::StoreU(v, d, out + i);
+        carry = hwy::HWY_NAMESPACE::ExtractLane(v, lanes - 1);
     }
     for (; i < n; ++i) out[i] = carry = static_cast<T>(carry * in[i]);
 }
@@ -345,8 +374,8 @@ void CumExtremeImpl(const void* av, void* ov, std::size_t n) {
     const T* in = static_cast<const T*>(av);
     T* out = static_cast<T*>(ov);
     // 128-bit cap: see CumSumImpl (ShiftLeftLanes is per-128-bit-block).
-    const hn::CappedTag<T, 16 / sizeof(T)> d;
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::CappedTag<T, 16 / sizeof(T)> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     const T ident = IS_MAX ? std::numeric_limits<T>::lowest()
                            : std::numeric_limits<T>::max();
     if (lanes < SCAN_SIMD_MIN_LANES) {
@@ -359,17 +388,20 @@ void CumExtremeImpl(const void* av, void* ov, std::size_t n) {
         return;
     }
     const auto op = [](auto a, auto b) {
-        return IS_MAX ? hn::Max(a, b) : hn::Min(a, b);
+        return IS_MAX ? hwy::HWY_NAMESPACE::Max(a, b)
+                      : hwy::HWY_NAMESPACE::Min(a, b);
     };
-    const auto vid = hn::Set(d, ident);
+    const auto vid = hwy::HWY_NAMESPACE::Set(d, ident);
     T carry = ident;
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes) {
-        auto v = inclusive_scan(d, hn::LoadU(d, in + i), op, vid);
-        v = IS_MAX ? hn::Max(v, hn::Set(d, carry))
-                   : hn::Min(v, hn::Set(d, carry));
-        hn::StoreU(v, d, out + i);
-        carry = hn::ExtractLane(v, lanes - 1);
+        auto v =
+            inclusive_scan(d, hwy::HWY_NAMESPACE::LoadU(d, in + i), op, vid);
+        v = IS_MAX
+                ? hwy::HWY_NAMESPACE::Max(v, hwy::HWY_NAMESPACE::Set(d, carry))
+                : hwy::HWY_NAMESPACE::Min(v, hwy::HWY_NAMESPACE::Set(d, carry));
+        hwy::HWY_NAMESPACE::StoreU(v, d, out + i);
+        carry = hwy::HWY_NAMESPACE::ExtractLane(v, lanes - 1);
     }
     for (; i < n; ++i) {
         carry = IS_MAX ? (in[i] > carry ? in[i] : carry)

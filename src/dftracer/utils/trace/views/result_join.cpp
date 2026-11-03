@@ -15,8 +15,6 @@
 #include <string>
 #include <string_view>
 
-namespace dataframe = dftracer::utils::dataframe;
-
 namespace dftracer::utils::trace::views {
 
 namespace {

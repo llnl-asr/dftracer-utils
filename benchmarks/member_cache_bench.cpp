@@ -32,7 +32,6 @@
 #include <mutex>
 
 using namespace dftracer::utils;
-namespace compress = dftracer::utils::utilities::fileio::compress;
 
 using Bytes = dstd::SharedPtr<const dstd::Vector<std::uint8_t>>;
 
@@ -54,7 +53,7 @@ Blob make_blob(std::size_t uncompressed_bytes) {
         x = x * 1664525u + 1013904223u;
         raw[i] = static_cast<std::uint8_t>((x >> 24) & 0x3F);
     }
-    compress::GzipMemberCompressor comp(6);
+    utilities::fileio::compress::GzipMemberCompressor comp(6);
     auto member = comp.compress_member(raw.data(), raw.size());
     if (!member) {
         std::fprintf(stderr, "compress failed\n");
@@ -66,7 +65,7 @@ Blob make_blob(std::size_t uncompressed_bytes) {
 // The actual work: a real libdeflate decode of the shared blob.
 coro::CoroTask<Bytes> decode(const Blob* blob) {
     g_decodes.fetch_add(1, std::memory_order_relaxed);
-    compress::GzipMemberDecompressor dec;
+    utilities::fileio::compress::GzipMemberDecompressor dec;
     auto out = dec.decompress_member(
         blob->compressed.data(), blob->compressed.size(), blob->uncompressed);
     if (!out) {

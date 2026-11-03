@@ -19,8 +19,6 @@
 
 namespace dftracer::utils::utilities::dlio {
 
-namespace bm = boost::math;
-
 namespace {
 
 constexpr double MIN_POSITIVE = 1e-12;
@@ -95,10 +93,10 @@ void finalize_fit(FittedDistribution& f, const Dist& dist,
                   const dstd::Vector<double>& data, const SampleSummary& s) {
     auto sorted = data;
     std::sort(sorted.begin(), sorted.end());
-    f.ks_stat =
-        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
-    f.log_likelihood =
-        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
+    f.ks_stat = ks_statistic(
+        sorted, [&](double x) { return boost::math::cdf(dist, x); });
+    f.log_likelihood = log_likelihood(
+        data, [&](double x) { return boost::math::pdf(dist, x); });
     f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
 }
 
@@ -113,7 +111,7 @@ FittedDistribution fit_normal(const dstd::Vector<double>& data,
     f.params = {s.mean, sigma, 0.0};
     f.valid = true;
 
-    bm::normal dist(s.mean, sigma);
+    boost::math::normal dist(s.mean, sigma);
     finalize_fit(f, dist, data, s);
     return f;
 }
@@ -140,7 +138,7 @@ FittedDistribution fit_lognormal(const dstd::Vector<double>& data,
     f.params = {mean_log, sigma, 0.0};
     f.valid = true;
 
-    bm::lognormal dist(mean_log, sigma);
+    boost::math::lognormal dist(mean_log, sigma);
     finalize_fit(f, dist, data, s);
     return f;
 }
@@ -154,7 +152,7 @@ FittedDistribution fit_exponential(const dstd::Vector<double>& data,
     f.params = {rate, 0.0, 0.0};
     f.valid = true;
 
-    bm::exponential dist(rate);
+    boost::math::exponential dist(rate);
     finalize_fit(f, dist, data, s);
     return f;
 }
@@ -188,8 +186,8 @@ FittedDistribution fit_gamma(const dstd::Vector<double>& data,
         // Data is degenerate; fall back to MoM.
     } else {
         for (int it = 0; it < NEWTON_MAX_ITER; ++it) {
-            const double g = std::log(k) - bm::digamma(k) - rhs;
-            const double gp = 1.0 / k - bm::trigamma(k);
+            const double g = std::log(k) - boost::math::digamma(k) - rhs;
+            const double gp = 1.0 / k - boost::math::trigamma(k);
             if (!std::isfinite(g) || !std::isfinite(gp) || gp == 0.0) break;
             const double dk = g / gp;
             k -= dk;
@@ -205,7 +203,7 @@ FittedDistribution fit_gamma(const dstd::Vector<double>& data,
     f.params = {k, theta, 0.0};
     f.valid = true;
 
-    bm::gamma_distribution<double> dist(k, theta);
+    boost::math::gamma_distribution<double> dist(k, theta);
     finalize_fit(f, dist, data, s);
     return f;
 }
@@ -258,7 +256,7 @@ FittedDistribution fit_weibull(const dstd::Vector<double>& data,
     f.params = {k, lambda, 0.0};
     f.valid = true;
 
-    bm::weibull dist(k, lambda);
+    boost::math::weibull dist(k, lambda);
     finalize_fit(f, dist, data, s);
     return f;
 }
@@ -326,17 +324,20 @@ dstd::Optional<FittedDistribution> best_fit_by_ks(
 double pdf(const FittedDistribution& fit, double x) {
     switch (fit.kind) {
         case DistributionKind::Normal:
-            return bm::pdf(bm::normal(fit.params[0], fit.params[1]), x);
+            return boost::math::pdf(
+                boost::math::normal(fit.params[0], fit.params[1]), x);
         case DistributionKind::Lognormal:
-            return bm::pdf(bm::lognormal(fit.params[0], fit.params[1]), x);
+            return boost::math::pdf(
+                boost::math::lognormal(fit.params[0], fit.params[1]), x);
         case DistributionKind::Gamma:
-            return bm::pdf(
-                bm::gamma_distribution<double>(fit.params[0], fit.params[1]),
-                x);
+            return boost::math::pdf(boost::math::gamma_distribution<double>(
+                                        fit.params[0], fit.params[1]),
+                                    x);
         case DistributionKind::Exponential:
-            return bm::pdf(bm::exponential(fit.params[0]), x);
+            return boost::math::pdf(boost::math::exponential(fit.params[0]), x);
         case DistributionKind::Weibull:
-            return bm::pdf(bm::weibull(fit.params[0], fit.params[1]), x);
+            return boost::math::pdf(
+                boost::math::weibull(fit.params[0], fit.params[1]), x);
     }
     return 0.0;
 }
@@ -344,17 +345,20 @@ double pdf(const FittedDistribution& fit, double x) {
 double cdf(const FittedDistribution& fit, double x) {
     switch (fit.kind) {
         case DistributionKind::Normal:
-            return bm::cdf(bm::normal(fit.params[0], fit.params[1]), x);
+            return boost::math::cdf(
+                boost::math::normal(fit.params[0], fit.params[1]), x);
         case DistributionKind::Lognormal:
-            return bm::cdf(bm::lognormal(fit.params[0], fit.params[1]), x);
+            return boost::math::cdf(
+                boost::math::lognormal(fit.params[0], fit.params[1]), x);
         case DistributionKind::Gamma:
-            return bm::cdf(
-                bm::gamma_distribution<double>(fit.params[0], fit.params[1]),
-                x);
+            return boost::math::cdf(boost::math::gamma_distribution<double>(
+                                        fit.params[0], fit.params[1]),
+                                    x);
         case DistributionKind::Exponential:
-            return bm::cdf(bm::exponential(fit.params[0]), x);
+            return boost::math::cdf(boost::math::exponential(fit.params[0]), x);
         case DistributionKind::Weibull:
-            return bm::cdf(bm::weibull(fit.params[0], fit.params[1]), x);
+            return boost::math::cdf(
+                boost::math::weibull(fit.params[0], fit.params[1]), x);
     }
     return 0.0;
 }
@@ -362,17 +366,22 @@ double cdf(const FittedDistribution& fit, double x) {
 double quantile(const FittedDistribution& fit, double p) {
     switch (fit.kind) {
         case DistributionKind::Normal:
-            return bm::quantile(bm::normal(fit.params[0], fit.params[1]), p);
+            return boost::math::quantile(
+                boost::math::normal(fit.params[0], fit.params[1]), p);
         case DistributionKind::Lognormal:
-            return bm::quantile(bm::lognormal(fit.params[0], fit.params[1]), p);
+            return boost::math::quantile(
+                boost::math::lognormal(fit.params[0], fit.params[1]), p);
         case DistributionKind::Gamma:
-            return bm::quantile(
-                bm::gamma_distribution<double>(fit.params[0], fit.params[1]),
+            return boost::math::quantile(
+                boost::math::gamma_distribution<double>(fit.params[0],
+                                                        fit.params[1]),
                 p);
         case DistributionKind::Exponential:
-            return bm::quantile(bm::exponential(fit.params[0]), p);
+            return boost::math::quantile(
+                boost::math::exponential(fit.params[0]), p);
         case DistributionKind::Weibull:
-            return bm::quantile(bm::weibull(fit.params[0], fit.params[1]), p);
+            return boost::math::quantile(
+                boost::math::weibull(fit.params[0], fit.params[1]), p);
     }
     return 0.0;
 }

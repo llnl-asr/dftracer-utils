@@ -30,9 +30,6 @@
 
 namespace dftracer::utils::index::cache {
 
-namespace codec = utilities::serialization;
-namespace dataframe = dftracer::utils::dataframe;
-
 namespace {
 
 // Every plan field except group_by - the basis shared by plan_signature and
@@ -184,7 +181,7 @@ void persist_rollup(CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
     dstd::append_u32_be(desc, static_cast<std::uint32_t>(group_by.size()));
     for (const auto& gk : group_by) {
         dstd::append_u32_be(desc, static_cast<std::uint32_t>(gk.kind));
-        codec::put_str(desc, key_identity(gk));
+        utilities::serialization::put_str(desc, key_identity(gk));
     }
     bytes += 2 * (1 + SIG_BYTES) + desc.size() + USAGE_BYTES;
     entries.emplace_back(DESC_KEY, std::move(desc));
@@ -243,7 +240,7 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
         [&](std::uint64_t sig, dstd::StringView k, dstd::StringView v) {
             if (k != DESC_KEY) return true;
             if (v.size() < 20) return true;
-            codec::BinaryReader br(v);
+            utilities::serialization::BinaryReader br(v);
             if (br.be64() != q_rest) return true;
             const std::uint64_t r_bucket = br.be64();
 

@@ -26,11 +26,12 @@
 #include <cstring>
 #include <random>
 
+using namespace dftracer::utils;
+
 namespace {
 
 using dftracer::utils::dstd::Vector;
 using dftracer::utils::index::schemas::dft::agg::QuantileStore;
-namespace df = dftracer::utils::dataframe;
 
 constexpr std::size_t VALUES = 1000000;
 constexpr std::size_t BATCH = 4096;
@@ -47,11 +48,11 @@ int main(int argc, char** argv) {
     const auto t0 = std::chrono::steady_clock::now();
     double sink = 0.0;
     if (!std::strcmp(name, "dd_add")) {
-        df::DDSketch s;
+        dataframe::DDSketch s;
         for (double x : v) s.add(x);
         sink = s.quantile(0.5);
     } else if (!std::strcmp(name, "merge_add")) {
-        df::MergeSketch s;
+        dataframe::MergeSketch s;
         for (double x : v) s.add(x);
         sink = s.quantile(0.5);
     } else if (!std::strcmp(name, "store_add")) {

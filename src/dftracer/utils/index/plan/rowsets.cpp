@@ -31,8 +31,6 @@
 
 namespace dftracer::utils::index::plan {
 
-namespace df = dftracer::utils::dataframe;
-
 const RecordSchema* recorded_schema(const Snapshot& snapshot,
                                     dstd::CStringView trace) {
     const auto file =
@@ -209,11 +207,11 @@ const RecordSchema& files_schema(const dstd::Vector<RowSetFile>& files) {
     return chosen;
 }
 
-dstd::Optional<df::DataFrame> stored_rowset(
+dstd::Optional<dataframe::DataFrame> stored_rowset(
     const dstd::Vector<RowSetFile>& files, dstd::StringView name) {
     if (files.empty()) return dstd::nullopt;
     dstd::Map<dstd::String, dstd::Optional<Snapshot>, std::less<>> snapshots;
-    dstd::Vector<df::DataFrame> parts;
+    dstd::Vector<dataframe::DataFrame> parts;
     try {
         for (const auto& f : files) {
             if (f.index.empty()) return dstd::nullopt;
@@ -225,7 +223,7 @@ dstd::Optional<df::DataFrame> stored_rowset(
             if (!file) return dstd::nullopt;
             auto bytes = common::unwrap(index::rowset(snapshot, *file, name));
             if (!bytes) return dstd::nullopt;
-            auto frame = df::frame_from_native(*bytes);
+            auto frame = dataframe::frame_from_native(*bytes);
             if (!frame) return dstd::nullopt;
             parts.push_back(std::move(*frame));
         }
@@ -233,9 +231,9 @@ dstd::Optional<df::DataFrame> stored_rowset(
         return dstd::nullopt;
     }
     if (parts.size() == 1) return std::move(parts.front());
-    dstd::Vector<const df::DataFrame*> ptrs;
+    dstd::Vector<const dataframe::DataFrame*> ptrs;
     for (const auto& p : parts) ptrs.push_back(&p);
-    return df::concat(ptrs, df::ConcatHow::Diagonal);
+    return dataframe::concat(ptrs, dataframe::ConcatHow::Diagonal);
 }
 
 bool has_stored_rowsets(const dstd::Vector<RowSetFile>& files) {

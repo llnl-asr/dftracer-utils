@@ -21,7 +21,6 @@
 #include <stdexcept>
 
 using namespace dftracer::utils;
-namespace fileio = dftracer::utils::utilities::fileio;
 
 class PgzipArgParse : public binaries::ArgParse {
    public:
@@ -88,12 +87,13 @@ static coro::CoroTask<FileResult> compress_file_parallel(
             co_return result;
         }
 
-        fileio::GzipWriterOptions opts;
+        utilities::fileio::GzipWriterOptions opts;
         opts.member_size = chunk_size;
         opts.level = compression_level;
         opts.workers = num_workers;
-        auto writer = common::unwrap(co_await fileio::GzipLineWriter::open(
-            dstd::String(result.output_path), std::move(opts)));
+        auto writer =
+            common::unwrap(co_await utilities::fileio::GzipLineWriter::open(
+                dstd::String(result.output_path), std::move(opts)));
 
         dstd::String buf;
         dstd::String carry;

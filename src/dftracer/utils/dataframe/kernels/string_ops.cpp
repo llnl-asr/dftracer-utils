@@ -35,9 +35,9 @@
 // offset difference) and the ASCII case folds (byte compare + conditional add).
 // Every other op is variable-length per row and is legitimately scalar.
 #include <hwy/highway.h>
-namespace hn = hwy::HWY_NAMESPACE;
 
-namespace duql = dftracer::utils::duql;
+using namespace dftracer::utils;
+
 using duql::detail::substr_find;
 
 namespace dftracer::utils::dataframe {
@@ -216,14 +216,16 @@ dftu_series* make_string(
 
 // out[i] = off[i+1] - off[i], widened to int64. Highway over the int32 offsets.
 void len_bytes_simd(const std::int32_t* off, std::int64_t* out, std::size_t n) {
-    const hn::ScalableTag<std::int64_t> d64;
-    const hn::Rebind<std::int32_t, decltype(d64)> d32;
-    const std::size_t lanes = hn::Lanes(d64);
+    const hwy::HWY_NAMESPACE::ScalableTag<std::int64_t> d64;
+    const hwy::HWY_NAMESPACE::Rebind<std::int32_t, decltype(d64)> d32;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d64);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes) {
-        const auto a = hn::LoadU(d32, off + i + 1);
-        const auto b = hn::LoadU(d32, off + i);
-        hn::StoreU(hn::PromoteTo(d64, hn::Sub(a, b)), d64, out + i);
+        const auto a = hwy::HWY_NAMESPACE::LoadU(d32, off + i + 1);
+        const auto b = hwy::HWY_NAMESPACE::LoadU(d32, off + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::PromoteTo(d64, hwy::HWY_NAMESPACE::Sub(a, b)),
+            d64, out + i);
     }
     for (; i < n; ++i) out[i] = static_cast<std::int64_t>(off[i + 1] - off[i]);
 }
@@ -232,15 +234,17 @@ void len_bytes_simd(const std::int32_t* off, std::int64_t* out, std::size_t n) {
 // byte ((c & 0xC0) != 0x80) starts a character. Highway compares a block and
 // folds the mask with CountTrue.
 std::int64_t count_char_starts(const std::uint8_t* p, std::size_t len) {
-    const hn::ScalableTag<std::uint8_t> d;
-    const auto vc0 = hn::Set(d, 0xC0);
-    const auto v80 = hn::Set(d, 0x80);
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> d;
+    const auto vc0 = hwy::HWY_NAMESPACE::Set(d, 0xC0);
+    const auto v80 = hwy::HWY_NAMESPACE::Set(d, 0x80);
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     std::int64_t count = 0;
     std::size_t i = 0;
     for (; i + lanes <= len; i += lanes) {
-        const auto m = hn::Ne(hn::And(hn::LoadU(d, p + i), vc0), v80);
-        count += static_cast<std::int64_t>(hn::CountTrue(d, m));
+        const auto m = hwy::HWY_NAMESPACE::Ne(
+            hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::LoadU(d, p + i), vc0),
+            v80);
+        count += static_cast<std::int64_t>(hwy::HWY_NAMESPACE::CountTrue(d, m));
     }
     for (; i < len; ++i)
         if ((p[i] & 0xC0) != 0x80) ++count;
@@ -252,16 +256,20 @@ std::int64_t count_char_starts(const std::uint8_t* p, std::size_t len) {
 // through unchanged (ASCII-only fold).
 void ascii_fold_simd(const std::uint8_t* in, std::uint8_t* out, std::size_t n,
                      std::uint8_t lo, std::uint8_t hi, int add) {
-    const hn::ScalableTag<std::uint8_t> d;
-    const auto vlo = hn::Set(d, lo);
-    const auto vhi = hn::Set(d, hi);
-    const auto vadd = hn::Set(d, static_cast<std::uint8_t>(add));
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> d;
+    const auto vlo = hwy::HWY_NAMESPACE::Set(d, lo);
+    const auto vhi = hwy::HWY_NAMESPACE::Set(d, hi);
+    const auto vadd =
+        hwy::HWY_NAMESPACE::Set(d, static_cast<std::uint8_t>(add));
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes) {
-        const auto v = hn::LoadU(d, in + i);
-        const auto m = hn::And(hn::Ge(v, vlo), hn::Le(v, vhi));
-        hn::StoreU(hn::IfThenElse(m, hn::Add(v, vadd), v), d, out + i);
+        const auto v = hwy::HWY_NAMESPACE::LoadU(d, in + i);
+        const auto m = hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(v, vlo),
+                                               hwy::HWY_NAMESPACE::Le(v, vhi));
+        hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::IfThenElse(
+                                       m, hwy::HWY_NAMESPACE::Add(v, vadd), v),
+                                   d, out + i);
     }
     for (; i < n; ++i) {
         const std::uint8_t c = in[i];
@@ -1018,8 +1026,6 @@ dftu_series* dftu_series_list_get(const dftu_series* v, int64_t index) {
 // second.
 namespace {
 
-namespace simd = dftracer::utils::dataframe::strsimd;
-
 // A FLAT String/Binary column read at offset width `Off`. Offsets are
 // absolute positions in `data`; a column cut from a larger one starts past 0.
 template <class Off>
@@ -1140,8 +1146,8 @@ struct Bits {
     dftracer::utils::dstd::Vector<std::uint64_t> aux;
 };
 
-Bits compute_bits(simd::BitKind kind, const std::uint8_t* p, std::size_t n,
-                  std::uint8_t eq, bool want_aux) {
+Bits compute_bits(dataframe::strsimd::BitKind kind, const std::uint8_t* p,
+                  std::size_t n, std::uint8_t eq, bool want_aux) {
     const std::size_t words = (n + 63) / 64;
     Bits b;
     b.bad.assign(words + 1, 0);
@@ -1153,12 +1159,12 @@ Bits compute_bits(simd::BitKind kind, const std::uint8_t* p, std::size_t n,
         parallel_backend_installed()) {
         parallel_for(static_cast<std::int64_t>(words), CHUNK,
                      [&](std::int64_t b0, std::int64_t e0) {
-                         simd::class_bits(
+                         dataframe::strsimd::class_bits(
                              kind, p, n, static_cast<std::size_t>(b0),
                              static_cast<std::size_t>(e0), eq, bp, ap);
                      });
     } else if (words != 0) {
-        simd::class_bits(kind, p, n, 0, words, eq, bp, ap);
+        dataframe::strsimd::class_bits(kind, p, n, 0, words, eq, bp, ap);
     }
     return b;
 }
@@ -1196,7 +1202,7 @@ std::size_t find_sep(const std::uint64_t* cand, const std::uint8_t* p,
                      std::size_t s, std::size_t e,
                      dftracer::utils::dstd::StringView sep, bool from_right) {
     const std::size_t sl = sep.size();
-    if (e - s < sl) return simd::NPOS;
+    if (e - s < sl) return dataframe::strsimd::NPOS;
     const std::size_t limit = e - sl + 1;  // one past the last start
     auto verify = [&](std::size_t q) {
         return sl == 1 || std::memcmp(p + q + 1, sep.data() + 1, sl - 1) == 0;
@@ -1204,24 +1210,25 @@ std::size_t find_sep(const std::uint64_t* cand, const std::uint8_t* p,
     if (!from_right) {
         std::size_t pos = s;
         while (pos < limit) {
-            const std::size_t q = simd::bits_next(cand, pos, limit);
-            if (q >= limit) return simd::NPOS;
+            const std::size_t q =
+                dataframe::strsimd::bits_next(cand, pos, limit);
+            if (q >= limit) return dataframe::strsimd::NPOS;
             if (verify(q)) return q;
             pos = q + 1;
         }
-        return simd::NPOS;
+        return dataframe::strsimd::NPOS;
     }
     std::size_t lim = limit;
     while (lim > s) {
-        const std::size_t q = simd::bits_prev(cand, s, lim);
-        if (q == simd::NPOS) return simd::NPOS;
+        const std::size_t q = dataframe::strsimd::bits_prev(cand, s, lim);
+        if (q == dataframe::strsimd::NPOS) return dataframe::strsimd::NPOS;
         if (verify(q)) return q;
         lim = q;
     }
-    return simd::NPOS;
+    return dataframe::strsimd::NPOS;
 }
 
-dftu_series* case_impl(const dftu_series* v, simd::CaseKind kind,
+dftu_series* case_impl(const dftu_series* v, dataframe::strsimd::CaseKind kind,
                        bool capitalize) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     const bool wide = is_wide_offset_type(v->type);
@@ -1239,9 +1246,10 @@ dftu_series* case_impl(const dftu_series* v, simd::CaseKind kind,
         if (data_len == 0) return out;
         const std::uint8_t* in = v->data.data();
         std::uint8_t* o = writable(out->data);
-        simd::case_map(capitalize ? simd::CaseKind::Lower : kind, in, o,
-                       data_len);
-        if (capitalize || kind == simd::CaseKind::Title) {
+        dataframe::strsimd::case_map(
+            capitalize ? dataframe::strsimd::CaseKind::Lower : kind, in, o,
+            data_len);
+        if (capitalize || kind == dataframe::strsimd::CaseKind::Title) {
             // A row's first byte has no previous byte: it is upper-cased when
             // lower, whatever sat before it in the buffer.
             for (std::int64_t i = 0; i < f.n; ++i) {
@@ -1262,39 +1270,39 @@ dftu_series* case_impl(const dftu_series* v, simd::CaseKind kind,
 }
 
 dftu_series* is_impl(const dftu_series* v, int cls) {
-    simd::BitKind kind = simd::BitKind::Alnum;
+    dataframe::strsimd::BitKind kind = dataframe::strsimd::BitKind::Alnum;
     bool want_aux = false;
     switch (cls) {
         case DFTU_STR_ALNUM:
-            kind = simd::BitKind::Alnum;
+            kind = dataframe::strsimd::BitKind::Alnum;
             break;
         case DFTU_STR_ALPHA:
-            kind = simd::BitKind::Alpha;
+            kind = dataframe::strsimd::BitKind::Alpha;
             break;
         case DFTU_STR_DIGIT:
         case DFTU_STR_DECIMAL:
         case DFTU_STR_NUMERIC:
-            kind = simd::BitKind::Digit;
+            kind = dataframe::strsimd::BitKind::Digit;
             break;
         case DFTU_STR_SPACE:
-            kind = simd::BitKind::Space;
+            kind = dataframe::strsimd::BitKind::Space;
             break;
         case DFTU_STR_LOWER:
-            kind = simd::BitKind::Lower;
+            kind = dataframe::strsimd::BitKind::Lower;
             want_aux = true;
             break;
         case DFTU_STR_UPPER:
-            kind = simd::BitKind::Upper;
+            kind = dataframe::strsimd::BitKind::Upper;
             want_aux = true;
             break;
         case DFTU_STR_TITLE:
-            kind = simd::BitKind::Title;
+            kind = dataframe::strsimd::BitKind::Title;
             want_aux = true;
             break;
         default:
             return nullptr;
     }
-    const bool title = kind == simd::BitKind::Title;
+    const bool title = kind == dataframe::strsimd::BitKind::Title;
     return with_flat(v, [&](const auto& f) -> dftu_series* {
         const std::int64_t lo = f.lo();
         const std::size_t nbytes = static_cast<std::size_t>(f.hi() - lo);
@@ -1304,10 +1312,11 @@ dftu_series* is_impl(const dftu_series* v, int cls) {
         // bad vector (no bit arrays at all).
         const std::int64_t avg =
             f.n > 0 ? static_cast<std::int64_t>(nbytes) / f.n : 0;
-        const simd::PredStrategy strat = simd::pred_strategy();
-        const bool by_rows = strat == simd::PredStrategy::Rows ||
-                             (strat == simd::PredStrategy::Auto &&
-                              avg >= simd::PRED_ROWS_MIN_AVG);
+        const dataframe::strsimd::PredStrategy strat =
+            dataframe::strsimd::pred_strategy();
+        const bool by_rows = strat == dataframe::strsimd::PredStrategy::Rows ||
+                             (strat == dataframe::strsimd::PredStrategy::Auto &&
+                              avg >= dataframe::strsimd::PRED_ROWS_MIN_AVG);
         Bits bits;
         if (!by_rows) bits = compute_bits(kind, p, nbytes, 0, want_aux);
         const std::uint64_t* bad = bits.bad.data();
@@ -1326,7 +1335,8 @@ dftu_series* is_impl(const dftu_series* v, int cls) {
         std::uint8_t* res = writable(out->data);
         auto rows = [&](std::int64_t b, std::int64_t e) {
             if (by_rows) {
-                simd::class_rows(kind, f.data, f.off, lo, b, e, res);
+                dataframe::strsimd::class_rows(kind, f.data, f.off, lo, b, e,
+                                               res);
                 return;
             }
             for (std::int64_t i = b; i < e; ++i) {
@@ -1338,11 +1348,13 @@ dftu_series* is_impl(const dftu_series* v, int cls) {
                 if (title) {
                     // The first byte has no previous byte, so it breaks the
                     // rule when lower; the rest read the bit array.
-                    yes = !lower_byte(p[s]) && !simd::bits_any(bad, s + 1, t) &&
-                          simd::bits_any(aux, s, t);
+                    yes = !lower_byte(p[s]) &&
+                          !dataframe::strsimd::bits_any(bad, s + 1, t) &&
+                          dataframe::strsimd::bits_any(aux, s, t);
                 } else {
-                    yes = !simd::bits_any(bad, s, t) &&
-                          (aux == nullptr || simd::bits_any(aux, s, t));
+                    yes = !dataframe::strsimd::bits_any(bad, s, t) &&
+                          (aux == nullptr ||
+                           dataframe::strsimd::bits_any(aux, s, t));
                 }
                 if (yes)
                     res[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
@@ -1563,7 +1575,7 @@ dftu_series* split_impl(const dftu_series* v, const F& f,
     const std::size_t sl = sep.size();
     Bits cand;
     if (sl != 0)
-        cand = compute_bits(simd::BitKind::Eq, p, nbytes,
+        cand = compute_bits(dataframe::strsimd::BitKind::Eq, p, nbytes,
                             static_cast<std::uint8_t>(sep[0]), false);
 
     // Pass 1: where the separator occurs in each row, the part counts and
@@ -1581,7 +1593,7 @@ dftu_series* split_impl(const dftu_series* v, const F& f,
             while (sl != 0 && pos < e) {
                 const std::size_t q =
                     find_sep(cand.bad.data(), p, pos, e, sep, false);
-                if (q == simd::NPOS) break;
+                if (q == dataframe::strsimd::NPOS) break;
                 hits.push_back(q);
                 pos = q + sl;
             }
@@ -1634,10 +1646,10 @@ dftu_series* partition_impl(const dftu_series* v, const F& f,
     const std::size_t nbytes = static_cast<std::size_t>(f.hi() - lo);
     const std::uint8_t* p = f.data != nullptr ? f.data + lo : nullptr;
     const std::size_t sl = sep.size();
-    const Bits cand = compute_bits(simd::BitKind::Eq, p, nbytes,
+    const Bits cand = compute_bits(dataframe::strsimd::BitKind::Eq, p, nbytes,
                                    static_cast<std::uint8_t>(sep[0]), false);
     dftracer::utils::dstd::Vector<std::size_t> at(static_cast<std::size_t>(n),
-                                                  simd::NPOS);
+                                                  dataframe::strsimd::NPOS);
     dftracer::utils::dstd::Vector<std::int32_t> list_off(
         static_cast<std::size_t>(n + 1), 0);
     std::int64_t parts = 0, bytes = 0;
@@ -1673,7 +1685,7 @@ dftu_series* partition_impl(const dftu_series* v, const F& f,
         const std::size_t s = static_cast<std::size_t>(f.off[i] - lo);
         const std::size_t e = static_cast<std::size_t>(f.off[i + 1] - lo);
         const std::size_t q = at[static_cast<std::size_t>(i)];
-        if (q == simd::NPOS) {
+        if (q == dataframe::strsimd::NPOS) {
             // Python: (row, "", "") for partition, ("", "", row) for
             // rpartition.
             if (!right) {
@@ -1702,7 +1714,7 @@ dftu_series* rfind_impl(const dftu_series* v, const F& f,
     const std::uint8_t* p = f.data != nullptr ? f.data + lo : nullptr;
     Bits cand;
     if (!needle.empty())
-        cand = compute_bits(simd::BitKind::Eq, p, nbytes,
+        cand = compute_bits(dataframe::strsimd::BitKind::Eq, p, nbytes,
                             static_cast<std::uint8_t>(needle[0]), false);
     auto* out = new dftu_series();
     out->type = TypeId::Int64;
@@ -1724,7 +1736,8 @@ dftu_series* rfind_impl(const dftu_series* v, const F& f,
             continue;
         }
         const std::size_t q = find_sep(cand.bad.data(), p, s, e, needle, true);
-        r[i] = q == simd::NPOS ? -1 : static_cast<std::int64_t>(q - s);
+        r[i] = q == dataframe::strsimd::NPOS ? -1
+                                             : static_cast<std::int64_t>(q - s);
     }
     return out;
 }
@@ -1814,11 +1827,11 @@ dftu_series* dftu_series_str_case(const dftu_series* v, int32_t op) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_case(flat_v, op));
     switch (static_cast<dftu_str_case>(op)) {
         case DFTU_STR_CAPITALIZE:
-            return case_impl(v, simd::CaseKind::Lower, true);
+            return case_impl(v, dataframe::strsimd::CaseKind::Lower, true);
         case DFTU_STR_TITLE_CASE:
-            return case_impl(v, simd::CaseKind::Title, false);
+            return case_impl(v, dataframe::strsimd::CaseKind::Title, false);
         case DFTU_STR_SWAPCASE:
-            return case_impl(v, simd::CaseKind::Swapcase, false);
+            return case_impl(v, dataframe::strsimd::CaseKind::Swapcase, false);
     }
     return nullptr;
 }

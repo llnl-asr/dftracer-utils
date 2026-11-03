@@ -65,7 +65,6 @@ namespace {
 
 using duql::Query;
 using trace::RecordPhase;
-namespace parallel = utilities::fileio::parallel;
 
 coro::CoroTask<void>* as_task(::dftu_task* t) {
     return reinterpret_cast<coro::CoroTask<void>*>(t);
@@ -417,7 +416,7 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
     return static_cast<PluginFold*>(h)->emplace_task(
         [](dstd::String t,
            dstd::Vector<dstd::String> s) -> coro::CoroTask<void> {
-            co_await parallel::merge_shards(t, s);
+            co_await utilities::fileio::parallel::merge_shards(t, s);
         }(std::move(tgt), std::move(sv)));
 }
 
@@ -668,17 +667,17 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
                          [[maybe_unused]] const char* path) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (!a || !s || !path || !a->release || !s->release) return -1;
-    namespace arr = utilities::arrow;
     try {
         nanoarrow::UniqueSchema schema;
         ArrowSchemaMove(s, schema.get());
         nanoarrow::UniqueArray array;
         ArrowArrayMove(a, array.get());
-        arr::ArrowExportResult res(std::move(schema), std::move(array));
+        utilities::arrow::ArrowExportResult res(std::move(schema),
+                                                std::move(array));
         int rc = -1;
         dftracer::utils::default_runtime().block_on(
             coro::named("dft-plugin-ipc", [&]() -> coro::CoroTask<void> {
-                arr::IpcWriter writer;
+                utilities::arrow::IpcWriter writer;
                 const auto open_rc = co_await writer.open(path);
                 if (open_rc != 0) co_return;
                 const auto write_rc = co_await writer.write_batch(res);
@@ -705,12 +704,11 @@ int host_arrow_read_ipc(void*, [[maybe_unused]] const char* path,
                         [[maybe_unused]] ::ArrowSchema* out_schema) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     if (!path || !out || !out_schema) return -1;
-    namespace arr = utilities::arrow;
     try {
-        arr::IpcReader reader;
+        utilities::arrow::IpcReader reader;
         if (reader.open(path) != 0) return -1;
         if (reader.num_batches() == 0) return -1;
-        arr::ArrowExportResult res = reader.read_batch(0);
+        utilities::arrow::ArrowExportResult res = reader.read_batch(0);
         if (!res.get_array() || !res.get_schema() ||
             !res.get_array()->release || !res.get_schema()->release)
             return -1;
@@ -761,19 +759,18 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                     void* ud) {
     if (!path || !on_batch) return -1;
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
-    namespace views = trace::views;
     try {
         dstd::String p(path);
         dftracer::utils::default_runtime().block_on(
             coro::named("dft-plugin-trace-read", [&]() -> coro::CoroTask<void> {
                 dftracer::utils::json::RecordParser parser;
-                views::detail::FoldEventBuffer batch_events;
-                namespace ix = dftracer::utils::index;
-                const ix::RecordSchema& schema = ix::detect_file_schema(p);
-                const bool by_path = schema.decoder == ix::Decoder::Path;
-                const ix::RecordSchema* declared =
+                trace::views::detail::FoldEventBuffer batch_events;
+                const index::RecordSchema& schema =
+                    index::detect_file_schema(p);
+                const bool by_path = schema.decoder == index::Decoder::Path;
+                const index::RecordSchema* declared =
                     schema.fields.empty() ? nullptr : &schema;
-                views::View v = views::View::from_file(p);
+                trace::views::View v = trace::views::View::from_file(p);
                 co_await v.for_each_batch(
                     [&](std::size_t,
                         const dstd::Vector<dstd::StringView>& events) {
@@ -783,18 +780,18 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                             simdjson::dom::element root;
                             if (parser.parse(ps).get(root)) continue;
                             if (by_path)
-                                views::detail::decode_record_into(
+                                trace::views::detail::decode_record_into(
                                     batch_events.append(), root, intern,
                                     /*capture_schema=*/false, nullptr,
                                     declared);
                             else
-                                views::detail::extract_fold_event_into(
+                                trace::views::detail::extract_fold_event_into(
                                     batch_events.append(), root, intern,
                                     /*needs_args=*/true);
                         }
                         if (batch_events.empty()) return;
                         dataframe::DataFrame df =
-                            views::detail::build_row_frame(
+                            trace::views::detail::build_row_frame(
                                 batch_events.events(), intern, {}, 1.0,
                                 by_path);
                         dstd::Vector<dftu_series*> handles;
@@ -1088,7 +1085,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
                                          std::uint32_t num_workers, int gzip) {
     try {
         auto pw = dstd::make_unique<PluginWriter>();
-        pw->writer = parallel::make_sharded_writer();
+        pw->writer = utilities::fileio::parallel::make_sharded_writer();
         pw->path = path ? path : "";
         pw->num_workers = num_workers ? num_workers : 1;
         pw->gzip = gzip != 0;
@@ -1117,14 +1114,14 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
 int PluginFold::close_trace_writer(::dftu_trace_writer* w) {
     auto* tw = reinterpret_cast<PluginTraceWriter*>(w);
     if (!tw) return -1;
-    namespace fio = utilities::fileio;
     int result = -1;
     try {
-        fio::GzipWriterOptions opts;
+        utilities::fileio::GzipWriterOptions opts;
         opts.member_size = common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
         const std::size_t member_size = opts.member_size;
-        auto writer = common::unwrap(
-            fio::GzipLineWriterBlocking::open(tw->path, std::move(opts)));
+        auto writer =
+            common::unwrap(utilities::fileio::GzipLineWriterBlocking::open(
+                tw->path, std::move(opts)));
         const dstd::StringView buf = tw->buffer;
         const std::size_t end = buf.rfind('\n') + 1;
         std::size_t pos = 0;
@@ -1290,7 +1287,6 @@ void PluginFold::step(const FoldBatch& batch) {
     if (port_bus_ && port_bus_->frame) {
         df = rewritten_batch(*port_bus_->frame, projection);
     } else {
-        namespace views = dftracer::utils::trace::views::detail;
         col_scratch_.clear();
         for (const auto& fe : batch.events) {
             if (fe.phase == trace::RecordPhase::Metadata ||
@@ -1302,8 +1298,9 @@ void PluginFold::step(const FoldBatch& batch) {
         if (col_scratch_.empty()) return;
         // An empty projection is build_row_frame's "every column", which for
         // a batch with many arg keys is a Series per key.
-        df = views::build_row_frame(col_scratch_, *intern_, projection, 1.0,
-                                    col_scratch_.front().by_path);
+        df = trace::views::detail::build_row_frame(
+            col_scratch_, *intern_, projection, 1.0,
+            col_scratch_.front().by_path);
     }
     if (df.num_rows() == 0) return;
 

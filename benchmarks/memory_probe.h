@@ -200,70 +200,78 @@ inline void* counted_alloc_or_throw(std::size_t size, std::size_t align) {
 
 #ifdef DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
 
-namespace mp_detail = dftu::memory_probe::detail;
-
 void* operator new(std::size_t size) {
-    return mp_detail::counted_alloc_or_throw(size, alignof(std::max_align_t));
+    return dftu::memory_probe::detail::counted_alloc_or_throw(
+        size, alignof(std::max_align_t));
 }
 void* operator new[](std::size_t size) {
-    return mp_detail::counted_alloc_or_throw(size, alignof(std::max_align_t));
+    return dftu::memory_probe::detail::counted_alloc_or_throw(
+        size, alignof(std::max_align_t));
 }
 void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
-    return mp_detail::counted_alloc(size, alignof(std::max_align_t));
+    return dftu::memory_probe::detail::counted_alloc(size,
+                                                     alignof(std::max_align_t));
 }
 void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
-    return mp_detail::counted_alloc(size, alignof(std::max_align_t));
+    return dftu::memory_probe::detail::counted_alloc(size,
+                                                     alignof(std::max_align_t));
 }
 void* operator new(std::size_t size, std::align_val_t align) {
-    return mp_detail::counted_alloc_or_throw(size,
-                                             static_cast<std::size_t>(align));
+    return dftu::memory_probe::detail::counted_alloc_or_throw(
+        size, static_cast<std::size_t>(align));
 }
 void* operator new[](std::size_t size, std::align_val_t align) {
-    return mp_detail::counted_alloc_or_throw(size,
-                                             static_cast<std::size_t>(align));
+    return dftu::memory_probe::detail::counted_alloc_or_throw(
+        size, static_cast<std::size_t>(align));
 }
 void* operator new(std::size_t size, std::align_val_t align,
                    const std::nothrow_t&) noexcept {
-    return mp_detail::counted_alloc(size, static_cast<std::size_t>(align));
+    return dftu::memory_probe::detail::counted_alloc(
+        size, static_cast<std::size_t>(align));
 }
 void* operator new[](std::size_t size, std::align_val_t align,
                      const std::nothrow_t&) noexcept {
-    return mp_detail::counted_alloc(size, static_cast<std::size_t>(align));
+    return dftu::memory_probe::detail::counted_alloc(
+        size, static_cast<std::size_t>(align));
 }
 
-void operator delete(void* p) noexcept { mp_detail::counted_free(p); }
-void operator delete[](void* p) noexcept { mp_detail::counted_free(p); }
+void operator delete(void* p) noexcept {
+    dftu::memory_probe::detail::counted_free(p);
+}
+void operator delete[](void* p) noexcept {
+    dftu::memory_probe::detail::counted_free(p);
+}
 void operator delete(void* p, std::size_t) noexcept {
-    mp_detail::counted_free(p);
+    dftu::memory_probe::detail::counted_free(p);
 }
 void operator delete[](void* p, std::size_t) noexcept {
-    mp_detail::counted_free(p);
+    dftu::memory_probe::detail::counted_free(p);
 }
 void operator delete(void* p, const std::nothrow_t&) noexcept {
-    mp_detail::counted_free(p);
+    dftu::memory_probe::detail::counted_free(p);
 }
 void operator delete[](void* p, const std::nothrow_t&) noexcept {
-    mp_detail::counted_free(p);
+    dftu::memory_probe::detail::counted_free(p);
 }
 void operator delete(void* p, std::align_val_t) noexcept {
-    mp_detail::counted_free(p);
+    dftu::memory_probe::detail::counted_free(p);
 }
 void operator delete[](void* p, std::align_val_t) noexcept {
-    mp_detail::counted_free(p);
+    dftu::memory_probe::detail::counted_free(p);
 }
 void operator delete(void* p, std::size_t, std::align_val_t) noexcept {
-    mp_detail::counted_free(p);
+    dftu::memory_probe::detail::counted_free(p);
 }
 void operator delete[](void* p, std::size_t, std::align_val_t) noexcept {
-    mp_detail::counted_free(p);
+    dftu::memory_probe::detail::counted_free(p);
 }
 void operator delete(void* p, std::align_val_t,
                      const std::nothrow_t&) noexcept {
-    mp_detail::counted_free(p);
+    dftu::memory_probe::detail::counted_free(p);
 }
 void operator delete[](void* p, std::align_val_t,
                        const std::nothrow_t&) noexcept {
-    mp_detail::counted_free(p);
+    dftu::memory_probe::detail::counted_free(p);
 }
 
 #endif

@@ -23,8 +23,6 @@
 
 namespace dftracer::utils::index {
 
-namespace store_layout = store::store_layout;
-
 using Ext = store::IndexExtension;
 
 namespace {
@@ -32,53 +30,58 @@ namespace {
 /// A copy with no record would not publish, so it holds this one.
 constexpr dstd::StringView EMPTY_COPY_KEY = "\xFF";
 
-bool copy_exists(kv::ScopeState state) {
-    return state == kv::ScopeState::Ready || state == kv::ScopeState::Failed;
+bool copy_exists(dftracer::utils::store::ScopeState state) {
+    return state == dftracer::utils::store::ScopeState::Ready ||
+           state == dftracer::utils::store::ScopeState::Failed;
 }
 
 bool same_stat(const SourceStat& a, const SourceStat& b) {
     return a.mtime == b.mtime && a.size == b.size;
 }
 
-kv::Namespace read_ns(Ext ext) {
-    kv::Namespace ns;
+dftracer::utils::store::Namespace read_ns(Ext ext) {
+    dftracer::utils::store::Namespace ns;
     ns.spec = ext_spec(ext);
     return ns;
 }
 
 bool builtin(Ext ext) { return ext != Ext::Plugin; }
 
-bool has_name(const dstd::Vector<kv::Namespace>& list,
-              const kv::Namespace& ns) {
-    for (const kv::Namespace& known : list)
+bool has_name(const dstd::Vector<dftracer::utils::store::Namespace>& list,
+              const dftracer::utils::store::Namespace& ns) {
+    for (const dftracer::utils::store::Namespace& known : list)
         if (known.spec.name == ns.spec.name) return true;
     return false;
 }
 
 /// The newest declared version of every index namespace that holds a copy of
 /// `scope`.
-dstd::Expected<dstd::Vector<kv::Namespace>, dstd::Error> held_copies(
-    kv::Store& store, const kv::Snapshot& taken, const kv::ScopeKey& scope) {
+dstd::Expected<dstd::Vector<dftracer::utils::store::Namespace>, dstd::Error>
+held_copies(dftracer::utils::store::Store& store,
+            const dftracer::utils::store::Snapshot& taken,
+            const dftracer::utils::store::ScopeKey& scope) {
     auto declared = taken.namespaces();
     if (!declared) return dstd::Unexpected<dstd::Error>(declared.error());
-    const dstd::StringView prefix(store_layout::NAMESPACE_PREFIX);
-    const dstd::StringView meta(store_layout::AGG_META_NAMESPACE_PREFIX);
-    dstd::Map<dstd::String, kv::NamespaceSpec> latest;
-    for (const kv::NamespaceDecl& decl : *declared) {
+    const dstd::StringView prefix(store::store_layout::NAMESPACE_PREFIX);
+    const dstd::StringView meta(store::store_layout::AGG_META_NAMESPACE_PREFIX);
+    dstd::Map<dstd::String, dftracer::utils::store::NamespaceSpec> latest;
+    for (const dftracer::utils::store::NamespaceDecl& decl : *declared) {
         const dstd::StringView name(decl.name.data(), decl.name.size());
         if (!name.starts_with(prefix) || name.starts_with(meta)) continue;
-        kv::NamespaceSpec& known = latest[dstd::String(name)];
+        dftracer::utils::store::NamespaceSpec& known =
+            latest[dstd::String(name)];
         if (known.name.empty() || decl.format_version > known.format_version) {
             known.name = decl.name;
             known.format_version = decl.format_version;
         }
     }
-    dstd::Vector<kv::Namespace> held;
+    dstd::Vector<dftracer::utils::store::Namespace> held;
     held.reserve(latest.size());
     for (const auto& [name, spec] : latest) {
-        kv::Namespace ns;
+        dftracer::utils::store::Namespace ns;
         ns.spec = spec;
-        if (taken.copy_info(ns, scope).state == kv::ScopeState::Absent)
+        if (taken.copy_info(ns, scope).state ==
+            dftracer::utils::store::ScopeState::Absent)
             continue;
         auto registered = store.ns(spec);
         if (!registered)
@@ -101,29 +104,32 @@ dstd::StringView FileRef::path() const {
 
 const SourceStat& FileRef::stat() const { return data_->stat; }
 
-dstd::Expected<kv::Store, dstd::Error> Index::Impl::open_store() {
+dstd::Expected<dftracer::utils::store::Store, dstd::Error>
+Index::Impl::open_store() {
     std::lock_guard<std::mutex> lock(mutex);
     if (store) return *store;
-    auto opened = kv::Store::open(store_dir);
+    auto opened = dftracer::utils::store::Store::open(store_dir);
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
     store = std::move(*opened);
     return *store;
 }
 
-dstd::Expected<dstd::Optional<kv::Store>, dstd::Error>
+dstd::Expected<dstd::Optional<dftracer::utils::store::Store>, dstd::Error>
 Index::Impl::find_store() {
     {
         std::lock_guard<std::mutex> lock(mutex);
         if (store) return store;
     }
     const auto present = dstd::fs::exists(dstd::PathView(store_dir));
-    if (!present || !*present) return dstd::Optional<kv::Store>{};
+    if (!present || !*present)
+        return dstd::Optional<dftracer::utils::store::Store>{};
     auto opened = open_store();
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
-    return dstd::Optional<kv::Store>(std::move(*opened));
+    return dstd::Optional<dftracer::utils::store::Store>(std::move(*opened));
 }
 
-FileRef IndexAccess::make_file(dstd::String path, kv::ScopeKey scope,
+FileRef IndexAccess::make_file(dstd::String path,
+                               dftracer::utils::store::ScopeKey scope,
                                const SourceStat& stat) {
     auto data = dstd::make_shared<FileRef::Data>();
     data->path = std::move(path);
@@ -132,14 +138,17 @@ FileRef IndexAccess::make_file(dstd::String path, kv::ScopeKey scope,
     return FileRef(std::move(data));
 }
 
-Snapshot IndexAccess::make_snapshot(dstd::Optional<kv::Snapshot> snap) {
+Snapshot IndexAccess::make_snapshot(
+    dstd::Optional<dftracer::utils::store::Snapshot> snap) {
     auto state = dstd::make_shared<Snapshot::Impl>();
     state->snap = std::move(snap);
     return Snapshot(std::move(state));
 }
 
-FileBuild IndexAccess::make_build(dstd::String root, kv::Store store,
-                                  kv::ScopeKey scope, const SourceStat& stat) {
+FileBuild IndexAccess::make_build(dstd::String root,
+                                  dftracer::utils::store::Store store,
+                                  dftracer::utils::store::ScopeKey scope,
+                                  const SourceStat& stat) {
     return FileBuild(dstd::make_shared<FileBuild::Impl>(
         std::move(root), std::move(store), std::move(scope), stat));
 }
@@ -148,22 +157,24 @@ const dstd::String& IndexAccess::root(const Index& index) {
     return index.impl_->root;
 }
 
-dstd::Expected<kv::Store, dstd::Error> IndexAccess::open_store(
-    const Index& index) {
+dstd::Expected<dftracer::utils::store::Store, dstd::Error>
+IndexAccess::open_store(const Index& index) {
     return index.impl_->open_store();
 }
 
-dstd::Expected<dstd::Optional<kv::Store>, dstd::Error> IndexAccess::find_store(
-    const Index& index) {
+dstd::Expected<dstd::Optional<dftracer::utils::store::Store>, dstd::Error>
+IndexAccess::find_store(const Index& index) {
     return index.impl_->find_store();
 }
 
-const kv::Snapshot* IndexAccess::store_snapshot(const Snapshot& snapshot) {
+const dftracer::utils::store::Snapshot* IndexAccess::store_snapshot(
+    const Snapshot& snapshot) {
     const auto& held = snapshot.impl_->snap;
     return held ? &*held : nullptr;
 }
 
-const kv::ScopeKey& IndexAccess::scope(const FileRef& file) {
+const dftracer::utils::store::ScopeKey& IndexAccess::scope(
+    const FileRef& file) {
     return file.data_->scope;
 }
 
@@ -172,11 +183,13 @@ void IndexAccess::record_error(FileBuild& build, dstd::Error error) {
     if (!impl.error) impl.error = std::move(error);
 }
 
-void IndexAccess::drop_unwritten(FileBuild& build,
-                                 dstd::Span<const kv::NamespaceSpec> kept) {
+void IndexAccess::drop_unwritten(
+    FileBuild& build,
+    dstd::Span<const dftracer::utils::store::NamespaceSpec> kept) {
     FileBuild::Impl& impl = *build.impl_;
     impl.drop_unwritten = true;
-    for (const kv::NamespaceSpec& spec : kept) impl.kept.push_back(spec.name);
+    for (const dftracer::utils::store::NamespaceSpec& spec : kept)
+        impl.kept.push_back(spec.name);
 }
 
 void FileBuild::Impl::put_to(Copy* copy, dstd::ByteView key,
@@ -188,7 +201,8 @@ void FileBuild::Impl::put_to(Copy* copy, dstd::ByteView key,
     ++copy->puts;
 }
 
-void IndexAccess::put(FileBuild& build, const kv::NamespaceSpec& spec,
+void IndexAccess::put(FileBuild& build,
+                      const dftracer::utils::store::NamespaceSpec& spec,
                       dstd::ByteView key, dstd::ByteView value) {
     FileBuild::Impl& impl = *build.impl_;
     if (impl.error) return;
@@ -202,7 +216,8 @@ void IndexAccess::put(FileBuild& build, store::IndexExtension ext,
     impl.put_to(impl.copy_of(ext), key, value);
 }
 
-void IndexAccess::erase(FileBuild& build, const kv::NamespaceSpec& spec,
+void IndexAccess::erase(FileBuild& build,
+                        const dftracer::utils::store::NamespaceSpec& spec,
                         dstd::ByteView begin, dstd::ByteView end) {
     FileBuild::Impl& impl = *build.impl_;
     if (impl.error || impl.committed) return;
@@ -214,7 +229,8 @@ void IndexAccess::erase(FileBuild& build, const kv::NamespaceSpec& spec,
     }
 }
 
-void IndexAccess::finish(FileBuild& build, const kv::NamespaceSpec& spec,
+void IndexAccess::finish(FileBuild& build,
+                         const dftracer::utils::store::NamespaceSpec& spec,
                          std::uint64_t params_hash) {
     FileBuild::Impl& impl = *build.impl_;
     if (impl.error) return;
@@ -225,7 +241,8 @@ void IndexAccess::finish(FileBuild& build, const kv::NamespaceSpec& spec,
     copy->failed = false;
 }
 
-void IndexAccess::fail(FileBuild& build, const kv::NamespaceSpec& spec,
+void IndexAccess::fail(FileBuild& build,
+                       const dftracer::utils::store::NamespaceSpec& spec,
                        std::uint64_t params_hash) {
     FileBuild::Impl& impl = *build.impl_;
     if (impl.error) return;
@@ -236,7 +253,8 @@ void IndexAccess::fail(FileBuild& build, const kv::NamespaceSpec& spec,
     copy->finished = false;
 }
 
-void IndexAccess::clear(FileBuild& build, const kv::NamespaceSpec& spec) {
+void IndexAccess::clear(FileBuild& build,
+                        const dftracer::utils::store::NamespaceSpec& spec) {
     FileBuild::Impl& impl = *build.impl_;
     if (impl.error) return;
     for (const FileBuild::Impl::Copy& known : impl.copies) {
@@ -247,7 +265,7 @@ void IndexAccess::clear(FileBuild& build, const kv::NamespaceSpec& spec) {
             return;
         }
     }
-    for (const kv::Namespace& known : impl.cleared) {
+    for (const dftracer::utils::store::Namespace& known : impl.cleared) {
         if (known.spec.name == spec.name) return;
     }
     auto registered = impl.store.ns(spec);
@@ -258,7 +276,8 @@ void IndexAccess::clear(FileBuild& build, const kv::NamespaceSpec& spec) {
     impl.cleared.push_back(*registered);
 }
 
-FileBuild::Impl::Impl(dstd::String index_root, kv::Store s, kv::ScopeKey key,
+FileBuild::Impl::Impl(dstd::String index_root, dftracer::utils::store::Store s,
+                      dftracer::utils::store::ScopeKey key,
                       const SourceStat& stat)
     : root(std::move(index_root)), store(std::move(s)), scope(std::move(key)) {
     ext_copy.fill(-1);
@@ -274,8 +293,9 @@ FileBuild::Impl::Copy* FileBuild::Impl::copy_of(store::IndexExtension ext) {
     return found;
 }
 
-FileBuild::Impl::Copy* FileBuild::Impl::copy_of(const kv::NamespaceSpec& spec) {
-    for (const kv::Namespace& known : cleared) {
+FileBuild::Impl::Copy* FileBuild::Impl::copy_of(
+    const dftracer::utils::store::NamespaceSpec& spec) {
+    for (const dftracer::utils::store::Namespace& known : cleared) {
         if (known.spec.name != spec.name) continue;
         error = dstd::Error(dstd::Condition::InvalidArgument,
                             "index: an extension is written and cleared");
@@ -333,7 +353,7 @@ coro::CoroTask<dstd::UniquePtr<Claim>> claim(FileBuild& build) {
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::prepare(
-    Impl& build, dstd::Vector<kv::Publish>& targets) {
+    Impl& build, dstd::Vector<dftracer::utils::store::Publish>& targets) {
     if (build.error) co_return dstd::Unexpected<dstd::Error>(*build.error);
     if (build.committed) co_return invalid("index: the build is committed");
     build.committed = true;
@@ -346,9 +366,9 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::prepare(
         if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
         auto held = held_copies(build.store, *taken, build.scope);
         if (!held) co_return dstd::Unexpected<dstd::Error>(held.error());
-        dstd::Vector<kv::Namespace> written;
+        dstd::Vector<dftracer::utils::store::Namespace> written;
         for (const Copy& copy : build.copies) written.push_back(copy.ns);
-        for (const kv::Namespace& ns : *held) {
+        for (const dftracer::utils::store::Namespace& ns : *held) {
             const bool kept = std::find(build.kept.begin(), build.kept.end(),
                                         ns.spec.name) != build.kept.end();
             if (!kept && !has_name(written, ns) && !has_name(build.cleared, ns))
@@ -359,9 +379,9 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::prepare(
                     build.cleared.size());
     for (Copy& copy : build.copies) {
         if (copy.failed) {
-            targets.push_back(kv::Publish{&copy.ns, &build.scope,
-                                          copy.params_hash, nullptr,
-                                          kv::Publish::Change::Failed});
+            targets.push_back(dftracer::utils::store::Publish{
+                &copy.ns, &build.scope, copy.params_hash, nullptr,
+                dftracer::utils::store::Publish::Change::Failed});
             continue;
         }
         const bool empty = copy.puts == 0 && copy.staged_puts == 0;
@@ -375,18 +395,19 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::prepare(
             if (!written)
                 co_return dstd::Unexpected<dstd::Error>(written.error());
         }
-        targets.push_back(kv::Publish{&copy.ns, &build.scope, copy.params_hash,
-                                      &build.sources});
+        targets.push_back(dftracer::utils::store::Publish{
+            &copy.ns, &build.scope, copy.params_hash, &build.sources});
     }
     if (!build.cleared.empty()) {
         auto taken = build.store.snapshot();
         if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
-        for (const kv::Namespace& ns : build.cleared) {
+        for (const dftracer::utils::store::Namespace& ns : build.cleared) {
             if (taken->copy_info(ns, build.scope).state ==
-                kv::ScopeState::Absent)
+                dftracer::utils::store::ScopeState::Absent)
                 continue;
-            targets.push_back(kv::Publish{&ns, &build.scope, 0, nullptr,
-                                          kv::Publish::Change::Dropped});
+            targets.push_back(dftracer::utils::store::Publish{
+                &ns, &build.scope, 0, nullptr,
+                dftracer::utils::store::Publish::Change::Dropped});
         }
     }
     co_return dstd::Expected<void, dstd::Error>{};
@@ -395,12 +416,13 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::prepare(
 coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(
     dstd::SharedPtr<Impl> self) {
     Impl& build = *self;
-    dstd::Vector<kv::Publish> targets;
+    dstd::Vector<dftracer::utils::store::Publish> targets;
     auto prepared = co_await prepare(build, targets);
     if (!prepared) co_return prepared;
     if (!targets.empty()) {
         auto published = co_await build.store.publish(
-            dstd::Span<const kv::Publish>(targets.data(), targets.size()));
+            dstd::Span<const dftracer::utils::store::Publish>(targets.data(),
+                                                              targets.size()));
         if (!published)
             co_return dstd::Unexpected<dstd::Error>(published.error());
     }
@@ -411,21 +433,22 @@ coro::CoroTask<dstd::Vector<dstd::Optional<dstd::Error>>>
 FileBuild::Impl::commit_group_task(dstd::Vector<dstd::SharedPtr<Impl>> group) {
     const std::size_t n = group.size();
     dstd::Vector<dstd::Optional<dstd::Error>> errors(n);
-    dstd::Vector<kv::Publish> targets;
+    dstd::Vector<dftracer::utils::store::Publish> targets;
     dstd::Vector<std::size_t> begin(n + 1, 0);
     for (std::size_t i = 0; i < n; ++i) {
         begin[i] = targets.size();
         auto prepared = co_await prepare(*group[i], targets);
         if (!prepared) {
             errors[i] = prepared.error();
-            targets.resize(begin[i], kv::Publish{});
+            targets.resize(begin[i], dftracer::utils::store::Publish{});
         }
     }
     begin[n] = targets.size();
     if (targets.empty()) co_return errors;
-    kv::Store store = group[0]->store;
+    dftracer::utils::store::Store store = group[0]->store;
     auto published = co_await store.publish(
-        dstd::Span<const kv::Publish>(targets.data(), targets.size()));
+        dstd::Span<const dftracer::utils::store::Publish>(targets.data(),
+                                                          targets.size()));
     for (std::size_t i = 0; i < n; ++i) {
         if (errors[i] || begin[i] == begin[i + 1]) continue;
         if (!published) errors[i] = published.error();
@@ -471,10 +494,13 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::commit() {
 }
 
 dstd::Optional<FileRef> Snapshot::file(dstd::StringView path) const {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(*this);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(*this);
     if (snap == nullptr) return dstd::nullopt;
-    kv::ScopeKey scope = kv::ScopeKey::file(path);
-    const kv::CopyInfo info = snap->copy_info(read_ns(Ext::Members), scope);
+    dftracer::utils::store::ScopeKey scope =
+        dftracer::utils::store::ScopeKey::file(path);
+    const dftracer::utils::store::CopyInfo info =
+        snap->copy_info(read_ns(Ext::Members), scope);
     if (!copy_exists(info.state)) return dstd::nullopt;
     return IndexAccess::make_file(
         dstd::String(path.data(), path.size()), std::move(scope),
@@ -483,12 +509,13 @@ dstd::Optional<FileRef> Snapshot::file(dstd::StringView path) const {
 
 dstd::Expected<dstd::Vector<FileRef>, dstd::Error> Snapshot::files() const {
     dstd::Vector<FileRef> out;
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(*this);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(*this);
     if (snap == nullptr) return out;
     auto listed = snap->scopes(read_ns(Ext::Members));
     if (!listed) return dstd::Unexpected<dstd::Error>(listed.error());
-    for (kv::ScopeEntry& entry : *listed) {
-        if (entry.scope.kind != kv::ScopeKind::File ||
+    for (dftracer::utils::store::ScopeEntry& entry : *listed) {
+        if (entry.scope.kind != dftracer::utils::store::ScopeKind::File ||
             entry.scope.paths.empty() || !copy_exists(entry.copy.state))
             continue;
         dstd::String path = entry.scope.paths[0];
@@ -501,33 +528,36 @@ dstd::Expected<dstd::Vector<FileRef>, dstd::Error> Snapshot::files() const {
 
 Freshness Snapshot::freshness(dstd::StringView path,
                               const SourceStat& now) const {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(*this);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(*this);
     if (snap == nullptr) return Freshness::Missing;
-    const kv::CopyInfo info =
-        snap->copy_info(read_ns(Ext::Members), kv::ScopeKey::file(path));
+    const dftracer::utils::store::CopyInfo info = snap->copy_info(
+        read_ns(Ext::Members), dftracer::utils::store::ScopeKey::file(path));
     if (!copy_exists(info.state)) return Freshness::Missing;
     if (!info.sources.empty()) {
         if (!same_stat(info.sources[0], now)) return Freshness::Stale;
-    } else if (info.state == kv::ScopeState::Ready) {
+    } else if (info.state == dftracer::utils::store::ScopeState::Ready) {
         return Freshness::Stale;
     }
-    return info.state == kv::ScopeState::Failed ? Freshness::Failed
-                                                : Freshness::Current;
+    return info.state == dftracer::utils::store::ScopeState::Failed
+               ? Freshness::Failed
+               : Freshness::Current;
 }
 
 Freshness Snapshot::extension(const FileRef& file, store::IndexExtension ext,
                               std::uint64_t params_hash) const {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(*this);
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(*this);
     if (snap == nullptr || !builtin(ext)) return Freshness::Missing;
-    const kv::CopyInfo info =
+    const dftracer::utils::store::CopyInfo info =
         snap->copy_info(read_ns(ext), IndexAccess::scope(file));
     switch (info.state) {
-        case kv::ScopeState::Absent:
+        case dftracer::utils::store::ScopeState::Absent:
             return Freshness::Missing;
-        case kv::ScopeState::Failed:
-        case kv::ScopeState::Bad:
+        case dftracer::utils::store::ScopeState::Failed:
+        case dftracer::utils::store::ScopeState::Bad:
             return Freshness::Failed;
-        case kv::ScopeState::Ready:
+        case dftracer::utils::store::ScopeState::Ready:
             break;
     }
     if (!info.sources.empty() && !same_stat(info.sources[0], file.stat()))
@@ -585,7 +615,7 @@ class RetainedRoots {
 RetainedRoots& retained_roots() {
     RetainedRoots& roots = dstd::Singleton<RetainedRoots>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        kv::Store::register_shutdown_close();
+        dftracer::utils::store::Store::register_shutdown_close();
         dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores, [] {
             dstd::Singleton<RetainedRoots>::get().clear();
         });
@@ -603,7 +633,7 @@ void release_root(dstd::StringView root) {
 void release_all_roots() {
     cache::clear_cache_roots();
     retained_roots().clear();
-    if (auto closed = kv::Store::close_all(); !closed) {
+    if (auto closed = dftracer::utils::store::Store::close_all(); !closed) {
         DFTRACER_UTILS_LOG_ERROR("index: close at exit: %s",
                                  closed.error().format().c_str());
     }
@@ -633,7 +663,8 @@ dstd::Expected<FileBuild, dstd::Error> Index::build(
     auto opened = impl_->open_store();
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
     return IndexAccess::make_build(impl_->root, std::move(*opened),
-                                   kv::ScopeKey::file(path), stat);
+                                   dftracer::utils::store::ScopeKey::file(path),
+                                   stat);
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Index::remove(
@@ -647,22 +678,25 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> IndexAccess::remove_task(
     auto found = impl->find_store();
     if (!found) co_return dstd::Unexpected<dstd::Error>(found.error());
     if (!*found) co_return dstd::Expected<void, dstd::Error>{};
-    kv::Store store = **found;
+    dftracer::utils::store::Store store = **found;
     auto taken = store.snapshot();
     if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
-    const kv::ScopeKey scope =
-        kv::ScopeKey::file(dstd::StringView(path.data(), path.size()));
+    const dftracer::utils::store::ScopeKey scope =
+        dftracer::utils::store::ScopeKey::file(
+            dstd::StringView(path.data(), path.size()));
     auto namespaces = held_copies(store, *taken, scope);
     if (!namespaces)
         co_return dstd::Unexpected<dstd::Error>(namespaces.error());
-    dstd::Vector<kv::Publish> targets;
-    for (const kv::Namespace& ns : *namespaces) {
-        targets.push_back(
-            kv::Publish{&ns, &scope, 0, nullptr, kv::Publish::Change::Dropped});
+    dstd::Vector<dftracer::utils::store::Publish> targets;
+    for (const dftracer::utils::store::Namespace& ns : *namespaces) {
+        targets.push_back(dftracer::utils::store::Publish{
+            &ns, &scope, 0, nullptr,
+            dftracer::utils::store::Publish::Change::Dropped});
     }
     if (targets.empty()) co_return dstd::Expected<void, dstd::Error>{};
     auto applied = co_await store.publish(
-        dstd::Span<const kv::Publish>(targets.data(), targets.size()));
+        dstd::Span<const dftracer::utils::store::Publish>(targets.data(),
+                                                          targets.size()));
     if (!applied) co_return dstd::Unexpected<dstd::Error>(applied.error());
     co_return dstd::Expected<void, dstd::Error>{};
 }

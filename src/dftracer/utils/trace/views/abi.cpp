@@ -18,6 +18,8 @@
 #include <cstring>
 #include <stdexcept>
 
+using namespace dftracer::utils;
+
 // The opaque dftu_view handle owns one immutable scan plan; each builder call
 // returns a handle to a new plan.
 struct dftu_view {
@@ -35,11 +37,12 @@ using dftracer::utils::trace::views::AggOp;
 using dftracer::utils::trace::views::AggSpec;
 using dftracer::utils::trace::views::GroupKey;
 using dftracer::utils::trace::views::Phase;
-namespace scan = dftracer::utils::trace::views::detail::scan;
 using dftracer::utils::trace::views::ViewFile;
 using dftracer::utils::trace::views::ViewSource;
 
-dftu_view* wrap(scan::ScanPlan p) { return new dftu_view{std::move(p)}; }
+dftu_view* wrap(trace::views::detail::scan::ScanPlan p) {
+    return new dftu_view{std::move(p)};
+}
 
 using dftracer::utils::trace::views::View;
 
@@ -215,7 +218,7 @@ dftu_view* dftu_view_from_files(const char* const* paths,
             if (index_paths && index_paths[i]) f.index_path = index_paths[i];
             files.push_back(std::move(f));
         }
-        return wrap(scan::from_files(std::move(files)));
+        return wrap(trace::views::detail::scan::from_files(std::move(files)));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -225,9 +228,10 @@ dftu_view* dftu_view_from_directory(const char* dir, const char* index_path,
                                     dftu_runtime* rt) {
     if (!dir) return nullptr;
     try {
-        scan::ScanPlan v =
+        trace::views::detail::scan::ScanPlan v =
             runtime_of(rt)
-                .submit(scan::from_directory(dir, index_path ? index_path : ""))
+                .submit(trace::views::detail::scan::from_directory(
+                    dir, index_path ? index_path : ""))
                 .get();
         if (v->files.empty()) return nullptr;
         return wrap(std::move(v));
@@ -241,7 +245,8 @@ void dftu_view_free(dftu_view* v) { delete v; }
 dftu_view* dftu_view_filter(const dftu_view* v, const dftu_duql* q) {
     if (!v || !q) return nullptr;
     try {
-        return wrap(scan::filter(v->p, duql_handle_unwrap(q)));
+        return wrap(
+            trace::views::detail::scan::filter(v->p, duql_handle_unwrap(q)));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -250,7 +255,8 @@ dftu_view* dftu_view_filter(const dftu_view* v, const dftu_duql* q) {
 char* dftu_view_schema_tree(const dftu_view* v) {
     if (!v) return nullptr;
     try {
-        return owned_string(schema_tree_json(scan::schema_tree(v->p)));
+        return owned_string(
+            schema_tree_json(trace::views::detail::scan::schema_tree(v->p)));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -261,7 +267,7 @@ void dftu_view_string_free(char* s) { std::free(s); }
 dftu_view* dftu_view_record_schema(const dftu_view* v, const char* id) {
     if (!v || !id) return nullptr;
     try {
-        return wrap(scan::record_schema(v->p, id));
+        return wrap(trace::views::detail::scan::record_schema(v->p, id));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -277,7 +283,7 @@ dftu_view* dftu_view_select(const dftu_view* v, const char* const* cols,
             if (!cols[i]) return nullptr;
             c.emplace_back(cols[i]);
         }
-        return wrap(scan::select(v->p, std::move(c)));
+        return wrap(trace::views::detail::scan::select(v->p, std::move(c)));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -306,7 +312,7 @@ dftu_view* dftu_view_phase(const dftu_view* v, int phase) {
             return nullptr;
     }
     try {
-        return wrap(scan::phase(v->p, p));
+        return wrap(trace::views::detail::scan::phase(v->p, p));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -319,7 +325,7 @@ dftu_view* dftu_view_all(const dftu_view* v) {
 dftu_view* dftu_view_limit(const dftu_view* v, uint64_t n) {
     if (!v) return nullptr;
     try {
-        return wrap(scan::limit(v->p, n));
+        return wrap(trace::views::detail::scan::limit(v->p, n));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -328,7 +334,7 @@ dftu_view* dftu_view_limit(const dftu_view* v, uint64_t n) {
 dftu_view* dftu_view_offset(const dftu_view* v, uint64_t n) {
     if (!v) return nullptr;
     try {
-        return wrap(scan::offset(v->p, n));
+        return wrap(trace::views::detail::scan::offset(v->p, n));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -338,7 +344,8 @@ dftu_view* dftu_view_sort_by(const dftu_view* v, const char* column,
                              int32_t descending) {
     if (!v || !column) return nullptr;
     try {
-        return wrap(scan::sort_by(v->p, column, descending != 0));
+        return wrap(
+            trace::views::detail::scan::sort_by(v->p, column, descending != 0));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -365,7 +372,7 @@ dftu_view* dftu_view_group_by(const dftu_view* v, const dftu_group_key* keys,
             }
             ks.push_back(std::move(k));
         }
-        return wrap(scan::group_by(v->p, std::move(ks)));
+        return wrap(trace::views::detail::scan::group_by(v->p, std::move(ks)));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -383,7 +390,7 @@ dftu_view* dftu_view_agg(const dftu_view* v, const dftu_view_agg_spec* specs,
                             specs[i].out ? specs[i].out : "",
                             specs[i].by ? specs[i].by : "", specs[i].q);
         }
-        return wrap(scan::agg(v->p, std::move(ag)));
+        return wrap(trace::views::detail::scan::agg(v->p, std::move(ag)));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -393,7 +400,9 @@ dftu_dataframe* dftu_view_collect(const dftu_view* v, dftu_runtime* rt) {
     if (!v) return nullptr;
     try {
         return dataframe_handle_wrap(
-            runtime_of(rt).submit(scan::collect_frame(v->p)).get());
+            runtime_of(rt)
+                .submit(trace::views::detail::scan::collect_frame(v->p))
+                .get());
     } catch (const std::exception&) {
         return nullptr;
     }

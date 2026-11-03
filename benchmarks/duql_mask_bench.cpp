@@ -18,12 +18,11 @@
 #include <cstdio>
 #include <cstdlib>
 
-namespace df = dftracer::utils::dataframe;
-namespace duql = dftracer::utils::duql;
+using namespace dftracer::utils;
 
 namespace {
 
-df::DataFrame frame(std::int64_t rows) {
+dataframe::DataFrame frame(std::int64_t rows) {
     constexpr dftracer::utils::dstd::StringView NAMES[] = {
         "read", "write", "open64", "MPI_Send", "fwrite", "lseek64"};
     dftracer::utils::dstd::Vector<std::int64_t> dur, size, retry;
@@ -38,13 +37,13 @@ df::DataFrame frame(std::int64_t rows) {
                 static_cast<std::uint8_t>(1U << (i % 8));
         name.push_back(NAMES[i % 6]);
     }
-    df::DataFrame f;
+    dataframe::DataFrame f;
     f.names = {"dur", "size", "retry", "name"};
-    f.columns.push_back(df::Series::flat_i64(dur.data(), rows));
-    f.columns.push_back(df::Series::flat_i64(size.data(), rows));
+    f.columns.push_back(dataframe::Series::flat_i64(dur.data(), rows));
+    f.columns.push_back(dataframe::Series::flat_i64(size.data(), rows));
     f.columns.push_back(
-        df::Series::flat_i64(retry.data(), rows, retry_valid.data()));
-    f.columns.push_back(df::Series::strings(name, nullptr));
+        dataframe::Series::flat_i64(retry.data(), rows, retry_valid.data()));
+    f.columns.push_back(dataframe::Series::strings(name, nullptr));
     return f;
 }
 
@@ -53,7 +52,7 @@ df::DataFrame frame(std::int64_t rows) {
 int main(int argc, char** argv) {
     const std::int64_t rows = argc > 1 ? std::atoll(argv[1]) : 1'000'000;
     const int rounds = argc > 2 ? std::atoi(argv[2]) : 15;
-    const df::DataFrame f = frame(rows);
+    const dataframe::DataFrame f = frame(rows);
     const char* const QUERIES[] = {
         "dur * 2 + size > 300",     "dur % 7 == 0 and size > 100",
         "abs(dur - 100) < 20",      "coalesce(retry, 0) > 0",
@@ -70,7 +69,8 @@ int main(int argc, char** argv) {
         std::int64_t kept = 0;
         for (int r = 0; r < rounds; ++r) {
             const auto t0 = std::chrono::steady_clock::now();
-            const df::Series m = df::evaluate_mask(parsed->root(), f);
+            const dataframe::Series m =
+                dataframe::evaluate_mask(parsed->root(), f);
             t.push_back(std::chrono::duration<double, std::milli>(
                             std::chrono::steady_clock::now() - t0)
                             .count());

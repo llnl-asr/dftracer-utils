@@ -52,8 +52,6 @@
 #include <vector>
 
 using namespace dftracer::utils;
-namespace df = dftracer::utils::dataframe;
-namespace mp = dftu::memory_probe;
 using namespace dftu::memory_workloads;
 
 namespace {
@@ -168,7 +166,7 @@ class Sampler {
             sample();
         }
         Peaks r = result_;
-        const mp::Reading end = mp::read();
+        const dftu::memory_probe::Reading end = dftu::memory_probe::read();
         r.peak_rss = end.peak_rss;
         r.end_rss = end.current_rss;
         r.end_anon = end.anon;
@@ -184,8 +182,8 @@ class Sampler {
     }
 
     void sample() {
-        const mp::Reading r = mp::read();
-        const std::int64_t live = mp::live_bytes();
+        const dftu::memory_probe::Reading r = dftu::memory_probe::read();
+        const std::int64_t live = dftu::memory_probe::live_bytes();
         const auto pools = memory::pool_stats();
         std::uint64_t group_live = 0;
         std::uint64_t group_reserved = 0;
@@ -231,7 +229,7 @@ class Sampler {
     dstd::Thread thread_;
 };
 
-void run_plan(const df::LazyFrame& plan, std::uint64_t budget) {
+void run_plan(const dataframe::LazyFrame& plan, std::uint64_t budget) {
     default_runtime().submit(drain_count(plan.memory_budget(budget))).get();
 }
 
@@ -241,10 +239,11 @@ void run_scoped(Fn fn) {
 }
 
 void group_by(const Sizes& s) {
-    run_plan(gen(s.frame_rows, s.frame_rows, 1)
-                 .group_by(dstd::Vector<dstd::String>{"k", "v"},
-                           {df::GroupAgg{df::Agg::Sum, "t", "t_sum"}}),
-             PLAN_BUDGET);
+    run_plan(
+        gen(s.frame_rows, s.frame_rows, 1)
+            .group_by(dstd::Vector<dstd::String>{"k", "v"},
+                      {dataframe::GroupAgg{dataframe::Agg::Sum, "t", "t_sum"}}),
+        PLAN_BUDGET);
 }
 
 void sort(const Sizes& s) {
@@ -254,7 +253,7 @@ void sort(const Sizes& s) {
 void join(const Sizes& s) {
     run_plan(gen(s.frame_rows, s.frame_rows, 1)
                  .join(gen(s.frame_rows / 4, s.frame_rows, 2), {"k"}, {"k"},
-                       df::JoinHow::Inner, "_r"),
+                       dataframe::JoinHow::Inner, "_r"),
              PLAN_BUDGET);
 }
 

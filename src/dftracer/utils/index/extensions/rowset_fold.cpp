@@ -19,9 +19,6 @@ namespace dftracer::utils::index::extensions {
 
 namespace {
 
-namespace df = dftracer::utils::dataframe;
-namespace views = trace::views::detail;
-
 // Whether `n` is `ph in ["M", 4]` or `ph == "M"`: the metadata phase.
 bool metadata_phase(const duql::QueryNode& n) {
     const auto* in = std::get_if<duql::InNode>(&n.data);
@@ -75,15 +72,16 @@ duql::QueryNodePtr without_phase(const duql::QueryNode& n) {
     return duql::clone(n);
 }
 
-RowSetFold::Value cell(const views::PodSource& src, dstd::StringView path) {
+RowSetFold::Value cell(const trace::views::detail::PodSource& src,
+                       dstd::StringView path) {
     using V = RowSetFold::Value;
     if (const auto* sp = src.special(path)) {
         switch (*sp) {
-            case views::FoldEvent::Special::FalseValue:
+            case trace::views::detail::FoldEvent::Special::FalseValue:
                 return false;
-            case views::FoldEvent::Special::TrueValue:
+            case trace::views::detail::FoldEvent::Special::TrueValue:
                 return true;
-            case views::FoldEvent::Special::NullValue:
+            case trace::views::detail::FoldEvent::Special::NullValue:
                 return V{};
             default:
                 return src.value(path);
@@ -92,11 +90,11 @@ RowSetFold::Value cell(const views::PodSource& src, dstd::StringView path) {
     if (!src.has(path)) return V{};
     if (const auto n = src.number_typed(path)) {
         switch (n->domain) {
-            case df::FieldStatDomain::I64:
+            case dataframe::FieldStatDomain::I64:
                 return n->i;
-            case df::FieldStatDomain::U64:
+            case dataframe::FieldStatDomain::U64:
                 return n->u;
-            case df::FieldStatDomain::F64:
+            case dataframe::FieldStatDomain::F64:
                 return n->d;
         }
     }
@@ -134,7 +132,7 @@ dstd::Vector<std::uint8_t> validity(const dstd::Vector<RowSetFold::Value>& c) {
 
 // One column: the type all its values share; integers and doubles together
 // as doubles; any other mix as text.
-df::Series series_of(const dstd::Vector<RowSetFold::Value>& c) {
+dataframe::Series series_of(const dstd::Vector<RowSetFold::Value>& c) {
     const auto n = static_cast<std::int64_t>(c.size());
     std::size_t kind = 0;
     bool mixed = false;
@@ -147,25 +145,28 @@ df::Series series_of(const dstd::Vector<RowSetFold::Value>& c) {
         kind = k;
     }
     const auto bits = validity(c);
-    if (kind == 0) return df::Series::nulls(df::TypeId::String, n);
+    if (kind == 0)
+        return dataframe::Series::nulls(dataframe::TypeId::String, n);
     if (!mixed && kind == 1) {
         dstd::Vector<std::uint8_t> on((c.size() + 7) / 8, 0);
         for (std::size_t i = 0; i < c.size(); ++i)
             if (const auto* b = std::get_if<bool>(&c[i]); b && *b)
                 on[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        return df::Series::flat(df::TypeId::Bool, on.data(), n, bits.data());
+        return dataframe::Series::flat(dataframe::TypeId::Bool, on.data(), n,
+                                       bits.data());
     }
     if (!mixed && kind == 2) {
         dstd::Vector<std::int64_t> v(c.size(), 0);
         for (std::size_t i = 0; i < c.size(); ++i)
             if (const auto* x = std::get_if<std::int64_t>(&c[i])) v[i] = *x;
-        return df::Series::flat_i64(v.data(), n, bits.data());
+        return dataframe::Series::flat_i64(v.data(), n, bits.data());
     }
     if (!mixed && kind == 3) {
         dstd::Vector<std::uint64_t> v(c.size(), 0);
         for (std::size_t i = 0; i < c.size(); ++i)
             if (const auto* x = std::get_if<std::uint64_t>(&c[i])) v[i] = *x;
-        return df::Series::flat(df::TypeId::Uint64, v.data(), n, bits.data());
+        return dataframe::Series::flat(dataframe::TypeId::Uint64, v.data(), n,
+                                       bits.data());
     }
     if (numbers) {
         dstd::Vector<double> v(c.size(), 0);
@@ -178,13 +179,13 @@ df::Series series_of(const dstd::Vector<RowSetFold::Value>& c) {
                         v[i] = static_cast<double>(x);
                 },
                 c[i]);
-        return df::Series::flat_f64(v.data(), n, bits.data());
+        return dataframe::Series::flat_f64(v.data(), n, bits.data());
     }
     dstd::Vector<dstd::String> text;
     text.reserve(c.size());
     for (const auto& v : c) text.push_back(text_of(v));
     const dstd::Vector<dstd::StringView> views(text.begin(), text.end());
-    return df::Series::strings(views, bits.data());
+    return dataframe::Series::strings(views, bits.data());
 }
 
 }  // namespace
@@ -224,7 +225,7 @@ dstd::UniquePtr<trace::views::detail::Fold> RowSetFold::slice() const {
 void RowSetFold::step(const trace::views::detail::FoldBatch& batch) {
     if (abandoned_ || rowsets_.empty()) return;
     for (const auto& e : batch.events) {
-        const views::PodSource src(e, *intern_);
+        const trace::views::detail::PodSource src(e, *intern_);
         for (std::size_t r = 0; r < rowsets_.size(); ++r) {
             const Guard& g = guards_[r];
             if (!e.by_path) {
@@ -236,7 +237,8 @@ void RowSetFold::step(const trace::views::detail::FoldBatch& batch) {
                                             ? (g.rest ? &*g.rest : nullptr)
                                         : rs.filter ? &*rs.filter
                                                     : nullptr;
-            if (filter && !views::pod_matches(*filter, e, *intern_, scratch_))
+            if (filter && !trace::views::detail::pod_matches(
+                              *filter, e, *intern_, scratch_))
                 continue;
             auto& cols = pending_[r].columns;
             for (std::size_t c = 0; c < rs.columns.size(); ++c) {
@@ -307,13 +309,14 @@ void RowSetFold::merge(trace::views::detail::Fold& slice) {
 void RowSetFold::write(index::FileBuild& build) const {
     if (abandoned_ || rowsets_.empty()) return;
     for (std::size_t r = 0; r < rowsets_.size(); ++r) {
-        df::DataFrame f;
+        dataframe::DataFrame f;
         for (std::size_t c = 0; c < rowsets_[r].columns.size(); ++c) {
             const auto& name = rowsets_[r].columns[c].first;
             f.names.emplace_back(name.data(), name.size());
             f.columns.push_back(series_of(sealed_[r].columns[c]));
         }
-        index::put_rowset(build, rowsets_[r].name, df::frame_to_native(f));
+        index::put_rowset(build, rowsets_[r].name,
+                          dataframe::frame_to_native(f));
     }
     build.finish(index::store::IndexExtension::Rowset, 0);
 }

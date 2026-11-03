@@ -46,7 +46,6 @@ namespace dftracer::utils::trace {
 
 namespace {
 
-namespace agg = index::schemas::dft::agg;
 using views::detail::FoldEvent;
 
 constexpr std::size_t STREAM_BUFFER_BYTES = 4u << 20;
@@ -228,7 +227,7 @@ class Task {
         return dstd::StringView(at->second.data(), at->second.size());
     }
 
-    PidFit pid_fit(const agg::AggPartial& p) const {
+    PidFit pid_fit(const index::schemas::dft::agg::AggPartial& p) const {
         if (r_.rules.pids.empty()) return PidFit::All;
         if (!p.pids.is_exact()) return PidFit::Mixed;
         const auto ids = p.pids.ids();
@@ -242,7 +241,8 @@ class Task {
                                 : PidFit::Mixed;
     }
 
-    static bool quantiles_missing(const agg::AggPartial& p) {
+    static bool quantiles_missing(
+        const index::schemas::dft::agg::AggPartial& p) {
         return (p.duration_values != 0 && p.duration_q.count() == 0) ||
                (p.size_values != 0 && p.size_q.count() == 0) ||
                (p.offset_values != 0 && p.offset_q.count() == 0);
@@ -258,8 +258,8 @@ class Task {
 
     void take_partial(std::uint32_t chunk, const AggGroup& group,
                       dstd::Span<const std::uint8_t> bytes);
-    bool bins_answer(const agg::AggPartial& p) const;
-    void take_bins(const agg::AggPartial& p, AggKey key);
+    bool bins_answer(const index::schemas::dft::agg::AggPartial& p) const;
+    void take_bins(const index::schemas::dft::agg::AggPartial& p, AggKey key);
 
     coro::CoroTask<void> whole_file_chunks(const dstd::String& path,
                                            const index::FileRef* file,
@@ -294,9 +294,11 @@ class Task {
     dstd::SharedPtr<dstd::String> buf_ = dstd::make_shared<dstd::String>();
 };
 
-void trim_row(agg::AggPartial& p, const AggKeep& keep) {
-    const auto drop = [](agg::DistinctIds& ids, bool kept) {
-        if (!kept && !ids.empty()) ids = agg::DistinctIds();
+void trim_row(index::schemas::dft::agg::AggPartial& p, const AggKeep& keep) {
+    const auto drop = [](index::schemas::dft::agg::DistinctIds& ids,
+                         bool kept) {
+        if (!kept && !ids.empty())
+            ids = index::schemas::dft::agg::DistinctIds();
     };
     drop(p.pids, keep.pids);
     drop(p.tids, keep.tids);
@@ -306,7 +308,7 @@ void trim_row(agg::AggPartial& p, const AggKeep& keep) {
     if (!keep.pid_spans) p.pid_spans.clear();
     if (!keep.offset) {
         p.offset = {};
-        p.offset_q = agg::QuantileStore(p.accuracy);
+        p.offset_q = index::schemas::dft::agg::QuantileStore(p.accuracy);
         p.offset_values = 0;
     }
 }
@@ -323,7 +325,7 @@ void Runner::Stripe::add(const dstd::Vector<Row*>& part) {
 
 void Runner::Stripe::add_sums(const dstd::Vector<Row*>& part) {
     for (Row* row : part) {
-        const agg::AggPartial& p = row->second;
+        const index::schemas::dft::agg::AggPartial& p = row->second;
         AggSums one{p.count, p.duration, p.size};
         auto it = sums.find(row->first);
         if (it == sums.end())
@@ -355,7 +357,7 @@ void Runner::Stripe::drain(bool offset) {
             merged.size.merge(order[at].second->size);
             if (offset) merged.offset.merge(order[at].second->offset);
         }
-        agg::AggPartial& p = (rows.begin() + row)->second;
+        index::schemas::dft::agg::AggPartial& p = (rows.begin() + row)->second;
         p.duration = merged.duration;
         p.size = merged.size;
         if (offset) p.offset = merged.offset;
@@ -712,7 +714,7 @@ void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
         queue_reread(chunk, group);
         return;
     }
-    agg::AggPartial::Fields keep;
+    index::schemas::dft::agg::AggPartial::Fields keep;
     keep.quantiles = r_.rules.q.quantiles && !r_.reread_only;
     keep.bins = r_.rules.q.sums_only && !r_.reread_only;
     const AggKeep& kept = r_.rules.q.keep;
@@ -723,13 +725,13 @@ void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
     keep.pid_files = kept.pid_files;
     keep.pids = kept.pids || r_.rules.q.by_pid || !r_.rules.pids.empty();
     keep.tids = kept.tids || r_.rules.q.by_tid;
-    auto parsed = agg::AggPartial::deserialize(
+    auto parsed = index::schemas::dft::agg::AggPartial::deserialize(
         dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()),
         r_.rules.q.config.sketch_accuracy, keep);
     if (!parsed)
         throw common::DFTUtilsException(
             common::ErrorCode::Parse, "aggregation partial: malformed record");
-    agg::AggPartial& p = *parsed;
+    index::schemas::dft::agg::AggPartial& p = *parsed;
     if (p.count == 0) {
         ++stats.partials_pruned;
         return;
@@ -798,14 +800,15 @@ void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
         it->second.merge(p);
 }
 
-bool Task::bins_answer(const agg::AggPartial& p) const {
+bool Task::bins_answer(const index::schemas::dft::agg::AggPartial& p) const {
     if (!r_.rules.q.sums_only || r_.rules.q.quantiles) return false;
     if (p.bin_interval == 0 || p.bins.empty()) return false;
     return r_.rules.q.window_us == 0 ||
            r_.rules.q.window_us % p.bin_interval == 0;
 }
 
-void Task::take_bins(const agg::AggPartial& p, AggKey key) {
+void Task::take_bins(const index::schemas::dft::agg::AggPartial& p,
+                     AggKey key) {
     const auto stat_of = [](std::uint64_t n, std::uint64_t sum) {
         dataframe::FieldStat s;
         if (n == 0) return s;
@@ -815,7 +818,7 @@ void Task::take_bins(const agg::AggPartial& p, AggKey key) {
         s.esum = std::bit_cast<std::int64_t>(sum);
         return s;
     };
-    for (const agg::TimeBin& b : p.bins) {
+    for (const index::schemas::dft::agg::TimeBin& b : p.bins) {
         if (r_.rules.q.by_pid) key.pid = b.pid;
         if (r_.rules.q.by_tid) key.tid = b.tid;
         if (r_.rules.q.window_us != 0)
@@ -823,11 +826,10 @@ void Task::take_bins(const agg::AggPartial& p, AggKey key) {
                          r_.rules.q.window_us;
         auto it = rows.find(key);
         if (it == rows.end())
-            it =
-                rows.emplace(key,
-                             agg::AggPartial(r_.rules.q.config.sketch_accuracy))
-                    .first;
-        agg::AggPartial& row = it->second;
+            it = rows.emplace(key, index::schemas::dft::agg::AggPartial(
+                                       r_.rules.q.config.sketch_accuracy))
+                     .first;
+        index::schemas::dft::agg::AggPartial& row = it->second;
         row.count += b.count;
         row.duration.merge(stat_of(b.duration_n, b.duration_sum));
         row.size.merge(stat_of(b.size_n, b.size_sum));
@@ -849,17 +851,16 @@ Task::open_reader(const dstd::String& path) {
 coro::CoroTask<dstd::String> Task::tail_before(
     const dstd::String& path, std::uint32_t chunk,
     const index::gzip::ChunkSpan* spans) {
-    namespace rd = utilities::reader::internal;
     auto reader = co_await open_reader(path);
     dstd::String tail;
     for (std::uint32_t k = chunk; k-- > 0;) {
-        auto stream =
-            reader->stream(rd::StreamConfig()
-                               .stream_type(rd::StreamType::Bytes)
-                               .range_type(rd::RangeType::ByteRange)
-                               .buffer_size(STREAM_BUFFER_BYTES)
-                               .from(spans[k].uc_offset)
-                               .to(spans[k].uc_offset + spans[k].uc_size));
+        auto stream = reader->stream(
+            utilities::reader::internal::StreamConfig()
+                .stream_type(utilities::reader::internal::StreamType::Bytes)
+                .range_type(utilities::reader::internal::RangeType::ByteRange)
+                .buffer_size(STREAM_BUFFER_BYTES)
+                .from(spans[k].uc_offset)
+                .to(spans[k].uc_offset + spans[k].uc_size));
         dstd::String after;  // bytes after the last newline seen in chunk k
         bool found = false;
         while (!stream->done()) {
@@ -921,7 +922,6 @@ coro::CoroTask<void> Task::read_chunk(const dstd::String& path,
                                       const index::gzip::ChunkSpan& span,
                                       const ChunkJob& job,
                                       const index::gzip::ChunkSpan* spans) {
-    namespace rd = utilities::reader::internal;
     ++stats.chunks_reread;
     dstd::HashSet<AggGroup, AggGroupHash> wanted;
     if (!job.all) wanted.insert(job.groups.begin(), job.groups.end());
@@ -938,12 +938,13 @@ coro::CoroTask<void> Task::read_chunk(const dstd::String& path,
     const std::uint64_t to = job.whole_file ? reader->get_max_bytes()
                                             : span.uc_offset + span.uc_size;
     if (from >= to) co_return;
-    auto stream = reader->stream(rd::StreamConfig()
-                                     .stream_type(rd::StreamType::Bytes)
-                                     .range_type(rd::RangeType::ByteRange)
-                                     .buffer_size(STREAM_BUFFER_BYTES)
-                                     .from(from)
-                                     .to(to));
+    auto stream = reader->stream(
+        utilities::reader::internal::StreamConfig()
+            .stream_type(utilities::reader::internal::StreamType::Bytes)
+            .range_type(utilities::reader::internal::RangeType::ByteRange)
+            .buffer_size(STREAM_BUFFER_BYTES)
+            .from(from)
+            .to(to));
     dstd::String pending;
     bool decided = job.chunk == 0;
     while (!stream->done()) {
@@ -977,7 +978,7 @@ bool Task::add_chunk_columns(
     auto found = common::unwrap(
         index::agg_chunk_columns(*src_.snapshot, *job.file, job.chunk));
     if (!found) return false;
-    agg::ChunkColumns block = std::move(*found);
+    index::schemas::dft::agg::ChunkColumns block = std::move(*found);
     dstd::Vector<std::uint32_t> read_ids(block.ids.size(), AGG_UNSET);
     const auto read_id = [&](std::uint32_t local) {
         std::uint32_t& id = read_ids[local];
@@ -1006,14 +1007,16 @@ bool Task::add_chunk_columns(
         column_event_.hhash_id = read_id(block.host[row]);
         column_event_.fhash_id = read_id(block.file[row]);
         for (std::size_t c = 0; c < block.columns.size(); ++c) {
-            const agg::ChunkColumn& column = block.columns[c];
+            const index::schemas::dft::agg::ChunkColumn& column =
+                block.columns[c];
             if (at[c] >= column.rows.size() || column.rows[at[c]] != row)
                 continue;
             const std::size_t k = at[c]++;
             views::detail::FoldEvent::ArgValue value = column.double_at(k);
-            if (column.kind == agg::ColumnKind::Int64)
+            if (column.kind == index::schemas::dft::agg::ColumnKind::Int64)
                 value = column.int64_at(k);
-            else if (column.kind == agg::ColumnKind::Uint64)
+            else if (column.kind ==
+                     index::schemas::dft::agg::ColumnKind::Uint64)
                 value = column.uint64_at(k);
             column_event_.args.emplace_back(path_ids[c], value);
         }

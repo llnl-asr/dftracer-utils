@@ -15,7 +15,6 @@
 
 namespace dftracer::utils::trace::views {
 
-namespace plan = dftracer::utils::index::plan;
 using dftracer::utils::index::store::internal::get_logical_path;
 
 ViewPlannerInput& ViewPlannerInput::with_view(const ViewDefinition& v) {
@@ -76,21 +75,23 @@ coro::CoroTask<dstd::Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
         try {
             dstd::Optional<dftracer::utils::index::Snapshot> owned;
             if (input.snapshot == nullptr)
-                owned.emplace(
-                    common::unwrap(plan::open_snapshot(input.index_path)));
+                owned.emplace(common::unwrap(
+                    index::plan::open_snapshot(input.index_path)));
             const dftracer::utils::index::Snapshot& snapshot =
                 input.snapshot != nullptr ? *input.snapshot : *owned;
             if (!input.scan_all_chunks) {
                 // The query and window describe data events; metadata the
                 // scan returns lives in chunks of its own.
-                const auto metadata =
-                    input.view.filter_metadata    ? plan::MetadataUse::Records
-                    : input.view.metadata_records ? plan::MetadataUse::All
-                    : input.view.include_metadata ? plan::MetadataUse::Every
-                                                  : plan::MetadataUse::None;
+                const auto metadata = input.view.filter_metadata
+                                          ? index::plan::MetadataUse::Records
+                                      : input.view.metadata_records
+                                          ? index::plan::MetadataUse::All
+                                      : input.view.include_metadata
+                                          ? index::plan::MetadataUse::Every
+                                          : index::plan::MetadataUse::None;
                 // Named, not built inside co_await: GCC 12 destroys such a
                 // temporary twice.
-                plan::PruneRequest request{
+                index::plan::PruneRequest request{
                     dstd::String(dstd::StringView(input.index_path)),
                     dstd::String(dstd::StringView(input.file_path)),
                     input.view.query ? &*input.view.query : nullptr,
@@ -99,7 +100,8 @@ coro::CoroTask<dstd::Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
                     total_checkpoints,
                     !input.view.window_overlap,
                     metadata};
-                auto pruned = co_await plan::prune_file(std::move(request));
+                auto pruned =
+                    co_await index::plan::prune_file(std::move(request));
                 if (!pruned)
                     co_return dstd::Unexpected(std::move(pruned).error());
                 if (pruned->total_chunks > 0) {

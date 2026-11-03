@@ -10,7 +10,7 @@
 #include <optional>
 #include <utility>
 
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -38,16 +38,16 @@ dftu_dataframe* dftu_dataframe_window(
         (n_specs > 0 && !specs))
         return nullptr;
     try {
-        dftracer::utils::dstd::Vector<df::WindowColumn> cols;
+        dftracer::utils::dstd::Vector<dataframe::WindowColumn> cols;
         cols.reserve(static_cast<std::size_t>(n_specs));
         for (int32_t i = 0; i < n_specs; ++i) {
             const dftu_window_spec& s = specs[i];
             if (!valid_window_func(s.func) || !s.out) return nullptr;
-            cols.push_back(df::window_column(s));
+            cols.push_back(dataframe::window_column(s));
         }
-        return df::dataframe_handle_wrap(df::window(
-            df::dataframe_handle_view(frame), names_of(partition_by, n_part),
-            names_of(order_by, n_order), cols));
+        return dataframe::dataframe_handle_wrap(dataframe::window(
+            dataframe::dataframe_handle_view(frame),
+            names_of(partition_by, n_part), names_of(order_by, n_order), cols));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -72,10 +72,11 @@ dftu_dataframe* dftu_dataframe_gap_fill(
         if (n_range == 2)
             r = dftracer::utils::dstd::Pair<int64_t, int64_t>{range[0],
                                                               range[1]};
-        return df::dataframe_handle_wrap(df::gap_fill(
-            df::dataframe_handle_view(frame), names_of(partition_by, n_part),
-            time, bucket, names_of(values, n_values),
-            static_cast<df::GapFillMode>(mode), r));
+        return dataframe::dataframe_handle_wrap(
+            dataframe::gap_fill(dataframe::dataframe_handle_view(frame),
+                                names_of(partition_by, n_part), time, bucket,
+                                names_of(values, n_values),
+                                static_cast<dataframe::GapFillMode>(mode), r));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -93,10 +94,10 @@ dftu_dataframe* dftu_dataframe_asof(const dftu_dataframe* left,
     try {
         dftracer::utils::dstd::Optional<double> tol;
         if (tolerance >= 0) tol = tolerance;
-        return df::dataframe_handle_wrap(
-            df::asof(df::dataframe_handle_view(left),
-                     df::dataframe_handle_view(right), on, names_of(by, n_by),
-                     static_cast<df::AsofDirection>(direction), tol));
+        return dataframe::dataframe_handle_wrap(dataframe::asof(
+            dataframe::dataframe_handle_view(left),
+            dataframe::dataframe_handle_view(right), on, names_of(by, n_by),
+            static_cast<dataframe::AsofDirection>(direction), tol));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -110,9 +111,10 @@ dftu_dataframe* dftu_dataframe_interval(const dftu_dataframe* left,
     if (!left || !right || !point || !lo || !hi || (n_by > 0 && !by))
         return nullptr;
     try {
-        return df::dataframe_handle_wrap(df::interval(
-            df::dataframe_handle_view(left), df::dataframe_handle_view(right),
-            point, lo, hi, names_of(by, n_by), outer != 0));
+        return dataframe::dataframe_handle_wrap(
+            dataframe::interval(dataframe::dataframe_handle_view(left),
+                                dataframe::dataframe_handle_view(right), point,
+                                lo, hi, names_of(by, n_by), outer != 0));
     } catch (const std::exception&) {
         return nullptr;
     }

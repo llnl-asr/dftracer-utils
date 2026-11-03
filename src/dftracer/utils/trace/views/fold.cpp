@@ -586,7 +586,6 @@ dstd::Optional<std::size_t> position(const dstd::Vector<dstd::String>& paths,
 // also be ISO-8601 text.
 void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
                 simdjson::dom::element v, LeafDecode& d) {
-    namespace ix = dftracer::utils::index;
     using T = simdjson::dom::element_type;
     const T type = v.type();
     const bool numeric =
@@ -595,8 +594,8 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
     if (numeric) num = v.get_double().value_unsafe();
     dstd::Optional<duql::Number> text_num;
     if (type == T::STRING &&
-        (f.type == ix::FieldType::Int || f.type == ix::FieldType::Float ||
-         f.role == ix::Role::Time || f.role == ix::Role::Duration))
+        (f.type == index::FieldType::Int || f.type == index::FieldType::Float ||
+         f.role == index::Role::Time || f.role == index::Role::Duration))
         text_num = duql::parse_number(v.get_string().value_unsafe());
     auto keep = [&] {
         append_scalar_arg(d.ev.args, d.ev.specials, id, v, d.intern);
@@ -611,23 +610,24 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
             d.ev.args.emplace_back(id, *i);
         else if (const auto* u = std::get_if<std::uint64_t>(&n))
             d.ev.args.emplace_back(id, *u);
-        else if (auto whole = ix::whole_int64(std::get<double>(n)))
+        else if (auto whole = index::whole_int64(std::get<double>(n)))
             d.ev.args.emplace_back(id, *whole);
         else
             return false;
         return true;
     };
     // An ISO-8601 time is its microseconds once decoded.
-    if (f.role == ix::Role::Time && f.type == ix::FieldType::String &&
+    if (f.role == index::Role::Time && f.type == index::FieldType::String &&
         type == T::STRING) {
-        if (const auto us = ix::iso8601_micros(v.get_string().value_unsafe())) {
+        if (const auto us =
+                index::iso8601_micros(v.get_string().value_unsafe())) {
             d.ev.args.emplace_back(id, *us);
             if (*us >= 0) d.ev.ts = static_cast<std::uint64_t>(*us);
         }
         return;
     }
     switch (f.type) {
-        case ix::FieldType::String:
+        case index::FieldType::String:
             if (type == T::STRING || type == T::NULL_VALUE) {
                 keep();
             } else {
@@ -636,11 +636,11 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
                 d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
             }
             break;
-        case ix::FieldType::Bool:
+        case index::FieldType::Bool:
             if (type != T::BOOL) return unconverted();
             keep();
             break;
-        case ix::FieldType::Float:
+        case index::FieldType::Float:
             if (numeric) {
                 d.ev.args.emplace_back(id, *num);
             } else if (text_num) {
@@ -651,13 +651,13 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
                 return unconverted();
             }
             break;
-        case ix::FieldType::Json: {
+        case index::FieldType::Json: {
             dstd::String text;
             dftracer::utils::json::append_canonical_json(text, v);
             d.ev.args.emplace_back(id, d.intern.get_or_insert(text));
             return;
         }
-        case ix::FieldType::Int:
+        case index::FieldType::Int:
             if (type == T::INT64 || type == T::UINT64) {
                 keep();
             } else if (const auto n = type == T::DOUBLE
@@ -675,22 +675,23 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
         num = std::visit([](auto x) { return static_cast<double>(x); },
                          *text_num);
     dstd::Optional<double> micros;
-    if (num) micros = ix::micros_per(f.unit.value_or(ix::TimeUnit::Us)) * *num;
+    if (num)
+        micros = index::micros_per(f.unit.value_or(index::TimeUnit::Us)) * *num;
     switch (f.role) {
-        case ix::Role::None:
+        case index::Role::None:
             break;
-        case ix::Role::Time:
+        case index::Role::Time:
             if (micros && *micros >= 0)
                 d.ev.ts = static_cast<std::uint64_t>(std::llround(*micros));
             break;
-        case ix::Role::Duration:
+        case index::Role::Duration:
             if (micros && *micros >= 0) {
                 d.ev.dur = static_cast<std::uint64_t>(std::llround(*micros));
                 d.ev.has_dur = true;
             }
             break;
-        case ix::Role::Entity:
-        case ix::Role::Lane: {
+        case index::Role::Entity:
+        case index::Role::Lane: {
             if (d.ev.args.empty() || d.ev.args.back().first != id) break;
             const auto& value = d.ev.args.back().second;
             std::uint64_t lane = 0;
@@ -700,11 +701,11 @@ void bind_field(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
                 lane = *u;
             else if (const auto* sid = std::get_if<std::uint32_t>(&value))
                 lane = static_cast<std::uint64_t>(
-                    ix::entity_id(d.intern.resolve(*sid)));
-            (f.role == ix::Role::Entity ? d.ev.pid : d.ev.tid) = lane;
+                    index::entity_id(d.intern.resolve(*sid)));
+            (f.role == index::Role::Entity ? d.ev.pid : d.ev.tid) = lane;
             break;
         }
-        case ix::Role::Name:
+        case index::Role::Name:
             if (!d.ev.args.empty() && d.ev.args.back().first == id)
                 if (const auto* sid =
                         std::get_if<std::uint32_t>(&d.ev.args.back().second))
@@ -857,7 +858,6 @@ void decode_record_into(
     const dftracer::utils::index::RecordSchema* record_schema,
     const dstd::Vector<const dftracer::utils::index::FieldSpec*>* path_fields,
     std::size_t max_children, DecodeHints* hints, bool skip_never_indexed) {
-    namespace ix = dftracer::utils::index;
     reset_fold_event(ev);
     ev.phase = RecordPhase::Complete;
     ev.by_path = true;
@@ -865,8 +865,8 @@ void decode_record_into(
     bool json = record_schema && record_schema->has_json;
     if (json && fields)
         json = std::any_of(fields->begin(), fields->end(),
-                           [](const ix::FieldSpec* f) {
-                               return f && f->type == ix::FieldType::Json;
+                           [](const index::FieldSpec* f) {
+                               return f && f->type == index::FieldType::Json;
                            });
     LeafDecode d{intern,
                  ev,

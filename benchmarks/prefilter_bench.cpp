@@ -21,7 +21,8 @@
 #include <cstdlib>
 #include <random>
 
-namespace duql = dftracer::utils::duql;
+using namespace dftracer::utils;
+
 using dftracer::utils::index::plan::Prefilter;
 
 namespace {

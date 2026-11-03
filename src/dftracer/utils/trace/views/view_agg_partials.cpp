@@ -42,10 +42,7 @@ namespace dftracer::utils::trace::views::detail {
 
 namespace {
 
-namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace dataframe = dftracer::utils::dataframe;
-namespace store = dftracer::utils::index::store;
-using store::internal::get_logical_path;
+using index::store::internal::get_logical_path;
 
 constexpr char EXTRA_SEP = '\x1f';
 
@@ -54,21 +51,21 @@ constexpr char EXTRA_SEP = '\x1f';
 // when it does not.
 dstd::String tier_field(const ViewPlan& plan, dstd::StringView f) {
     if (!plan_by_path(plan)) return dstd::String(f);
-    namespace ix = dftracer::utils::index;
-    const ix::RecordSchema& s = plan_record_schema(plan);
-    const ix::Roles& r = s.roles;
-    auto exact = [&](dstd::StringView path, ix::FieldType type) {
+    const index::RecordSchema& s = plan_record_schema(plan);
+    const index::Roles& r = s.roles;
+    auto exact = [&](dstd::StringView path, index::FieldType type) {
         if (f.empty() || path != f) return false;
-        const ix::FieldSpec* spec = s.field_at(path);
+        const index::FieldSpec* spec = s.field_at(path);
         return spec && !spec->optional && spec->type == type;
     };
-    if (exact(r.name, ix::FieldType::String)) return "name";
-    if (exact(r.entity, ix::FieldType::Int)) return "pid";
-    if (exact(r.lane, ix::FieldType::Int)) return "tid";
-    if (r.duration_unit == ix::TimeUnit::Us &&
-        exact(r.duration, ix::FieldType::Int))
+    if (exact(r.name, index::FieldType::String)) return "name";
+    if (exact(r.entity, index::FieldType::Int)) return "pid";
+    if (exact(r.lane, index::FieldType::Int)) return "tid";
+    if (r.duration_unit == index::TimeUnit::Us &&
+        exact(r.duration, index::FieldType::Int))
         return "dur";
-    if (r.time_unit == ix::TimeUnit::Us && exact(r.time, ix::FieldType::Int))
+    if (r.time_unit == index::TimeUnit::Us &&
+        exact(r.time, index::FieldType::Int))
         return "ts";
     return {};
 }
@@ -76,34 +73,35 @@ dstd::String tier_field(const ViewPlan& plan, dstd::StringView f) {
 // The tier folds a missing or negative role value as 0 where the scan reads
 // null, so every chunk's zone must show the role present in every record.
 bool roles_complete(const ViewPlan& plan) {
-    namespace ix = dftracer::utils::index;
-    const ix::Roles& r = plan_record_schema(plan).roles;
+    const index::Roles& r = plan_record_schema(plan).roles;
     dstd::Vector<dstd::StringView> paths;
     for (const dstd::String* p :
          {&r.name, &r.entity, &r.lane, &r.duration, &r.time})
         if (!tier_field(plan, *p).empty()) paths.push_back(*p);
     if (paths.empty()) return true;
-    dstd::Map<dstd::String, ix::Snapshot> snapshots;
+    dstd::Map<dstd::String, index::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         auto at = snapshots.find(f.index_path);
         if (at == snapshots.end())
             at = snapshots
-                     .emplace(
-                         f.index_path,
-                         common::unwrap(ix::plan::open_snapshot(f.index_path)))
+                     .emplace(f.index_path,
+                              common::unwrap(
+                                  index::plan::open_snapshot(f.index_path)))
                      .first;
-        const ix::Snapshot& snapshot = at->second;
+        const index::Snapshot& snapshot = at->second;
         const auto file = snapshot.file(get_logical_path(f.file_path));
-        if (!file || !ix::extension_current(snapshot, *file,
-                                            store::IndexExtension::Zonemap))
+        if (!file ||
+            !index::extension_current(snapshot, *file,
+                                      index::store::IndexExtension::Zonemap))
             return false;
-        const auto spans = common::unwrap(ix::spans(snapshot, *file));
+        const auto spans = common::unwrap(index::spans(snapshot, *file));
         for (dstd::StringView p : paths) {
             dstd::Map<std::uint64_t,
                       dftracer::utils::index::extensions::kinds::Zone>
                 zones;
-            for (const auto& [granule, bytes] : common::unwrap(ix::granules(
-                     snapshot, *file, store::IndexExtension::Zonemap, p)))
+            for (const auto& [granule, bytes] : common::unwrap(
+                     index::granules(snapshot, *file,
+                                     index::store::IndexExtension::Zonemap, p)))
                 if (auto z =
                         dftracer::utils::index::extensions::kinds::decode_zone(
                             bytes))
@@ -461,8 +459,8 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
                 if (it == root_of.end()) {
                     auto snapshot = common::unwrap(
                         index::plan::open_snapshot(f.index_path));
-                    const auto config =
-                        common::unwrap(agg::tier::read_config(snapshot));
+                    const auto config = common::unwrap(
+                        index::schemas::dft::agg::tier::read_config(snapshot));
                     if (!config && !trace)
                         return declined("an index with no aggregation config");
                     AggQuerySource src;
@@ -494,7 +492,8 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
                     if (!trace)
                         return declined("a file missing from its index");
                 } else if (!trace) {
-                    if (snapshot.extension(*file, store::IndexExtension::Agg,
+                    if (snapshot.extension(*file,
+                                           index::store::IndexExtension::Agg,
                                            *q.sources[at].params_hash) !=
                         index::Freshness::Current)
                         return declined(
@@ -593,7 +592,7 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
 
 // A path record's int field is signed where dftracer's is unsigned.
 dataframe::FieldStat field_stat(const dstd::String& field,
-                                const agg::AggPartial& p,
+                                const index::schemas::dft::agg::AggPartial& p,
                                 dataframe::FieldStatDomain domain) {
     dataframe::FieldStat fs;
     if (field == "dur") {
@@ -683,14 +682,15 @@ class Seeder {
 
     void seed(dataframe::AggState& state,
               const dstd::Vector<dstd::String>& keys,
-              const dstd::Vector<bool>& nulls, const agg::AggPartial& p) {
+              const dstd::Vector<bool>& nulls,
+              const index::schemas::dft::agg::AggPartial& p) {
         dstd::Vector<dataframe::AggSeedValue> values;
         values.reserve(cols_.size());
         for (std::size_t i = 0; i < cols_.size(); ++i) {
             dataframe::AggSeedValue v;
             v.value_col = cols_[i].value_col;
             v.stat = field_stat(cols_[i].field, p, domain_);
-            const agg::QuantileStore* q = nullptr;
+            const index::schemas::dft::agg::QuantileStore* q = nullptr;
             if (quantiles_) {
                 if (cols_[i].field == "dur")
                     q = &p.duration_q;
@@ -882,7 +882,7 @@ coro::CoroTask<bool> partials_collect_typed(
     const ProgressFn* progress) {
     auto prep = prepare(plan, /*typed=*/true, PrepSource::Partials);
     if (!prep) co_return false;
-    const int shards = agg::AGG_KEY_NUM_SHARDS;
+    const int shards = index::schemas::dft::agg::AGG_KEY_NUM_SHARDS;
     if (shard_end <= 0) shard_end = shards;
     const bool whole = shard_begin <= 0 && shard_end >= shards;
     const auto total = static_cast<std::size_t>(shard_end - shard_begin);

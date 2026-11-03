@@ -9,8 +9,6 @@
 
 namespace dftracer::utils::index::plan {
 
-namespace kinds = index::extensions::kinds;
-
 bool unrecorded(dstd::StringView path) {
     const dstd::StringView head = path.substr(0, path.find('.'));
     return head == "pid" || head == "tid" || head == "ts" || head == "dur" ||
@@ -82,7 +80,7 @@ const FileIndexData::Zones& FileIndexData::zones(const dstd::String& path) {
     if (name && current(IndexExtension::Zonemap))
         for (auto& [granule, bytes] : common::unwrap(index::granules(
                  *snapshot, *file, IndexExtension::Zonemap, *name)))
-            if (auto zone = kinds::decode_zone(bytes))
+            if (auto zone = index::extensions::kinds::decode_zone(bytes))
                 out.emplace(granule, std::move(*zone));
     return out;
 }
@@ -95,7 +93,7 @@ const FileIndexData::Counts& FileIndexData::counts(const dstd::String& path) {
     if (name && current(IndexExtension::Counts))
         for (auto& [granule, bytes] : common::unwrap(index::granules(
                  *snapshot, *file, IndexExtension::Counts, *name))) {
-            auto counts = kinds::decode_counts(bytes);
+            auto counts = index::extensions::kinds::decode_counts(bytes);
             if (!counts || !counts->compressed) continue;
             auto& g = out[granule];
             g.observed = counts->observed;
@@ -112,7 +110,7 @@ const FileIndexData::Blooms& FileIndexData::blooms(const dstd::String& path) {
     if (name && current(IndexExtension::Bloom))
         for (auto& [granule, bytes] : common::unwrap(index::granules(
                  *snapshot, *file, IndexExtension::Bloom, *name)))
-            if (auto bloom = kinds::decode_bloom(bytes))
+            if (auto bloom = index::extensions::kinds::decode_bloom(bytes))
                 out.emplace(granule, std::move(*bloom));
     return out;
 }
@@ -126,7 +124,7 @@ const index::extensions::ScalableBloomFilter* FileIndexData::file_bloom(
         if (name && current(IndexExtension::Bloom))
             if (auto bytes = common::unwrap(index::path_file(
                     *snapshot, *file, IndexExtension::Bloom, *name)))
-                bloom = kinds::decode_bloom(*bytes);
+                bloom = index::extensions::kinds::decode_bloom(*bytes);
         it = file_blooms_.emplace(path, std::move(bloom)).first;
     }
     return it->second ? &*it->second : nullptr;
@@ -141,7 +139,8 @@ const dstd::Set<std::uint64_t>& FileIndexData::posting_chunks(
     const auto& name = evidence_name(path);
     if (name && current(IndexExtension::Postings))
         for (auto g : common::unwrap(index::posting_granules(
-                 *snapshot, *file, *name, kinds::value_hash(val))))
+                 *snapshot, *file, *name,
+                 index::extensions::kinds::value_hash(val))))
             out.insert(g);
     return out;
 }
@@ -160,8 +159,8 @@ dstd::Optional<bool> FileIndexData::posting_contains(const dstd::String& path,
     auto key = path + '\0' + val;
     auto it = posting_membership_.find(key);
     if (it != posting_membership_.end()) return it->second;
-    const bool present = common::unwrap(
-        index::has_posting(*snapshot, *file, *name, kinds::value_hash(val)));
+    const bool present = common::unwrap(index::has_posting(
+        *snapshot, *file, *name, index::extensions::kinds::value_hash(val)));
     posting_membership_.emplace(key, present);
     return present;
 }

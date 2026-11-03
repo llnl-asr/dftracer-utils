@@ -23,20 +23,18 @@ namespace dftracer::utils::duql {
 
 namespace {
 
-namespace df = dftracer::utils::dataframe;
-
 [[noreturn]] void fail(const dstd::String& why) {
     throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
                                     ("View::duql " + why).c_str());
 }
 
-bool bit(const df::Series& s, std::int64_t r) {
+bool bit(const dataframe::Series& s, std::int64_t r) {
     const auto* bits = s.data<std::uint8_t>();
     return (bits[r >> 3] >> (r & 7)) & 1;
 }
 
 template <class T>
-bool int_key(dstd::String& out, const df::Series& s, std::int64_t r) {
+bool int_key(dstd::String& out, const dataframe::Series& s, std::int64_t r) {
     const T v = s.data<T>()[r];
     if constexpr (std::is_signed_v<T>) {
         if (v < 0) {
@@ -52,28 +50,29 @@ bool int_key(dstd::String& out, const df::Series& s, std::int64_t r) {
 }
 
 // Row `r` of a FLAT column as the row evaluator reads it.
-dstd::Optional<Cell> cell_of(const df::Series& s, std::int64_t r) {
+dstd::Optional<Cell> cell_of(const dataframe::Series& s, std::int64_t r) {
     if (s.is_null(r)) return Cell::null();
     switch (s.type()) {
-        case df::TypeId::Int8:
-        case df::TypeId::Int16:
-        case df::TypeId::Int32:
-        case df::TypeId::Int64:
-        case df::TypeId::Uint8:
-        case df::TypeId::Uint16:
-        case df::TypeId::Uint32:
-            return Cell{
-                s.slice(r, 1).cast(df::TypeId::Int64).data<std::int64_t>()[0]};
-        case df::TypeId::Uint64:
+        case dataframe::TypeId::Int8:
+        case dataframe::TypeId::Int16:
+        case dataframe::TypeId::Int32:
+        case dataframe::TypeId::Int64:
+        case dataframe::TypeId::Uint8:
+        case dataframe::TypeId::Uint16:
+        case dataframe::TypeId::Uint32:
+            return Cell{s.slice(r, 1)
+                            .cast(dataframe::TypeId::Int64)
+                            .data<std::int64_t>()[0]};
+        case dataframe::TypeId::Uint64:
             return Cell{s.data<std::uint64_t>()[r]};
-        case df::TypeId::Float32:
+        case dataframe::TypeId::Float32:
             return Cell{static_cast<double>(s.data<float>()[r])};
-        case df::TypeId::Float64:
+        case dataframe::TypeId::Float64:
             return Cell{s.data<double>()[r]};
-        case df::TypeId::Bool:
+        case dataframe::TypeId::Bool:
             return Cell{bit(s, r)};
-        case df::TypeId::String:
-        case df::TypeId::LargeString:
+        case dataframe::TypeId::String:
+        case dataframe::TypeId::LargeString:
             return Cell{dstd::String(s.string_at(r))};
         default:
             return dstd::nullopt;
@@ -114,7 +113,7 @@ bool append_json_key(dstd::String& out, dstd::StringView text) {
 
 // Row `r` of a FLAT column as duql orders it; nullopt for null, NaN and
 // containers. A JSON cell's string is kept in `owned`.
-dstd::Optional<Ordered> ordered_of(const df::Series& s, std::int64_t r,
+dstd::Optional<Ordered> ordered_of(const dataframe::Series& s, std::int64_t r,
                                    dstd::Deque<dstd::String>& owned) {
     if (s.is_null(r)) return dstd::nullopt;
     auto real = [](double d) -> dstd::Optional<Ordered> {
@@ -123,30 +122,30 @@ dstd::Optional<Ordered> ordered_of(const df::Series& s, std::int64_t r,
     };
     auto whole = [&](auto v) { return Ordered{static_cast<std::int64_t>(v)}; };
     switch (s.type()) {
-        case df::TypeId::Int8:
+        case dataframe::TypeId::Int8:
             return whole(s.data<std::int8_t>()[r]);
-        case df::TypeId::Int16:
+        case dataframe::TypeId::Int16:
             return whole(s.data<std::int16_t>()[r]);
-        case df::TypeId::Int32:
+        case dataframe::TypeId::Int32:
             return whole(s.data<std::int32_t>()[r]);
-        case df::TypeId::Int64:
+        case dataframe::TypeId::Int64:
             return whole(s.data<std::int64_t>()[r]);
-        case df::TypeId::Uint8:
+        case dataframe::TypeId::Uint8:
             return whole(s.data<std::uint8_t>()[r]);
-        case df::TypeId::Uint16:
+        case dataframe::TypeId::Uint16:
             return whole(s.data<std::uint16_t>()[r]);
-        case df::TypeId::Uint32:
+        case dataframe::TypeId::Uint32:
             return whole(s.data<std::uint32_t>()[r]);
-        case df::TypeId::Uint64:
+        case dataframe::TypeId::Uint64:
             return Ordered{s.data<std::uint64_t>()[r]};
-        case df::TypeId::Float32:
+        case dataframe::TypeId::Float32:
             return real(static_cast<double>(s.data<float>()[r]));
-        case df::TypeId::Float64:
+        case dataframe::TypeId::Float64:
             return real(s.data<double>()[r]);
-        case df::TypeId::Bool:
+        case dataframe::TypeId::Bool:
             return Ordered{bit(s, r)};
-        case df::TypeId::String:
-        case df::TypeId::LargeString:
+        case dataframe::TypeId::String:
+        case dataframe::TypeId::LargeString:
             break;
         default:
             return dstd::nullopt;
@@ -174,17 +173,17 @@ dstd::Optional<Ordered> ordered_of(const df::Series& s, std::int64_t r,
     }
 }
 
-bool integral(df::TypeId t) {
+bool integral(dataframe::TypeId t) {
     switch (t) {
-        case df::TypeId::Int8:
-        case df::TypeId::Int16:
-        case df::TypeId::Int32:
-        case df::TypeId::Int64:
-        case df::TypeId::Uint8:
-        case df::TypeId::Uint16:
-        case df::TypeId::Uint32:
-        case df::TypeId::Uint64:
-        case df::TypeId::Bool:
+        case dataframe::TypeId::Int8:
+        case dataframe::TypeId::Int16:
+        case dataframe::TypeId::Int32:
+        case dataframe::TypeId::Int64:
+        case dataframe::TypeId::Uint8:
+        case dataframe::TypeId::Uint16:
+        case dataframe::TypeId::Uint32:
+        case dataframe::TypeId::Uint64:
+        case dataframe::TypeId::Bool:
             return true;
         default:
             return false;
@@ -193,35 +192,36 @@ bool integral(df::TypeId t) {
 
 }  // namespace
 
-bool append_cell_key(dstd::String& out, const df::Series& s, std::int64_t r) {
+bool append_cell_key(dstd::String& out, const dataframe::Series& s,
+                     std::int64_t r) {
     if (s.is_null(r)) return false;
     switch (s.type()) {
-        case df::TypeId::Int8:
+        case dataframe::TypeId::Int8:
             return int_key<std::int8_t>(out, s, r);
-        case df::TypeId::Int16:
+        case dataframe::TypeId::Int16:
             return int_key<std::int16_t>(out, s, r);
-        case df::TypeId::Int32:
+        case dataframe::TypeId::Int32:
             return int_key<std::int32_t>(out, s, r);
-        case df::TypeId::Int64:
+        case dataframe::TypeId::Int64:
             return int_key<std::int64_t>(out, s, r);
-        case df::TypeId::Uint8:
+        case dataframe::TypeId::Uint8:
             return int_key<std::uint8_t>(out, s, r);
-        case df::TypeId::Uint16:
+        case dataframe::TypeId::Uint16:
             return int_key<std::uint16_t>(out, s, r);
-        case df::TypeId::Uint32:
+        case dataframe::TypeId::Uint32:
             return int_key<std::uint32_t>(out, s, r);
-        case df::TypeId::Uint64:
+        case dataframe::TypeId::Uint64:
             return int_key<std::uint64_t>(out, s, r);
-        case df::TypeId::Float32:
+        case dataframe::TypeId::Float32:
             return append_double_key(out,
                                      static_cast<double>(s.data<float>()[r]));
-        case df::TypeId::Float64:
+        case dataframe::TypeId::Float64:
             return append_double_key(out, s.data<double>()[r]);
-        case df::TypeId::Bool:
+        case dataframe::TypeId::Bool:
             append_bool_key(out, bit(s, r));
             return true;
-        case df::TypeId::String:
-        case df::TypeId::LargeString:
+        case dataframe::TypeId::String:
+        case dataframe::TypeId::LargeString:
             if (s.is_json()) return append_json_key(out, s.string_at(r));
             append_string_key(out, s.string_at(r));
             return true;
@@ -230,7 +230,7 @@ bool append_cell_key(dstd::String& out, const df::Series& s, std::int64_t r) {
     }
 }
 
-df::DataFrame flat_frame(df::DataFrame f) {
+dataframe::DataFrame flat_frame(dataframe::DataFrame f) {
     for (auto& c : f.columns)
         if (!c.is_flat()) c = c.materialize();
     return f;
@@ -238,39 +238,39 @@ df::DataFrame flat_frame(df::DataFrame f) {
 
 namespace {
 
-std::uint64_t series_bytes(const df::Series& s) {
+std::uint64_t series_bytes(const dataframe::Series& s) {
     const std::int64_t n = s.length();
     std::uint64_t bytes =
         s.null_count() > 0 ? static_cast<std::uint64_t>((n + 7) / 8) : 0;
     switch (s.type()) {
-        case df::TypeId::String:
-        case df::TypeId::LargeString:
+        case dataframe::TypeId::String:
+        case dataframe::TypeId::LargeString:
             bytes += static_cast<std::uint64_t>(n + 1) *
-                     (s.type() == df::TypeId::String ? 4 : 8);
+                     (s.type() == dataframe::TypeId::String ? 4 : 8);
             for (std::int64_t r = 0; r < n; ++r) bytes += s.string_at(r).size();
             return bytes;
-        case df::TypeId::List:
-        case df::TypeId::LargeList:
+        case dataframe::TypeId::List:
+        case dataframe::TypeId::LargeList:
             bytes += static_cast<std::uint64_t>(n + 1) * 4;
             [[fallthrough]];
-        case df::TypeId::Struct:
+        case dataframe::TypeId::Struct:
             for (std::int64_t i = 0; i < s.num_children(); ++i)
                 bytes += series_bytes(s.child(i));
             return bytes;
         default:
-            return bytes + df::buffer_bytes(s.type(), n);
+            return bytes + dataframe::buffer_bytes(s.type(), n);
     }
 }
 
 }  // namespace
 
-std::uint64_t frame_bytes(const df::DataFrame& f) {
+std::uint64_t frame_bytes(const dataframe::DataFrame& f) {
     std::uint64_t bytes = 0;
     for (const auto& c : f.columns) bytes += series_bytes(c);
     return bytes;
 }
 
-dstd::Optional<std::size_t> column_of(const df::DataFrame& f,
+dstd::Optional<std::size_t> column_of(const dataframe::DataFrame& f,
                                       dstd::StringView name) {
     for (std::size_t i = 0; i < f.names.size(); ++i)
         if (f.names[i] == name) return i;
@@ -283,15 +283,15 @@ dstd::Optional<std::size_t> column_of(const df::DataFrame& f,
 }
 
 dstd::SharedPtr<const LookupTable> make_lookup_table(
-    dstd::String name, dstd::SharedPtr<const df::DataFrame> frame,
+    dstd::String name, dstd::SharedPtr<const dataframe::DataFrame> frame,
     const dstd::Vector<std::size_t>& columns) {
     if (std::any_of(frame->columns.begin(), frame->columns.end(),
-                    [](const df::Series& c) { return !c.is_flat(); })) {
-        df::DataFrame flat;
+                    [](const dataframe::Series& c) { return !c.is_flat(); })) {
+        dataframe::DataFrame flat;
         flat.names = frame->names;
-        for (const df::Series& c : frame->columns)
+        for (const dataframe::Series& c : frame->columns)
             flat.columns.push_back(c.is_flat() ? c.share() : c.materialize());
-        frame = dstd::make_shared<const df::DataFrame>(std::move(flat));
+        frame = dstd::make_shared<const dataframe::DataFrame>(std::move(flat));
     }
     auto t = dstd::make_shared<LookupTable>();
     t->name = std::move(name);
@@ -319,14 +319,15 @@ namespace {
 void index_range(LookupTable& t, RangeRead read, std::size_t range,
                  dstd::Optional<std::size_t> value) {
     auto ix = dstd::make_shared<RangeIndex>();
-    const df::DataFrame& f = *t.frame;
-    const df::Series& by = f.columns[range];
-    const df::Series* arg = value ? &f.columns[*value] : nullptr;
+    const dataframe::DataFrame& f = *t.frame;
+    const dataframe::Series& by = f.columns[range];
+    const dataframe::Series* arg = value ? &f.columns[*value] : nullptr;
     const bool tree = read != RangeRead::Rows && read != RangeRead::Count;
     if ((read == RangeRead::Sum || read == RangeRead::Mean) && arg) {
-        const df::TypeId type = arg->type();
-        const bool number = integral(type) || type == df::TypeId::Float32 ||
-                            type == df::TypeId::Float64 ||
+        const dataframe::TypeId type = arg->type();
+        const bool number = integral(type) ||
+                            type == dataframe::TypeId::Float32 ||
+                            type == dataframe::TypeId::Float64 ||
                             arg->null_count() == arg->length();
         if (!number || arg->is_json())
             fail("'" + t.name +
@@ -414,10 +415,10 @@ void index_range(LookupTable& t, RangeRead read, std::size_t range,
 }  // namespace
 
 dstd::SharedPtr<const LookupTable> make_lookup_table(
-    const TLookup& l, dstd::SharedPtr<const df::DataFrame> frame) {
+    const TLookup& l, dstd::SharedPtr<const dataframe::DataFrame> frame) {
     if (joined(l))
         fail("'" + l.name + "' reads its rows through a join, not a table");
-    const df::DataFrame& f = *frame;
+    const dataframe::DataFrame& f = *frame;
     dstd::Vector<std::size_t> columns;
     dstd::Optional<std::size_t> range;
     if (l.range != RangeRead::None) {
@@ -471,7 +472,7 @@ dstd::SharedPtr<const LookupTable> make_lookup_table(
         t->value = column_of(*t->frame, l.column);
     if (range) index_range(*t, l.range, *range, t->value);
     if (t->value) {
-        const df::Series& v = t->frame->columns[*t->value];
+        const dataframe::Series& v = t->frame->columns[*t->value];
         t->cells.reserve(static_cast<std::size_t>(v.length()));
         for (std::int64_t r = 0; r < v.length(); ++r)
             t->cells.push_back(cell_of(v, r));
@@ -479,7 +480,7 @@ dstd::SharedPtr<const LookupTable> make_lookup_table(
     return t;
 }
 
-dstd::String row_key(const dstd::Vector<const df::Series*>& keys,
+dstd::String row_key(const dstd::Vector<const dataframe::Series*>& keys,
                      std::int64_t r) {
     dstd::String key;
     for (const auto* k : keys) append_cell_key(key, *k, r);
@@ -487,7 +488,8 @@ dstd::String row_key(const dstd::Vector<const df::Series*>& keys,
 }
 
 Matches match(const LookupTable& table,
-              const dstd::Vector<const df::Series*>& keys, std::int64_t n) {
+              const dstd::Vector<const dataframe::Series*>& keys,
+              std::int64_t n) {
     Matches m;
     m.offsets.reserve(static_cast<std::size_t>(n) + 1);
     m.offsets.push_back(0);
@@ -511,8 +513,8 @@ Matches match(const LookupTable& table,
     return m;
 }
 
-bool same_cell(const df::Series& x, std::int64_t a, const df::Series& y,
-               std::int64_t b) {
+bool same_cell(const dataframe::Series& x, std::int64_t a,
+               const dataframe::Series& y, std::int64_t b) {
     dstd::String ka;
     dstd::String kb;
     const bool ha = append_cell_key(ka, x, a);
@@ -523,9 +525,9 @@ bool same_cell(const df::Series& x, std::int64_t a, const df::Series& y,
 
 namespace {
 
-df::Series range_column(const TLookup& t, const LookupTable& table,
-                        const dstd::Vector<const df::Series*>& keys,
-                        std::int64_t n) {
+dataframe::Series range_column(
+    const TLookup& t, const LookupTable& table,
+    const dstd::Vector<const dataframe::Series*>& keys, std::int64_t n) {
     const std::size_t bounds = (t.low ? 1 : 0) + (t.high ? 1 : 0);
     const std::size_t keyed = keys.size() - bounds;
     const std::size_t subject = keys.size() - t.correlated;
@@ -578,27 +580,30 @@ df::Series range_column(const TLookup& t, const LookupTable& table,
         }
     }
     if (in)
-        return df::Series::flat(df::TypeId::Bool, bits.data(), n, valid.data());
+        return dataframe::Series::flat(dataframe::TypeId::Bool, bits.data(), n,
+                                       valid.data());
     if (picks) {
-        if (!table.value) return df::Series::nulls(df::TypeId::Bool, n);
+        if (!table.value)
+            return dataframe::Series::nulls(dataframe::TypeId::Bool, n);
         return table.frame->columns[*table.value].take(pick);
     }
-    if (reals) return df::Series::flat_f64(doubles.data(), n, valid.data());
-    return df::Series::flat_i64(ints.data(), n, valid.data());
+    if (reals)
+        return dataframe::Series::flat_f64(doubles.data(), n, valid.data());
+    return dataframe::Series::flat_i64(ints.data(), n, valid.data());
 }
 
 }  // namespace
 
-df::Series lookup_column(const TLookup& t,
-                         const dstd::Vector<const df::Series*>& keys,
-                         std::int64_t n) {
+dataframe::Series lookup_column(
+    const TLookup& t, const dstd::Vector<const dataframe::Series*>& keys,
+    std::int64_t n) {
     const LookupTable* table = t.slot ? t.slot->table.get() : nullptr;
     if (!table) fail("'" + t.name + "' was read before its rows were bound");
     if (t.range != RangeRead::None) return range_column(t, *table, keys, n);
-    const df::DataFrame& f = *table->frame;
+    const dataframe::DataFrame& f = *table->frame;
     if (t.kind == LookupKind::Scalar) {
         if (f.num_rows() == 0 || f.columns.empty())
-            return df::Series::nulls(df::TypeId::Bool, n);
+            return dataframe::Series::nulls(dataframe::TypeId::Bool, n);
         return f.columns[0].take(
             dstd::Vector<std::int64_t>(static_cast<std::size_t>(n), 0));
     }
@@ -622,10 +627,12 @@ df::Series lookup_column(const TLookup& t,
             if (hit != t.negated) out[i >> 3] |= b;
             valid[i >> 3] |= b;
         }
-        return df::Series::flat(df::TypeId::Bool, out.data(), n, valid.data());
+        return dataframe::Series::flat(dataframe::TypeId::Bool, out.data(), n,
+                                       valid.data());
     }
-    if (!table->value) return df::Series::nulls(df::TypeId::Bool, n);
-    const df::Series& value = f.columns[*table->value];
+    if (!table->value)
+        return dataframe::Series::nulls(dataframe::TypeId::Bool, n);
+    const dataframe::Series& value = f.columns[*table->value];
     dstd::Vector<std::int64_t> pick(static_cast<std::size_t>(n), -1);
     for (std::int64_t r = 0; r < n; ++r) {
         const auto i = static_cast<std::size_t>(r);
@@ -642,9 +649,9 @@ df::Series lookup_column(const TLookup& t,
     return value.take(pick);
 }
 
-df::Series in_column(const dstd::Vector<const df::Series*>& keys,
-                     std::size_t subject, const df::Series& matched,
-                     bool negated) {
+dataframe::Series in_column(const dstd::Vector<const dataframe::Series*>& keys,
+                            std::size_t subject,
+                            const dataframe::Series& matched, bool negated) {
     const std::int64_t n = matched.length();
     dstd::Vector<std::uint8_t> out((static_cast<std::size_t>(n) + 7) / 8, 0);
     dstd::Vector<std::uint8_t> valid(out.size(), 0);
@@ -661,16 +668,18 @@ df::Series in_column(const dstd::Vector<const df::Series*>& keys,
         if (matched.is_null(r) == negated) out[i >> 3] |= b;
         valid[i >> 3] |= b;
     }
-    return df::Series::flat(df::TypeId::Bool, out.data(), n, valid.data());
+    return dataframe::Series::flat(dataframe::TypeId::Bool, out.data(), n,
+                                   valid.data());
 }
 
-df::Series scalar_column(const dstd::String& name,
-                         const dstd::Vector<const df::Series*>& keys,
-                         const df::Series& nest, std::size_t field,
-                         const df::DataFrame* empty) {
+dataframe::Series scalar_column(
+    const dstd::String& name,
+    const dstd::Vector<const dataframe::Series*>& keys,
+    const dataframe::Series& nest, std::size_t field,
+    const dataframe::DataFrame* empty) {
     const std::int64_t n = nest.length();
     const std::int32_t* off = nest.offsets();
-    df::DataFrame values;
+    dataframe::DataFrame values;
     values.names = {CORRELATED_VALUE};
     values.columns.push_back(
         nest.child(0).child(static_cast<std::int64_t>(field)));
@@ -680,7 +689,8 @@ df::Series scalar_column(const dstd::String& name,
             fail("'" + name + "' over no rows gives " +
                  dstd::int_text(empty->num_rows()) + " rows, not one");
         none = values.num_rows();
-        values = df::concat({&values, empty}, df::ConcatHow::Diagonal);
+        values =
+            dataframe::concat({&values, empty}, dataframe::ConcatHow::Diagonal);
     }
     dstd::Vector<std::int64_t> pick(static_cast<std::size_t>(n), none);
     for (std::int64_t r = 0; r < n; ++r) {

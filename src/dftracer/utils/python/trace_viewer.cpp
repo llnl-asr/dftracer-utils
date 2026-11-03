@@ -45,6 +45,8 @@
 #include <cstring>
 #include <utility>
 
+using namespace dftracer::utils;
+
 namespace {
 
 PyObject* str_list_dstd(
@@ -67,16 +69,14 @@ dftracer::utils::dstd::String DS(const dftracer::utils::dstd::String& v) {
     return dftracer::utils::dstd::String(v.data(), v.size());
 }
 
-namespace py = dftracer::utils::python;
-namespace views = dftracer::utils::trace::views;
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::LazyFrame;
-using views::AggOp;
-using views::AggSpec;
-using views::ExportStats;
-using views::GroupKey;
-using views::Phase;
-using views::View;
+using trace::views::AggOp;
+using trace::views::AggSpec;
+using trace::views::ExportStats;
+using trace::views::GroupKey;
+using trace::views::Phase;
+using trace::views::View;
 
 View& tv_of(PyObject* self) {
     return *reinterpret_cast<TraceViewerObject*>(self)->tv;
@@ -97,7 +97,7 @@ PyObject* guarded(Fn&& fn) {
     try {
         return fn();
     } catch (const std::exception& e) {
-        py::set_typed_py_error(e);
+        python::set_typed_py_error(e);
         return nullptr;
     }
 }
@@ -135,7 +135,7 @@ PyObject* stats_dict(const ExportStats& s) {
 
 // A Python (done, total) callback as a ProgressFn. It fires on a runtime
 // worker, so each call takes the GIL.
-views::ProgressFn progress_from(PyObject* obj) {
+trace::views::ProgressFn progress_from(PyObject* obj) {
     if (!obj || obj == Py_None) return {};
     Py_INCREF(obj);
     auto cb = dftracer::utils::dstd::adopt_shared_ptr(obj, [](PyObject* p) {
@@ -156,7 +156,7 @@ views::ProgressFn progress_from(PyObject* obj) {
     };
 }
 
-class FileSink : public views::ExportSink {
+class FileSink : public trace::views::ExportSink {
    public:
     explicit FileSink(FILE* f) : f_(f) {}
     void write(dftracer::utils::dstd::StringView data) override {
@@ -290,7 +290,7 @@ dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(
     if (op == "active") return AggSpec(AggOp::Active, DS(occ));
     if (op == "pct")
         return AggSpec(AggOp::Pct, DS(field), "", "",
-                       by.empty() ? 0.0 : py::parse_double(by));
+                       by.empty() ? 0.0 : python::parse_double(by));
     if (op.size() >= 2 && op[0] == 'p') {
         double denom = 1.0;
         for (std::size_t i = 1; i < op.size(); ++i) {
@@ -299,7 +299,7 @@ dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(
             denom *= 10.0;
         }
         return AggSpec(AggOp::Pct, DS(field), DS(op + "_" + field), "",
-                       py::parse_double(op.substr(1)) / denom);
+                       python::parse_double(op.substr(1)) / denom);
     }
     return dftracer::utils::dstd::nullopt;
 }
@@ -320,7 +320,7 @@ bool parse_specs(PyObject* args, dftracer::utils::dstd::Vector<AggSpec>& out) {
 }
 
 bool parse_containment(PyObject* args, PyObject* kwds, bool with_group,
-                       views::ContainmentArgs& out) {
+                       trace::views::ContainmentArgs& out) {
     static const char* kw_group[] = {"partition", "ts",    "dur",
                                      "name",      "group", nullptr};
     static const char* kw_plain[] = {"partition", "ts", "dur", "name", nullptr};
@@ -336,12 +336,12 @@ bool parse_containment(PyObject* args, PyObject* kwds, bool with_group,
         return false;
     if (part && part != Py_None) {
         out.partition.clear();
-        if (!py::parse_string_seq(part, "partition must be a sequence",
-                                  out.partition))
+        if (!python::parse_string_seq(part, "partition must be a sequence",
+                                      out.partition))
             return false;
     }
     if (group && group != Py_None &&
-        !py::parse_string_seq(group, "group must be a sequence", out.group))
+        !python::parse_string_seq(group, "group must be a sequence", out.group))
         return false;
     out.ts = ts;
     out.dur = dur;
@@ -395,28 +395,28 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
             dir = DS(path);
         else
             paths.emplace_back(path);
-    } else if (!py::parse_string_seq(files,
-                                     "files must be a path or a "
-                                     "sequence of paths",
-                                     paths)) {
+    } else if (!python::parse_string_seq(files,
+                                         "files must be a path or a "
+                                         "sequence of paths",
+                                         paths)) {
         return -1;
     }
     View tv;
     if (dir) {
         if (!run_blocking([&] {
-                tv = py::get_default_runtime()
+                tv = python::get_default_runtime()
                          ->submit(View::from_directory(*dir, DS(index_dir)))
                          .get();
             }))
             return -1;
     } else {
-        dftracer::utils::dstd::Vector<views::ViewFile> vfiles;
+        dftracer::utils::dstd::Vector<trace::views::ViewFile> vfiles;
         vfiles.reserve(paths.size());
         for (const dftracer::utils::dstd::String& p : paths) {
             const auto index_path =
                 dftracer::utils::trace::internal::determine_index_path(
                     p, index_dir);
-            vfiles.push_back(views::ViewFile{DS(p), index_path});
+            vfiles.push_back(trace::views::ViewFile{DS(p), index_path});
         }
         if (!run_blocking([&] { tv = View::from_files(std::move(vfiles)); }))
             return -1;
@@ -428,11 +428,11 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
 
 PyObject* tv_lazy(PyObject* self, PyObject*) {
     return guarded(
-        [&] { return py::wrap_lazyframe(LazyFrame(tv_of(self).lazy())); });
+        [&] { return python::wrap_lazyframe(LazyFrame(tv_of(self).lazy())); });
 }
 
 PyObject* tv_with_lazy(PyObject* self, PyObject* arg) {
-    const LazyFrame* lf = py::lazyframe_of(arg);
+    const LazyFrame* lf = python::lazyframe_of(arg);
     if (!lf) return nullptr;
     return build(self, [&](const View& t) { return t.with_lazy(*lf); });
 }
@@ -552,7 +552,8 @@ PyObject* tv_explain_duql(PyObject* self, PyObject* args) {
 
 PyObject* tv_select(PyObject* self, PyObject* arg) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
-    if (!py::parse_string_seq(arg, "select expects a sequence of names", names))
+    if (!python::parse_string_seq(arg, "select expects a sequence of names",
+                                  names))
         return nullptr;
     return build(self, [&](const View& t) {
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
@@ -646,7 +647,6 @@ PyObject* tv_time_scale(PyObject* self, PyObject* arg) {
 }
 
 PyObject* tv_time_unit(PyObject* self, PyObject* arg) {
-    namespace trace = dftracer::utils::trace;
     const char* s = as_utf8(arg);
     if (!s) return nullptr;
     const dftracer::utils::dstd::String t(s);
@@ -736,7 +736,7 @@ PyObject* tv_columns(PyObject* self, PyObject*) {
 }
 
 PyObject* tv_column_info(PyObject* self, PyObject*) {
-    dftracer::utils::dstd::Vector<views::ColumnInfo> info;
+    dftracer::utils::dstd::Vector<trace::views::ColumnInfo> info;
     if (!run_blocking([&] { info = tv_of(self).column_info(); }))
         return nullptr;
     PyObject* d = PyDict_New();
@@ -755,8 +755,9 @@ PyObject* tv_column_info(PyObject* self, PyObject*) {
 
 PyObject* tv_schema_tree(PyObject* self, PyObject*) {
     dftracer::utils::dstd::String json;
-    if (!run_blocking(
-            [&] { json = views::schema_tree_json(tv_of(self).schema_tree()); }))
+    if (!run_blocking([&] {
+            json = trace::views::schema_tree_json(tv_of(self).schema_tree());
+        }))
         return nullptr;
     return PyUnicode_FromStringAndSize(json.data(),
                                        static_cast<Py_ssize_t>(json.size()));
@@ -781,32 +782,32 @@ PyObject* tv_filters_events(PyObject* self, PyObject*) {
 }
 
 PyObject* tv_call_tree(PyObject* self, PyObject* args, PyObject* kwds) {
-    views::ContainmentArgs a;
+    trace::views::ContainmentArgs a;
     if (!parse_containment(args, kwds, false, a)) return nullptr;
     return guarded([&] {
-        return py::wrap_lazyframe(
+        return python::wrap_lazyframe(
             tv_of(self).call_tree(a.partition, a.ts, a.dur, a.name));
     });
 }
 
 PyObject* tv_flamegraph(PyObject* self, PyObject* args, PyObject* kwds) {
-    views::ContainmentArgs a;
+    trace::views::ContainmentArgs a;
     if (!parse_containment(args, kwds, true, a)) return nullptr;
     return guarded([&] {
-        return py::wrap_lazyframe(
+        return python::wrap_lazyframe(
             tv_of(self).flamegraph(a.partition, a.ts, a.dur, a.name, a.group));
     });
 }
 
 PyObject* tv_containment(PyObject* self, PyObject* args, PyObject* kwds) {
-    views::ContainmentArgs a;
+    trace::views::ContainmentArgs a;
     if (!parse_containment(args, kwds, true, a)) return nullptr;
     return guarded([&]() -> PyObject* {
         auto r =
             tv_of(self).containment(a.partition, a.ts, a.dur, a.name, a.group);
-        PyObject* ct = py::wrap_lazyframe(LazyFrame(r.plans()[0]));
+        PyObject* ct = python::wrap_lazyframe(LazyFrame(r.plans()[0]));
         if (!ct) return nullptr;
-        PyObject* fg = py::wrap_lazyframe(LazyFrame(r.plans()[1]));
+        PyObject* fg = python::wrap_lazyframe(LazyFrame(r.plans()[1]));
         if (!fg) {
             Py_DECREF(ct);
             return nullptr;
@@ -817,10 +818,10 @@ PyObject* tv_containment(PyObject* self, PyObject* args, PyObject* kwds) {
 
 PyObject* tv_flamegraph_partial(PyObject* self, PyObject* args,
                                 PyObject* kwds) {
-    views::ContainmentArgs a;
+    trace::views::ContainmentArgs a;
     if (!parse_containment(args, kwds, true, a)) return nullptr;
     return guarded([&] {
-        return py::wrap_lazyframe(LazyFrame(
+        return python::wrap_lazyframe(LazyFrame(
             tv_of(self)
                 .flamegraph_partial(a.partition, a.ts, a.dur, a.name, a.group)
                 .plans()
@@ -830,7 +831,7 @@ PyObject* tv_flamegraph_partial(PyObject* self, PyObject* args,
 
 PyObject* tv_aggregate_partial(PyObject* self, PyObject*) {
     return guarded([&] {
-        return py::wrap_lazyframe(
+        return python::wrap_lazyframe(
             LazyFrame(tv_of(self).aggregate_partial().plans().front()));
     });
 }
@@ -845,8 +846,8 @@ PyObject* tv_sink_json(PyObject* self, PyObject* arg) {
     }
     auto sink = dftracer::utils::dstd::make_shared<FileSink>(f);
     return guarded([&] {
-        return py::wrap_lazyframe(LazyFrame(
-            tv_of(self).sink_json(sink, views::LAZY).plans().front()));
+        return python::wrap_lazyframe(LazyFrame(
+            tv_of(self).sink_json(sink, trace::views::LAZY).plans().front()));
     });
 }
 
@@ -860,8 +861,8 @@ PyObject* tv_typed(PyObject* self, PyObject* args, PyObject* kwds) {
                                      const_cast<char**>(kwlist), &shard_begin,
                                      &shard_end, &progress, &runtime_arg))
         return nullptr;
-    views::TypedResult typed;
-    views::ProgressFn fn = progress_from(progress);
+    trace::views::TypedResult typed;
+    trace::views::ProgressFn fn = progress_from(progress);
     if (!run_on(
             runtime_arg,
             [&] {
@@ -877,7 +878,7 @@ PyObject* tv_typed(PyObject* self, PyObject* args, PyObject* kwds) {
         {"aggregated", &typed.aggregated},
         {"counters", &typed.counters}};
     for (const auto& [key, frame] : parts) {
-        PyObject* v = py::wrap_dataframe(std::move(*frame));
+        PyObject* v = python::wrap_dataframe(std::move(*frame));
         if (!v || PyDict_SetItemString(d, key, v) < 0) {
             Py_XDECREF(v);
             Py_DECREF(d);
@@ -899,7 +900,7 @@ PyObject* tv_materialize(PyObject* self, PyObject* args, PyObject* kwds) {
             &part_size, &progress, &runtime_arg))
         return nullptr;
     ExportStats stats;
-    views::ProgressFn fn = progress_from(progress);
+    trace::views::ProgressFn fn = progress_from(progress);
     if (!run_on(
             runtime_arg,
             [&] {
@@ -935,17 +936,17 @@ PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
     try {
         aggregates = t.aggregates();
     } catch (const std::exception& e) {
-        py::set_typed_py_error(e);
+        python::set_typed_py_error(e);
         return nullptr;
     }
     if (aggregates) {
-        dftracer::utils::dstd::UniquePtr<views::ExportSink> sink;
+        dftracer::utils::dstd::UniquePtr<trace::views::ExportSink> sink;
         if (compress) {
             try {
                 sink = dftracer::utils::dstd::make_unique<
                     dftracer::utils::python::GzipSink>(path, level);
             } catch (const std::exception& e) {
-                py::set_typed_py_error(e);
+                python::set_typed_py_error(e);
                 return nullptr;
             }
         } else {
@@ -962,7 +963,7 @@ PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
         if (!ok) return nullptr;
         return stats_dict(stats);
     }
-    views::TraceWriteOptions opts;
+    trace::views::TraceWriteOptions opts;
     opts.output_path = path;
     opts.member_size = static_cast<std::size_t>(member_size);
     opts.compress = compress != 0;
@@ -977,14 +978,15 @@ PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
 
 PyObject* tv_merge_partials(PyObject* self, PyObject* arg) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> owned;
-    if (!py::parse_bytes_seq(arg, "merge_partials expects a sequence", owned))
+    if (!python::parse_bytes_seq(arg, "merge_partials expects a sequence",
+                                 owned))
         return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
         owned.begin(), owned.end());
     DataFrame out;
     if (!run_blocking([&] { out = tv_of(self).merge_partials(parts); }))
         return nullptr;
-    return py::wrap_dataframe(std::move(out));
+    return python::wrap_dataframe(std::move(out));
 }
 
 PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
@@ -996,8 +998,8 @@ PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
             args, kwds, "O|O", const_cast<char**>(kwlist), &arg, &runtime_arg))
         return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> owned;
-    if (!py::parse_bytes_seq(arg, "materialize_partials expects a sequence",
-                             owned))
+    if (!python::parse_bytes_seq(arg, "materialize_partials expects a sequence",
+                                 owned))
         return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
         owned.begin(), owned.end());
@@ -1015,7 +1017,7 @@ PyObject* tv_reconstruct_if_cached(PyObject* self, PyObject*) {
     if (!run_blocking([&] { out = tv_of(self).reconstruct_if_cached(); }))
         return nullptr;
     if (!out) Py_RETURN_NONE;
-    return py::wrap_dataframe(std::move(*out));
+    return python::wrap_dataframe(std::move(*out));
 }
 
 PyObject* tv_mv_source(PyObject* self, PyObject*) {
@@ -1047,8 +1049,9 @@ PyObject* tv_compare(PyObject* self, PyObject* arg) {
         PyErr_SetString(PyExc_TypeError, "compare() needs a _TraceViewer");
         return nullptr;
     }
-    return guarded(
-        [&] { return py::wrap_lazyframe(tv_of(self).compare(tv_of(arg))); });
+    return guarded([&] {
+        return python::wrap_lazyframe(tv_of(self).compare(tv_of(arg)));
+    });
 }
 
 // A branch that folds `host`'s plugin set over the scan and leaves the named
@@ -1059,10 +1062,10 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
         return nullptr;
     }
     const dftracer::utils::plugins::Plugins* set =
-        py::plugin_host_plugins(host);
+        python::plugin_host_plugins(host);
     if (!set) return nullptr;
     dftracer::utils::plugins::NamedResultRegistry* results =
-        py::plugin_host_results(host);
+        python::plugin_host_results(host);
     if (!results) return nullptr;
     Py_INCREF(host);
     auto keep = dftracer::utils::dstd::adopt_shared_ptr(host, [](PyObject* p) {
@@ -1070,27 +1073,29 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
         Py_DECREF(p);
         PyGILState_Release(g);
     });
-    views::SessionBranch attach = [set, results, keep](views::ViewSession& s) {
-        views::Deferred<dftracer::utils::plugins::PluginRun> h = set->attach(s);
+    trace::views::SessionBranch attach = [set, results,
+                                          keep](trace::views::ViewSession& s) {
+        trace::views::Deferred<dftracer::utils::plugins::PluginRun> h =
+            set->attach(s);
         return dftracer::utils::dstd::Function<void(const ExportStats&)>(
             [h, results, keep](const ExportStats&) mutable {
                 *results = std::move(h.get().results);
             });
     };
     return guarded([&] {
-        return py::wrap_lazyframe(tv_of(self).branch(std::move(attach)));
+        return python::wrap_lazyframe(tv_of(self).branch(std::move(attach)));
     });
 }
 
 PyObject* merge_flamegraph_partials_py(PyObject*, PyObject* arg) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> owned;
-    if (!py::parse_bytes_seq(
+    if (!python::parse_bytes_seq(
             arg, "merge_flamegraph_partials expects a sequence", owned))
         return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
         owned.begin(), owned.end());
     return guarded([&] {
-        return py::wrap_dataframe(View::merge_flamegraph_partials(parts));
+        return python::wrap_dataframe(View::merge_flamegraph_partials(parts));
     });
 }
 
@@ -1100,7 +1105,7 @@ PyObject* plugin_results_py(PyObject*, PyObject* host) {
                         "plugin_results() needs a Plugins instance");
         return nullptr;
     }
-    return py::plugin_host_results_dict(host);
+    return python::plugin_host_results_dict(host);
 }
 
 PyMethodDef tv_methods[] = {

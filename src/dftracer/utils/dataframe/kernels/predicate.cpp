@@ -21,7 +21,6 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
 // mode: 0 = is_nan, 1 = is_finite, 2 = is_infinite. Bits are built 64 at a time
 // so every block store lands on a byte boundary regardless of the lane count;
@@ -29,20 +28,22 @@ namespace hn = hwy::HWY_NAMESPACE;
 template <class T>
 void pred_bits(const T* p, std::int64_t n, std::int32_t mode,
                std::uint8_t* out) {
-    const hn::ScalableTag<T> d;
-    const std::size_t lanes = hn::Lanes(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     const std::uint64_t lane_mask =
         lanes >= 64 ? ~std::uint64_t{0} : ((std::uint64_t{1} << lanes) - 1);
     std::int64_t i = 0;
     for (; i + 64 <= n; i += 64) {
         std::uint64_t bits = 0;
         for (std::size_t c = 0; c < 64; c += lanes) {
-            const auto v = hn::LoadU(d, p + i + static_cast<std::int64_t>(c));
-            const auto m = mode == 0   ? hn::IsNaN(v)
-                           : mode == 1 ? hn::IsFinite(v)
-                                       : hn::IsInf(v);
+            const auto v = hwy::HWY_NAMESPACE::LoadU(
+                d, p + i + static_cast<std::int64_t>(c));
+            const auto m = mode == 0   ? hwy::HWY_NAMESPACE::IsNaN(v)
+                           : mode == 1 ? hwy::HWY_NAMESPACE::IsFinite(v)
+                                       : hwy::HWY_NAMESPACE::IsInf(v);
             std::uint64_t cb = 0;
-            hn::StoreMaskBits(d, m, reinterpret_cast<std::uint8_t*>(&cb));
+            hwy::HWY_NAMESPACE::StoreMaskBits(
+                d, m, reinterpret_cast<std::uint8_t*>(&cb));
             bits |= (cb & lane_mask) << c;
         }
         std::memcpy(out + (i >> 3), &bits, 8);

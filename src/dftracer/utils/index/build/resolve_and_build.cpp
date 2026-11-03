@@ -63,8 +63,6 @@ coro::CoroTask<dstd::Vector<ResolverResult::Failure>> build_tier(
     co_return failures;
 }
 
-namespace agg = index::schemas::dft::agg;
-
 // Aggregates files whose members are current, leaving every other extension.
 coro::CoroTask<dstd::Vector<ResolverResult::Failure>> build_aggregation(
     dstd::Vector<dstd::String> files, const ResolveAndBuildInput& input,
@@ -379,7 +377,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
             index::release_root(root);
             auto target = common::unwrap(index::Index::open(
                 index::store::internal::normalize_index_root(root)));
-            agg::tier::clear(target);
+            index::schemas::dft::agg::tier::clear(target);
         }
     dstd::String retry_failure;
     try {

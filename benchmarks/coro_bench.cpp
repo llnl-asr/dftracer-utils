@@ -75,7 +75,6 @@
 namespace {
 
 using namespace dftracer::utils;
-namespace aio = dftracer::utils::io;
 
 using Clock = std::chrono::steady_clock;
 
@@ -300,7 +299,7 @@ Result read_loop(std::size_t n) {
             auto offset =
                 static_cast<off_t>((i % READ_FILE_BLOCKS) * READ_BLOCK);
             ssize_t got =
-                co_await aio::pread(fd, buf.data(), READ_BLOCK, offset);
+                co_await io::pread(fd, buf.data(), READ_BLOCK, offset);
             if (got == static_cast<ssize_t>(READ_BLOCK)) ++good;
         }
         finish_meter(start, r);

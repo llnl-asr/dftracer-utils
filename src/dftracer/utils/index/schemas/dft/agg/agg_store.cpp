@@ -14,8 +14,6 @@
 
 namespace dftracer::utils::index::schemas::dft::agg::tier {
 
-namespace layout = index::store::layout;
-
 namespace {
 
 constexpr dstd::StringView CONFIG_NAME = "config";
@@ -51,8 +49,8 @@ void drop_meta(const Index& index, dstd::StringView name) {
 dstd::Optional<Config> decode_config(dstd::StringView value) {
     if (value.size() < CONFIG_FIXED_BYTES) return dstd::nullopt;
     Config c;
-    c.time_interval_us = layout::read_u64(value);
-    c.params_hash = layout::read_u64(value.substr(8));
+    c.time_interval_us = index::store::layout::read_u64(value);
+    c.params_hash = index::store::layout::read_u64(value.substr(8));
     c.group_by_file =
         (static_cast<std::uint8_t>(value[16]) & FLAG_GROUP_BY_FILE) != 0;
     // The extra group keys follow, joined by 0x1F.
@@ -68,8 +66,8 @@ dstd::Optional<Config> decode_config(dstd::StringView value) {
 
 dstd::Optional<TimeBounds> decode_time_bounds(dstd::StringView value) {
     if (value.size() < 16) return dstd::nullopt;
-    return TimeBounds{layout::read_u64(value),
-                      layout::read_u64(value.substr(8))};
+    return TimeBounds{index::store::layout::read_u64(value),
+                      index::store::layout::read_u64(value.substr(8))};
 }
 
 }  // namespace
@@ -122,8 +120,8 @@ void clear(const Index& index) {
     dstd::Expected<void, dstd::Error> dropped;
     default_runtime().block_on(
         coro::named("aggregation tier clear", [&]() -> coro::CoroTask<void> {
-            dropped =
-                co_await remove_extension(index, layout::Ext::Agg, listed);
+            dropped = co_await remove_extension(
+                index, index::store::layout::Ext::Agg, listed);
         }()));
     common::unwrap(std::move(dropped));
     for (const dstd::StringView name : META_NAMES) drop_meta(index, name);

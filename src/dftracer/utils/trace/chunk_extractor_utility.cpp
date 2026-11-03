@@ -16,7 +16,6 @@ namespace dftracer::utils::trace {
 
 using utilities::fileio::ChunkWriter;
 using utilities::fileio::ChunkWriterConfig;
-namespace lines = utilities::fileio::lines;
 
 dstd::StringView event_of_line(dstd::StringView line) {
     const char* trimmed;
@@ -106,9 +105,10 @@ ChunkExtractorUtility::extract_and_write(
 
     for (std::size_t i = 0; i < input.files.size(); ++i) {
         const auto& file = input.files[i];
-        auto line_gen = lines::sources::async_streaming_gz_lines(
-            dstd::String(file), 0, 0, true,
-            i < input.open_files.size() ? input.open_files[i] : nullptr);
+        auto line_gen =
+            utilities::fileio::lines::sources::async_streaming_gz_lines(
+                dstd::String(file), 0, 0, true,
+                i < input.open_files.size() ? input.open_files[i] : nullptr);
         for (;;) {
             auto line_opt = co_await line_gen.next();
             if (!line_opt) break;

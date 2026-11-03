@@ -89,27 +89,26 @@ struct TraceFields {
     dstd::String fallback_label;
 
     explicit TraceFields(const dftracer::utils::index::RecordSchema& s) {
-        namespace ix = dftracer::utils::index;
-        if (s.decoder != ix::Decoder::Path) return;
+        if (s.decoder != index::Decoder::Path) return;
         by_path = true;
         time = s.roles.time;
         duration = s.roles.duration;
         entity = s.roles.entity;
         lane = s.roles.lane;
-        time_us = ix::micros_per(s.roles.time_unit);
-        duration_us = ix::micros_per(s.roles.duration_unit);
+        time_us = index::micros_per(s.roles.time_unit);
+        duration_us = index::micros_per(s.roles.duration_unit);
         fallback_label = s.id;
         // The label is the name role, else the field named "name", else the
         // first string field without a role.
         label = s.roles.name;
         entity_name.clear();
         for (const auto& f : s.fields) {
-            if (f.role == ix::Role::Entity) entity_name = f.name;
+            if (f.role == index::Role::Entity) entity_name = f.name;
             if (label.empty() && f.name == "name") label = f.path;
         }
         for (const auto& f : s.fields)
-            if (label.empty() && f.role == ix::Role::None &&
-                f.type == ix::FieldType::String)
+            if (label.empty() && f.role == index::Role::None &&
+                f.type == index::FieldType::String)
                 label = f.path;
     }
 

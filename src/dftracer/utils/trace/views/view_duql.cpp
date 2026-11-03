@@ -87,9 +87,6 @@ duql::PluginCatalog registry_plugins() {
     return out;
 }
 
-namespace df = dftracer::utils::dataframe;
-namespace ix = dftracer::utils::index;
-
 [[noreturn]] void refuse(dstd::StringView why) {
     throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
                                          "View::duql ", why);
@@ -122,16 +119,16 @@ dstd::String joined(const Names& names) {
     return out;
 }
 
-bool is_integer(df::TypeId t) {
-    return t == df::TypeId::Int8 || t == df::TypeId::Int16 ||
-           t == df::TypeId::Int32 || t == df::TypeId::Int64 ||
-           t == df::TypeId::Uint8 || t == df::TypeId::Uint16 ||
-           t == df::TypeId::Uint32 || t == df::TypeId::Uint64;
+bool is_integer(dataframe::TypeId t) {
+    return t == dataframe::TypeId::Int8 || t == dataframe::TypeId::Int16 ||
+           t == dataframe::TypeId::Int32 || t == dataframe::TypeId::Int64 ||
+           t == dataframe::TypeId::Uint8 || t == dataframe::TypeId::Uint16 ||
+           t == dataframe::TypeId::Uint32 || t == dataframe::TypeId::Uint64;
 }
 
-bool is_number(df::TypeId t) {
-    return is_integer(t) || t == df::TypeId::Float32 ||
-           t == df::TypeId::Float64;
+bool is_number(dataframe::TypeId t) {
+    return is_integer(t) || t == dataframe::TypeId::Float32 ||
+           t == dataframe::TypeId::Float64;
 }
 
 // The names of the columns of `f`, a frame a source declaring `declared`
@@ -139,7 +136,7 @@ bool is_number(df::TypeId t) {
 // ones by position, as the ops above read it, then its own. Columns past the
 // declared ones are those its input returned beyond its schema.
 dstd::Vector<std::uint32_t> frame_ids(
-    const df::DataFrame& f, const dstd::Vector<dstd::String>& declared,
+    const dataframe::DataFrame& f, const dstd::Vector<dstd::String>& declared,
     dftracer::utils::dstd::StringIntern& intern) {
     const bool by_name =
         std::all_of(declared.begin(), declared.end(), [&](const auto& n) {
@@ -153,7 +150,7 @@ dstd::Vector<std::uint32_t> frame_ids(
     return ids;
 }
 
-dstd::Vector<dstd::String> field_names(const df::Schema& s) {
+dstd::Vector<dstd::String> field_names(const dataframe::Schema& s) {
     dstd::Vector<dstd::String> out;
     for (const auto& f : s.fields) out.push_back(f.name);
     return out;
@@ -161,32 +158,34 @@ dstd::Vector<dstd::String> field_names(const df::Schema& s) {
 
 // Rows of `inner`, collected, then passed through `finish` before any op
 // above reads them.
-class FinishSource final : public df::Source {
+class FinishSource final : public dataframe::Source {
    public:
-    using Finish = dstd::Function<df::DataFrame(df::DataFrame)>;
+    using Finish = dstd::Function<dataframe::DataFrame(dataframe::DataFrame)>;
 
-    FinishSource(df::LazyFrame inner, df::Schema schema, Finish finish)
+    FinishSource(dataframe::LazyFrame inner, dataframe::Schema schema,
+                 Finish finish)
         : inner_(std::move(inner)),
           schema_(std::move(schema)),
           finish_(dstd::make_shared<Finish>(std::move(finish))) {}
 
-    df::Schema schema() const override { return schema_; }
+    dataframe::Schema schema() const override { return schema_; }
     // The rows carry the columns the inner scan returned beyond its schema.
     bool undeclared_columns() const override { return true; }
 
-    df::ScanResult scan(const df::ScanRequest& req) const override {
-        df::ScanResult r;
+    dataframe::ScanResult scan(
+        const dataframe::ScanRequest& req) const override {
+        dataframe::ScanResult r;
         r.cursor = dstd::make_unique<Rows>(
             inner_, finish_, req.projection,
             req.projection.empty() ? field_names(schema_) : req.projection);
-        r.filters.assign(req.filters.size(), df::Pushed::No);
+        r.filters.assign(req.filters.size(), dataframe::Pushed::No);
         return r;
     }
 
    private:
-    class Rows final : public df::Cursor {
+    class Rows final : public dataframe::Cursor {
        public:
-        Rows(df::LazyFrame inner, dstd::SharedPtr<Finish> finish,
+        Rows(dataframe::LazyFrame inner, dstd::SharedPtr<Finish> finish,
              // types
              dstd::Vector<dstd::String> projection,
              // types
@@ -196,18 +195,18 @@ class FinishSource final : public df::Source {
               projection_(std::move(projection)),
               declared_(std::move(declared)) {}
 
-        coro::CoroTask<dstd::Optional<df::Morsel>> next(
+        coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
             std::int64_t max_rows) override {
             if (!rows_) {
                 // GCC 12 destroys a temporary built inside co_await twice.
-                df::DataFrame collected = co_await inner_.collect();
-                df::DataFrame f =
-                    (*finish_)(co_await df::join_chunks(std::move(collected)));
+                dataframe::DataFrame collected = co_await inner_.collect();
+                dataframe::DataFrame f = (*finish_)(
+                    co_await dataframe::join_chunks(std::move(collected)));
                 if (!projection_.empty()) f = f.select(projection_);
                 intern_ =
                     dstd::make_shared<dftracer::utils::dstd::StringIntern>();
                 ids_ = frame_ids(f, declared_, *intern_);
-                rows_ = df::InMemorySource(std::move(f)).scan({}).cursor;
+                rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
             }
             auto m = co_await rows_->next(max_rows);
             if (m) {
@@ -218,47 +217,48 @@ class FinishSource final : public df::Source {
         }
 
        private:
-        df::LazyFrame inner_;
+        dataframe::LazyFrame inner_;
         dstd::SharedPtr<Finish> finish_;
         dstd::Vector<dstd::String> projection_;
         dstd::Vector<dstd::String> declared_;
-        dstd::UniquePtr<df::Cursor> rows_;
+        dstd::UniquePtr<dataframe::Cursor> rows_;
         dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_;
         dstd::Vector<std::uint32_t> ids_;
     };
 
-    df::LazyFrame inner_;
-    df::Schema schema_;
+    dataframe::LazyFrame inner_;
+    dataframe::Schema schema_;
     dstd::SharedPtr<Finish> finish_;
 };
 
 // Rows of `inner`, each batch passed through `map` as it streams.
-class MapSource final : public df::Source {
+class MapSource final : public dataframe::Source {
    public:
-    using Map = dstd::Function<df::DataFrame(df::DataFrame)>;
+    using Map = dstd::Function<dataframe::DataFrame(dataframe::DataFrame)>;
 
-    MapSource(df::LazyFrame inner, df::Schema schema, Map map)
+    MapSource(dataframe::LazyFrame inner, dataframe::Schema schema, Map map)
         : inner_(std::move(inner)),
           schema_(std::move(schema)),
           map_(dstd::make_shared<Map>(std::move(map))) {}
 
-    df::Schema schema() const override { return schema_; }
+    dataframe::Schema schema() const override { return schema_; }
     // The rows carry the columns the inner scan returned beyond its schema.
     bool undeclared_columns() const override { return true; }
 
-    df::ScanResult scan(const df::ScanRequest& req) const override {
-        df::ScanResult r;
+    dataframe::ScanResult scan(
+        const dataframe::ScanRequest& req) const override {
+        dataframe::ScanResult r;
         r.cursor = dstd::make_unique<Rows>(
             inner_, map_, req.projection,
             req.projection.empty() ? field_names(schema_) : req.projection);
-        r.filters.assign(req.filters.size(), df::Pushed::No);
+        r.filters.assign(req.filters.size(), dataframe::Pushed::No);
         return r;
     }
 
    private:
-    class Rows final : public df::Cursor {
+    class Rows final : public dataframe::Cursor {
        public:
-        Rows(const df::LazyFrame& inner, dstd::SharedPtr<Map> map,
+        Rows(const dataframe::LazyFrame& inner, dstd::SharedPtr<Map> map,
              // types
              dstd::Vector<dstd::String> projection,
              // types
@@ -268,7 +268,7 @@ class MapSource final : public df::Source {
               projection_(std::move(projection)),
               declared_(std::move(declared)) {}
 
-        coro::CoroTask<dstd::Optional<df::Morsel>> next(
+        coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
             std::int64_t max_rows) override {
             for (;;) {
                 if (rows_) {
@@ -281,10 +281,10 @@ class MapSource final : public df::Source {
                 }
                 auto batch = co_await batches_.next();
                 if (!batch) co_return dstd::nullopt;
-                df::DataFrame f = (*map_)(std::move(*batch));
+                dataframe::DataFrame f = (*map_)(std::move(*batch));
                 if (!projection_.empty()) f = f.select(projection_);
                 ids_ = frame_ids(f, declared_, *intern_);
-                rows_ = df::InMemorySource(std::move(f)).scan({}).cursor;
+                rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
             }
         }
 
@@ -292,27 +292,27 @@ class MapSource final : public df::Source {
         dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
             dstd::make_shared<dftracer::utils::dstd::StringIntern>();
         dstd::Vector<std::uint32_t> ids_;
-        coro::AsyncGenerator<df::DataFrame> batches_;
+        coro::AsyncGenerator<dataframe::DataFrame> batches_;
         dstd::SharedPtr<Map> map_;
         dstd::Vector<dstd::String> projection_;
         dstd::Vector<dstd::String> declared_;
-        dstd::UniquePtr<df::Cursor> rows_;
+        dstd::UniquePtr<dataframe::Cursor> rows_;
     };
 
-    df::LazyFrame inner_;
-    df::Schema schema_;
+    dataframe::LazyFrame inner_;
+    dataframe::Schema schema_;
     dstd::SharedPtr<Map> map_;
 };
 
 // `f` with the columns `in` names, in order; one its rows lack is null.
-df::DataFrame aligned(
-    df::DataFrame f,
-    const dstd::Vector<dstd::Pair<dstd::String, df::TypeId>>& in) {
+dataframe::DataFrame aligned(
+    dataframe::DataFrame f,
+    const dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>>& in) {
     bool same = f.names.size() == in.size();
     for (std::size_t i = 0; same && i < in.size(); ++i)
         same = f.names[i] == in[i].first;
     if (same) return f;
-    df::DataFrame out;
+    dataframe::DataFrame out;
     const std::int64_t n = f.num_rows();
     for (const auto& [name, type] : in) {
         out.names.emplace_back(name);
@@ -323,11 +323,11 @@ df::DataFrame aligned(
                     .share());
             continue;
         }
-        const bool scalar = type != df::TypeId::Unknown &&
-                            type != df::TypeId::List &&
-                            type != df::TypeId::Struct;
-        out.columns.push_back(
-            df::Series::nulls(scalar ? type : df::TypeId::String, n));
+        const bool scalar = type != dataframe::TypeId::Unknown &&
+                            type != dataframe::TypeId::List &&
+                            type != dataframe::TypeId::Struct;
+        out.columns.push_back(dataframe::Series::nulls(
+            scalar ? type : dataframe::TypeId::String, n));
     }
     for (std::size_t i = 0; i < f.names.size(); ++i)
         if (std::none_of(in.begin(), in.end(), [&](const auto& c) {
@@ -341,11 +341,11 @@ df::DataFrame aligned(
 
 // One row per group of `inner`'s rows, folded by a GroupFold as they
 // stream.
-class FoldSource final : public df::Source {
+class FoldSource final : public dataframe::Source {
    public:
-    FoldSource(df::LazyFrame inner, df::Schema schema,
-               dstd::Vector<dstd::Pair<dstd::String, df::TypeId>> in,
-               dstd::Vector<df::DataType> key_types,
+    FoldSource(dataframe::LazyFrame inner, dataframe::Schema schema,
+               dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>> in,
+               dstd::Vector<dataframe::DataType> key_types,
                dstd::Vector<duql::FoldAgg> aggs)
         : inner_(std::move(inner)),
           schema_(std::move(schema)),
@@ -353,17 +353,18 @@ class FoldSource final : public df::Source {
           key_types_(std::move(key_types)),
           aggs_(std::move(aggs)) {}
 
-    df::Schema schema() const override { return schema_; }
+    dataframe::Schema schema() const override { return schema_; }
 
-    df::ScanResult scan(const df::ScanRequest& req) const override {
-        df::ScanResult r;
+    dataframe::ScanResult scan(
+        const dataframe::ScanRequest& req) const override {
+        dataframe::ScanResult r;
         r.cursor = dstd::make_unique<Rows>(*this, req.projection);
-        r.filters.assign(req.filters.size(), df::Pushed::No);
+        r.filters.assign(req.filters.size(), dataframe::Pushed::No);
         return r;
     }
 
    private:
-    class Rows final : public df::Cursor {
+    class Rows final : public dataframe::Cursor {
        public:
         Rows(const FoldSource& src, dstd::Vector<dstd::String> projection)
             : batches_(src.inner_.stream()),
@@ -373,7 +374,7 @@ class FoldSource final : public df::Source {
             for (const auto& f : src.schema_.fields) names_.push_back(f.name);
         }
 
-        coro::CoroTask<dstd::Optional<df::Morsel>> next(
+        coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
             std::int64_t max_rows) override {
             if (!rows_) {
                 for (;;) {
@@ -381,26 +382,26 @@ class FoldSource final : public df::Source {
                     if (!batch) break;
                     fold_.add(aligned(std::move(*batch), in_));
                 }
-                df::DataFrame f = fold_.finish(std::move(names_));
+                dataframe::DataFrame f = fold_.finish(std::move(names_));
                 if (!projection_.empty()) f = f.select(projection_);
-                rows_ = df::InMemorySource(std::move(f)).scan({}).cursor;
+                rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
             }
             co_return co_await rows_->next(max_rows);
         }
 
        private:
-        coro::AsyncGenerator<df::DataFrame> batches_;
+        coro::AsyncGenerator<dataframe::DataFrame> batches_;
         duql::GroupFold fold_;
-        dstd::Vector<dstd::Pair<dstd::String, df::TypeId>> in_;
+        dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>> in_;
         dstd::Vector<dstd::String> names_;
         dstd::Vector<dstd::String> projection_;
-        dstd::UniquePtr<df::Cursor> rows_;
+        dstd::UniquePtr<dataframe::Cursor> rows_;
     };
 
-    df::LazyFrame inner_;
-    df::Schema schema_;
-    dstd::Vector<dstd::Pair<dstd::String, df::TypeId>> in_;
-    dstd::Vector<df::DataType> key_types_;
+    dataframe::LazyFrame inner_;
+    dataframe::Schema schema_;
+    dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>> in_;
+    dstd::Vector<dataframe::DataType> key_types_;
     dstd::Vector<duql::FoldAgg> aggs_;
 };
 
@@ -748,18 +749,18 @@ char join_letters(char a, char b) {
     return 'j';
 }
 
-df::DataType letter_type(char c) {
+dataframe::DataType letter_type(char c) {
     switch (c) {
         case 'i':
-            return df::scalar(df::TypeId::Int64);
+            return dataframe::scalar(dataframe::TypeId::Int64);
         case 'f':
-            return df::scalar(df::TypeId::Float64);
+            return dataframe::scalar(dataframe::TypeId::Float64);
         case 'b':
-            return df::scalar(df::TypeId::Bool);
+            return dataframe::scalar(dataframe::TypeId::Bool);
         case 'a':
-            return df::scalar(df::TypeId::Unknown);
+            return dataframe::scalar(dataframe::TypeId::Unknown);
         default:
-            return df::scalar(df::TypeId::String);
+            return dataframe::scalar(dataframe::TypeId::String);
     }
 }
 
@@ -774,7 +775,7 @@ const dstd::String JSON_LIST = detail::list_token("j", "");
 
 // The select token and column type that read the array field `path` as a
 // List, typed from the element paths the index observed.
-dstd::Pair<dstd::String, df::DataType> list_type(
+dstd::Pair<dstd::String, dataframe::DataType> list_type(
     const dstd::Vector<SchemaLeaf>& tree, const dstd::String& path,
     bool args_fallback) {
     char scalar = 0;
@@ -812,23 +813,23 @@ dstd::Pair<dstd::String, df::DataType> list_type(
     }
     if (objects && !scalars && !nested) {
         dstd::String spec = "{";
-        dstd::Vector<df::Field> members;
+        dstd::Vector<dataframe::Field> members;
         for (const auto& [name, c] : fields) {
             const char k = c ? c : 's';
             if (spec.size() > 1) spec += ',';
             spec += name + "=" + k;
             members.push_back(
-                df::Field{dstd::String(name), letter_type(k), true});
+                dataframe::Field{dstd::String(name), letter_type(k), true});
         }
         spec += '}';
         return {detail::list_token(spec, path),
-                df::list_of(df::struct_of(std::move(members)))};
+                dataframe::list_of(dataframe::struct_of(std::move(members)))};
     }
     const char k = nested || objects ? 'j'
                    : scalars         ? (scalar ? scalar : 's')
                                      : 'a';
     return {detail::list_token(dstd::String(1, k), path),
-            df::list_of(letter_type(k))};
+            dataframe::list_of(letter_type(k))};
 }
 
 // What a narrowed scan reads for the field `f`: an array (`array`, or a
@@ -862,23 +863,25 @@ dstd::Vector<dstd::String> scan_reads(const dstd::Vector<SchemaLeaf>& tree,
     return {f};
 }
 
-df::TypeId observed_type(const dstd::String& type) {
-    if (type == "int" || type == "uint") return df::TypeId::Int64;
-    if (type == "float") return df::TypeId::Float64;
-    if (type == "string") return df::TypeId::String;
-    if (type == "bool") return df::TypeId::Bool;
-    return df::TypeId::Unknown;
+dataframe::TypeId observed_type(const dstd::String& type) {
+    if (type == "int" || type == "uint") return dataframe::TypeId::Int64;
+    if (type == "float") return dataframe::TypeId::Float64;
+    if (type == "string") return dataframe::TypeId::String;
+    if (type == "bool") return dataframe::TypeId::Bool;
+    return dataframe::TypeId::Unknown;
 }
 
 // One null row of `type`.
-df::Series null_cell(const df::DataType& type) {
-    if (type.id == df::TypeId::List && !type.fields.empty())
-        return df::Series::list({0, 0}, null_cell(type.fields.front().type))
+dataframe::Series null_cell(const dataframe::DataType& type) {
+    if (type.id == dataframe::TypeId::List && !type.fields.empty())
+        return dataframe::Series::list({0, 0},
+                                       null_cell(type.fields.front().type))
             .take(dstd::Vector<std::int64_t>{-1});
-    const bool scalar = type.id != df::TypeId::Unknown &&
-                        type.id != df::TypeId::List &&
-                        type.id != df::TypeId::Struct;
-    return df::Series::nulls(scalar ? type.id : df::TypeId::String, 1);
+    const bool scalar = type.id != dataframe::TypeId::Unknown &&
+                        type.id != dataframe::TypeId::List &&
+                        type.id != dataframe::TypeId::Struct;
+    return dataframe::Series::nulls(
+        scalar ? type.id : dataframe::TypeId::String, 1);
 }
 
 // Keeps a row index plus the seed inside int64.
@@ -1061,22 +1064,23 @@ void each_pushed(
     if (p.filter) walk(*p.filter);
 }
 
-dstd::Optional<duql::LiteralNode> literal_of(const df::Series& s,
+dstd::Optional<duql::LiteralNode> literal_of(const dataframe::Series& s,
                                              std::int64_t r) {
     if (s.is_null(r)) return dstd::nullopt;
-    const df::TypeId t = s.type();
-    if (t == df::TypeId::Uint64)
+    const dataframe::TypeId t = s.type();
+    if (t == dataframe::TypeId::Uint64)
         return duql::LiteralNode{s.data<std::uint64_t>()[r]};
     if (is_integer(t))
+        return duql::LiteralNode{s.slice(r, 1)
+                                     .cast(dataframe::TypeId::Int64)
+                                     .data<std::int64_t>()[0]};
+    if (t == dataframe::TypeId::Float32 || t == dataframe::TypeId::Float64)
         return duql::LiteralNode{
-            s.slice(r, 1).cast(df::TypeId::Int64).data<std::int64_t>()[0]};
-    if (t == df::TypeId::Float32 || t == df::TypeId::Float64)
-        return duql::LiteralNode{
-            s.slice(r, 1).cast(df::TypeId::Float64).data<double>()[0]};
-    if (t == df::TypeId::Bool)
+            s.slice(r, 1).cast(dataframe::TypeId::Float64).data<double>()[0]};
+    if (t == dataframe::TypeId::Bool)
         return duql::LiteralNode{
             ((s.data<std::uint8_t>()[r >> 3] >> (r & 7)) & 1) != 0};
-    if (t == df::TypeId::String || t == df::TypeId::LargeString)
+    if (t == dataframe::TypeId::String || t == dataframe::TypeId::LargeString)
         return duql::LiteralNode{dstd::String(s.string_at(r))};
     return dstd::nullopt;
 }
@@ -1125,8 +1129,8 @@ Pushdown key_sets(const duql::Pipeline& p) {
     each_pushed(p, [&](const duql::Term& leaf, const duql::TField& f,
                        const duql::TLookup& l, const duql::Term* cond) {
         const duql::LookupTable& t = *l.slot->table;
-        const df::Series& keys = t.frame->columns[t.key_columns.front()];
-        dstd::Optional<df::Series> pass;
+        const dataframe::Series& keys = t.frame->columns[t.key_columns.front()];
+        dstd::Optional<dataframe::Series> pass;
         bool record = false;
         if (cond)
             duql::for_each_term(*cond, [&](const duql::Term& x) {
@@ -1138,10 +1142,10 @@ Pushdown key_sets(const duql::Pipeline& p) {
                     record = true;
             });
         if (cond && !record && t.value) {
-            const df::Series& values = t.frame->columns[*t.value];
+            const dataframe::Series& values = t.frame->columns[*t.value];
             if (auto e = duql::vectorize_condition(
                     *cond, {{".", values.data_type()}}, false))
-                pass = df::eval(*e, {&values}).materialize();
+                pass = dataframe::eval(*e, {&values}).materialize();
         }
         auto passes = [&](std::int64_t r) {
             if (!pass) return !cond || !t.value || record;
@@ -1158,7 +1162,7 @@ Pushdown key_sets(const duql::Pipeline& p) {
                 }
         // Past the cap the list prunes nothing, and the lookup term filters
         // the same rows without a per-record scan of the list.
-        if (arr.elements.size() > ix::plan::SEMI_JOIN_CAP) return;
+        if (arr.elements.size() > index::plan::SEMI_JOIN_CAP) return;
         arr.set = duql::make_in_set(arr);
         auto node = duql::make_node(
             duql::InNode{duql::FieldNode{f.base}, std::move(arr)});
@@ -1191,7 +1195,7 @@ dstd::Optional<CacheKey> cache_key(const detail::ViewPlan& given,
     for (auto& f : plan.files)
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
-    const dstd::String path = ix::cache::lookup_cache_path(plan);
+    const dstd::String path = index::cache::lookup_cache_path(plan);
     if (path.empty()) return dstd::nullopt;
     detail::plan_record_schema(plan);
     // A `data` side reads the View as given: its filters are part of it.
@@ -1206,7 +1210,7 @@ dstd::Optional<CacheKey> cache_key(const detail::ViewPlan& given,
             key += "\n" + number_text(plan.time_range->first) + ".." +
                    number_text(plan.time_range->second);
     }
-    const auto sig = ix::cache::lookup_signature(plan, key);
+    const auto sig = index::cache::lookup_signature(plan, key);
     if (!sig) return dstd::nullopt;
     return CacheKey{dstd::String(path.data(), path.size()), *sig};
 }
@@ -1227,19 +1231,20 @@ dstd::Optional<CacheKey> cache_key(const detail::ViewPlan& given,
 }
 
 // Stores a side's rows in the lookup cache; a store that fails keeps none.
-void persist(const CacheKey& key, const dstd::Vector<df::DataFrame>& parts) {
+void persist(const CacheKey& key,
+             const dstd::Vector<dataframe::DataFrame>& parts) {
     if (parts.empty()) return;
     try {
-        const auto db = ix::cache::open_lookup_db(
-            key.path, ix::cache::CacheStore::Mode::ReadWrite);
+        const auto db = index::cache::open_lookup_db(
+            key.path, index::cache::CacheStore::Mode::ReadWrite);
         if (!db) return;
-        dstd::Vector<const df::DataFrame*> ptrs;
+        dstd::Vector<const dataframe::DataFrame*> ptrs;
         for (const auto& p : parts) ptrs.push_back(&p);
-        ix::cache::persist_lookup(*db, key.sig,
-                                  ptrs.size() == 1
-                                      ? df::frame_to_native(parts.front())
-                                      : df::frame_to_native(df::concat(
-                                            ptrs, df::ConcatHow::Diagonal)));
+        index::cache::persist_lookup(
+            *db, key.sig,
+            ptrs.size() == 1 ? dataframe::frame_to_native(parts.front())
+                             : dataframe::frame_to_native(dataframe::concat(
+                                   ptrs, dataframe::ConcatHow::Diagonal)));
     } catch (const std::exception&) {
     }
 }
@@ -1265,29 +1270,30 @@ class Sides {
     dstd::Vector<dstd::Vector<duql::VectorColumn>> columns;
     dstd::Vector<dstd::Optional<CacheKey>> keys;
     // The files of each source row set, and whether their indexes hold it.
-    dstd::Vector<dstd::Vector<ix::plan::RowSetFile>> files;
+    dstd::Vector<dstd::Vector<index::plan::RowSetFile>> files;
     dstd::Vector<char> stored;
 
-    dstd::SharedPtr<const df::DataFrame> frame(std::size_t i) {
+    dstd::SharedPtr<const dataframe::DataFrame> frame(std::size_t i) {
         std::call_once(once_[i], [&] { frames_[i] = run(i); });
         return frames_[i];
     }
 
     // The first TYPE_PROBE_ROWS rows of side `i`, for the types of its
     // columns.
-    dstd::SharedPtr<const df::DataFrame> probe(std::size_t i) const {
-        const df::LazyFrame plan = views[i]->head(TYPE_PROBE_ROWS).lazy();
-        df::DataFrame f;
+    dstd::SharedPtr<const dataframe::DataFrame> probe(std::size_t i) const {
+        const dataframe::LazyFrame plan =
+            views[i]->head(TYPE_PROBE_ROWS).lazy();
+        dataframe::DataFrame f;
         dftracer::utils::default_runtime().block_on(
             coro::named("duql_side_types", [&]() -> coro::CoroTask<void> {
                 f = co_await plan.collect();
                 co_return;
             }()));
-        return dstd::make_shared<const df::DataFrame>(std::move(f));
+        return dstd::make_shared<const dataframe::DataFrame>(std::move(f));
     }
 
     // The distinct rows of side `i` for a key-set `in`.
-    dstd::SharedPtr<const df::DataFrame> key_frame(std::size_t i) {
+    dstd::SharedPtr<const dataframe::DataFrame> key_frame(std::size_t i) {
         std::call_once(key_once_[i], [&] { key_frames_[i] = distinct(i); });
         return key_frames_[i];
     }
@@ -1317,26 +1323,27 @@ class Sides {
     }
 
    private:
-    dstd::Vector<dstd::SharedPtr<const df::DataFrame>> frames_;
+    dstd::Vector<dstd::SharedPtr<const dataframe::DataFrame>> frames_;
     dstd::Vector<std::once_flag> once_;
-    dstd::Vector<dstd::SharedPtr<const df::DataFrame>> key_frames_;
+    dstd::Vector<dstd::SharedPtr<const dataframe::DataFrame>> key_frames_;
     dstd::Vector<std::once_flag> key_once_;
     std::mutex bind_;
 
     // Side `i`'s rows with a value in every column, each once. The rows
     // caps do not apply; the View's memory budget bounds them.
-    dstd::SharedPtr<const df::DataFrame> distinct(std::size_t i) {
+    dstd::SharedPtr<const dataframe::DataFrame> distinct(std::size_t i) {
         const dstd::String& name = dstd::String(program.sides[i].name);
         dstd::Optional<CacheKey> key = keys[i];
         if (key) {
             key->sig = dftracer::utils::dstd::hash::splitmix64(
                 key->sig ^ DISTINCT_CACHE_SALT);
             try {
-                if (const auto db = ix::cache::open_lookup_db(
-                        key->path, ix::cache::CacheStore::Mode::ReadOnly))
-                    if (auto bytes = ix::cache::read_lookup(*db, key->sig))
-                        if (auto cached = df::frame_from_native(*bytes))
-                            return dstd::make_shared<const df::DataFrame>(
+                if (const auto db = index::cache::open_lookup_db(
+                        key->path, index::cache::CacheStore::Mode::ReadOnly))
+                    if (auto bytes = index::cache::read_lookup(*db, key->sig))
+                        if (auto cached = dataframe::frame_from_native(*bytes))
+                            return dstd::make_shared<
+                                const dataframe::DataFrame>(
                                 duql::flat_frame(std::move(*cached)));
             } catch (const std::exception&) {
             }
@@ -1345,9 +1352,9 @@ class Sides {
             dftracer::utils::memory::resolve_spill_budget(
                 views[i]->memory_budget_bytes());
         dftracer::utils::dstd::StringViewSet seen;
-        dstd::Vector<df::DataFrame> parts;
+        dstd::Vector<dataframe::DataFrame> parts;
         std::uint64_t bytes = 0;
-        const df::LazyFrame plan = views[i]->lazy();
+        const dataframe::LazyFrame plan = views[i]->lazy();
         dftracer::utils::default_runtime().block_on(
             coro::named("duql_key_set", [&]() -> coro::CoroTask<void> {
                 auto gen = plan.stream();
@@ -1355,7 +1362,7 @@ class Sides {
                 for (;;) {
                     auto f = co_await gen.next();
                     if (!f) break;
-                    df::DataFrame part = duql::flat_frame(std::move(*f));
+                    dataframe::DataFrame part = duql::flat_frame(std::move(*f));
                     dstd::Vector<std::int64_t> take;
                     for (std::int64_t r = 0; r < part.num_rows(); ++r) {
                         row_key.clear();
@@ -1368,7 +1375,7 @@ class Sides {
                         bytes += row_key.size() + sizeof(dstd::String);
                     }
                     if (take.empty()) continue;
-                    df::DataFrame kept;
+                    dataframe::DataFrame kept;
                     kept.names = part.names;
                     for (const auto& c : part.columns)
                         kept.columns.push_back(c.take(take));
@@ -1384,24 +1391,26 @@ class Sides {
                 co_return;
             }()));
         if (parts.empty()) {
-            df::DataFrame none;
+            dataframe::DataFrame none;
             for (const auto& c : columns[i]) {
                 none.names.emplace_back(c.name);
-                none.columns.push_back(df::Series::nulls(
-                    c.type.id == df::TypeId::Unknown ? df::TypeId::String
-                                                     : c.type.id,
+                none.columns.push_back(dataframe::Series::nulls(
+                    c.type.id == dataframe::TypeId::Unknown
+                        ? dataframe::TypeId::String
+                        : c.type.id,
                     0));
             }
-            return dstd::make_shared<const df::DataFrame>(std::move(none));
+            return dstd::make_shared<const dataframe::DataFrame>(
+                std::move(none));
         }
         if (key) persist(*key, parts);
-        dstd::Vector<const df::DataFrame*> ptrs;
+        dstd::Vector<const dataframe::DataFrame*> ptrs;
         for (const auto& part : parts) ptrs.push_back(&part);
-        return dstd::make_shared<const df::DataFrame>(
-            df::concat(ptrs, df::ConcatHow::Diagonal));
+        return dstd::make_shared<const dataframe::DataFrame>(
+            dataframe::concat(ptrs, dataframe::ConcatHow::Diagonal));
     }
 
-    dstd::SharedPtr<const df::DataFrame> run(std::size_t i) {
+    dstd::SharedPtr<const dataframe::DataFrame> run(std::size_t i) {
         const dstd::String& name = dstd::String(program.sides[i].name);
         const std::uint64_t max_rows =
             env_count("DUQL_LOOKUP_MAX_ROWS", LOOKUP_MAX_ROWS);
@@ -1410,27 +1419,31 @@ class Sides {
         const auto limit = static_cast<std::int64_t>(std::min<std::uint64_t>(
             max_rows, std::numeric_limits<std::int64_t>::max() - 1));
         if (stored[i])
-            if (auto f = ix::plan::stored_rowset(files[i], name)) {
+            if (auto f = index::plan::stored_rowset(files[i], name)) {
                 if (static_cast<std::uint64_t>(f->num_rows()) > max_rows)
                     over_rows(name, static_cast<std::uint64_t>(f->num_rows()),
                               max_rows);
-                df::DataFrame flat = duql::flat_frame(std::move(*f));
+                dataframe::DataFrame flat = duql::flat_frame(std::move(*f));
                 if (const std::uint64_t bytes = duql::frame_bytes(flat);
                     bytes > max_bytes)
                     over_bytes(name, bytes, max_bytes);
-                return dstd::make_shared<const df::DataFrame>(std::move(flat));
+                return dstd::make_shared<const dataframe::DataFrame>(
+                    std::move(flat));
             }
         if (keys[i]) try {
-                if (const auto db = ix::cache::open_lookup_db(
-                        keys[i]->path, ix::cache::CacheStore::Mode::ReadOnly))
-                    if (auto bytes = ix::cache::read_lookup(*db, keys[i]->sig))
-                        if (auto cached = df::frame_from_native(*bytes))
-                            return dstd::make_shared<const df::DataFrame>(
+                if (const auto db = index::cache::open_lookup_db(
+                        keys[i]->path,
+                        index::cache::CacheStore::Mode::ReadOnly))
+                    if (auto bytes =
+                            index::cache::read_lookup(*db, keys[i]->sig))
+                        if (auto cached = dataframe::frame_from_native(*bytes))
+                            return dstd::make_shared<
+                                const dataframe::DataFrame>(
                                 duql::flat_frame(std::move(*cached)));
             } catch (const std::exception&) {
             }
-        const df::LazyFrame plan = views[i]->head(limit + 1).lazy();
-        df::DataFrame f;
+        const dataframe::LazyFrame plan = views[i]->head(limit + 1).lazy();
+        dataframe::DataFrame f;
         dftracer::utils::default_runtime().block_on(
             coro::named("duql_lookup_side", [&]() -> coro::CoroTask<void> {
                 f = co_await plan.collect();
@@ -1442,11 +1455,11 @@ class Sides {
         if (const std::uint64_t bytes = duql::frame_bytes(f); bytes > max_bytes)
             over_bytes(name, bytes, max_bytes);
         if (keys[i]) {
-            dstd::Vector<df::DataFrame> parts;
+            dstd::Vector<dataframe::DataFrame> parts;
             parts.push_back(f.select(f.names));
             persist(*keys[i], parts);
         }
-        return dstd::make_shared<const df::DataFrame>(std::move(f));
+        return dstd::make_shared<const dataframe::DataFrame>(std::move(f));
     }
 };
 
@@ -1460,27 +1473,28 @@ dstd::SharedPtr<Sides> owner(const dstd::WeakPtr<Sides>& sides) {
 
 // The rows of side `side`, from memory when a run first pulls them: the copy
 // the build step collected, or the cache's.
-class SideSource final : public df::Source {
+class SideSource final : public dataframe::Source {
    public:
     SideSource(dstd::SharedPtr<Sides> strong, dstd::WeakPtr<Sides> weak,
-               std::size_t side, df::Schema schema)
+               std::size_t side, dataframe::Schema schema)
         : strong_(std::move(strong)),
           weak_(std::move(weak)),
           side_(side),
           schema_(std::move(schema)) {}
 
-    df::Schema schema() const override { return schema_; }
+    dataframe::Schema schema() const override { return schema_; }
 
-    df::ScanResult scan(const df::ScanRequest& req) const override {
-        df::ScanResult r;
+    dataframe::ScanResult scan(
+        const dataframe::ScanRequest& req) const override {
+        dataframe::ScanResult r;
         r.cursor = dstd::make_unique<Rows>(strong_ ? strong_ : owner(weak_),
                                            side_, req.projection);
-        r.filters.assign(req.filters.size(), df::Pushed::No);
+        r.filters.assign(req.filters.size(), dataframe::Pushed::No);
         return r;
     }
 
    private:
-    class Rows final : public df::Cursor {
+    class Rows final : public dataframe::Cursor {
        public:
         Rows(dstd::SharedPtr<Sides> sides, std::size_t side,
              // types
@@ -1489,16 +1503,16 @@ class SideSource final : public df::Source {
               side_(side),
               projection_(std::move(projection)) {}
 
-        coro::CoroTask<dstd::Optional<df::Morsel>> next(
+        coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
             std::int64_t max_rows) override {
             if (!rows_) {
                 const auto frame = sides_->frame(side_);
-                df::DataFrame f;
+                dataframe::DataFrame f;
                 f.names = frame->names;
                 for (const auto& c : frame->columns)
                     f.columns.push_back(c.share());
                 if (!projection_.empty()) f = f.select(projection_);
-                rows_ = df::InMemorySource(std::move(f)).scan({}).cursor;
+                rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
             }
             co_return co_await rows_->next(max_rows);
         }
@@ -1507,28 +1521,28 @@ class SideSource final : public df::Source {
         dstd::SharedPtr<Sides> sides_;
         std::size_t side_;
         dstd::Vector<dstd::String> projection_;
-        dstd::UniquePtr<df::Cursor> rows_;
+        dstd::UniquePtr<dataframe::Cursor> rows_;
     };
 
     dstd::SharedPtr<Sides> strong_;
     dstd::WeakPtr<Sides> weak_;
     std::size_t side_;
-    df::Schema schema_;
+    dataframe::Schema schema_;
 };
 
 // The cache write of side `side` as its rows stream into a join. A side past
 // DUQL_LOOKUP_MAX_ROWS or DUQL_LOOKUP_MAX_BYTES is not cached; the engine's
 // join spills it instead of failing. The main plan's tap owns the sides.
-dstd::SharedPtr<const df::detail::Tap> side_tap(dstd::SharedPtr<Sides> strong,
-                                                dstd::WeakPtr<Sides> weak,
-                                                std::size_t side) {
-    auto tap = dstd::make_shared<df::detail::Tap>();
+dstd::SharedPtr<const dataframe::detail::Tap> side_tap(
+    dstd::SharedPtr<Sides> strong, dstd::WeakPtr<Sides> weak,
+    std::size_t side) {
+    auto tap = dstd::make_shared<dataframe::detail::Tap>();
     tap->open = [strong = std::move(strong), weak = std::move(weak), side] {
         struct State {
             std::uint64_t rows = 0;
             std::uint64_t bytes = 0;
             bool over = false;
-            dstd::Vector<df::DataFrame> parts;
+            dstd::Vector<dataframe::DataFrame> parts;
         };
         auto state = dstd::make_shared<State>();
         const auto s = strong ? strong : owner(weak);
@@ -1537,11 +1551,12 @@ dstd::SharedPtr<const df::detail::Tap> side_tap(dstd::SharedPtr<Sides> strong,
             env_count("DUQL_LOOKUP_MAX_ROWS", LOOKUP_MAX_ROWS);
         const std::uint64_t max_bytes =
             env_count("DUQL_LOOKUP_MAX_BYTES", LOOKUP_MAX_BYTES);
-        df::detail::TapRun run;
-        run.rows = [state, key, max_rows, max_bytes](const df::DataFrame& f) {
+        dataframe::detail::TapRun run;
+        run.rows = [state, key, max_rows,
+                    max_bytes](const dataframe::DataFrame& f) {
             if (state->over) return;
             state->rows += static_cast<std::uint64_t>(f.num_rows());
-            df::DataFrame part;
+            dataframe::DataFrame part;
             part.names = f.names;
             for (const auto& c : f.columns) part.columns.push_back(c.share());
             part = duql::flat_frame(std::move(part));
@@ -1574,7 +1589,7 @@ struct Ctx {
     dstd::Function<View(const View&, dstd::SharedPtr<const detail::BuildStep>)>
         with_step;
     dstd::Function<View(const duql::Input&)> input;
-    dstd::Function<const ix::RecordSchema&(const View&)> schema;
+    dstd::Function<const index::RecordSchema&(const View&)> schema;
 };
 
 Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
@@ -1585,12 +1600,12 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
 // it does, its rows. Reads no trace.
 dstd::String cache_state(const dstd::Optional<CacheKey>& key) {
     if (!key) return "not cached";
-    const auto db = ix::cache::open_lookup_db(
-        key->path, ix::cache::CacheStore::Mode::ReadOnly);
-    if (!db || !ix::cache::lookup_exists(*db, key->sig)) return "not cached";
+    const auto db = index::cache::open_lookup_db(
+        key->path, index::cache::CacheStore::Mode::ReadOnly);
+    if (!db || !index::cache::lookup_exists(*db, key->sig)) return "not cached";
     try {
-        if (auto bytes = ix::cache::read_lookup(*db, key->sig))
-            if (auto f = df::frame_from_native(*bytes))
+        if (auto bytes = index::cache::read_lookup(*db, key->sig))
+            if (auto f = dataframe::frame_from_native(*bytes))
                 return "cached, " + dstd::to_string(f->num_rows()) + " rows";
     } catch (const std::exception&) {
     }
@@ -1604,8 +1619,8 @@ dstd::String cache_state(const dstd::Optional<CacheKey>& key) {
 class Applier {
    public:
     // With `frame`, `v` holds rows with those columns rather than a scan.
-    Applier(View v, const ix::RecordSchema& schema, const Ctx& ctx, Reads reads,
-            dstd::SharedPtr<const detail::BuildStep> step,
+    Applier(View v, const index::RecordSchema& schema, const Ctx& ctx,
+            Reads reads, dstd::SharedPtr<const detail::BuildStep> step,
             dstd::Vector<std::size_t> collected, bool main,
             dstd::Optional<dstd::Vector<duql::VectorColumn>> frame = {})
         : collected_(std::move(collected)),
@@ -1667,7 +1682,7 @@ class Applier {
     dstd::Vector<std::size_t> collected_;
     bool main_;
     View v_;
-    const ix::RecordSchema& schema_;
+    const index::RecordSchema& schema_;
     const duql::Roles& roles_;
     const Ctx& ctx_;
     dstd::SharedPtr<const detail::BuildStep> step_;
@@ -1680,7 +1695,7 @@ class Applier {
     dstd::Vector<dstd::String> arrays_;
     bool closed_ = false;
     dstd::Vector<dstd::String> extras_;
-    dstd::Optional<dstd::Map<dstd::String, df::TypeId>> index_types_;
+    dstd::Optional<dstd::Map<dstd::String, dataframe::TypeId>> index_types_;
     dstd::Optional<dstd::Vector<SchemaLeaf>> tree_;
     std::size_t quants_ = 0;
     std::size_t lookups_ = 0;
@@ -1699,7 +1714,7 @@ class Applier {
 
     bool is_json(dstd::StringView name) const {
         for (const auto& spec : schema_.fields)
-            if (spec.type == ix::FieldType::Json &&
+            if (spec.type == index::FieldType::Json &&
                 (name == spec.name || name == spec.path ||
                  (schema_.args_fallback && name.starts_with("args.") &&
                   name.substr(5) == spec.name)))
@@ -1709,22 +1724,23 @@ class Applier {
 
     // The type the index observed for `name`, Unknown when it saw none or
     // several.
-    df::TypeId observed(dstd::StringView name) {
+    dataframe::TypeId observed(dstd::StringView name) {
         if (!index_types_) {
             index_types_.emplace();
             for (const auto& l : tree())
                 index_types_->emplace(l.path, observed_type(l.type));
         }
         const auto it = index_types_->find(dotted(name));
-        return it == index_types_->end() ? df::TypeId::Unknown : it->second;
+        return it == index_types_->end() ? dataframe::TypeId::Unknown
+                                         : it->second;
     }
 
     void columns_from_view(bool records = false) {
         cols_.clear();
         for (const auto& f : v_.output_schema().fields) {
-            df::DataType type = f.type;
-            if (type.id == df::TypeId::Unknown)
-                type = df::scalar(observed(f.name));
+            dataframe::DataType type = f.type;
+            if (type.id == dataframe::TypeId::Unknown)
+                type = dataframe::scalar(observed(f.name));
             cols_.push_back({dstd::String(f.name), std::move(type),
                              is_json(f.name), records});
         }
@@ -1733,8 +1749,8 @@ class Applier {
             auto i = index(a);
             if (!i) i = arg_index(a);
             if (i && cols_[*i].type.fields.empty() &&
-                (cols_[*i].type.id == df::TypeId::List ||
-                 cols_[*i].type.id == df::TypeId::Unknown)) {
+                (cols_[*i].type.id == dataframe::TypeId::List ||
+                 cols_[*i].type.id == dataframe::TypeId::Unknown)) {
                 auto [token, type] =
                     list_type(tree(), a, schema_.args_fallback);
                 cols_[*i].type = std::move(type);
@@ -1749,11 +1765,11 @@ class Applier {
         if (auto i = index(base)) return cols_[*i];
         if (auto i = arg_index(base)) return cols_[*i];
         if (!scan_) return dstd::nullopt;
-        df::TypeId t = observed(base);
-        if (t == df::TypeId::Unknown && schema_.args_fallback)
+        dataframe::TypeId t = observed(base);
+        if (t == dataframe::TypeId::Unknown && schema_.args_fallback)
             t = observed("args." + base);
-        if (t == df::TypeId::Unknown) return dstd::nullopt;
-        return duql::VectorColumn{base, df::scalar(t), is_json(base)};
+        if (t == dataframe::TypeId::Unknown) return dstd::nullopt;
+        return duql::VectorColumn{base, dataframe::scalar(t), is_json(base)};
     }
 
     // Whether the index lists field `f`, or a path under it.
@@ -1820,13 +1836,14 @@ class Applier {
     // that still reads raw events.
     bool name_paths(const dstd::Vector<dstd::String>& read) {
         if (!v_.filters_events()) return false;
-        dstd::Vector<df::Field> named;
+        dstd::Vector<dataframe::Field> named;
         for (std::size_t i = cols_.size(); i < read.size(); ++i) {
             if (read[i] != detail::select_source_field(read[i]) ||
                 read[i].starts_with(detail::list_token("", "").substr(0, 2)))
                 return false;
-            named.push_back(df::Field{dstd::String(read[i]),
-                                      df::scalar(observed(read[i])), true});
+            named.push_back(
+                dataframe::Field{dstd::String(read[i]),
+                                 dataframe::scalar(observed(read[i])), true});
         }
         v_ = detail::with_named_columns(v_, std::move(named));
         columns_from_view(true);
@@ -1840,8 +1857,8 @@ class Applier {
         return out;
     }
 
-    dstd::Vector<df::DataType> types() const {
-        dstd::Vector<df::DataType> out;
+    dstd::Vector<dataframe::DataType> types() const {
+        dstd::Vector<dataframe::DataType> out;
         out.reserve(cols_.size());
         for (const auto& c : cols_) out.push_back(c.type);
         return out;
@@ -1860,8 +1877,8 @@ class Applier {
         return index("args." + base);
     }
 
-    df::Expr col(dstd::StringView name) const {
-        return df::expr_col(static_cast<std::int32_t>(*index(name)));
+    dataframe::Expr col(dstd::StringView name) const {
+        return dataframe::expr_col(static_cast<std::int32_t>(*index(name)));
     }
 
     // Whether a field named `base` reads a column: the column itself, one it
@@ -1881,8 +1898,8 @@ class Applier {
         return reads(base) || (schema_.args_fallback && reads("args." + base));
     }
 
-    df::Expr compile(const duql::TermRef& t, const dstd::String& text,
-                     bool condition = false) {
+    dataframe::Expr compile(const duql::TermRef& t, const dstd::String& text,
+                            bool condition = false) {
         hidden(t);
         // After the scan the columns are fixed, so a name none of them holds
         // is a mistake, not a missing field.
@@ -1908,7 +1925,7 @@ class Applier {
         duql::for_each_term_field(t, [&](const duql::TField& f) {
             if (f.root != duql::FieldRoot::Record) return;
             for (const auto& c : cols_)
-                if (c.type.id == df::TypeId::Unknown && !c.json &&
+                if (c.type.id == dataframe::TypeId::Unknown && !c.json &&
                     (c.name == dstd::String(f.base) ||
                      (schema_.args_fallback &&
                       c.name == dstd::String("args." + f.base)) ||
@@ -1923,28 +1940,29 @@ class Applier {
     // `t` computed per batch into a column: each batch gives the untyped
     // columns its own types, then `t` compiles as it would over a plan that
     // declared them so, once per distinct set of types.
-    df::Expr per_batch(const duql::TermRef& t, const dstd::String& text,
-                       bool condition) {
+    dataframe::Expr per_batch(const duql::TermRef& t, const dstd::String& text,
+                              bool condition) {
         const dstd::String name = "__duql_t_" + dstd::to_string(typed_++);
         dstd::Vector<duql::VectorColumn> next = cols_;
-        next.push_back({name, df::scalar(condition ? df::TypeId::Bool
-                                                   : df::TypeId::Unknown)});
+        next.push_back(
+            {name, dataframe::scalar(condition ? dataframe::TypeId::Bool
+                                               : dataframe::TypeId::Unknown)});
         next.back().term = t.get();
         struct Cache {
             std::mutex mu;
-            dstd::Map<dstd::Vector<df::TypeId>, df::Expr> exprs;
+            dstd::Map<dstd::Vector<dataframe::TypeId>, dataframe::Expr> exprs;
         };
         map_rows(
             [t, text, condition, name, cols = cols_, fb = schema_.args_fallback,
-             cache = dstd::make_shared<Cache>()](df::DataFrame f) {
+             cache = dstd::make_shared<Cache>()](dataframe::DataFrame f) {
                 dstd::Vector<duql::VectorColumn> typed = cols;
-                dstd::Vector<df::TypeId> types;
+                dstd::Vector<dataframe::TypeId> types;
                 for (std::size_t i = 0; i < typed.size(); ++i) {
-                    if (typed[i].type.id == df::TypeId::Unknown)
+                    if (typed[i].type.id == dataframe::TypeId::Unknown)
                         typed[i].type = f.columns[i].data_type();
                     types.push_back(typed[i].type.id);
                 }
-                df::Expr e;
+                dataframe::Expr e;
                 {
                     std::lock_guard<std::mutex> lock(cache->mu);
                     auto it = cache->exprs.find(types);
@@ -1963,15 +1981,15 @@ class Applier {
                     e = it->second;
                 }
                 // Series*>
-                dstd::Vector<const df::Series*> inputs;
+                dstd::Vector<const dataframe::Series*> inputs;
                 for (const auto& c : f.columns) inputs.push_back(&c);
-                df::Series out = df::eval(e, inputs);
+                dataframe::Series out = dataframe::eval(e, inputs);
                 f.names.emplace_back(name);
                 f.columns.push_back(std::move(out));
                 return f;
             },
             std::move(next), "per batch " + name + " = " + text);
-        return df::expr_col(static_cast<std::int32_t>(cols_.size() - 1));
+        return dataframe::expr_col(static_cast<std::int32_t>(cols_.size() - 1));
     }
 
     // `next` as the columns, each batch passed through `fn`.
@@ -1980,17 +1998,19 @@ class Applier {
     void map_rows(MapSource::Map fn, dstd::Vector<duql::VectorColumn> next,
                   dstd::String line) {
         lines.push_back(std::move(line));
-        df::Schema schema;
+        dataframe::Schema schema;
         for (const auto& c : next)
             schema.fields.push_back(
-                df::Field{dstd::String(c.name), c.type, true});
-        dstd::Vector<dstd::Pair<dstd::String, df::TypeId>> in;
+                dataframe::Field{dstd::String(c.name), c.type, true});
+        dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>> in;
         for (const auto& c : cols_) in.emplace_back(c.name, c.type.id);
-        v_ = v_.with_lazy(df::LazyFrame::scan(dstd::make_shared<MapSource>(
-            v_.lazy(), std::move(schema),
-            [in = std::move(in), fn = std::move(fn)](df::DataFrame f) {
-                return fn(aligned(std::move(f), in));
-            })));
+        v_ = v_.with_lazy(
+            dataframe::LazyFrame::scan(dstd::make_shared<MapSource>(
+                v_.lazy(), std::move(schema),
+                [in = std::move(in),
+                 fn = std::move(fn)](dataframe::DataFrame f) {
+                    return fn(aligned(std::move(f), in));
+                })));
         cols_ = std::move(next);
     }
 
@@ -2041,12 +2061,12 @@ class Applier {
     // key over deeper columns reads whether any of them holds a value.
     void object_fields(const duql::TField& f, const dstd::String& text,
                        bool values, dstd::Vector<dstd::String>& keys,
-                       dstd::Vector<df::Expr>& args,
-                       dstd::Vector<df::DataType>& types) {
+                       dstd::Vector<dataframe::Expr>& args,
+                       dstd::Vector<dataframe::DataType>& types) {
         if (f.root != duql::FieldRoot::Record || f.neg_at != f.steps.size())
             return;
         if (auto i = field_index(dstd::String(f.base))) {
-            if (cols_[*i].type.id != df::TypeId::Struct) return;
+            if (cols_[*i].type.id != dataframe::TypeId::Struct) return;
             for (const auto& x : cols_[*i].type.fields)
                 keys.emplace_back(x.name);
             args.push_back(col(cols_[*i].name));
@@ -2078,18 +2098,18 @@ class Applier {
                 refuse("'" + text + "' reads '" + direct +
                        "', which holds an object or list; only a scan "
                        "filter evaluates it");
-            df::Expr any;
+            dataframe::Expr any;
             for (const std::size_t i : at) {
-                const df::Expr has =
-                    df::expr_is_null(col(cols_[i].name), false);
-                any = any.valid()
-                          ? df::expr_logical(df::LogicalOp::Or, any, has)
-                          : has;
+                const dataframe::Expr has =
+                    dataframe::expr_is_null(col(cols_[i].name), false);
+                any = any.valid() ? dataframe::expr_logical(
+                                        dataframe::LogicalOp::Or, any, has)
+                                  : has;
             }
-            args.push_back(
-                df::expr_select(any, df::expr_lit_bool(true),
-                                df::expr_lit_null(df::TypeId::Bool)));
-            types.push_back(df::scalar(df::TypeId::Bool));
+            args.push_back(dataframe::expr_select(
+                any, dataframe::expr_lit_bool(true),
+                dataframe::expr_lit_null(dataframe::TypeId::Bool)));
+            types.push_back(dataframe::scalar(dataframe::TypeId::Bool));
         }
     }
 
@@ -2112,8 +2132,8 @@ class Applier {
             operands = {ix->array.get(), ix->index.get()};
         else
             for (const auto& a : ls->items) operands.push_back(a.get());
-        dstd::Vector<df::Expr> args;
-        dstd::Vector<df::DataType> arg_types;
+        dstd::Vector<dataframe::Expr> args;
+        dstd::Vector<dataframe::DataType> arg_types;
         dstd::Vector<dstd::String> keys;
         if (c && (c->fn == duql::Fn::Keys || c->fn == duql::Fn::Values)) {
             if (const auto* f = std::get_if<duql::TField>(&c->args[0]->node))
@@ -2133,8 +2153,8 @@ class Applier {
                 args.push_back(std::move(*e));
                 arg_types.push_back(
                     ls && duql::is_null_term(*a, cols_, schema_.args_fallback)
-                        ? df::scalar(df::TypeId::Unknown)
-                        : df::infer_type(args.back(), types()));
+                        ? dataframe::scalar(dataframe::TypeId::Unknown)
+                        : dataframe::infer_type(args.back(), types()));
             }
         }
         const dstd::String name = "__duql_c_" + dstd::to_string(calls_++);
@@ -2148,26 +2168,27 @@ class Applier {
         dstd::Vector<bool> per_batch(operands.size(), false);
         for (std::size_t i = 0; i < operands.size() && i < arg_types.size();
              ++i)
-            per_batch[i] =
-                arg_types[i].id == df::TypeId::Unknown && untyped(*operands[i]);
+            per_batch[i] = arg_types[i].id == dataframe::TypeId::Unknown &&
+                           untyped(*operands[i]);
         if (std::find(per_batch.begin(), per_batch.end(), true) !=
             per_batch.end()) {
             dstd::Vector<duql::VectorColumn> next = cols_;
-            next.push_back({name, df::scalar(df::TypeId::Unknown)});
+            next.push_back(
+                {name, dataframe::scalar(dataframe::TypeId::Unknown)});
             mark(next.back());
             map_rows(
                 [term, args, keys, arg_types, per_batch, text,
-                 name](df::DataFrame f) {
+                 name](dataframe::DataFrame f) {
                     // Series*>
-                    dstd::Vector<const df::Series*> inputs;
+                    dstd::Vector<const dataframe::Series*> inputs;
                     for (const auto& x : f.columns) inputs.push_back(&x);
-                    dstd::Vector<df::Series> values;
-                    dstd::Vector<df::DataType> types = arg_types;
+                    dstd::Vector<dataframe::Series> values;
+                    dstd::Vector<dataframe::DataType> types = arg_types;
                     for (std::size_t i = 0; i < args.size(); ++i) {
-                        values.push_back(df::eval(args[i], inputs));
+                        values.push_back(dataframe::eval(args[i], inputs));
                         if (per_batch[i]) types[i] = values.back().data_type();
                     }
-                    dstd::Optional<df::DataType> type;
+                    dstd::Optional<dataframe::DataType> type;
                     try {
                         type = duql::call_type(*term, types);
                     } catch (const std::invalid_argument& e) {
@@ -2179,21 +2200,23 @@ class Applier {
                     f.columns.push_back(
                         type ? duql::call_column(*term, values, keys, *type,
                                                  rows)
-                             : df::Series::nulls(df::TypeId::Bool, rows));
+                             : dataframe::Series::nulls(dataframe::TypeId::Bool,
+                                                        rows));
                     return f;
                 },
                 std::move(next), "call " + name + " per batch = " + text);
             return;
         }
-        dstd::Optional<df::DataType> type;
+        dstd::Optional<dataframe::DataType> type;
         try {
             type = duql::call_type(*term, arg_types);
         } catch (const std::invalid_argument& e) {
             refuse("'" + text + "': " + e.what());
         }
         if (!type) {
-            with_column(name, df::expr_lit_null(df::TypeId::Bool), text);
-            cols_.back().type = df::scalar(df::TypeId::Unknown);
+            with_column(name, dataframe::expr_lit_null(dataframe::TypeId::Bool),
+                        text);
+            cols_.back().type = dataframe::scalar(dataframe::TypeId::Unknown);
             mark(cols_.back());
             return;
         }
@@ -2201,13 +2224,13 @@ class Applier {
         next.push_back({name, *type, c && c->fn == duql::Fn::ParseJson, false});
         mark(next.back());
         map_rows(
-            [t, term, args, keys, type = *type, name](df::DataFrame f) {
+            [t, term, args, keys, type = *type, name](dataframe::DataFrame f) {
                 // Series*>
-                dstd::Vector<const df::Series*> inputs;
+                dstd::Vector<const dataframe::Series*> inputs;
                 for (const auto& x : f.columns) inputs.push_back(&x);
-                dstd::Vector<df::Series> values;
+                dstd::Vector<dataframe::Series> values;
                 for (const auto& a : args)
-                    values.push_back(df::eval(a, inputs));
+                    values.push_back(dataframe::eval(a, inputs));
                 const std::int64_t rows = f.num_rows();
                 f.names.emplace_back(name);
                 f.columns.push_back(
@@ -2242,13 +2265,14 @@ class Applier {
         const dstd::String name = "__duql_q_" + dstd::to_string(quants_++);
         dstd::Vector<duql::VectorColumn> in = cols_;
         dstd::Vector<duql::VectorColumn> next = cols_;
-        next.push_back({name, df::scalar(df::TypeId::Bool), false, false, q});
+        next.push_back({name, dataframe::scalar(dataframe::TypeId::Bool), false,
+                        false, q});
         map_rows(
             [t, q, in = std::move(in), name, step = step_,
-             fb = schema_.args_fallback](df::DataFrame f) {
+             fb = schema_.args_fallback](dataframe::DataFrame f) {
                 ready(step);
                 // Series*>
-                dstd::Vector<const df::Series*> inputs;
+                dstd::Vector<const dataframe::Series*> inputs;
                 for (const auto& c : f.columns) inputs.push_back(&c);
                 auto truth = duql::quantify(*q, inputs, in, fb);
                 if (!truth) refuse(truth.error().message);
@@ -2261,14 +2285,15 @@ class Applier {
     }
 
     // The type of the column `name` of side `side`, Unknown when it has none.
-    df::DataType side_type(std::size_t side, dstd::StringView name) const {
+    dataframe::DataType side_type(std::size_t side,
+                                  dstd::StringView name) const {
         const auto& cols = ctx_.sides->columns[side];
         for (const auto& c : cols)
             if (c.name == name) return c.type;
         if (schema_.args_fallback)
             for (const auto& c : cols)
                 if (c.name == "args." + dstd::String(name)) return c.type;
-        return df::scalar(df::TypeId::Unknown);
+        return dataframe::scalar(dataframe::TypeId::Unknown);
     }
 
     // The columns of `l`'s keys over the rows, computed apart when a key is
@@ -2287,9 +2312,9 @@ class Applier {
 
     // The side of a joined `l`, with `marker` a TRUE column of that name;
     // in `right`, the columns it matches on.
-    df::LazyFrame joined_side(const duql::TLookup& l,
-                              dstd::Vector<dstd::String>& right, bool& memory,
-                              const dstd::String& marker) {
+    dataframe::LazyFrame joined_side(const duql::TLookup& l,
+                                     dstd::Vector<dstd::String>& right,
+                                     bool& memory, const dstd::String& marker) {
         const auto& side_cols = ctx_.sides->columns[l.side];
         if (l.kind == duql::LookupKind::In) {
             if (side_cols.size() != l.keys.size())
@@ -2302,9 +2327,10 @@ class Applier {
             right.clear();
             for (const auto& t : l.target) right.emplace_back(t);
         }
-        df::LazyFrame side = side_plan(l.side, memory);
+        dataframe::LazyFrame side = side_plan(l.side, memory);
         if (marker.empty()) return side;
-        return side.with_column(std_str(marker), df::expr_lit_bool(true));
+        return side.with_column(std_str(marker),
+                                dataframe::expr_lit_bool(true));
     }
 
     // Whether `l`'s keys are columns of one exact type each, the type of
@@ -2316,10 +2342,11 @@ class Applier {
             const auto* f = whole_field(l.keys[k].get());
             const auto i = f ? index(f->base) : dstd::nullopt;
             if (!i) return false;
-            const df::DataType& a = cols_[*i].type;
-            const df::DataType& b = side_cols[k].type;
-            const bool exact = is_integer(a.id) || a.id == df::TypeId::String ||
-                               a.id == df::TypeId::Bool;
+            const dataframe::DataType& a = cols_[*i].type;
+            const dataframe::DataType& b = side_cols[k].type;
+            const bool exact = is_integer(a.id) ||
+                               a.id == dataframe::TypeId::String ||
+                               a.id == dataframe::TypeId::Bool;
             if (!exact || a.id != b.id || a.is_json() || b.is_json())
                 return false;
         }
@@ -2334,13 +2361,14 @@ class Applier {
         const dstd::Vector<dstd::String> left = key_columns(t, l, id);
         dstd::Vector<dstd::String> right;
         bool memory = false;
-        df::LazyFrame side = joined_side(l, right, memory, "");
+        dataframe::LazyFrame side = joined_side(l, right, memory, "");
         lines.push_back(dstd::String("semi join " + l.name + " on ") +
                         joined(left) +
                         (memory ? " (side from memory)"
                                 : " (side joined, sharing the scan)"));
         v_ = v_.with_lazy(v_.lazy().join(std::move(side), std_strs(left),
-                                         std_strs(right), df::JoinHow::Semi));
+                                         std_strs(right),
+                                         dataframe::JoinHow::Semi));
         if (names() != before) keep(before);
     }
 
@@ -2356,35 +2384,36 @@ class Applier {
         bool memory = false;
         const bool in = l->kind == duql::LookupKind::In;
         const dstd::String matched = "__duql_lm_" + id;
-        df::LazyFrame side =
+        dataframe::LazyFrame side =
             joined_side(*l, right, memory, in ? matched : dstd::String());
         const dstd::String how = in ? "lookup join " : "nest join ";
         lines.push_back(how + dstd::String(l->name) + " on " + joined(left) +
                         (memory ? " (side from memory)"
                                 : " (side joined, sharing the scan)"));
         dstd::Optional<std::size_t> field;
-        df::DataType type = df::scalar(df::TypeId::Bool);
+        dataframe::DataType type = dataframe::scalar(dataframe::TypeId::Bool);
         if (in) {
             v_ = v_.with_lazy(v_.lazy().join(std::move(side), std_strs(left),
                                              std_strs(right),
-                                             df::JoinHow::Lookup));
-            cols_.push_back({matched, df::scalar(df::TypeId::Bool)});
+                                             dataframe::JoinHow::Lookup));
+            cols_.push_back(
+                {matched, dataframe::scalar(dataframe::TypeId::Bool)});
         } else {
-            dstd::Vector<df::Field> fields;
+            dstd::Vector<dataframe::Field> fields;
             const auto& side_cols = ctx_.sides->columns[l->side];
             for (std::size_t c = 0; c < side_cols.size(); ++c) {
-                fields.push_back(df::Field{std_str(side_cols[c].name),
-                                           side_cols[c].type, true});
+                fields.push_back(dataframe::Field{std_str(side_cols[c].name),
+                                                  side_cols[c].type, true});
                 if (side_cols[c].name == dstd::String(l->column)) field = c;
             }
             if (!field)
                 refuse("'" + l->name + "' has no column '" + l->column + "'");
             type = side_cols[*field].type;
-            v_ = v_.with_lazy(v_.lazy().join(std::move(side), std_strs(left),
-                                             std_strs(right), df::JoinHow::Nest,
-                                             std_str(matched)));
-            cols_.push_back(
-                {matched, df::list_of(df::struct_of(std::move(fields)))});
+            v_ = v_.with_lazy(
+                v_.lazy().join(std::move(side), std_strs(left), std_strs(right),
+                               dataframe::JoinHow::Nest, std_str(matched)));
+            cols_.push_back({matched, dataframe::list_of(dataframe::struct_of(
+                                          std::move(fields)))});
         }
         dstd::Vector<duql::VectorColumn> next = cols_;
         next.push_back({name, type, false, false, nullptr, l});
@@ -2395,24 +2424,25 @@ class Applier {
         const dstd::String sub = dstd::String(l->name);
         const dstd::Optional<std::size_t> empty = l->empty;
         map_rows(
-            [=](df::DataFrame f) {
-                auto at = [&](const dstd::String& n) -> const df::Series& {
+            [=](dataframe::DataFrame f) {
+                auto at =
+                    [&](const dstd::String& n) -> const dataframe::Series& {
                     for (std::size_t i = 0; i < f.names.size(); ++i)
                         if (dstd::StringView(f.names[i]) == n)
                             return f.columns[i];
                     refuse("the join of '" + sub + "' lost column '" + n + "'");
                 };
-                dstd::Vector<df::Series> keys;
+                dstd::Vector<dataframe::Series> keys;
                 for (const auto& k : left) keys.push_back(at(k).materialize());
                 // Series*>
-                dstd::Vector<const df::Series*> ptrs;
+                dstd::Vector<const dataframe::Series*> ptrs;
                 for (const auto& k : keys) ptrs.push_back(&k);
-                df::Series out;
+                dataframe::Series out;
                 if (in) {
                     out = duql::in_column(ptrs, subject,
                                           at(matched).materialize(), negated);
                 } else {
-                    dstd::SharedPtr<const df::DataFrame> none;
+                    dstd::SharedPtr<const dataframe::DataFrame> none;
                     if (empty)
                         none = (strong ? strong : owner(weak))->frame(*empty);
                     out = duql::scalar_column(dstd::String(sub), ptrs,
@@ -2439,23 +2469,23 @@ class Applier {
             join_lookup(t, term);
             return;
         }
-        df::DataType type = df::scalar(df::TypeId::Bool);
+        dataframe::DataType type = dataframe::scalar(dataframe::TypeId::Bool);
         if (l->kind == duql::LookupKind::Arrow) {
             type = side_type(l->side, l->column);
         } else if (l->kind == duql::LookupKind::Scalar) {
             const auto& cols = ctx_.sides->columns[l->side];
             if (l->range == duql::RangeRead::Sum) {
-                const df::TypeId v = side_type(l->side, l->column).id;
-                type = df::scalar(v == df::TypeId::Float32 ||
-                                          v == df::TypeId::Float64
-                                      ? df::TypeId::Float64
-                                      : df::TypeId::Int64);
+                const dataframe::TypeId v = side_type(l->side, l->column).id;
+                type = dataframe::scalar(v == dataframe::TypeId::Float32 ||
+                                                 v == dataframe::TypeId::Float64
+                                             ? dataframe::TypeId::Float64
+                                             : dataframe::TypeId::Int64);
             } else if (l->range == duql::RangeRead::Mean) {
-                type = df::scalar(df::TypeId::Float64);
+                type = dataframe::scalar(dataframe::TypeId::Float64);
             } else if (l->range == duql::RangeRead::Count ||
                        l->range == duql::RangeRead::CountValues ||
                        l->range == duql::RangeRead::CountIf) {
-                type = df::scalar(df::TypeId::Int64);
+                type = dataframe::scalar(dataframe::TypeId::Int64);
             } else if (!l->keys.empty())
                 type = side_type(l->side, l->column);
             else if (!cols.empty())
@@ -2467,10 +2497,10 @@ class Applier {
         next.push_back({name, type, false, false, nullptr, l});
         map_rows(
             [t, l, in = std::move(in), name, step = step_,
-             fb = schema_.args_fallback](df::DataFrame f) {
+             fb = schema_.args_fallback](dataframe::DataFrame f) {
                 ready(step);
                 // Series*>
-                dstd::Vector<const df::Series*> inputs;
+                dstd::Vector<const dataframe::Series*> inputs;
                 for (const auto& c : f.columns) inputs.push_back(&c);
                 auto values = duql::lookup(*l, inputs, in, fb);
                 if (!values) refuse(values.error().message);
@@ -2482,9 +2512,9 @@ class Applier {
             "lookup " + name + " = " + dstd::String(duql::term_text(*term)));
     }
 
-    void with_column(const dstd::String& name, const df::Expr& e,
+    void with_column(const dstd::String& name, const dataframe::Expr& e,
                      const dstd::String& text) {
-        df::DataType type = df::infer_type(e, types());
+        dataframe::DataType type = dataframe::infer_type(e, types());
         v_ = v_.with_column(std_str(name), e);
         if (auto i = index(name))
             cols_[*i] = {name, std::move(type), false};
@@ -2503,7 +2533,7 @@ class Applier {
             next.push_back(cols_[*i]);
         }
         lines.push_back("select " + joined(keep));
-        if (rest) keep.emplace_back(df::REST_COLUMN);
+        if (rest) keep.emplace_back(dataframe::REST_COLUMN);
         v_ = v_.with_lazy(v_.lazy().select(std_strs(keep)));
         cols_ = std::move(next);
     }
@@ -2638,7 +2668,7 @@ class Applier {
             }
             if (key.nulls_first) {
                 dstd::String flag = "__duql_nulls_" + dstd::to_string(k);
-                with_column(flag, df::expr_is_null(col(name)),
+                with_column(flag, dataframe::expr_is_null(col(name)),
                             dstd::String(key.key.text + " is null"));
                 out.by.push_back(std::move(flag));
                 out.desc.push_back(true);
@@ -2702,19 +2732,22 @@ class Applier {
         const dstd::String row = "__duql_row";
         v_ = v_.with_lazy(v_.lazy().with_row_index(std_str(row)));
         cols_.insert(cols_.begin(),
-                     {row, df::scalar(df::TypeId::Int64), false});
-        const df::Expr hash = df::expr_cast(
-            df::TypeId::Float64,
-            df::expr_prim(df::PrimOp::Mix64,
-                          df::expr_arith(df::ArithOp::Add, col(row),
-                                         df::expr_lit(static_cast<std::int64_t>(
-                                             s.seed & SEED_MASK)))));
+                     {row, dataframe::scalar(dataframe::TypeId::Int64), false});
+        const dataframe::Expr hash = dataframe::expr_cast(
+            dataframe::TypeId::Float64,
+            dataframe::expr_prim(
+                dataframe::PrimOp::Mix64,
+                dataframe::expr_arith(
+                    dataframe::ArithOp::Add, col(row),
+                    dataframe::expr_lit(
+                        static_cast<std::int64_t>(s.seed & SEED_MASK)))));
         // mix64 is signed: uniform over [-2^63, 2^63).
         if (s.amount < 100)
-            v_ = v_.filter(df::expr_cmp_expr(
-                df::CmpOp::Lt, hash,
-                df::expr_lit(-9223372036854775808.0 +
-                             s.amount / 100.0 * 18446744073709551616.0)));
+            v_ = v_.filter(dataframe::expr_cmp_expr(
+                dataframe::CmpOp::Lt, hash,
+                dataframe::expr_lit(-9223372036854775808.0 +
+                                    s.amount / 100.0 *
+                                        18446744073709551616.0)));
         lines.push_back("sample " + number_text(s.amount) + "%" + seed);
         keep(before);
     }
@@ -2764,8 +2797,9 @@ class Applier {
 
     void row_index(const dstd::String& name) {
         v_ = v_.with_lazy(v_.lazy().with_row_index(std_str(name)));
-        cols_.insert(cols_.begin(),
-                     {name, df::scalar(df::TypeId::Int64), false});
+        cols_.insert(
+            cols_.begin(),
+            {name, dataframe::scalar(dataframe::TypeId::Int64), false});
     }
 
     dstd::Optional<std::size_t> field_index(const dstd::String& field) const {
@@ -2777,7 +2811,7 @@ class Applier {
         dftu_window_func func;
         dstd::String value;
         dstd::String out;
-        df::DataType type;
+        dataframe::DataType type;
         std::int64_t offset = 0;
         std::int64_t following = DFTU_WINDOW_UNBOUNDED;
         std::int64_t preceding = DFTU_WINDOW_UNBOUNDED;
@@ -2814,7 +2848,7 @@ class Applier {
             out.push_back(s.out);
             cols_.push_back({s.out, s.type, false});
         }
-        df::OpArgs a;
+        dataframe::OpArgs a;
         a.strlist(1, keys.data(), static_cast<std::int32_t>(keys.size()))
             .strlist(2, &by, 1)
             .winlist(3, raw);
@@ -2828,29 +2862,39 @@ class Applier {
         const dstd::Vector<
             dstd::Pair<const duql::PipelineWinCall*, dstd::String>>& calls,
         const dstd::String& pid) {
-        dstd::Vector<df::GroupAgg> specs;
+        dstd::Vector<dataframe::GroupAgg> specs;
         dstd::Vector<dstd::String> quantiles;
         dstd::Vector<duql::VectorColumn> next = cols_;
         dstd::String text;
         for (const auto& [c, in] : calls) {
-            df::GroupAgg g{df::Agg::Var, std_str(in), std_str(c->column)};
-            df::DataType type = df::scalar(df::TypeId::Float64);
+            dataframe::GroupAgg g{dataframe::Agg::Var, std_str(in),
+                                  std_str(c->column)};
+            dataframe::DataType type =
+                dataframe::scalar(dataframe::TypeId::Float64);
             switch (c->fn) {
                 case duql::WinFn::Std:
-                    g.op = df::Agg::Std;
+                    g.op = dataframe::Agg::Std;
                     break;
                 case duql::WinFn::Quantile:
-                    g.op = df::Agg::Pct;
+                    g.op = dataframe::Agg::Pct;
                     g.param = c->q;
                     quantiles.push_back(dstd::String(c->column));
                     break;
                 case duql::WinFn::Histogram:
-                    g.op = df::Agg::Hist;
-                    type = df::list_of(df::struct_of(
-                        {df::Field{"lo", df::scalar(df::TypeId::Float64), true},
-                         df::Field{"hi", df::scalar(df::TypeId::Float64), true},
-                         df::Field{"count", df::scalar(df::TypeId::Uint64),
-                                   true}}));
+                    g.op = dataframe::Agg::Hist;
+                    type = dataframe::list_of(dataframe::struct_of(
+                        {dataframe::Field{
+                             "lo",
+                             dataframe::scalar(dataframe::TypeId::Float64),
+                             true},
+                         dataframe::Field{
+                             "hi",
+                             dataframe::scalar(dataframe::TypeId::Float64),
+                             true},
+                         dataframe::Field{
+                             "count",
+                             dataframe::scalar(dataframe::TypeId::Uint64),
+                             true}}));
                     break;
                 default:
                     break;
@@ -2859,47 +2903,50 @@ class Applier {
             next.push_back({dstd::String(c->column), std::move(type)});
             text += (text.empty() ? "" : ", ") + c->text;
         }
-        df::Schema schema;
+        dataframe::Schema schema;
         for (const auto& c : next)
             schema.fields.push_back(
-                df::Field{dstd::String(c.name), c.type, true});
+                dataframe::Field{dstd::String(c.name), c.type, true});
         const dstd::String spid(pid);
         finish(
-            [spid, specs](df::DataFrame f) {
-                df::DataFrame g =
+            [spid, specs](dataframe::DataFrame f) {
+                dataframe::DataFrame g =
                     f.group_by(dstd::Vector<dstd::String>{spid}, specs);
-                return f.join(g, {spid}, {spid}, df::JoinHow::Lookup);
+                return f.join(g, {spid}, {spid}, dataframe::JoinHow::Lookup);
             },
             "partition aggregates " + text, std::move(schema));
         cols_ = std::move(next);
         for (const auto& q : quantiles)
             v_ = v_.with_column(
                 std_str(q),
-                df::expr_select(df::expr_unary(df::UnaryOp::IsNan, col(q)),
-                                df::expr_lit_null(df::TypeId::Float64),
-                                col(q)));
+                dataframe::expr_select(
+                    dataframe::expr_unary(dataframe::UnaryOp::IsNan, col(q)),
+                    dataframe::expr_lit_null(dataframe::TypeId::Float64),
+                    col(q)));
     }
 
-    df::DataType type_of(const dstd::String& column) const {
+    dataframe::DataType type_of(const dstd::String& column) const {
         return cols_[*index(column)].type;
     }
 
-    df::DataType sum_type(const dstd::String& in, const dstd::String& text) {
-        const df::TypeId t = type_of(in).id;
-        if (t != df::TypeId::Unknown && !is_number(t))
+    dataframe::DataType sum_type(const dstd::String& in,
+                                 const dstd::String& text) {
+        const dataframe::TypeId t = type_of(in).id;
+        if (t != dataframe::TypeId::Unknown && !is_number(t))
             refuse("'" + text + "' in a window needs numbers");
-        return df::scalar(is_integer(t) ? df::TypeId::Int64
-                                        : df::TypeId::Float64);
+        return dataframe::scalar(is_integer(t) ? dataframe::TypeId::Int64
+                                               : dataframe::TypeId::Float64);
     }
 
     // Row `a` differs from row `b`, null included.
-    df::Expr differs(const dstd::String& a, const dstd::String& b) {
-        const df::Expr na = df::expr_is_null(col(a));
-        const df::Expr nb = df::expr_is_null(col(b));
-        return df::expr_select(
-            na, df::expr_not(nb),
-            df::expr_select(nb, df::expr_lit_bool(true),
-                            df::expr_cmp_expr(df::CmpOp::Ne, col(a), col(b))));
+    dataframe::Expr differs(const dstd::String& a, const dstd::String& b) {
+        const dataframe::Expr na = dataframe::expr_is_null(col(a));
+        const dataframe::Expr nb = dataframe::expr_is_null(col(b));
+        return dataframe::expr_select(
+            na, dataframe::expr_not(nb),
+            dataframe::expr_select(nb, dataframe::expr_lit_bool(true),
+                                   dataframe::expr_cmp_expr(
+                                       dataframe::CmpOp::Ne, col(a), col(b))));
     }
 
     void stage(const duql::PipelineWindow& w) {
@@ -2947,8 +2994,8 @@ class Applier {
             s.following = 0;
             if (c.frame->range) {
                 if (sort_keys.size() != 1) refuse("'over' needs one sort key");
-                const df::TypeId t = type_of(sort_keys[0]).id;
-                if (t != df::TypeId::Unknown && !is_number(t))
+                const dataframe::TypeId t = type_of(sort_keys[0]).id;
+                if (t != dataframe::TypeId::Unknown && !is_number(t))
                     refuse("'" + c.text + "' needs a numeric sort key");
                 s.preceding = static_cast<std::int64_t>(c.frame->width);
                 s.mode = DFTU_WINDOW_FRAME_RANGE;
@@ -2960,7 +3007,8 @@ class Applier {
         };
         dstd::Vector<dstd::Pair<const duql::PipelineWinCall*, dstd::String>>
             partition;
-        const df::DataType i64 = df::scalar(df::TypeId::Int64);
+        const dataframe::DataType i64 =
+            dataframe::scalar(dataframe::TypeId::Int64);
         for (std::size_t i = 0; i < w.calls.size(); ++i) {
             const auto& c = w.calls[i];
             dstd::String in;
@@ -2968,9 +3016,10 @@ class Applier {
                 in = "__duql_in_" + dstd::to_string(i);
                 with_column(
                     in,
-                    df::expr_select(compile(c.arg, dstd::String(c.text), true),
-                                    df::expr_lit(std::int64_t{1}),
-                                    df::expr_lit_null(df::TypeId::Int64)),
+                    dataframe::expr_select(
+                        compile(c.arg, dstd::String(c.text), true),
+                        dataframe::expr_lit(std::int64_t{1}),
+                        dataframe::expr_lit_null(dataframe::TypeId::Int64)),
                     dstd::String(c.text));
             } else if (c.arg) {
                 in = source({"", c.arg, c.text},
@@ -3010,9 +3059,9 @@ class Applier {
                     break;
                 case duql::WinFn::RunningMean:
                     sum_type(in, dstd::String(c.text));
-                    forward.push_back({DFTU_WINDOW_FRAME_MEAN, in,
-                                       dstd::String(c.column),
-                                       df::scalar(df::TypeId::Float64), 1, 0});
+                    forward.push_back(
+                        {DFTU_WINDOW_FRAME_MEAN, in, dstd::String(c.column),
+                         dataframe::scalar(dataframe::TypeId::Float64), 1, 0});
                     break;
                 case duql::WinFn::Ntile:
                     forward.push_back({DFTU_WINDOW_NTILE, "",
@@ -3049,7 +3098,7 @@ class Applier {
                 case duql::WinFn::Mean:
                     sum_type(in, dstd::String(c.text));
                     framed({DFTU_WINDOW_FRAME_MEAN, in, dstd::String(c.column),
-                            df::scalar(df::TypeId::Float64)},
+                            dataframe::scalar(dataframe::TypeId::Float64)},
                            c);
                     break;
                 case duql::WinFn::Min:
@@ -3086,9 +3135,10 @@ class Applier {
                            c);
                     break;
                 case duql::WinFn::Collect:
-                    framed({DFTU_WINDOW_FRAME_COLLECT, in,
-                            dstd::String(c.column), df::list_of(type_of(in))},
-                           c);
+                    framed(
+                        {DFTU_WINDOW_FRAME_COLLECT, in, dstd::String(c.column),
+                         dataframe::list_of(type_of(in))},
+                        c);
                     break;
                 case duql::WinFn::Argmax:
                 case duql::WinFn::Argmin: {
@@ -3106,13 +3156,13 @@ class Applier {
                 case duql::WinFn::Quantile:
                     if (c.frame) {
                         sum_type(in, dstd::String(c.text));
-                        WinSpec s{c.fn == duql::WinFn::Var
-                                      ? DFTU_WINDOW_FRAME_VAR
-                                  : c.fn == duql::WinFn::Std
-                                      ? DFTU_WINDOW_FRAME_STD
-                                      : DFTU_WINDOW_FRAME_QUANTILE,
-                                  in, dstd::String(c.column),
-                                  df::scalar(df::TypeId::Float64)};
+                        WinSpec s{
+                            c.fn == duql::WinFn::Var ? DFTU_WINDOW_FRAME_VAR
+                            : c.fn == duql::WinFn::Std
+                                ? DFTU_WINDOW_FRAME_STD
+                                : DFTU_WINDOW_FRAME_QUANTILE,
+                            in, dstd::String(c.column),
+                            dataframe::scalar(dataframe::TypeId::Float64)};
                         s.q = c.q;
                         framed(std::move(s), c);
                         break;
@@ -3141,26 +3191,29 @@ class Applier {
         window_op(part, ord, forward);
         window_op(part, sort_keys.empty() ? ord : sort_keys[0], ranged);
         for (const auto& [edge, c] : edges)
-            with_column(
-                dstd::String(c->column),
-                df::expr_select(df::expr_is_null(col(edge)),
-                                compile(c->fallback, dstd::String(c->text)),
-                                col(c->column)),
-                dstd::String(c->text));
+            with_column(dstd::String(c->column),
+                        dataframe::expr_select(
+                            dataframe::expr_is_null(col(edge)),
+                            compile(c->fallback, dstd::String(c->text)),
+                            col(c->column)),
+                        dstd::String(c->text));
         if (peers) {
-            df::Expr peer = df::expr_cmp(df::CmpOp::Eq, col("__duql_rn"),
-                                         df::detail::expr_scalar_i(1));
+            dataframe::Expr peer =
+                dataframe::expr_cmp(dataframe::CmpOp::Eq, col("__duql_rn"),
+                                    dataframe::detail::expr_scalar_i(1));
             for (std::size_t k = 0; k < sort_keys.size(); ++k)
-                peer = df::expr_logical(
-                    df::LogicalOp::Or, peer,
+                peer = dataframe::expr_logical(
+                    dataframe::LogicalOp::Or, peer,
                     differs(sort_keys[k], "__duql_prev_" + dstd::to_string(k)));
             with_column("__duql_peer",
-                        df::expr_select(peer, df::expr_lit(std::int64_t{1}),
-                                        df::expr_lit(std::int64_t{0})),
+                        dataframe::expr_select(
+                            peer, dataframe::expr_lit(std::int64_t{1}),
+                            dataframe::expr_lit(std::int64_t{0})),
                         "peer start");
             with_column("__duql_start",
-                        df::expr_select(peer, col("__duql_rn"),
-                                        df::expr_lit_null(df::TypeId::Int64)),
+                        dataframe::expr_select(
+                            peer, col("__duql_rn"),
+                            dataframe::expr_lit_null(dataframe::TypeId::Int64)),
                         "peer start row");
             for (const auto* c : ranks)
                 last.push_back(
@@ -3175,14 +3228,14 @@ class Applier {
         } else {
             for (const auto* c : ranks)
                 with_column(dstd::String(c->column),
-                            df::expr_lit(std::int64_t{1}),
+                            dataframe::expr_lit(std::int64_t{1}),
                             dstd::String(c->text));
             if (!dist.empty())
-                with_column("__duql_dr", df::expr_lit(std::int64_t{1}),
+                with_column("__duql_dr", dataframe::expr_lit(std::int64_t{1}),
                             "peer group");
         }
         if (!reverse.empty()) {
-            with_column("__duql_rev", df::expr_neg(col(ord)), "-" + ord);
+            with_column("__duql_rev", dataframe::expr_neg(col(ord)), "-" + ord);
             window_op(part, "__duql_rev", reverse);
         }
         window_op(part, ord, last);
@@ -3190,7 +3243,8 @@ class Applier {
             distribution.push_back(
                 {c->fn == duql::WinFn::PercentRank ? DFTU_WINDOW_PERCENT_RANK
                                                    : DFTU_WINDOW_CUME_DIST,
-                 "", dstd::String(c->column), df::scalar(df::TypeId::Float64)});
+                 "", dstd::String(c->column),
+                 dataframe::scalar(dataframe::TypeId::Float64)});
         window_op(part, "__duql_dr", distribution);
         if (!partition.empty()) partition_aggs(partition, pid);
         lines.push_back("sort_by_multi " + pos);
@@ -3237,18 +3291,18 @@ class Applier {
     }
 
     // `f` with the column `name` replaced by the op run over it.
-    static df::DataFrame run_column_op(
-        df::DataFrame f, const dstd::String& name, const dftu_op_desc* op,
-        const dstd::String& second, dftu_scalar a, dftu_scalar b,
-        const dstd::Optional<dstd::String>& str) {
-        dftu_dataframe* in = df::dataframe_handle_wrap(std::move(f));
+    static dataframe::DataFrame run_column_op(
+        dataframe::DataFrame f, const dstd::String& name,
+        const dftu_op_desc* op, const dstd::String& second, dftu_scalar a,
+        dftu_scalar b, const dstd::Optional<dstd::String>& str) {
+        dftu_dataframe* in = dataframe::dataframe_handle_wrap(std::move(f));
         dftu_dataframe* out =
             dftu_dataframe_column_op(in, name.c_str(), op->name,
                                      second.empty() ? nullptr : second.c_str(),
                                      a, b, str ? str->c_str() : nullptr);
         dftu_dataframe_free(in);
         if (!out) plugin_refusal(op->name, op, "the arguments do not fit");
-        return df::dataframe_handle_take(out);
+        return dataframe::dataframe_handle_take(out);
     }
 
     void stage(const duql::PipelinePlugin& p) {
@@ -3284,30 +3338,32 @@ class Applier {
         const dftu_scalar b =
             p.scalars.size() > 1 ? plugin_scalar(p.scalars[1]) : dftu_scalar{};
         const std::size_t at = *index(p.arg.name);
-        df::DataType type = df::scalar(df::TypeId::Unknown);
-        bool known = cols_[at].type.id != df::TypeId::Unknown;
+        dataframe::DataType type =
+            dataframe::scalar(dataframe::TypeId::Unknown);
+        bool known = cols_[at].type.id != dataframe::TypeId::Unknown;
         if (p.arg2)
-            known =
-                known && cols_[*index(second)].type.id != df::TypeId::Unknown;
+            known = known &&
+                    cols_[*index(second)].type.id != dataframe::TypeId::Unknown;
         if (known) {
-            df::DataFrame probe;
+            dataframe::DataFrame probe;
             probe.names.emplace_back(dstd::String(p.arg.name));
-            probe.columns.push_back(df::Series::nulls(cols_[at].type.id, 0));
+            probe.columns.push_back(
+                dataframe::Series::nulls(cols_[at].type.id, 0));
             if (p.arg2) {
                 probe.names.emplace_back(second);
                 probe.columns.push_back(
-                    df::Series::nulls(cols_[*index(second)].type.id, 0));
+                    dataframe::Series::nulls(cols_[*index(second)].type.id, 0));
             }
             const auto out =
                 run_column_op(std::move(probe), dstd::String(p.arg.name), op,
                               second, a, b, p.str);
-            type = df::scalar(out.columns[0].type());
+            type = dataframe::scalar(out.columns[0].type());
         }
         dstd::Vector<duql::VectorColumn> next = cols_;
         next[at].type = type;
         map_rows(
             [name = p.arg.name, op, second, a, b,
-             str = p.str](df::DataFrame f) {
+             str = p.str](dataframe::DataFrame f) {
                 return run_column_op(std::move(f), dstd::String(name), op,
                                      second, a, b, str);
             },
@@ -3320,7 +3376,7 @@ class Applier {
         const dftu_op_desc* op = dftu_op_find(c.op.c_str());
         if (!op) refuse("'call " + c.op + "' is not registered");
         const dstd::String what = dstd::String("call " + c.op);
-        df::OpArgs args;
+        dataframe::OpArgs args;
         std::size_t used = 0;
         for (std::uint32_t i = 1; i < DFTU_OP_MAX_ARGS; ++i) {
             const dftu_op_tok tok = DFTU_OP_SIG_ARG(op->sig, i);
@@ -3415,10 +3471,10 @@ class Applier {
                            ss.span};
         dstd::Vector<dstd::String> out = names();
         out.push_back(dstd::String(ss.name));
-        cols_.push_back(
-            {dstd::String(ss.name), df::scalar(df::TypeId::Int64), false});
+        cols_.push_back({dstd::String(ss.name),
+                         dataframe::scalar(dataframe::TypeId::Int64), false});
         const dstd::Vector<dftu_window_spec> specs{w};
-        df::OpArgs a;
+        dataframe::OpArgs a;
         a.strlist(1, keys.data(), static_cast<std::int32_t>(keys.size()))
             .strlist(2, &by, 1)
             .winlist(3, specs);
@@ -3441,11 +3497,12 @@ class Applier {
         if (!e.index.empty()) line += " with_index " + e.index;
         if (e.keep_empty) line += " keep_empty";
         const auto li = field_index(dstd::String(e.path));
-        const bool list = li && cols_[*li].type.id == df::TypeId::List;
-        const df::DataType elem = list && !cols_[*li].type.fields.empty()
-                                      ? cols_[*li].type.fields.front().type
-                                      : df::scalar(df::TypeId::String);
-        const bool is_struct = elem.id == df::TypeId::Struct;
+        const bool list = li && cols_[*li].type.id == dataframe::TypeId::List;
+        const dataframe::DataType elem =
+            list && !cols_[*li].type.fields.empty()
+                ? cols_[*li].type.fields.front().type
+                : dataframe::scalar(dataframe::TypeId::String);
+        const bool is_struct = elem.id == dataframe::TypeId::Struct;
         const bool json = list && cols_[*li].json;
         auto replaced = [&](const dstd::String& n) {
             return n == dstd::String(e.name) || n == dstd::String(e.index) ||
@@ -3461,8 +3518,8 @@ class Applier {
             else
                 next.push_back({dstd::String(e.name), elem, json});
             if (!e.index.empty())
-                next.push_back(
-                    {dstd::String(e.index), df::scalar(df::TypeId::Int64)});
+                next.push_back({dstd::String(e.index),
+                                dataframe::scalar(dataframe::TypeId::Int64)});
         };
         for (std::size_t j = 0; j < cols_.size(); ++j) {
             const bool here = li && j == *li;
@@ -3478,12 +3535,12 @@ class Applier {
         const dstd::String idx = dstd::String(e.index);
         const bool keep_empty = e.keep_empty;
         map_rows(
-            [at, drop, name, idx, keep_empty](df::DataFrame f) {
+            [at, drop, name, idx, keep_empty](dataframe::DataFrame f) {
                 const std::int64_t n = f.num_rows();
-                df::Series lists;
+                dataframe::Series lists;
                 const std::int32_t* off = nullptr;
                 if (at < f.columns.size() &&
-                    f.columns[at].type() == df::TypeId::List) {
+                    f.columns[at].type() == dataframe::TypeId::List) {
                     lists = f.columns[at].materialize();
                     off = lists.offsets();
                 }
@@ -3507,10 +3564,11 @@ class Applier {
                     }
                 }
                 const auto m = static_cast<std::int64_t>(parent.size());
-                df::DataFrame out;
+                dataframe::DataFrame out;
                 auto elements = [&] {
-                    if (off && lists.child(0).type() == df::TypeId::Struct) {
-                        const df::Series child = lists.child(0);
+                    if (off &&
+                        lists.child(0).type() == dataframe::TypeId::Struct) {
+                        const dataframe::Series child = lists.child(0);
                         for (std::int64_t i = 0; i < child.num_children();
                              ++i) {
                             dstd::String joined_name(name);
@@ -3523,8 +3581,8 @@ class Applier {
                         out.columns.push_back(lists.child(0).take(element));
                     } else {
                         out.names.emplace_back(name);
-                        out.columns.push_back(
-                            df::Series::nulls(df::TypeId::String, m));
+                        out.columns.push_back(dataframe::Series::nulls(
+                            dataframe::TypeId::String, m));
                     }
                     if (idx.empty()) return;
                     dstd::Vector<std::uint8_t> valid(
@@ -3534,8 +3592,8 @@ class Applier {
                             valid[static_cast<std::size_t>(r >> 3)] |=
                                 static_cast<std::uint8_t>(1u << (r & 7));
                     out.names.emplace_back(idx);
-                    out.columns.push_back(
-                        df::Series::flat_i64(position.data(), m, valid.data()));
+                    out.columns.push_back(dataframe::Series::flat_i64(
+                        position.data(), m, valid.data()));
                 };
                 for (std::size_t j = 0; j < f.columns.size(); ++j) {
                     if (j == at) {
@@ -3610,15 +3668,15 @@ class Applier {
                 next.push_back({dstd::String(p.aggs[a].name + ".") + v,
                                 cols_[n_keys + 1 + a].type});
         }
-        dstd::Optional<df::Schema> schema{df::Schema{}};
+        dstd::Optional<dataframe::Schema> schema{dataframe::Schema{}};
         if (p.fixed)
             for (const auto& c : next)
                 schema->fields.push_back(
-                    df::Field{std_str(c.name), c.type, true});
+                    dataframe::Field{std_str(c.name), c.type, true});
         const bool open = !p.fixed;
         const std::uint64_t limit = pivot_max_columns();
         finish(
-            [n_keys, aggs, fixed, open, limit](df::DataFrame f) {
+            [n_keys, aggs, fixed, open, limit](dataframe::DataFrame f) {
                 return spread(std::move(f), n_keys, aggs, fixed, open, limit);
             },
             "spread __duql_pivot into " + joined(aggs), std::move(schema));
@@ -3637,30 +3695,33 @@ class Applier {
 
     // Rows sorted by (keys, pivot value) as one row per key tuple, with a
     // column `agg.value` per aggregate and value.
-    static df::DataFrame spread(df::DataFrame f, std::size_t n_keys,
-                                const dstd::Vector<dstd::String>& aggs,
-                                dstd::Vector<dstd::String> values, bool open,
-                                std::uint64_t limit) {
+    static dataframe::DataFrame spread(dataframe::DataFrame f,
+                                       std::size_t n_keys,
+                                       const dstd::Vector<dstd::String>& aggs,
+                                       dstd::Vector<dstd::String> values,
+                                       bool open, std::uint64_t limit) {
         const std::int64_t n = f.num_rows();
-        auto text = [](const df::Series& s, std::int64_t r) -> dstd::String {
+        auto text = [](const dataframe::Series& s,
+                       std::int64_t r) -> dstd::String {
             if (s.is_null(r)) return "null";
-            if (s.type() == df::TypeId::String)
+            if (s.type() == dataframe::TypeId::String)
                 return dstd::String(s.string_at(r));
-            if (s.type() == df::TypeId::Bool)
-                return s.cast(df::TypeId::Int64).data<std::int64_t>()[r]
+            if (s.type() == dataframe::TypeId::Bool)
+                return s.cast(dataframe::TypeId::Int64).data<std::int64_t>()[r]
                            ? "true"
                            : "false";
-            if (s.type() == df::TypeId::Uint64)
+            if (s.type() == dataframe::TypeId::Uint64)
                 return dstd::to_string(
                     s.materialize().data<std::uint64_t>()[r]);
             if (is_integer(s.type()))
                 return dstd::to_string(s.slice(r, 1)
-                                           .cast(df::TypeId::Int64)
+                                           .cast(dataframe::TypeId::Int64)
                                            .data<std::int64_t>()[0]);
-            return number_text(
-                s.slice(r, 1).cast(df::TypeId::Float64).data<double>()[0]);
+            return number_text(s.slice(r, 1)
+                                   .cast(dataframe::TypeId::Float64)
+                                   .data<double>()[0]);
         };
-        const df::Series& pk = f.columns[n_keys];
+        const dataframe::Series& pk = f.columns[n_keys];
         dstd::Vector<dstd::String> row_value;
         for (std::int64_t r = 0; r < n; ++r) row_value.push_back(text(pk, r));
         if (open) {
@@ -3673,13 +3734,13 @@ class Applier {
                 refuse("'pivot' gives " + dstd::to_string(firsts.size()) +
                        " columns per aggregate, over DUQL_PIVOT_MAX_COLUMNS (" +
                        dstd::to_string(limit) + ")");
-            const df::Series order = pk.take(firsts).argsort();
+            const dataframe::Series order = pk.take(firsts).argsort();
             for (std::int64_t i = 0; i < order.length(); ++i)
                 values.push_back(row_value[static_cast<std::size_t>(
                     firsts[static_cast<std::size_t>(
                         order.data<std::int64_t>()[i])])]);
         }
-        dstd::Vector<df::Series> key_text;
+        dstd::Vector<dataframe::Series> key_text;
         for (std::size_t c = 0; c < n_keys; ++c)
             key_text.push_back(f.columns[c].share());
         auto same_tuple = [&](std::int64_t a, std::int64_t b) {
@@ -3698,7 +3759,7 @@ class Applier {
                 if (values[v] == row_value[static_cast<std::size_t>(r)])
                     cells[v].back() = r;
         }
-        df::DataFrame out;
+        dataframe::DataFrame out;
         for (std::size_t c = 0; c < n_keys; ++c) {
             out.names.emplace_back(f.names[c]);
             out.columns.push_back(f.columns[c].take(starts));
@@ -3714,43 +3775,46 @@ class Applier {
     void stage(const duql::PipelineUnpivot& u) {
         leave_scan("unpivot");
         dstd::Vector<std::size_t> at;
-        dstd::Vector<df::TypeId> types;
+        dstd::Vector<dataframe::TypeId> types;
         for (const auto& f : u.fields) {
             const auto i = field_index(dstd::String(f));
             if (!i) refuse("'unpivot' has no field '" + f + "'");
             at.push_back(*i);
             types.push_back(cols_[*i].type.id);
         }
-        const bool unknown = std::find(types.begin(), types.end(),
-                                       df::TypeId::Unknown) != types.end();
+        const bool unknown =
+            std::find(types.begin(), types.end(), dataframe::TypeId::Unknown) !=
+            types.end();
         const bool numbers = std::all_of(types.begin(), types.end(), is_number);
         const bool same =
             std::all_of(types.begin(), types.end(),
-                        [&](df::TypeId t) { return t == types[0]; });
-        df::TypeId target = types.empty() ? df::TypeId::String : types[0];
+                        [&](dataframe::TypeId t) { return t == types[0]; });
+        dataframe::TypeId target =
+            types.empty() ? dataframe::TypeId::String : types[0];
         if (unknown) {
-            target = df::TypeId::String;
+            target = dataframe::TypeId::String;
         } else if (!same && numbers) {
             target = std::all_of(types.begin(), types.end(), is_integer)
-                         ? df::TypeId::Int64
-                         : df::TypeId::Float64;
+                         ? dataframe::TypeId::Int64
+                         : dataframe::TypeId::Float64;
         } else if (!same) {
             dstd::String what;
             for (std::size_t k = 0; k < u.fields.size(); ++k)
                 what += dstd::String((what.empty() ? "" : ", ") + u.fields[k] +
                                      " (") +
-                        dstd::String(df::type_name(types[k])) + ")";
+                        dstd::String(dataframe::type_name(types[k])) + ")";
             refuse("'unpivot' mixes the types of " + what +
                    "; convert them with int(), float() or string()");
         }
         dstd::Vector<dstd::String> values;
         for (std::size_t k = 0; k < at.size(); ++k) {
             const dstd::String name = "__duql_value_" + dstd::to_string(k);
-            df::Expr e = col(cols_[at[k]].name);
+            dataframe::Expr e = col(cols_[at[k]].name);
             if (types[k] != target)
-                e = target == df::TypeId::String
-                        ? df::expr_convert(df::ConvertOp::String, e)
-                        : df::expr_cast(target, e);
+                e = target == dataframe::TypeId::String
+                        ? dataframe::expr_convert(dataframe::ConvertOp::String,
+                                                  e)
+                        : dataframe::expr_cast(target, e);
             with_column(name, e, dstd::String(u.fields[k]));
             values.push_back(name);
         }
@@ -3766,15 +3830,16 @@ class Applier {
             ids.push_back(j);
             next.push_back(cols_[j]);
         }
-        next.push_back({dstd::String(u.key), df::scalar(df::TypeId::String)});
-        next.push_back({dstd::String(u.value), df::scalar(target)});
+        next.push_back({dstd::String(u.key),
+                        dataframe::scalar(dataframe::TypeId::String)});
+        next.push_back({dstd::String(u.value), dataframe::scalar(target)});
         dstd::Vector<std::size_t> value_at;
         for (const auto& v : values) value_at.push_back(*index(v));
         const dstd::Vector<dstd::String> keys = strings_of(u.fields);
         const dstd::String key = dstd::String(u.key);
         const dstd::String value = dstd::String(u.value);
         map_rows(
-            [ids, value_at, keys, key, value](df::DataFrame f) {
+            [ids, value_at, keys, key, value](dataframe::DataFrame f) {
                 const std::int64_t n = f.num_rows();
                 const auto k = static_cast<std::int64_t>(keys.size());
                 dstd::Vector<std::int64_t> parent;
@@ -3786,25 +3851,26 @@ class Applier {
                         pick.push_back(j * n + r);
                         names.emplace_back(keys[static_cast<std::size_t>(j)]);
                     }
-                dstd::Vector<df::DataFrame> parts;
+                dstd::Vector<dataframe::DataFrame> parts;
                 for (const auto v : value_at) {
-                    df::DataFrame one;
+                    dataframe::DataFrame one;
                     one.names.emplace_back("v");
                     one.columns.push_back(f.columns[v].share());
                     parts.push_back(std::move(one));
                 }
-                dstd::Vector<const df::DataFrame*> ptrs;
+                dstd::Vector<const dataframe::DataFrame*> ptrs;
                 for (const auto& p : parts) ptrs.push_back(&p);
-                df::DataFrame stacked =
-                    ptrs.empty() ? df::DataFrame{}
-                                 : df::concat(ptrs, df::ConcatHow::Vertical);
-                df::DataFrame out;
+                dataframe::DataFrame stacked =
+                    ptrs.empty() ? dataframe::DataFrame{}
+                                 : dataframe::concat(
+                                       ptrs, dataframe::ConcatHow::Vertical);
+                dataframe::DataFrame out;
                 for (const auto j : ids) {
                     out.names.emplace_back(f.names[j]);
                     out.columns.push_back(f.columns[j].take(parent));
                 }
                 out.names.emplace_back(key);
-                out.columns.push_back(df::Series::strings(names));
+                out.columns.push_back(dataframe::Series::strings(names));
                 out.names.emplace_back(value);
                 out.columns.push_back(stacked.columns.front().take(pick));
                 return out;
@@ -3819,27 +3885,27 @@ class Applier {
         if (ctx_.sides->stored[i]) return true;
         const auto& key = ctx_.sides->keys[i];
         if (!key) return false;
-        const auto db = ix::cache::open_lookup_db(
-            key->path, ix::cache::CacheStore::Mode::ReadOnly);
-        return db && ix::cache::lookup_exists(*db, key->sig);
+        const auto db = index::cache::open_lookup_db(
+            key->path, index::cache::CacheStore::Mode::ReadOnly);
+        return db && index::cache::lookup_exists(*db, key->sig);
     }
 
     // Side `i` as a join's right plan: from memory when the build step or
     // the cache has it, else its own plan, which shares the scan with the
     // rows when it reads their files, under a tap for its caps and cache.
-    df::LazyFrame side_plan(std::size_t i, bool& memory) const {
+    dataframe::LazyFrame side_plan(std::size_t i, bool& memory) const {
         memory = std::find(collected_.begin(), collected_.end(), i) !=
                      collected_.end() ||
                  cached(i);
         if (!memory)
-            return df::detail::tap(
+            return dataframe::detail::tap(
                 ctx_.sides->views[i]->lazy(),
                 side_tap(main_ ? ctx_.sides : nullptr, ctx_.sides, i));
-        df::Schema schema;
+        dataframe::Schema schema;
         for (const auto& c : ctx_.sides->columns[i])
             schema.fields.push_back(
-                df::Field{dstd::String(c.name), c.type, true});
-        return df::LazyFrame::scan(dstd::make_shared<SideSource>(
+                dataframe::Field{dstd::String(c.name), c.type, true});
+        return dataframe::LazyFrame::scan(dstd::make_shared<SideSource>(
             main_ ? ctx_.sides : nullptr, ctx_.sides, i, std::move(schema)));
     }
 
@@ -3881,14 +3947,14 @@ class Applier {
         }
         if (l.kind == duql::syntax::LookupKind::Anti) {
             bool memory = false;
-            df::LazyFrame side = side_plan(l.side, memory);
+            dataframe::LazyFrame side = side_plan(l.side, memory);
             lines.push_back(dstd::String("lookup " + l.name + " on ") +
                             keys_text + " anti" +
                             (memory ? " (side from memory)"
                                     : " (side joined, sharing the scan)"));
             v_ = v_.with_lazy(v_.lazy().join(std::move(side), std_strs(left),
                                              std_strs(right),
-                                             df::JoinHow::Anti));
+                                             dataframe::JoinHow::Anti));
             if (names() != before) keep(before);
             return;
         }
@@ -3905,11 +3971,13 @@ class Applier {
             if (index(into->name))
                 refuse("'lookup " + l.name + " into " + into->name +
                        "' names a column the rows have; pick another name");
-            dstd::Vector<df::Field> fields;
+            dstd::Vector<dataframe::Field> fields;
             for (const auto& c : side_cols)
-                fields.push_back(df::Field{std_str(c.name), c.type, true});
-            next.push_back({dstd::String(into->name),
-                            df::list_of(df::struct_of(std::move(fields)))});
+                fields.push_back(
+                    dataframe::Field{std_str(c.name), c.type, true});
+            next.push_back(
+                {dstd::String(into->name),
+                 dataframe::list_of(dataframe::struct_of(std::move(fields)))});
             added.push_back(dstd::String(into->name));
         } else {
             for (const auto& c : side_cols) {
@@ -3933,7 +4001,7 @@ class Applier {
             }
         }
         bool memory = false;
-        df::LazyFrame side = side_plan(l.side, memory);
+        dataframe::LazyFrame side = side_plan(l.side, memory);
         dstd::Vector<dstd::String> right_on = right;
         if (!nest) {
             // The key columns name the row set in the join's errors.
@@ -3951,8 +4019,9 @@ class Applier {
             for (auto& k : right_on) k = dstd::String(l.name + ".") + k;
             if (inner) {
                 side = side.with_column(dstd::String(HIT_COLUMN),
-                                        df::expr_lit_bool(true));
-                next.push_back({HIT_COLUMN, df::scalar(df::TypeId::Bool)});
+                                        dataframe::expr_lit_bool(true));
+                next.push_back(
+                    {HIT_COLUMN, dataframe::scalar(dataframe::TypeId::Bool)});
             }
         }
         lines.push_back(dstd::String("lookup " + l.name + " on ") + keys_text +
@@ -3960,18 +4029,19 @@ class Applier {
                         dstd::String((nest ? " into " + into->name : "")) +
                         (memory ? " (side from memory)"
                                 : " (side joined, sharing the scan)"));
-        v_ = v_.with_lazy(
-            v_.lazy().join(std::move(side), std_strs(left), std_strs(right_on),
-                           nest ? df::JoinHow::Nest : df::JoinHow::Lookup,
-                           nest ? std_str(into->name) : dstd::String()));
+        v_ = v_.with_lazy(v_.lazy().join(
+            std::move(side), std_strs(left), std_strs(right_on),
+            nest ? dataframe::JoinHow::Nest : dataframe::JoinHow::Lookup,
+            nest ? std_str(into->name) : dstd::String()));
         cols_ = std::move(next);
         if (inner) {
             if (nest)
-                v_ = v_.with_lazy(v_.lazy().filter(
-                    df::expr_list_len(col(into->name)) > std::int64_t{0}));
+                v_ = v_.with_lazy(
+                    v_.lazy().filter(dataframe::expr_list_len(col(into->name)) >
+                                     std::int64_t{0}));
             else
-                v_ = v_.with_lazy(v_.lazy().filter(
-                    df::expr_not(df::expr_is_null(col(HIT_COLUMN)))));
+                v_ = v_.with_lazy(v_.lazy().filter(dataframe::expr_not(
+                    dataframe::expr_is_null(col(HIT_COLUMN)))));
         }
         dstd::Vector<dstd::String> keep_names = before;
         for (const auto& n : added) keep_names.push_back(n);
@@ -3980,24 +4050,27 @@ class Applier {
 
     // The type an as-of pair shares: the type itself, else the number type
     // both convert to.
-    static df::DataType asof_type(const dstd::String& what,
-                                  const dstd::String& side,
-                                  const df::DataType& rows,
-                                  const df::DataType& other) {
-        if (rows.id == df::TypeId::Unknown && other.id == df::TypeId::Unknown)
+    static dataframe::DataType asof_type(const dstd::String& what,
+                                         const dstd::String& side,
+                                         const dataframe::DataType& rows,
+                                         const dataframe::DataType& other) {
+        if (rows.id == dataframe::TypeId::Unknown &&
+            other.id == dataframe::TypeId::Unknown)
             refuse("'lookup " + side + " ... asof': " + what +
                    " has no known type; convert it with int(), float() or "
                    "string()");
         if (rows == other) return rows;
-        if (rows.id == df::TypeId::Unknown) return other;
-        if (other.id == df::TypeId::Unknown) return rows;
+        if (rows.id == dataframe::TypeId::Unknown) return other;
+        if (other.id == dataframe::TypeId::Unknown) return rows;
         if (is_number(rows.id) && is_number(other.id))
-            return df::scalar(is_integer(rows.id) && is_integer(other.id)
-                                  ? df::TypeId::Int64
-                                  : df::TypeId::Float64);
+            return dataframe::scalar(is_integer(rows.id) && is_integer(other.id)
+                                         ? dataframe::TypeId::Int64
+                                         : dataframe::TypeId::Float64);
         refuse("'lookup " + side + " ... asof': " + what + " is " +
-               dstd::String(df::type_name(rows.id)) + " in the rows and " +
-               dstd::String(df::type_name(other.id)) + " in '" + side + "'");
+               dstd::String(dataframe::type_name(rows.id)) +
+               " in the rows and " +
+               dstd::String(dataframe::type_name(other.id)) + " in '" + side +
+               "'");
     }
 
     // The side's columns a lookup adds, but its keys and the `consumed`
@@ -4036,17 +4109,17 @@ class Applier {
                        "'rename'");
             out.names[c] = own_name;
             if (at) {
-                const df::DataType& own = cols_[*at].type;
-                const df::DataType& theirs = side_cols[c].type;
-                if (own.id != df::TypeId::Unknown &&
-                    theirs.id != df::TypeId::Unknown && own != theirs)
+                const dataframe::DataType& own = cols_[*at].type;
+                const dataframe::DataType& theirs = side_cols[c].type;
+                if (own.id != dataframe::TypeId::Unknown &&
+                    theirs.id != dataframe::TypeId::Unknown && own != theirs)
                     refuse(dstd::String("'lookup " + l.name + " ... " + clause +
                                         "': '") +
                            own_name + "' is " +
-                           dstd::String(df::type_name(own.id)) +
+                           dstd::String(dataframe::type_name(own.id)) +
                            " in the rows and " +
-                           dstd::String(df::type_name(theirs.id)) + " in '" +
-                           dstd::String(l.name) + "'");
+                           dstd::String(dataframe::type_name(theirs.id)) +
+                           " in '" + dstd::String(l.name) + "'");
                 out.names[c] = "__duql_av_" + own_name;
                 out.fills.emplace_back(own_name, out.names[c]);
             } else {
@@ -4081,43 +4154,45 @@ class Applier {
         dstd::Vector<dstd::String> side_names;
         for (const auto& c : side_cols) side_names.push_back(c.name);
         bool memory = false;
-        df::LazyFrame side = side_plan(l.side, memory);
+        dataframe::LazyFrame side = side_plan(l.side, memory);
         for (std::size_t k = 0; k < left.size(); ++k) {
-            const df::DataType lt = cols_[*index(left[k])].type;
-            const df::DataType st = side_cols[side_key[k]].type;
-            const df::DataType to =
+            const dataframe::DataType lt = cols_[*index(left[k])].type;
+            const dataframe::DataType st = side_cols[side_key[k]].type;
+            const dataframe::DataType to =
                 asof_type(dstd::String("key '" + l.keys[k].second + "'"),
                           dstd::String(l.name), lt, st);
             const dstd::String from = "__duql_lk_" + dstd::to_string(k);
-            with_column(from, df::expr_cast(to.id, col(left[k])),
+            with_column(from, dataframe::expr_cast(to.id, col(left[k])),
                         dstd::String(l.keys[k].first.text));
             side = side.with_column(
                 std_str(side_names[side_key[k]]),
-                df::expr_cast(to.id, df::expr_col(static_cast<std::int32_t>(
-                                         side_key[k]))));
+                dataframe::expr_cast(
+                    to.id, dataframe::expr_col(
+                               static_cast<std::int32_t>(side_key[k]))));
             equi.push_back(from);
         }
         const dstd::String time_src = source(a.time, "__duql_at");
-        const df::DataType time_type = asof_type(
+        const dataframe::DataType time_type = asof_type(
             dstd::String("time '" + a.column + "'"), dstd::String(l.name),
             cols_[*index(time_src)].type, side_cols[*t].type);
         if (!is_number(time_type.id))
             refuse("'lookup " + l.name + " ... asof': time '" + a.time.text +
-                   "' is " + dstd::String(df::type_name(time_type.id)) +
+                   "' is " + dstd::String(dataframe::type_name(time_type.id)) +
                    ", not a number");
         const dstd::String time = "__duql_at";
-        with_column(time, df::expr_cast(time_type.id, col(time_src)),
+        with_column(time, dataframe::expr_cast(time_type.id, col(time_src)),
                     dstd::String(a.time.text));
         side = side.with_column(
             std_str(side_names[*t]),
-            df::expr_cast(time_type.id,
-                          df::expr_col(static_cast<std::int32_t>(*t))));
+            dataframe::expr_cast(
+                time_type.id,
+                dataframe::expr_col(static_cast<std::int32_t>(*t))));
 
         SideValues values = side_values(l, "asof", side_key, *t);
         // A null key has no key: the op would pair null with null.
         for (const auto k : side_key)
-            side = side.filter(df::expr_is_null(
-                df::expr_col(static_cast<std::int32_t>(k)), false));
+            side = side.filter(dataframe::expr_is_null(
+                dataframe::expr_col(static_cast<std::int32_t>(k)), false));
         dstd::Vector<dstd::String> renamed = side_names;
         renamed[*t] = time;
         for (std::size_t k = 0; k < side_key.size(); ++k)
@@ -4133,7 +4208,7 @@ class Applier {
             if (!n.empty()) out.push_back(n);
         dstd::Vector<const char*> by;
         for (const auto& e : equi) by.push_back(e.c_str());
-        df::OpArgs args;
+        dataframe::OpArgs args;
         args.str(2, time.c_str())
             .strlist(3, by.data(), static_cast<std::int32_t>(by.size()))
             .i32(4, static_cast<std::int32_t>(a.direction))
@@ -4154,7 +4229,7 @@ class Applier {
                                              {std::move(side)}, std_strs(out)));
         for (auto& c : values.columns) cols_.push_back(std::move(c));
         for (const auto& [name, tmp] : values.fills)
-            with_column(name, df::expr_coalesce({col(name), col(tmp)}),
+            with_column(name, dataframe::expr_coalesce({col(name), col(tmp)}),
                         name + " ?? " + tmp);
         lines.push_back("sort_by " + pos);
         v_ = v_.with_lazy(v_.lazy().sort_by(std_str(pos)));
@@ -4193,21 +4268,23 @@ class Applier {
             if (index(o.into))
                 refuse("'lookup " + l.name + " overlap into " + o.into +
                        "' names a column the rows have; pick another name");
-            dstd::Vector<df::Field> fields;
+            dstd::Vector<dataframe::Field> fields;
             for (const auto& c : side_cols)
-                fields.push_back(df::Field{std_str(c.name), c.type, true});
-            next.push_back({dstd::String(o.into),
-                            df::list_of(df::struct_of(std::move(fields)))});
+                fields.push_back(
+                    dataframe::Field{std_str(c.name), c.type, true});
+            next.push_back(
+                {dstd::String(o.into),
+                 dataframe::list_of(dataframe::struct_of(std::move(fields)))});
             values.added.push_back(dstd::String(o.into));
         } else {
             values = side_values(l, "overlap", side_key, *t, *d);
             for (const auto& c : values.columns) next.push_back(c);
         }
 
-        df::Schema schema;
+        dataframe::Schema schema;
         for (const auto& c : next)
             schema.fields.push_back(
-                df::Field{dstd::String(c.name), c.type, true});
+                dataframe::Field{dstd::String(c.name), c.type, true});
         const dstd::Vector<dstd::String> side_names = [&] {
             dstd::Vector<dstd::String> out;
             for (const auto& c : side_cols) out.push_back(c.name);
@@ -4226,17 +4303,18 @@ class Applier {
         dstd::SharedPtr<Sides> strong = main_ ? ctx_.sides : nullptr;
         dstd::WeakPtr<Sides> weak = ctx_.sides;
         finish(
-            [=](df::DataFrame rows) {
+            [=](dataframe::DataFrame rows) {
                 const dstd::SharedPtr<Sides> sides =
                     strong ? strong : owner(weak);
                 const auto held = sides->frame(side_id);
-                df::DataFrame side;
+                dataframe::DataFrame side;
                 side.names = held->names;
                 for (const auto& c : held->columns)
                     side.columns.push_back(c.share());
                 side = duql::flat_frame(std::move(side));
                 rows = duql::flat_frame(std::move(rows));
-                auto find = [](const df::DataFrame& f, const dstd::String& n) {
+                auto find = [](const dataframe::DataFrame& f,
+                               const dstd::String& n) {
                     for (std::size_t i = 0; i < f.names.size(); ++i)
                         if (dstd::StringView(f.names[i]) == n)
                             return f.columns[i].share();
@@ -4257,7 +4335,7 @@ class Applier {
                 const duql::OverlapMatches m =
                     duql::overlap_matches(mine, theirs);
 
-                df::DataFrame out;
+                dataframe::DataFrame out;
                 out.names = rows.names;
                 if (!into.empty()) {
                     for (const auto& c : rows.columns)
@@ -4265,13 +4343,13 @@ class Applier {
                     dstd::Vector<std::int32_t> offsets;
                     for (const auto x : m.offsets)
                         offsets.push_back(static_cast<std::int32_t>(x));
-                    dstd::Vector<df::Series> parts;
+                    dstd::Vector<dataframe::Series> parts;
                     for (const auto& c : side.columns)
                         parts.push_back(c.take(m.rows));
                     out.names.emplace_back(into);
-                    out.columns.push_back(df::Series::list(
-                        offsets,
-                        df::Series::structs(side.names, std::move(parts))));
+                    out.columns.push_back(dataframe::Series::list(
+                        offsets, dataframe::Series::structs(side.names,
+                                                            std::move(parts))));
                     return out;
                 }
                 dstd::Vector<std::int64_t> from_rows;
@@ -4302,7 +4380,7 @@ class Applier {
             std::move(schema));
         cols_ = std::move(next);
         for (const auto& [name, tmp] : values.fills)
-            with_column(name, df::expr_coalesce({col(name), col(tmp)}),
+            with_column(name, dataframe::expr_coalesce({col(name), col(tmp)}),
                         name + " ?? " + tmp);
         dstd::Vector<dstd::String> keep_names = before;
         for (const auto& n : values.added) keep_names.push_back(n);
@@ -4310,18 +4388,19 @@ class Applier {
     }
 
     // The type both sides of a union give `name`, or a refusal naming it.
-    static df::DataType unify(const dstd::String& name, const df::DataType& a,
-                              const df::DataType& b) {
-        if (a.id == df::TypeId::Unknown) return b;
-        if (b.id == df::TypeId::Unknown) return a;
+    static dataframe::DataType unify(const dstd::String& name,
+                                     const dataframe::DataType& a,
+                                     const dataframe::DataType& b) {
+        if (a.id == dataframe::TypeId::Unknown) return b;
+        if (b.id == dataframe::TypeId::Unknown) return a;
         if (a == b) return a;
         if (is_number(a.id) && is_number(b.id))
-            return df::scalar(is_integer(a.id) && is_integer(b.id)
-                                  ? df::TypeId::Int64
-                                  : df::TypeId::Float64);
+            return dataframe::scalar(is_integer(a.id) && is_integer(b.id)
+                                         ? dataframe::TypeId::Int64
+                                         : dataframe::TypeId::Float64);
         refuse("'union' gives column '" + name + "' as " +
-               dstd::String(df::type_name(a.id)) + " and " +
-               dstd::String(df::type_name(b.id)) +
+               dstd::String(dataframe::type_name(a.id)) + " and " +
+               dstd::String(dataframe::type_name(b.id)) +
                "; convert one with int(), float() or string()");
     }
 
@@ -4337,19 +4416,22 @@ class Applier {
         for (const auto& w : want) {
             order.push_back(w.name);
             const auto i = at(w.name);
-            const df::TypeId to = w.type.id == df::TypeId::Unknown
-                                      ? df::TypeId::String
-                                      : w.type.id;
+            const dataframe::TypeId to = w.type.id == dataframe::TypeId::Unknown
+                                             ? dataframe::TypeId::String
+                                             : w.type.id;
             if (!i) {
-                v = v.with_column(std_str(w.name), df::expr_lit_null(to));
+                v = v.with_column(std_str(w.name),
+                                  dataframe::expr_lit_null(to));
                 continue;
             }
             if (cols[*i].type == w.type) continue;
-            const df::Expr c = df::expr_col(static_cast<std::int32_t>(*i));
-            v = v.with_column(std_str(w.name),
-                              to == df::TypeId::String
-                                  ? df::expr_convert(df::ConvertOp::String, c)
-                                  : df::expr_cast(to, c));
+            const dataframe::Expr c =
+                dataframe::expr_col(static_cast<std::int32_t>(*i));
+            v = v.with_column(
+                std_str(w.name),
+                to == dataframe::TypeId::String
+                    ? dataframe::expr_convert(dataframe::ConvertOp::String, c)
+                    : dataframe::expr_cast(to, c));
         }
         return v.with_lazy(v.lazy().select(std_strs(order)));
     }
@@ -4375,8 +4457,8 @@ class Applier {
                 it->type = unify(c.name, it->type, c.type);
         }
         for (auto& w : want)
-            if (w.type.id == df::TypeId::Unknown)
-                w.type = df::scalar(df::TypeId::String);
+            if (w.type.id == dataframe::TypeId::Unknown)
+                w.type = dataframe::scalar(dataframe::TypeId::String);
         View mine = align(v_, cols_, want);
         View theirs = align(other.view, other.cols, want);
         v_ = v_.with_lazy(mine.lazy().concat(theirs.lazy()));
@@ -4385,38 +4467,39 @@ class Applier {
 
     // The column type an aggregate gives on either plan, or nullopt to keep
     // what the plan gives.
-    dstd::Optional<df::TypeId> agg_type(const duql::PipelineAgg& a,
-                                        dstd::Optional<df::TypeId> in) const {
+    dstd::Optional<dataframe::TypeId> agg_type(
+        const duql::PipelineAgg& a,
+        dstd::Optional<dataframe::TypeId> in) const {
         switch (a.fn) {
             case duql::AggFn::Count:
             case duql::AggFn::CountIf:
             case duql::AggFn::CountDistinct:
-                return df::TypeId::Int64;
+                return dataframe::TypeId::Int64;
             case duql::AggFn::Sketch:
             case duql::AggFn::Merge:
-                return df::TypeId::String;
+                return dataframe::TypeId::String;
             case duql::AggFn::Collect:
             case duql::AggFn::Plugin:
                 return dstd::nullopt;
             case duql::AggFn::Sum:
                 if (!in) return dstd::nullopt;
-                return is_integer(*in) ? df::TypeId::Int64
-                                       : df::TypeId::Float64;
+                return is_integer(*in) ? dataframe::TypeId::Int64
+                                       : dataframe::TypeId::Float64;
             case duql::AggFn::Min:
             case duql::AggFn::Max:
             case duql::AggFn::First:
             case duql::AggFn::Last:
             case duql::AggFn::Argmax:
             case duql::AggFn::Argmin:
-                if (in && (is_number(*in) || *in == df::TypeId::String ||
-                           *in == df::TypeId::Bool))
+                if (in && (is_number(*in) || *in == dataframe::TypeId::String ||
+                           *in == dataframe::TypeId::Bool))
                     return in;
                 return dstd::nullopt;
             case duql::AggFn::Mean:
             case duql::AggFn::Var:
             case duql::AggFn::Std:
             case duql::AggFn::Quantile:
-                return df::TypeId::Float64;
+                return dataframe::TypeId::Float64;
             case duql::AggFn::Histogram:
             case duql::AggFn::Busy:
             case duql::AggFn::Concurrency:
@@ -4427,16 +4510,17 @@ class Applier {
         return dstd::nullopt;
     }
 
-    dstd::Optional<df::TypeId> term_type(const duql::TermRef& t,
-                                         const dstd::String& text) {
+    dstd::Optional<dataframe::TypeId> term_type(const duql::TermRef& t,
+                                                const dstd::String& text) {
         if (!t) return dstd::nullopt;
         if (const auto* f = whole_field(t))
             if (const auto c = scan_column(dstd::String(f->base)))
-                return c->type.id == df::TypeId::Unknown
+                return c->type.id == dataframe::TypeId::Unknown
                            ? dstd::nullopt
-                           : dstd::Optional<df::TypeId>(c->type.id);
-        const df::TypeId id = df::infer_type(compile(t, text), types()).id;
-        if (id == df::TypeId::Unknown) return dstd::nullopt;
+                           : dstd::Optional<dataframe::TypeId>(c->type.id);
+        const dataframe::TypeId id =
+            dataframe::infer_type(compile(t, text), types()).id;
+        if (id == dataframe::TypeId::Unknown) return dstd::nullopt;
         return id;
     }
 
@@ -4490,9 +4574,9 @@ class Applier {
         dstd::Vector<dstd::String> seen;
         for (const auto& k : g.keys) {
             const auto c = trace_column(k.term);
-            if (!c || (c->type.id != df::TypeId::String &&
-                       c->type.id != df::TypeId::Int64 &&
-                       c->type.id != df::TypeId::Uint64))
+            if (!c || (c->type.id != dataframe::TypeId::String &&
+                       c->type.id != dataframe::TypeId::Int64 &&
+                       c->type.id != dataframe::TypeId::Uint64))
                 return dstd::String("key '" + k.text +
                                     "' is not a string or integer field");
             for (const auto& s : seen)
@@ -4545,14 +4629,14 @@ class Applier {
                 }
             leave_scan("group");
         }
-        dstd::Vector<dstd::Optional<df::TypeId>> key_types;
+        dstd::Vector<dstd::Optional<dataframe::TypeId>> key_types;
         if (bucket)
             key_types.push_back(
                 term_type(bucket->key, dstd::String(bucket->text))
-                    .value_or(df::TypeId::Int64));
+                    .value_or(dataframe::TypeId::Int64));
         for (const auto& k : g.keys)
             key_types.push_back(term_type(k.term, dstd::String(k.text)));
-        dstd::Vector<dstd::Optional<df::TypeId>> agg_types;
+        dstd::Vector<dstd::Optional<dataframe::TypeId>> agg_types;
         for (const auto& a : g.aggs)
             agg_types.push_back(
                 agg_type(a, term_type(a.arg, dstd::String(a.text))));
@@ -4589,39 +4673,44 @@ class Applier {
         for (const auto& f : v_.output_schema().fields)
             cols_.push_back({dstd::String(f.name), f.type, false});
         for (std::size_t i = 0; i < out.size(); ++i) {
-            const dstd::Optional<df::TypeId> want =
+            const dstd::Optional<dataframe::TypeId> want =
                 i < key_types.size() ? key_types[i]
                                      : agg_types[i - key_types.size()];
             if (!want || cols_[i].type.id == *want ||
-                (*want == df::TypeId::String &&
-                 cols_[i].type.id != df::TypeId::Unknown))
+                (*want == dataframe::TypeId::String &&
+                 cols_[i].type.id != dataframe::TypeId::Unknown))
                 continue;
-            df::Expr e = col(out[i]);
-            const bool is_text = cols_[i].type.id == df::TypeId::String;
+            dataframe::Expr e = col(out[i]);
+            const bool is_text = cols_[i].type.id == dataframe::TypeId::String;
             if ((is_text && is_number(*want)) ||
-                (cols_[i].type.id == df::TypeId::Uint64 &&
-                 *want == df::TypeId::Int64))
-                e = df::expr_convert(is_integer(*want) ? df::ConvertOp::Int
-                                                       : df::ConvertOp::Float,
-                                     e);
-            v_ = v_.with_column(std_str(out[i]), df::expr_cast(*want, e));
-            cols_[i].type = df::scalar(*want);
+                (cols_[i].type.id == dataframe::TypeId::Uint64 &&
+                 *want == dataframe::TypeId::Int64))
+                e = dataframe::expr_convert(is_integer(*want)
+                                                ? dataframe::ConvertOp::Int
+                                                : dataframe::ConvertOp::Float,
+                                            e);
+            v_ =
+                v_.with_column(std_str(out[i]), dataframe::expr_cast(*want, e));
+            cols_[i].type = dataframe::scalar(*want);
         }
         for (const auto& [sum, valid] : sums)
             v_ = v_.with_column(
                 std_str(sum),
-                df::expr_arith(
-                    df::ArithOp::Mul, col(sum),
-                    df::expr_select(df::expr_is_null(col(valid), false),
-                                    df::expr_lit(std::int64_t{1}),
-                                    df::expr_lit_null(df::TypeId::Int64))));
+                dataframe::expr_arith(
+                    dataframe::ArithOp::Mul, col(sum),
+                    dataframe::expr_select(
+                        dataframe::expr_is_null(col(valid), false),
+                        dataframe::expr_lit(std::int64_t{1}),
+                        dataframe::expr_lit_null(dataframe::TypeId::Int64))));
         for (const auto& a : group.aggs)
             if (a.fn == duql::AggFn::Quantile)
                 v_ = v_.with_column(
                     std_str(dstd::String(a.name)),
-                    df::expr_select(
-                        df::expr_unary(df::UnaryOp::IsNan, col(a.name)),
-                        df::expr_lit_null(df::TypeId::Float64), col(a.name)));
+                    dataframe::expr_select(
+                        dataframe::expr_unary(dataframe::UnaryOp::IsNan,
+                                              col(a.name)),
+                        dataframe::expr_lit_null(dataframe::TypeId::Float64),
+                        col(a.name)));
         if (out != visible) keep(visible, false);
         if (!keys.empty()) {
             lines.push_back("sort_by_multi " + joined(keys));
@@ -4693,22 +4782,24 @@ class Applier {
             const dstd::String out = "__duql_agg_" + dstd::to_string(i);
             with_column(
                 out,
-                df::expr_binary(
-                    df::BinaryOp::Div,
-                    df::expr_col(static_cast<std::int32_t>(*index(out))),
-                    df::expr_lit(us_per_dur)),
+                dataframe::expr_binary(
+                    dataframe::BinaryOp::Div,
+                    dataframe::expr_col(static_cast<std::int32_t>(*index(out))),
+                    dataframe::expr_lit(us_per_dur)),
                 out + " in duration units");
         }
         // The trace aggregation keys buckets in microseconds; the time role
         // may count in another unit.
         if (bucket && us_per_time_unit() != 1.0) {
             const auto i = index("time_bucket");
-            df::Expr in_unit = df::expr_binary(
-                df::BinaryOp::Div, df::expr_col(static_cast<std::int32_t>(*i)),
-                df::expr_lit(us_per_time_unit()));
+            dataframe::Expr in_unit = dataframe::expr_binary(
+                dataframe::BinaryOp::Div,
+                dataframe::expr_col(static_cast<std::int32_t>(*i)),
+                dataframe::expr_lit(us_per_time_unit()));
             const auto* field = schema_.field_at(roles_.time);
-            if (field && field->type == ix::FieldType::Int)
-                in_unit = df::expr_cast(df::TypeId::Int64, in_unit);
+            if (field && field->type == index::FieldType::Int)
+                in_unit =
+                    dataframe::expr_cast(dataframe::TypeId::Int64, in_unit);
             with_column("time_bucket", in_unit, "time_bucket in time units");
         }
     }
@@ -4746,14 +4837,14 @@ class Applier {
         return out;
     }
 
-    static df::DataType plugin_type(const dstd::String& name) {
+    static dataframe::DataType plugin_type(const dstd::String& name) {
         switch (DFTU_OP_SIG_RET(dftu_op_find(name.c_str())->sig)) {
             case DFTU_TOK_I64:
-                return df::scalar(df::TypeId::Int64);
+                return dataframe::scalar(dataframe::TypeId::Int64);
             case DFTU_TOK_BOOL:
-                return df::scalar(df::TypeId::Bool);
+                return dataframe::scalar(dataframe::TypeId::Bool);
             default:
-                return df::scalar(df::TypeId::Float64);
+                return dataframe::scalar(dataframe::TypeId::Float64);
         }
     }
 
@@ -4773,30 +4864,32 @@ class Applier {
                             dstd::String(roles_.time)),
                     dstd::String(roles_.time));
         const std::size_t at = *index(time);
-        const df::TypeId tid = cols_[at].type.id;
+        const dataframe::TypeId tid = cols_[at].type.id;
         const auto whole = [](double x) { return std::trunc(x) == x; };
         const double step = *b.every;
-        const bool exact =
-            (tid == df::TypeId::Int64 || tid == df::TypeId::Uint64) &&
-            whole(b.width) && whole(step) && whole(b.origin);
-        const df::TypeId out_type =
-            exact ? df::TypeId::Int64 : df::TypeId::Float64;
+        const bool exact = (tid == dataframe::TypeId::Int64 ||
+                            tid == dataframe::TypeId::Uint64) &&
+                           whole(b.width) && whole(step) && whole(b.origin);
+        const dataframe::TypeId out_type =
+            exact ? dataframe::TypeId::Int64 : dataframe::TypeId::Float64;
         const double width = b.width;
         const double origin = b.origin;
         dstd::Vector<duql::VectorColumn> next = cols_;
-        next.push_back({"__duql_bucket", df::scalar(out_type)});
+        next.push_back({"__duql_bucket", dataframe::scalar(out_type)});
         const auto windows =
             static_cast<std::size_t>(std::max(1.0, std::ceil(width / step)));
         map_rows(
-            [at, exact, width, step, origin, windows](df::DataFrame f) {
+            [at, exact, width, step, origin, windows](dataframe::DataFrame f) {
                 const std::int64_t n = f.num_rows();
                 dstd::Vector<std::int64_t> parent;
                 parent.reserve(static_cast<std::size_t>(n) * windows);
                 dstd::Vector<std::int64_t> starts_i;
                 dstd::Vector<double> starts_f;
                 if (exact) {
-                    const df::Series t =
-                        f.columns[at].cast(df::TypeId::Int64).materialize();
+                    const dataframe::Series t =
+                        f.columns[at]
+                            .cast(dataframe::TypeId::Int64)
+                            .materialize();
                     const std::int64_t* v = t.data<std::int64_t>();
                     const auto w = static_cast<std::int64_t>(width);
                     const auto e = static_cast<std::int64_t>(step);
@@ -4813,8 +4906,10 @@ class Applier {
                         }
                     }
                 } else {
-                    const df::Series t =
-                        f.columns[at].cast(df::TypeId::Float64).materialize();
+                    const dataframe::Series t =
+                        f.columns[at]
+                            .cast(dataframe::TypeId::Float64)
+                            .materialize();
                     const double* v = t.data<double>();
                     starts_f.reserve(parent.capacity());
                     for (std::int64_t r = 0; r < n; ++r) {
@@ -4833,15 +4928,15 @@ class Applier {
                     }
                 }
                 const auto m = static_cast<std::int64_t>(parent.size());
-                df::DataFrame out;
+                dataframe::DataFrame out;
                 for (std::size_t j = 0; j < f.columns.size(); ++j) {
                     out.names.emplace_back(f.names[j]);
                     out.columns.push_back(f.columns[j].take(parent));
                 }
                 out.names.emplace_back("__duql_bucket");
                 out.columns.push_back(
-                    exact ? df::Series::flat_i64(starts_i.data(), m)
-                          : df::Series::flat_f64(starts_f.data(), m));
+                    exact ? dataframe::Series::flat_i64(starts_i.data(), m)
+                          : dataframe::Series::flat_f64(starts_f.data(), m));
                 return out;
             },
             std::move(next),
@@ -4865,7 +4960,7 @@ class Applier {
         for (std::size_t k = 0; k < g.keys.size(); ++k)
             keys.push_back(
                 source(g.keys[k], "__duql_key_" + dstd::to_string(k)));
-        dstd::Vector<df::GroupAgg> specs;
+        dstd::Vector<dataframe::GroupAgg> specs;
         dstd::Vector<duql::FoldAgg> fold(g.aggs.size());
         dstd::Vector<dstd::String> by(g.aggs.size());
         bool folded = false;
@@ -4880,60 +4975,63 @@ class Applier {
                 in = "__duql_in_" + dstd::to_string(i);
                 with_column(
                     in,
-                    df::expr_select(compile(a.arg, dstd::String(a.text), true),
-                                    df::expr_lit(std::int64_t{1}),
-                                    df::expr_lit_null(df::TypeId::Int64)),
+                    dataframe::expr_select(
+                        compile(a.arg, dstd::String(a.text), true),
+                        dataframe::expr_lit(std::int64_t{1}),
+                        dataframe::expr_lit_null(dataframe::TypeId::Int64)),
                     dstd::String(a.text));
             } else if (a.arg) {
                 in = source({"", a.arg, a.text},
                             "__duql_in_" + dstd::to_string(i));
             }
-            df::GroupAgg spec{df::Agg::Count, std_str(in), std_str(out)};
+            dataframe::GroupAgg spec{dataframe::Agg::Count, std_str(in),
+                                     std_str(out)};
             switch (a.fn) {
                 case duql::AggFn::Count:
-                    spec.op = df::Agg::CountValid;
+                    spec.op = dataframe::Agg::CountValid;
                     if (!a.arg) {
                         // A key-less Count with no input gives null.
                         spec.column = "__duql_one";
                         if (!index(spec.column))
                             with_column(dstd::String(spec.column),
-                                        df::expr_lit(std::int64_t{1}), "1");
+                                        dataframe::expr_lit(std::int64_t{1}),
+                                        "1");
                     }
                     break;
                 case duql::AggFn::CountIf:
-                    spec.op = df::Agg::CountValid;
+                    spec.op = dataframe::Agg::CountValid;
                     break;
                 case duql::AggFn::Sum:
-                    spec.op = df::Agg::Sum;
+                    spec.op = dataframe::Agg::Sum;
                     break;
                 case duql::AggFn::Min:
-                    spec.op = df::Agg::Min;
+                    spec.op = dataframe::Agg::Min;
                     break;
                 case duql::AggFn::Max:
-                    spec.op = df::Agg::Max;
+                    spec.op = dataframe::Agg::Max;
                     break;
                 case duql::AggFn::Mean:
-                    spec.op = df::Agg::Mean;
+                    spec.op = dataframe::Agg::Mean;
                     break;
                 case duql::AggFn::Var:
-                    spec.op = df::Agg::Var;
+                    spec.op = dataframe::Agg::Var;
                     break;
                 case duql::AggFn::Std:
-                    spec.op = df::Agg::Std;
+                    spec.op = dataframe::Agg::Std;
                     break;
                 case duql::AggFn::First:
-                    spec.op = df::Agg::First;
+                    spec.op = dataframe::Agg::First;
                     break;
                 case duql::AggFn::Last:
-                    spec.op = df::Agg::Last;
+                    spec.op = dataframe::Agg::Last;
                     break;
                 case duql::AggFn::Quantile:
-                    spec.op = df::Agg::Pct;
+                    spec.op = dataframe::Agg::Pct;
                     spec.param = a.q;
                     if (a.merged) fold[i].op = duql::FoldOp::MergeQuantile;
                     break;
                 case duql::AggFn::Histogram:
-                    spec.op = df::Agg::Hist;
+                    spec.op = dataframe::Agg::Hist;
                     break;
                 case duql::AggFn::Busy:
                 case duql::AggFn::Concurrency:
@@ -4966,7 +5064,7 @@ class Applier {
                     break;
             }
             folded = folded || fold[i].op != duql::FoldOp::Engine;
-            fold[i].engine = df::to_agg_op(spec.op);
+            fold[i].engine = dataframe::to_agg_op(spec.op);
             fold[i].param = spec.param;
             specs.push_back(std::move(spec));
         }
@@ -4981,7 +5079,7 @@ class Applier {
     // A group with an aggregate the engine lacks: one streaming pass, in
     // input order, that folds the engine's aggregates and duql's.
     void fold_group(const dstd::Vector<dstd::String>& keys,
-                    const dstd::Vector<df::GroupAgg>& specs,
+                    const dstd::Vector<dataframe::GroupAgg>& specs,
                     const dstd::Vector<dstd::String>& by,
                     dstd::Vector<duql::FoldAgg> fold) {
         dstd::Vector<dstd::String> read = keys;
@@ -4996,28 +5094,29 @@ class Applier {
             if (!specs[i].column.empty()) fold[i].in = at(specs[i].column);
             if (!by[i].empty()) fold[i].by = at(by[i]);
         }
-        df::Schema schema;
-        dstd::Vector<df::DataType> key_types;
+        dataframe::Schema schema;
+        dstd::Vector<dataframe::DataType> key_types;
         for (const auto& k : keys) {
             key_types.push_back(type_of(k));
-            schema.fields.push_back(df::Field{std_str(k), type_of(k), true});
+            schema.fields.push_back(
+                dataframe::Field{std_str(k), type_of(k), true});
         }
-        dstd::Vector<dstd::Pair<dstd::String, df::TypeId>> in;
+        dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>> in;
         for (const auto& n : read) in.emplace_back(n, type_of(n).id);
         for (std::size_t i = 0; i < fold.size(); ++i) {
             auto& f = fold[i];
-            const df::DataType t =
-                f.in < 0 ? df::scalar(df::TypeId::Int64)
+            const dataframe::DataType t =
+                f.in < 0 ? dataframe::scalar(dataframe::TypeId::Int64)
                          : type_of(read[static_cast<std::size_t>(f.in)]);
             switch (f.op) {
                 case duql::FoldOp::Engine:
-                    f.type = df::agg_output_type(f.engine, t.id);
+                    f.type = dataframe::agg_output_type(f.engine, t.id);
                     break;
                 case duql::FoldOp::CountDistinct:
-                    f.type = df::scalar(df::TypeId::Int64);
+                    f.type = dataframe::scalar(dataframe::TypeId::Int64);
                     break;
                 case duql::FoldOp::Collect:
-                    f.type = df::list_of(t);
+                    f.type = dataframe::list_of(t);
                     break;
                 case duql::FoldOp::Argmax:
                 case duql::FoldOp::Argmin:
@@ -5028,29 +5127,31 @@ class Applier {
                     break;
                 case duql::FoldOp::Sketch:
                 case duql::FoldOp::Merge:
-                    f.type = df::scalar(df::TypeId::String);
+                    f.type = dataframe::scalar(dataframe::TypeId::String);
                     break;
                 case duql::FoldOp::MergeQuantile:
-                    f.type = df::scalar(df::TypeId::Float64);
+                    f.type = dataframe::scalar(dataframe::TypeId::Float64);
                     break;
             }
-            schema.fields.push_back(df::Field{
+            schema.fields.push_back(dataframe::Field{
                 std_str("__duql_agg_" + dstd::to_string(i)), f.type, true});
         }
         lines.push_back("group fold over " + joined(read) +
                         " (one pass, in input order)");
-        v_ = v_.with_lazy(df::LazyFrame::scan(dstd::make_shared<FoldSource>(
-            v_.lazy().select(std_strs(read)), std::move(schema), std::move(in),
-            std::move(key_types), std::move(fold))));
+        v_ = v_.with_lazy(
+            dataframe::LazyFrame::scan(dstd::make_shared<FoldSource>(
+                v_.lazy().select(std_strs(read)), std::move(schema),
+                std::move(in), std::move(key_types), std::move(fold))));
         columns_from_view();
     }
 
     void finish(FinishSource::Finish fn, const dstd::String& line,
-                dstd::Optional<df::Schema> schema = dstd::nullopt) {
+                dstd::Optional<dataframe::Schema> schema = dstd::nullopt) {
         lines.push_back(line);
         if (!schema) schema = v_.output_schema();
-        v_ = v_.with_lazy(df::LazyFrame::scan(dstd::make_shared<FinishSource>(
-            v_.lazy(), std::move(*schema), std::move(fn))));
+        v_ = v_.with_lazy(
+            dataframe::LazyFrame::scan(dstd::make_shared<FinishSource>(
+                v_.lazy(), std::move(*schema), std::move(fn))));
     }
 
     // `agg` over no rows: one row, counts 0 and the rest null.
@@ -5058,18 +5159,19 @@ class Applier {
         dstd::Vector<dstd::String> counts;
         for (const auto& a : g.aggs)
             if (is_count(a.fn)) counts.push_back(dstd::String(a.name));
-        dstd::Vector<dstd::Pair<dstd::String, df::DataType>> cols;
+        dstd::Vector<dstd::Pair<dstd::String, dataframe::DataType>> cols;
         for (const auto& c : cols_) cols.emplace_back(c.name, c.type);
         finish(
-            [counts, cols](df::DataFrame f) {
+            [counts, cols](dataframe::DataFrame f) {
                 if (f.num_rows() > 0) return f;
-                df::DataFrame row;
+                dataframe::DataFrame row;
                 const std::int64_t zero = 0;
                 for (const auto& [name, type] : cols) {
                     row.names.emplace_back(name);
                     if (std::find(counts.begin(), counts.end(), name) !=
                         counts.end())
-                        row.columns.push_back(df::Series::flat_i64(&zero, 1));
+                        row.columns.push_back(
+                            dataframe::Series::flat_i64(&zero, 1));
                     else
                         row.columns.push_back(null_cell(type));
                 }
@@ -5096,11 +5198,11 @@ class Applier {
         const dstd::Optional<double> range_hi = b.high;
         finish(
             [counts, n_keys, width, origin, limit, mode, range_lo,
-             range_hi](df::DataFrame f) {
+             range_hi](dataframe::DataFrame f) {
                 const std::int64_t n = f.num_rows();
                 if (n == 0) return f;
-                const df::Series bucket =
-                    f.columns[0].cast(df::TypeId::Float64);
+                const dataframe::Series bucket =
+                    f.columns[0].cast(dataframe::TypeId::Float64);
                 const double* at = bucket.data<double>();
                 double lo = std::numeric_limits<double>::infinity();
                 double hi = -lo;
@@ -5122,30 +5224,32 @@ class Applier {
                 dstd::Map<dstd::String, std::int64_t> groups;
                 dstd::Vector<std::int64_t> reps;
                 dstd::Map<dstd::Pair<dstd::String, std::int64_t>, bool> present;
-                const auto texts = [n_keys](const df::DataFrame& fr) {
-                    dstd::Vector<df::Series> text;
+                const auto texts = [n_keys](const dataframe::DataFrame& fr) {
+                    dstd::Vector<dataframe::Series> text;
                     for (std::size_t c = 1; c <= n_keys; ++c)
-                        text.push_back(
-                            fr.columns[c].type() == df::TypeId::String
-                                ? fr.columns[c].share()
-                                : fr.columns[c].cast(df::TypeId::String));
+                        text.push_back(fr.columns[c].type() ==
+                                               dataframe::TypeId::String
+                                           ? fr.columns[c].share()
+                                           : fr.columns[c].cast(
+                                                 dataframe::TypeId::String));
                     return text;
                 };
-                const auto key_in = [](const dstd::Vector<df::Series>& text,
-                                       std::int64_t r) {
-                    dstd::String k;
-                    for (const df::Series& s : text) {
-                        if (s.is_null(r)) {
-                            k += '\x01';
-                        } else {
-                            k += '\x02';
-                            k += s.string_at(r);
+                const auto key_in =
+                    [](const dstd::Vector<dataframe::Series>& text,
+                       std::int64_t r) {
+                        dstd::String k;
+                        for (const dataframe::Series& s : text) {
+                            if (s.is_null(r)) {
+                                k += '\x01';
+                            } else {
+                                k += '\x02';
+                                k += s.string_at(r);
+                            }
+                            k += '\0';
                         }
-                        k += '\0';
-                    }
-                    return k;
-                };
-                const dstd::Vector<df::Series> text = texts(f);
+                        return k;
+                    };
+                const dstd::Vector<dataframe::Series> text = texts(f);
                 auto key_of = [&](std::int64_t r) { return key_in(text, r); };
                 for (std::int64_t r = 0; r < n; ++r) {
                     dstd::String k = key_of(r);
@@ -5175,32 +5279,35 @@ class Applier {
                 if (take.empty()) return f;
                 dstd::Vector<dstd::String> key_names(
                     f.names.begin(), f.names.begin() + 1 + n_keys);
-                df::DataFrame add = f.select(std_strs(key_names)).take(take);
+                dataframe::DataFrame add =
+                    f.select(std_strs(key_names)).take(take);
                 const auto m = static_cast<std::int64_t>(take.size());
-                add.columns[0] = df::Series::flat_f64(starts.data(), m)
+                add.columns[0] = dataframe::Series::flat_f64(starts.data(), m)
                                      .cast(f.columns[0].type());
                 const dstd::Vector<std::int64_t> zeros(
                     static_cast<std::size_t>(m), 0);
                 for (const auto& c : counts) {
                     add.names.emplace_back(c);
                     add.columns.push_back(
-                        df::Series::flat_i64(zeros.data(), m));
+                        dataframe::Series::flat_i64(zeros.data(), m));
                 }
                 const bool carry = mode != duql::syntax::FillMode::Zero;
-                df::DataFrame flagged;
-                const df::DataFrame* base = &f;
+                dataframe::DataFrame flagged;
+                const dataframe::DataFrame* base = &f;
                 if (carry) {
                     const dstd::Vector<std::int64_t> none(
                         static_cast<std::size_t>(n), 0);
                     const dstd::Vector<std::int64_t> ones(
                         static_cast<std::size_t>(m), 1);
                     flagged = f.with_column(
-                        "__duql_added", df::Series::flat_i64(none.data(), n));
+                        "__duql_added",
+                        dataframe::Series::flat_i64(none.data(), n));
                     add.names.emplace_back("__duql_added");
-                    add.columns.push_back(df::Series::flat_i64(ones.data(), m));
+                    add.columns.push_back(
+                        dataframe::Series::flat_i64(ones.data(), m));
                 }
-                df::DataFrame out =
-                    df::concat({base, &add}, df::ConcatHow::Diagonal);
+                dataframe::DataFrame out = dataframe::concat(
+                    {base, &add}, dataframe::ConcatHow::Diagonal);
                 dstd::Vector<dstd::String> keep = strings_of(f.names);
                 if (carry) keep.push_back("__duql_added");
                 out = out.select(std_strs(keep))
@@ -5209,11 +5316,13 @@ class Applier {
                               dstd::Vector<bool>(key_names.size(), false));
                 if (!carry) return out;
                 const std::int64_t total = out.num_rows();
-                const df::Series added_col = out.columns.back().materialize();
+                const dataframe::Series added_col =
+                    out.columns.back().materialize();
                 const std::int64_t* added = added_col.data<std::int64_t>();
-                const df::Series pos = out.columns[0].cast(df::TypeId::Float64);
+                const dataframe::Series pos =
+                    out.columns[0].cast(dataframe::TypeId::Float64);
                 const double* position = pos.data<double>();
-                const dstd::Vector<df::Series> sorted_text = texts(out);
+                const dstd::Vector<dataframe::Series> sorted_text = texts(out);
                 dstd::Map<dstd::String, dstd::Vector<std::int64_t>> members;
                 for (std::int64_t r = 0; r < total; ++r)
                     if (!pos.is_null(r))
@@ -5223,9 +5332,9 @@ class Applier {
                     if (std::find(counts.begin(), counts.end(),
                                   dstd::StringView(f.names[c])) != counts.end())
                         continue;
-                    const df::Series& col = out.columns[c];
+                    const dataframe::Series& col = out.columns[c];
                     const bool numeric =
-                        df::is_numeric_dispatchable(col.type());
+                        dataframe::is_numeric_dispatchable(col.type());
                     if (linear && !numeric) continue;
                     if (!linear) {
                         dstd::Vector<std::int64_t> pick(
@@ -5244,7 +5353,8 @@ class Applier {
                         out.columns[c] = col.take(pick);
                         continue;
                     }
-                    const df::Series num = col.cast(df::TypeId::Float64);
+                    const dataframe::Series num =
+                        col.cast(dataframe::TypeId::Float64);
                     const double* v = num.data<double>();
                     dstd::Vector<double> value(v, v + total);
                     dstd::Vector<std::uint8_t> valid(
@@ -5277,10 +5387,10 @@ class Applier {
                             }
                         }
                     }
-                    out.columns[c] =
-                        df::Series::flat(df::TypeId::Float64, value.data(),
-                                         total, valid.data())
-                            .cast(col.type());
+                    out.columns[c] = dataframe::Series::flat(
+                                         dataframe::TypeId::Float64,
+                                         value.data(), total, valid.data())
+                                         .cast(col.type());
                 }
                 return out.select(f.names);
             },
@@ -5306,12 +5416,13 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
     if (p.input.kind == duql::InputKind::Side) {
         const std::size_t i = p.input.side;
         side_cols = ctx.sides->columns[i];
-        df::Schema schema;
+        dataframe::Schema schema;
         for (const auto& c : *side_cols)
             schema.fields.push_back(
-                df::Field{dstd::String(c.name), c.type, true});
-        v = v.with_lazy(df::LazyFrame::scan(dstd::make_shared<SideSource>(
-            main ? ctx.sides : nullptr, ctx.sides, i, std::move(schema))));
+                dataframe::Field{dstd::String(c.name), c.type, true});
+        v = v.with_lazy(
+            dataframe::LazyFrame::scan(dstd::make_shared<SideSource>(
+                main ? ctx.sides : nullptr, ctx.sides, i, std::move(schema))));
         lines.push_back(
             dstd::String("from " + ctx.sides->program.sides[i].name +
                          (ctx.sides->stored[i]
@@ -5405,7 +5516,7 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
             cols.push_back({dstd::String(f.name), f.type});
         return {std::move(v), std::move(cols)};
     }
-    const ix::RecordSchema& schema = ctx.schema(v);
+    const index::RecordSchema& schema = ctx.schema(v);
     Applier a(std::move(v), schema, ctx, std::move(fields), step, reads, main,
               std::move(side_cols));
     if (!p.scan_select.empty()) a.selected_at_scan();
@@ -5430,9 +5541,9 @@ View detail::with_named_columns(const View& v,
 
 dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan(
     dstd::StringView text, const duql::Params& params) const {
-    const ix::RecordSchema& schema = detail::plan_record_schema(*plan_);
+    const index::RecordSchema& schema = detail::plan_record_schema(*plan_);
     Ctx ctx;
-    ctx.roles = ix::duql_roles(schema);
+    ctx.roles = index::duql_roles(schema);
     const duql::PluginCatalog plugins = registry_plugins();
     const duql::LeafPaths leaves = [this] {
         detail::scan::ensure_catalog(plan_);
@@ -5492,7 +5603,7 @@ dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan(
         }
         return *this;
     };
-    ctx.schema = [](const View& v) -> const ix::RecordSchema& {
+    ctx.schema = [](const View& v) -> const index::RecordSchema& {
         return detail::plan_record_schema(*v.plan_);
     };
     Sides& sides = *ctx.sides;
@@ -5535,7 +5646,7 @@ dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan(
                      f.index_path.empty()
                          ? internal::determine_index_path(f.file_path, "")
                          : dstd::String(dstd::StringView(f.index_path))});
-            sides.stored[i] = ix::plan::has_stored_rowsets(sides.files[i]);
+            sides.stored[i] = index::plan::has_stored_rowsets(sides.files[i]);
         }
         sides.views[i] = std::move(b.view);
         sides.columns[i] = std::move(b.cols);
@@ -5545,7 +5656,7 @@ dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan(
         // a joined side stays uncapped.
         if (std::any_of(sides.columns[i].begin(), sides.columns[i].end(),
                         [](const duql::VectorColumn& c) {
-                            return c.type.id == df::TypeId::Unknown;
+                            return c.type.id == dataframe::TypeId::Unknown;
                         })) {
             const bool table =
                 std::find(tables.begin(), tables.end(), i) != tables.end();
@@ -5556,7 +5667,7 @@ dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan(
                                      : sides.probe(i);
             for (auto& c : sides.columns[i])
                 for (std::size_t k = 0; k < frame->names.size(); ++k)
-                    if (c.type.id == df::TypeId::Unknown &&
+                    if (c.type.id == dataframe::TypeId::Unknown &&
                         dstd::StringView(frame->names[k]) == c.name)
                         c.type = frame->columns[k].data_type();
         }

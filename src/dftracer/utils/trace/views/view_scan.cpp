@@ -51,19 +51,18 @@ std::size_t checkpoint_size_or_default(std::size_t s) {
 
 const dftracer::utils::index::RecordSchema& plan_record_schema(
     const ViewPlan& plan) {
-    namespace ix = dftracer::utils::index;
     if (auto p = plan.record_schema) return *p;
-    dstd::Vector<ix::plan::RowSetFile> files;
+    dstd::Vector<index::plan::RowSetFile> files;
     files.reserve(plan.files.size());
     for (const auto& f : plan.files)
         files.push_back({dstd::String(dstd::StringView(f.file_path)),
                          dstd::String(dstd::StringView(f.index_path)),
                          f.fd ? f.fd->get() : -1});
-    const ix::RecordSchema* found = &ix::plan::files_schema(files);
+    const index::RecordSchema* found = &index::plan::files_schema(files);
     // Registered record_schemas live until the process exits, so the pointer
     // never dangles.
-    plan.record_schema =
-        dstd::SharedPtr<const ix::RecordSchema>(dstd::SharedPtr<void>(), found);
+    plan.record_schema = dstd::SharedPtr<const index::RecordSchema>(
+        dstd::SharedPtr<void>(), found);
     return *found;
 }
 
@@ -235,13 +234,12 @@ ViewDefinition make_vdef(const ViewPlan& plan, bool for_aggregation) {
     vdef.query = effective_query(plan);
     vdef.args_fallback = plan_record_schema(plan).args_fallback;
     if (plan_by_path(plan)) {
-        namespace ix = dftracer::utils::index;
-        const ix::RecordSchema& schema = plan_record_schema(plan);
+        const index::RecordSchema& schema = plan_record_schema(plan);
         vdef.by_path = true;
         // A schema without fields changes no decoded value.
         if (!schema.fields.empty()) vdef.record_schema = &schema;
         vdef.paths = needed_paths(plan);
-        const ix::Roles& roles = schema.roles;
+        const index::Roles& roles = schema.roles;
         // Only trace operations read the roles.
         if (!vdef.paths.empty() && plan.timed) {
             for (const auto* p : {&roles.time, &roles.duration, &roles.entity,
@@ -256,9 +254,9 @@ ViewDefinition make_vdef(const ViewPlan& plan, bool for_aggregation) {
                 vdef.path_fields.push_back(schema.field_at(p));
         if (!roles.time.empty()) {
             vdef.time_path = roles.time;
-            vdef.time_factor = ix::micros_per(roles.time_unit);
+            vdef.time_factor = index::micros_per(roles.time_unit);
             vdef.duration_path = roles.duration;
-            vdef.duration_factor = ix::micros_per(roles.duration_unit);
+            vdef.duration_factor = index::micros_per(roles.duration_unit);
         }
     }
     // Rows select by start; occupancy needs every event that overlaps the
@@ -356,14 +354,13 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
 
     // One snapshot per index root, taken after the metadata pass may have
     // built the index, and shared read-only by every planner.
-    namespace ix = dftracer::utils::index;
-    dstd::HashMap<dstd::String, ix::Snapshot> snapshots;
+    dstd::HashMap<dstd::String, index::Snapshot> snapshots;
     dstd::HashSet<dstd::String> seen_roots;
     for (const auto& f : plan.files) {
         if (f.index_path.empty()) continue;
         if (!seen_roots.insert(dstd::String(f.index_path)).second) continue;
-        if (!common::input_exists(ix::store_of(f.index_path))) continue;
-        if (auto taken = ix::plan::open_snapshot(f.index_path))
+        if (!common::input_exists(index::store_of(f.index_path))) continue;
+        if (auto taken = index::plan::open_snapshot(f.index_path))
             snapshots.emplace(dstd::String(f.index_path), std::move(*taken));
     }
 
@@ -381,7 +378,7 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
                     pin.with_view(vdef)
                         .with_file_path(f.file_path)
                         .with_index_path(
-                            common::input_exists(ix::store_of(index_path))
+                            common::input_exists(index::store_of(index_path))
                                 ? index_path
                                 : "")
                         .with_uncompressed_size(uc_sizes[fi])
@@ -445,8 +442,7 @@ namespace {
 // no index yet. One snapshot serves every file of a root.
 bool any_file_missing_extension(
     const ViewPlan& plan, dftracer::utils::index::store::IndexExtension ext) {
-    namespace ix = dftracer::utils::index;
-    dstd::Map<dstd::String, ix::Snapshot> snapshots;
+    dstd::Map<dstd::String, index::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         try {
             auto at = snapshots.find(f.index_path);
@@ -454,11 +450,11 @@ bool any_file_missing_extension(
                 at = snapshots
                          .emplace(f.index_path,
                                   common::unwrap(
-                                      ix::plan::open_snapshot(f.index_path)))
+                                      index::plan::open_snapshot(f.index_path)))
                          .first;
             const auto file = at->second.file(
-                ix::store::internal::get_logical_path(f.file_path));
-            if (!file || !ix::extension_current(at->second, *file, ext))
+                index::store::internal::get_logical_path(f.file_path));
+            if (!file || !index::extension_current(at->second, *file, ext))
                 return true;
         } catch (const std::exception&) {
             return true;
@@ -499,11 +495,10 @@ dstd::Vector<dstd::UniquePtr<Fold>> select_index_folds(
 dstd::UniquePtr<Fold> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern) {
-    namespace ix = dftracer::utils::index;
     if (plan.files.empty() || !any_file_missing_catalog(plan)) return nullptr;
-    auto fold = dstd::make_unique<ix::extensions::CatalogFold>(
-        intern, ix::build::for_schema({}, plan_record_schema(plan))
-                    .params_hash(ix::store::IndexExtension::Catalog));
+    auto fold = dstd::make_unique<index::extensions::CatalogFold>(
+        intern, index::build::for_schema({}, plan_record_schema(plan))
+                    .params_hash(index::store::IndexExtension::Catalog));
     if (!fold->accepts(scan_shape(vdef))) return nullptr;
     return fold;
 }

@@ -32,13 +32,13 @@
 #include <dftracer/utils/dataframe/types.h>     // byte_width, buffer_bytes
 #include <dftracer/utils/dstd/hash/hash.h>
 #include <dftracer/utils/dstd/hash/partition.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 

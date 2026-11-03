@@ -23,7 +23,6 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -84,7 +83,7 @@ struct AggAccum {
     dftracer::utils::dstd::Map<dftracer::utils::dstd::String, FieldStat> dyn;
     dftracer::utils::dstd::Map<dftracer::utils::dstd::String, stats::DDSketch>
         dyn_sketches;
-    ankerl::unordered_dense::map<std::uint64_t, std::int64_t> occ_deltas;
+    dftracer::utils::dstd::HashMap<std::uint64_t, std::int64_t> occ_deltas;
     std::uint64_t occ_cell_us = 0;
     std::uint64_t occ_total = 0;
     std::uint64_t occ_ts = (std::numeric_limits<std::uint64_t>::max)();
@@ -92,7 +91,7 @@ struct AggAccum {
 };
 
 using GroupMap =
-    ankerl::unordered_dense::map<dftracer::utils::dstd::String, AggAccum>;
+    dftracer::utils::dstd::HashMap<dftracer::utils::dstd::String, AggAccum>;
 
 // The key text of a missing or JSON-null Arg/Field value: a null output cell.
 inline constexpr dftracer::utils::dstd::StringView NULL_KEY{"\0", 1};

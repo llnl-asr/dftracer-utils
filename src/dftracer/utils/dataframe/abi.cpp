@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstring>
 
@@ -373,7 +373,7 @@ const char* dftu_series_string_at(const dftu_series* col, int64_t i,
 
 namespace {
 void buffer_bytes_once(const dftu_series* col,
-                       ankerl::unordered_dense::set<const void*>& seen,
+                       dftracer::utils::dstd::HashSet<const void*>& seen,
                        std::int64_t& total) {
     auto add = [&](const auto& b) {
         if (b.block() && seen.insert(b.data()).second)
@@ -393,7 +393,7 @@ int64_t dftu_series_buffer_bytes(const dftu_series* col) {
     if (col == nullptr) return 0;
     std::int64_t total = 0;
     if (col->is_chunked()) {
-        ankerl::unordered_dense::set<const void*> seen;
+        dftracer::utils::dstd::HashSet<const void*> seen;
         buffer_bytes_once(col, seen, total);
         return total;
     }

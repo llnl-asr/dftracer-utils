@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -1075,9 +1076,8 @@ class PluginCondition final : public Condition {
 
     FileIndexData& d_;
     index::extensions::PluginExtensionPtr ext_;
-    ankerl::unordered_dense::map<const duql_ns::QueryNode*, void*> compiled_;
-    dstd::Optional<ankerl::unordered_dense::map<std::uint64_t, dstd::String>>
-        granules_;
+    dstd::HashMap<const duql_ns::QueryNode*, void*> compiled_;
+    dstd::Optional<dstd::HashMap<std::uint64_t, dstd::String>> granules_;
     dstd::Optional<dstd::String> file_;
     bool file_loaded_ = false;
 };

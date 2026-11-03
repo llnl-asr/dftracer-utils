@@ -2,11 +2,11 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_CATALOG_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_CATALOG_FOLD_H
 
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/store/types.h>
 #include <dftracer/utils/trace/views/fold.h>
 
@@ -54,8 +54,7 @@ class CatalogFold : public trace::views::detail::Fold {
    private:
     struct FileState {
         dstd::String index_path;
-        ankerl::unordered_dense::map<std::uint32_t, index::store::PathStat>
-            paths;
+        dstd::HashMap<std::uint32_t, index::store::PathStat> paths;
     };
 
     dftracer::utils::dstd::StringIntern* intern_;

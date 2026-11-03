@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -106,8 +107,7 @@ static dstd::String serialize_density_body(
     bool truncated, bool ts_normalized, std::uint64_t display_global_min,
     double max_dur, TraceIndex::TimeMetric metric,
     const dstd::Vector<std::uint32_t>* big_depth = nullptr,
-    const ankerl::unordered_dense::map<dstd::String, dstd::String>*
-        group_names = nullptr) {
+    const dstd::HashMap<dstd::String, dstd::String>* group_names = nullptr) {
     // Blocks are positioned/sized in native threshold units; scale the visible
     // time fields (block ts/dur, duration sums, max_dur) to microseconds.
     const double us = dftracer::utils::trace::time_metric_us_scale(metric);
@@ -348,7 +348,7 @@ static dstd::String serve_density_from_summary(
     }
 
     dstd::Vector<dstd::String> spans;
-    ankerl::unordered_dense::set<std::int64_t> span_lanes;
+    dstd::HashSet<std::int64_t> span_lanes;
     for (const auto& sp : s.app_spans) {
         if (has_pid && sp.pid != want_pid) continue;
         if (has_tid && sp.tid != want_tid) continue;
@@ -955,11 +955,11 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // Resolve hash group values (fhash -> path, hhash -> host, ...) for the
     // groups actually present; unresolvable hashes fall back to the raw value
     // on the client.
-    ankerl::unordered_dense::map<dstd::String, dstd::String> group_names;
+    dstd::HashMap<dstd::String, dstd::String> group_names;
     if (any_resolve && !group_col.empty()) {
         // Split each composite group key into its per-column components and
         // collect the ones from hash columns; resolve each distinct hash once.
-        ankerl::unordered_dense::map<dstd::String, RowSetField> to_resolve;
+        dstd::HashMap<dstd::String, RowSetField> to_resolve;
         auto collect = [&](dstd::StringView composite) {
             std::size_t start = 0, idx = 0;
             while (start <= composite.size() && idx < resolve_types.size()) {

@@ -7,9 +7,10 @@
 #include <dftracer/utils/dstd/cache/eviction_policy.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <array>
 #include <atomic>
@@ -34,6 +35,17 @@ struct MemberKey {
     std::uint64_t member;
     bool operator==(const MemberKey& o) const {
         return file == o.file && member == o.member;
+    }
+};
+
+/// Hasher of the shard tables. The std::hash below only picks a shard and
+/// feeds the eviction policy.
+struct MemberKeyHash {
+    using is_avalanching = void;
+
+    std::size_t operator()(const MemberKey& k) const noexcept {
+        return static_cast<std::size_t>(
+            dstd::hash::splitmix64(k.file ^ dstd::hash::splitmix64(k.member)));
     }
 };
 
@@ -64,7 +76,7 @@ namespace dftracer::utils::utilities::reader::internal {
 /// buffer. So N overlapping queries over one member cost one pread + one
 /// inflate instead of N.
 ///
-/// The key space is split into NSHARDS independent shards (each an ankerl map
+/// The key space is split into NSHARDS independent shards (each a dstd::HashMap
 /// + eviction policy under its own std::mutex), so lookups on different
 /// members do not contend. The byte budget is one total: a shard holding a few
 /// large members keeps them while the cache as a whole has room. The eviction
@@ -169,7 +181,7 @@ class MemberDecodeCache {
     };
     struct Shard {
         std::mutex mu;
-        ankerl::unordered_dense::map<MemberKey, dstd::SharedPtr<Entry>> map;
+        dstd::HashMap<MemberKey, dstd::SharedPtr<Entry>, MemberKeyHash> map;
         dstd::UniquePtr<dstd::cache::EvictionPolicy<MemberKey>> policy;
     };
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -22,13 +23,10 @@ bool parse(const dstd::String& text, std::uint64_t& out) {
 }
 
 // Per chunk, the [min, max] of the zonemap of `path`.
-ankerl::unordered_dense::map<std::uint64_t,
-                             dstd::Pair<std::uint64_t, std::uint64_t>>
+dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>
 chunk_bounds(const index::Snapshot& snapshot, const index::FileRef& file,
              dstd::StringView path) {
-    ankerl::unordered_dense::map<std::uint64_t,
-                                 dstd::Pair<std::uint64_t, std::uint64_t>>
-        out;
+    dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>> out;
     if (!index::extension_current(snapshot, file,
                                   index::store::IndexExtension::Zonemap))
         return out;
@@ -46,23 +44,21 @@ chunk_bounds(const index::Snapshot& snapshot, const index::FileRef& file,
 
 }  // namespace
 
-ankerl::unordered_dense::map<std::uint64_t,
-                             dstd::Pair<std::uint64_t, std::uint64_t>>
+dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>
 chunk_time_bounds(const index::Snapshot& snapshot, const index::FileRef& file) {
     return chunk_bounds(snapshot, file, "te");
 }
 
-ankerl::unordered_dense::map<std::uint64_t,
-                             dstd::Pair<std::uint64_t, std::uint64_t>>
+dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>
 chunk_start_bounds(const index::Snapshot& snapshot,
                    const index::FileRef& file) {
     return chunk_bounds(snapshot, file, "ts");
 }
 
-ankerl::unordered_dense::set<std::uint64_t> chunks_without_starts(
+dstd::HashSet<std::uint64_t> chunks_without_starts(
     const index::Snapshot& snapshot, const index::FileRef& file,
     std::uint64_t begin, std::uint64_t end) {
-    ankerl::unordered_dense::set<std::uint64_t> out;
+    dstd::HashSet<std::uint64_t> out;
     if (!index::extension_current(snapshot, file,
                                   index::store::IndexExtension::Zonemap))
         return out;

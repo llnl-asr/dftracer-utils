@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -79,7 +80,7 @@ struct PidTidHash {
 // since every level is an exact 4:1 fold of the one below, workers can sit at
 // different depths and still merge.
 struct FineAcc {
-    ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> slot;
+    dstd::HashMap<std::uint64_t, std::uint32_t> slot;
     dstd::Vector<std::uint64_t> keys;
     dstd::Vector<VizSummary::Cell> cells;
     unsigned demote = 0;
@@ -115,7 +116,7 @@ struct FineAcc {
 
     void coarsen() {
         ++demote;
-        ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> ns;
+        dstd::HashMap<std::uint64_t, std::uint32_t> ns;
         dstd::Vector<std::uint64_t> nk;
         dstd::Vector<VizSummary::Cell> nc;
         ns.reserve(keys.size() / 2);
@@ -162,7 +163,7 @@ struct SumBuild {
     std::uint64_t t0 = 0;
 
     std::mutex lane_mtx;
-    ankerl::unordered_dense::map<PidTid, std::uint32_t, PidTidHash> lane_of;
+    dstd::HashMap<PidTid, std::uint32_t, PidTidHash> lane_of;
     dstd::Vector<PidTid> lane_keys;
 
     dstd::Vector<std::atomic<double>> cread;
@@ -179,9 +180,7 @@ struct SumBuild {
     dstd::Vector<dstd::String> names;
 
     // Per-worker caches so the hot path never locks.
-    dstd::Vector<
-        ankerl::unordered_dense::map<PidTid, std::uint32_t, PidTidHash>>
-        lane_cache;
+    dstd::Vector<dstd::HashMap<PidTid, std::uint32_t, PidTidHash>> lane_cache;
     dstd::Vector<dftracer::utils::dstd::StringViewMap<std::uint32_t>>
         name_cache;
 
@@ -203,14 +202,12 @@ struct SumBuild {
     dstd::Vector<dftracer::utils::dstd::StringViewMap<dstd::String>> fh_parts;
 
     dstd::Vector<dftracer::utils::dstd::StringViewMap<dstd::String>> sh_parts;
-    dstd::Vector<ankerl::unordered_dense::map<std::int64_t, dstd::String>>
-        app_start, app_end;
+    dstd::Vector<dstd::HashMap<std::int64_t, dstd::String>> app_start, app_end;
 
     // Per-pid application name from the CM "app" config record. Traces that put
     // the app name in CM (not the start event's exec_hash) rely on this for the
     // synthetic app-span label.
-    dstd::Vector<ankerl::unordered_dense::map<std::int64_t, dstd::String>>
-        cm_app;
+    dstd::Vector<dstd::HashMap<std::int64_t, dstd::String>> cm_app;
 
     // Per-worker events at least one finest-level bucket wide, kept whole (see
     // VizSummary::long_events).
@@ -230,9 +227,7 @@ struct SumBuild {
 
     // Per-worker process-hierarchy state (see VizSummary::procs), keyed by pid
     // so it stays small however many events a process emits.
-    dstd::Vector<
-        ankerl::unordered_dense::map<std::int64_t, VizSummary::ProcRow>>
-        procs;
+    dstd::Vector<dstd::HashMap<std::int64_t, VizSummary::ProcRow>> procs;
     dstd::Vector<dstd::Vector<VizSummary::ForkEdge>> forks;
     dstd::Vector<dftracer::utils::dstd::StringViewMap<dstd::String>> hh_parts;
 
@@ -244,11 +239,9 @@ struct SumBuild {
         dstd::String cat;
         std::int64_t pid = 0;
         std::int64_t tid = 0;
-        ankerl::unordered_dense::map<std::uint32_t,
-                                     dstd::Pair<double, std::uint32_t>>
-            byb;
+        dstd::HashMap<std::uint32_t, dstd::Pair<double, std::uint32_t>> byb;
     };
-    dstd::Vector<ankerl::unordered_dense::map<dstd::String, CtrAccum>> c_series;
+    dstd::Vector<dstd::HashMap<dstd::String, CtrAccum>> c_series;
 
     // Series identity includes pid/tid so a per-process counter keeps one
     // series per emitter (node-level counters emit under pid 0).
@@ -640,7 +633,7 @@ static void fold_summary(std::size_t w, dstd::StringView event, SumBuild& b) {
     // name => same keys), so this is O(distinct names), not O(events).
     if (b.col_seen[w].find(name0) == b.col_seen[w].end()) {
         b.col_seen[w].emplace(name0);
-        static const ankerl::unordered_dense::set<dstd::StringView> SKIP = {
+        static const dstd::HashSet<dstd::StringView> SKIP = {
             "pid", "tid", "ts", "dur", "ph", "id", "args"};
         auto obj = root.get_object();
         if (!obj.error())
@@ -876,7 +869,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     // Merge per-worker ph="C" samples by series key into sparse, ascending
     // fine-bucket series.
     {
-        ankerl::unordered_dense::map<dstd::String, SumBuild::CtrAccum> merged;
+        dstd::HashMap<dstd::String, SumBuild::CtrAccum> merged;
         for (auto& wm : b.c_series)
             for (auto& [sk, acc] : wm) {
                 auto& m = merged[sk];
@@ -1067,7 +1060,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     }
 
     {
-        ankerl::unordered_dense::set<dstd::String> all_cols;
+        dstd::HashSet<dstd::String> all_cols;
         for (auto& c : b.cols)
             for (auto& k : c) all_cols.emplace(k);
         summary->columns.assign(all_cols.begin(), all_cols.end());
@@ -1117,12 +1110,12 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
         dftracer::utils::dstd::StringViewMap<dstd::String> sh;
         for (auto& part : b.sh_parts)
             for (auto& kv : part) sh.emplace(kv.first, kv.second);
-        ankerl::unordered_dense::map<std::int64_t, dstd::String> starts, ends;
+        dstd::HashMap<std::int64_t, dstd::String> starts, ends;
         for (auto& part : b.app_start)
             for (auto& kv : part) starts.emplace(kv.first, kv.second);
         for (auto& part : b.app_end)
             for (auto& kv : part) ends.emplace(kv.first, kv.second);
-        ankerl::unordered_dense::map<std::int64_t, dstd::String> cm_apps;
+        dstd::HashMap<std::int64_t, dstd::String> cm_apps;
         for (auto& part : b.cm_app)
             for (auto& kv : part) cm_apps.emplace(kv.first, kv.second);
 
@@ -1228,7 +1221,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     summary->io_files = io_fh.size();
 
     {
-        ankerl::unordered_dense::map<std::int64_t, VizSummary::ProcRow> procs;
+        dstd::HashMap<std::int64_t, VizSummary::ProcRow> procs;
         for (auto& part : b.procs) {
             for (auto& [pid, src] : part) {
                 auto it = procs.find(pid);

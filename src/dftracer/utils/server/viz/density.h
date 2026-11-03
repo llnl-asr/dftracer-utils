@@ -7,11 +7,11 @@
 // extraction and containment-depth assignment. Internal to the server.
 
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/server/viz/internal.h>
@@ -79,8 +79,7 @@ struct DensityAgg {
     }
 };
 
-using DensityMap =
-    ankerl::unordered_dense::map<DensityKey, DensityAgg, DensityKeyHash>;
+using DensityMap = dstd::HashMap<DensityKey, DensityAgg, DensityKeyHash>;
 
 // Composite group-value separator: joins the per-column values of a multi-key
 // group_by ("cat,fhash") into one lane key. Never appears in field values.
@@ -219,7 +218,7 @@ static constexpr std::size_t MAX_UNREFERENCED_HASH_RECORDS = 500;
 inline void drop_unreferenced_hash_records(dstd::Vector<dstd::String>& big) {
     thread_local dftracer::utils::json::RecordParser parser;
     thread_local dstd::String buf;
-    ankerl::unordered_dense::set<dstd::String> referenced;
+    dstd::HashSet<dstd::String> referenced;
     dstd::Vector<bool> is_decl(big.size(), false);
 
     for (std::size_t i = 0; i < big.size(); ++i) {
@@ -326,7 +325,7 @@ inline dstd::Vector<std::uint32_t> assign_view_depths(
             return h;
         }
     };
-    ankerl::unordered_dense::map<LaneKey, dstd::Vector<Item>, LaneHash> lanes;
+    dstd::HashMap<LaneKey, dstd::Vector<Item>, LaneHash> lanes;
 
     for (std::size_t i = 0; i < big.size(); ++i) {
         std::int64_t pid = 0, tid = 0;
@@ -396,7 +395,7 @@ inline void assign_counter_depths(const dstd::Vector<dstd::String>& big,
     auto lane_of = [](std::int64_t pid, std::int64_t tid) {
         return (pid << 20) ^ tid;
     };
-    ankerl::unordered_dense::map<std::int64_t, std::uint32_t> lane_max;
+    dstd::HashMap<std::int64_t, std::uint32_t> lane_max;
     auto bump = [&](std::int64_t lane, std::uint32_t depth) {
         auto& m = lane_max[lane];
         if (depth + 1 > m) m = depth + 1;

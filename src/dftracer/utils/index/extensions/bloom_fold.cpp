@@ -341,7 +341,7 @@ void BloomFold::write_file(index::FileBuild& build, dstd::CStringView file,
     const auto dims = dims_of(keys);
     // The runs hold every candidate path's evidence. The paths the selection
     // did not keep are erased from them.
-    ankerl::unordered_dense::set<std::uint32_t> kept;
+    dstd::HashSet<std::uint32_t> kept;
     for (const AutoKey& key : keys)
         if (!key.absence_only) kept.insert(key.id);
     for (std::uint32_t k : sp.key_union)
@@ -356,8 +356,8 @@ void BloomFold::write_file(index::FileBuild& build, dstd::CStringView file,
     // A run wrote the records of every auto key it met; one the selection kept
     // only as absence entries still owes the chunks that lacked it.
     for (const auto& spilled : sp.keys) {
-        ankerl::unordered_dense::set<std::uint32_t> had(spilled.keys.begin(),
-                                                        spilled.keys.end());
+        dstd::HashSet<std::uint32_t> had(spilled.keys.begin(),
+                                         spilled.keys.end());
         for (const AutoKey& key : keys)
             if (!had.contains(key.id))
                 BV::write_absent_extra(build, spilled.checkpoint, key.name,

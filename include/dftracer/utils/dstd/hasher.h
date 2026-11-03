@@ -3,11 +3,13 @@
 #define DFTRACER_UTILS_DSTD_HASHER_H
 
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/ptr_hash.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <string_view>
 #include <type_traits>
@@ -67,6 +69,23 @@ struct Hash<T, std::enable_if_t<std::is_integral_v<T>>> {
             hash::splitmix64(static_cast<std::uint64_t>(value)));
     }
 };
+
+/// Hashes the bit pattern, with -0.0 taken as 0.0 so values that compare
+/// equal hash equal.
+template <class T>
+struct Hash<T, std::enable_if_t<std::is_floating_point_v<T>>> {
+    using is_avalanching = void;
+
+    std::size_t operator()(T value) const noexcept {
+        if (value == T{0}) value = T{0};
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(T));
+        return static_cast<std::size_t>(hash::splitmix64(bits));
+    }
+};
+
+template <class T>
+struct Hash<T*, void> : PtrHash {};
 
 }  // namespace dftracer::utils::dstd
 

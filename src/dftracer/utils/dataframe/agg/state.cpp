@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -2012,7 +2013,7 @@ AggStatePtr agg_clip_occupancy(const AggState& src_in, std::uint64_t lo,
     };
 
     const std::size_t nkeys = st.nkeys;
-    ankerl::unordered_dense::map<dstd::String, std::size_t> rest_at;
+    dstd::HashMap<dstd::String, std::size_t> rest_at;
     dstd::Vector<dstd::Vector<std::int64_t>> rests;
     dstd::String sig;
     const std::int64_t ng = st.ngroups();

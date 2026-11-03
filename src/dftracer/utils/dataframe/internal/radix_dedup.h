@@ -3,9 +3,9 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_RADIX_DEDUP_H
 
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstdint>
 
@@ -34,7 +34,7 @@ template <class Key, class KeyOf>
 dstd::Vector<std::uint8_t> radix_first_seen_by(std::int64_t m, KeyOf&& key_of) {
     dstd::Vector<std::uint8_t> keep(static_cast<std::size_t>(m), 0);
     if (!parallel_backend_installed() || m < RADIX_DEDUP_MIN_ROWS) {
-        ankerl::unordered_dense::set<Key> seen;
+        dstd::HashSet<Key> seen;
         seen.reserve(static_cast<std::size_t>(m));
         for (std::int64_t j = 0; j < m; ++j)
             if (seen.insert(key_of(j)).second)
@@ -49,7 +49,7 @@ dstd::Vector<std::uint8_t> radix_first_seen_by(std::int64_t m, KeyOf&& key_of) {
     parallel_for(
         static_cast<std::int64_t>(p), 1, [&](std::int64_t pb, std::int64_t pe) {
             for (std::int64_t g = pb; g < pe; ++g) {
-                ankerl::unordered_dense::set<Key> seen;
+                dstd::HashSet<Key> seen;
                 for (std::int64_t j : buckets[static_cast<std::size_t>(g)])
                     if (seen.insert(key_of(j)).second)
                         keep[static_cast<std::size_t>(j)] = 1;
@@ -66,7 +66,7 @@ template <class Key, class KeyOf>
 dstd::Vector<std::int64_t> radix_counts_by(std::int64_t m, KeyOf&& key_of) {
     dstd::Vector<std::int64_t> counts(static_cast<std::size_t>(m), 0);
     if (!parallel_backend_installed() || m < RADIX_DEDUP_MIN_ROWS) {
-        ankerl::unordered_dense::map<Key, std::int64_t> cnt;
+        dstd::HashMap<Key, std::int64_t> cnt;
         cnt.reserve(static_cast<std::size_t>(m));
         for (std::int64_t j = 0; j < m; ++j) ++cnt[key_of(j)];
         for (std::int64_t j = 0; j < m; ++j)
@@ -81,7 +81,7 @@ dstd::Vector<std::int64_t> radix_counts_by(std::int64_t m, KeyOf&& key_of) {
     parallel_for(
         static_cast<std::int64_t>(p), 1, [&](std::int64_t pb, std::int64_t pe) {
             for (std::int64_t g = pb; g < pe; ++g) {
-                ankerl::unordered_dense::map<Key, std::int64_t> cnt;
+                dstd::HashMap<Key, std::int64_t> cnt;
                 for (std::int64_t j : buckets[static_cast<std::size_t>(g)])
                     ++cnt[key_of(j)];
                 for (std::int64_t j : buckets[static_cast<std::size_t>(g)])

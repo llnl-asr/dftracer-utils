@@ -89,6 +89,11 @@ FNR == 1 { kept = 0 }
   if (line ~ /\/\/ keep std: /) { kept = (line ~ /^[ \t]*\/\//); next }
   if (kept) { kept = 0; next }
   sub(/\/\/.*$/, "", line)
+  if (line ~ /ankerl::/ || line ~ /dstd\/vendor\/unordered_dense\.h/) {
+    print FILENAME ":" FNR ": " $0 "  (use dstd::HashMap or dstd::HashSet)"
+    hits++
+    next
+  }
   if (line ~ /(^|[^A-Za-z0-9_:])std::(string|string_view|vector|span|map|set|multimap|multiset|unordered_map|unordered_set|deque|list|queue|priority_queue|unique_ptr|make_unique|shared_ptr|make_shared|weak_ptr|optional|nullopt|variant|monostate|pair|make_pair|tuple|any|any_cast|function|thread|promise|future|shared_future|to_string|stoi|stol|stoll|stoul|stoull|stod|stof|stable_sort|ofstream|ifstream|ostringstream|stringstream|istringstream|to_chars|from_chars)([^A-Za-z0-9_]|$)/) {
     print FILENAME ":" FNR ": " $0
     hits++
@@ -113,14 +118,17 @@ if(SELF_TEST)
        "std::atomic<int> d;\n"
        "// keep std: test\n"
        "std::deque<int> e;\n"
-       "dstd::UniquePtr<int> f(new int(1));\n")
+       "dstd::UniquePtr<int> f(new int(1));\n"
+       "ankerl::unordered_dense::map<int, int> g;\n"
+       "#include <dftracer/utils/dstd/vendor/unordered_dense.h>\n")
   execute_process(COMMAND ${_awk} -f "${_awk_file}" "${_sample}"
                   RESULT_VARIABLE _rc OUTPUT_VARIABLE _out)
   string(REGEX REPLACE "[^\n]" "" _newlines "${_out}")
   string(LENGTH "${_newlines}" _n)
-  if(NOT _rc OR NOT _n EQUAL 2 OR NOT _out MATCHES ":1: std::vector"
-     OR NOT _out MATCHES ":8: dstd::UniquePtr")
-    message(FATAL_ERROR "dstd_only self test: expected hits on lines 1 and 8, got:\n${_out}")
+  if(NOT _rc OR NOT _n EQUAL 4 OR NOT _out MATCHES ":1: std::vector"
+     OR NOT _out MATCHES ":8: dstd::UniquePtr" OR NOT _out MATCHES ":9: ankerl"
+     OR NOT _out MATCHES ":10: #include")
+    message(FATAL_ERROR "dstd_only self test: expected hits on lines 1, 8, 9 and 10, got:\n${_out}")
   endif()
   return()
 endif()

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_FOLD_EVENT_H
 
 #include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -11,7 +12,6 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/trace/event.h>
@@ -597,7 +597,7 @@ struct DecodeHints {
     /// The catalog path id ("args." + key) of each argument key id, by index
     /// below FIELD_CACHE_IDS and by map above.
     dstd::Vector<std::uint32_t> arg_leaf;
-    ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> arg_leaf_far;
+    dstd::HashMap<std::uint32_t, std::uint32_t> arg_leaf_far;
     /// The path id of each top-level key whose value is a scalar. `packed`
     /// holds a key of up to 8 bytes, zero padded, so it compares as a word.
     struct TopLeaf {

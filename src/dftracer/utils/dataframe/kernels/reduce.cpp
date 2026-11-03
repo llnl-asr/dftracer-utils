@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/internal/type_promotion.h>
 #include <dftracer/utils/dataframe/kernels/reduce.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -186,7 +187,7 @@ template <class T>
 void mode_serial(const T* p,
                  const dftracer::utils::dstd::Vector<std::int64_t>& idx,
                  dftu_scalar& out) {
-    ankerl::unordered_dense::map<T, std::int64_t> counts;
+    dftracer::utils::dstd::HashMap<T, std::int64_t> counts;
     T best{};
     std::int64_t best_count = 0;
     for (std::int64_t j : idx) {
@@ -234,7 +235,7 @@ void mode_one(const dftu_series& v, dftu_scalar& out) {
     std::int64_t best_count = 0;
     for (std::int64_t c : counts) best_count = std::max(best_count, c);
 
-    ankerl::unordered_dense::set<T> candidates;
+    dftracer::utils::dstd::HashSet<T> candidates;
     for (std::int64_t j = 0; j < m; ++j)
         if (counts[static_cast<std::size_t>(j)] == best_count)
             candidates.insert(p[idx[static_cast<std::size_t>(j)]]);

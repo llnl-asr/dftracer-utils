@@ -10,7 +10,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/result_registry.h>
@@ -98,7 +97,7 @@ struct SharedResultRegistry {
 template <class T>
 class StableRegistry {
    public:
-    using IndexMap = ankerl::unordered_dense::map<std::uint64_t, std::size_t>;
+    using IndexMap = dstd::HashMap<std::uint64_t, std::size_t>;
 
     auto begin() { return items_.begin(); }
     auto end() { return items_.end(); }

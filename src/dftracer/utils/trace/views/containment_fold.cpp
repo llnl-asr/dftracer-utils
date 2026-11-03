@@ -383,7 +383,7 @@ static dstd::Vector<df::FlameNode> fold_flame_arena(
     // synthetic node named by the lane's group value - it is lane-constant, so
     // it is read from the lane's first row. With no group key every lane folds
     // together by name path under the single "all" root.
-    ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> group_of;
+    dstd::HashMap<std::uint32_t, std::uint32_t> group_of;
     for (std::size_t li = 0; li < arenas.size(); ++li) {
         dstd::Vector<df::FlameNode>& a = arenas[li];
         if (a.empty() || lanes[li].empty()) continue;

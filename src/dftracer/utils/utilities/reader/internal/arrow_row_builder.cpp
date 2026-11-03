@@ -8,7 +8,6 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/schema.h>
@@ -53,17 +52,16 @@ std::int8_t get_io_cat(dstd::StringView func) {
     // Op sets are disjoint, so a single flat lookup preserves the original
     // first-match semantics. Keys view the constexpr op arrays (static
     // storage).
-    static const ankerl::unordered_dense::map<dstd::StringView, std::int8_t>
-        op_to_cat = [] {
-            ankerl::unordered_dense::map<dstd::StringView, std::int8_t> m;
-            for (auto op : posix_ops::READ) m.emplace(op, IoRead);
-            for (auto op : posix_ops::WRITE) m.emplace(op, IoWrite);
-            for (auto op : posix_ops::SYNC) m.emplace(op, IoSync);
-            for (auto op : posix_ops::PCTL) m.emplace(op, IoPctl);
-            for (auto op : posix_ops::IPC) m.emplace(op, IoIpc);
-            for (auto op : posix_ops::METADATA) m.emplace(op, IoMetadata);
-            return m;
-        }();
+    static const dstd::HashMap<dstd::StringView, std::int8_t> op_to_cat = [] {
+        dstd::HashMap<dstd::StringView, std::int8_t> m;
+        for (auto op : posix_ops::READ) m.emplace(op, IoRead);
+        for (auto op : posix_ops::WRITE) m.emplace(op, IoWrite);
+        for (auto op : posix_ops::SYNC) m.emplace(op, IoSync);
+        for (auto op : posix_ops::PCTL) m.emplace(op, IoPctl);
+        for (auto op : posix_ops::IPC) m.emplace(op, IoIpc);
+        for (auto op : posix_ops::METADATA) m.emplace(op, IoMetadata);
+        return m;
+    }();
     auto it = op_to_cat.find(func);
     return it != op_to_cat.end() ? it->second
                                  : static_cast<std::int8_t>(IoOther);

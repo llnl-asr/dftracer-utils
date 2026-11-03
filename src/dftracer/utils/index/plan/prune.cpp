@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/condition.h>
@@ -24,8 +24,8 @@ namespace {
 // are kept.
 dstd::Vector<std::uint64_t> filter_by_time(
     const dstd::Vector<std::uint64_t>& chunks,
-    const ankerl::unordered_dense::map<
-        std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>& bounds,
+    const dstd::HashMap<std::uint64_t,
+                        dstd::Pair<std::uint64_t, std::uint64_t>>& bounds,
     double begin, double end, bool half_open) {
     dstd::Vector<std::uint64_t> kept;
     kept.reserve(chunks.size());
@@ -95,10 +95,9 @@ coro::CoroTask<common::Result<PruneResult>> prune_data(
     if (begin <= 0 && end <= 0) co_return result;
 
     if (request.index_path.empty()) co_return result;
-    ankerl::unordered_dense::map<std::uint64_t,
-                                 dstd::Pair<std::uint64_t, std::uint64_t>>
+    dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>
         bounds;
-    ankerl::unordered_dense::set<std::uint64_t> no_starts;
+    dstd::HashSet<std::uint64_t> no_starts;
     try {
         const index::Snapshot& snapshot = *common::unwrap(reads.get());
         const auto file =

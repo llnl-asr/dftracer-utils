@@ -21,8 +21,8 @@ namespace dftracer::utils::dataframe::lazy_internal {
 /// The pool given at construction must stay open until the arena is destroyed.
 class HashArena {
    public:
-    /// Below this many buckets the table doubles as ankerl::unordered_dense
-    /// grows it. From it on, it grows four times at a time.
+    /// Below this many buckets the table doubles, as dstd::HashMap grows
+    /// it. From it on, it grows four times at a time.
     static constexpr std::size_t GROWTH_FROM = std::size_t{1} << 18;
 
     explicit HashArena(memory::Pool& pool)
@@ -116,7 +116,8 @@ class HashArena {
     // of the new one. Below GROWTH_FROM the reserve ahead costs more than that.
     static constexpr std::size_t GROWTH = 4;
 
-    // The entries a table of `buckets` holds before it rehashes, as in ankerl.
+    // The entries a table of `buckets` holds before it rehashes, as in
+    // dstd::HashMap.
     std::size_t table_capacity(std::size_t buckets) const noexcept {
         return static_cast<std::size_t>(static_cast<float>(buckets) *
                                         head_.max_load_factor());

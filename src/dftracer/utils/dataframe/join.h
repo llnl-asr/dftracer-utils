@@ -4,11 +4,11 @@
 
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <atomic>
 #include <cstdint>
@@ -143,7 +143,7 @@ class HashJoin {
     // sharing a hash chain through `next_` (ascending), and a probe compares
     // the key cells exactly along the chain, so a hash collision costs a
     // compare, never a wrong match.
-    ankerl::unordered_dense::map<std::uint64_t, std::int64_t> first_;
+    dstd::HashMap<std::uint64_t, std::int64_t> first_;
     // In place of `first_` for a single integer key over a dense range: the
     // first row of each key value, indexed by value - direct_base_.
     dstd::Vector<std::int64_t> direct_;

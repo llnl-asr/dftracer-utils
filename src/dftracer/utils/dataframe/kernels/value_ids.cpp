@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/value_ids.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstring>
 
@@ -14,7 +14,7 @@ namespace {
 constexpr char BOOL_BYTES[2] = {0, 1};
 
 struct Builder {
-    ankerl::unordered_dense::map<dstd::StringView, std::int32_t> map;
+    dstd::HashMap<dstd::StringView, std::int32_t> map;
     ValueIds& out;
     bool is_string;
     bool is_bool;

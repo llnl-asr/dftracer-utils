@@ -118,7 +118,7 @@ bool is_sorted_impl(const Series& v, bool descending) {
     return true;
 }
 Series is_in_strings(const dftu_series& v, const dftu_series& values) {
-    ankerl::unordered_dense::set<dstd::StringView> set;
+    dstd::HashSet<dstd::StringView> set;
     dstd::StringView s;
     for (std::int64_t j = 0; j < values.length; ++j)
         if (str_at(&values, j, s)) set.insert(s);

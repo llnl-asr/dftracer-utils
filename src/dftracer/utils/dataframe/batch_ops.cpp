@@ -28,7 +28,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/json/json_escape.h>
 
 #include <algorithm>
@@ -443,7 +442,7 @@ Series concat_text_views(const dstd::Vector<const Series*>& parts) {
         });
     ViewBuilder builder;
     if (dict_all) {
-        ankerl::unordered_dense::map<dstd::StringView, std::int32_t> seen;
+        dstd::HashMap<dstd::StringView, std::int32_t> seen;
         dstd::Vector<dstd::Vector<std::int32_t>> remaps(parts.size());
         std::int32_t distinct = 0;
         bool fits = true;
@@ -1368,7 +1367,7 @@ DataFrame unique(const DataFrame& b, const dstd::Vector<dstd::String>& subset) {
             first = std::move(ids.first);
             continue;
         }
-        ankerl::unordered_dense::map<std::uint64_t, std::int32_t> seen;
+        dstd::HashMap<std::uint64_t, std::int32_t> seen;
         first.clear();
         for (std::int64_t i = 0; i < n; ++i) {
             const std::uint64_t key =

@@ -14,7 +14,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
@@ -94,7 +93,7 @@ bool index_is_stale(dstd::StringView root,
                     const dstd::Vector<dstd::String>& paths) {
     namespace ix = dftracer::utils::index;
     const auto snapshot = common::unwrap(ix::plan::open_snapshot(root));
-    ankerl::unordered_dense::set<dstd::StringView> listed;
+    dstd::HashSet<dstd::StringView> listed;
     dstd::Vector<dstd::String> logical_paths;
     logical_paths.reserve(paths.size());
     for (const auto& path : paths) {

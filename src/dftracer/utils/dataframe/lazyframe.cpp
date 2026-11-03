@@ -49,7 +49,6 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/budget.h>
 
@@ -2007,10 +2006,7 @@ class IsDupCursor : public Cursor {
 
     // The counts never leave the cursor, so they live in its Scratch pool. A
     // key past the short-string size keeps its bytes on the C library.
-    using Counts =
-        dstd::PoolHashMap<dstd::String, std::int64_t,
-                          ankerl::unordered_dense::hash<dstd::String>,
-                          std::equal_to<dstd::String>>;
+    using Counts = dstd::PoolHashMap<dstd::String, std::int64_t>;
     // An entry and its bucket.
     static constexpr std::uint64_t COUNT_ENTRY_BYTES =
         sizeof(Counts::value_type) + sizeof(Counts::bucket_type);
@@ -2092,7 +2088,7 @@ class ToDummiesCursor : public Cursor {
     coro::CoroTask<void> build(std::int64_t max_rows) {
         ci_ = require_col(sch_, column_, "to_dummies");
 
-        ankerl::unordered_dense::set<dstd::String> seen;
+        dstd::HashSet<dstd::String> seen;
         dstd::Vector<Series> chunks;
         for (;;) {
             auto m = co_await first_->next(max_rows);
@@ -2137,7 +2133,7 @@ class ToDummiesCursor : public Cursor {
     dstd::String column_;
     bool built_ = false;
     int ci_ = 0;
-    ankerl::unordered_dense::map<dstd::String, int> uniq_idx_;
+    dstd::HashMap<dstd::String, int> uniq_idx_;
     dstd::Vector<dstd::String> produced_;
 };
 
@@ -5850,7 +5846,7 @@ coro::CoroTask<dstd::Vector<DataFrame>> collect_all(
 
 LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs) {
     LoweredGroupAggs out;
-    ankerl::unordered_dense::map<dstd::String, std::int32_t> dedup;
+    dstd::HashMap<dstd::String, std::int32_t> dedup;
     auto resolve = [&](const dstd::String& name) -> std::int32_t {
         auto it = dedup.find(name);
         if (it != dedup.end()) return it->second;

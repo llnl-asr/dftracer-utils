@@ -15,7 +15,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <algorithm>
 #include <bit>
@@ -361,7 +360,7 @@ class AggState {
     // The key hash of a row to its first group, one flat probe per row; a
     // group with the same hash as an earlier one (a true collision) chains
     // from it through `next_in_bucket`, so no bucket owns a vector.
-    ankerl::unordered_dense::map<std::uint64_t, std::int64_t> key_buckets;
+    dstd::HashMap<std::uint64_t, std::int64_t> key_buckets;
     dstd::Vector<std::int64_t> next_in_bucket;  // per group, -1 ends a chain
     // Up to three 8-byte keys over dense value ranges index their group
     // here (the keys packed as mixed-radix digits over direct_lo /
@@ -455,7 +454,7 @@ class AggState {
     }
     // Net wraps of an integer light sum by `light` index (FieldStat::ecarry),
     // present only once that sum wraps.
-    ankerl::unordered_dense::map<std::size_t, std::int64_t> light_carry;
+    dstd::HashMap<std::size_t, std::int64_t> light_carry;
     bool light_on = false;
     // Per group, the least row index that fed it, kept by the accumulate
     // loops and the merge (a group that came in any other way, a
@@ -589,7 +588,7 @@ class AggState {
     dstd::Vector<int> spec_set;  // spec -> set slot, or -1
     dstd::Vector<std::int32_t> set_val_col;
     // Sorted once at finalize; a hash set takes the inserts.
-    using StringSet = ankerl::unordered_dense::set<dstd::String>;
+    using StringSet = dstd::HashSet<dstd::String>;
     dstd::Vector<StringSet> sets;  // groups * n_set
 
     // Occupancy: one slot per distinct (ts col, dur col, occ_cell) triple (all

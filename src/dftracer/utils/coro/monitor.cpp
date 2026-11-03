@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/symbolize.h>
 #include <dftracer/utils/coro/monitor.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
@@ -12,7 +13,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <algorithm>
 #include <atomic>
@@ -58,8 +58,12 @@ struct Done {
 // Per-shard state: the live coroutine set plus the finished records collected
 // for the end-of-run report. Both live under one shard lock, so a completion
 // (erase live + append done) takes a single lock, not two.
+using LiveMap = dstd::HashMap<const void*, Live, dstd::PtrHash>;
+
+// The map is made on first use and freed after the report, because an empty
+// table already holds a bucket and the registry is never destroyed.
 struct ShardData {
-    ankerl::unordered_dense::map<const void*, Live, dstd::PtrHash> live;
+    dstd::UniquePtr<LiveMap> live;
     dstd::Vector<Done> done;
 };
 
@@ -208,14 +212,17 @@ void at_exit_render() {
     // children nest instead of orphaning into roots.
     r.shards.for_each_shard([&](ShardData& s) {
         all.insert(all.end(), s.done.begin(), s.done.end());
-        for (const auto& entry : s.live) {
-            const auto& l = entry.second;
-            const long long us =
-                std::chrono::duration_cast<std::chrono::microseconds>(now -
-                                                                      l.start)
-                    .count();
-            all.push_back(
-                Done{l.id, l.parent, l.resume_fn, us, l.kind, l.spawn_tid, -1});
+        if (s.live) {
+            for (const auto& entry : *s.live) {
+                const auto& l = entry.second;
+                const long long us =
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        now - l.start)
+                        .count();
+                all.push_back(Done{l.id, l.parent, l.resume_fn, us, l.kind,
+                                   l.spawn_tid, -1});
+            }
+            s.live.reset();
         }
     });
     r.csv.reset();
@@ -242,9 +249,10 @@ void at_exit_render() {
 
 bool monitoring_enabled() {
     static const bool enabled = [] {
+        const Mode mode = parse_mode();
+        if (mode == Mode::Off) return false;
         Registry& r = registry();
-        r.mode = parse_mode();
-        if (r.mode == Mode::Off) return false;
+        r.mode = mode;
         const auto file =
             common::Env::get<dstd::StringView>("DFTRACER_UTILS_MONITOR_FILE");
         if (file.has_value()) {
@@ -274,8 +282,9 @@ long long monitor_enqueue(const void* handle, CoroKind kind) {
     Registry& r = registry();
     long long id = -1;
     r.shards.with_shard(shard_key(handle), [&](ShardData& s) {
-        auto it = s.live.find(handle);
-        if (it != s.live.end()) {
+        if (!s.live) s.live = dstd::make_unique<LiveMap>();
+        auto it = s.live->find(handle);
+        if (it != s.live->end()) {
             id = it->second.id;  // re-enqueue / re-seen
             return;
         }
@@ -283,8 +292,8 @@ long long monitor_enqueue(const void* handle, CoroKind kind) {
         // fn.
         const void* resume_fn = *reinterpret_cast<const void* const*>(handle);
         id = r.next_id.fetch_add(1, std::memory_order_relaxed);
-        s.live.emplace(handle, Live{id, t_current, resume_fn, Clock::now(),
-                                    kind, t_worker});
+        s.live->emplace(handle, Live{id, t_current, resume_fn, Clock::now(),
+                                     kind, t_worker});
     });
     return id;
 }
@@ -315,7 +324,7 @@ long long record_and_erase(Registry& r, ShardData& s, It it, int finish_tid) {
     }
     s.done.push_back(
         Done{l.id, l.parent, l.resume_fn, us, l.kind, l.spawn_tid, finish_tid});
-    s.live.erase(it);
+    s.live->erase(it);
     return parent;
 }
 
@@ -326,8 +335,9 @@ void monitor_resume_end(const void* handle, bool done) {
     if (!done) return;
     Registry& r = registry();
     r.shards.with_shard(shard_key(handle), [&](ShardData& s) {
-        auto it = s.live.find(handle);
-        if (it == s.live.end()) return;
+        if (!s.live) return;
+        auto it = s.live->find(handle);
+        if (it == s.live->end()) return;
         record_and_erase(r, s, it, t_worker);
     });
 }
@@ -336,8 +346,9 @@ void monitor_sync_complete(const void* handle) {
     Registry& r = registry();
     long long parent = -1;
     r.shards.with_shard(shard_key(handle), [&](ShardData& s) {
-        auto it = s.live.find(handle);
-        if (it == s.live.end()) return;  // already finalized
+        if (!s.live) return;
+        auto it = s.live->find(handle);
+        if (it == s.live->end()) return;  // already finalized
         parent = record_and_erase(r, s, it, t_worker);
     });
     t_current = parent;  // restore the awaiting coroutine as current

@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -115,7 +116,7 @@ class GroupByCursor : public Cursor {
             key_idx.push_back(index_in(sch_, k));
         dstd::Vector<int>
             value_idx;  // sch indices of the deduped value columns
-        ankerl::unordered_dense::map<dstd::String, std::int32_t> dedup;
+        dstd::HashMap<dstd::String, std::int32_t> dedup;
         auto resolve = [&](const dstd::String& name) -> std::int32_t {
             auto it = dedup.find(name);
             if (it != dedup.end()) return it->second;

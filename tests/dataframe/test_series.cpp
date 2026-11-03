@@ -2466,6 +2466,11 @@ TEST_SUITE("vec") {
         CHECK(scalar_value<std::int64_t>(cw.mode()) ==
               1);                  // 1 hits count 2 first
 
+        // -0.0 and 0.0 compare equal, so they count as one value.
+        dstd::Vector<double> z{1.5, -0.0, 1.5, 0.0, 0.0};
+        CHECK(scalar_value<double>(Series::flat_f64(z.data(), 5).mode()) ==
+              0.0);
+
         // Bool reductions via a comparison mask.
         Series allpos = dv::gt(cw, std::int64_t(0));   // all true
         CHECK(allpos.all());

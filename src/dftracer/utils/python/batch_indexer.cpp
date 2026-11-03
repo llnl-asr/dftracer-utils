@@ -3,6 +3,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -625,9 +626,8 @@ std::uint64_t pid_of(dftracer::utils::dstd::StringView key) {
     return pid;
 }
 
-using PidSet = ankerl::unordered_dense::set<std::uint64_t>;
-using PidsByPath =
-    ankerl::unordered_dense::map<dftracer::utils::dstd::String, PidSet>;
+using PidSet = dstd::HashSet<std::uint64_t>;
+using PidsByPath = dstd::HashMap<dftracer::utils::dstd::String, PidSet>;
 
 // The distinct PIDs the index recorded for one file.
 PidSet file_pids(const dftracer::utils::index::Snapshot& snapshot,

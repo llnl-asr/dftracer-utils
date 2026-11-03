@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/lazy/hash_arena.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -445,7 +446,7 @@ class HeadByCursor : public Cursor {
     dstd::Vector<std::int64_t> key_idx_;
     std::int64_t n_;
     std::uint64_t budget_;
-    ankerl::unordered_dense::map<dstd::String, std::int64_t> counts_;
+    dstd::HashMap<dstd::String, std::int64_t> counts_;
     std::size_t fast_bytes_ = 0;
     std::int64_t next_row_id_ = 0;
     bool spilling_ = false;

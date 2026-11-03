@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -127,7 +128,7 @@ class PivotCursor : public Cursor {
         const int ci = require_col(sch_, on_, "pivot");
         const int vi = require_col(sch_, values_, "pivot");
 
-        ankerl::unordered_dense::set<dstd::String> seen;
+        dstd::HashSet<dstd::String> seen;
         dstd::Vector<Series> distinct;
         for (;;) {
             auto m = co_await first_->next(max_rows);
@@ -229,7 +230,7 @@ class PivotCursor : public Cursor {
 
     // Append the first-occurrence non-null cells of `col` to `chunks`.
     static void distinct_into(const Series& col,
-                              ankerl::unordered_dense::set<dstd::String>& seen,
+                              dstd::HashSet<dstd::String>& seen,
                               dstd::Vector<Series>& chunks) {
         dstd::Vector<Series> one;
         one.push_back(col.share());
@@ -249,7 +250,7 @@ class PivotCursor : public Cursor {
     bool built_ = false;
     bool eof_ = false;
     Series uniq_col_;
-    ankerl::unordered_dense::map<dstd::String, std::int64_t> col_of_;
+    dstd::HashMap<dstd::String, std::int64_t> col_of_;
     dstd::Vector<Series> pending_;
     std::int64_t pending_rows_ = 0;
     dstd::Optional<Morsel> ahead_;

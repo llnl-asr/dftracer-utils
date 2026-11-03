@@ -13,7 +13,6 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/trace/views/fold.h>
 
@@ -142,10 +141,10 @@ class BloomFold : public trace::views::detail::Fold {
         AutoField() { stats.value_type.clear(); }
         index::schemas::dft::BloomCore::ChunkDimensionStats stats;
         index::schemas::dft::BloomCore::NumericBounds bounds;
-        ankerl::unordered_dense::set<std::uint32_t> values;
+        dstd::HashSet<std::uint32_t> values;
         bool overflow = false;
     };
-    using AutoChunk = ankerl::unordered_dense::map<std::uint32_t, AutoField>;
+    using AutoChunk = dstd::HashMap<std::uint32_t, AutoField>;
 
    public:
     class Lane {
@@ -206,7 +205,7 @@ class BloomFold : public trace::views::detail::Fold {
             index::schemas::dft::BloomCore::ChunkState chunk;
         };
         dstd::Vector<PendingChunk> pending;
-        ankerl::unordered_dense::set<std::uint32_t> key_union;
+        dstd::HashSet<std::uint32_t> key_union;
         std::size_t runs = 0;
         std::uint64_t run_bytes = 0;
     };
@@ -226,10 +225,9 @@ class BloomFold : public trace::views::detail::Fold {
         dstd::Map<std::uint64_t, ChunkState> chunks;
         dstd::Map<std::uint64_t, AutoChunk> auto_chunks;
         /// The catalog: data-record leaves by interned exact path.
-        ankerl::unordered_dense::map<std::uint32_t, index::store::PathStat>
-            paths;
+        dstd::HashMap<std::uint32_t, index::store::PathStat> paths;
         /// Auto keys of the chunks summarized so far.
-        ankerl::unordered_dense::map<std::uint32_t, PathEvidence> evidence;
+        dstd::HashMap<std::uint32_t, PathEvidence> evidence;
     };
 
     dftracer::utils::dstd::StringIntern* intern_;
@@ -239,7 +237,7 @@ class BloomFold : public trace::views::detail::Fold {
     dstd::Vector<std::uint32_t> extra_keys_;
     // Args keys the path budget leaves alone: the extra dimensions and the
     // command hash keys the fixed shash dimension already covers.
-    ankerl::unordered_dense::set<std::uint32_t> auto_skip_;
+    dstd::HashSet<std::uint32_t> auto_skip_;
     std::uint32_t dur_key_ = 0;
     dstd::Optional<std::uint64_t> file_bytes_;
 

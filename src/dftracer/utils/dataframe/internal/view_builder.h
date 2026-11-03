@@ -5,9 +5,9 @@
 #include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstdint>
 #include <memory>
@@ -64,7 +64,7 @@ class ViewBuilder {
 
     dstd::Vector<std::uint8_t> views_;
     dstd::Vector<BufferView> buffers_;
-    ankerl::unordered_dense::map<const std::uint8_t*, std::int32_t> index_of_;
+    dstd::HashMap<const std::uint8_t*, std::int32_t> index_of_;
     dstd::Vector<std::int64_t> null_rows_;
     const std::uint8_t* last_data_ = nullptr;
     std::int32_t last_index_ = 0;

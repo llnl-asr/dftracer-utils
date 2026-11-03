@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -108,7 +109,7 @@ struct PartitionStats {
     bool by_order = false;   // a range frame to the end: split by order value
     std::size_t order_col = 0;
     dstd::Vector<Tail> tail_specs;
-    ankerl::unordered_dense::map<dstd::String, Part> parts;
+    dstd::HashMap<dstd::String, Part> parts;
 
     const Part* find(const dstd::String& key) const {
         const auto it = parts.find(key);

@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -85,7 +86,7 @@ struct StatAgg {
     double max = 0;
     // Union of active intervals as a difference map: bucket -> net (starts -
     // ends). Coverage is the length of buckets whose running sum stays > 0.
-    ankerl::unordered_dense::map<std::int32_t, std::int32_t> cov;
+    dstd::HashMap<std::int32_t, std::int32_t> cov;
     void add(double cnt, double sum, double dmin, double dmax) {
         count += cnt;
         total += sum;
@@ -291,7 +292,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
                               : group == GroupBy::Fhash ? "fhash"
                                                         : "name";
 
-    using StatMap = ankerl::unordered_dense::map<dstd::String, StatAgg>;
+    using StatMap = dstd::HashMap<dstd::String, StatAgg>;
     auto merge_stats = [](StatMap&& a, StatMap&& b) {
         for (auto& [k, v] : b) {
             auto& x = a[k];

@@ -9,7 +9,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
@@ -126,7 +125,7 @@ IndexStatus to_status(const build::ResolverResult& r) {
     s.aggregation_needs_rebuild = !r.stale_aggregation_roots.empty();
     s.ready.reserve(r.cached.size());
     for (const auto& f : r.cached) s.ready.push_back(f.file_path);
-    ankerl::unordered_dense::set<dstd::StringView> seen;
+    dstd::HashSet<dstd::StringView> seen;
     for (const auto* list :
          {&r.needs_checkpoint, &r.needs_bloom, &r.needs_aggregation}) {
         for (const auto& item : *list) {

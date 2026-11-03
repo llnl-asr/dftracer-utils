@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -457,10 +458,10 @@ class GroupKeys {
     Wide last_wide_;
     dstd::String last_bytes_;
     dstd::String last_text_;
-    ankerl::unordered_dense::map<std::uint64_t, std::int32_t> word_ids_;
-    ankerl::unordered_dense::map<Wide, std::int32_t, WideHash> wide_ids_;
+    dstd::HashMap<std::uint64_t, std::int32_t> word_ids_;
+    dstd::HashMap<Wide, std::int32_t, WideHash> wide_ids_;
     dstd::StringViewMap<std::int32_t> byte_ids_;
-    ankerl::unordered_dense::map<dstd::String, std::int32_t> text_ids_;
+    dstd::HashMap<dstd::String, std::int32_t> text_ids_;
 };
 
 // Runs a GroupTransformCore over a stream. Rows are grouped by a hash of the

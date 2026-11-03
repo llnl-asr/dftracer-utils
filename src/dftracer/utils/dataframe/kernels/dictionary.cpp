@@ -11,7 +11,6 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <algorithm>
 #include <cstring>
@@ -99,9 +98,8 @@ dstd::Vector<std::int32_t> dictionary_encode_parallel(
     // its length (a whole-word hash and compare, no memcmp call); a longer
     // one by its bytes. Both share a chunk's local code space.
     struct Local {
-        ankerl::unordered_dense::map<ShortKey, std::int32_t, ShortKeyHash>
-            shorts;
-        ankerl::unordered_dense::map<dstd::StringView, std::int32_t> longs;
+        dstd::HashMap<ShortKey, std::int32_t, ShortKeyHash> shorts;
+        dstd::HashMap<dstd::StringView, std::int32_t> longs;
         dstd::Vector<std::int64_t> first_row;  // per local code
     };
     auto at = [&](std::int64_t i) {
@@ -132,7 +130,7 @@ dstd::Vector<std::int32_t> dictionary_encode_parallel(
     });
     // Global numbering by first appearance.
     dstd::Vector<dstd::Pair<std::int64_t, dstd::StringView>> ordered;
-    ankerl::unordered_dense::map<dstd::StringView, std::int64_t> first_seen;
+    dstd::HashMap<dstd::StringView, std::int64_t> first_seen;
     for (const Local& l : local)
         for (const std::int64_t row : l.first_row) {
             auto [it, fresh] = first_seen.try_emplace(at(row), row);
@@ -141,7 +139,7 @@ dstd::Vector<std::int32_t> dictionary_encode_parallel(
     ordered.reserve(first_seen.size());
     for (const auto& [s, row] : first_seen) ordered.emplace_back(row, s);
     std::sort(ordered.begin(), ordered.end());
-    ankerl::unordered_dense::map<dstd::StringView, std::int32_t> code_of;
+    dstd::HashMap<dstd::StringView, std::int32_t> code_of;
     code_of.reserve(ordered.size());
     dict_offsets.assign(1, 0);
     for (std::size_t c = 0; c < ordered.size(); ++c) {

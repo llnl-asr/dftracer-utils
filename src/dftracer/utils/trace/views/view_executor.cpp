@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -18,7 +19,6 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/file_admission.h>
@@ -1458,7 +1458,7 @@ class DistinctRowFold : public Fold {
     std::int64_t row_in_unit_ = 0;
     dstd::String scratch_;
     dstd::Vector<Entry> entries_;
-    ankerl::unordered_dense::map<dstd::String, std::size_t> index_;
+    dstd::HashMap<dstd::String, std::size_t> index_;
 };
 
 }  // namespace

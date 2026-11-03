@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -858,9 +859,7 @@ class GroupReader {
     dstd::Vector<Call> cur_;
     simdjson::dom::parser parser_;
     dstd::StringViewMap<std::uint32_t> string_ids_;
-    dstd::StringViewMap<
-        ankerl::unordered_dense::map<std::int64_t, std::uint32_t>>
-        proc_ids_;
+    dstd::StringViewMap<dstd::HashMap<std::int64_t, std::uint32_t>> proc_ids_;
 };
 
 void append_run_keys(string_builder& sb, dstd::StringView id,
@@ -1230,7 +1229,7 @@ class SetAcc {
     dstd::Optional<SortRec> fail_at_;
 
     dstd::Vector<dstd::UniquePtr<PathRec>> recs_;
-    ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> children_;
+    dstd::HashMap<std::uint64_t, std::uint32_t> children_;
     dstd::Vector<dstd::String> counter_keys_;
     dstd::Vector<std::uint32_t> counter_order_;
     dstd::String id_;

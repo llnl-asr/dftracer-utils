@@ -6,9 +6,9 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -151,7 +151,7 @@ inline bool string_ranks(const dftu_series* v,
         return dictionary_ranks(v, per_row, nranks);
     const std::int64_t n = v->length;
     const std::int64_t cap = n / 4;
-    ankerl::unordered_dense::map<dstd::StringView, std::int32_t> seen;
+    dstd::HashMap<dstd::StringView, std::int32_t> seen;
     dstd::Vector<dstd::StringView> vals;
     per_row.resize(static_cast<std::size_t>(n));
     dstd::StringView s;

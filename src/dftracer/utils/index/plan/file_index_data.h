@@ -2,13 +2,13 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_FILE_INDEX_DATA_H
 #define DFTRACER_UTILS_INDEX_PLAN_FILE_INDEX_DATA_H
 
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/index.h>
@@ -47,14 +47,12 @@ struct FileIndexData {
     dstd::Set<std::uint64_t> all_chunks;
     /// Lines per chunk from the member table: a chunk whose lines are not all
     /// observed records holds records the kinds never saw.
-    ankerl::unordered_dense::map<std::uint64_t, std::uint64_t> chunk_lines;
+    dstd::HashMap<std::uint64_t, std::uint64_t> chunk_lines;
 
-    using Zones = ankerl::unordered_dense::map<std::uint64_t,
-                                               index::extensions::kinds::Zone>;
-    using Counts = ankerl::unordered_dense::map<std::uint64_t, GranuleCounts>;
+    using Zones = dstd::HashMap<std::uint64_t, index::extensions::kinds::Zone>;
+    using Counts = dstd::HashMap<std::uint64_t, GranuleCounts>;
     using Blooms =
-        ankerl::unordered_dense::map<std::uint64_t,
-                                     index::extensions::ScalableBloomFilter>;
+        dstd::HashMap<std::uint64_t, index::extensions::ScalableBloomFilter>;
 
     /// Whether `path` is a dftracer fixed dimension, built from the record's
     /// top-level field.
@@ -91,7 +89,7 @@ struct FileIndexData {
    private:
     bool current(IndexExtension ext);
 
-    ankerl::unordered_dense::map<std::uint16_t, bool> current_;
+    dstd::HashMap<std::uint16_t, bool> current_;
     dstd::Optional<Catalog> catalog_;
     dstd::StringViewMap<dstd::Optional<dstd::String>> evidence_names_;
     dstd::StringViewMap<Zones> zones_;

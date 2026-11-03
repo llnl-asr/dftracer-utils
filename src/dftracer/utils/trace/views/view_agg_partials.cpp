@@ -4,8 +4,8 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -914,10 +914,9 @@ coro::CoroTask<bool> partials_collect_typed(
                 joined += k;
                 joined += GROUP_SEP;
             }
-            const auto shard = static_cast<int>(
-                dftracer::utils::dstd::hash::fnv1a_mix(
-                    dftracer::utils::dstd::hash::fnv1a_hash(joined)) %
-                static_cast<std::uint64_t>(shards));
+            const auto shard =
+                static_cast<int>(dftracer::utils::dstd::hash::xxh3_64(joined) %
+                                 static_cast<std::uint64_t>(shards));
             if (shard < shard_begin || shard >= shard_end) continue;
         }
         seeder.seed(key.kind == AggKind::Event ? *events : *profiles, keys,

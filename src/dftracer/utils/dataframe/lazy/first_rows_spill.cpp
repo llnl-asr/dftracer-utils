@@ -3,7 +3,7 @@
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/hash_arena.h>
 #include <dftracer/utils/dstd/function.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -513,9 +513,8 @@ class UniqueCursor : public Cursor {
                                 key_off[at] = start;
                                 key_len[at] = static_cast<std::uint32_t>(
                                     buf.size() - start);
-                                hashes[at] = dstd::hash::fnv1a_mix(
-                                    dstd::hash::fnv1a_hash(buf.data() + start,
-                                                           buf.size() - start));
+                                hashes[at] = dstd::hash::xxh3_64(
+                                    buf.data() + start, buf.size() - start);
                             }
                         }
                     });
@@ -639,8 +638,7 @@ class UniqueCursor : public Cursor {
     }
 
     bool already_seen(const dstd::String& key) const {
-        const std::uint64_t h = dstd::hash::fnv1a_mix(
-            dstd::hash::fnv1a_hash(key.data(), key.size()));
+        const std::uint64_t h = dstd::hash::xxh3_64(key.data(), key.size());
         const auto len = static_cast<std::uint32_t>(key.size());
         if (!seen_p_.empty())
             return seen_p_[h % seen_p_.size()]->contains(h, key.data(), len);

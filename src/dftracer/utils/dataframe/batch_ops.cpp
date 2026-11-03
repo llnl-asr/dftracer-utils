@@ -19,8 +19,8 @@
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/algorithm.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>       // string cell hashing
 #include <dftracer/utils/dstd/hash/splitmix64.h>  // row/cell hashing
+#include <dftracer/utils/dstd/hash/xxh3.h>        // string cell hashing
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -884,7 +884,7 @@ std::uint64_t read_f64_bits(const Series& c, std::int64_t i) {
 std::uint64_t hash_cell(const Series& c, std::int64_t i) {
     switch (c.type()) {
         case TypeId::String:
-            return dstd::hash::fnv1a_hash(c.string_at(i));
+            return dstd::hash::xxh3_64(c.string_at(i));
         case TypeId::Bool: {
             const std::uint8_t* b = c.data<std::uint8_t>();
             return splitmix64((b[i >> 3] >> (i & 7)) & 1);

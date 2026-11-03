@@ -10,8 +10,8 @@
 #include <dftracer/utils/dataframe/parallel.h>              // parallel_for
 #include <dftracer/utils/dstd/concurrent_queue.h>
 #include <dftracer/utils/dstd/hash/constants.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>       // string key hashing
-#include <dftracer/utils/dstd/hash/splitmix64.h>  // row hashing
+#include <dftracer/utils/dstd/hash/splitmix64.h>            // row hashing
+#include <dftracer/utils/dstd/hash/xxh3.h>  // string key hashing
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -798,7 +798,7 @@ dstd::Optional<DataFrame> group_agg_by_key_hash(
                 if (nullable[j] && c.is_null(i))
                     v = NULL_KEY;
                 else if (c.type() == TypeId::String)
-                    v = dftracer::utils::dstd::hash::fnv1a_hash(c.string_at(i));
+                    v = dftracer::utils::dstd::hash::xxh3_64(c.string_at(i));
                 else
                     v = read_u64(c, i);
                 h = dftracer::utils::dstd::hash::splitmix64(h ^ v);

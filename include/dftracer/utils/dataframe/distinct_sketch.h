@@ -22,7 +22,7 @@
 // per-file and per-worker sketches combine without keeping the values.
 
 #include <dftracer/utils/dstd/bits.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -141,8 +141,7 @@ class BasicDistinctSketch {
     }
 
     static std::uint64_t hash64(dstd::StringView s) {
-        return dftracer::utils::dstd::hash::fnv1a_mix(
-            dftracer::utils::dstd::hash::fnv1a_hash(s));
+        return dftracer::utils::dstd::hash::xxh3_64(s);
     }
 
     dstd::Vector<std::uint64_t> sparse_;

@@ -4,12 +4,11 @@
 
 #include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/tuple.h>
-// keep std: the vendored hash backs dstd::Hash
-#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -21,7 +20,7 @@
 namespace dftracer::utils::dstd {
 
 /// The default hasher of HashMap and HashSet. Every specialization avalanches,
-/// so ankerl uses the value as it is.
+/// so the table uses the value as it is.
 template <class T, class = void>
 struct Hash;
 
@@ -31,10 +30,9 @@ struct StringHash {
     using is_transparent = void;
     using is_avalanching = void;
 
-    // wyhash through ankerl: FNV-1a in dstd/hash/ reads one byte per step.
+    // XXH3: FNV-1a in dstd/hash/ reads one byte per step.
     std::size_t operator()(StringView s) const noexcept {
-        // keep std: the vendored hash backs dstd::Hash
-        return ankerl::unordered_dense::hash<StringView>{}(s);
+        return static_cast<std::size_t>(hash::xxh3_64(s));
     }
 };
 

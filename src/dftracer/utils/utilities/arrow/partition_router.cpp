@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/dstd/fs.h>
@@ -250,7 +250,7 @@ int PartitionRouter::compute_bucket(
         combined += v;
         combined += '\0';
     }
-    return static_cast<int>(dftracer::utils::dstd::hash::fnv1a_hash(combined) %
+    return static_cast<int>(dftracer::utils::dstd::hash::xxh3_64(combined) %
                             static_cast<uint64_t>(config_.num_buckets));
 }
 

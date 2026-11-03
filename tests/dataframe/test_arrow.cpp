@@ -167,8 +167,7 @@ TEST_SUITE("dataframe_arrow_public") {
         col->data = new_buffer(16);
         const std::int32_t codes[4] = {2, 1, 1, 0};
         std::memcpy(writable(col->data), codes, 16);
-        col->set_child(
-            dftracer::utils::dstd::SharedPtr<dftu_series>(values.release()));
+        col->set_child(adopt_series(values.release()));
         {
             Series dict{col};
             OwnedArrow a = dict.to_arrow();

@@ -340,11 +340,10 @@ dftracer::utils::dstd::Expected<dstd::Vector<Macro>, DuqlError> macros_of(
                     "macro '" + def.name + "' is defined twice"));
         if (expr)
             out.push_back({def.name, def.params,
-                           dstd::SharedPtr<const Expr>(std::move(*expr)),
-                           origin});
+                           dstd::to_shared_ptr(std::move(*expr)), origin});
         else
             out.push_back({def.name, def.params,
-                           dstd::SharedPtr<const Pipeline>(
+                           dstd::to_shared_ptr(
                                std::move(std::get<PipelinePtr>(def.body))),
                            origin});
     }

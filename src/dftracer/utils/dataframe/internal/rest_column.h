@@ -32,8 +32,7 @@ inline Series struct_of_length(std::vector<std::string> names,
     col->nested.reserve(fields.size());
     for (std::size_t i = 0; i < fields.size(); ++i)
         col->nested.push_back(
-            {dstd::SharedPtr<dftu_series>(fields[i].release()),
-             std::move(names[i])});
+            {adopt_series(fields[i].release()), std::move(names[i])});
     return Series{col};
 }
 

@@ -383,7 +383,7 @@ Prefilter::Prefilter(const duql::Query& q) : clauses_(clauses_of(q.root())) {
         hs_free_compile_error(err);
         return;
     }
-    db_ = dstd::SharedPtr<hs_database>(db, hs_free_database);
+    db_ = dstd::adopt_shared_ptr(db, hs_free_database);
 #endif
 }
 

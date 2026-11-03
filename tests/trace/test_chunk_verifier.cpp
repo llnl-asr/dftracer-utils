@@ -96,7 +96,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             printf("Creating verifier...\n");
-            auto verifier = std::make_shared<
+            auto verifier = dstd::make_shared<
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
@@ -131,7 +131,7 @@ TEST_SUITE("ChunkVerifier") {
                 return 67890;
             };
 
-            auto verifier = std::make_shared<
+            auto verifier = dstd::make_shared<
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
@@ -172,7 +172,7 @@ TEST_SUITE("ChunkVerifier") {
                 return hash;
             };
 
-            auto verifier = std::make_shared<
+            auto verifier = dstd::make_shared<
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
@@ -215,7 +215,7 @@ TEST_SUITE("ChunkVerifier") {
                 return 0;
             };
 
-            auto verifier = std::make_shared<
+            auto verifier = dstd::make_shared<
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
@@ -257,7 +257,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             printf("Creating verifier\n");
-            auto verifier = std::make_shared<
+            auto verifier = dstd::make_shared<
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
@@ -293,7 +293,7 @@ TEST_SUITE("ChunkVerifier") {
                 return 100;  // Match input hash
             };
 
-            auto verifier = std::make_shared<
+            auto verifier = dstd::make_shared<
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 

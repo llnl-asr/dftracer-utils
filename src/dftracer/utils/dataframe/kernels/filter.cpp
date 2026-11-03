@@ -489,8 +489,7 @@ static dftu_series* gather_struct(const dftu_series& base, const Idx* idx,
     out->nested.reserve(base.num_fields());
     for (std::size_t i = 0; i < base.num_fields(); ++i)
         out->nested.push_back(
-            {dftracer::utils::dstd::SharedPtr<dftu_series>(
-                 gather_column(*base.nested[i].series, idx, n, &info)),
+            {adopt_series(gather_column(*base.nested[i].series, idx, n, &info)),
              base.nested[i].name});
     out->validity =
         gather_validity(base, idx, n, out->null_count, info.has_neg);
@@ -521,7 +520,7 @@ static dftu_series* gather_list_w(const dftu_series& base, const Idx* idx,
     const std::size_t off_bytes = offsets.size() * sizeof(Off);
     offsets_of<Off>(*out) = new_buffer(off_bytes);
     std::memcpy(writable(offsets_of<Off>(*out)), offsets.data(), off_bytes);
-    out->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(
+    out->set_child(adopt_series(
         gather_column(*base.child(), child_idx.data(),
                       static_cast<std::int64_t>(child_idx.size()))));
     out->validity =
@@ -626,7 +625,7 @@ static dftu_series* gather_chunked_runs(const dftu_series& base, const Idx* idx,
                 }
                 const IdxInfo run_info{run.top < 0 ? -1 : run.top - shift,
                                        info.has_neg, true, true};
-                pieces[static_cast<std::size_t>(r)].reset(
+                pieces[static_cast<std::size_t>(r)] = adopt_series(
                     gather_column(*base.nested[run.chunk].series, at,
                                   run.end - run.begin, &run_info));
             }
@@ -1142,8 +1141,8 @@ dftu_series* dftu_series_materialize(const dftu_series* v) {
 
     const dftu_series& base = *v->child();
     if (base.encoding != Encoding::Flat) {
-        dftracer::utils::dstd::SharedPtr<dftu_series> flat_base(
-            dftu_series_materialize(&base));
+        dftracer::utils::dstd::SharedPtr<dftu_series> flat_base =
+            adopt_series(dftu_series_materialize(&base));
         if (!flat_base) return nullptr;
         dftu_series with_flat_base(*v);
         with_flat_base.set_child(std::move(flat_base));

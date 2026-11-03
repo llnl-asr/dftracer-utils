@@ -98,7 +98,7 @@ class RowReader {
     explicit RowReader(const dftu_series* v) : v_(v) {
         if (!is_string_kind(v->type)) return;
         if (needs_flat_copy(*v)) {
-            own_.reset(dftu_series_materialize(v));
+            own_ = adopt_series(dftu_series_materialize(v));
             if (!own_) return;
             v_ = v = own_.get();
         }
@@ -942,7 +942,7 @@ dftu_series* list_transform_w(const dftu_series* v, Fn fn) {
         static_cast<std::size_t>(v->length + 1) * sizeof(std::int32_t);
     out->offsets = new_buffer(loff_bytes);
     std::memcpy(writable(out->offsets), list_off.data(), loff_bytes);
-    out->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(child));
+    out->set_child(adopt_series(child));
     return out;
 }
 
@@ -1178,7 +1178,7 @@ dftu_series* make_str_list(const dftu_series* v,
     const std::size_t loff_bytes = list_off.size() * sizeof(std::int32_t);
     out->offsets = new_buffer(loff_bytes);
     std::memcpy(writable(out->offsets), list_off.data(), loff_bytes);
-    out->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(child));
+    out->set_child(adopt_series(child));
     return out;
 }
 

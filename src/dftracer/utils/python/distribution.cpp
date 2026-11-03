@@ -302,7 +302,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     // GIL-holding deleter drops the ref safely after the build.
     if (progress_obj && progress_obj != Py_None) {
         Py_INCREF(progress_obj);
-        dftracer::utils::dstd::SharedPtr<PyObject> cb(
+        auto cb = dftracer::utils::dstd::adopt_shared_ptr(
             progress_obj, [](PyObject *p) {
                 PyGILState_STATE g = PyGILState_Ensure();
                 Py_DECREF(p);

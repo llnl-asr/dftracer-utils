@@ -197,8 +197,7 @@ dftu_series* dftu_series_new_struct(dftu_series** fields, const char** names,
     col->length = n_fields > 0 ? fields[0]->length : 0;
     for (int32_t i = 0; i < n_fields; ++i) {
         col->nested.push_back(
-            {dftracer::utils::dstd::SharedPtr<dftu_series>(fields[i]),
-             names && names[i] ? names[i] : ""});
+            {adopt_series(fields[i]), names && names[i] ? names[i] : ""});
     }
     return col;
 }
@@ -214,7 +213,7 @@ dftu_series* dftu_series_new_list(const int32_t* offsets, int64_t n,
     col->offsets = new_buffer(off_bytes);
     if (offsets != nullptr)
         std::memcpy(writable(col->offsets), offsets, off_bytes);
-    col->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(values));
+    col->set_child(adopt_series(values));
     return col;
 }
 
@@ -543,7 +542,7 @@ dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
             dftu_series* part = dftu_series_slice(col->nested[k].series.get(),
                                                   lo - starts[k], hi - lo);
             if (!part) return nullptr;
-            parts.emplace_back(part);
+            parts.push_back(adopt_series(part));
         }
         if (parts.empty())
             return dftu_series_slice(col->nested.front().series.get(), 0, 0);

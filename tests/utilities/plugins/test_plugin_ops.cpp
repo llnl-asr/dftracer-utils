@@ -197,9 +197,9 @@ dftu_series* doubled_through_data(const dftu_series* v) {
 
 dftracer::utils::dstd::SharedPtr<dftu_series> flat_chunk(
     std::vector<std::int64_t> v) {
-    return {dftu_series_new_flat(DFTU_TYPE_INT64, v.data(),
-                                 static_cast<std::int64_t>(v.size()), nullptr),
-            dftu_series_free};
+    return adopt_series(
+        dftu_series_new_flat(DFTU_TYPE_INT64, v.data(),
+                             static_cast<std::int64_t>(v.size()), nullptr));
 }
 
 }  // namespace

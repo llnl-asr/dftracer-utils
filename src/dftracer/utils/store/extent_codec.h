@@ -63,6 +63,12 @@ class PageDict {
     static dstd::Expected<dstd::SharedPtr<const PageDict>, dstd::Error>
     for_decode(dstd::ByteView bytes, const DictRef& ref);
 
+    struct Key {
+        explicit Key() = default;
+    };
+
+    PageDict(Key, const DictRef& ref, ZSTD_CDict_s* cdict, ZSTD_DDict_s* ddict)
+        : ref_(ref), cdict_(cdict), ddict_(ddict) {}
     PageDict(const PageDict&) = delete;
     PageDict& operator=(const PageDict&) = delete;
     ~PageDict();
@@ -72,9 +78,6 @@ class PageDict {
     const ZSTD_DDict_s* ddict() const { return ddict_; }
 
    private:
-    PageDict(const DictRef& ref, ZSTD_CDict_s* cdict, ZSTD_DDict_s* ddict)
-        : ref_(ref), cdict_(cdict), ddict_(ddict) {}
-
     DictRef ref_;
     ZSTD_CDict_s* cdict_ = nullptr;
     ZSTD_DDict_s* ddict_ = nullptr;

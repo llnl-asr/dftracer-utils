@@ -34,7 +34,7 @@ Series dictionary_from_codes(dstd::Span<const std::int32_t> codes,
     h->type = TypeId::String;
     h->params = TypeParams{};
     h->encoding = Encoding::Dictionary;
-    h->set_child(dstd::SharedPtr<dftu_series>(values.release()));
+    h->set_child(adopt_series(values.release()));
     return out;
 }
 
@@ -221,7 +221,7 @@ dftu_series* dictionary_encode_w(const dftu_series* v) {
     out->data = new_buffer(codes.size() * sizeof(std::int32_t));
     std::memcpy(writable(out->data), codes.data(),
                 codes.size() * sizeof(std::int32_t));
-    out->set_child(dstd::SharedPtr<dftu_series>(dict));
+    out->set_child(adopt_series(dict));
     return out;
 }
 

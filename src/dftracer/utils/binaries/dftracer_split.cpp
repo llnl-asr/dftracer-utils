@@ -116,7 +116,7 @@ struct FileGroup {
     std::vector<std::string> files;
     // use std types (tasks step)
     // keep std: unswept API
-    std::vector<std::shared_ptr<dstd::ScopedFd>> open_files;
+    std::vector<dstd::SharedPtr<dstd::ScopedFd>> open_files;
     // (tasks step)
     double ratio = 1.0;
 };

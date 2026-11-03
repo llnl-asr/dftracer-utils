@@ -260,11 +260,12 @@ int IpcReader::read_footer() {
     }
 
     // Wrap in shared_ptr with custom deleter
-    shared_schema_ = dstd::SharedPtr<void>(schema, [](void* p) {
-        auto* s = static_cast<ArrowSchema*>(p);
-        if (s->release) s->release(s);
-        delete s;
-    });
+    shared_schema_ =
+        dstd::adopt_shared_ptr(static_cast<void*>(schema), [](void* p) {
+            auto* s = static_cast<ArrowSchema*>(p);
+            if (s->release) s->release(s);
+            delete s;
+        });
 
     // Set decoder's expected schema
     rc = ArrowIpcDecoderSetSchema(decoder, &footer->schema, &error);

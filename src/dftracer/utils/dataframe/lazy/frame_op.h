@@ -33,7 +33,12 @@ inline const char* window_end(const dftu_window_spec& w) {
 // the op runs; SERIES shares the column; EXPR / DUQL / LAZY operands are
 // refused (no owned form).
 class OwnedFrameOpArgs {
+    struct Key {
+        explicit Key() = default;
+    };
+
    public:
+    explicit OwnedFrameOpArgs(Key) {}
     OwnedFrameOpArgs(const dftu_op_desc& op, const OpArgs& args,
                      std::vector<LazyFrame> frames)
         : frames_(std::move(frames)) {
@@ -171,7 +176,7 @@ class OwnedFrameOpArgs {
     // frame operand count.
     dstd::SharedPtr<const OwnedFrameOpArgs> with_frames(
         std::vector<LazyFrame> frames) const {
-        auto out = dstd::SharedPtr<OwnedFrameOpArgs>(new OwnedFrameOpArgs());
+        auto out = dstd::make_shared<OwnedFrameOpArgs>(Key{});
         out->slots_.reserve(slots_.size());
         for (const Slot& s : slots_) {
             Slot c;
@@ -293,8 +298,6 @@ class OwnedFrameOpArgs {
     }
 
    private:
-    OwnedFrameOpArgs() = default;
-
     struct Slot {
         dftu_op_tok tok = DFTU_TOK_NONE;
         dftu_op_val val{};

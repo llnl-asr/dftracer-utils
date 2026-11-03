@@ -140,8 +140,7 @@ std::vector<Case> cases() {
     {
         Series values{dftu_series_share(dv.handle()->child().get())};
         const_cast<dftu_series*>(dv.handle())
-            ->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(
-                view_of(rows_of(values)).release()));
+            ->set_child(adopt_series(view_of(rows_of(values)).release()));
     }
     out.push_back(
         {"dict over view", Kind::DictView, std::move(dv), base, nullptr});
@@ -810,8 +809,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         sel->data = new_buffer(3 * sizeof(std::int64_t));
         const std::int64_t idx[3] = {3, 0, -1};
         std::memcpy(writable(sel->data), idx, sizeof idx);
-        sel->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(
-            dftu_series_share(dict.handle())));
+        sel->set_child(adopt_series(dftu_series_share(dict.handle())));
         const Series over_dict{sel};
 
         const Series flat = over_dict.materialize();
@@ -828,8 +826,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         outer->data = new_buffer(2 * sizeof(std::int32_t));
         const std::int32_t outer_codes[2] = {1, 0};
         std::memcpy(writable(outer->data), outer_codes, sizeof outer_codes);
-        outer->set_child(dftracer::utils::dstd::SharedPtr<dftu_series>(
-            dftu_series_share(over_dict.handle())));
+        outer->set_child(adopt_series(dftu_series_share(over_dict.handle())));
         const Series dict_over_sel{outer};
         const Series flat2 = dict_over_sel.materialize();
         REQUIRE(flat2.valid());

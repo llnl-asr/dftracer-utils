@@ -810,7 +810,7 @@ Series import_list_like(TypeId result_type, const ArrowSchema* schema,
         delete col;
         return Series{};
     }
-    col->set_child(dstd::SharedPtr<dftu_series>(child.release()));
+    col->set_child(adopt_series(child.release()));
     return Series{col};
 }
 
@@ -834,7 +834,7 @@ Series import_large_list(const ArrowSchema* schema, const ArrowArray* arr,
         delete col;
         return Series{};
     }
-    col->set_child(dstd::SharedPtr<dftu_series>(child.release()));
+    col->set_child(adopt_series(child.release()));
     return Series{col};
 }
 
@@ -860,7 +860,7 @@ Series import_fixed_size_list(const ArrowSchemaView& view,
         delete col;
         return Series{};
     }
-    col->set_child(dstd::SharedPtr<dftu_series>(child.release()));
+    col->set_child(adopt_series(child.release()));
     return Series{col};
 }
 
@@ -884,7 +884,7 @@ Series import_struct(const ArrowSchema* schema, const ArrowArray* arr,
             return Series{};
         }
         col->nested.push_back(
-            {dstd::SharedPtr<dftu_series>(child.release()),
+            {adopt_series(child.release()),
              schema->children[i]->name ? schema->children[i]->name : ""});
     }
     return Series{col};
@@ -919,7 +919,7 @@ Series import_dict(const ArrowSchema* schema, const ArrowArray* arr,
     adopt_type_from(*col, *values.handle());
     col->length = n;
     col->null_count = arr->null_count < 0 ? 0 : arr->null_count;
-    col->set_child(dstd::SharedPtr<dftu_series>(values.release()));
+    col->set_child(adopt_series(values.release()));
     import_validity(col, arr, owner);
 
     if (index_type == TypeId::Int64) {
@@ -1004,7 +1004,7 @@ Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
 dstd::SharedPtr<ArrowArray> adopt_array(ArrowArray* array) {
     auto* moved = new ArrowArray(*array);
     array->release = nullptr;
-    return dstd::SharedPtr<ArrowArray>(moved, [](ArrowArray* a) {
+    return dstd::adopt_shared_ptr(moved, [](ArrowArray* a) {
         if (a->release != nullptr) a->release(a);
         delete a;
     });

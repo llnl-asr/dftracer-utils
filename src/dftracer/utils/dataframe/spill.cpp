@@ -353,7 +353,7 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         col->encoding = Encoding::Flat;
         col->length = n;
         col->set_fixed_size(width);
-        col->set_child(dstd::SharedPtr<dftu_series>(child.release()));
+        col->set_child(adopt_series(child.release()));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
             col->validity = new_buffer(vbytes);
@@ -377,7 +377,7 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         auto buffer = new_buffer(off_bytes);
         if (off_bytes != 0) std::memcpy(writable(buffer), offs, off_bytes);
         col->offsets = std::move(buffer);
-        col->set_child(dstd::SharedPtr<dftu_series>(child.release()));
+        col->set_child(adopt_series(child.release()));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
             col->validity = new_buffer(vbytes);
@@ -398,8 +398,7 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
             std::string field(reinterpret_cast<const char*>(name), name_bytes);
             Series child = get_series(p, end);
             col->nested.push_back(
-                {dstd::SharedPtr<dftu_series>(child.release()),
-                 std::move(field)});
+                {adopt_series(child.release()), std::move(field)});
         }
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);

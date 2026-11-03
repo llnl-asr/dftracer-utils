@@ -126,7 +126,7 @@ Series chunked_column(std::vector<Series> parts) {
             for (const dftu_nested& n : h->nested) chunks.push_back(n.series);
             dftu_series_free(h);
         } else {
-            chunks.emplace_back(h);
+            chunks.push_back(adopt_series(h));
         }
     }
     if (chunks.empty()) return std::move(parts.front());

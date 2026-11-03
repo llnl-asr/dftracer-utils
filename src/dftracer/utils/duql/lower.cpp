@@ -801,7 +801,8 @@ class Lowering {
                      "'expr as name'");
             name = path_text(*path, value.span);
         }
-        return {std::move(name), duql::TermRef(std::move(t)), std::move(text)};
+        return {std::move(name), dstd::to_shared_ptr(std::move(t)),
+                std::move(text)};
     }
 
     duql::PipelineItem plugin_item(
@@ -935,7 +936,7 @@ class Lowering {
         st.op = c.name;
         st.text = text_of(span);
         const dstd::String name = "__duql_p_" + dstd::int_text(plug_count_++);
-        st.arg = {name, duql::TermRef(term(*c.args[0].value)),
+        st.arg = {name, dstd::to_shared_ptr(term(*c.args[0].value)),
                   text_of(*c.args[0].value)};
         plug_hidden_.push_back(name);
         for (std::size_t k = 1; k < c.args.size(); ++k) {
@@ -955,8 +956,8 @@ class Lowering {
                     fail(e.span,
                          "'" + c.name + "' takes one second column argument");
                 const dstd::String second = name + "_b";
-                st.arg2 = duql::PipelineItem{second, duql::TermRef(term(e)),
-                                             text_of(e)};
+                st.arg2 = duql::PipelineItem{
+                    second, dstd::to_shared_ptr(term(e)), text_of(e)};
                 plug_hidden_.push_back(second);
             }
         }
@@ -992,7 +993,7 @@ class Lowering {
         const Flag in_condition(cond_, true);
         auto t = term(condition);
         dstd::String text = duql::term_text(*t);
-        return duql::PipelineWhere{duql::TermRef(std::move(t)),
+        return duql::PipelineWhere{dstd::to_shared_ptr(std::move(t)),
                                    std::move(text)};
     }
 
@@ -1127,12 +1128,12 @@ class Lowering {
                     if (n.high)
                         upper = make_term(duql::TBinary{duql::TermOp::Lt, ts(),
                                                         number_term(out.high)});
-                    out.condition =
+                    out.condition = dstd::to_shared_ptr(
                         lower && upper
                             ? make_term(duql::TBinary{duql::TermOp::And,
                                                       std::move(lower),
                                                       std::move(upper)})
-                            : std::move(lower ? lower : upper);
+                            : std::move(lower ? lower : upper));
                     out.text = duql::term_text(*out.condition);
                     return out;
                 } else if constexpr (std::is_same_v<T, Bucket>) {
@@ -1170,7 +1171,7 @@ class Lowering {
                         {},
                         n.fill_mode,
                         n.fill,
-                        std::move(key),
+                        dstd::to_shared_ptr(std::move(key)),
                         std::move(text),
                         n.as.empty() ? dstd::String("bucket") : n.as,
                         every,
@@ -1375,7 +1376,7 @@ class Lowering {
             if (!(out.span > 0))
                 fail(n.max->span, "a session 'max' must be positive");
         }
-        out.time = role_field(roles_->time);
+        out.time = dstd::to_shared_ptr(role_field(roles_->time));
         if (!roles_->duration.empty()) {
             duql::TermPtr dur = role_field(roles_->duration);
             if (const auto d = roles_->fields.find(roles_->duration);
@@ -1386,8 +1387,8 @@ class Lowering {
                     number_term(
                         static_cast<double>(d->second) /
                         static_cast<double>(roles_->time_ns_per_unit))});
-            out.end = make_term(duql::TBinary{
-                duql::TermOp::Add, role_field(roles_->time), std::move(dur)});
+            out.end = dstd::to_shared_ptr(make_term(duql::TBinary{
+                duql::TermOp::Add, role_field(roles_->time), std::move(dur)}));
         }
         out.name = n.as.empty() ? dstd::String("session") : n.as;
         out.text = duql::term_text(*out.time) +
@@ -1497,7 +1498,7 @@ class Lowering {
     duql::PipelineItem role_item(const dstd::String& path) const {
         duql::TermPtr t = role_field(path);
         dstd::String text = duql::term_text(*t);
-        return {{}, duql::TermRef(std::move(t)), std::move(text)};
+        return {{}, dstd::to_shared_ptr(std::move(t)), std::move(text)};
     }
 
     duql::TermPtr role_field(const dstd::String& path) const {
@@ -1546,8 +1547,8 @@ class Lowering {
                      "each entry of a 'window' block uses a window "
                      "function, such as 'r = row_number()' or "
                      "'g = ts - lag(ts)'");
-            out.items.push_back(
-                {a.name, duql::TermRef(std::move(t)), text_of(a.value->span)});
+            out.items.push_back({a.name, dstd::to_shared_ptr(std::move(t)),
+                                 text_of(a.value->span)});
         }
         win_order_ = outer_order;
         return out;
@@ -1675,8 +1676,8 @@ class Lowering {
         call.text = text_of(span);
         if (n > 0 && w->fn != duql::WinFn::Ntile) {
             win_arg_ = true;
-            call.arg = term(*c.args[0].value);
-            if (arg_by) call.by = term(*c.args[1].value);
+            call.arg = dstd::to_shared_ptr(term(*c.args[0].value));
+            if (arg_by) call.by = dstd::to_shared_ptr(term(*c.args[1].value));
             win_arg_ = false;
         }
         if (n > 1 && w->fn == duql::WinFn::Quantile) {
@@ -1710,7 +1711,7 @@ class Lowering {
             if (!literal(d))
                 fail(d.span,
                      "a lag or lead default is a literal or a parameter");
-            call.fallback = duql::TermRef(term(d));
+            call.fallback = dstd::to_shared_ptr(term(d));
         }
         if (over) call.frame = frame_of(*over, span);
         duql::TField f;
@@ -1747,8 +1748,9 @@ class Lowering {
                 auto t = term(e);
                 agg_ = nullptr;
                 if (out.size() > before)
-                    derive.items.push_back(
-                        {a.name, duql::TermRef(std::move(t)), text_of(e.span)});
+                    derive.items.push_back({a.name,
+                                            dstd::to_shared_ptr(std::move(t)),
+                                            text_of(e.span)});
             }
             if (out.size() == before)
                 fail(e.span, stage == "pivot"
@@ -1827,7 +1829,7 @@ class Lowering {
         agg.name = name;
         agg.fn = duql::AggFn::Plugin;
         agg.plugin = c.name;
-        agg.arg = term(*c.args[0].value);
+        agg.arg = dstd::to_shared_ptr(term(*c.args[0].value));
         agg.text = c.name + "(" + duql::term_text(*agg.arg);
         for (std::size_t k = 1; k < c.args.size(); ++k) {
             const Expr& e = *c.args[k].value;
@@ -1873,13 +1875,13 @@ class Lowering {
                 agg.merged = true;
                 first = inner->args[0].value.get();
             }
-            agg.arg = term(*first);
+            agg.arg = dstd::to_shared_ptr(term(*first));
             agg.text += agg.merged ? "merge(" + duql::term_text(*agg.arg) + ")"
                                    : duql::term_text(*agg.arg);
         }
         if (info->fn == duql::AggFn::Argmax ||
             info->fn == duql::AggFn::Argmin) {
-            agg.by = term(*c->args[1].value);
+            agg.by = dstd::to_shared_ptr(term(*c->args[1].value));
             agg.text += ", " + duql::term_text(*agg.by);
         }
         if (info->fn == duql::AggFn::Quantile) {
@@ -2280,8 +2282,8 @@ class Lowering {
         const Flag in_condition(cond_, true);
         auto t = term(e);
         dstd::String text = duql::term_text(*t);
-        return duql::make_node(duql::ExprLeaf{
-            dstd::SharedPtr<const duql::Term>(std::move(t)), std::move(text)});
+        return duql::make_node(
+            duql::ExprLeaf{dstd::to_shared_ptr(std::move(t)), std::move(text)});
     }
 
     static dstd::Pair<MatchOp, bool> regex_op(BinaryOp op) {

@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <new>
 #include <type_traits>
 #include <utility>
 
@@ -108,19 +109,86 @@ UniquePtr<T> make_unique_for_overwrite(std::size_t n) {
     return UniquePtr<T>(p);
 }
 
+/**
+ * @brief A std::shared_ptr whose count block always comes from this library's
+ * heap.
+ *
+ * Make one with @ref make_shared, with @ref to_shared_ptr from a @ref UniquePtr
+ * or with @ref adopt_shared_ptr from a pointer and its deleter. A raw pointer,
+ * a pointer with only a deleter and a std::unique_ptr do not compile, because
+ * std::shared_ptr would take the count block from the global operator new.
+ */
 template <class T>
-using SharedPtr = std::shared_ptr<T>;
+class SharedPtr : public std::shared_ptr<T> {
+   public:
+    using std::shared_ptr<T>::shared_ptr;
+    using std::shared_ptr<T>::reset;
+
+    SharedPtr() noexcept = default;
+    SharedPtr(const std::shared_ptr<T>& other) noexcept
+        : std::shared_ptr<T>(other) {}
+    SharedPtr(std::shared_ptr<T>&& other) noexcept
+        : std::shared_ptr<T>(std::move(other)) {}
+
+    template <class Y>
+    explicit SharedPtr(Y*) = delete;
+    template <class Y, class D>
+    SharedPtr(Y*, D) = delete;
+    template <class Y, class D>
+    SharedPtr(std::unique_ptr<Y, D>&&) = delete;
+    template <class Y>
+    void reset(Y*) = delete;
+    template <class Y, class D>
+    void reset(Y*, D) = delete;
+};
 
 template <class T>
 using WeakPtr = std::weak_ptr<T>;
 
 /// One block for the object and its control block, from memory::allocate.
 template <class T, class... Args>
+    requires(!std::is_array_v<T>)
 SharedPtr<T> make_shared(Args&&... args) {
     return std::allocate_shared<T>(memory::Allocator<T>{},
                                    std::forward<Args>(args)...);
 }
 
+/// An array of @p n value-initialized elements (zero for numbers) and its
+/// control block in one block from memory::allocate.
+template <class T>
+    requires std::is_unbounded_array_v<T>
+SharedPtr<T> make_shared(std::size_t n) {
+    return std::allocate_shared<T>(memory::Allocator<std::byte>{}, n);
+}
+
+/// Like make_shared<T[]>(n), but a number is left unwritten, for a buffer
+/// that is filled right after.
+template <class T>
+    requires std::is_unbounded_array_v<T>
+SharedPtr<T> make_shared_for_overwrite(std::size_t n) {
+    return std::allocate_shared_for_overwrite<T>(memory::Allocator<std::byte>{},
+                                                 n);
+}
+
+/// Shares the object or array of @p p. The count block comes from
+/// memory::allocate.
+template <class T>
+SharedPtr<T> to_shared_ptr(UniquePtr<T>&& p) {
+    return SharedPtr<T>(p.release(), Delete<T>{},
+                        memory::Allocator<std::byte>{});
+}
+
+/// Shares @p p, freed by @p deleter. The count block comes from
+/// memory::allocate. When that allocation fails, @p deleter frees @p p.
+template <class T, class D>
+SharedPtr<T> adopt_shared_ptr(T* p, D deleter) {
+    return SharedPtr<T>(p, std::move(deleter), memory::Allocator<std::byte>{});
+}
+
 }  // namespace dftracer::utils::dstd
+
+template <class T>
+struct std::hash<dftracer::utils::dstd::SharedPtr<T>>
+    : std::hash<std::shared_ptr<T>> {};
 
 #endif  // DFTRACER_UTILS_DSTD_MEMORY_H

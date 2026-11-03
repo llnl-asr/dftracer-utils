@@ -346,7 +346,7 @@ PageDict::for_encode(dstd::ByteView bytes, const DictRef& ref) {
         bytes.data(), bytes.size(), ZSTD_dlm_byCopy, ZSTD_dct_auto,
         ZSTD_getCParams(PAGE_ZSTD_LEVEL, 0, bytes.size()), general_pool_mem());
     if (cdict == nullptr) return parse_error();
-    return dstd::SharedPtr<const PageDict>(new PageDict(ref, cdict, nullptr));
+    return dstd::make_shared<const PageDict>(Key{}, ref, cdict, nullptr);
 }
 
 dstd::Expected<dstd::SharedPtr<const PageDict>, dstd::Error>
@@ -359,7 +359,7 @@ PageDict::for_decode(dstd::ByteView bytes, const DictRef& ref) {
         ZSTD_createDDict_advanced(bytes.data(), bytes.size(), ZSTD_dlm_byCopy,
                                   ZSTD_dct_auto, general_pool_mem());
     if (ddict == nullptr) return parse_error();
-    return dstd::SharedPtr<const PageDict>(new PageDict(ref, nullptr, ddict));
+    return dstd::make_shared<const PageDict>(Key{}, ref, nullptr, ddict);
 }
 
 PageDict::~PageDict() {

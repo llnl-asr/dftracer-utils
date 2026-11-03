@@ -429,7 +429,8 @@ Store::State::writer_for_use() {
     auto shared = default_runtime_shared();
     auto created = engine::Writer::create(dir.str(), *shared->executor());
     if (!created) return dstd::Unexpected<dstd::Error>(created.error());
-    dstd::SharedPtr<engine::Writer> opened(std::move(*created));
+    dstd::SharedPtr<engine::Writer> opened =
+        dstd::to_shared_ptr(std::move(*created));
     for (const Namespace& known : namespaces) {
         auto added = opened->add_namespace(known.spec);
         if (!added) return dstd::Unexpected<dstd::Error>(added.error());

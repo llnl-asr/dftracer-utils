@@ -47,6 +47,12 @@ struct dftu_nested {
     std::string name;
 };
 
+/// Takes ownership of @p p, freed with dftu_series_free.
+inline dftracer::utils::dstd::SharedPtr<dftu_series> adopt_series(
+    dftu_series* p) {
+    return dftracer::utils::dstd::adopt_shared_ptr(p, dftu_series_free);
+}
+
 /// Layout behind the opaque dftu_series handle. Private to the dataframe
 /// sources; the public headers only forward-declare it. Members that only
 /// some types use share storage keyed by `type` and `encoding`.

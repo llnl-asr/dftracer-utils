@@ -121,7 +121,7 @@ PyObject* stats_dict(const ExportStats& s) {
 views::ProgressFn progress_from(PyObject* obj) {
     if (!obj || obj == Py_None) return {};
     Py_INCREF(obj);
-    dftracer::utils::dstd::SharedPtr<PyObject> cb(obj, [](PyObject* p) {
+    auto cb = dftracer::utils::dstd::adopt_shared_ptr(obj, [](PyObject* p) {
         PyGILState_STATE g = PyGILState_Ensure();
         Py_DECREF(p);
         PyGILState_Release(g);
@@ -1034,7 +1034,7 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
         py::plugin_host_results(host);
     if (!results) return nullptr;
     Py_INCREF(host);
-    dftracer::utils::dstd::SharedPtr<PyObject> keep(host, [](PyObject* p) {
+    auto keep = dftracer::utils::dstd::adopt_shared_ptr(host, [](PyObject* p) {
         PyGILState_STATE g = PyGILState_Ensure();
         Py_DECREF(p);
         PyGILState_Release(g);

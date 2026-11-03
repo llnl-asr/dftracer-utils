@@ -274,8 +274,8 @@ TEST_SUITE("chunked columns") {
         Series base = view_of(rows_for(0, N, false));
         std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> chunks;
         for (int k = 0; k < 4; ++k)
-            chunks.emplace_back(dftu_series_slice(base.handle(), CUTS[k],
-                                                  CUTS[k + 1] - CUTS[k]));
+            chunks.push_back(adopt_series(dftu_series_slice(
+                base.handle(), CUTS[k], CUTS[k + 1] - CUTS[k])));
         Series chunked{make_chunked(std::move(chunks))};
         const std::int64_t blobs = dftu_series_buffer_bytes(base.handle()) -
                                    static_cast<std::int64_t>(N) * 16;

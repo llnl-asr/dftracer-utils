@@ -585,7 +585,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             tails_.resize(folds_.size());
         }
         co_await permits_->acquire(1);
-        dstd::SharedPtr<const Parsed> piece(
+        dstd::SharedPtr<const Parsed> piece = dstd::adopt_shared_ptr(
             done.release(), PieceRelease{permits_.get(), buffers_});
         for (std::size_t i = 0; i < folds_.size(); ++i) {
             if (folds_[i] == bloom_) continue;

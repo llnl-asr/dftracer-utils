@@ -21,6 +21,7 @@
 #include <random>
 #include <string>
 #include <system_error>
+#include <type_traits>
 #include <unordered_set>
 
 using namespace dftracer::utils;
@@ -291,6 +292,66 @@ TEST_CASE("UniquePtr array form zeroes on make_unique and frees its block") {
         CHECK(moved[4095] == 0);
         auto empty = dstd::make_unique<int[]>(0);
         CHECK(empty != nullptr);
+    }
+    CHECK(memory::Manager::get().general().blocks() == before);
+}
+
+TEST_CASE("share takes its count block from the memory library") {
+    std::atomic<int> destroyed{0};
+    const std::size_t before = memory::Manager::get().general().blocks();
+    {
+        dstd::SharedPtr<Base> base =
+            dstd::to_shared_ptr(dstd::make_unique<Derived>(&destroyed));
+        CHECK(base->base_value == 1);
+        CHECK(memory::Manager::get().general().blocks() == before + 2);
+        dstd::SharedPtr<Base> again = base;
+        CHECK(base.use_count() == 2);
+    }
+    CHECK(destroyed.load() == 1);
+    CHECK(memory::Manager::get().general().blocks() == before);
+}
+
+TEST_CASE("share with a deleter calls it once") {
+    int calls = 0;
+    int value = 7;
+    {
+        dstd::SharedPtr<int> p =
+            dstd::adopt_shared_ptr(&value, [&calls](int*) { ++calls; });
+        dstd::SharedPtr<int> q = p;
+        CHECK(*q == 7);
+        p.reset();
+        CHECK(calls == 0);
+    }
+    CHECK(calls == 1);
+}
+
+static_assert(!std::is_constructible_v<dstd::SharedPtr<int>, int*>);
+static_assert(
+    !std::is_constructible_v<dstd::SharedPtr<int>, int*, void (*)(int*)>);
+static_assert(
+    !std::is_constructible_v<dstd::SharedPtr<int>, std::unique_ptr<int>&&>);
+static_assert(
+    std::is_constructible_v<dstd::SharedPtr<int>, std::shared_ptr<int>>);
+
+TEST_CASE("SharedPtr array forms come from our heap and free everything") {
+    const std::size_t before = memory::Manager::get().general().blocks();
+    {
+        dstd::SharedPtr<std::uint64_t[]> zeroed =
+            dstd::make_shared<std::uint64_t[]>(512);
+        bool all_zero = true;
+        for (std::size_t i = 0; i < 512; ++i)
+            all_zero = all_zero && zeroed[i] == 0;
+        CHECK(all_zero);
+        CHECK(memory::Manager::get().general().blocks() == before + 1);
+        dstd::SharedPtr<char[]> raw =
+            dstd::make_shared_for_overwrite<char[]>(64);
+        raw[63] = 'x';
+        CHECK(raw[63] == 'x');
+        dstd::SharedPtr<int[]> moved =
+            dstd::to_shared_ptr(dstd::make_unique<int[]>(8));
+        dstd::SharedPtr<int[]> copy = moved;
+        CHECK(copy.use_count() == 2);
+        CHECK(copy[7] == 0);
     }
     CHECK(memory::Manager::get().general().blocks() == before);
 }

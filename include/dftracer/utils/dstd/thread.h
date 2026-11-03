@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <pthread.h>
@@ -33,6 +34,8 @@ class Thread {
         bool operator!=(const Id& other) const noexcept {
             return !(*this == other);
         }
+        /// Ids that compare equal hash equal. The empty id hashes to 0.
+        std::size_t hash() const noexcept;
 
        private:
         friend class Thread;
@@ -115,6 +118,14 @@ class Thread {
 
     pthread_t handle_{};
     bool joinable_{false};
+};
+
+template <>
+struct Hash<Thread::Id> {
+    using is_avalanching = void;
+    std::size_t operator()(const Thread::Id& id) const noexcept {
+        return id.hash();
+    }
 };
 
 }  // namespace dftracer::utils::dstd

@@ -89,6 +89,17 @@ TEST_CASE("Thread ids tell threads apart") {
     CHECK(t.id() == dstd::Thread::Id());
 }
 
+TEST_CASE("equal Thread ids hash equal") {
+    dstd::Thread::Id inner;
+    dstd::Thread t([&] { inner = dstd::Thread::current_id(); });
+    const dstd::Thread::Id outer = t.id();
+    t.join();
+    const dstd::Hash<dstd::Thread::Id> hash;
+    CHECK(hash(inner) == hash(outer));
+    CHECK(hash(dstd::Thread::current_id()) == hash(dstd::Thread::current_id()));
+    CHECK(hash(dstd::Thread::Id()) == 0);
+}
+
 TEST_CASE("Promise hands its value to the future on another thread") {
     dstd::Promise<int> promise;
     dstd::Future<int> future = promise.get_future();

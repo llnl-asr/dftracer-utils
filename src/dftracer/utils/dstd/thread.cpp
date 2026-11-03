@@ -39,6 +39,16 @@ bool Thread::Id::operator==(const Id& other) const noexcept {
     return !set_ || pthread_equal(handle_, other.handle_) != 0;
 }
 
+std::size_t Thread::Id::hash() const noexcept {
+    if (!set_) return 0;
+    // pthread_t is an integer on Linux and a pointer on macOS, and on both a
+    // handle equals another under pthread_equal only when the bytes match.
+    static_assert(sizeof(pthread_t) <= sizeof(std::uint64_t));
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &handle_, sizeof(pthread_t));
+    return static_cast<std::size_t>(hash::splitmix64(bits));
+}
+
 Thread& Thread::operator=(Thread&& other) noexcept {
     if (this != &other) {
         join();

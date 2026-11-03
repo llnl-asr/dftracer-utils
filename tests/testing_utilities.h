@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <sys/wait.h>
@@ -20,7 +21,6 @@
 #include <cstdlib>
 #include <fstream>
 #include <functional>
-#include <thread>
 #include <type_traits>
 
 extern "C" {
@@ -164,8 +164,9 @@ inline dftracer::utils::dstd::Path make_unique_test_path(
     const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
                          std::chrono::steady_clock::now().time_since_epoch())
                          .count();
-    // keep std: std::hash of a thread id
-    const auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    const auto tid =
+        dftracer::utils::dstd::Hash<dftracer::utils::dstd::Thread::Id>{}(
+            dftracer::utils::dstd::Thread::current_id());
     const auto unique_id = dftracer::utils::dstd::to_string(pid) + "_" +
                            dftracer::utils::dstd::to_string(now) + "_" +
                            dftracer::utils::dstd::to_string(tid) + "_" +

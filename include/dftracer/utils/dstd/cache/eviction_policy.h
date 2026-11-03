@@ -2,8 +2,9 @@
 #ifndef DFTRACER_UTILS_DSTD_CACHE_EVICTION_POLICY_H
 #define DFTRACER_UTILS_DSTD_CACHE_EVICTION_POLICY_H
 
+#include <dftracer/utils/dstd/memory.h>
+
 #include <cstddef>
-#include <memory>
 #include <optional>
 
 namespace dftracer::utils::dstd::cache {
@@ -33,7 +34,7 @@ enum class EvictionKind { Lru, Clock };
 
 /// Create a policy of the given kind.
 template <typename Key>
-std::unique_ptr<EvictionPolicy<Key>> make_eviction_policy(EvictionKind kind);
+UniquePtr<EvictionPolicy<Key>> make_eviction_policy(EvictionKind kind);
 
 }  // namespace dftracer::utils::dstd::cache
 

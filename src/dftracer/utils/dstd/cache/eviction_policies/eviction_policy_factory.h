@@ -5,8 +5,7 @@
 #include <dftracer/utils/dstd/cache/eviction_policies/clock_eviction_policy.h>
 #include <dftracer/utils/dstd/cache/eviction_policies/lru_eviction_policy.h>
 #include <dftracer/utils/dstd/cache/eviction_policy.h>
-
-#include <memory>
+#include <dftracer/utils/dstd/memory.h>
 
 namespace dftracer::utils::dstd::cache {
 
@@ -15,13 +14,13 @@ namespace dftracer::utils::dstd::cache {
 // and explicitly instantiates make_eviction_policy<Key>, so the concrete
 // policies are compiled once and not exposed to callers.
 template <typename Key>
-std::unique_ptr<EvictionPolicy<Key>> make_eviction_policy(EvictionKind kind) {
+UniquePtr<EvictionPolicy<Key>> make_eviction_policy(EvictionKind kind) {
     switch (kind) {
         case EvictionKind::Clock:
-            return std::make_unique<ClockEvictionPolicy<Key>>();
+            return make_unique<ClockEvictionPolicy<Key>>();
         case EvictionKind::Lru:
         default:
-            return std::make_unique<LruEvictionPolicy<Key>>();
+            return make_unique<LruEvictionPolicy<Key>>();
     }
 }
 

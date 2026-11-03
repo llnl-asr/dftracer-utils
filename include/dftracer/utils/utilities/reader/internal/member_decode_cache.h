@@ -16,7 +16,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <mutex>
 
 namespace dftracer::utils::utilities::reader::internal {
@@ -171,8 +170,7 @@ class MemberDecodeCache {
     struct Shard {
         std::mutex mu;
         ankerl::unordered_dense::map<MemberKey, dstd::SharedPtr<Entry>> map;
-        // keep std: make_eviction_policy returns a std::unique_ptr
-        std::unique_ptr<dstd::cache::EvictionPolicy<MemberKey>> policy;
+        dstd::UniquePtr<dstd::cache::EvictionPolicy<MemberKey>> policy;
     };
 
     bool over_budget() const {

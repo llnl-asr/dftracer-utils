@@ -100,9 +100,7 @@ class SplitArgParse : public binaries::ArgParse {
 namespace {
 
 struct FileProbe {
-    dstd::String path;  ///< The rechunked copy when the input was rechunked  //
-                        ///< keep std: gzip and extractor APIs take dstd::String
-                        ///< (utilities step)
+    dstd::String path;   ///< The rechunked copy when the input was rechunked
     std::uint64_t bytes = 0;
     double ratio = 1.0;  ///< Uncompressed bytes per compressed byte
     bool ok = false;

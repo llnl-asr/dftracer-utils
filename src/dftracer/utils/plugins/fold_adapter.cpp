@@ -1220,7 +1220,6 @@ int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
     match_qmap_.clear();
     for (dstd::StringView f : q.fields()) {
         // A path-decoded frame names each column by its path.
-        // keep std: C ABI needs a terminated string
         dftu_series* c = dftu_dataframe_column(df, dstd::String(f).c_str());
         const bool top = f == "cat" || f == "name" || f == "fhash" ||
                          f == "hhash" || f == "pid" || f == "tid" ||
@@ -1228,7 +1227,6 @@ int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
         if (!c && !top) {
             dstd::String args_name("args.");
             args_name.append(common::strip_args_prefix(f));
-            // keep std: C ABI needs a terminated string
             c = dftu_dataframe_column(df, args_name.c_str());
         }
         if (!c) continue;

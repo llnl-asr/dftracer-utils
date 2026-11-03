@@ -39,7 +39,6 @@ set(_dirs
     src/dftracer/utils/trace
     include/dftracer/utils/dataframe
     src/dftracer/utils/dataframe
-    include/dftracer/utils/server
     src/dftracer/utils/server
     src/dftracer/utils/binaries
     src/dftracer/utils/python

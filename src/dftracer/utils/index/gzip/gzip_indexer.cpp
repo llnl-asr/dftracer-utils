@@ -1199,6 +1199,11 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
     dstd::Optional<index::Snapshot> snapshot;
     {
         auto opened = index::Index::open(index_path);
+        bool fresh = false;
+        if (opened) {
+            auto before = opened->snapshot();
+            fresh = before && !before->file(logical).has_value();
+        }
         auto build =
             opened ? opened->build(
                          logical,
@@ -1209,8 +1214,9 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
         dstd::Expected<void, dstd::Error> committed = {};
         if (build) {
             persist_gzip_index_artifacts(*build, *artifacts);
-            // The new members renumber the chunks the old copies describe.
-            index::clear_chunk_copies(*build);
+            // The new members renumber the chunks the old copies describe. A
+            // fresh file has none.
+            if (!fresh) index::clear_chunk_copies(*build);
             committed = co_await build->commit();
         } else {
             committed = dstd::Unexpected<dstd::Error>(build.error());

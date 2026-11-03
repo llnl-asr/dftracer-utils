@@ -225,6 +225,8 @@ struct BootstrapRoot {
     dstd::String index_path;
     dstd::Vector<std::size_t> members;
     dstd::Optional<dftracer::utils::index::Index> index;
+    /// The index before this bootstrap; empty when it could not be read.
+    dstd::Optional<dftracer::utils::index::Snapshot> before;
     dstd::String index_error;
 };
 
@@ -268,9 +270,11 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
         auto opened = dftracer::utils::index::Index::open(
             dftracer::utils::index::store::internal::normalize_index_root(
                 index_path));
-        if (opened)
+        if (opened) {
             store->index.emplace(std::move(*opened));
-        else
+            auto taken = store->index->snapshot();
+            if (taken) store->before.emplace(std::move(*taken));
+        } else
             store->index_error = dstd::String(opened.error().message());
         out.roots.push_back(std::move(store));
     }
@@ -282,6 +286,7 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
 struct BootstrapBuild {
     dstd::Optional<dftracer::utils::index::FileBuild> build;
     dstd::String failure;
+    bool fresh = false;
 };
 
 BootstrapBuild open_bootstrap_build(BootstrapRoot& root, dstd::StringView file,
@@ -292,9 +297,10 @@ BootstrapBuild open_bootstrap_build(BootstrapRoot& root, dstd::StringView file,
         out.failure = root.index_error;
         return out;
     }
-    auto started =
-        root.index->build(index::store::internal::get_logical_path(file),
-                          index::SourceStat{mtime, source.size, source.hash});
+    const dstd::String logical = index::store::internal::get_logical_path(file);
+    out.fresh = root.before && !root.before->file(logical).has_value();
+    auto started = root.index->build(
+        logical, index::SourceStat{mtime, source.size, source.hash});
     if (started)
         out.build.emplace(std::move(*started));
     else
@@ -308,10 +314,11 @@ void fill_bootstrap_file(
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
     const dftracer::utils::index::RecordSchema& schema,
     dftracer::utils::index::extensions::BloomFold& bloom,
-    dftracer::utils::index::extensions::RowSetFold& rowsets) {
+    dftracer::utils::index::extensions::RowSetFold& rowsets, bool fresh) {
     index::gzip::persist_gzip_index_artifacts(build, arts);
-    // The new members renumber the chunks the old copies describe.
-    index::clear_chunk_copies(build);
+    // The new members renumber the chunks the old copies describe. A fresh
+    // file has none, and the check costs a store snapshot per file.
+    if (!fresh) index::clear_chunk_copies(build);
     index::put_profile(build, schema.id);
     build.finish(index::store::IndexExtension::Profile, schema.params_hash());
     bloom.write(build);
@@ -454,7 +461,8 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
                                      started.failure.c_str());
             continue;
         }
-        fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets);
+        fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets,
+                            started.fresh);
         const dstd::String staging = co_await pending[slot].add(
             std::move(*started.build), 0,
             dftracer::utils::index::store::internal::get_logical_path(
@@ -792,7 +800,8 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     read.events_scanned = arts.total_lines;
     counted(*plan, read);
     driver.seal();
-    fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets);
+    fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets,
+                        started.fresh);
     const dstd::String failure = co_await group->add(
         std::move(*started.build), 0,
         dftracer::utils::index::store::internal::get_logical_path(f.file_path));

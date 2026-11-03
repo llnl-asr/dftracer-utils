@@ -5,11 +5,15 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -21,24 +25,21 @@
 #include <algorithm>
 #include <atomic>
 #include <exception>
-#include <map>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio {
 
 namespace pfw = parallel;
 namespace cmp = compress;
 
-std::string gzip_part_path(const std::string& base, int idx, bool multi) {
-    if (!multi) return base;
+dstd::String gzip_part_path(dstd::StringView base, int idx, bool multi) {
+    if (!multi) return dstd::String(base);
     const std::size_t pos = base.rfind(".pfw");
-    if (pos == std::string::npos) return base + "-" + std::to_string(idx);
-    return base.substr(0, pos) + "-" + std::to_string(idx) + base.substr(pos);
+    if (pos == dstd::StringView::npos)
+        return dstd::String(base) + "-" + dstd::to_string(idx);
+    return dstd::String(base.substr(0, pos)) + "-" + dstd::to_string(idx) +
+           dstd::String(base.substr(pos));
 }
 
 namespace {
@@ -48,8 +49,8 @@ constexpr std::size_t EXTRA_IN_FLIGHT = 2;
 
 struct Job {
     std::uint64_t seq;
-    std::string data;
-    std::unique_ptr<char[]> raw;  ///< when set, the bytes instead of `data`
+    dstd::String data;
+    dstd::UniquePtr<char[]> raw;  ///< when set, the bytes instead of `data`
     std::size_t raw_size = 0;
     std::size_t part = 0;
     std::uint64_t part_index = 0;
@@ -63,8 +64,8 @@ struct Job {
 };
 
 struct Done {
-    std::vector<std::uint8_t> comp;
-    std::string plain;
+    dstd::Vector<std::uint8_t> comp;
+    dstd::String plain;
     std::uint64_t uc_size = 0;
     std::uint64_t lines = 0;
     std::size_t part = 0;
@@ -77,7 +78,7 @@ constexpr std::size_t UNIT_BYTES = 1024;
 }  // namespace
 
 struct GzipLineWriter::Impl {
-    Impl(std::string base_path, GzipWriterOptions o, std::size_t w)
+    Impl(dstd::String base_path, GzipWriterOptions o, std::size_t w)
         : base(std::move(base_path)),
           opts(std::move(o)),
           workers(w),
@@ -98,11 +99,11 @@ struct GzipLineWriter::Impl {
         prod_cap = std::max<std::size_t>(2 * member_units, total - job_cap);
         const std::size_t max_jobs =
             std::min<std::size_t>(w + EXTRA_IN_FLIGHT, job_cap / job_unit);
-        slots = std::make_unique<coro::CoroSemaphore>(
+        slots = dstd::make_unique<coro::CoroSemaphore>(
             std::max<std::size_t>(1, max_jobs));
         prod_mem =
-            std::make_unique<coro::CoroSemaphore>(prod_cap - member_units);
-        job_mem = std::make_unique<coro::CoroSemaphore>(job_cap);
+            dstd::make_unique<coro::CoroSemaphore>(prod_cap - member_units);
+        job_mem = dstd::make_unique<coro::CoroSemaphore>(job_cap);
         // The shared buffer (ordered mode, unordered append) is one member.
         held.store(member_units, std::memory_order_relaxed);
         peak_held.store(member_units, std::memory_order_relaxed);
@@ -113,7 +114,7 @@ struct GzipLineWriter::Impl {
     }
 
     std::size_t member_units = 0, job_cap = 0, prod_cap = 0;
-    std::unique_ptr<coro::CoroSemaphore> prod_mem, job_mem;
+    dstd::UniquePtr<coro::CoroSemaphore> prod_mem, job_mem;
     std::atomic<std::uint64_t> held{0}, peak_held{0}, prod_held{0};
 
     void note_held(std::int64_t delta) {
@@ -146,41 +147,41 @@ struct GzipLineWriter::Impl {
         sem.release(units);
     }
 
-    std::string base;
+    dstd::String base;
     GzipWriterOptions opts;
     std::size_t workers;
     coro::Scope scope;
-    std::unique_ptr<coro::CoroSemaphore> slots;
+    dstd::UniquePtr<coro::CoroSemaphore> slots;
     coro::CoroSemaphore compute;
     coro::AsyncMutex drain_mu;
 
     std::mutex buf_mu;
-    std::string buf;
+    dstd::String buf;
     std::atomic<std::uint64_t> next_seq{0};
     // Submit decides every member's part (ordered mode only).
     std::size_t sub_part = 0;
     std::uint64_t sub_index = 0, sub_uc = 0;
-    std::vector<std::size_t> free_slots;
+    dstd::Vector<std::size_t> free_slots;
 
     std::mutex mu;
-    std::map<std::uint64_t, Done> ready;
+    dstd::Map<std::uint64_t, Done> ready;
     std::uint64_t next_write = 0;
     dstd::Optional<dstd::Error> error;
-    std::vector<std::unique_ptr<cmp::GzipMemberCompressor>> pool;
+    dstd::Vector<dstd::UniquePtr<cmp::GzipMemberCompressor>> pool;
 
     std::atomic<std::size_t> in_flight{0};
     std::atomic<std::size_t> peak{0};
 
     // Writer step state; touched only under drain_mu, or after join.
-    std::unique_ptr<pfw::ParallelWriter> writer;
+    dstd::UniquePtr<pfw::ParallelWriter> writer;
     pfw::FileLayout layout = pfw::FileLayout::Striped;
-    std::string cur_path;
+    dstd::String cur_path;
     std::size_t part = 0;
     std::uint64_t member_idx = 0;
     std::uint64_t part_c = 0;
     std::uint64_t part_uc = 0;
     std::uint64_t part_lines = 0;
-    std::vector<std::string> created;
+    dstd::Vector<dstd::String> created;
     WriteSummary summary;
     bool cleaned = false;
     bool closed = false;
@@ -200,7 +201,7 @@ struct GzipLineWriter::Impl {
     bool multi() const { return opts.part_size > 0; }
     bool unordered() const { return !opts.ordered; }
 
-    void set_error(common::ErrorCode code, std::string msg) {
+    void set_error(common::ErrorCode code, dstd::String msg) {
         std::lock_guard<std::mutex> lk(mu);
         if (!error) error = dstd::Error{code, msg};
     }
@@ -236,9 +237,9 @@ struct GzipLineWriter::Impl {
         co_return co_await write_extra(opts.part_header, true);
     }
 
-    coro::CoroTask<bool> write_extra(const std::string& bytes, bool header) {
+    coro::CoroTask<bool> write_extra(const dstd::String& bytes, bool header) {
         if (bytes.empty()) co_return true;
-        std::vector<std::uint8_t> comp;
+        dstd::Vector<std::uint8_t> comp;
         if (opts.compress) {
             auto c = take_compressor();
             const bool ok = c->valid() && c->compress_member_into(
@@ -281,7 +282,7 @@ struct GzipLineWriter::Impl {
         ok = co_await writer->close() == 0 && ok;
         if (ok && layout == pfw::FileLayout::Sharded) {
             // GCC 12 destroys a temporary built inside co_await twice.
-            const std::vector<std::string> shards = writer->output_paths();
+            const dstd::Vector<dstd::String> shards = writer->output_paths();
             ok = co_await pfw::merge_shards(cur_path, shards) == 0;
         }
         writer.reset();
@@ -369,7 +370,7 @@ struct GzipLineWriter::Impl {
         drain_mu.unlock();
     }
 
-    std::unique_ptr<cmp::GzipMemberCompressor> take_compressor() {
+    dstd::UniquePtr<cmp::GzipMemberCompressor> take_compressor() {
         {
             std::lock_guard<std::mutex> lk(mu);
             if (!pool.empty()) {
@@ -378,10 +379,10 @@ struct GzipLineWriter::Impl {
                 return c;
             }
         }
-        return std::make_unique<cmp::GzipMemberCompressor>(opts.level);
+        return dstd::make_unique<cmp::GzipMemberCompressor>(opts.level);
     }
 
-    void give_compressor(std::unique_ptr<cmp::GzipMemberCompressor> c) {
+    void give_compressor(dstd::UniquePtr<cmp::GzipMemberCompressor> c) {
         std::lock_guard<std::mutex> lk(mu);
         pool.push_back(std::move(c));
     }
@@ -448,8 +449,8 @@ struct GzipLineWriter::Impl {
         co_await drain();
     }
 
-    coro::CoroTask<void> submit(std::string data,
-                                std::unique_ptr<char[]> raw = nullptr,
+    coro::CoroTask<void> submit(dstd::String data,
+                                dstd::UniquePtr<char[]> raw = nullptr,
                                 std::size_t raw_size = 0) {
         const std::size_t size0 = raw ? raw_size : data.size();
         std::size_t jb = size0;
@@ -467,7 +468,7 @@ struct GzipLineWriter::Impl {
         while (now > p && !peak.compare_exchange_weak(p, now)) {
         }
         const std::size_t size = raw ? raw_size : data.size();
-        auto job = std::make_shared<Job>(
+        auto job = dstd::make_shared<Job>(
             Job{next_seq.fetch_add(1, std::memory_order_relaxed),
                 std::move(data), std::move(raw), raw_size});
         job->units = units;
@@ -487,7 +488,7 @@ struct GzipLineWriter::Impl {
             [this, job]() -> coro::CoroTask<void> { co_await run_job(job); });
     }
 
-    std::unique_ptr<char[]> scratch;  ///< ordered append_with, reused
+    dstd::UniquePtr<char[]> scratch;  ///< ordered append_with, reused
     std::size_t scratch_cap = 0;
 
     coro::CoroTask<dstd::Error> fail() {
@@ -512,7 +513,7 @@ struct GzipLineWriter::Impl {
 };
 
 GzipLineWriter::GzipLineWriter() = default;
-GzipLineWriter::GzipLineWriter(std::unique_ptr<Impl> impl)
+GzipLineWriter::GzipLineWriter(dstd::UniquePtr<Impl> impl)
     : impl_(std::move(impl)) {}
 GzipLineWriter::GzipLineWriter(GzipLineWriter&&) noexcept = default;
 GzipLineWriter& GzipLineWriter::operator=(GzipLineWriter&& o) noexcept {
@@ -527,7 +528,7 @@ GzipLineWriter::~GzipLineWriter() {
 }
 
 coro::CoroTask<common::Result<GzipLineWriter>> GzipLineWriter::open(
-    std::string path, GzipWriterOptions opts) {
+    dstd::String path, GzipWriterOptions opts) {
     if (opts.member_size == 0)
         co_return common::make_error(common::ErrorCode::InvalidArgument,
                                      "member_size must be positive");
@@ -542,7 +543,7 @@ coro::CoroTask<common::Result<GzipLineWriter>> GzipLineWriter::open(
             ? opts.workers
             : std::max<std::size_t>(1, common::available_parallelism());
     auto impl =
-        std::make_unique<Impl>(std::move(path), std::move(opts), workers);
+        dstd::make_unique<Impl>(std::move(path), std::move(opts), workers);
     const auto open_part_ok = co_await impl->open_part();
     if (!open_part_ok) {
         dstd::Error err = co_await impl->fail();
@@ -553,22 +554,22 @@ coro::CoroTask<common::Result<GzipLineWriter>> GzipLineWriter::open(
 
 namespace {
 // Takes every complete member out of `buf` (caller holds any lock on it).
-std::vector<std::string> take_members(std::string& buf, std::size_t size) {
-    std::vector<dstd::Pair<std::size_t, std::size_t>> spans;
+dstd::Vector<dstd::String> take_members(dstd::String& buf, std::size_t size) {
+    dstd::Vector<dstd::Pair<std::size_t, std::size_t>> spans;
     std::size_t pos = 0;
     while (buf.size() > pos + size) {
         const std::size_t nl = buf.find('\n', pos + size);
-        if (nl == std::string::npos) break;
+        if (nl == dstd::String::npos) break;
         spans.emplace_back(pos, nl + 1 - pos);
         pos = nl + 1;
     }
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     if (spans.empty()) return out;
     // The last member takes over `buf` and only the tail after it is copied;
     // copying every member would fault in a fresh member-sized buffer each.
     for (std::size_t i = 0; i + 1 < spans.size(); ++i)
         out.push_back(buf.substr(spans[i].first, spans[i].second));
-    std::string rest(buf, pos);
+    dstd::String rest(buf, pos);
     buf.resize(pos);
     if (spans.back().first > 0) buf.erase(0, spans.back().first);
     out.push_back(std::move(buf));
@@ -588,7 +589,7 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::append(
     if (lines.back() != '\n')
         co_return common::make_error(common::ErrorCode::InvalidArgument,
                                      "appended lines must end with a newline");
-    std::vector<std::string> members;
+    dstd::Vector<dstd::String> members;
     {
         std::lock_guard<std::mutex> lk(s.buf_mu);
         s.buf.append(lines);
@@ -604,7 +605,7 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::append(
 
 coro::CoroTask<common::Result<void>> GzipLineWriter::append_with(
     std::size_t max_bytes,
-    std::function<std::size_t(char*, std::size_t)> fill) {
+    dstd::Function<std::size_t(char*, std::size_t)> fill) {
     Impl& s = *impl_;
     if (s.failed()) {
         dstd::Error err = co_await s.fail();
@@ -615,7 +616,8 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::append_with(
         const std::size_t held_units =
             co_await s.reserve(*s.prod_mem, s.prod_cap - s.member_units,
                                Impl::units_of(max_bytes));
-        std::unique_ptr<char[]> own(new char[max_bytes]);
+        dstd::UniquePtr<char[]> own =
+            dstd::make_unique_for_overwrite<char[]>(max_bytes);
         const std::size_t n = fill(own.get(), max_bytes);
         if (n > max_bytes || (n > 0 && own[n - 1] != '\n')) {
             s.unreserve(*s.prod_mem, held_units);
@@ -624,13 +626,13 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::append_with(
         }
         if (n > 0) {
             // GCC 12 destroys a temporary built inside co_await twice.
-            std::string none;
+            dstd::String none;
             co_await s.submit(std::move(none), std::move(own), n);
         }
         s.unreserve(*s.prod_mem, held_units);
     } else {
         if (s.scratch_cap < max_bytes) {
-            s.scratch.reset(new char[max_bytes]);
+            s.scratch = dstd::make_unique_for_overwrite<char[]>(max_bytes);
             s.scratch_cap = max_bytes;
         }
         const std::size_t n = fill(s.scratch.get(), max_bytes);
@@ -725,7 +727,7 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::append(
 
 coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::append_with(
     std::size_t max_bytes,
-    std::function<std::size_t(char*, std::size_t)> fill) {
+    dstd::Function<std::size_t(char*, std::size_t)> fill) {
     Impl& s = *impl_;
     if (s.failed()) {
         dstd::Error err = co_await s.fail();
@@ -752,7 +754,7 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::flush() {
         co_return dstd::Unexpected(std::move(err));
     }
     if (buf_.empty()) co_return common::Result<void>{};
-    std::string pending = std::move(buf_);
+    dstd::String pending = std::move(buf_);
     buf_.clear();
     co_await s.submit(std::move(pending));
     release_extra();
@@ -769,7 +771,7 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::cut() {
         dstd::Error err = co_await s.fail();
         co_return dstd::Unexpected(std::move(err));
     }
-    std::string pending;
+    dstd::String pending;
     {
         std::lock_guard<std::mutex> lk(s.buf_mu);
         pending.swap(s.buf);
@@ -814,7 +816,7 @@ coro::CoroTask<common::Result<WriteSummary>> GzipLineWriter::close(
 }
 
 GzipLineWriterBlocking::GzipLineWriterBlocking(GzipLineWriter w)
-    : w_(std::make_unique<GzipLineWriter>(std::move(w))) {}
+    : w_(dstd::make_unique<GzipLineWriter>(std::move(w))) {}
 GzipLineWriterBlocking::GzipLineWriterBlocking(
     GzipLineWriterBlocking&&) noexcept = default;
 GzipLineWriterBlocking& GzipLineWriterBlocking::operator=(
@@ -834,7 +836,7 @@ common::Result<T> run_on_default(const char* name, F&& f) {
 }  // namespace
 
 common::Result<GzipLineWriterBlocking> GzipLineWriterBlocking::open(
-    std::string path, GzipWriterOptions opts) {
+    dstd::String path, GzipWriterOptions opts) {
     auto r = run_on_default<GzipLineWriter>("gzip_line_writer_open", [&] {
         return GzipLineWriter::open(std::move(path), std::move(opts));
     });
@@ -849,7 +851,7 @@ common::Result<void> GzipLineWriterBlocking::append(dstd::StringView lines) {
 
 common::Result<void> GzipLineWriterBlocking::append_with(
     std::size_t max_bytes,
-    std::function<std::size_t(char*, std::size_t)> fill) {
+    dstd::Function<std::size_t(char*, std::size_t)> fill) {
     return run_on_default<void>("gzip_line_writer_append_with", [&] {
         return w_->append_with(max_bytes, std::move(fill));
     });

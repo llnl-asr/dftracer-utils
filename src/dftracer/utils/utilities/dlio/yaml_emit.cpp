@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/dlio/yaml_emit.h>
 #include <yaml-cpp/yaml.h>
 
 #include <cmath>
 #include <ostream>
-#include <sstream>
-#include <string>
 #include <variant>
 
 namespace dftracer::utils::utilities::dlio {
@@ -80,8 +79,8 @@ YAML::Node emit_block(const DlioTimingBlock& block) {
 
 }  // namespace
 
-std::string render_dlio_yaml(const DlioTimingBlock* computation,
-                             const DlioTimingBlock* preprocess) {
+dstd::String render_dlio_yaml(const DlioTimingBlock* computation,
+                              const DlioTimingBlock* preprocess) {
     YAML::Node root;
     if (computation) {
         YAML::Node train;
@@ -98,7 +97,7 @@ std::string render_dlio_yaml(const DlioTimingBlock* computation,
     emit.SetMapFormat(YAML::Block);
     emit.SetSeqFormat(YAML::Block);
     emit << root;
-    return std::string(emit.c_str());
+    return dstd::String(emit.c_str());
 }
 
 bool write_dlio_yaml(std::ostream& out, const DlioTimingBlock* computation,

@@ -41,8 +41,8 @@ std::string hex_lines(std::size_t bytes) {
 }
 
 template <typename Inflate>
-double run(const std::vector<std::uint8_t>& gz, std::size_t expect,
-           Inflate&& inflate_fn) {
+double run(const dftracer::utils::dstd::Vector<std::uint8_t>& gz,
+           std::size_t expect, Inflate&& inflate_fn) {
     std::vector<unsigned char> out(OUT_CHUNK);
     const auto t0 = std::chrono::steady_clock::now();
     std::size_t total = 0;
@@ -64,10 +64,10 @@ int main(int argc, char** argv) {
     const std::string text = hex_lines(mb << 20);
 
     gzc::GzipMemberCompressor c(6);
-    std::vector<std::uint8_t> gz;
+    dftracer::utils::dstd::Vector<std::uint8_t> gz;
     if (!c.compress_member_into(gz, text.data(), text.size())) return 1;
 
-    auto zlib_gzip = [](const std::vector<std::uint8_t>& in,
+    auto zlib_gzip = [](const dftracer::utils::dstd::Vector<std::uint8_t>& in,
                         std::vector<unsigned char>& out, std::size_t& total) {
         z_stream zs{};
         inflateInit2(&zs, 31);
@@ -83,20 +83,20 @@ int main(int argc, char** argv) {
         inflateEnd(&zs);
         if (rc != Z_STREAM_END) std::exit(2);
     };
-    auto libdeflate_crc = [](const std::vector<std::uint8_t>& in,
-                             std::vector<unsigned char>& out,
-                             std::size_t& total) {
-        gzc::GzipStreamInflater inf;
-        inf.init(31);
-        inf.set_input(in.data(), in.size());
-        gzc::InflateStatus rc;
-        do {
-            inf.set_output(out.data(), out.size());
-            rc = inf.inflate();
-            total += out.size() - inf.avail_out();
-        } while (rc == gzc::InflateStatus::Ok);
-        if (rc != gzc::InflateStatus::StreamEnd) std::exit(2);
-    };
+    auto libdeflate_crc =
+        [](const dftracer::utils::dstd::Vector<std::uint8_t>& in,
+           std::vector<unsigned char>& out, std::size_t& total) {
+            gzc::GzipStreamInflater inf;
+            inf.init(31);
+            inf.set_input(in.data(), in.size());
+            gzc::InflateStatus rc;
+            do {
+                inf.set_output(out.data(), out.size());
+                rc = inf.inflate();
+                total += out.size() - inf.avail_out();
+            } while (rc == gzc::InflateStatus::Ok);
+            if (rc != gzc::InflateStatus::StreamEnd) std::exit(2);
+        };
 
     double best_zlib = 1e9;
     double best_new = 1e9;

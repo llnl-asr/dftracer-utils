@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/utilities/reader/internal/trace_reader_prefilter.h>
 #include <simdjson.h>
 
 #include <cstring>
-#include <optional>
-#include <string>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -125,16 +123,16 @@ bool probe_matches_value(const CompiledEqProbe& p,
 
 // Try to compile the query AST as an AND of EQ leaves. nullopt on
 // unsupported shapes; the ValueMap path handles those.
-dstd::Optional<std::vector<CompiledEqProbe>> try_compile_eq_probes(
+dstd::Optional<dstd::Vector<CompiledEqProbe>> try_compile_eq_probes(
     const duql::QueryNode& node) {
     using namespace duql;
     return std::visit(
-        [&](const auto& n) -> dstd::Optional<std::vector<CompiledEqProbe>> {
+        [&](const auto& n) -> dstd::Optional<dstd::Vector<CompiledEqProbe>> {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, CompareNode>) {
                 CompiledEqProbe p;
                 if (n.field.any || !compile_eq_leaf(n, p)) return dstd::nullopt;
-                return std::vector<CompiledEqProbe>{std::move(p)};
+                return dstd::Vector<CompiledEqProbe>{std::move(p)};
             } else if constexpr (std::is_same_v<T, AndNode>) {
                 auto l = try_compile_eq_probes(*n.left);
                 if (!l) return dstd::nullopt;
@@ -151,12 +149,12 @@ dstd::Optional<std::vector<CompiledEqProbe>> try_compile_eq_probes(
 }
 
 // Evaluate compiled AND-of-EQ probes by directly probing simdjson fields.
-bool eval_compiled_eq(const std::vector<CompiledEqProbe>& probes,
+bool eval_compiled_eq(const dstd::Vector<CompiledEqProbe>& probes,
                       simdjson::ondemand::document_reference doc) {
     // The value of `key` in `obj`: nullopt when absent, an empty value when
     // it is null.
     using Found = dstd::Optional<dstd::Optional<simdjson::ondemand::value>>;
-    auto field = [](auto&& obj, const std::string& key) -> Found {
+    auto field = [](auto&& obj, const dstd::String& key) -> Found {
         auto r = obj.find_field_unordered(dstd::StringView(key));
         if (r.error()) return dstd::nullopt;
         simdjson::ondemand::value v = r.value_unsafe();

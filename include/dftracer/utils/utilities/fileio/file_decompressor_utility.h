@@ -8,13 +8,12 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-
-#include <string>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -22,8 +21,8 @@ namespace dftracer::utils::utilities::fileio {
  * @brief Input for file decompression workflow.
  */
 struct FileDecompressionUtilityInput {
-    std::string input_path;  ///< Input .gz file path
-    std::string
+    dstd::String input_path;  ///< Input .gz file path
+    dstd::String
         output_path;  ///< Output decompressed file path (empty = auto-generate)
 
     /**
@@ -32,8 +31,8 @@ struct FileDecompressionUtilityInput {
      * Strips .gz extension from input path to generate output path.
      */
     static FileDecompressionUtilityInput from_file(
-        const std::string& input_path) {
-        std::string output = input_path;
+        dstd::StringView input_path) {
+        dstd::String output(input_path);
 
         // Strip .gz extension if present
         if (output.size() > 3 && output.substr(output.size() - 3) == ".gz") {
@@ -43,14 +42,14 @@ struct FileDecompressionUtilityInput {
             output += ".decompressed";
         }
 
-        return FileDecompressionUtilityInput{input_path, output};
+        return FileDecompressionUtilityInput{dstd::String(input_path), output};
     }
 
     /**
      * @brief Fluent builder: Set output path.
      */
-    FileDecompressionUtilityInput& with_output(const std::string& path) {
-        output_path = path;
+    FileDecompressionUtilityInput& with_output(dstd::StringView path) {
+        output_path = dstd::String(path);
         return *this;
     }
 };
@@ -62,16 +61,16 @@ struct FileDecompressionUtilityInput {
  * struct carries only the successful-result data.
  */
 struct FileDecompressionUtilityOutput {
-    std::string input_path;         ///< Original .gz input file path
-    std::string output_path;        ///< Decompressed output file path
+    dstd::String input_path;        ///< Original .gz input file path
+    dstd::String output_path;       ///< Decompressed output file path
     std::size_t compressed_size;    ///< Compressed file size (bytes)
     std::size_t decompressed_size;  ///< Decompressed file size (bytes)
 
     FileDecompressionUtilityOutput()
         : compressed_size(0), decompressed_size(0) {}
 
-    FileDecompressionUtilityOutput& with_paths(const std::string& in_path,
-                                               const std::string& out_path) {
+    FileDecompressionUtilityOutput& with_paths(dstd::StringView in_path,
+                                               dstd::StringView out_path) {
         input_path = in_path;
         output_path = out_path;
         return *this;
@@ -94,12 +93,12 @@ struct FileDecompressionUtilityOutput {
  * Usage:
  * @code
  * // Single file decompression
- * auto decompressor = std::make_shared<FileDecompressor>();
+ * auto decompressor = dstd::make_shared<FileDecompressor>();
  * auto input = FileDecompressionInput::from_file("archive.gz");
  * auto result = decompressor->process(input);
  *
  * // Parallel batch decompression
- * auto batch_decompressor = std::make_shared<
+ * auto batch_decompressor = dstd::make_shared<
  *     BatchProcessor<FileDecompressionUtilityInput,
  * FileDecompressionUtilityOutput>>( [decompressor](const
  * FileDecompressionUtilityInput& input, coro::Scope& ctx) { return
@@ -107,7 +106,7 @@ struct FileDecompressionUtilityOutput {
  *         }
  * );
  *
- * std::vector<FileDecompressionUtilityInput> files = { ... };
+ * dstd::Vector<FileDecompressionUtilityInput> files = { ... };
  * auto results = batch_decompressor->process(files);
  * @endcode
  */
@@ -185,7 +184,7 @@ class FileDecompressorUtility {
 
             co_return common::make_error(
                 common::ErrorCode::Compression,
-                std::string("Decompression failed: ") + e.what());
+                dstd::String("Decompression failed: ") + e.what());
         }
 
         FileDecompressionUtilityOutput payload;

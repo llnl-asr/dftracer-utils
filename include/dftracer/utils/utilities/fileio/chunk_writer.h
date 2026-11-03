@@ -5,21 +5,20 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <optional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio {
 
 struct ChunkWriterConfig {
-    std::string output_dir;
-    std::string base_name;
+    dstd::String output_dir;
+    dstd::String base_name;
     std::size_t chunk_size_bytes = 256 * 1024 * 1024;
     /// Uncompressed bytes per gzip member; members end at line boundaries.
     /// A chunk rolls over at the first member boundary at or past
@@ -35,13 +34,13 @@ struct ChunkWriterConfig {
     /// The coalescing buffer of io_flush_bytes is on top of it.
     std::uint64_t memory_budget = 0;
 
-    using ChunkRotationCallback = std::function<void(
-        std::size_t chunk_index, const std::string& chunk_path,
+    using ChunkRotationCallback = dstd::Function<void(
+        std::size_t chunk_index, dstd::StringView chunk_path,
         std::size_t event_count, std::size_t byte_count)>;
     ChunkRotationCallback on_chunk_complete;
 
-    ChunkWriterConfig& with_output_dir(std::string dir) {
-        output_dir = std::move(dir);
+    ChunkWriterConfig& with_output_dir(dstd::StringView dir) {
+        output_dir = dir;
         return *this;
     }
     ChunkWriterConfig& with_member_size(std::size_t bytes) {
@@ -59,7 +58,7 @@ struct ChunkWriterConfig {
 };
 
 struct ChunkInfo {
-    std::string path;
+    dstd::String path;
     std::size_t bytes_written = 0;
     std::size_t events_written = 0;
     int chunk_index = 0;
@@ -81,18 +80,18 @@ class ChunkWriter {
     std::size_t total_events_written() const { return total_events_; }
     /// Most bytes the gzip writer reserved at once, known after close().
     std::uint64_t peak_reserved_bytes() const { return peak_bytes_; }
-    const std::vector<ChunkInfo>& chunks() const { return chunks_; }
+    const dstd::Vector<ChunkInfo>& chunks() const { return chunks_; }
     bool is_open() const { return open_; }
 
    private:
     ChunkWriterConfig config_;
     dstd::Optional<GzipLineWriter> writer_;
-    std::string pending_;
+    dstd::String pending_;
     bool open_ = false;
     std::size_t total_bytes_ = 0;
     std::size_t total_events_ = 0;
     std::uint64_t peak_bytes_ = 0;
-    std::vector<ChunkInfo> chunks_;
+    dstd::Vector<ChunkInfo> chunks_;
 };
 
 }  // namespace dftracer::utils::utilities::fileio

@@ -11,9 +11,6 @@
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
 
-#include <memory>
-#include <string>
-
 namespace dftracer::utils::utilities::fileio::lines::sources {
 
 /**
@@ -70,9 +67,9 @@ inline coro::AsyncGenerator<Line> async_indexed_file_lines(
                                         "Failed to create stream");
     }
 
-    std::string stream_buffer;
+    dstd::String stream_buffer;
     stream_buffer.resize(config.buffer_size());
-    std::string line_buffer;
+    dstd::String line_buffer;
     std::size_t current_position = config.start();
     const bool is_line_range =
         config.range_type() == reader::internal::RangeType::LineRange;

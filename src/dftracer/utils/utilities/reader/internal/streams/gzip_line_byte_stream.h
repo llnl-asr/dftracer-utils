@@ -5,13 +5,14 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <span>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -20,7 +21,7 @@ class GzipLineByteStream : public GzipStream {
     static constexpr std::size_t SEARCH_BUFFER_SIZE = 2048;
     static constexpr std::size_t LINE_SEARCH_LOOKBACK = 512;
 
-    std::vector<char> partial_line_buffer_;
+    dstd::Vector<char> partial_line_buffer_;
     std::size_t actual_start_bytes_;
     std::size_t bytes_returned_;  // Track how many bytes we've returned to user
     bool extend_to_line_boundary_ = false;
@@ -38,7 +39,7 @@ class GzipLineByteStream : public GzipStream {
     void set_extend_to_line_boundary(bool v) { extend_to_line_boundary_ = v; }
 
     void initialize(
-        const std::string &gz_path, std::size_t start_bytes,
+        const dstd::String &gz_path, std::size_t start_bytes,
         std::size_t end_bytes,
         dftracer::utils::index::gzip::CheckpointIndexer &indexer) override {
         GzipStream::initialize(gz_path, start_bytes, end_bytes, indexer);
@@ -197,7 +198,7 @@ class GzipLineByteStream : public GzipStream {
             if (partial_size >= buffer_.size()) {
                 throw ReaderError(ReaderError::ReadError,
                                   "a line is longer than the read buffer (" +
-                                      std::to_string(buffer_.size()) +
+                                      dstd::to_string(buffer_.size()) +
                                       " bytes)");
             }
             std::memcpy(buffer_.data(), partial_line_buffer_.data(),
@@ -224,7 +225,7 @@ class GzipLineByteStream : public GzipStream {
             if (!status) {
                 throw ReaderError(ReaderError::CompressionError,
                                   "gzip decode failed mid-stream at position " +
-                                      std::to_string(current_position_));
+                                      dstd::to_string(current_position_));
             }
             if (bytes_read == 0) {
                 is_finished_ = true;

@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -18,7 +19,9 @@
 #include <atomic>
 #include <cstdint>
 #include <random>
+#include <string>
 #include <system_error>
+#include <unordered_set>
 
 using namespace dftracer::utils;
 
@@ -290,4 +293,13 @@ TEST_CASE("UniquePtr array form zeroes on make_unique and frees its block") {
         CHECK(empty != nullptr);
     }
     CHECK(memory::Manager::get().general().blocks() == before);
+}
+
+TEST_CASE("std::hash of a dstd::String matches std::string") {
+    const dstd::String text = "trace-000.pfw.gz";
+    CHECK(std::hash<dstd::String>{}(text) ==
+          std::hash<std::string>{}(std::string("trace-000.pfw.gz")));
+    std::unordered_set<dstd::String> seen;  // keep std: tests std::hash use
+    seen.insert(text);
+    CHECK(seen.count(dstd::String("trace-000.pfw.gz")) == 1);
 }

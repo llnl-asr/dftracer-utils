@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
@@ -15,10 +16,7 @@
 
 #include <cstring>
 #include <iterator>
-#include <memory>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio::lines::sources {
 
@@ -58,8 +56,8 @@ class IndexedFileLineIteratorConfig {
    public:
     IndexedFileLineIteratorConfig() = default;
 
-    IndexedFileLineIteratorConfig& with_file(
-        const std::string& file_path, const std::string& index_path = "") {
+    IndexedFileLineIteratorConfig& with_file(dstd::CStringView file_path,
+                                             dstd::StringView index_path = "") {
         reader_ =
             dftracer::utils::utilities::reader::internal::ReaderFactory::create(
                 file_path, index_path);
@@ -139,11 +137,11 @@ class IndexedFileLineIteratorConfig {
 class IndexedFileLineIterator {
    private:
     IndexedFileLineIteratorConfig config_;
-    std::unique_ptr<dftracer::utils::utilities::reader::internal::ReaderStream>
+    dstd::UniquePtr<dftracer::utils::utilities::reader::internal::ReaderStream>
         stream_;
     std::size_t current_position_;
-    mutable std::string line_buffer_;    ///< Buffer to hold current line data
-    mutable std::string stream_buffer_;  ///< Buffer for reading from stream
+    mutable dstd::String line_buffer_;    ///< Buffer to hold current line data
+    mutable dstd::String stream_buffer_;  ///< Buffer for reading from stream
     mutable bool stream_done_;
     mutable bool
         has_buffered_line_;  ///< True if line_buffer_ contains a valid line

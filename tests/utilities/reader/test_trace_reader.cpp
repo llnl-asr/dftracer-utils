@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::reader;
 using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::coro;
@@ -130,7 +131,7 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
 
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         CHECK_FALSE(reader.has_index());
 
@@ -153,7 +154,8 @@ TEST_SUITE("TraceReader") {
                     determine_index_path(gz_file, index_dir))
                     .value());
 
-        TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
+        TraceReader reader({.file_path = dstd::String(gz_file),
+                            .index_dir = dstd::String(index_dir)});
 
         CHECK(reader.has_index());
 
@@ -166,7 +168,7 @@ TEST_SUITE("TraceReader") {
             dftracer::utils::dstd::fs::remove_all(
                 determine_index_path(gz_file, index_dir))
                 .has_value();
-            TraceReader plain_reader({.file_path = gz_file});
+            TraceReader plain_reader({.file_path = dstd::String(gz_file)});
             CHECK_FALSE(plain_reader.has_index());
             auto n_plain = count_lines(plain_reader.read_lines()).get();
             CHECK(n_plain == n_indexed);
@@ -185,7 +187,8 @@ TEST_SUITE("TraceReader") {
         REQUIRE(indexer != nullptr);
         indexer->build();
 
-        TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
+        TraceReader reader({.file_path = dstd::String(gz_file),
+                            .index_dir = dstd::String(index_dir)});
         REQUIRE(reader.has_index());
 
         ReadConfig bare;
@@ -204,7 +207,7 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
 
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto n_full = count_lines(reader.read_lines()).get();
         REQUIRE(n_full > 0);
@@ -220,7 +223,7 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
 
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
         rc.start_line = 1;
@@ -234,7 +237,7 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
 
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
         auto total = count_raw_bytes(reader.read_raw()).get();
         CHECK(total > 0);
     }
@@ -243,7 +246,7 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
 
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
         ReadConfig rc;
         rc.line_aligned = false;
         auto total = count_raw_bytes(reader.read_raw(rc)).get();
@@ -254,7 +257,7 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
 
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
         ReadConfig rc;
         rc.line_aligned = true;
         rc.multi_line = false;
@@ -277,7 +280,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("read_raw with byte range returns subset") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto total = count_raw_bytes(reader.read_raw()).get();
         REQUIRE(total > 0);
@@ -304,7 +307,8 @@ TEST_SUITE("TraceReader") {
                     determine_index_path(gz_file, index_dir))
                     .value());
 
-        TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
+        TraceReader reader({.file_path = dstd::String(gz_file),
+                            .index_dir = dstd::String(index_dir)});
         CHECK(reader.has_index());
 
         auto total = count_raw_bytes(reader.read_raw()).get();
@@ -334,7 +338,7 @@ TEST_SUITE("TraceReader") {
         }
         auto gz_file = gzip_fixture(std::string(test_file.str()));
 
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
         rc.start_byte = 0;
@@ -361,7 +365,7 @@ TEST_SUITE("TraceReader") {
         }
         auto gz_file = gzip_fixture(std::string(test_file.str()));
 
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
         rc.start_byte = 2;
@@ -381,7 +385,7 @@ TEST_SUITE("TraceReader") {
         std::string index_dir = env.get_dir();
         std::string index_path = env.get_index_path(gz_file);
 
-        TraceReader plain_reader({.file_path = gz_file});
+        TraceReader plain_reader({.file_path = dstd::String(gz_file)});
         CHECK_FALSE(plain_reader.has_index());
         ReadConfig single_line;
         single_line.line_aligned = true;
@@ -394,8 +398,8 @@ TEST_SUITE("TraceReader") {
         REQUIRE(indexer != nullptr);
         indexer->build();
 
-        TraceReader indexed_reader(
-            {.file_path = gz_file, .index_dir = index_dir});
+        TraceReader indexed_reader({.file_path = dstd::String(gz_file),
+                                    .index_dir = dstd::String(index_dir)});
         CHECK(indexed_reader.has_index());
         auto indexed_chunks =
             count_raw_chunks(indexed_reader.read_raw(single_line)).get();
@@ -407,7 +411,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("read_raw small buffer_size produces more chunks") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig large_buf;
         large_buf.buffer_size = 4 * 1024 * 1024;
@@ -425,7 +429,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("Query filters matching events") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto all = count_lines(reader.read_lines()).get();
         REQUIRE(all > 0);
@@ -440,7 +444,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("Query with no matches returns zero lines") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
         rc.query = R"(cat == "NONEXISTENT")";
@@ -451,7 +455,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("Query filters by name") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
         rc.query = R"(name == "read")";
@@ -477,7 +481,7 @@ TEST_SUITE("TraceReader") {
             dftracer::utils::dstd::fs::file_size(test_file).value();
         auto gz_file = gzip_fixture(std::string(test_file.str()));
 
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
         rc.start_byte = 0;
@@ -494,7 +498,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("Query with AND narrows results") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc_cat;
         rc_cat.query = R"(cat == "POSIX")";
@@ -511,7 +515,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("Query with OR widens results") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc_read;
         rc_read.query = R"(name == "read")";
@@ -542,7 +546,8 @@ TEST_SUITE("TraceReader") {
                     determine_index_path(gz_file, index_dir))
                     .value());
 
-        TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
+        TraceReader reader({.file_path = dstd::String(gz_file),
+                            .index_dir = dstd::String(index_dir)});
         CHECK(reader.has_index());
 
         ReadConfig rc;
@@ -557,7 +562,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("Query combines with line range") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
         rc.start_line = 1;
@@ -570,7 +575,7 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("Empty query string reads all") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto all = count_lines(reader.read_lines()).get();
 
@@ -601,7 +606,7 @@ TEST_SUITE("TraceReader") {
 
         REQUIRE(dftu_utils_test::build_index(gz));
 
-        TraceReader reader({.file_path = gz});
+        TraceReader reader({.file_path = dstd::String(gz)});
         REQUIRE(reader.has_index());
 
         auto all = count_lines(reader.read_lines()).get();
@@ -642,7 +647,7 @@ TEST_SUITE("TraceReader") {
 
         REQUIRE(dftu_utils_test::build_index(gz));
 
-        TraceReader reader({.file_path = gz});
+        TraceReader reader({.file_path = dstd::String(gz)});
         REQUIRE(reader.has_index());
 
         auto all_bytes = count_raw_bytes(reader.read_raw()).get();
@@ -697,7 +702,8 @@ TEST_SUITE("TraceReader") {
         REQUIRE(dftu_utils_test::build_index(gz, "",
                                              /*checkpoint_size=*/32 * 1024));
 
-        TraceReader reader({.file_path = gz, .checkpoint_size = 32 * 1024});
+        TraceReader reader(
+            {.file_path = dstd::String(gz), .checkpoint_size = 32 * 1024});
         REQUIRE(reader.has_index());
 
         auto all = count_lines(reader.read_lines()).get();
@@ -730,7 +736,7 @@ TEST_SUITE("TraceReader::read_json") {
     TEST_CASE("read_json returns parsed events") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto events = collect_json_events(reader.read_json()).get();
         CHECK(events.size() > 0);
@@ -742,7 +748,7 @@ TEST_SUITE("TraceReader::read_json") {
     TEST_CASE("read_json count matches read_lines count") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto line_count = count_lines(reader.read_lines()).get();
         auto json_count = count_json_lines(reader.read_json()).get();
@@ -753,7 +759,7 @@ TEST_SUITE("TraceReader::read_json") {
     TEST_CASE("read_json query filters events") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         auto all = count_json_lines(reader.read_json()).get();
         REQUIRE(all > 0);
@@ -771,7 +777,7 @@ TEST_SUITE("TraceReader::read_json") {
     TEST_CASE("read_json query with no matches returns zero") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
         rc.query = R"(cat == "NONEXISTENT")";
@@ -782,7 +788,7 @@ TEST_SUITE("TraceReader::read_json") {
     TEST_CASE("read_json with AND query") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
 
         ReadConfig rc;
         rc.query = R"(cat == "POSIX" and name == "read")";
@@ -811,7 +817,7 @@ TEST_SUITE("TraceReader::read_json") {
 
         auto gz = gzip_fixture(pfw);
 
-        TraceReader reader({.file_path = gz});
+        TraceReader reader({.file_path = dstd::String(gz)});
 
         ReadConfig rc;
         rc.query = R"(cat == "POSIX")";
@@ -852,7 +858,8 @@ TEST_SUITE("TraceReader::read_json") {
         REQUIRE(dftu_utils_test::build_index(gz, "",
                                              /*checkpoint_size=*/32 * 1024));
 
-        TraceReader reader({.file_path = gz, .checkpoint_size = 32 * 1024});
+        TraceReader reader(
+            {.file_path = dstd::String(gz), .checkpoint_size = 32 * 1024});
         REQUIRE(reader.has_index());
 
         ReadConfig rc;
@@ -884,7 +891,7 @@ TEST_SUITE("TraceReader::read_json") {
 
         auto gz_file = gzip_fixture(std::string(test_file.str()));
 
-        TraceReader reader({.file_path = gz_file});
+        TraceReader reader({.file_path = dstd::String(gz_file)});
         auto events = collect_json_events(reader.read_json()).get();
         REQUIRE(events.size() == 1);
         CHECK(events[0].name == "read");

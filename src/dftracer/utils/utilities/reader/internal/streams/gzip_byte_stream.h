@@ -4,11 +4,11 @@
 
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 
 #include <cstddef>
-#include <span>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -24,7 +24,7 @@ class GzipByteStream : public GzipStream {
     using GzipStream::read_async;
 
     void initialize(
-        const std::string &gz_path, std::size_t start_bytes,
+        const dstd::String &gz_path, std::size_t start_bytes,
         std::size_t end_bytes,
         dftracer::utils::index::gzip::CheckpointIndexer &indexer) override {
         GzipStream::initialize(gz_path, start_bytes, end_bytes, indexer);
@@ -75,7 +75,7 @@ class GzipByteStream : public GzipStream {
         if (!result) {
             throw ReaderError(ReaderError::CompressionError,
                               "gzip decode failed mid-stream at position " +
-                                  std::to_string(current_position_));
+                                  dstd::to_string(current_position_));
         }
         if (bytes_read == 0) {
             is_finished_ = true;

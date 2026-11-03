@@ -6,13 +6,14 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 #include <atomic>
 #include <cstdio>
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::arrow {
 
@@ -35,7 +36,7 @@ class BufferPool {
     static constexpr std::size_t DEFAULT_BUFFER_CAPACITY = 4 * 1024 * 1024;
 
     struct Slot {
-        std::vector<uint8_t> data;
+        dstd::Vector<uint8_t> data;
         std::atomic<bool> in_use{false};
     };
 
@@ -71,7 +72,7 @@ class BufferPool {
         ~Lease() { reset(); }
 
         explicit operator bool() const { return pooled_ || owned_; }
-        std::vector<uint8_t>& data() {
+        dstd::Vector<uint8_t>& data() {
             return pooled_ ? pooled_->data : owned_->data;
         }
         void reset() noexcept {
@@ -84,7 +85,7 @@ class BufferPool {
        private:
         friend class BufferPool;
         Slot* pooled_ = nullptr;
-        std::unique_ptr<Slot> owned_;
+        dstd::UniquePtr<Slot> owned_;
     };
 
     // Never empty: when every pooled slot is busy the lease owns a new slot.
@@ -92,7 +93,7 @@ class BufferPool {
     std::size_t size() const { return slots_.size(); }
 
    private:
-    std::vector<std::unique_ptr<Slot>> slots_;
+    dstd::Vector<dstd::UniquePtr<Slot>> slots_;
 };
 
 /**
@@ -117,7 +118,7 @@ class IpcWriter {
     IpcWriter& operator=(IpcWriter&& other) noexcept;
 
     coro::CoroTask<int> open(
-        const std::string& path,
+        dstd::CStringView path,
         IpcCompression compression = DEFAULT_ARROW_IPC_COMPRESSION,
         std::size_t pool_slots = 4);
 
@@ -138,7 +139,7 @@ class IpcWriter {
     void reset_state() noexcept;
 
     struct CompressedBatch {
-        std::vector<uint8_t> header;
+        dstd::Vector<uint8_t> header;
         BufferPool::Lease body;
         std::size_t body_size;
         std::int32_t metadata_length;

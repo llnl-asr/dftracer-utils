@@ -23,17 +23,17 @@ using fileio::lines::Lines;
  *
  * Features:
  * - Flexible predicate-based filtering
- * - Returns std::optional for composability
+ * - Returns dstd::Optional for composability
  * - Can be used in map/filter pipelines
  * - Can be tagged with Retryable, Monitored behaviors
- *   (Note: Cacheable not recommended due to std::function in input)
+ *   (Note: Cacheable not recommended due to dstd::Function in input)
  *
  * Usage:
  * @code
- * auto filter = std::make_shared<LineFilter>();
+ * auto filter = dstd::make_shared<LineFilter>();
  *
  * auto predicate = [](const Line& line) {
- *     return line.content.find("ERROR") != std::string::npos;
+ *     return line.content.find("ERROR") != dstd::String::npos;
  * };
  *
  * FilterableLine input{Line{"ERROR: Something went wrong"}, predicate};
@@ -47,11 +47,11 @@ using fileio::lines::Lines;
  * Filtering multiple lines:
  * @code
  * auto is_error = [](const Line& line) {
- *     return line.content.find("ERROR") != std::string::npos;
+ *     return line.content.find("ERROR") != dstd::String::npos;
  * };
  *
  * Lines input = get_lines();
- * std::vector<Line> filtered;
+ * dstd::Vector<Line> filtered;
  *
  * for (const auto& line : input.lines) {
  *     auto result = filter->process(FilterableLine{line, is_error});

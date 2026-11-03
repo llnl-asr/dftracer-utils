@@ -1,24 +1,25 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/distributions.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 #include <functional>
 #include <random>
-#include <vector>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::dlio;
 using Rng = std::mt19937_64;
 
 namespace {
 
-std::vector<double> generate_samples(std::size_t n,
-                                     std::function<double(std::mt19937_64&)> f,
-                                     std::uint64_t seed = 12345) {
+dstd::Vector<double> generate_samples(std::size_t n,
+                                      std::function<double(std::mt19937_64&)> f,
+                                      std::uint64_t seed = 12345) {
     std::mt19937_64 rng(seed);
-    std::vector<double> data;
+    dstd::Vector<double> data;
     data.reserve(n);
     for (std::size_t i = 0; i < n; ++i) data.push_back(f(rng));
     return data;
@@ -87,14 +88,14 @@ TEST_SUITE("fit_single_distribution") {
     }
 
     TEST_CASE("Lognormal: rejects non-positive data") {
-        std::vector<double> data{1.0, -2.0, 3.0, 4.0};
+        dstd::Vector<double> data{1.0, -2.0, 3.0, 4.0};
         const auto fit =
             fit_single_distribution(DistributionKind::Lognormal, data);
         CHECK_FALSE(fit.valid);
     }
 
     TEST_CASE("Normal: rejects too few samples") {
-        std::vector<double> data{1.0};
+        dstd::Vector<double> data{1.0};
         const auto fit =
             fit_single_distribution(DistributionKind::Normal, data);
         CHECK_FALSE(fit.valid);

@@ -198,8 +198,8 @@ coro::CoroTask<std::size_t> hash_events(const std::string& path) {
     // std::string (utilities step)
     std::size_t content_hash = 0;
     utilities::hash::HasherUtility hasher;
-    auto line_gen =
-        utilities::fileio::lines::sources::async_streaming_gz_lines(path);
+    auto line_gen = utilities::fileio::lines::sources::async_streaming_gz_lines(
+        dstd::String(path));
     for (;;) {
         auto line_opt = co_await line_gen.next();
         if (!line_opt) break;
@@ -368,7 +368,8 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
                     "Input %s is a single large gzip member; rechunking to "
                     "bounded members at %s",
                     probe.path.c_str(), out.c_str());
-                co_await gzc::gzip_rechunk_to_members(probe.path, out,
+                co_await gzc::gzip_rechunk_to_members(dstd::String(probe.path),
+                                                      dstd::String(out),
                                                       member_size_bytes, 6);
                 probe.path = out;
                 probe.bytes =

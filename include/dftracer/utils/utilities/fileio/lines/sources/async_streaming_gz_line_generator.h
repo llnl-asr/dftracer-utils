@@ -8,14 +8,13 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <sys/stat.h>
 
 #include <cstring>
-#include <memory>
-#include <string>
 
 namespace dftracer::utils::utilities::fileio::lines::sources {
 /**
@@ -27,8 +26,8 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  * when given, replaces `file_path` and closes with its last owner.
  */
 inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
-    std::string file_path, std::size_t start_line = 0, std::size_t end_line = 0,
-    bool recover_truncated = true,
+    dstd::String file_path, std::size_t start_line = 0,
+    std::size_t end_line = 0, bool recover_truncated = true,
     dftracer::utils::dstd::SharedPtr<dftracer::utils::dstd::ScopedFd>
         open_file = nullptr) {
     dftracer::utils::dstd::ScopedFd owned;
@@ -39,7 +38,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
             throw common::DFTUtilsException(
                 common::ErrorCode::Io,
                 "Cannot open compressed file: " + file_path + " (errno=" +
-                    std::to_string(static_cast<int>(-fd_result)) + ")");
+                    dstd::to_string(static_cast<int>(-fd_result)) + ")");
         }
         owned = dftracer::utils::dstd::ScopedFd(static_cast<int>(fd_result));
     }
@@ -52,7 +51,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     }
     const std::uint64_t file_size = static_cast<std::uint64_t>(st.st_size);
 
-    std::string line_buffer;
+    dstd::String line_buffer;
     std::size_t current_line = 0;
     std::exception_ptr ex;
 

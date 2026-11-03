@@ -37,14 +37,14 @@ Types
 
    // Text content
    struct Text {
-       std::string content;
+       dstd::String content;
        bool empty() const;
        std::size_t size() const;
    };
 
    // Line with position
    struct Line {
-       std::string_view content;
+       dstd::StringView content;
        std::size_t line_number;  // 1-based
    };
 
@@ -128,9 +128,9 @@ created are removed; destroying a writer without ``close()`` does the same.
 
    GzipWriterOptions opts;
    opts.on_member = [&](const MemberInfo& m) { members.push_back(m); };
-   auto w = co_await GzipLineWriter::open("/out/trace.pfw.gz", opts);
+   auto w = co_await GzipLineWriter::open("/out/trace.pfw.gz", std::move(opts));
    if (!w) co_return w.error();
-   for (const std::string& batch : batches)       // whole lines, '\n'-ended
+   for (const dstd::String& batch : batches)       // whole lines, '\n'-ended
        if (auto r = co_await w->append(batch); !r) co_return r.error();
    auto summary = co_await w->close();
 

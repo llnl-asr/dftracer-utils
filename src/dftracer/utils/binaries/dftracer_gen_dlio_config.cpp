@@ -134,12 +134,10 @@ class GenDlioConfigArgParse : public binaries::ArgParse {
 };
 
 dstd::Optional<dlio::BestModel> fit_best_model(
-    // keep std: unswept API
-    const std::vector<double>& data) {
+    const dstd::Vector<double>& data) {
     if (data.empty()) return dstd::nullopt;
     const auto singles = dlio::fit_all_single_distributions(data);
-    // keep std: unswept API
-    std::vector<dlio::FittedMixture> mixtures;
+    dstd::Vector<dlio::FittedMixture> mixtures;
     if (data.size() >= 20) {
         mixtures.push_back(dlio::fit_gaussian_mixture(data, 2));
         mixtures.push_back(dlio::fit_gaussian_mixture(data, 3));

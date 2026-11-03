@@ -3,12 +3,12 @@
 #define DFTRACER_UTILS_UTILITIES_DLIO_STATISTIC_H
 
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/quantile_store.h>
 
 #include <cstdint>
 #include <limits>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::utilities::dlio {
 
@@ -70,7 +70,7 @@ struct Boundary {
 
 /// Sweep-line union of [start, end] intervals encoded as boundaries.
 /// Times are in microseconds; return value is seconds.
-double sweep_union(std::vector<Boundary>& boundaries);
+double sweep_union(dstd::Vector<Boundary>& boundaries);
 
 }  // namespace dftracer::utils::utilities::dlio
 

@@ -4,12 +4,10 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/distributions.h>
 
 #include <cstdint>
-#include <optional>
-#include <variant>
-#include <vector>
 
 namespace dftracer::utils::utilities::dlio {
 
@@ -20,8 +18,8 @@ struct GmmComponent {
 
 /// Univariate Gaussian Mixture Model fit. Component count is `weights.size()`.
 struct FittedMixture {
-    std::vector<double> weights;           ///< sum to 1
-    std::vector<GmmComponent> components;  ///< same length as weights
+    dstd::Vector<double> weights;           ///< sum to 1
+    dstd::Vector<GmmComponent> components;  ///< same length as weights
     double log_likelihood = 0.0;
     double bic = 0.0;
     int iterations = 0;
@@ -38,7 +36,7 @@ struct MixtureFitOptions {
 
 /// Fits a K-component Gaussian Mixture via EM. K-means-style initialization on
 /// quantile-spread means and total-variance / K for each component.
-FittedMixture fit_gaussian_mixture(const std::vector<double>& data, int K,
+FittedMixture fit_gaussian_mixture(const dstd::Vector<double>& data, int K,
                                    const MixtureFitOptions& options = {});
 
 double pdf(const FittedMixture& mix, double x);
@@ -65,8 +63,8 @@ struct ModelSelection {
 /// typically the output of fit_all_single_distributions(); `mixtures` is
 /// typically two entries (GMM-2 and GMM-3). Invalid fits are ignored.
 dstd::Optional<ModelSelection> select_best_model(
-    const std::vector<FittedDistribution>& single_fits,
-    const std::vector<FittedMixture>& mixtures);
+    const dstd::Vector<FittedDistribution>& single_fits,
+    const dstd::Vector<FittedMixture>& mixtures);
 
 double pdf(const BestModel& m, double x);
 double cdf(const BestModel& m, double x);

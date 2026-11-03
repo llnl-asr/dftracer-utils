@@ -2,27 +2,26 @@
 #ifndef DFTRACER_UTILS_UTILITIES_DLIO_BARRIER_SIMULATOR_H
 #define DFTRACER_UTILS_UTILITIES_DLIO_BARRIER_SIMULATOR_H
 
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/statistic.h>
 
 #include <cstdint>
-#include <functional>
-#include <optional>
 #include <random>
-#include <vector>
 
 namespace dftracer::utils::utilities::dlio {
 
 using Rng = std::mt19937_64;
-using Sampler = std::function<double(Rng&)>;
+using Sampler = dstd::Function<double(Rng&)>;
 
 struct BarrierSimulatorContext {
     int num_ranks = 0;
     int num_steps = 0;
     double trace_e2e_duration = 0.0;
 
-    std::vector<std::vector<double>> fetch_block_trace;
-    std::vector<std::vector<double>> fetch_iter_trace;
+    dstd::Vector<dstd::Vector<double>> fetch_block_trace;
+    dstd::Vector<dstd::Vector<double>> fetch_iter_trace;
 
     Statistic fetch_block_stats;
     Statistic fetch_iter_stats;
@@ -33,11 +32,11 @@ struct BarrierSimulatorContext {
     ComponentTimeMetrics trace_fetch_iter_metrics;
     ComponentTimeMetrics trace_fetch_block_metrics;
     double trace_rank_variance = 0.0;
-    std::vector<double> trace_per_rank_throughput;
+    dstd::Vector<double> trace_per_rank_throughput;
 
-    dstd::Optional<std::vector<std::vector<double>>> getitem_trace;
+    dstd::Optional<dstd::Vector<dstd::Vector<double>>> getitem_trace;
     dstd::Optional<Statistic> io_stats;
-    dstd::Optional<std::vector<double>> io_samples;
+    dstd::Optional<dstd::Vector<double>> io_samples;
 
     bool sync_mode = false;
     int accumulate_grad_batches = 1;
@@ -57,18 +56,18 @@ struct BarrierSimulationResult {
     double avg_barrier_overhead = 0.0;
     double max_barrier_overhead = 0.0;
 
-    std::vector<double> per_rank_completion_time;
+    dstd::Vector<double> per_rank_completion_time;
     double rank_variance = 0.0;
     double trace_rank_variance = 0.0;
     double rank_variance_error = 0.0;
     double load_imbalance = 0.0;
 
-    std::vector<double> simulated_fetch_block;
+    dstd::Vector<double> simulated_fetch_block;
     double fetch_block_cdf_similarity = 0.0;
 
-    std::vector<double> simulated_preprocess;
-    std::vector<double> simulated_getitem;
-    std::vector<double> simulated_fetch_iter;
+    dstd::Vector<double> simulated_preprocess;
+    dstd::Vector<double> simulated_getitem;
+    dstd::Vector<double> simulated_fetch_iter;
     double fetch_iter_cdf_similarity = 0.0;
     double getitem_cdf_similarity = 0.0;
     double avg_queue_depth = 0.0;
@@ -82,8 +81,8 @@ struct BarrierSimulationResult {
     dstd::Optional<ComponentTimeMetrics> trace_fetch_iter_metrics;
     dstd::Optional<ComponentTimeMetrics> trace_fetch_block_metrics;
 
-    std::vector<double> simulated_per_rank_throughput;
-    std::vector<double> trace_per_rank_throughput;
+    dstd::Vector<double> simulated_per_rank_throughput;
+    dstd::Vector<double> trace_per_rank_throughput;
 
     double throughput_mean = 0.0;
     double trace_throughput_mean = 0.0;
@@ -107,10 +106,10 @@ class BarrierSimulator {
 
 /// 1 - Kolmogorov-Smirnov statistic between the two empirical distributions.
 /// Returns 1.0 for perfect match, 0.0 for fully disjoint.
-double cdf_similarity(const std::vector<double>& a,
-                      const std::vector<double>& b);
+double cdf_similarity(const dstd::Vector<double>& a,
+                      const dstd::Vector<double>& b);
 
-double variance(const std::vector<double>& values);
+double variance(const dstd::Vector<double>& values);
 
 }  // namespace dftracer::utils::utilities::dlio
 

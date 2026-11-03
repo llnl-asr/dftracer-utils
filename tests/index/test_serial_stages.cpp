@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -65,14 +66,14 @@ std::string write_small_trace(const std::string& dir, int n) {
     return dftu_utils_test::write_gz_trace(dir + name, out.str());
 }
 
-std::vector<scan::FileEntry> scan_dir(const std::string& dir) {
-    std::vector<scan::FileEntry> entries;
+dstd::Vector<scan::FileEntry> scan_dir(dstd::StringView dir) {
+    dstd::Vector<scan::FileEntry> entries;
     Runtime rt(4);
     auto task =
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             scan::PatternDirectoryScannerUtility scanner;
             const scan::PatternDirectoryScannerUtilityInput input(
-                dir, std::vector<std::string>{".pfw"}, true);
+                dir, dstd::Vector<dstd::String>{".pfw"}, true);
             entries = co_await scanner(scope, input);
         });
     rt.submit(std::move(task), "scan-dir").wait();
@@ -82,16 +83,16 @@ std::vector<scan::FileEntry> scan_dir(const std::string& dir) {
 
 // The scan as the CLIs run it, from a coroutine that get() drives on the main
 // thread.
-coro::CoroTask<std::vector<scan::FileEntry>> cli_scan_task(std::string dir) {
+coro::CoroTask<dstd::Vector<scan::FileEntry>> cli_scan_task(dstd::String dir) {
     auto entries = scan::scan_on_pool<scan::PatternDirectoryScannerUtility>(
         WORKERS, 2,
         scan::PatternDirectoryScannerUtilityInput(
-            std::move(dir), std::vector<std::string>{".pfw"}, true, false));
+            std::move(dir), dstd::Vector<dstd::String>{".pfw"}, true, false));
     co_return entries;
 }
 
-std::vector<scan::FileEntry> cli_scan(const std::string& dir) {
-    return cli_scan_task(dir).get();
+dstd::Vector<scan::FileEntry> cli_scan(dstd::StringView dir) {
+    return cli_scan_task(dstd::String(dir)).get();
 }
 
 std::vector<std::string> write_view_traces(const std::string& dir, int count) {
@@ -204,7 +205,7 @@ TEST_SUITE("SerialStages") {
         CHECK(entries.size() == SCAN_FILES);
         CHECK(scan::scan_stat_threads().count() >= 1);
         CHECK_FALSE(
-            scan::scan_stat_threads().contains(std::this_thread::get_id()));
+            scan::scan_stat_threads().contains(dstd::Thread::current_id()));
     }
 
     TEST_CASE("a bootstrap that fails midway marks only complete files") {

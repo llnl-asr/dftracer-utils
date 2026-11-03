@@ -60,8 +60,8 @@ TEST_CASE("C++ Indexer - Basic functionality") {
         REQUIRE(indexer != nullptr);
 
         // Test getter methods
-        CHECK(indexer->get_archive_path() == gz_file);
-        CHECK(indexer->get_index_path() == idx_file);
+        CHECK(dstd::StringView(indexer->get_archive_path()) == gz_file);
+        CHECK(dstd::StringView(indexer->get_index_path()) == idx_file);
 
         // Build index first before accessing metadata
         indexer->build();
@@ -107,7 +107,7 @@ TEST_CASE("C++ Reader - Basic functionality") {
             auto reader = ReaderFactory::create(gz_file, idx_file);
             REQUIRE(reader != nullptr);
             CHECK(reader->is_valid());
-            CHECK(reader->get_archive_path() == gz_file);
+            CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
         }
 
         // Should be able to create another one
@@ -128,8 +128,8 @@ TEST_CASE("C++ Reader - Basic functionality") {
         REQUIRE(reader != nullptr);
 
         // Test getter methods
-        CHECK(reader->get_archive_path() == gz_file);
-        CHECK(reader->get_index_path() == idx_file);
+        CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
+        CHECK(dstd::StringView(reader->get_index_path()) == idx_file);
     }
 
     SUBCASE("Read byte range using streaming API") {
@@ -544,14 +544,14 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         REQUIRE(reader != nullptr);
 
         CHECK(reader->is_valid());
-        CHECK(reader->get_archive_path() == gz_file);
+        CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
 
         std::size_t max_bytes = reader->get_max_bytes();
         CHECK(max_bytes > 0);
 
         // Multiple calls should return same value
         CHECK(reader->get_max_bytes() == max_bytes);
-        CHECK(reader->get_archive_path() == gz_file);
+        CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
         CHECK(reader->is_valid());
     }
 
@@ -1284,7 +1284,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         REQUIRE(reader != nullptr);
 
         // Read first 5 lines
-        std::string result = reader->read_lines(1, 5);
+        dstd::String result = reader->read_lines(1, 5);
         CHECK(!result.empty());
 
         // Count newlines to verify we got the right number of lines
@@ -1305,7 +1305,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         // Test specific line numbers that should contain predictable content
         for (std::size_t line_num :
              std::vector<std::size_t>({1, 10, 50, 100})) {
-            std::string result = reader->read_lines(line_num, line_num);
+            dstd::String result = reader->read_lines(line_num, line_num);
             CHECK(!result.empty());
 
             // Should contain id: N where N = line_num
@@ -1327,7 +1327,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         REQUIRE(reader != nullptr);
 
         // Read line range 10-15 (6 lines total)
-        std::string result = reader->read_lines(10, 15);
+        dstd::String result = reader->read_lines(10, 15);
         CHECK(!result.empty());
 
         // Count lines
@@ -1354,7 +1354,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         // Test that our line numbering matches sed's 1-based numbering
         // Line 1 should contain id: 1, line 2 should contain id: 2, etc.
         for (std::size_t i = 1; i <= 5; ++i) {
-            std::string result = reader->read_lines(i, i);
+            dstd::String result = reader->read_lines(i, i);
             std::string expected_id = "\"id\": " + std::to_string(i);
             CHECK(result.find(expected_id) != std::string::npos);
         }
@@ -1386,7 +1386,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
 
         if (num_lines > 100) {
             // Read a large range
-            std::string result = reader->read_lines(1, 100);
+            dstd::String result = reader->read_lines(1, 100);
             CHECK(!result.empty());
 
             // Count lines
@@ -1414,7 +1414,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         if (total_lines > 10) {
             // Read last few lines
             std::size_t start_line = total_lines - 5;
-            std::string result = reader->read_lines(start_line, total_lines);
+            dstd::String result = reader->read_lines(start_line, total_lines);
             CHECK(!result.empty());
 
             // Should have exactly 6 lines (start_line through total_lines
@@ -1442,7 +1442,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
 
         for (std::size_t line_num : test_lines) {
             if (line_num <= total_lines) {
-                std::string result = reader->read_lines(line_num, line_num);
+                dstd::String result = reader->read_lines(line_num, line_num);
                 CHECK(!result.empty());
 
                 // Should have exactly one line

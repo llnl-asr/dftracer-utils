@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::reader;
 using namespace dftracer::utils::utilities::trace_gen;
 using namespace dftracer::utils::coro;
@@ -58,7 +59,7 @@ TEST_SUITE("trace_gen::TraceWriter") {
         REQUIRE(dftracer::utils::dstd::fs::exists(gz_path).value());
         CHECK(dftracer::utils::dstd::fs::file_size(gz_path).value() > 0);
 
-        TraceReader reader({.file_path = gz_path});
+        TraceReader reader({.file_path = dstd::String(gz_path)});
         CHECK_FALSE(reader.has_index());
 
         auto lines = collect_lines(reader.read_lines()).get();
@@ -88,7 +89,7 @@ TEST_SUITE("trace_gen::TraceWriter") {
             emit_event(writer, a);
         }
 
-        TraceReader reader({.file_path = gz_path});
+        TraceReader reader({.file_path = dstd::String(gz_path)});
         auto lines = collect_lines(reader.read_lines()).get();
 
         REQUIRE(lines.size() == 1);

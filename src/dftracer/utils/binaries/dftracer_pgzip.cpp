@@ -95,10 +95,8 @@ static coro::CoroTask<FileResult> compress_file_parallel(
         opts.member_size = chunk_size;
         opts.level = compression_level;
         opts.workers = num_workers;
-        // keep std: unswept API
-        const std::string writer_path(result.output_path);
-        auto writer = common::unwrap(
-            co_await fileio::GzipLineWriter::open(writer_path, opts));
+        auto writer = common::unwrap(co_await fileio::GzipLineWriter::open(
+            dstd::String(result.output_path), std::move(opts)));
 
         dstd::String buf;
         dstd::String carry;

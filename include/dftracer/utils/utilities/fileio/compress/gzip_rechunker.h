@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
@@ -16,10 +17,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio::compress {
 
@@ -51,8 +48,8 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
     constexpr std::size_t BUFFER_BYTES = std::size_t{1} << 20;
     const std::size_t in_bytes = static_cast<std::size_t>(
         std::min<std::uint64_t>(BUFFER_BYTES, file_size));
-    auto in = std::make_unique_for_overwrite<unsigned char[]>(in_bytes);
-    auto out = std::make_unique_for_overwrite<unsigned char[]>(BUFFER_BYTES);
+    auto in = dstd::make_unique_for_overwrite<unsigned char[]>(in_bytes);
+    auto out = dstd::make_unique_for_overwrite<unsigned char[]>(BUFFER_BYTES);
     std::uint64_t off = 0;
     std::uint64_t produced = 0;
     std::uint64_t member_produced = 0;
@@ -107,8 +104,8 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
 /// to `out_path`: identical uncompressed bytes, re-framed by @ref
 /// GzipLineWriter into members of about `member_size` uncompressed bytes that
 /// end at newlines.
-inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
-                                                    const std::string& out_path,
+inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
+                                                    dstd::String out_path,
                                                     std::size_t member_size,
                                                     int level) {
     if (member_size == 0)
@@ -142,11 +139,12 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
     GzipWriterOptions opts;
     opts.member_size = member_size;
     opts.level = level;
-    auto writer = common::unwrap(co_await GzipLineWriter::open(out_path, opts));
+    auto writer = common::unwrap(
+        co_await GzipLineWriter::open(out_path, std::move(opts)));
 
-    std::vector<unsigned char> in(1u << 20);
-    std::vector<unsigned char> out(1u << 20);
-    std::string carry;
+    dstd::Vector<unsigned char> in(1u << 20);
+    dstd::Vector<unsigned char> out(1u << 20);
+    dstd::String carry;
     std::uint64_t off = 0;
 
     // Appends the whole lines of `text` and keeps the rest in `carry`.

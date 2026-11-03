@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/distributions.h>
 #include <dftracer/utils/utilities/dlio/mixture.h>
 #include <doctest/doctest.h>
@@ -8,22 +9,22 @@
 #include <cmath>
 #include <random>
 #include <variant>
-#include <vector>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::dlio;
 
 namespace {
 
 // Sample n points from a K-component Normal mixture with given
 // weights/means/stddevs.
-std::vector<double> sample_mixture(std::size_t n,
-                                   const std::vector<double>& weights,
-                                   const std::vector<double>& means,
-                                   const std::vector<double>& stddevs,
-                                   std::uint64_t seed = 4242) {
+dstd::Vector<double> sample_mixture(std::size_t n,
+                                    const dstd::Vector<double>& weights,
+                                    const dstd::Vector<double>& means,
+                                    const dstd::Vector<double>& stddevs,
+                                    std::uint64_t seed = 4242) {
     std::mt19937_64 rng(seed);
     std::discrete_distribution<int> cat(weights.begin(), weights.end());
-    std::vector<double> data;
+    dstd::Vector<double> data;
     data.reserve(n);
     for (std::size_t i = 0; i < n; ++i) {
         const int k = cat(rng);
@@ -47,7 +48,7 @@ TEST_SUITE("fit_gaussian_mixture") {
 
         // Sort by mean for deterministic comparison (EM has label-switching
         // freedom).
-        std::vector<std::size_t> idx{0, 1};
+        dstd::Vector<std::size_t> idx{0, 1};
         std::sort(idx.begin(), idx.end(), [&](std::size_t a, std::size_t b) {
             return fit.components[a].mean < fit.components[b].mean;
         });
@@ -78,7 +79,7 @@ TEST_SUITE("fit_gaussian_mixture") {
     }
 
     TEST_CASE("rejects too few samples") {
-        std::vector<double> data{1.0, 2.0};
+        dstd::Vector<double> data{1.0, 2.0};
         const auto fit = fit_gaussian_mixture(data, 2);
         CHECK_FALSE(fit.valid);
     }
@@ -125,8 +126,8 @@ TEST_SUITE("select_best_model") {
         auto data = sample_mixture(4000, {0.5, 0.5}, {0.0, 4.0}, {0.3, 0.4},
                                    /*seed=*/22);
         const auto singles = fit_all_single_distributions(data);
-        std::vector<FittedMixture> mixes{fit_gaussian_mixture(data, 2),
-                                         fit_gaussian_mixture(data, 3)};
+        dstd::Vector<FittedMixture> mixes{fit_gaussian_mixture(data, 2),
+                                          fit_gaussian_mixture(data, 3)};
         const auto best = select_best_model(singles, mixes);
         REQUIRE(best.has_value());
         // For clearly bimodal data, no single dist should win.
@@ -135,13 +136,13 @@ TEST_SUITE("select_best_model") {
 
     TEST_CASE("picks single for unimodal Normal data") {
         std::mt19937_64 rng(33);
-        std::vector<double> data;
+        dstd::Vector<double> data;
         data.reserve(3000);
         for (int i = 0; i < 3000; ++i)
             data.push_back(std::normal_distribution<double>(2.0, 0.5)(rng));
         const auto singles = fit_all_single_distributions(data);
-        std::vector<FittedMixture> mixes{fit_gaussian_mixture(data, 2),
-                                         fit_gaussian_mixture(data, 3)};
+        dstd::Vector<FittedMixture> mixes{fit_gaussian_mixture(data, 2),
+                                          fit_gaussian_mixture(data, 3)};
         const auto best = select_best_model(singles, mixes);
         REQUIRE(best.has_value());
         // With BIC's parameter penalty, a single Normal should beat GMM-2/3.

@@ -108,7 +108,8 @@ TEST_SUITE("viz_stats_fastpath") {
             auto task =
                 coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                     co_await gzc::gzip_rechunk_to_members(
-                        src, gz, /*member_size=*/4096, /*level=*/6);
+                        dstd::String(src), dstd::String(gz),
+                        /*member_size=*/4096, /*level=*/6);
                     co_await index.initialize();
                     co_return;
                 });

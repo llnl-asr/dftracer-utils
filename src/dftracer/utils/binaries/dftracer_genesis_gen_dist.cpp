@@ -656,10 +656,8 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
         opts.workers = std::max<std::size_t>(1, cli->pipeline.executor_threads);
         opts.memory_budget = bytes;
         opts.ordered = false;
-        // keep std: unswept API
-        const std::string writer_path(path.data(), path.size());
-        auto opened =
-            co_await fileio::GzipLineWriter::open(writer_path, std::move(opts));
+        auto opened = co_await fileio::GzipLineWriter::open(dstd::String(path),
+                                                            std::move(opts));
         if (!opened) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Cannot write %s: %s", binaries::c_str(path),

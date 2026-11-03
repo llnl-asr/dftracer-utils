@@ -5,9 +5,6 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
-#include <functional>
-#include <vector>
-
 namespace dftracer::utils::utilities::fileio {
 
 /**

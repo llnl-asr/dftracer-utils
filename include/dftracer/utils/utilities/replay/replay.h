@@ -5,7 +5,11 @@
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/utilities/replay/trace.h>
 
@@ -13,12 +17,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
 namespace dftracer::utils::utilities::replay {
 
@@ -35,28 +33,27 @@ struct ReplayConfig {
     double timing_scale = 1.0;   ///< Scale timing (1.0 = original, 0.5 = 2x
                                  ///< faster, 2.0 = 2x slower)
     std::uint64_t start_time_offset = 0;  ///< Offset to add to all timestamps
-    std::string output_directory;  ///< Directory for creating files (empty =
-                                   ///< use original paths)
+    dstd::String output_directory;  ///< Directory for creating files (empty =
+                                    ///< use original paths)
     std::size_t max_file_size =
-        1024 * 1024 * 100;         ///< Max file size to create (100MB default)
+        1024 * 1024 * 100;          ///< Max file size to create (100MB default)
 
     /// Function and category filters
-    std::unordered_set<std::string>
-        filter_functions;    ///< Only replay these functions (empty = all)
-    std::unordered_set<std::string>
-        exclude_functions;   ///< Exclude these functions
-    std::unordered_set<std::string>
+    dstd::HashSet<dstd::String>
+        filter_functions;  ///< Only replay these functions (empty = all)
+    dstd::HashSet<dstd::String> exclude_functions;  ///< Exclude these functions
+    dstd::HashSet<dstd::String>
         filter_categories;   ///< Only replay these categories
-    std::unordered_set<std::string>
+    dstd::HashSet<dstd::String>
         exclude_categories;  ///< Exclude these categories
 
     /// Process/Thread filters
-    std::unordered_set<std::uint32_t>
+    dstd::HashSet<std::uint32_t>
         filter_pids;  ///< Only replay these PIDs (empty = all)
-    std::unordered_set<std::uint32_t>
+    dstd::HashSet<std::uint32_t>
         filter_tids;  ///< Only replay these TIDs (empty = all)
-    std::unordered_set<std::uint32_t> exclude_pids;  ///< Exclude these PIDs
-    std::unordered_set<std::uint32_t> exclude_tids;  ///< Exclude these TIDs
+    dstd::HashSet<std::uint32_t> exclude_pids;  ///< Exclude these PIDs
+    dstd::HashSet<std::uint32_t> exclude_tids;  ///< Exclude these TIDs
 
     /// Timestamp filters (microseconds)
     std::uint64_t start_timestamp =
@@ -98,7 +95,7 @@ struct ReplayConfig {
     /// Optional hook fired after the timing wait and before the executor runs,
     /// to measure dispatch lateness. run_pipelined calls it from several
     /// threads at once.
-    std::function<void(const Trace&, std::chrono::steady_clock::time_point)>
+    dstd::Function<void(const Trace&, std::chrono::steady_clock::time_point)>
         on_dispatch;
 };
 
@@ -113,13 +110,13 @@ struct ReplayResult {
     std::chrono::microseconds total_duration{0};
     std::chrono::microseconds execution_duration{0};
     /// Keys are non-owning views into the replay @ref dstd::StringIntern pool.
-    std::unordered_map<dstd::StringView, std::size_t> function_counts;
-    std::unordered_map<dstd::StringView, std::size_t> category_counts;
-    std::vector<std::string> error_messages;
+    dstd::HashMap<dstd::StringView, std::size_t> function_counts;
+    dstd::HashMap<dstd::StringView, std::size_t> category_counts;
+    dstd::Vector<dstd::String> error_messages;
 
     /// Extended statistics
-    std::unordered_map<std::uint32_t, std::size_t> pid_counts;
-    std::unordered_map<std::uint32_t, std::size_t> tid_counts;
+    dstd::HashMap<std::uint32_t, std::size_t> pid_counts;
+    dstd::HashMap<std::uint32_t, std::size_t> tid_counts;
     std::size_t total_bytes_read = 0;
     std::size_t total_bytes_written = 0;
     std::uint64_t first_timestamp = UINT64_MAX;
@@ -165,7 +162,7 @@ class TraceExecutor {
     /**
      * Get human-readable name for this executor
      */
-    virtual std::string get_name() const = 0;
+    virtual dstd::String get_name() const = 0;
 };
 
 /**
@@ -175,13 +172,13 @@ class PosixExecutor : public TraceExecutor {
    public:
     bool execute(const Trace& trace, const ReplayConfig& config) override;
     bool can_handle(const Trace& trace) const override;
-    std::string get_name() const override { return "POSIX"; }
+    dstd::String get_name() const override { return "POSIX"; }
 
    private:
     /// Keys are interned via the replay @ref dstd::StringIntern pool.
-    std::unordered_map<dstd::StringView, int> open_files_;
+    dstd::HashMap<dstd::StringView, int> open_files_;
     /// Scratch buffer reused across reads and writes.
-    std::vector<char> io_buffer_;
+    dstd::Vector<char> io_buffer_;
 
     bool execute_open(const Trace& trace, const ReplayConfig& config);
     bool execute_close(const Trace& trace, const ReplayConfig& config);
@@ -202,7 +199,7 @@ class DFTracerExecutor : public TraceExecutor {
    public:
     bool execute(const Trace& trace, const ReplayConfig& config) override;
     bool can_handle(const Trace& trace) const override;
-    std::string get_name() const override { return "DFTracer"; }
+    dstd::String get_name() const override { return "DFTracer"; }
 
    private:
     void sleep_for_duration(double duration_microseconds);
@@ -231,14 +228,14 @@ class ReplayEngine {
      * Construct replay engine with configuration
      * @param config Replay configuration options
      */
-    explicit ReplayEngine(const ReplayConfig& config);
+    explicit ReplayEngine(ReplayConfig config);
 
     /**
      * Construct and immediately configure for a trace file
      * @param trace_file Path to trace file
      * @param config Replay configuration options
      */
-    ReplayEngine(const std::string& trace_file, const ReplayConfig& config);
+    ReplayEngine(dstd::StringView trace_file, ReplayConfig config);
 
     ~ReplayEngine();
 
@@ -248,15 +245,15 @@ class ReplayEngine {
      * @param index_file Optional path to index file
      * @return Replay results and statistics
      */
-    ReplayResult replay(const std::string& trace_file,
-                        const std::string& index_file = "");
+    ReplayResult replay(dstd::StringView trace_file,
+                        dstd::StringView index_file = "");
 
     /**
      * Replay traces from multiple files
      * @param trace_files Vector of trace file paths
      * @return Aggregated replay results
      */
-    ReplayResult replay(const std::vector<std::string>& trace_files);
+    ReplayResult replay(const dstd::Vector<dstd::String>& trace_files);
 
     /**
      * Replay traces using call tree structure
@@ -265,14 +262,14 @@ class ReplayEngine {
      * @param pattern File pattern (default: "*.pfw.gz")
      * @return Replay results with call tree statistics
      */
-    ReplayResult replay_with_call_tree(const std::string& trace_dir,
-                                       const std::string& pattern = "*.pfw.gz");
+    ReplayResult replay_with_call_tree(dstd::StringView trace_dir,
+                                       dstd::StringView pattern = "*.pfw.gz");
 
     /**
      * Stream parsed Trace events of one trace file. Drives
      * TraceReader::read_json under the hood; each call yields one event.
      */
-    coro::AsyncGenerator<Trace> stream_traces(std::string file);
+    coro::AsyncGenerator<Trace> stream_traces(dstd::String file);
 
     /**
      * Replay files in parallel, one lane per file, at most one file per
@@ -281,14 +278,14 @@ class ReplayEngine {
      * results merged in input order and must outlive the awaited coroutine.
      */
     coro::CoroTask<void> run_pipelined(coro::Scope& scope,
-                                       const std::vector<std::string>& files,
+                                       const dstd::Vector<dstd::String>& files,
                                        ReplayResult& result,
                                        std::size_t channel_capacity = 4096);
 
    private:
     struct Lane {
         std::chrono::steady_clock::time_point start{};
-        std::unique_ptr<TraceExecutor> executor;
+        dstd::UniquePtr<TraceExecutor> executor;
         ReplayResult result;
         std::uint64_t first_timestamp = 0;
         bool anchored = false;
@@ -301,8 +298,8 @@ class ReplayEngine {
     Lane make_lane() const;
 
     /// replay(file) without resetting the max_events count.
-    ReplayResult replay_file_sync(const std::string& trace_file,
-                                  const std::string& index_file);
+    ReplayResult replay_file_sync(dstd::StringView trace_file,
+                                  dstd::StringView index_file);
 
     /**
      * Counts the event into the lane's result. Returns false when it is skipped
@@ -315,7 +312,7 @@ class ReplayEngine {
 
     void replay_one_trace(const Trace& trace, Lane& lane);
 
-    coro::CoroTask<void> replay_file(std::string file, Lane& lane,
+    coro::CoroTask<void> replay_file(dstd::String file, Lane& lane,
                                      std::size_t channel_capacity);
 
     /**

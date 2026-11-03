@@ -4,12 +4,11 @@
 
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/partition_writer.h>
 #include <nanoarrow/nanoarrow.h>
-
-#include <iomanip>
-#include <sstream>
 
 namespace dftracer::utils::utilities::arrow {
 
@@ -61,14 +60,16 @@ PartitionWriter& PartitionWriter::operator=(PartitionWriter&& other) noexcept {
     return *this;
 }
 
-std::string PartitionWriter::generate_filename() const {
-    std::ostringstream ss;
-    ss << "part-" << std::setw(5) << std::setfill('0') << file_index_
-       << ".arrow";
-    return std::string((dstd::PathView(output_dir_) / ss.str()).str());
+dstd::String PartitionWriter::generate_filename() const {
+    const dstd::String digits = dstd::to_string(file_index_);
+    dstd::String name = "part-";
+    if (digits.size() < 5) name.append(5 - digits.size(), '0');
+    name += digits;
+    name += ".arrow";
+    return dstd::String((dstd::PathView(output_dir_) / name).str());
 }
 
-coro::CoroTask<int> PartitionWriter::open(const std::string& output_dir,
+coro::CoroTask<int> PartitionWriter::open(dstd::StringView output_dir,
                                           int64_t chunk_size_bytes,
                                           IpcCompression compression) {
     if (is_open_) co_return -1;
@@ -86,7 +87,7 @@ coro::CoroTask<int> PartitionWriter::open(const std::string& output_dir,
     files_.clear();
     row_counts_.clear();
 
-    std::string path = generate_filename();
+    dstd::String path = generate_filename();
     int rc = co_await writer_.open(path, compression_);
     if (rc != 0) co_return rc;
 
@@ -135,7 +136,7 @@ coro::CoroTask<int> PartitionWriter::rotate_file() {
     current_file_bytes_ = 0;
     current_file_rows_ = 0;
 
-    std::string path = generate_filename();
+    dstd::String path = generate_filename();
     co_return co_await writer_.open(path, compression_);
 }
 

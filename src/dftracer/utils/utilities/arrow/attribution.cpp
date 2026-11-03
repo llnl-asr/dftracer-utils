@@ -4,7 +4,11 @@
 #include <dftracer/utils/dstd/scope_exit.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/attribution.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
@@ -15,36 +19,33 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace dftracer::utils::utilities::arrow {
 
 namespace {
 
-std::string render_cell(const ArrowArrayView* v, std::int64_t row, KeyKind k) {
+dstd::String render_cell(const ArrowArrayView* v, std::int64_t row, KeyKind k) {
     switch (k) {
         case KeyKind::Signed:
-            return std::to_string(ArrowArrayViewGetIntUnsafe(v, row));
+            return dstd::to_string(ArrowArrayViewGetIntUnsafe(v, row));
         case KeyKind::Unsigned:
-            return std::to_string(ArrowArrayViewGetUIntUnsafe(v, row));
+            return dstd::to_string(ArrowArrayViewGetUIntUnsafe(v, row));
         case KeyKind::Float: {
             char buf[32];
             std::snprintf(buf, sizeof(buf), "%.17g",
                           ArrowArrayViewGetDoubleUnsafe(v, row));
-            return std::string(buf);
+            return dstd::String(buf);
         }
         default: {
             ArrowStringView s = ArrowArrayViewGetStringUnsafe(v, row);
-            return std::string(s.data, static_cast<std::size_t>(s.size_bytes));
+            return dstd::String(s.data, static_cast<std::size_t>(s.size_bytes));
         }
     }
 }
 
 struct OutRow {
-    std::string dim;
-    std::string value;
+    dstd::String dim;
+    dstd::String value;
     std::int64_t sel;
     std::int64_t base;
 };
@@ -76,8 +77,8 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
             "attribute: select column must be boolean");
     }
 
-    std::vector<const ArrowArrayView*> dviews(n_dim);
-    std::vector<KeyKind> dkinds(n_dim);
+    dstd::Vector<const ArrowArrayView*> dviews(n_dim);
+    dstd::Vector<KeyKind> dkinds(n_dim);
     for (std::uint32_t d = 0; d < n_dim; ++d) {
         if (dim_cols[d] >= static_cast<std::uint32_t>(ncols)) {
             throw common::DFTUtilsException(
@@ -95,8 +96,8 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
         dkinds[d] = *kk;
     }
 
-    std::vector<
-        std::unordered_map<std::string, dstd::Pair<std::int64_t, std::int64_t>>>
+    dstd::Vector<
+        dstd::HashMap<dstd::String, dstd::Pair<std::int64_t, std::int64_t>>>
         counts(n_dim);
     std::int64_t total_sel = 0;
     std::int64_t total_base = 0;
@@ -110,7 +111,7 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
             ++total_base;
         for (std::uint32_t d = 0; d < n_dim; ++d) {
             if (ArrowArrayViewIsNull(dviews[d], row)) continue;
-            std::string key = render_cell(dviews[d], row, dkinds[d]);
+            dstd::String key = render_cell(dviews[d], row, dkinds[d]);
             auto& c = counts[d][std::move(key)];
             if (selected)
                 ++c.first;
@@ -119,10 +120,10 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
         }
     }
 
-    std::vector<OutRow> rows;
+    dstd::Vector<OutRow> rows;
     for (std::uint32_t d = 0; d < n_dim; ++d) {
         const char* dname = s->children[dim_cols[d]]->name;
-        std::string dim = dname ? dname : "";
+        dstd::String dim = dname ? dname : "";
         for (auto& e : counts[d]) {
             rows.push_back({dim, e.first, e.second.first, e.second.second});
         }

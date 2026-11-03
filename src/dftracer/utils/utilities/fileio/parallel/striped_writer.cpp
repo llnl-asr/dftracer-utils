@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <dftracer/utils/utilities/fileio/parallel/pwrite_fully.h>
@@ -11,7 +14,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio::parallel {
 
@@ -19,7 +21,7 @@ namespace {
 
 class StripedWriter final : public ParallelWriter {
    public:
-    coro::CoroTask<int> open(std::string path, std::size_t num_workers,
+    coro::CoroTask<int> open(dstd::String path, std::size_t num_workers,
                              bool /*gzip_extension*/,
                              coro::Scope* /*scope*/) override {
         path_ = std::move(path);
@@ -33,7 +35,7 @@ class StripedWriter final : public ParallelWriter {
         fd_ = static_cast<int>(fd);
         offset_.store(0, std::memory_order_relaxed);
         per_worker_layout_.assign(std::max<std::size_t>(num_workers, 1),
-                                  std::vector<MemberSpan>{});
+                                  dstd::Vector<MemberSpan>{});
         merged_layout_.clear();
         merged_layout_built_ = false;
         co_return 0;
@@ -70,7 +72,7 @@ class StripedWriter final : public ParallelWriter {
         co_return static_cast<int>(rc);
     }
 
-    std::vector<std::string> output_paths() const override { return {path_}; }
+    dstd::Vector<dstd::String> output_paths() const override { return {path_}; }
 
     dstd::Optional<MemberSpan> last_member(
         std::size_t worker_idx) const override {
@@ -112,18 +114,18 @@ class StripedWriter final : public ParallelWriter {
             static_cast<off_t>(base));
     }
 
-    std::string path_;
+    dstd::String path_;
     int fd_ = -1;
     std::atomic<std::uint64_t> offset_{0};
-    std::vector<std::vector<MemberSpan>> per_worker_layout_;
-    mutable std::vector<MemberSpan> merged_layout_;
+    dstd::Vector<dstd::Vector<MemberSpan>> per_worker_layout_;
+    mutable dstd::Vector<MemberSpan> merged_layout_;
     mutable bool merged_layout_built_ = false;
 };
 
 }  // namespace
 
-std::unique_ptr<ParallelWriter> make_striped_writer() {
-    return std::make_unique<StripedWriter>();
+dstd::UniquePtr<ParallelWriter> make_striped_writer() {
+    return dstd::make_unique<StripedWriter>();
 }
 
 }  // namespace dftracer::utils::utilities::fileio::parallel

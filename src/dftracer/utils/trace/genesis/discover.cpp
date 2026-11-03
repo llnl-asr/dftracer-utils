@@ -330,9 +330,8 @@ coro::CoroTask<Discovery> discover(coro::Scope& ctx,
         const dstd::Path root =
             common::unwrap(dstd::fs::absolute(dstd::PathView(r)));
         // A braced list inside the co_await expression crashes GCC 12.
-        // keep std: the scanner input holds a std::vector of std::string
-        const std::vector<std::string> patterns{".pfw.gz", "summary.json",
-                                                ".csv"};
+        const dstd::Vector<dstd::String> patterns{".pfw.gz", "summary.json",
+                                                  ".csv"};
         utilities::filesystem::PatternDirectoryScannerUtilityInput input(
             root.str(), patterns, true, true);
         const auto entries = co_await scan(ctx, input);

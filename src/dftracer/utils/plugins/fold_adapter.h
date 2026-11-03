@@ -32,8 +32,7 @@ namespace dftracer::utils::plugins {
 // Host-owned parallel writer handed to the plugin as an opaque dftu_writer*;
 // num_workers/gzip are captured at writer_create for a later writer_open.
 struct PluginWriter {
-    // keep std: fileio make_sharded_writer returns std::unique_ptr
-    std::unique_ptr<utilities::fileio::parallel::ParallelWriter> writer;
+    dstd::UniquePtr<utilities::fileio::parallel::ParallelWriter> writer;
     dstd::String path;
     std::size_t num_workers = 1;
     bool gzip = false;

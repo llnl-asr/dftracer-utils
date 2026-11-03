@@ -5,8 +5,10 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -15,9 +17,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <memory>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio::compress {
 
@@ -64,13 +63,13 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
                 std::min(std::max(out_cap, isize + isize / 16), stream_above);
         }
     }
-    auto out = std::make_unique_for_overwrite<unsigned char[]>(out_cap);
+    auto out = dstd::make_unique_for_overwrite<unsigned char[]>(out_cap);
 
     // comp holds file bytes [comp_off, next_read) at comp[head, tail).
     std::size_t comp_cap = 0;
     std::size_t head = 0;
     std::size_t tail = 0;
-    std::unique_ptr<unsigned char[]> comp;
+    dstd::UniquePtr<unsigned char[]> comp;
     std::uint64_t comp_off = 0;
     std::uint64_t next_read = 0;
 
@@ -94,7 +93,7 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
                     }
                     out_cap = std::min(out_cap * 2, stream_above);
                     out.reset();
-                    out = std::make_unique_for_overwrite<unsigned char[]>(
+                    out = dstd::make_unique_for_overwrite<unsigned char[]>(
                         out_cap);
                     continue;
                 }
@@ -104,7 +103,7 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
 
             if (next_read >= file_size) {
                 // The last member was cut short: yield its complete lines.
-                std::vector<std::uint8_t> rest;
+                dstd::Vector<std::uint8_t> rest;
                 auto keep = recover_truncated
                                 ? decode_truncated_member(comp.get() + head,
                                                           tail - head, rest)
@@ -132,7 +131,7 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
                 } else {
                     comp_cap = std::max(held + want, comp_cap * 2);
                     auto bigger =
-                        std::make_unique_for_overwrite<unsigned char[]>(
+                        dstd::make_unique_for_overwrite<unsigned char[]>(
                             comp_cap);
                     if (held > 0)
                         std::memcpy(bigger.get(), comp.get() + head, held);
@@ -162,7 +161,7 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
                     "failed to start a gzip stream");
             }
             auto in =
-                std::make_unique_for_overwrite<unsigned char[]>(READ_CHUNK);
+                dstd::make_unique_for_overwrite<unsigned char[]>(READ_CHUNK);
             zs.set_input(comp.get() + head, tail - head);
             std::uint64_t stream_read = next_read;
             std::size_t filled = 0;

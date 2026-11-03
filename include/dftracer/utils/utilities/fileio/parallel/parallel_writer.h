@@ -4,17 +4,15 @@
 
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/parallel/layout.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <span>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::coro {
 class Scope;
@@ -32,7 +30,7 @@ class ParallelWriter {
     /// Create/truncate backing storage. `scope` may be null for layouts that
     /// don't spawn internal coroutines; padded-striped requires a non-null
     /// scope that outlives close().
-    virtual coro::CoroTask<int> open(std::string path, std::size_t num_workers,
+    virtual coro::CoroTask<int> open(dstd::String path, std::size_t num_workers,
                                      bool gzip_extension,
                                      coro::Scope* scope) = 0;
 
@@ -49,7 +47,7 @@ class ParallelWriter {
     virtual coro::CoroTask<int> close() = 0;
 
     /// One entry for striped; N entries (read order) for sharded.
-    virtual std::vector<std::string> output_paths() const = 0;
+    virtual dstd::Vector<dstd::String> output_paths() const = 0;
 
     /// Per-write_chunk layout entry: byte offset + length of one independently
     /// decompressable gzip member (or raw chunk for non-gzip layouts).
@@ -76,7 +74,9 @@ class ParallelWriter {
     /// Per-worker base offset to add to a shard-local `MemberSpan.offset` to
     /// get the merged-file offset. Empty by default (no remap needed for
     /// single-stream layouts). Call after `close()`.
-    virtual std::vector<std::uint64_t> shard_base_offsets() const { return {}; }
+    virtual dstd::Vector<std::uint64_t> shard_base_offsets() const {
+        return {};
+    }
 };
 
 struct WriterConfig {
@@ -85,15 +85,15 @@ struct WriterConfig {
     bool gzip = false;
 };
 
-std::unique_ptr<ParallelWriter> make_writer(const WriterConfig& cfg);
-std::unique_ptr<ParallelWriter> make_striped_writer();
-std::unique_ptr<ParallelWriter> make_sharded_writer();
-std::unique_ptr<ParallelWriter> make_padded_striped_writer(
+dstd::UniquePtr<ParallelWriter> make_writer(const WriterConfig& cfg);
+dstd::UniquePtr<ParallelWriter> make_striped_writer();
+dstd::UniquePtr<ParallelWriter> make_sharded_writer();
+dstd::UniquePtr<ParallelWriter> make_padded_striped_writer(
     std::size_t stripe_size);
 
 /// Everything needed to build a writer for a target path in one place.
 struct WriterRequest {
-    std::string path;
+    dstd::String path;
     std::size_t baseline_workers;
     std::size_t default_flush_bytes;
     std::size_t buffer_headroom_bytes;
@@ -104,7 +104,7 @@ struct WriterRequest {
 /// sizing, so the caller can open() with the right worker count and remap
 /// member offsets.
 struct ConfiguredWriter {
-    std::unique_ptr<ParallelWriter> writer;
+    dstd::UniquePtr<ParallelWriter> writer;
     LayoutInfo layout;  ///< resolved layout (striped-with-no-stripe -> sharded)
     WriterSizing sizing;  ///< num_workers / flush_threshold / buffer_capacity
 };

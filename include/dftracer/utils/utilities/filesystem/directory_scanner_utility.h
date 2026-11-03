@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
@@ -24,12 +25,8 @@
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
-#include <functional>
-#include <memory>
 #include <mutex>
-#include <string>
 #include <thread>
-#include <vector>
 
 namespace dftracer::utils::utilities::filesystem {
 
@@ -58,25 +55,32 @@ class ScanStatThreads {
    public:
     void note() {
         std::lock_guard<std::mutex> lock(mu_);
-        ids_.insert(std::this_thread::get_id());
+        const dstd::Thread::Id id = dstd::Thread::current_id();
+        for (const dstd::Thread::Id& seen : ids_) {
+            if (seen == id) return;
+        }
+        ids_.push_back(id);
     }
     std::size_t count() const {
         std::lock_guard<std::mutex> lock(mu_);
         return ids_.size();
     }
-    bool contains(std::thread::id id) const {
+    bool contains(dstd::Thread::Id id) const {
         std::lock_guard<std::mutex> lock(mu_);
-        return ids_.count(id) > 0;
+        for (const dstd::Thread::Id& seen : ids_) {
+            if (seen == id) return true;
+        }
+        return false;
     }
     void clear() {
-        dftracer::utils::dstd::Set<std::thread::id> dropped;
+        dftracer::utils::dstd::Vector<dstd::Thread::Id> dropped;
         std::lock_guard<std::mutex> lock(mu_);
         dropped.swap(ids_);
     }
 
    private:
     mutable std::mutex mu_;
-    dftracer::utils::dstd::Set<std::thread::id> ids_;
+    dftracer::utils::dstd::Vector<dstd::Thread::Id> ids_;
 };
 
 inline ScanStatThreads& scan_stat_threads() {
@@ -130,7 +134,7 @@ class DirectoryScannerUtility {
      * @throws common::DFTUtilsException if directory doesn't exist, is not a
      * directory, or cannot be read
      */
-    coro::CoroTask<std::vector<FileEntry>> operator()(
+    coro::CoroTask<dstd::Vector<FileEntry>> operator()(
         coro::Scope& ctx, const DirectoryScannerUtilityInput& input) const {
         dftracer::utils::common::InputFileStat root_stat;
         if (!dftracer::utils::common::stat_input(input.path, root_stat)) {
@@ -151,7 +155,7 @@ class DirectoryScannerUtility {
 
         if (input.recursive) {
             coro::Executor* exec = ctx.executor();
-            auto gate = std::make_shared<coro::AdaptiveGate>(
+            auto gate = dstd::make_shared<coro::AdaptiveGate>(
                 exec ? exec->concurrency() : 1);
             co_return co_await scan_parallel(ctx, std::move(gate), input.path,
                                              input.populate_size);
@@ -172,13 +176,13 @@ class DirectoryScannerUtility {
         }
         auto entries = co_await coro::when_all(std::move(tasks));
 
-        co_return std::vector<FileEntry>(
+        co_return dstd::Vector<FileEntry>(
             std::make_move_iterator(entries.begin()),
             std::make_move_iterator(entries.end()));
     }
 
     /// Scope-less overload: opens its own scope on the current executor.
-    coro::CoroTask<std::vector<FileEntry>> operator()(
+    coro::CoroTask<dstd::Vector<FileEntry>> operator()(
         const DirectoryScannerUtilityInput& input) const {
         return coro::with_scope(
             [this, input](coro::Scope& s) { return (*this)(s, input); });
@@ -193,7 +197,7 @@ class DirectoryScannerUtility {
     };
 
     struct StatBatch {
-        std::vector<FileEntry> entries;
+        dstd::Vector<FileEntry> entries;
         dstd::Vector<dstd::Path> subdirs;
     };
 
@@ -254,7 +258,7 @@ class DirectoryScannerUtility {
     /// Recursive parallel scan merged in listing order. Stat batches run over
     /// @p ctx, as many at once as @p gate admits. An unreadable directory is
     /// skipped rather than aborting the scan.
-    static coro::CoroTask<std::vector<FileEntry>> scan_parallel(
+    static coro::CoroTask<dstd::Vector<FileEntry>> scan_parallel(
         coro::Scope& ctx, dstd::SharedPtr<coro::AdaptiveGate> gate,
         dstd::Path dir, bool populate_size) {
         dstd::Vector<Listed> listing = list_dir(dir.view(), false);
@@ -277,8 +281,8 @@ class DirectoryScannerUtility {
         }
         auto stated = co_await coro::when_all(std::move(batches));
 
-        std::vector<FileEntry> files;
-        dstd::Vector<coro::SpawnFuture<std::vector<FileEntry>>> subdirs;
+        dstd::Vector<FileEntry> files;
+        dstd::Vector<coro::SpawnFuture<dstd::Vector<FileEntry>>> subdirs;
         for (auto& batch : stated) {
             files.insert(files.end(),
                          std::make_move_iterator(batch.entries.begin()),
@@ -286,7 +290,7 @@ class DirectoryScannerUtility {
             for (auto& sub : batch.subdirs) {
                 subdirs.push_back(ctx.spawn_future(
                     [gate, &ctx, p = std::move(sub), populate_size]()
-                        -> coro::CoroTask<std::vector<FileEntry>> {
+                        -> coro::CoroTask<dstd::Vector<FileEntry>> {
                         co_return co_await scan_parallel(ctx, gate, p,
                                                          populate_size);
                     }));
@@ -311,15 +315,15 @@ class DirectoryScannerUtility {
 /// one-thread main run loop cannot do.
 template <class Scanner, class Input>
 coro::CoroTask<void> scan_on_pool_task(coro::Scope& scope, Input input,
-                                       std::vector<FileEntry>* entries) {
+                                       dstd::Vector<FileEntry>* entries) {
     Scanner scanner;
     *entries = co_await scanner(scope, input);
 }
 
 template <class Scanner, class Input>
-std::vector<FileEntry> scan_on_pool(std::size_t executor_threads,
-                                    std::size_t io_threads, Input input) {
-    std::vector<FileEntry> entries;
+dstd::Vector<FileEntry> scan_on_pool(std::size_t executor_threads,
+                                     std::size_t io_threads, Input input) {
+    dstd::Vector<FileEntry> entries;
     RuntimeSettings settings;
     settings.threads = executor_threads;
     settings.io_threads = io_threads;

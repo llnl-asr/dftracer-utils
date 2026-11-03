@@ -182,7 +182,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         rec.last_line_num = rec.first_line_num + (m.lines ? m.lines - 1 : 0);
         pd.members.push_back(rec);
     };
-    wopts.on_part = [&](std::size_t part, const std::string& path,
+    wopts.on_part = [&](std::size_t part, dstd::StringView path,
                         std::uint64_t uc_bytes, std::uint64_t lines) {
         auto& pd = part_at(part);
         pd.path = path;
@@ -191,7 +191,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     };
     wopts.fold = fold_member;
     auto opened = co_await utilities::fileio::GzipLineWriter::open(
-        opts.output_path, std::move(wopts));
+        dstd::String(opts.output_path), std::move(wopts));
     if (!opened) {
         throw common::DFTUtilsException(
             common::ErrorCode::Io,

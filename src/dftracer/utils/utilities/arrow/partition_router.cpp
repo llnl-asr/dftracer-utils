@@ -4,24 +4,26 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <dftracer/utils/utilities/arrow/partition_router.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <cstring>
-#include <functional>
-#include <iomanip>
-#include <sstream>
 
 namespace dftracer::utils::utilities::arrow {
 
 namespace {
 
-std::string extract_string(const ArrowArrayView* view, int64_t idx) {
+dstd::String extract_string(const ArrowArrayView* view, int64_t idx) {
     ArrowStringView sv = ArrowArrayViewGetStringUnsafe(view, idx);
-    return std::string(sv.data, sv.size_bytes);
+    return dstd::String(sv.data, sv.size_bytes);
 }
 
 int64_t extract_int64(const ArrowArrayView* view, int64_t idx) {
@@ -40,7 +42,7 @@ bool is_null(const ArrowArrayView* view, int64_t idx) {
     return ArrowArrayViewIsNull(view, idx);
 }
 
-std::string value_to_string(const ArrowArrayView* view, int64_t idx) {
+dstd::String value_to_string(const ArrowArrayView* view, int64_t idx) {
     if (is_null(view, idx)) {
         return "__null__";
     }
@@ -53,15 +55,15 @@ std::string value_to_string(const ArrowArrayView* view, int64_t idx) {
         case NANOARROW_TYPE_INT32:
         case NANOARROW_TYPE_INT16:
         case NANOARROW_TYPE_INT8:
-            return std::to_string(extract_int64(view, idx));
+            return dstd::to_string(extract_int64(view, idx));
         case NANOARROW_TYPE_UINT64:
         case NANOARROW_TYPE_UINT32:
         case NANOARROW_TYPE_UINT16:
         case NANOARROW_TYPE_UINT8:
-            return std::to_string(extract_uint64(view, idx));
+            return dstd::to_string(extract_uint64(view, idx));
         case NANOARROW_TYPE_DOUBLE:
         case NANOARROW_TYPE_FLOAT:
-            return std::to_string(extract_double(view, idx));
+            return dstd::to_string(extract_double(view, idx));
         case NANOARROW_TYPE_BOOL:
             return extract_int64(view, idx) ? "true" : "false";
         default:
@@ -137,9 +139,9 @@ void append_row_from_view(RecordBatchBuilder& builder,
 }
 
 // Column specs mirroring the input schema, typed from the view's storage type.
-std::vector<ColumnSpec> build_col_specs(const ArrowSchema* schema,
-                                        const ArrowArrayView& view) {
-    std::vector<ColumnSpec> col_specs;
+dstd::Vector<ColumnSpec> build_col_specs(const ArrowSchema* schema,
+                                         const ArrowArrayView& view) {
+    dstd::Vector<ColumnSpec> col_specs;
     col_specs.reserve(schema->n_children);
     for (int64_t i = 0; i < schema->n_children; i++) {
         col_specs.push_back(
@@ -150,10 +152,10 @@ std::vector<ColumnSpec> build_col_specs(const ArrowSchema* schema,
 }
 
 // Indices of `partition_columns` within `schema` (first match per name).
-std::vector<int64_t> find_partition_indices(
+dstd::Vector<int64_t> find_partition_indices(
     const ArrowSchema* schema,
-    const std::vector<std::string>& partition_columns) {
-    std::vector<int64_t> indices;
+    const dstd::Vector<dstd::String>& partition_columns) {
+    dstd::Vector<int64_t> indices;
     for (const auto& col_name : partition_columns) {
         for (int64_t i = 0; i < schema->n_children; i++) {
             if (schema->children[i]->name == col_name) {
@@ -194,7 +196,7 @@ PartitionRouter& PartitionRouter::operator=(PartitionRouter&& other) noexcept {
     return *this;
 }
 
-int PartitionRouter::open(const std::string& output_dir,
+int PartitionRouter::open(dstd::StringView output_dir,
                           const PartitionConfig& config,
                           int64_t chunk_size_bytes,
                           IpcCompression compression) {
@@ -213,23 +215,23 @@ int PartitionRouter::open(const std::string& output_dir,
     return 0;
 }
 
-std::string PartitionRouter::partition_path(
-    const std::string& partition_key) const {
+dstd::String PartitionRouter::partition_path(
+    dstd::StringView partition_key) const {
     if (partition_key.empty()) {
         return output_dir_;
     }
-    return std::string((dstd::PathView(output_dir_) / partition_key).str());
+    return dstd::String((dstd::PathView(output_dir_) / partition_key).str());
 }
 
 coro::CoroTask<PartitionWriter*> PartitionRouter::get_or_create_writer(
-    const std::string& partition_key) {
+    dstd::StringView partition_key) {
     auto it = writers_.find(partition_key);
     if (it != writers_.end()) {
         co_return it->second.get();
     }
 
-    auto writer = std::make_unique<PartitionWriter>();
-    std::string path = partition_path(partition_key);
+    auto writer = dstd::make_unique<PartitionWriter>();
+    dstd::String path = partition_path(partition_key);
     const auto open_rc =
         co_await writer->open(path, chunk_size_bytes_, compression_);
     if (open_rc != 0) {
@@ -242,8 +244,8 @@ coro::CoroTask<PartitionWriter*> PartitionRouter::get_or_create_writer(
 }
 
 int PartitionRouter::compute_bucket(
-    const std::vector<std::string>& values) const {
-    std::string combined;
+    const dstd::Vector<dstd::String>& values) const {
+    dstd::String combined;
     for (const auto& v : values) {
         combined += v;
         combined += '\0';
@@ -278,14 +280,14 @@ coro::CoroTask<int> PartitionRouter::route_column(ArrowExportResult& batch) {
         co_return -1;
     }
 
-    std::unordered_map<std::string, std::vector<int64_t>> partition_rows;
+    dstd::HashMap<dstd::String, dstd::Vector<int64_t>> partition_rows;
 
     for (int64_t row = 0; row < num_rows; row++) {
-        std::string partition_key;
+        dstd::String partition_key;
         for (size_t i = 0; i < partition_col_indices.size(); i++) {
             int64_t col_idx = partition_col_indices[i];
             const ArrowArrayView* col_view = view.children[col_idx];
-            std::string value = value_to_string(col_view, row);
+            dstd::String value = value_to_string(col_view, row);
 
             if (i > 0) partition_key += "/";
             partition_key += config_.partition_columns[i] + "=" + value;
@@ -342,10 +344,10 @@ coro::CoroTask<int> PartitionRouter::route_bucketed(ArrowExportResult& batch) {
         co_return -1;
     }
 
-    std::unordered_map<int, std::vector<int64_t>> bucket_rows;
+    dstd::HashMap<int, dstd::Vector<int64_t>> bucket_rows;
 
     for (int64_t row = 0; row < num_rows; row++) {
-        std::vector<std::string> values;
+        dstd::Vector<dstd::String> values;
         values.reserve(partition_col_indices.size());
         for (int64_t col_idx : partition_col_indices) {
             values.push_back(value_to_string(view.children[col_idx], row));
@@ -357,10 +359,12 @@ coro::CoroTask<int> PartitionRouter::route_bucketed(ArrowExportResult& batch) {
     auto col_specs = build_col_specs(schema, view);
 
     auto bucket_key = [&](int bucket) {
-        std::ostringstream ss;
-        ss << config_.partition_columns[0] << "_bucket=" << std::setw(2)
-           << std::setfill('0') << bucket;
-        return ss.str();
+        dstd::String key = config_.partition_columns[0];
+        key += "_bucket=";
+        const dstd::String digits = dstd::to_string(bucket);
+        if (digits.size() < 2) key.append(2 - digits.size(), '0');
+        key += digits;
+        return key;
     };
 
     for (auto& [bucket, rows] : bucket_rows) {
@@ -404,21 +408,21 @@ coro::CoroTask<int> PartitionRouter::route_view(ArrowExportResult& batch) {
         co_return rc;
     }
 
-    std::unordered_map<std::string, int64_t> col_name_to_idx;
+    dstd::HashMap<dstd::String, int64_t> col_name_to_idx;
     for (int64_t i = 0; i < schema->n_children; i++) {
         col_name_to_idx[schema->children[i]->name] = i;
     }
 
-    std::unordered_map<std::string, std::vector<int64_t>> view_rows;
+    dstd::HashMap<dstd::String, dstd::Vector<int64_t>> view_rows;
 
     for (int64_t row = 0; row < num_rows; row++) {
-        std::unordered_map<std::string, std::string> row_values;
+        dstd::HashMap<dstd::String, dstd::String> row_values;
         for (int64_t col = 0; col < schema->n_children; col++) {
             row_values[schema->children[col]->name] =
                 value_to_string(view.children[col], row);
         }
 
-        std::string matched_view;
+        dstd::String matched_view;
         for (const auto& [view_name, predicate] : config_.views) {
             if (!predicate.has_value()) {
                 if (matched_view.empty()) {

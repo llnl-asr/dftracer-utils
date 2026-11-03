@@ -2,13 +2,13 @@
 #ifndef DFTRACER_UTILS_UTILITIES_TEXT_SHARED_H
 #define DFTRACER_UTILS_UTILITIES_TEXT_SHARED_H
 
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/hash/hash.h>
 
 #include <functional>
-#include <optional>
 #include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::text {
 
@@ -16,10 +16,10 @@ namespace dftracer::utils::utilities::text {
  * @brief Represents raw text content.
  */
 struct Text {
-    std::string content;
+    dstd::String content;
 
     Text() = default;
-    explicit Text(std::string str) : content(std::move(str)) {}
+    explicit Text(dstd::String str) : content(std::move(str)) {}
     explicit Text(const char* str) : content(str) {}
 
     bool empty() const { return content.empty(); }
@@ -31,12 +31,12 @@ struct Text {
  */
 struct FilterableLine {
     fileio::lines::Line line;
-    std::function<bool(const fileio::lines::Line&)> predicate;
+    dstd::Function<bool(const fileio::lines::Line&)> predicate;
 
     FilterableLine() = default;
 
     FilterableLine(fileio::lines::Line l,
-                   std::function<bool(const fileio::lines::Line&)> pred)
+                   dstd::Function<bool(const fileio::lines::Line&)> pred)
         : line(std::move(l)), predicate(std::move(pred)) {}
 
     // Note: Cannot easily define equality for std::function, so filtering

@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/inflater.h>
@@ -15,7 +16,6 @@
 #include <cinttypes>
 #include <cstring>
 #include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -35,7 +35,7 @@ class GzipStream : public StreamBase {
     bool mid_line_start_ = false;
 
     // Less frequently accessed members
-    std::string current_gz_path_;
+    dstd::String current_gz_path_;
     dftracer::utils::index::gzip::CheckpointIndexer *indexer_ = nullptr;
     std::size_t start_bytes_;
     dftracer::utils::index::gzip::GzipMemberRecord member_;
@@ -67,7 +67,7 @@ class GzipStream : public StreamBase {
 
     virtual ~GzipStream() { reset(); }
 
-    bool matches(const std::string &gz_path, std::size_t /*start_bytes*/,
+    bool matches(const dstd::String &gz_path, std::size_t /*start_bytes*/,
                  std::size_t end_bytes) const {
         // Reuse the stream if same file and same end position.
         // For POSIX-style sequential reads, the stream continues from
@@ -145,7 +145,7 @@ class GzipStream : public StreamBase {
     }
 
    protected:
-    int open_file(const std::string &path) {
+    int open_file(const dstd::String &path) {
         int fd = ::open(path.c_str(), O_RDONLY);
         if (fd < 0) {
             throw ReaderError(ReaderError::FileIoError,
@@ -161,7 +161,7 @@ class GzipStream : public StreamBase {
     /// read, so a stream is built without blocking a caller who is going to
     /// await the data anyway.
     void initialize(
-        const std::string &gz_path, std::size_t start_bytes,
+        const dstd::String &gz_path, std::size_t start_bytes,
         std::size_t end_bytes,
         dftracer::utils::index::gzip::CheckpointIndexer &indexer) override {
         if (is_active_) {
@@ -186,8 +186,8 @@ class GzipStream : public StreamBase {
         // cache is configured (server). Keyed by a stable per-path token so
         // different fds to the same file coalesce.
         if (auto *cache = global_member_decode_cache()) {
-            inflater_.set_cache(cache,
-                                std::hash<std::string>{}(current_gz_path_));
+            inflater_.set_cache(
+                cache, std::hash<dstd::StringView>{}(current_gz_path_));
         }
 
         if (indexer_) {
@@ -270,15 +270,18 @@ class GzipStream : public StreamBase {
         if (member_.kind !=
             dftracer::utils::index::gzip::GzipRecordKind::Restart)
             return false;
+        // keep std: member_window returns std::string
         const std::string window = member_window();
         return window.empty() || window.back() != '\n';
     }
 
+    // keep std: CheckpointIndexer::restart_window returns std::string
     std::string member_window() const {
         using dftracer::utils::index::gzip::GzipRecordKind;
         return member_.kind == GzipRecordKind::Restart
                    ? indexer_->restart_window(member_.member_idx)
-                   : std::string();
+                   : std::string();  // keep std: restart_window returns
+                                     // std::string
     }
 
     // Decode-buffer size hint (uncompressed span); 0 for an unbounded end.

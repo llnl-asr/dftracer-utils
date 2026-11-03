@@ -12,6 +12,7 @@ void insert_simdjson_value(ArgsMap &map, dstd::StringView key,
     switch (type.value_unsafe()) {
         case simdjson::ondemand::json_type::string: {
             auto r = val.get_string();
+            // keep std: ArgsValue holds a std::string
             if (!r.error()) map.insert(key, std::string(r.value_unsafe()));
             break;
         }
@@ -36,6 +37,7 @@ void insert_simdjson_value(ArgsMap &map, dstd::StringView key,
         }
         case simdjson::ondemand::json_type::object:
         case simdjson::ondemand::json_type::array: {
+            // keep std: flatten_arg_ondemand takes std::string&
             std::string prefix(key);
             trace::detail::flatten_arg_ondemand(prefix, val, map);
             break;

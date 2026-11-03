@@ -8,11 +8,12 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
-#include <fstream>
+#include <cstdio>
 #include <stdexcept>
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -44,27 +45,25 @@ inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
             common::str_cat("File does not exist: ", path.str()));
     }
 
-    std::ifstream file(path.c_str(), std::ios::binary);
+    dstd::ScopedFile file(std::fopen(path.c_str(), "rb"));
     if (!file) {
         throw common::DFTUtilsException(
             common::ErrorCode::Io,
             common::str_cat("Cannot open file: ", path.str()));
     }
 
-    std::vector<unsigned char> buffer(chunk_size);
+    dstd::Vector<unsigned char> buffer(chunk_size);
 
     while (true) {
-        file.read(reinterpret_cast<char*>(buffer.data()),
-                  static_cast<std::streamsize>(chunk_size));
-        std::streamsize bytes_read = file.gcount();
+        const std::size_t bytes_read =
+            std::fread(buffer.data(), 1, chunk_size, file.get());
 
-        if (bytes_read <= 0) break;
+        if (bytes_read == 0) break;
 
-        co_yield dstd::ByteView(buffer.data(),
-                                static_cast<std::size_t>(bytes_read));
+        co_yield dstd::ByteView(buffer.data(), bytes_read);
     }
 
-    if (file.bad()) {
+    if (std::ferror(file.get())) {
         throw common::DFTUtilsException(
             common::ErrorCode::Io,
             common::str_cat("Error reading file: ", path.str()));

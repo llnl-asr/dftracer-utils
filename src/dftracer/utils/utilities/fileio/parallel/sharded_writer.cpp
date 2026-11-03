@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <fcntl.h>
 #include <unistd.h>
-
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio::parallel {
 
@@ -14,17 +16,17 @@ namespace {
 
 class ShardedWriter final : public ParallelWriter {
    public:
-    coro::CoroTask<int> open(std::string path, std::size_t num_workers,
+    coro::CoroTask<int> open(dstd::String path, std::size_t num_workers,
                              bool gzip_extension,
                              coro::Scope* /*scope*/) override {
         base_path_ = std::move(path);
-        const std::string ext = gzip_extension ? ".gz" : "";
+        const dstd::String ext = gzip_extension ? ".gz" : "";
         shard_paths_.resize(num_workers);
         shard_fds_.assign(num_workers, -1);
         shard_offsets_.assign(num_workers, 0);
         per_worker_last_.assign(num_workers, dstd::nullopt);
         for (std::size_t i = 0; i < num_workers; ++i) {
-            shard_paths_[i] = base_path_ + ".shard_" + std::to_string(i) + ext;
+            shard_paths_[i] = base_path_ + ".shard_" + dstd::to_string(i) + ext;
             ssize_t fd = co_await ::dftracer::utils::io::open(
                 shard_paths_[i].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd < 0) {
@@ -73,7 +75,7 @@ class ShardedWriter final : public ParallelWriter {
         co_return status;
     }
 
-    std::vector<std::string> output_paths() const override {
+    dstd::Vector<dstd::String> output_paths() const override {
         return shard_paths_;
     }
 
@@ -83,8 +85,8 @@ class ShardedWriter final : public ParallelWriter {
         return per_worker_last_[worker_idx];
     }
 
-    std::vector<std::uint64_t> shard_base_offsets() const override {
-        std::vector<std::uint64_t> bases(shard_offsets_.size(), 0);
+    dstd::Vector<std::uint64_t> shard_base_offsets() const override {
+        dstd::Vector<std::uint64_t> bases(shard_offsets_.size(), 0);
         std::uint64_t accum = 0;
         for (std::size_t i = 0; i < shard_offsets_.size(); ++i) {
             bases[i] = accum;
@@ -110,20 +112,20 @@ class ShardedWriter final : public ParallelWriter {
         co_return 0;
     }
 
-    std::string base_path_;
-    std::vector<std::string> shard_paths_;
-    std::vector<int> shard_fds_;
-    std::vector<std::uint64_t> shard_offsets_;
-    std::vector<dstd::Optional<MemberSpan>> per_worker_last_;
+    dstd::String base_path_;
+    dstd::Vector<dstd::String> shard_paths_;
+    dstd::Vector<int> shard_fds_;
+    dstd::Vector<std::uint64_t> shard_offsets_;
+    dstd::Vector<dstd::Optional<MemberSpan>> per_worker_last_;
 };
 
 }  // namespace
 
-std::unique_ptr<ParallelWriter> make_sharded_writer() {
-    return std::make_unique<ShardedWriter>();
+dstd::UniquePtr<ParallelWriter> make_sharded_writer() {
+    return dstd::make_unique<ShardedWriter>();
 }
 
-std::unique_ptr<ParallelWriter> make_writer(const WriterConfig& cfg) {
+dstd::UniquePtr<ParallelWriter> make_writer(const WriterConfig& cfg) {
     if (cfg.layout == FileLayout::Sharded) return make_sharded_writer();
     // Padded striped needs gzip and a large-enough stripe to guarantee a
     // compressed flush fits one slot. Below the minimum, fall back to the

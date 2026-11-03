@@ -567,7 +567,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     const std::size_t baseline = std::max<std::size_t>(1, opts.num_workers);
     const auto sizing =
         pfw::make_writer_for_path(
-            {opts.output_path, baseline,
+            {dstd::String(opts.output_path), baseline,
              opts.member_size ? opts.member_size : DEFAULT_FLUSH_BYTES,
              BUFFER_HEADROOM_BYTES, opts.compress})
             .sizing;
@@ -581,7 +581,7 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     wopts.ordered = false;
     wopts.memory_budget = plan.memory_budget;
     auto opened = co_await utilities::fileio::GzipLineWriter::open(
-        opts.output_path, std::move(wopts));
+        dstd::String(opts.output_path), std::move(wopts));
     if (!opened) {
         throw common::DFTUtilsException(
             common::ErrorCode::Io,

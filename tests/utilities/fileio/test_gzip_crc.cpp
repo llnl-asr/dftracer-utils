@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/memory/manager.h>
@@ -18,10 +20,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
-#include <optional>
 #include <random>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using dftracer::utils::index::gzip::GzipMemberRecord;
@@ -52,10 +51,10 @@ constexpr std::uint64_t CKPT = 1u << 20;
 std::size_t FULL_TEXT_SIZE = 0;
 constexpr std::size_t CRC_BYTE_FROM_END = 8;
 
-std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
+dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     std::mt19937 rng(seed);
     static const char HEX[] = "0123456789abcdef";
-    std::string s;
+    dstd::String s;
     s.reserve(bytes + 128);
     while (s.size() < bytes) {
         s += "{\"id\":\"";
@@ -65,28 +64,28 @@ std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
     return s;
 }
 
-std::vector<std::uint8_t> gzip_member(const std::string& text) {
+dstd::Vector<std::uint8_t> gzip_member(const dstd::String& text) {
     gz::GzipMemberCompressor c;
-    std::vector<std::uint8_t> out;
+    dstd::Vector<std::uint8_t> out;
     REQUIRE(c.compress_member_into(out, text.data(), text.size()));
     return out;
 }
 
 struct Sample {
-    std::string text;
-    std::vector<std::uint8_t> bytes;
+    dstd::String text;
+    dstd::Vector<std::uint8_t> bytes;
     std::size_t first_member_size = 0;
     std::size_t first_text_size = 0;
 
     Sample() {
-        const std::string big = hex_lines(6u << 20, 7);
+        const dstd::String big = hex_lines(6u << 20, 7);
         const auto first = gzip_member(big);
         first_member_size = first.size();
         first_text_size = big.size();
         text = big;
         bytes = first;
         for (std::uint32_t i = 0; i < 3; ++i) {
-            const std::string small = hex_lines(40000, 100 + i);
+            const dstd::String small = hex_lines(40000, 100 + i);
             const auto m = gzip_member(small);
             bytes.insert(bytes.end(), m.begin(), m.end());
             text += small;
@@ -94,12 +93,12 @@ struct Sample {
         FULL_TEXT_SIZE = text.size();
     }
 
-    std::vector<std::uint8_t> bad_trailer_crc() const {
+    dstd::Vector<std::uint8_t> bad_trailer_crc() const {
         auto b = bytes;
         b[first_member_size - CRC_BYTE_FROM_END] ^= 0x55;
         return b;
     }
-    std::vector<std::uint8_t> bad_data_byte() const {
+    dstd::Vector<std::uint8_t> bad_data_byte() const {
         auto b = bytes;
         b[first_member_size / 2] ^= 0x55;
         return b;
@@ -107,10 +106,10 @@ struct Sample {
 };
 
 struct TempFile {
-    std::string dir;
-    std::string path;
+    dstd::String dir;
+    dstd::String path;
 
-    explicit TempFile(const std::vector<std::uint8_t>& bytes) {
+    explicit TempFile(const dstd::Vector<std::uint8_t>& bytes) {
         char tmpl[] = "/tmp/dftu_gzcrc_XXXXXX";
         REQUIRE(::mkdtemp(tmpl) != nullptr);
         dir = tmpl;
@@ -124,10 +123,10 @@ struct TempFile {
 };
 
 // Whole-file reference decode with the system zlib.
-std::string zlib_decode_all(const std::string& path) {
+dstd::String zlib_decode_all(const dstd::String& path) {
     std::FILE* f = std::fopen(path.c_str(), "rb");
     REQUIRE(f != nullptr);
-    std::vector<unsigned char> in;
+    dstd::Vector<unsigned char> in;
     unsigned char buf[1 << 16];
     std::size_t n;
     while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
@@ -137,8 +136,8 @@ std::string zlib_decode_all(const std::string& path) {
     REQUIRE(inflateInit2(&zs, 31) == Z_OK);
     zs.next_in = in.data();
     zs.avail_in = static_cast<uInt>(in.size());
-    std::string out;
-    std::vector<unsigned char> chunk(1 << 20);
+    dstd::String out;
+    dstd::Vector<unsigned char> chunk(1 << 20);
     while (true) {
         zs.next_out = chunk.data();
         zs.avail_out = static_cast<uInt>(chunk.size());
@@ -157,12 +156,12 @@ std::string zlib_decode_all(const std::string& path) {
 }
 
 // Each path returns the decoded text, or nullopt when it rejected the input.
-using PathResult = dstd::Optional<std::string>;
+using PathResult = dstd::Optional<dstd::String>;
 
-PathResult read_with_inflater(const std::string& path, GzipRecordKind kind) {
+PathResult read_with_inflater(const dstd::String& path, GzipRecordKind kind) {
     const int fd = ::open(path.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
-    std::string out;
+    dstd::String out;
     bool ok = false;
     run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         ReaderInflater inflater;
@@ -170,8 +169,8 @@ PathResult read_with_inflater(const std::string& path, GzipRecordKind kind) {
         off_t offset = 0;
         GzipMemberRecord rec;
         rec.kind = kind;
-        ok = co_await inflater.seek_to_member(fd, offset, rec, std::string());
-        std::vector<unsigned char> buf(1u << 20);
+        ok = co_await inflater.seek_to_member(fd, offset, rec, dstd::String());
+        dstd::Vector<unsigned char> buf(1u << 20);
         while (ok) {
             std::size_t got = 0;
             ok =
@@ -185,47 +184,48 @@ PathResult read_with_inflater(const std::string& path, GzipRecordKind kind) {
     return out;
 }
 
-PathResult reader_head_stream(const std::string& path) {
+PathResult reader_head_stream(const dstd::String& path) {
     return read_with_inflater(path, GzipRecordKind::Head);
 }
 
-PathResult reader_whole_member(const std::string& path) {
+PathResult reader_whole_member(const dstd::String& path) {
     return read_with_inflater(path, GzipRecordKind::Member);
 }
 
-PathResult indexer_stream(const std::string& path) {
+PathResult indexer_stream(const dstd::String& path) {
     dstd::Optional<index::gzip::GzipBuildArtifacts> art;
     run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         CrcWindow window;
         art = co_await index::gzip::build_gzip_index_artifacts(
-            path, CKPT, index::gzip::CheckpointIndexer::VisitorList{}, &scope);
+            std::string(path), CKPT,
+            index::gzip::CheckpointIndexer::VisitorList{}, &scope);
     });
     // A corrupt member ends the build at that member, short of the full text.
     if (!art || art->total_uc_size != FULL_TEXT_SIZE) return dstd::nullopt;
-    return std::string(art->total_uc_size, 'x');
+    return dstd::String(art->total_uc_size, 'x');
 }
 
-PathResult truncated_decoder(const std::string& path) {
+PathResult truncated_decoder(const dstd::String& path) {
     std::FILE* f = std::fopen(path.c_str(), "rb");
     REQUIRE(f != nullptr);
-    std::vector<std::uint8_t> in;
+    dstd::Vector<std::uint8_t> in;
     std::uint8_t buf[1 << 16];
     std::size_t n;
     while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
         in.insert(in.end(), buf, buf + n);
     std::fclose(f);
-    std::vector<std::uint8_t> out;
+    dstd::Vector<std::uint8_t> out;
     dstd::Optional<std::size_t> keep;
     {
         CrcWindow window;
         keep = gz::decode_truncated_member(in.data(), in.size(), out);
     }
     if (!keep) return dstd::nullopt;
-    return std::string(out.begin(), out.begin() + *keep);
+    return dstd::String(out.begin(), out.begin() + *keep);
 }
 
-PathResult rechunker(const std::string& path) {
-    const std::string out_path = path + ".rechunked.gz";
+PathResult rechunker(const dstd::String& path) {
+    const dstd::String out_path = path + ".rechunked.gz";
     bool ok = true;
     run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         CrcWindow window;
@@ -242,7 +242,7 @@ PathResult rechunker(const std::string& path) {
 
 struct PathCase {
     const char* name;
-    PathResult (*run)(const std::string&);
+    PathResult (*run)(const dstd::String&);
     // The index path reports only the decoded size, and the truncated decoder
     // takes one member.
     bool whole_file;
@@ -257,7 +257,7 @@ const PathCase PATHS[] = {
     {"truncated-member decoder", truncated_decoder, false, false},
 };
 
-bool same(const PathCase& p, const PathResult& got, const std::string& text) {
+bool same(const PathCase& p, const PathResult& got, const dstd::String& text) {
     if (!got) return false;
     if (p.size_only) return got->size() == text.size();
     return *got == text;
@@ -271,7 +271,7 @@ TEST_CASE("the control: a stream that verifies the gzip checksum is counted") {
     Sample s;
     TempFile f(s.bytes);
     const auto before = gz::zlib_checksum_streams_opened();
-    index::detect_file_schema(f.path);
+    index::detect_file_schema(std::string(f.path));
     CHECK(gz::zlib_checksum_streams_opened() > before);
 }
 
@@ -279,9 +279,9 @@ TEST_CASE(
     "good multi-member input decodes identically without a zlib checksum") {
     Sample s;
     for (const auto& p : PATHS) {
-        CAPTURE(std::string(p.name));
-        std::string expect = s.text;
-        std::vector<std::uint8_t> bytes = s.bytes;
+        CAPTURE(dstd::String(p.name));
+        dstd::String expect = s.text;
+        dstd::Vector<std::uint8_t> bytes = s.bytes;
         if (!p.whole_file) {
             bytes.resize(s.first_member_size);
             expect = s.text.substr(0, s.first_text_size);
@@ -297,7 +297,7 @@ TEST_CASE(
 TEST_CASE("a flipped trailer crc byte is rejected on every path") {
     Sample s;
     for (const auto& p : PATHS) {
-        CAPTURE(std::string(p.name));
+        CAPTURE(dstd::String(p.name));
         auto bytes = s.bad_trailer_crc();
         if (!p.whole_file) bytes.resize(s.first_member_size);
         TempFile file(bytes);
@@ -308,7 +308,7 @@ TEST_CASE("a flipped trailer crc byte is rejected on every path") {
 TEST_CASE("a flipped data byte is rejected on every path") {
     Sample s;
     for (const auto& p : PATHS) {
-        CAPTURE(std::string(p.name));
+        CAPTURE(dstd::String(p.name));
         auto bytes = s.bad_data_byte();
         if (!p.whole_file) bytes.resize(s.first_member_size);
         TempFile file(bytes);
@@ -317,13 +317,13 @@ TEST_CASE("a flipped data byte is rejected on every path") {
 }
 
 TEST_CASE("a gzip header with FHCRC and optional fields is accepted") {
-    const std::string text = hex_lines(200000, 3);
+    const dstd::String text = hex_lines(200000, 3);
     gz::GzipMemberCompressor c;
-    std::vector<std::uint8_t> plain;
+    dstd::Vector<std::uint8_t> plain;
     REQUIRE(c.compress_member_into(plain, text.data(), text.size()));
     constexpr std::size_t PLAIN_HEADER = 10;
-    std::vector<std::uint8_t> header = {0x1f, 0x8b, 8, 2 | 4 | 8 | 16, 0, 0, 0,
-                                        0,    0,    3};
+    dstd::Vector<std::uint8_t> header = {0x1f, 0x8b, 8, 2 | 4 | 8 | 16, 0, 0, 0,
+                                         0,    0,    3};
     const std::uint8_t extra[] = {3, 0, 'a', 'b', 'c'};
     header.insert(header.end(), extra, extra + sizeof(extra));
     for (const char* s : {"name", "note"}) {
@@ -333,14 +333,14 @@ TEST_CASE("a gzip header with FHCRC and optional fields is accepted") {
     const std::uint32_t hcrc = gz::gzip_crc32(0, header.data(), header.size());
     header.push_back(static_cast<std::uint8_t>(hcrc & 0xff));
     header.push_back(static_cast<std::uint8_t>((hcrc >> 8) & 0xff));
-    std::vector<std::uint8_t> member = header;
+    dstd::Vector<std::uint8_t> member = header;
     member.insert(member.end(), plain.begin() + PLAIN_HEADER, plain.end());
 
-    auto decode = [&](const std::vector<std::uint8_t>& in) {
+    auto decode = [&](const dstd::Vector<std::uint8_t>& in) {
         gz::GzipStreamInflater inf;
         REQUIRE(inf.init(31));
         inf.set_input(in.data(), in.size());
-        std::string out(text.size() + 16, '\0');
+        dstd::String out(text.size() + 16, '\0');
         inf.set_output(reinterpret_cast<unsigned char*>(out.data()),
                        out.size());
         const auto rc = inf.inflate();

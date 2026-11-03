@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/barrier_simulator.h>
 #include <dftracer/utils/utilities/dlio/statistic.h>
 #include <dftracer/utils/utilities/dlio/worker_queue.h>
@@ -22,7 +23,7 @@ inline double uniform01(Rng& rng) {
 
 }  // namespace
 
-double sweep_union(std::vector<Boundary>& boundaries) {
+double sweep_union(dstd::Vector<Boundary>& boundaries) {
     if (boundaries.empty()) return 0.0;
     std::sort(
         boundaries.begin(), boundaries.end(),
@@ -40,7 +41,7 @@ double sweep_union(std::vector<Boundary>& boundaries) {
     return union_time_us / 1e6;
 }
 
-double variance(const std::vector<double>& values) {
+double variance(const dstd::Vector<double>& values) {
     if (values.empty()) return 0.0;
     double mean = 0.0;
     for (double v : values) mean += v;
@@ -54,18 +55,18 @@ double variance(const std::vector<double>& values) {
     return sq / static_cast<double>(values.size());
 }
 
-double cdf_similarity(const std::vector<double>& a,
-                      const std::vector<double>& b) {
+double cdf_similarity(const dstd::Vector<double>& a,
+                      const dstd::Vector<double>& b) {
     if (a.empty() || b.empty()) return 0.0;
 
-    std::vector<double> as(a), bs(b);
+    dstd::Vector<double> as(a), bs(b);
     std::sort(as.begin(), as.end());
     std::sort(bs.begin(), bs.end());
 
     const auto na = static_cast<double>(as.size());
     const auto nb = static_cast<double>(bs.size());
 
-    std::vector<double> all;
+    dstd::Vector<double> all;
     all.reserve(as.size() + bs.size());
     all.insert(all.end(), as.begin(), as.end());
     all.insert(all.end(), bs.begin(), bs.end());
@@ -84,14 +85,14 @@ double cdf_similarity(const std::vector<double>& a,
     return 1.0 - max_diff;
 }
 
-std::vector<WorkInterval> WorkerQueue::produce_batches(
+dstd::Vector<WorkInterval> WorkerQueue::produce_batches(
     double current_time, const BatchTimeSampler& sampler) {
     if (worker_free_times_.empty()) {
         worker_free_times_.assign(static_cast<std::size_t>(num_workers_),
                                   current_time);
     }
 
-    std::vector<WorkInterval> intervals;
+    dstd::Vector<WorkInterval> intervals;
     while (ready_batches_.size() < queue_capacity_) {
         const auto earliest_it = std::min_element(worker_free_times_.begin(),
                                                   worker_free_times_.end());
@@ -128,25 +129,25 @@ BarrierSimulationResult BarrierSimulator::simulate(
     const Sampler& preprocess_sampler) const {
     BarrierSimulationResult result;
 
-    std::vector<Rng> rank_rngs;
+    dstd::Vector<Rng> rank_rngs;
     rank_rngs.reserve(static_cast<std::size_t>(ctx.num_ranks));
     for (int rank = 0; rank < ctx.num_ranks; ++rank) {
         rank_rngs.emplace_back(base_seed + static_cast<std::uint64_t>(rank));
     }
 
-    std::vector<double> rank_times(static_cast<std::size_t>(ctx.num_ranks),
-                                   0.0);
-    std::vector<double> rank_work_times(static_cast<std::size_t>(ctx.num_ranks),
-                                        0.0);
-    std::vector<double> barrier_overheads;
+    dstd::Vector<double> rank_times(static_cast<std::size_t>(ctx.num_ranks),
+                                    0.0);
+    dstd::Vector<double> rank_work_times(
+        static_cast<std::size_t>(ctx.num_ranks), 0.0);
+    dstd::Vector<double> barrier_overheads;
 
-    std::vector<Boundary> boundaries;
-    std::vector<Boundary> preprocess_boundaries;
-    std::vector<Boundary> fetch_iter_boundaries;
-    std::vector<Boundary> fetch_block_boundaries;
+    dstd::Vector<Boundary> boundaries;
+    dstd::Vector<Boundary> preprocess_boundaries;
+    dstd::Vector<Boundary> fetch_iter_boundaries;
+    dstd::Vector<Boundary> fetch_block_boundaries;
 
-    std::vector<WorkerQueue> rank_queues;
-    std::vector<Rng> preprocess_rngs;
+    dstd::Vector<WorkerQueue> rank_queues;
+    dstd::Vector<Rng> preprocess_rngs;
     preprocess_rngs.reserve(static_cast<std::size_t>(ctx.num_ranks));
     for (int rank = 0; rank < ctx.num_ranks; ++rank) {
         preprocess_rngs.emplace_back(base_seed + PREPROCESS_RNG_OFFSET +
@@ -346,7 +347,7 @@ BarrierSimulationResult BarrierSimulator::simulate(
     }
 
     {
-        std::vector<double> trace_flat;
+        dstd::Vector<double> trace_flat;
         for (const auto& rank_data : ctx.fetch_block_trace) {
             trace_flat.insert(trace_flat.end(), rank_data.begin(),
                               rank_data.end());
@@ -356,7 +357,7 @@ BarrierSimulationResult BarrierSimulator::simulate(
     }
 
     if (!result.simulated_fetch_iter.empty() && !ctx.fetch_iter_trace.empty()) {
-        std::vector<double> trace_flat;
+        dstd::Vector<double> trace_flat;
         for (const auto& rank_data : ctx.fetch_iter_trace) {
             trace_flat.insert(trace_flat.end(), rank_data.begin(),
                               rank_data.end());
@@ -366,7 +367,7 @@ BarrierSimulationResult BarrierSimulator::simulate(
     }
 
     if (!result.simulated_getitem.empty() && ctx.getitem_trace) {
-        std::vector<double> trace_flat;
+        dstd::Vector<double> trace_flat;
         for (const auto& rank_data : *ctx.getitem_trace) {
             trace_flat.insert(trace_flat.end(), rank_data.begin(),
                               rank_data.end());

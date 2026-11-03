@@ -5,15 +5,14 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
-#include <string_view>
 #include <type_traits>
-#include <vector>
 
 /// Line formatting for GzipLineWriter::append_fmt, with the format fixed at
 /// compile time (FixedString) or parsed once at run time (LineFormat).
@@ -73,7 +72,7 @@ inline constexpr bool IS_FLOAT =
 
 template <class T>
 inline constexpr bool IS_STR =
-    std::is_same_v<T, dstd::StringView> || std::is_same_v<T, std::string> ||
+    std::is_same_v<T, dstd::StringView> || std::is_same_v<T, dstd::String> ||
     std::is_same_v<T, const char*>;
 
 template <class T>
@@ -164,15 +163,10 @@ std::size_t arg_bound(const T& v) {
 template <class E, class T>
 char* put_arg(char* d, const T& v) {
     static_assert(LINE_ARG<T>, "unsupported line argument type");
-    if constexpr (IS_INT<T>) {
-        return std::to_chars(d, d + INT_MAX_CHARS, v).ptr;
-    } else if constexpr (IS_FLOAT<T>) {
-#ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
-        return dstd::to_chars_double(d, d + FLOAT_MAX_CHARS,
-                                     static_cast<double>(v));
-#else
-        return std::to_chars(d, d + FLOAT_MAX_CHARS, v).ptr;
-#endif
+    if constexpr (IS_INT<T> || IS_FLOAT<T>) {
+        return dstd::to_chars(
+                   d, d + (IS_INT<T> ? INT_MAX_CHARS : FLOAT_MAX_CHARS), v)
+            .ptr;
     } else if constexpr (std::is_same_v<T, bool>) {
         const dstd::StringView t = v ? "true" : "false";
         std::memcpy(d, t.data(), t.size());
@@ -239,7 +233,7 @@ class BasicLineFormat {
             [&] { f.end_.push_back(f.text_.size()); });
         if (err)
             return common::make_error(common::ErrorCode::InvalidArgument,
-                                      std::string("line format: ") + err);
+                                      dstd::String("line format: ") + err);
         f.end_.push_back(f.text_.size());
         return f;
     }
@@ -249,8 +243,8 @@ class BasicLineFormat {
 
    private:
     BasicLineFormat() = default;
-    std::string text_;
-    std::vector<std::size_t> end_;
+    dstd::String text_;
+    dstd::Vector<std::size_t> end_;
 };
 
 template <class E, LineArg... A>

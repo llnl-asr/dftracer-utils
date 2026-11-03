@@ -173,7 +173,8 @@ TEST_SUITE("duql paths") {
     TEST_CASE("every path selects the records the three-valued rule keeps") {
         TestEnvironment env(10);
         const std::string gz = write_trace(env);
-        reader::TraceReader tr({.file_path = gz, .index_dir = env.get_dir()});
+        reader::TraceReader tr({.file_path = dstd::String(gz),
+                                .index_dir = dstd::String(env.get_dir())});
         REQUIRE(tr.has_index());
 
         for (const auto& c : cases()) {
@@ -270,7 +271,8 @@ TEST_SUITE("duql paths") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
         (void)dstd::fs::remove(plain);
         dftracer::utils::index::Indexer::open({gz}).build();
-        reader::TraceReader tr({.file_path = gz, .index_dir = env.get_dir()});
+        reader::TraceReader tr({.file_path = dstd::String(gz),
+                                .index_dir = dstd::String(env.get_dir())});
         REQUIRE(tr.has_index());
 
         DataFrame frame;

@@ -99,7 +99,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
         config.dftracer_mode = true;
         config.maintain_timing = false;
 
-        ReplayEngine engine(config);
+        ReplayEngine engine(std::move(config));
 
         auto start_time = std::chrono::steady_clock::now();
         ReplayResult result = engine.replay(trace_file);
@@ -134,7 +134,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
         config.dry_run = true;
         config.maintain_timing = false;
 
-        ReplayEngine engine(config);
+        ReplayEngine engine(std::move(config));
         ReplayResult result = engine.replay(trace_file);
 
         CHECK(result.total_events > 0);
@@ -168,7 +168,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
         config.maintain_timing = false;
         config.filter_categories.insert("POSIX");
 
-        ReplayEngine engine(config);
+        ReplayEngine engine(std::move(config));
         ReplayResult result = engine.replay(trace_file);
 
         CHECK(result.total_events == 3);
@@ -204,7 +204,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
         config.filter_functions.insert("read");
         config.filter_functions.insert("write");
 
-        ReplayEngine engine(config);
+        ReplayEngine engine(std::move(config));
         ReplayResult result = engine.replay(trace_file);
 
         CHECK(result.total_events == 3);
@@ -238,7 +238,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
         config.maintain_timing = false;
         config.max_events = 5;
 
-        ReplayEngine engine(config);
+        ReplayEngine engine(std::move(config));
         ReplayResult result = engine.replay(trace_file);
 
         CHECK(result.executed_events <= 5);
@@ -271,7 +271,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
         config.sampling_rate = 0.5;  // 50% sampling
         config.sample_deterministic = true;
 
-        ReplayEngine engine(config);
+        ReplayEngine engine(std::move(config));
         ReplayResult result = engine.replay(trace_file);
 
         // With 50% sampling, we expect roughly half the events
@@ -355,7 +355,7 @@ TEST_CASE("DFTracer Replay - Real trace files") {
         config.no_sleep = true;  // Fast mode for testing
         config.maintain_timing = false;
 
-        ReplayEngine engine(config);
+        ReplayEngine engine(std::move(config));
 
         auto start_time = std::chrono::steady_clock::now();
         ReplayResult result = engine.replay(trace_dir);
@@ -394,7 +394,7 @@ TEST_CASE("DFTracer Replay - Call tree integration") {
         config.use_call_tree = true;
         config.hierarchical_replay = false;
 
-        ReplayEngine engine(config);
+        ReplayEngine engine(std::move(config));
 
         auto start_time = std::chrono::steady_clock::now();
         ReplayResult result = engine.replay_with_call_tree(trace_dir);

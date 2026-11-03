@@ -2,9 +2,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_GZIP_STREAM_INFLATER_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_GZIP_STREAM_INFLATER_H
 
+#include <dftracer/utils/dstd/memory.h>
+
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 
 namespace dftracer::utils::utilities::fileio::compress {
 
@@ -66,7 +67,7 @@ class GzipStreamInflater {
 
    private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    dstd::UniquePtr<Impl> impl_;
 };
 
 /// The streams opened in this process in a mode where zlib-ng verifies the

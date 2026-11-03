@@ -17,6 +17,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -41,7 +42,6 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -53,10 +53,8 @@ namespace {
 
 // Throws std::invalid_argument on a token that is not a 32-bit unsigned
 // integer.
-// keep std: unswept API
-std::unordered_set<std::uint32_t> parse_csv_uint32(dstd::StringView csv) {
-    // keep std: unswept API
-    std::unordered_set<std::uint32_t> out;
+dstd::HashSet<std::uint32_t> parse_csv_uint32(dstd::StringView csv) {
+    dstd::HashSet<std::uint32_t> out;
     for (const auto token : binaries::split_csv(csv)) {
         const auto value = dstd::from_chars<std::uint32_t>(token);
         if (!value) {
@@ -232,10 +230,8 @@ class ReplayArgParse : public binaries::ArgParse {
     }
 };
 
-// keep std: unswept API
-std::unordered_set<std::string> parse_csv_string(dstd::StringView csv) {
-    // keep std: unswept API
-    std::unordered_set<std::string> out;
+dstd::HashSet<dstd::String> parse_csv_string(dstd::StringView csv) {
+    dstd::HashSet<dstd::String> out;
     for (const auto token : binaries::split_csv(csv)) out.emplace(token);
     return out;
 }
@@ -247,8 +243,7 @@ struct RunCtx {
     bool is_root = true;
 
     ReplayConfig config;
-    // keep std: unswept API
-    std::vector<std::string> trace_files;
+    dstd::Vector<dstd::String> trace_files;
     ReplayResult result;
     int exit_code = 0;
     bool failed = false;
@@ -329,16 +324,14 @@ void print_filters(const RunCtx& ctx) {
 
     std::printf("\nActive Filters:\n");
     auto print_uint_set = [](const char* label,
-                             // keep std: unswept API
-                             const std::unordered_set<std::uint32_t>& s) {
+                             const dstd::HashSet<std::uint32_t>& s) {
         if (s.empty()) return;
         std::printf("  %s:", label);
         for (auto v : s) std::printf(" %u", v);
         std::printf("\n");
     };
     auto print_str_set = [](const char* label,
-                            // keep std: unswept API
-                            const std::unordered_set<std::string>& s) {
+                            const dstd::HashSet<dstd::String>& s) {
         if (s.empty()) return;
         std::printf("  %s:", label);
         for (const auto& v : s) std::printf(" %s", v.c_str());
@@ -378,9 +371,10 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, coro::Scope* scope) {
         std::printf("\n=== Starting Replay ===\n");
     }
 
-    ReplayEngine engine(ctx->config);
+    const bool use_call_tree = ctx->config.use_call_tree;
+    ReplayEngine engine(std::move(ctx->config));
 
-    if (ctx->config.use_call_tree) {
+    if (use_call_tree) {
         // Call tree path stays sync, replay_with_call_tree builds the
         // full tree in memory first, so there's nothing to hide behind a
         // channel. We just call it from inside this task.
@@ -399,9 +393,7 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, coro::Scope* scope) {
         if (ctx->is_root) {
             std::printf("Using call tree hierarchical replay mode\n");
         }
-        ctx->result =
-            // keep std: unswept API
-            engine.replay_with_call_tree(std::string(ctx->cli->inputs[0]));
+        ctx->result = engine.replay_with_call_tree(ctx->cli->inputs[0]);
     } else {
         // Pipelined path: producer (read+parse) feeds Channel<Trace>;
         // consumer (apply_timing+execute) drains it.

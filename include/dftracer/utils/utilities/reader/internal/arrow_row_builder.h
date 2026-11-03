@@ -8,14 +8,11 @@
 
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <simdjson.h>
-
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -26,7 +23,7 @@ using trace::TimeScaleState;
 struct RowBuildOptions {
     // Top-level keys to keep (nullptr/empty = all). "args" gates whether the
     // args object is flattened at all, so dropping it skips that work entirely.
-    const std::vector<std::string> *keep = nullptr;
+    const dstd::Vector<dstd::String> *keep = nullptr;
     // Dictionary-encode string columns (big win for low-cardinality fields like
     // cat/name that repeat across most rows).
     bool dict_strings = false;

@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/parallel/layout.h>
 
 #include <algorithm>
 
 namespace dftracer::utils::utilities::fileio::parallel {
 
-LayoutInfo detect_layout(const std::string& path) noexcept {
+LayoutInfo detect_layout(dstd::CStringView path) noexcept {
     LayoutInfo info{};
     info.layout = FileLayout::Striped;
     info.fs = common::filesystem_kind(path);

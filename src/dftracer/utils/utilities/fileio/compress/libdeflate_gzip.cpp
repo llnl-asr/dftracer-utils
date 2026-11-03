@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -9,7 +11,6 @@
 #include <algorithm>
 #include <climits>
 #include <cstddef>
-#include <memory>
 
 namespace dftracer::utils::utilities::fileio::compress {
 
@@ -107,11 +108,11 @@ dstd::Optional<DecompressResult> GzipMemberDecompressor::decompress(
     return dstd::nullopt;
 }
 
-dstd::Optional<std::vector<std::uint8_t>>
+dstd::Optional<dstd::Vector<std::uint8_t>>
 GzipMemberDecompressor::decompress_member(const void* comp,
                                           std::size_t comp_len,
                                           std::size_t uncompressed_size) const {
-    std::vector<std::uint8_t> out(uncompressed_size);
+    dstd::Vector<std::uint8_t> out(uncompressed_size);
     auto res = decompress(comp, comp_len, out.data(), out.size());
     if (!res) return dstd::nullopt;
     out.resize(res->out_bytes);
@@ -156,7 +157,7 @@ dstd::Optional<std::size_t> GzipMemberCompressor::compress(
     return n;
 }
 
-bool GzipMemberCompressor::compress_member_into(std::vector<std::uint8_t>& out,
+bool GzipMemberCompressor::compress_member_into(dstd::Vector<std::uint8_t>& out,
                                                 const void* data,
                                                 std::size_t len) const {
     if (!c_) return false;
@@ -164,10 +165,10 @@ bool GzipMemberCompressor::compress_member_into(std::vector<std::uint8_t>& out,
     // fill and fault in all of it to keep a few percent. A per-thread scratch
     // buffer is reused across members and only its used part is written.
     const std::size_t cap = bound(len);
-    thread_local std::unique_ptr<std::uint8_t[]> scratch;
+    thread_local dstd::UniquePtr<std::uint8_t[]> scratch;
     thread_local std::size_t scratch_cap = 0;
     if (scratch_cap < cap) {
-        scratch.reset(new std::uint8_t[cap]);
+        scratch = dstd::make_unique_for_overwrite<std::uint8_t[]>(cap);
         scratch_cap = cap;
     }
     auto n = compress(data, len, scratch.get(), cap);
@@ -176,15 +177,15 @@ bool GzipMemberCompressor::compress_member_into(std::vector<std::uint8_t>& out,
     return true;
 }
 
-dstd::Optional<std::vector<std::uint8_t>> GzipMemberCompressor::compress_member(
-    const void* data, std::size_t len) const {
-    std::vector<std::uint8_t> out;
+dstd::Optional<dstd::Vector<std::uint8_t>>
+GzipMemberCompressor::compress_member(const void* data, std::size_t len) const {
+    dstd::Vector<std::uint8_t> out;
     if (!compress_member_into(out, data, len)) return dstd::nullopt;
     return out;
 }
 
 dstd::Optional<std::size_t> decode_truncated_member(
-    const void* comp, std::size_t comp_len, std::vector<std::uint8_t>& out) {
+    const void* comp, std::size_t comp_len, dstd::Vector<std::uint8_t>& out) {
     GzipStreamInflater gz;
     if (!gz.init(common::constants::indexer::ZLIB_GZIP_WINDOW_BITS))
         return dstd::nullopt;

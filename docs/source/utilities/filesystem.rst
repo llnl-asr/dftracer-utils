@@ -11,7 +11,7 @@ Directory scanning and file enumeration utilities.
    #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 Both scanners are coroutine utilities: they take a ``CoroScope&`` plus their
-input and return a ``coro::CoroTask<std::vector<FileEntry>>``, or can be
+input and return a ``coro::CoroTask<dstd::Vector<FileEntry>>``, or can be
 called without a scope (they open their own on the current executor). A
 recursive scan fans out one child scan per subdirectory over the scope, so
 many directories are read concurrently on parallel filesystems such as
@@ -68,7 +68,7 @@ entry found.
    DirectoryScannerUtility scanner;
    DirectoryScannerUtilityInput input{"/data/traces", /*recursive=*/true};
 
-   std::vector<FileEntry> files = co_await scanner(input);
+   dstd::Vector<FileEntry> files = co_await scanner(input);
 
 PatternDirectoryScannerUtility
 ------------------------------
@@ -81,13 +81,13 @@ extension/suffix pattern.
 .. code-block:: cpp
 
    struct PatternDirectoryScannerUtilityInput {
-       std::string path;
+       dstd::String path;
        bool recursive = false;
        bool populate_size = true;
-       std::vector<std::string> patterns;  // e.g. {".pfw.gz"}; empty = match all
+       dstd::Vector<dstd::String> patterns;  // e.g. {".pfw.gz"}; empty = match all
 
-       static PatternDirectoryScannerUtilityInput from_path(std::string p);
-       PatternDirectoryScannerUtilityInput& with_patterns(std::vector<std::string> p);
+       static PatternDirectoryScannerUtilityInput from_path(dstd::StringView p);
+       PatternDirectoryScannerUtilityInput& with_patterns(dstd::Vector<dstd::String> p);
        PatternDirectoryScannerUtilityInput& with_recursive(bool value);
    };
 
@@ -108,4 +108,4 @@ way; anything else must match the filename exactly.
        .with_patterns({".pfw.gz"})
        .with_recursive(true);
 
-   std::vector<FileEntry> trace_files = co_await scanner(input);
+   dstd::Vector<FileEntry> trace_files = co_await scanner(input);

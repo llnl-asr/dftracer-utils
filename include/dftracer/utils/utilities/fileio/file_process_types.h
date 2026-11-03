@@ -2,12 +2,12 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_H
 
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <cstddef>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -15,16 +15,16 @@ namespace dftracer::utils::utilities::fileio {
  * @brief Input for processing files in a directory.
  */
 struct DirectoryProcessInput {
-    std::string directory_path;
+    dstd::String directory_path;
     bool recursive = false;
-    std::vector<std::string> extensions;  ///< e.g., {".pfw", ".pfw.gz"}
+    dstd::Vector<dstd::String> extensions;  ///< e.g., {".pfw", ".pfw.gz"}
 
     DirectoryProcessInput() = default;
 
-    DirectoryProcessInput(std::string path,
-                          std::vector<std::string> exts = {".pfw", ".pfw.gz"},
+    DirectoryProcessInput(dstd::StringView path,
+                          dstd::Vector<dstd::String> exts = {".pfw", ".pfw.gz"},
                           bool recurse = false)
-        : directory_path(std::move(path)),
+        : directory_path(path),
           recursive(recurse),
           extensions(std::move(exts)) {}
 
@@ -47,31 +47,31 @@ struct DirectoryProcessInput {
  * @brief Input for reading an indexed file.
  */
 struct IndexedReadInput {
-    std::string file_path;
-    std::string index_path;  ///< Root-local `.dftindex` path.
+    dstd::String file_path;
+    dstd::String index_path;  ///< Root-local `.dftindex` path.
     std::size_t checkpoint_size = dftracer::utils::index::gzip::
         CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE;
     bool force_rebuild = false;
 
     IndexedReadInput() = default;
 
-    IndexedReadInput(std::string fpath, std::string ipath,
+    IndexedReadInput(dstd::StringView fpath, dstd::StringView ipath,
                      std::size_t ckpt_size = dftracer::utils::index::gzip::
                          CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE,
                      bool force = false)
-        : file_path(std::move(fpath)),
-          index_path(std::move(ipath)),
+        : file_path(fpath),
+          index_path(ipath),
           checkpoint_size(ckpt_size),
           force_rebuild(force) {}
 
-    static IndexedReadInput from_file(std::string path) {
+    static IndexedReadInput from_file(dstd::StringView path) {
         IndexedReadInput input;
-        input.file_path = std::move(path);
+        input.file_path = path;
         return input;
     }
 
-    IndexedReadInput& with_index(std::string idx) {
-        index_path = std::move(idx);
+    IndexedReadInput& with_index(dstd::StringView idx) {
+        index_path = idx;
         return *this;
     }
 
@@ -90,8 +90,8 @@ struct IndexedReadInput {
  * @brief Input for batch processing lines from a file.
  */
 struct LineBatchInput {
-    std::string file_path;
-    std::string index_path;      ///< Empty for plain text files
+    dstd::String file_path;
+    dstd::String index_path;     ///< Empty for plain text files
                                  ///< or `.dftindex` for indexed archives.
     std::size_t start_line = 0;  ///< 0 = from beginning
     std::size_t end_line = 0;    ///< 0 = to end
@@ -100,21 +100,21 @@ struct LineBatchInput {
 
     LineBatchInput() = default;
 
-    LineBatchInput(std::string fpath, std::string ipath = "",
+    LineBatchInput(dstd::StringView fpath, dstd::StringView ipath = "",
                    std::size_t start = 0, std::size_t end = 0)
-        : file_path(std::move(fpath)),
-          index_path(std::move(ipath)),
+        : file_path(fpath),
+          index_path(ipath),
           start_line(start),
           end_line(end) {}
 
-    static LineBatchInput from_file(std::string path) {
+    static LineBatchInput from_file(dstd::StringView path) {
         LineBatchInput input;
-        input.file_path = std::move(path);
+        input.file_path = path;
         return input;
     }
 
-    LineBatchInput& with_index(std::string idx) {
-        index_path = std::move(idx);
+    LineBatchInput& with_index(dstd::StringView idx) {
+        index_path = idx;
         return *this;
     }
 
@@ -134,19 +134,19 @@ struct LineBatchInput {
  * @brief Output from processing a single file.
  */
 struct FileProcessOutput {
-    std::string file_path;
+    dstd::String file_path;
     bool success = false;
     std::size_t items_processed = 0;
-    std::string error_message;
+    dstd::String error_message;
 
     FileProcessOutput() = default;
 
-    FileProcessOutput(std::string path, bool succ, std::size_t items = 0,
-                      std::string error = "")
-        : file_path(std::move(path)),
+    FileProcessOutput(dstd::StringView path, bool succ, std::size_t items = 0,
+                      dstd::StringView error = "")
+        : file_path(path),
           success(succ),
           items_processed(items),
-          error_message(std::move(error)) {}
+          error_message(error) {}
 };
 
 /**
@@ -154,7 +154,7 @@ struct FileProcessOutput {
  */
 template <typename T>
 struct BatchFileProcessOutput {
-    std::vector<T> results;
+    dstd::Vector<T> results;
     std::size_t successful_count = 0;
     std::size_t failed_count = 0;
     std::size_t total_items_processed = 0;

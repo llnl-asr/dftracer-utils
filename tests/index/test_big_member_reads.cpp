@@ -456,7 +456,7 @@ TEST_SUITE("BigMemberReads") {
             run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
                 auto lines =
                     utilities::fileio::lines::sources::async_streaming_gz_lines(
-                        path);
+                        dstd::String(path));
                 while (auto line = co_await lines.next()) ++n;
             });
             return n;

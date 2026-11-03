@@ -525,12 +525,16 @@ inline dstd::Path absolute_path(dstd::StringView path) {
 inline std::vector<utilities::filesystem::FileEntry> scan_trace_files_on_pool(
     const PipelineArgs& pipeline, dstd::StringView directory,
     bool populate_size = true) {
-    return utilities::filesystem::scan_on_pool<
+    auto scanned = utilities::filesystem::scan_on_pool<
         utilities::filesystem::PatternDirectoryScannerUtility>(
         pipeline.executor_threads, 1,
         utilities::filesystem::PatternDirectoryScannerUtilityInput{
             dstd::String(directory),
             utilities::filesystem::trace_file_patterns(), true, populate_size});
+    // keep std: unswept API
+    return std::vector<utilities::filesystem::FileEntry>(
+        std::make_move_iterator(scanned.begin()),
+        std::make_move_iterator(scanned.end()));
 }
 
 // Parallel per-subdirectory scan of `directory` for trace files via
@@ -615,10 +619,12 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     std::size_t checkpoint_size = 0) {
     if (!directory.empty()) {
         utilities::filesystem::PatternDirectoryScannerUtility scanner;
-        *entries = co_await scanner(
+        auto scanned = co_await scanner(
             ctx,
             utilities::filesystem::PatternDirectoryScannerUtilityInput{
                 directory, utilities::filesystem::trace_file_patterns(), true});
+        entries->assign(std::make_move_iterator(scanned.begin()),
+                        std::make_move_iterator(scanned.end()));
     } else {
         for (const auto& f : files) entries->emplace_back(dstd::StringView(f));
     }

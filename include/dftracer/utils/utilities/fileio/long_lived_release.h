@@ -5,11 +5,11 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <exception>
-#include <memory>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -23,7 +23,7 @@ coro::CoroTask<void> join_and_delete(Impl* impl) {
         DFTRACER_UTILS_LOG_ERROR("long-lived scope cleanup failed: %s",
                                  e.what());
     }
-    delete impl;
+    dstd::UniquePtr<Impl> owner(impl);
 }
 
 }  // namespace detail
@@ -33,7 +33,7 @@ coro::CoroTask<void> join_and_delete(Impl* impl) {
 /// thread the call blocks to join, else (or if that throws) a joiner task takes
 /// the Impl. With no runtime left it leaks, as destroying frames terminates.
 template <typename Impl>
-void release_long_lived(std::unique_ptr<Impl> impl, const char* name) {
+void release_long_lived(dstd::UniquePtr<Impl> impl, const char* name) {
     if (!impl || impl->settled()) return;
     impl->abandon();
     if (!coro::Executor::current()) {

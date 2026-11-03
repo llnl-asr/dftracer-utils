@@ -413,7 +413,7 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
             4 * 1024 * 1024  // 4MB (larger than INCOMPLETE_BUFFER_SIZE)
         };
 
-        std::vector<std::string> results;
+        dstd::Vector<dstd::String> results;
         std::vector<std::size_t> line_counts;
         std::vector<std::string> last_lines;
 
@@ -439,7 +439,7 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
             // Validate JSON completeness
             CHECK(validate_json_lines(content));
 
-            results.push_back(content);
+            results.emplace_back(content);
             line_counts.push_back(count_json_lines(content));
             last_lines.push_back(get_last_json_line(content));
         }
@@ -1347,7 +1347,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         std::mt19937 gen(rd());
         std::uniform_int_distribution<std::size_t> dis(1, total_lines);
 
-        std::vector<std::string> results;
+        dstd::Vector<dstd::String> results;
 
         // Test 50 random line ranges
         for (std::size_t i = 0; i < 50; ++i) {
@@ -1357,7 +1357,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             std::size_t end_line = start_line + range_size - 1;
 
             try {
-                std::string result = reader->read_lines(start_line, end_line);
+                dstd::String result = reader->read_lines(start_line, end_line);
 
                 // Count actual lines returned
                 std::size_t line_count = 0;
@@ -1430,7 +1430,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         for (auto range : large_ranges) {
             if (range.first <= range.second && range.second <= total_lines) {
                 try {
-                    std::string result =
+                    dstd::String result =
                         reader->read_lines(range.first, range.second);
 
                     // Count lines
@@ -1498,7 +1498,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         for (std::size_t line_num : test_lines) {
             if (line_num <= total_lines && line_num > 0) {
                 try {
-                    std::string result = reader->read_lines(line_num, line_num);
+                    dstd::String result =
+                        reader->read_lines(line_num, line_num);
 
                     // Should have exactly one line
                     std::size_t line_count = 0;
@@ -1544,12 +1545,13 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         // Test boundary conditions
         try {
             // First line
-            std::string first = reader->read_lines(1, 1);
+            dstd::String first = reader->read_lines(1, 1);
             CHECK(first.find("\"name\":\"name_1\"") != std::string::npos);
 
             // Last line
             if (total_lines > 0) {
-                std::string last = reader->read_lines(total_lines, total_lines);
+                dstd::String last =
+                    reader->read_lines(total_lines, total_lines);
                 std::string expected =
                     "\"name\":\"name_" + std::to_string(total_lines) + "\"";
                 CHECK(last.find(expected) != std::string::npos);
@@ -1557,7 +1559,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
             // First few lines
             if (total_lines >= 5) {
-                std::string first_few = reader->read_lines(1, 5);
+                dstd::String first_few = reader->read_lines(1, 5);
                 std::size_t line_count = 0;
                 for (char c : first_few) {
                     if (c == '\n') line_count++;
@@ -1568,7 +1570,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             // Last few lines
             if (total_lines >= 5) {
                 std::size_t start = total_lines - 4;
-                std::string last_few = reader->read_lines(start, total_lines);
+                dstd::String last_few = reader->read_lines(start, total_lines);
                 std::size_t line_count = 0;
                 for (char c : last_few) {
                     if (c == '\n') line_count++;
@@ -1647,12 +1649,12 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
         for (auto range : test_ranges) {
             if (range.first <= range.second && range.second <= total_lines &&
                 range.first > 0) {
-                std::vector<std::string> results;
+                dstd::Vector<dstd::String> results;
 
                 // Read same range with all readers
                 for (auto& reader : readers) {
                     try {
-                        std::string result =
+                        dstd::String result =
                             reader->read_lines(range.first, range.second);
                         results.push_back(result);
                     } catch (const std::exception& e) {
@@ -1697,7 +1699,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
 
                 if (thread_start <= thread_end && thread_start > 0) {
                     try {
-                        std::string result =
+                        dstd::String result =
                             thread_reader->read_lines(thread_start, thread_end);
 
                         // Validate result
@@ -1750,14 +1752,14 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
         REQUIRE(reader->is_valid());
 
         // Sequential reading
-        std::vector<std::string> sequential_results;
+        dstd::Vector<dstd::String> sequential_results;
         const std::size_t chunk_size = 50;
 
         for (std::size_t start = 1; start <= total_lines; start += chunk_size) {
             std::size_t end = std::min(start + chunk_size - 1, total_lines);
 
             try {
-                std::string result = reader->read_lines(start, end);
+                dstd::String result = reader->read_lines(start, end);
                 sequential_results.push_back(result);
             } catch (const std::exception& e) {
                 sequential_results.push_back("");  // Mark failed
@@ -1770,7 +1772,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
         }
 
         // Random access reading (same ranges as sequential)
-        std::vector<std::string> random_results;
+        dstd::Vector<dstd::String> random_results;
         std::vector<std::size_t> indices;
         for (std::size_t i = 0; i < sequential_results.size(); ++i) {
             indices.push_back(i);
@@ -1789,7 +1791,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
             std::size_t end = std::min(start + chunk_size - 1, total_lines);
 
             try {
-                std::string result = random_reader->read_lines(start, end);
+                dstd::String result = random_reader->read_lines(start, end);
                 random_results.push_back(result);
             } catch (const std::exception& e) {
                 random_results.push_back("");  // Mark failed

@@ -3,15 +3,13 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_MULTI_LINE_STREAM_H
 
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 
 #include <cstdio>
 #include <cstring>
-#include <memory>
-#include <span>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -24,10 +22,10 @@ namespace dftracer::utils::utilities::reader::internal {
  */
 class MultiLineStream : public ReaderStream {
    private:
-    std::unique_ptr<ReaderStream> underlying_stream_;
+    dstd::UniquePtr<ReaderStream> underlying_stream_;
     dstd::Span<const char> current_span_;
-    std::string line_accumulator_;
-    std::string output_buffer_;
+    dstd::String line_accumulator_;
+    dstd::String output_buffer_;
     bool is_finished_;
     std::size_t current_line_;
     std::size_t start_line_;
@@ -39,7 +37,7 @@ class MultiLineStream : public ReaderStream {
         output_buf_pos_;  // Position in output_buffer_ for buffer-based reads
 
    public:
-    explicit MultiLineStream(std::unique_ptr<ReaderStream> underlying_stream,
+    explicit MultiLineStream(dstd::UniquePtr<ReaderStream> underlying_stream,
                              std::size_t start_line = 0,
                              std::size_t end_line = 0,
                              std::size_t initial_line = 1)

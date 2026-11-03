@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/index.h>
@@ -411,7 +412,7 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
         utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
             input.directory, utilities::filesystem::trace_file_patterns(),
             true};
-        std::vector<utilities::filesystem::FileEntry> matched;
+        dstd::Vector<utilities::filesystem::FileEntry> matched;
         matched = co_await scanner_(ctx, scan_input);
         result.all_files.reserve(matched.size());
         result.all_file_sizes.reserve(matched.size());

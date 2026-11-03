@@ -3,13 +3,11 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_JSON_DICT_BUILDER_H
 
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/args_map.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <simdjson.h>
-
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -23,7 +21,7 @@ struct JsonDictEvent {
 };
 
 struct JsonDictBatch {
-    std::vector<JsonDictEvent> events;
+    dstd::Vector<JsonDictEvent> events;
 };
 
 // Coerce a simdjson value into `map` under `key`. Errored or non-scalar

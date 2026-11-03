@@ -6,14 +6,11 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
-
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::coro {
 class Scope;
@@ -23,17 +20,17 @@ namespace dftracer::utils::utilities::arrow {
 
 /**
  * Result from reading a single Arrow IPC file.
- * Batches are stored in shared_ptr to allow copying through std::shared_future.
+ * Batches are stored in shared_ptr to allow copying through dstd::SharedFuture.
  */
 struct ArrowFileReadResult {
-    std::string path;
-    dstd::SharedPtr<std::vector<ArrowExportResult>> batches;
+    dstd::String path;
+    dstd::SharedPtr<dstd::Vector<ArrowExportResult>> batches;
     std::int64_t total_rows = 0;
-    std::string error;
+    dstd::String error;
     bool success = true;
 
     ArrowFileReadResult()
-        : batches(std::make_shared<std::vector<ArrowExportResult>>()) {}
+        : batches(dstd::make_shared<dstd::Vector<ArrowExportResult>>()) {}
 };
 
 /**
@@ -53,7 +50,7 @@ struct ParallelReadResult {
  * @param path Path to the Arrow IPC file.
  * @return @ref ArrowFileReadResult with batches or error.
  */
-coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(std::string path);
+coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(dstd::String path);
 
 /**
  * Read multiple Arrow IPC files in parallel.
@@ -65,13 +62,13 @@ coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(std::string path);
  * @return @ref ParallelReadResult with all results.
  */
 coro::CoroTask<ParallelReadResult> read_arrow_files_parallel(
-    std::vector<std::string> paths);
+    dstd::Vector<dstd::String> paths);
 
 /**
  * Callback type for streaming file results.
  * Return false to cancel remaining reads.
  */
-using FileResultCallback = std::function<bool(ArrowFileReadResult&&)>;
+using FileResultCallback = dstd::Function<bool(ArrowFileReadResult&&)>;
 
 /**
  * Read multiple Arrow IPC files in parallel, streaming results via callback.
@@ -88,7 +85,7 @@ using FileResultCallback = std::function<bool(ArrowFileReadResult&&)>;
  * @return Summary stats (files_read, files_failed, total_rows, total_batches).
  */
 coro::CoroTask<ParallelReadResult> read_arrow_files_streaming(
-    coro::Scope& scope, std::vector<std::string> paths,
+    coro::Scope& scope, dstd::Vector<dstd::String> paths,
     FileResultCallback callback);
 
 }  // namespace dftracer::utils::utilities::arrow

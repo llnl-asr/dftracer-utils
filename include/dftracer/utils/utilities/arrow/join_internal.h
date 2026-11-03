@@ -8,6 +8,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <nanoarrow/nanoarrow.h>
 
@@ -15,9 +16,6 @@
 #include <cstdint>
 #include <cstring>
 #include <numeric>
-#include <optional>
-#include <string_view>
-#include <vector>
 
 /// Shared sort/compare + value-passthrough helpers backing the Arrow relational
 /// ops (join, asof_join, interval_join, window). Internal to the arrow layer;
@@ -93,7 +91,7 @@ inline dstd::Optional<KeyKind> key_kind_from_storage(ArrowType t) noexcept {
 struct ValueCol {
     const ArrowArrayView* view;
     ColumnType type;
-    std::vector<ColumnType> field_types;
+    dstd::Vector<ColumnType> field_types;
 };
 
 /// Supports scalars, list<struct<...>>, list<utf8/binary>, and list of any
@@ -115,7 +113,7 @@ inline ValueCol plan_value_col(const ArrowArrayView* v, const ArrowSchema* s,
         const ArrowArrayView* elem = v->children[0];
         if (elem->storage_type == NANOARROW_TYPE_STRUCT) {
             const ArrowSchema* item_schema = s->children[0];
-            std::vector<ColumnSpec> fields;
+            dstd::Vector<ColumnSpec> fields;
             fields.reserve(static_cast<std::size_t>(elem->n_children));
             for (std::int64_t f = 0; f < elem->n_children; ++f) {
                 auto ft =
@@ -209,7 +207,7 @@ inline void append_value(RecordBatchBuilder& b, std::size_t out,
                 ArrowArrayViewListChildOffset(vc.view, row);
             const std::int64_t end =
                 ArrowArrayViewListChildOffset(vc.view, row + 1);
-            std::vector<dstd::StringView> vals;
+            dstd::Vector<dstd::StringView> vals;
             vals.reserve(static_cast<std::size_t>(end - start));
             for (std::int64_t p = start; p < end; ++p) {
                 ArrowStringView s = ArrowArrayViewGetStringUnsafe(elem, p);
@@ -225,7 +223,7 @@ inline void append_value(RecordBatchBuilder& b, std::size_t out,
                 ArrowArrayViewListChildOffset(vc.view, row);
             const std::int64_t end =
                 ArrowArrayViewListChildOffset(vc.view, row + 1);
-            std::vector<std::int64_t> vals;
+            dstd::Vector<std::int64_t> vals;
             vals.reserve(static_cast<std::size_t>(end - start));
             for (std::int64_t p = start; p < end; ++p)
                 vals.push_back(ArrowArrayViewGetIntUnsafe(elem, p));
@@ -238,10 +236,10 @@ inline void append_value(RecordBatchBuilder& b, std::size_t out,
                 ArrowArrayViewListChildOffset(vc.view, row);
             const std::int64_t end =
                 ArrowArrayViewListChildOffset(vc.view, row + 1);
-            std::vector<std::vector<StructCell>> rows;
+            dstd::Vector<dstd::Vector<StructCell>> rows;
             rows.reserve(static_cast<std::size_t>(end - start));
             for (std::int64_t p = start; p < end; ++p) {
-                std::vector<StructCell> cells(vc.field_types.size());
+                dstd::Vector<StructCell> cells(vc.field_types.size());
                 for (std::size_t f = 0; f < vc.field_types.size(); ++f) {
                     const ArrowArrayView* fv = st->children[f];
                     StructCell& c = cells[f];
@@ -280,7 +278,7 @@ inline void append_value(RecordBatchBuilder& b, std::size_t out,
     }
 }
 
-using KeyViews = std::vector<const ArrowArrayView*>;
+using KeyViews = dstd::Vector<const ArrowArrayView*>;
 
 inline bool row_key_null(const KeyViews& keys, std::int64_t row) {
     for (const ArrowArrayView* v : keys)
@@ -325,7 +323,7 @@ inline int cell_cmp(const ArrowArrayView* va, std::int64_t ia,
 /// Compare two non-null key tuples; returns <0, 0, >0. Both sides share the
 /// same per-column KeyKind (validated by the caller).
 inline int key_cmp(const KeyViews& ka, std::int64_t ia, const KeyViews& kb,
-                   std::int64_t ib, const std::vector<KeyKind>& kinds) {
+                   std::int64_t ib, const dstd::Vector<KeyKind>& kinds) {
     for (std::size_t k = 0; k < kinds.size(); ++k) {
         int c = cell_cmp(ka[k], ia, kb[k], ib, kinds[k]);
         if (c != 0) return c;
@@ -337,12 +335,10 @@ inline int key_cmp(const KeyViews& ka, std::int64_t ia, const KeyViews& kb,
 /// last), then an optional numeric `secondary` column (null sorts last), then
 /// the original row index for a stable, deterministic tie-break. Pass secondary
 /// = nullptr to sort by the equi tuple alone.
-inline std::vector<std::int64_t> order_rows(const KeyViews& equi,
-                                            const std::vector<KeyKind>& ekinds,
-                                            const ArrowArrayView* secondary,
-                                            KeyKind secondary_kind,
-                                            std::int64_t n) {
-    std::vector<std::int64_t> order(static_cast<std::size_t>(n));
+inline dstd::Vector<std::int64_t> order_rows(
+    const KeyViews& equi, const dstd::Vector<KeyKind>& ekinds,
+    const ArrowArrayView* secondary, KeyKind secondary_kind, std::int64_t n) {
+    dstd::Vector<std::int64_t> order(static_cast<std::size_t>(n));
     std::iota(order.begin(), order.end(), 0);
     std::sort(order.begin(), order.end(), [&](std::int64_t a, std::int64_t bb) {
         bool ea = row_key_null(equi, a);
@@ -368,9 +364,9 @@ inline std::vector<std::int64_t> order_rows(const KeyViews& equi,
 
 /// Given `order` sorted by order_rows, [i, return) is the maximal run sharing
 /// order[i]'s equi key (null-keyed rows form their own run).
-inline std::int64_t equi_partition_end(const std::vector<std::int64_t>& order,
+inline std::int64_t equi_partition_end(const dstd::Vector<std::int64_t>& order,
                                        const KeyViews& equi,
-                                       const std::vector<KeyKind>& ekinds,
+                                       const dstd::Vector<KeyKind>& ekinds,
                                        std::int64_t i, std::int64_t n) {
     std::int64_t rep = order[static_cast<std::size_t>(i)];
     bool rn = row_key_null(equi, rep);

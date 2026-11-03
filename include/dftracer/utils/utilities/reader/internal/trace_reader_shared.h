@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -15,12 +16,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <memory>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -115,7 +110,7 @@ inline void store_positions(duql::ValueMap& fields, dstd::StringView key,
             case simdjson::ondemand::json_type::number:
             case simdjson::ondemand::json_type::boolean:
                 if (auto cell = ondemand_to_cell(v))
-                    fields[std::string(key) + "." + std::to_string(pos)] =
+                    fields[dstd::String(key) + "." + dstd::to_string(pos)] =
                         std::move(*cell);
                 break;
             default:
@@ -136,7 +131,7 @@ inline void store_referenced(duql::ValueMap& fields, const duql::Query& query,
         store_positions(fields, key, val);
     } else if (query.references(key)) {
         if (auto cell = ondemand_to_cell(val))
-            fields[std::string(key)] = std::move(*cell);
+            fields[dstd::String(key)] = std::move(*cell);
     }
 }
 
@@ -159,7 +154,7 @@ inline void store_referenced_nested(duql::ValueMap& fields,
                                     dstd::StringView child,
                                     simdjson::ondemand::value val) {
     const bool want_bare = query.references(child);
-    std::string dotted;
+    dstd::String dotted;
     bool want_dotted = false;
     if (check_dotted) {
         dotted.reserve(parent.size() + 1 + child.size());
@@ -179,16 +174,16 @@ inline void store_referenced_nested(duql::ValueMap& fields,
     auto cell = ondemand_to_cell(val);
     if (!cell) return;
     // A top-level field of the same name wins, as the evaluator resolves it.
-    if (want_bare) fields.try_emplace(std::string(child), *cell);
+    if (want_bare) fields.try_emplace(dstd::String(child), *cell);
     if (want_dotted) fields[std::move(dotted)] = std::move(*cell);
 }
 
 // Chunk generator with index-driven pruning. Defined in trace_reader.cpp;
 // shared by read_json (core) and read_arrow (Arrow export).
 coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
-    dstd::SharedPtr<Reader> reader, std::string index_path,
-    std::string file_path, ReadConfig config, dstd::Optional<duql::Query> query,
-    bool extend_to_line_boundary = false);
+    dstd::SharedPtr<Reader> reader, dstd::String index_path,
+    dstd::String file_path, ReadConfig config,
+    dstd::Optional<duql::Query> query, bool extend_to_line_boundary = false);
 
 }  // namespace dftracer::utils::utilities::reader::internal
 

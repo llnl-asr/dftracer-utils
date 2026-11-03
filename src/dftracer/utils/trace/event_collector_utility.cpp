@@ -92,7 +92,8 @@ EventCollectorFromMetadataUtility::operator()(
         } else {
             auto line_gen =
                 utilities::fileio::lines::sources::async_streaming_gz_lines(
-                    file.file_path, file.start_line, file.end_line);
+                    dstd::String(file.file_path), file.start_line,
+                    file.end_line);
             for (;;) {
                 auto line_opt = co_await line_gen.next();
                 if (!line_opt) break;

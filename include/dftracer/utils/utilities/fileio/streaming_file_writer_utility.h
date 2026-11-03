@@ -8,9 +8,10 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/utilities/fileio/types/streaming.h>
 
-#include <fstream>
+#include <cstdio>
 #include <stdexcept>
 
 namespace dftracer::utils::utilities::fileio {
@@ -28,7 +29,7 @@ namespace dftracer::utils::utilities::fileio {
  */
 class StreamingFileWriterUtility {
    private:
-    std::ofstream file_;
+    dstd::ScopedFile file_;
     dstd::Path path_;
     bool append_ = false;
     bool create_dirs_ = true;
@@ -65,14 +66,7 @@ class StreamingFileWriterUtility {
         }
 
         // Open file
-        std::ios::openmode mode = std::ios::binary;
-        if (append_) {
-            mode |= std::ios::app;
-        } else {
-            mode |= std::ios::trunc;
-        }
-
-        file_.open(path_.c_str(), mode);
+        file_.reset(std::fopen(path_.c_str(), append_ ? "ab" : "wb"));
         if (!file_) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Io,
@@ -125,10 +119,8 @@ class StreamingFileWriterUtility {
                                                         total_chunks_);
         }
 
-        file_.write(chunk.as<char>(),
-                    static_cast<std::streamsize>(chunk.size()));
-
-        if (!file_) {
+        if (std::fwrite(chunk.as<char>(), 1, chunk.size(), file_.get()) !=
+            chunk.size()) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Io,
                 common::str_cat("Error writing to file: ", path_.str()));
@@ -146,7 +138,7 @@ class StreamingFileWriterUtility {
      */
     void close() {
         if (opened_) {
-            file_.close();
+            file_.reset();
             opened_ = false;
         }
     }

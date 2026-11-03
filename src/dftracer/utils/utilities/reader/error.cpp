@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/reader/error.h>
 
 namespace dftracer::utils::utilities::reader {
-std::string ReaderError::format_message(Type type, const std::string &message) {
+dstd::String ReaderError::format_message(Type type,
+                                         const dstd::String &message) {
     const char *prefix = "";
     switch (type) {
         case ReaderError::DatabaseError:
@@ -27,7 +29,7 @@ std::string ReaderError::format_message(Type type, const std::string &message) {
             prefix = "Unknown error";
             break;
     }
-    return std::string(prefix) + ": " + message;
+    return dstd::String(prefix) + ": " + message;
 }
 
 }  // namespace dftracer::utils::utilities::reader

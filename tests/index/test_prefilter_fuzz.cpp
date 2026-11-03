@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
 namespace views = dftracer::utils::trace::views;
 namespace reader = dftracer::utils::utilities::reader;
 using dftracer::utils::duql::Query;
@@ -216,7 +217,7 @@ ViewCounts view_counts(const std::string& gz, const Query& q) {
 
 std::size_t reader_count(const std::string& gz, const std::string& text) {
     auto run = [&]() -> dftracer::utils::coro::CoroTask<std::size_t> {
-        reader::TraceReader r({.file_path = gz});
+        reader::TraceReader r({.file_path = dstd::String(gz)});
         reader::ReadConfig cfg;
         cfg.query = text;
         cfg.buffer_size = READ_BUFFER_BYTES;
@@ -231,7 +232,7 @@ std::size_t reader_count(const std::string& gz, const std::string& text) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 std::int64_t arrow_count(const std::string& gz, const std::string& text) {
     auto run = [&]() -> dftracer::utils::coro::CoroTask<std::int64_t> {
-        reader::TraceReader r({.file_path = gz});
+        reader::TraceReader r({.file_path = dstd::String(gz)});
         reader::ReadConfig cfg;
         cfg.query = text;
         cfg.buffer_size = READ_BUFFER_BYTES;

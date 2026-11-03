@@ -5,6 +5,8 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
 
 namespace dftracer::utils::utilities::fileio {
@@ -32,12 +34,12 @@ coro::CoroTask<void> ChunkWriter::open() {
     opts.part_size = config_.chunk_size_bytes;
     opts.part_name = [this](std::size_t idx) {
         return config_.output_dir + "/" + config_.base_name + "_chunk" +
-               std::to_string(idx) + ".pfw" + (config_.compress ? ".gz" : "");
+               dstd::to_string(idx) + ".pfw" + (config_.compress ? ".gz" : "");
     };
-    opts.on_part = [this](std::size_t part, const std::string& path,
+    opts.on_part = [this](std::size_t part, dstd::StringView path,
                           std::uint64_t uc_bytes, std::uint64_t lines) {
         chunks_.push_back(ChunkInfo{
-            .path = path,
+            .path = dstd::String(path),
             .bytes_written = static_cast<std::size_t>(uc_bytes),
             .events_written = static_cast<std::size_t>(lines),
             .chunk_index = static_cast<int>(part),

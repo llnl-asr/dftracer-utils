@@ -3,8 +3,11 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/long_lived_release.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
@@ -15,12 +18,8 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <exception>
-#include <memory>
-#include <optional>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio::parallel {
 
@@ -41,7 +40,8 @@ constexpr std::size_t CHUNK_CHANNEL_CAPACITY = 64;
 constexpr std::size_t MAX_INFLIGHT_PWRITES = 16;
 
 // Append a FEXTRA-only padding member (decompresses to zero bytes).
-void append_padding_member(std::vector<std::uint8_t>& out, std::uint16_t xlen) {
+void append_padding_member(dstd::Vector<std::uint8_t>& out,
+                           std::uint16_t xlen) {
     const std::size_t start = out.size();
     out.resize(start + PAD_MEMBER_FIXED_OVERHEAD + xlen);
     std::uint8_t* p = out.data() + start;
@@ -74,7 +74,7 @@ void append_padding_member(std::vector<std::uint8_t>& out, std::uint16_t xlen) {
 // Callers leave at least PAD_MEMBER_FIXED_OVERHEAD bytes. Each member leaves
 // either nothing or at least that much, so the stripe ends in a whole member:
 // a few bytes too small for one would stay zero, and gzip stops at them.
-void pad_to_stripe(std::vector<std::uint8_t>& out, std::size_t stripe_size) {
+void pad_to_stripe(dstd::Vector<std::uint8_t>& out, std::size_t stripe_size) {
     std::size_t remaining = stripe_size - out.size();
     while (remaining > PAD_MEMBER_MAX_SIZE) {
         const std::size_t take = std::min(
@@ -90,7 +90,7 @@ void pad_to_stripe(std::vector<std::uint8_t>& out, std::size_t stripe_size) {
 }
 
 struct Chunk {
-    std::vector<std::uint8_t> data;
+    dstd::Vector<std::uint8_t> data;
     dstd::SharedPtr<coro::Channel<ParallelWriter::MemberSpan>> ack;
 };
 
@@ -99,14 +99,14 @@ struct Chunk {
 struct PaddedStripedImpl {
     explicit PaddedStripedImpl(std::size_t stripe) : stripe_size(stripe) {}
 
-    std::string path;
+    dstd::String path;
     int fd = -1;
     std::size_t stripe_size;
     std::atomic<std::uint64_t> next_stripe_idx{0};
 
     dstd::UniquePtr<coro::Scope> packer_scope;
     dstd::SharedPtr<coro::Channel<Chunk>> channel;
-    std::vector<coro::ChannelProducer<Chunk>> producers;
+    dstd::Vector<coro::ChannelProducer<Chunk>> producers;
     dstd::Optional<coro::SpawnFuture<int>> packer_future;
     bool packer_drained = false;
 
@@ -155,12 +155,12 @@ struct PaddedStripedImpl {
 
     coro::CoroTask<int> run_packer(coro::Scope& parent_scope,
                                    coro::ChannelConsumer<Chunk> consumer) {
-        std::vector<std::uint8_t> buf;
+        dstd::Vector<std::uint8_t> buf;
         buf.reserve(stripe_size);
         std::uint64_t current_stripe_idx =
             next_stripe_idx.fetch_add(1, std::memory_order_relaxed);
 
-        std::deque<coro::SpawnFuture<int>> in_flight;
+        dstd::Deque<coro::SpawnFuture<int>> in_flight;
         int final_rc = 0;
 
         auto await_one = [&]() -> coro::CoroTask<void> {
@@ -172,7 +172,7 @@ struct PaddedStripedImpl {
 
         // `stripes` consecutive stripes from `emit_idx`, one for packed
         // members, more for a member larger than a stripe.
-        auto launch_emit = [&](std::vector<std::uint8_t>&& payload,
+        auto launch_emit = [&](dstd::Vector<std::uint8_t>&& payload,
                                std::uint64_t emit_idx,
                                std::uint64_t stripes) -> coro::CoroTask<void> {
             while (in_flight.size() >= MAX_INFLIGHT_PWRITES) {
@@ -261,7 +261,7 @@ struct PaddedStripedImpl {
 class PaddedStripedWriter : public ParallelWriter {
    public:
     explicit PaddedStripedWriter(std::size_t stripe_size)
-        : impl_(std::make_unique<PaddedStripedImpl>(stripe_size)) {}
+        : impl_(dstd::make_unique<PaddedStripedImpl>(stripe_size)) {}
 
     PaddedStripedWriter(PaddedStripedWriter&&) noexcept = default;
     PaddedStripedWriter& operator=(PaddedStripedWriter&& o) noexcept {
@@ -274,7 +274,7 @@ class PaddedStripedWriter : public ParallelWriter {
     }
     ~PaddedStripedWriter() override { release(); }
 
-    coro::CoroTask<int> open(std::string path, std::size_t num_workers,
+    coro::CoroTask<int> open(dstd::String path, std::size_t num_workers,
                              bool /*gzip_extension*/,
                              coro::Scope* /*scope*/) override {
         PaddedStripedImpl& s = *impl_;
@@ -292,7 +292,7 @@ class PaddedStripedWriter : public ParallelWriter {
 
         // Valid-gzip placeholder so callers that skip write_header still
         // produce a file gunzip can walk.
-        std::vector<std::uint8_t> pad;
+        dstd::Vector<std::uint8_t> pad;
         pad.reserve(s.stripe_size);
         pad_to_stripe(pad, s.stripe_size);
         const auto pwrite_bytes_rc =
@@ -331,7 +331,7 @@ class PaddedStripedWriter : public ParallelWriter {
                 data.size(), s.stripe_size);
             co_return -1;
         }
-        std::vector<std::uint8_t> buf;
+        dstd::Vector<std::uint8_t> buf;
         buf.reserve(s.stripe_size);
         buf.insert(
             buf.end(), reinterpret_cast<const std::uint8_t*>(data.data()),
@@ -389,7 +389,7 @@ class PaddedStripedWriter : public ParallelWriter {
         co_return static_cast<int>(rc);
     }
 
-    std::vector<std::string> output_paths() const override {
+    dstd::Vector<dstd::String> output_paths() const override {
         return {impl_->path};
     }
 
@@ -404,15 +404,15 @@ class PaddedStripedWriter : public ParallelWriter {
         release_long_lived(std::move(impl_), "padded_striped_writer_abort");
     }
 
-    std::unique_ptr<PaddedStripedImpl> impl_;
-    std::vector<dstd::Optional<MemberSpan>> per_worker_last_;
+    dstd::UniquePtr<PaddedStripedImpl> impl_;
+    dstd::Vector<dstd::Optional<MemberSpan>> per_worker_last_;
 };
 
 }  // namespace
 
-std::unique_ptr<ParallelWriter> make_padded_striped_writer(
+dstd::UniquePtr<ParallelWriter> make_padded_striped_writer(
     std::size_t stripe_size) {
-    return std::make_unique<PaddedStripedWriter>(stripe_size);
+    return dstd::make_unique<PaddedStripedWriter>(stripe_size);
 }
 
 }  // namespace dftracer::utils::utilities::fileio::parallel

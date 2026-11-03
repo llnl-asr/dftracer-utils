@@ -281,7 +281,7 @@ TEST_SUITE("View - metadata under pruning") {
         auto count_with = [&](const std::string& text, bool skip) {
             auto run = [&]() -> coro::CoroTask<std::size_t> {
                 dftracer::utils::utilities::reader::TraceReader reader(
-                    {.file_path = gz});
+                    {.file_path = dstd::String(gz)});
                 dftracer::utils::utilities::reader::ReadConfig cfg;
                 cfg.query = text;
                 cfg.skip_pruning = skip;

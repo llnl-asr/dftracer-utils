@@ -5,6 +5,8 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/file_decompressor_utility.h>
 #include <doctest/doctest.h>
@@ -12,17 +14,16 @@
 
 #include <cstddef>
 #include <fstream>
-#include <memory>
 #include <sstream>
-#include <string>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::fileio;
 
-static std::string read_file_content(const std::string& path) {
+static dstd::String read_file_content(const dstd::String& path) {
     std::ifstream ifs(path.c_str());
     std::stringstream ss;
     ss << ifs.rdbuf();
-    return ss.str();
+    return dstd::String(ss.str());
 }
 
 static dftracer::utils::dstd::Path create_test_dir() {
@@ -52,12 +53,12 @@ TEST_SUITE("FileDecompressor") {
             });
 
         SUBCASE("Decompress gzipped text file") {
-            std::string original_file =
-                std::string((test_dir / "test_original.txt").str());
-            std::string compressed_file = original_file + ".gz";
-            std::string decompressed_file = original_file;
+            dstd::String original_file =
+                dstd::String((test_dir / "test_original.txt").str());
+            dstd::String compressed_file = original_file + ".gz";
+            dstd::String decompressed_file = original_file;
 
-            std::string original_content =
+            dstd::String original_content =
                 "This is test content.\n"
                 "It has multiple lines.\n"
                 "We will compress and decompress it.\n";
@@ -88,17 +89,17 @@ TEST_SUITE("FileDecompressor") {
                   original_content.size());
             CHECK(dftracer::utils::dstd::fs::exists(decompressed_file).value());
 
-            std::string decompressed_content =
+            dstd::String decompressed_content =
                 read_file_content(decompressed_file);
             CHECK(decompressed_content == original_content);
         }
 
         SUBCASE("Decompress with custom output path") {
-            std::string original_file =
-                std::string((test_dir / "source.txt").str());
-            std::string compressed_file = original_file + ".gz";
-            std::string custom_output =
-                std::string((test_dir / "custom_decompressed.txt").str());
+            dstd::String original_file =
+                dstd::String((test_dir / "source.txt").str());
+            dstd::String compressed_file = original_file + ".gz";
+            dstd::String custom_output =
+                dstd::String((test_dir / "custom_decompressed.txt").str());
 
             std::ofstream ofs(original_file.c_str());
             ofs << "Custom output path test";
@@ -130,9 +131,9 @@ TEST_SUITE("FileDecompressor") {
             });
 
         SUBCASE("Compress and decompress preserves content") {
-            std::string original_file =
-                std::string((test_dir / "roundtrip.txt").str());
-            std::string compressed_file = original_file + ".gz";
+            dstd::String original_file =
+                dstd::String((test_dir / "roundtrip.txt").str());
+            dstd::String compressed_file = original_file + ".gz";
 
             std::stringstream content;
             content << "Line with spaces    and    tabs\t\there\n";
@@ -142,7 +143,7 @@ TEST_SUITE("FileDecompressor") {
             content << "\n\n";
             content << "Final line without newline";
 
-            std::string original_content = content.str();
+            dstd::String original_content(content.str());
 
             std::ofstream ofs(original_file.c_str());
             ofs << original_content;
@@ -164,18 +165,19 @@ TEST_SUITE("FileDecompressor") {
                     .get();
             REQUIRE(decompress_result.has_value());
 
-            std::string decompressed_content = read_file_content(original_file);
+            dstd::String decompressed_content =
+                read_file_content(original_file);
             CHECK(decompressed_content == original_content);
             CHECK(decompressed_content.size() == original_content.size());
         }
 
         SUBCASE("Large file round-trip") {
-            std::string original_file =
-                std::string((test_dir / "large_roundtrip.txt").str());
-            std::string compressed_file = original_file + ".gz";
+            dstd::String original_file =
+                dstd::String((test_dir / "large_roundtrip.txt").str());
+            dstd::String compressed_file = original_file + ".gz";
 
             std::ofstream ofs(original_file.c_str());
-            std::string line =
+            dstd::String line =
                 "This is a line that will be repeated many times to create a "
                 "large file.\n";
             for (int i = 0; i < 10000; ++i) {
@@ -218,8 +220,8 @@ TEST_SUITE("FileDecompressor") {
         SUBCASE("Non-existent input file") {
             FileDecompressorUtility decompressor;
 
-            std::string non_existent =
-                std::string((test_dir / "non_existent.gz").str());
+            dstd::String non_existent =
+                dstd::String((test_dir / "non_existent.gz").str());
             auto input = FileDecompressionUtilityInput::from_file(non_existent);
             auto result = decompressor(input).get();
 
@@ -227,12 +229,12 @@ TEST_SUITE("FileDecompressor") {
             CHECK(result.error().is_code(
                 dftracer::utils::common::ErrorCode::NotFound));
             CHECK(result.error().message().find("does not exist") !=
-                  std::string::npos);
+                  dstd::String::npos);
         }
 
         SUBCASE("Corrupt compressed file") {
-            std::string corrupt_file =
-                std::string((test_dir / "corrupt.gz").str());
+            dstd::String corrupt_file =
+                dstd::String((test_dir / "corrupt.gz").str());
 
             std::ofstream ofs(corrupt_file.c_str(), std::ios::binary);
             ofs << "This is not valid gzip data!";
@@ -247,17 +249,17 @@ TEST_SUITE("FileDecompressor") {
                 dftracer::utils::common::ErrorCode::Compression));
             bool has_decompression_error =
                 result.error().message().find("Decompression failed") !=
-                std::string::npos;
+                dstd::String::npos;
             bool has_header_error =
                 result.error().message().find("incorrect header") !=
-                std::string::npos;
+                dstd::String::npos;
             CHECK((has_decompression_error || has_header_error));
         }
 
         SUBCASE("Empty compressed file") {
-            std::string empty_file =
-                std::string((test_dir / "empty.txt").str());
-            std::string compressed_file = empty_file + ".gz";
+            dstd::String empty_file =
+                dstd::String((test_dir / "empty.txt").str());
+            dstd::String compressed_file = empty_file + ".gz";
 
             std::ofstream ofs(empty_file.c_str());
             ofs.close();
@@ -292,12 +294,12 @@ TEST_SUITE("FileDecompressor") {
             });
 
         SUBCASE("Decompress binary data") {
-            std::string binary_file =
-                std::string((test_dir / "binary.dat").str());
-            std::string compressed_file = binary_file + ".gz";
+            dstd::String binary_file =
+                dstd::String((test_dir / "binary.dat").str());
+            dstd::String compressed_file = binary_file + ".gz";
 
             std::ofstream ofs(binary_file.c_str(), std::ios::binary);
-            std::vector<unsigned char> original_data;
+            dstd::Vector<unsigned char> original_data;
             for (int i = 0; i < 256; ++i) {
                 for (int j = 0; j < 10; ++j) {
                     original_data.push_back(static_cast<unsigned char>(i));
@@ -323,7 +325,7 @@ TEST_SUITE("FileDecompressor") {
             REQUIRE(decompress_result.has_value());
 
             std::ifstream ifs(binary_file.c_str(), std::ios::binary);
-            std::vector<unsigned char> decompressed_data(
+            dstd::Vector<unsigned char> decompressed_data(
                 (std::istreambuf_iterator<char>(ifs)),
                 std::istreambuf_iterator<char>());
 
@@ -340,10 +342,10 @@ TEST_SUITE("FileDecompressor") {
             });
 
         SUBCASE("DFTU_TRY binds value on success") {
-            std::string original_file =
-                std::string((test_dir / "dftu_try.txt").str());
-            std::string compressed_file = original_file + ".gz";
-            std::string original_content = "DFTU_TRY happy path content\n";
+            dstd::String original_file =
+                dstd::String((test_dir / "dftu_try.txt").str());
+            dstd::String compressed_file = original_file + ".gz";
+            dstd::String original_content = "DFTU_TRY happy path content\n";
 
             std::ofstream ofs(original_file.c_str());
             ofs << original_content;
@@ -367,8 +369,8 @@ TEST_SUITE("FileDecompressor") {
         }
 
         SUBCASE("DFTU_TRY propagates error on bad input") {
-            std::string non_existent =
-                std::string((test_dir / "missing.gz").str());
+            dstd::String non_existent =
+                dstd::String((test_dir / "missing.gz").str());
             FileDecompressorUtility decompressor;
             auto input = FileDecompressionUtilityInput::from_file(non_existent);
             auto r = decompressed_size_via_dft_try(decompressor, input).get();

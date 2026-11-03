@@ -3,6 +3,9 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 #include <doctest/doctest.h>
@@ -16,9 +19,10 @@ using namespace dftracer::utils::utilities::filesystem;
 
 // Run a scanner in a Runtime, injecting its scope. Re-raises any exception.
 template <typename Scanner, typename Input>
-static std::vector<FileEntry> run_scan(Scanner& scanner, const Input& input) {
+static dftracer::utils::dstd::Vector<FileEntry> run_scan(Scanner& scanner,
+                                                         const Input& input) {
     dftracer::utils::Runtime rt;
-    std::vector<FileEntry> result;
+    dftracer::utils::dstd::Vector<FileEntry> result;
     rt.block_on(dftracer::utils::coro::named(
         "scan", dftracer::utils::coro::with_scope(
                     [&](dftracer::utils::coro::Scope& s)

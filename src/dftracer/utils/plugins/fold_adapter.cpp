@@ -409,16 +409,14 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
 
 ::dftu_task* host_merge_shards(void* h, const char* target,
                                const char* const* shards, std::uint32_t n) {
-    // keep std: fileio parallel::merge_shards takes std::string
-    std::string tgt(target ? target : "");
-    // keep std: fileio parallel::merge_shards takes std::vector<std::string>
-    std::vector<std::string> sv;
+    dstd::String tgt(target ? target : "");
+    dstd::Vector<dstd::String> sv;
     sv.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i)
         sv.emplace_back(shards[i] ? shards[i] : "");
     return static_cast<PluginFold*>(h)->emplace_task(
-        // keep std: the lambda forwards to merge_shards
-        [](std::string t, std::vector<std::string> s) -> coro::CoroTask<void> {
+        [](dstd::String t,
+           dstd::Vector<dstd::String> s) -> coro::CoroTask<void> {
             co_await parallel::merge_shards(t, s);
         }(std::move(tgt), std::move(sv)));
 }
@@ -431,9 +429,8 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
 ::dftu_task* host_writer_open(void* h, ::dftu_writer* w) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](PluginWriter* pw) -> coro::CoroTask<void> {
-            // keep std: fileio ParallelWriter::open takes std::string
-            co_await pw->writer->open(std::string(pw->path), pw->num_workers,
-                                      pw->gzip, nullptr);
+            co_await pw->writer->open(pw->path, pw->num_workers, pw->gzip,
+                                      nullptr);
         }(reinterpret_cast<PluginWriter*>(w)));
 }
 
@@ -679,12 +676,10 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
         ArrowArrayMove(a, array.get());
         arr::ArrowExportResult res(std::move(schema), std::move(array));
         int rc = -1;
-        // keep std: arrow IpcWriter::open takes const std::string&
-        std::string p(path);
         dftracer::utils::default_runtime().block_on(
             coro::named("dft-plugin-ipc", [&]() -> coro::CoroTask<void> {
                 arr::IpcWriter writer;
-                const auto open_rc = co_await writer.open(p);
+                const auto open_rc = co_await writer.open(path);
                 if (open_rc != 0) co_return;
                 const auto write_rc = co_await writer.write_batch(res);
                 if (write_rc != 0) co_return;
@@ -713,8 +708,7 @@ int host_arrow_read_ipc(void*, [[maybe_unused]] const char* path,
     namespace arr = utilities::arrow;
     try {
         arr::IpcReader reader;
-        if (reader.open(std::string(path)) != 0)  // keep std: arrow reader
-            return -1;
+        if (reader.open(path) != 0) return -1;
         if (reader.num_batches() == 0) return -1;
         arr::ArrowExportResult res = reader.read_batch(0);
         if (!res.get_array() || !res.get_schema() ||
@@ -1130,14 +1124,14 @@ int PluginFold::close_trace_writer(::dftu_trace_writer* w) {
     try {
         fio::GzipWriterOptions opts;
         opts.member_size = common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
-        // keep std: fileio GzipLineWriterBlocking::open takes std::string
-        auto writer = common::unwrap(fio::GzipLineWriterBlocking::open(
-            std::string(tw->path), opts));  // keep std: open takes std::string
+        const std::size_t member_size = opts.member_size;
+        auto writer = common::unwrap(
+            fio::GzipLineWriterBlocking::open(tw->path, std::move(opts)));
         const dstd::StringView buf = tw->buffer;
         const std::size_t end = buf.rfind('\n') + 1;
         std::size_t pos = 0;
         while (pos < end) {
-            std::size_t cut = buf.find('\n', pos + opts.member_size);
+            std::size_t cut = buf.find('\n', pos + member_size);
             cut = cut == dstd::StringView::npos || cut >= end ? end : cut + 1;
             common::unwrap(writer.append(buf.substr(pos, cut - pos)));
             pos = cut;

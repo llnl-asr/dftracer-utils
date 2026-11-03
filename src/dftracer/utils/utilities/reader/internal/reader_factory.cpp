@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/format_detector.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
@@ -11,8 +13,8 @@
 
 namespace dftracer::utils::utilities::reader::internal {
 
-dstd::SharedPtr<Reader> ReaderFactory::create(const std::string &archive_path,
-                                              const std::string &index_path,
+dstd::SharedPtr<Reader> ReaderFactory::create(dstd::CStringView archive_path,
+                                              dstd::StringView index_path,
                                               std::size_t index_ckpt_size) {
     common::ArchiveFormat format = common::FormatDetector::detect(archive_path);
 
@@ -22,13 +24,14 @@ dstd::SharedPtr<Reader> ReaderFactory::create(const std::string &archive_path,
 
     switch (format) {
         case common::ArchiveFormat::Gzip:
-            return std::make_shared<GzipReader>(archive_path, index_path,
-                                                index_ckpt_size);
+            return dstd::make_shared<GzipReader>(archive_path, index_path,
+                                                 index_ckpt_size);
 
         default:
             throw ReaderError(
                 ReaderError::InvalidArgument,
-                "Unsupported archive format for file: " + archive_path);
+                common::str_cat("Unsupported archive format for file: ",
+                                archive_path.view()));
     }
 }
 
@@ -39,7 +42,7 @@ dstd::SharedPtr<Reader> ReaderFactory::create(
                           "Indexer cannot be null");
     }
 
-    return std::make_shared<GzipReader>(indexer);
+    return dstd::make_shared<GzipReader>(indexer);
 }
 
 }  // namespace dftracer::utils::utilities::reader::internal

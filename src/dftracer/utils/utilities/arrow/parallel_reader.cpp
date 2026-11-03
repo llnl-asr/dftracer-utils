@@ -5,6 +5,7 @@
 
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/arrow/ipc_reader.h>
 #include <dftracer/utils/utilities/arrow/parallel_reader.h>
 
@@ -14,7 +15,7 @@ using namespace dftracer::utils;
 
 namespace dftracer::utils::utilities::arrow {
 
-coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(std::string path) {
+coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(dstd::String path) {
     ArrowFileReadResult result;
     result.path = path;
 
@@ -42,7 +43,7 @@ coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(std::string path) {
 }
 
 coro::CoroTask<ParallelReadResult> read_arrow_files_parallel(
-    std::vector<std::string> paths) {
+    dstd::Vector<dstd::String> paths) {
     ParallelReadResult result;
 
     if (paths.empty()) {
@@ -72,7 +73,7 @@ coro::CoroTask<ParallelReadResult> read_arrow_files_parallel(
 }
 
 coro::CoroTask<ParallelReadResult> read_arrow_files_streaming(
-    coro::Scope& /*scope*/, std::vector<std::string> paths,
+    coro::Scope& /*scope*/, dstd::Vector<dstd::String> paths,
     FileResultCallback callback) {
     if (paths.empty()) {
         co_return ParallelReadResult{};

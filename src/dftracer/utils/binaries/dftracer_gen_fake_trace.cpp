@@ -459,12 +459,12 @@ int main(int argc, char** argv) {
             // keep std: unswept API
             const std::string ckpt_file_name = "/checkpoints/model_ckpt.pt";
             // keep std: unswept API
-            const std::string ckpt_file_hash = make_hash(ckpt_file_name);
+            const std::string ckpt_file_hash(make_hash(ckpt_file_name));
 
             // keep std: unswept API
             const std::string script_name = "python train_unet3d.py";
             // keep std: unswept API
-            const std::string script_hash = make_hash(script_name);
+            const std::string script_hash(make_hash(script_name));
 
             // -----------------------------------------------------------------------
             // Banner

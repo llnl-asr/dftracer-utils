@@ -3,6 +3,10 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/ipc_writer.h>
@@ -16,7 +20,6 @@
 #include <zstd.h>
 
 #include <cstring>
-#include <vector>
 
 #define ns(x) FLATBUFFERS_WRAP_NAMESPACE(org_apache_arrow_flatbuf, x)
 
@@ -31,7 +34,7 @@ using FileBlock = ArrowIpcFileBlock;
 BufferPool::BufferPool(std::size_t num_slots, std::size_t initial_capacity) {
     slots_.reserve(num_slots);
     for (std::size_t i = 0; i < num_slots; ++i) {
-        auto slot = std::make_unique<Slot>();
+        auto slot = dstd::make_unique<Slot>();
         slot->data.reserve(initial_capacity);
         slots_.push_back(std::move(slot));
     }
@@ -47,7 +50,7 @@ BufferPool::Lease BufferPool::acquire(std::size_t min_capacity) {
             break;
         }
     }
-    if (!lease.pooled_) lease.owned_ = std::make_unique<Slot>();
+    if (!lease.pooled_) lease.owned_ = dstd::make_unique<Slot>();
     auto& data = lease.data();
     if (data.capacity() < min_capacity) data.reserve(min_capacity);
     data.clear();
@@ -64,7 +67,7 @@ struct BufferInfo {
 };
 
 static void collect_flat_buffers(ArrowArrayView* view,
-                                 std::vector<ArrowBufferView>& out,
+                                 dstd::Vector<ArrowBufferView>& out,
                                  bool is_root = false) {
     if (!is_root) {
         std::int64_t num_buffers = ArrowArrayViewGetNumBuffers(view);
@@ -78,7 +81,7 @@ static void collect_flat_buffers(ArrowArrayView* view,
 }
 
 static void collect_nodes(const ArrowArrayView* view,
-                          std::vector<ns(FieldNode_t)>& nodes,
+                          dstd::Vector<ns(FieldNode_t)>& nodes,
                           bool is_root = false) {
     if (!is_root) {
         ns(FieldNode_t) node;
@@ -92,9 +95,9 @@ static void collect_nodes(const ArrowArrayView* view,
 }
 
 static int build_compressed_body(ArrowArrayView* view,
-                                 std::vector<uint8_t>& out_body,
-                                 std::vector<BufferInfo>& out_info) {
-    std::vector<ArrowBufferView> flat_buffers;
+                                 dstd::Vector<uint8_t>& out_body,
+                                 dstd::Vector<BufferInfo>& out_info) {
+    dstd::Vector<ArrowBufferView> flat_buffers;
     collect_flat_buffers(view, flat_buffers, true);
 
     out_body.clear();
@@ -140,10 +143,10 @@ static int build_compressed_body(ArrowArrayView* view,
 }
 
 static int build_message_header(ArrowArrayView* view,
-                                const std::vector<BufferInfo>& buffer_info,
+                                const dstd::Vector<BufferInfo>& buffer_info,
                                 std::int64_t body_length,
-                                std::vector<uint8_t>& out_header) {
-    std::vector<ns(FieldNode_t)> nodes;
+                                dstd::Vector<uint8_t>& out_header) {
+    dstd::Vector<ns(FieldNode_t)> nodes;
     collect_nodes(view, nodes, true);
 
     flatcc_builder_t builder;
@@ -152,7 +155,7 @@ static int build_message_header(ArrowArrayView* view,
     }
     flatcc_builder_set_vtable_clustering(&builder, 0);
 
-    std::vector<ns(Buffer_t)> buffer_structs;
+    dstd::Vector<ns(Buffer_t)> buffer_structs;
     buffer_structs.reserve(buffer_info.size());
     for (const auto& buf : buffer_info) {
         ns(Buffer_t) b;
@@ -264,7 +267,7 @@ void IpcWriter::reset_state() noexcept {
 // open
 // ---------------------------------------------------------------------------
 
-coro::CoroTask<int> IpcWriter::open(const std::string& path,
+coro::CoroTask<int> IpcWriter::open(dstd::CStringView path,
                                     IpcCompression compression,
                                     std::size_t pool_slots) {
     if (is_open()) co_return -1;
@@ -295,7 +298,7 @@ coro::CoroTask<int> IpcWriter::open(const std::string& path,
     write_offset_ = 8;
 
     // Initialize block tracking
-    batch_blocks_ = new std::vector<FileBlock>();
+    batch_blocks_ = new dstd::Vector<FileBlock>();
 
     co_return 0;
 }
@@ -353,8 +356,8 @@ coro::CoroTask<int> IpcWriter::write_schema(ArrowExportResult& batch) {
 // ---------------------------------------------------------------------------
 
 static int encode_batch_uncompressed(ArrowExportResult& batch,
-                                     std::vector<uint8_t>& out_header,
-                                     std::vector<uint8_t>& out_body) {
+                                     dstd::Vector<uint8_t>& out_header,
+                                     dstd::Vector<uint8_t>& out_body) {
     ArrowSchema* schema = batch.get_schema();
     ArrowArray* array = batch.get_array();
 
@@ -451,7 +454,7 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
 
     // Acquire pooled buffer for compressed body
     std::size_t estimated_size = 0;
-    std::vector<ArrowBufferView> flat_buffers;
+    dstd::Vector<ArrowBufferView> flat_buffers;
     collect_flat_buffers(&view, flat_buffers, true);
     for (const auto& buf : flat_buffers) {
         estimated_size += ZSTD_compressBound(buf.size_bytes) + 8;
@@ -460,7 +463,7 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
     result.body = buffer_pool_.acquire(estimated_size);
 
     // Compress into pooled buffer
-    std::vector<BufferInfo> buffer_info;
+    dstd::Vector<BufferInfo> buffer_info;
     rc = build_compressed_body(&view, result.body.data(), buffer_info);
     if (rc != 0) {
         ArrowArrayViewReset(&view);
@@ -490,7 +493,7 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
 // ---------------------------------------------------------------------------
 
 coro::CoroTask<int> IpcWriter::write_compressed(CompressedBatch& cb) {
-    auto* blocks = static_cast<std::vector<FileBlock>*>(batch_blocks_);
+    auto* blocks = static_cast<dstd::Vector<FileBlock>*>(batch_blocks_);
 
     // Record block info
     FileBlock block;
@@ -549,7 +552,7 @@ coro::CoroTask<int> IpcWriter::write_batch(ArrowExportResult& batch) {
 // ---------------------------------------------------------------------------
 
 coro::CoroTask<int> IpcWriter::write_footer() {
-    auto* blocks = static_cast<std::vector<FileBlock>*>(batch_blocks_);
+    auto* blocks = static_cast<dstd::Vector<FileBlock>*>(batch_blocks_);
     auto* schema = static_cast<ArrowSchema*>(schema_copy_);
 
     if (!blocks || !schema) {
@@ -591,7 +594,7 @@ coro::CoroTask<int> IpcWriter::write_footer() {
     }
 
     // Build footer: EOS marker + footer + footer_size + magic
-    std::vector<uint8_t> footer_data;
+    dstd::Vector<uint8_t> footer_data;
     footer_data.resize(8 + footer_buf.size_bytes + 4 + 6);
 
     std::int32_t eos_continuation = -1;
@@ -642,7 +645,7 @@ coro::CoroTask<int> IpcWriter::close() {
         delete schema;
     }
     if (batch_blocks_) {
-        delete static_cast<std::vector<FileBlock>*>(batch_blocks_);
+        delete static_cast<dstd::Vector<FileBlock>*>(batch_blocks_);
     }
 
     // Fsync and close

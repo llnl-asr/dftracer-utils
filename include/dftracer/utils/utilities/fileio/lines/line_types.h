@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINE_TYPES_H
 
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <cstddef>
@@ -49,29 +50,29 @@ struct Line {
  * @endcode
  */
 struct LineReadInput {
-    std::string file_path;   ///< Path to the archive file
-    std::string index_path;  ///< Path to the `.dftindex` store
-                             ///< (empty for plain files)
-    std::size_t start_line;  ///< Starting line (1-based, inclusive), 0 = start
-    std::size_t end_line;    ///< Ending line (1-based, inclusive), 0 = end
+    dstd::String file_path;   ///< Path to the archive file
+    dstd::String index_path;  ///< Path to the `.dftindex` store
+                              ///< (empty for plain files)
+    std::size_t start_line;   ///< Starting line (1-based, inclusive), 0 = start
+    std::size_t end_line;     ///< Ending line (1-based, inclusive), 0 = end
 
     LineReadInput() : start_line(0), end_line(0) {}
 
-    LineReadInput(std::string file_path_, std::string idx_path_,
+    LineReadInput(dstd::StringView file_path_, dstd::StringView idx_path_,
                   std::size_t start_line_, std::size_t end_line_)
-        : file_path(std::move(file_path_)),
-          index_path(std::move(idx_path_)),
+        : file_path(file_path_),
+          index_path(idx_path_),
           start_line(start_line_),
           end_line(end_line_) {}
 
-    static LineReadInput from_file(std::string path) {
+    static LineReadInput from_file(dstd::StringView path) {
         LineReadInput input;
-        input.file_path = std::move(path);
+        input.file_path = path;
         return input;
     }
 
-    LineReadInput& with_index(std::string idx) {
-        index_path = std::move(idx);
+    LineReadInput& with_index(dstd::StringView idx) {
+        index_path = idx;
         return *this;
     }
 
@@ -96,14 +97,15 @@ struct LineReadInput {
  * from vectors of strings or Line objects.
  */
 struct Lines {
-    std::vector<Line> lines;
-    std::vector<std::string> storage;  ///< Owns string data for zero-copy views
+    dstd::Vector<Line> lines;
+    dstd::Vector<dstd::String>
+        storage;  ///< Owns string data for zero-copy views
 
     Lines() = default;
 
-    explicit Lines(std::vector<Line> ls) : lines(std::move(ls)) {}
+    explicit Lines(dstd::Vector<Line> ls) : lines(std::move(ls)) {}
 
-    explicit Lines(const std::vector<std::string>& strings) {
+    explicit Lines(const dstd::Vector<dstd::String>& strings) {
         storage = strings;
         lines.reserve(storage.size());
         std::size_t line_num = 1;
@@ -112,7 +114,7 @@ struct Lines {
         }
     }
 
-    explicit Lines(std::vector<std::string>&& strings) {
+    explicit Lines(dstd::Vector<dstd::String>&& strings) {
         storage = std::move(strings);
         lines.reserve(storage.size());
         std::size_t line_num = 1;

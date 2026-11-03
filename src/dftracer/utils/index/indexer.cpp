@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -236,7 +237,7 @@ Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
             impl->paths.push_back(std::move(p));
             continue;
         }
-        std::vector<utilities::filesystem::FileEntry> matched;
+        dstd::Vector<utilities::filesystem::FileEntry> matched;
         impl->runtime().block_on(coro::named(
             "indexer-open",
             coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {

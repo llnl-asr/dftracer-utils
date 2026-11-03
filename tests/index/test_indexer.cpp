@@ -544,7 +544,7 @@ TEST_SUITE("Truncated") {
         const auto count_lines = [](const std::string& path)
             -> dftracer::utils::coro::CoroTask<std::size_t> {
             dftracer::utils::utilities::reader::TraceReader reader(
-                {.file_path = path});
+                {.file_path = dstd::String(path)});
             auto gen = reader.read_lines();
             std::size_t n = 0;
             while (auto line = co_await gen.next()) ++n;

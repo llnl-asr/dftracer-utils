@@ -2,6 +2,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <doctest/doctest.h>
@@ -15,9 +18,10 @@ using namespace dftracer::utils::utilities::filesystem;
 
 // Run a scanner in a Runtime, injecting its scope. Re-raises any exception.
 template <typename Scanner, typename Input>
-static std::vector<FileEntry> run_scan(Scanner& scanner, const Input& input) {
+static dftracer::utils::dstd::Vector<FileEntry> run_scan(Scanner& scanner,
+                                                         const Input& input) {
     dftracer::utils::Runtime rt;
-    std::vector<FileEntry> result;
+    dftracer::utils::dstd::Vector<FileEntry> result;
     rt.block_on(dftracer::utils::coro::named(
         "scan", dftracer::utils::coro::with_scope(
                     [&](dftracer::utils::coro::Scope& s)
@@ -400,9 +404,11 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
         fixture.create_file("file.ext50");
         fixture.create_file("file.ext100");
 
-        std::vector<std::string> many_patterns;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
+            many_patterns;
         for (int i = 1; i <= 100; ++i) {
-            many_patterns.push_back(".ext" + std::to_string(i));
+            many_patterns.push_back(dftracer::utils::dstd::String(".ext") +
+                                    dftracer::utils::dstd::to_string(i));
         }
 
         PatternDirectoryScannerUtilityInput input{fixture.str(), many_patterns,

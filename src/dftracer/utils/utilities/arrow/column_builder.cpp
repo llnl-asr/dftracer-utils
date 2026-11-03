@@ -5,12 +5,11 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <nanoarrow/nanoarrow.h>
 
-#include <optional>
 #include <stdexcept>
-#include <string>
 
 namespace dftracer::utils::utilities::arrow {
 
@@ -114,7 +113,7 @@ constexpr StorageKind storage_kind(ColumnType t) noexcept {
 
 void RecordBatchBuilder::init_column(ColumnData& col, ColumnType type,
                                      dstd::StringView name) {
-    col.name = std::string(name);
+    col.name = dstd::String(name);
     col.type = type;
     col.count = 0;
     col.has_nulls = false;
@@ -179,10 +178,10 @@ void RecordBatchBuilder::backfill_nulls(ColumnData& col,
 
 void RecordBatchBuilder::declare_schema(
     std::initializer_list<ColumnSpec> specs) {
-    declare_schema(std::vector<ColumnSpec>(specs));
+    declare_schema(dstd::Vector<ColumnSpec>(specs));
 }
 
-void RecordBatchBuilder::declare_schema(const std::vector<ColumnSpec>& specs) {
+void RecordBatchBuilder::declare_schema(const dstd::Vector<ColumnSpec>& specs) {
     columns_.clear();
     name_to_index_.clear();
     columns_.reserve(specs.size());
@@ -220,7 +219,7 @@ std::size_t RecordBatchBuilder::add_or_get_column(dstd::StringView name,
     if (num_rows_ > 0) {
         backfill_nulls(columns_.back(), num_rows_);
     }
-    name_to_index_.emplace(std::string(name), idx);
+    name_to_index_.emplace(dstd::String(name), idx);
     touched_.push_back(false);
     return idx;
 }
@@ -314,7 +313,7 @@ void RecordBatchBuilder::append_bool(std::size_t col_idx, bool value) {
 }
 
 void RecordBatchBuilder::append_hist(
-    std::size_t col_idx, const std::vector<dataframe::HistogramBin>& bins) {
+    std::size_t col_idx, const dstd::Vector<dataframe::HistogramBin>& bins) {
     auto& col = columns_[col_idx];
     col.hist_bins.insert(col.hist_bins.end(), bins.begin(), bins.end());
     col.hist_offsets.push_back(static_cast<std::int32_t>(col.hist_bins.size()));
@@ -324,7 +323,7 @@ void RecordBatchBuilder::append_hist(
 }
 
 void RecordBatchBuilder::append_string_list(
-    std::size_t col_idx, const std::vector<dstd::StringView>& values) {
+    std::size_t col_idx, const dstd::Vector<dstd::StringView>& values) {
     auto& col = columns_[col_idx];
     for (dstd::StringView v : values) {
         col.string_data.insert(col.string_data.end(), v.begin(), v.end());
@@ -339,7 +338,7 @@ void RecordBatchBuilder::append_string_list(
 }
 
 void RecordBatchBuilder::append_int64_list(
-    std::size_t col_idx, const std::vector<std::int64_t>& values) {
+    std::size_t col_idx, const dstd::Vector<std::int64_t>& values) {
     auto& col = columns_[col_idx];
     col.int64_values.insert(col.int64_values.end(), values.begin(),
                             values.end());
@@ -351,7 +350,7 @@ void RecordBatchBuilder::append_int64_list(
 }
 
 void RecordBatchBuilder::append_struct_list(
-    std::size_t col_idx, const std::vector<std::vector<StructCell>>& rows) {
+    std::size_t col_idx, const dstd::Vector<dstd::Vector<StructCell>>& rows) {
     auto& col = columns_[col_idx];
     for (const auto& inner : rows) {
         for (std::size_t f = 0; f < col.struct_children.size(); ++f) {

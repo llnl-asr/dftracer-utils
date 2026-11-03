@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/mixture.h>
 
 #include <algorithm>
@@ -26,7 +27,7 @@ inline double normal_pdf(double x, double mean, double stddev) {
 
 // log(sum_k exp(log_x[k])) computed with the standard log-sum-exp trick to
 // avoid underflow when component log-likelihoods diverge.
-double log_sum_exp(const std::vector<double>& log_x) {
+double log_sum_exp(const dstd::Vector<double>& log_x) {
     double m = -std::numeric_limits<double>::infinity();
     for (double v : log_x) {
         if (v > m) m = v;
@@ -40,8 +41,8 @@ double log_sum_exp(const std::vector<double>& log_x) {
 // Pick K initial means by sampling sorted-data quantiles uniformly across (0,
 // 1). Avoids the degenerate case where random init collapses all components
 // together.
-std::vector<double> initial_means(const std::vector<double>& sorted, int K) {
-    std::vector<double> means;
+dstd::Vector<double> initial_means(const dstd::Vector<double>& sorted, int K) {
+    dstd::Vector<double> means;
     means.reserve(K);
     for (int k = 0; k < K; ++k) {
         const double q =
@@ -54,7 +55,7 @@ std::vector<double> initial_means(const std::vector<double>& sorted, int K) {
     return means;
 }
 
-double sample_variance(const std::vector<double>& data, double mean) {
+double sample_variance(const dstd::Vector<double>& data, double mean) {
     double sq = 0.0;
     for (double x : data) {
         const double d = x - mean;
@@ -65,7 +66,7 @@ double sample_variance(const std::vector<double>& data, double mean) {
 
 }  // namespace
 
-FittedMixture fit_gaussian_mixture(const std::vector<double>& data, int K,
+FittedMixture fit_gaussian_mixture(const dstd::Vector<double>& data, int K,
                                    const MixtureFitOptions& options) {
     FittedMixture m;
     if (K <= 0 || data.size() < static_cast<std::size_t>(K) * 2) return m;
@@ -87,10 +88,10 @@ FittedMixture fit_gaussian_mixture(const std::vector<double>& data, int K,
     }
 
     const std::size_t N = data.size();
-    std::vector<std::vector<double>> resp(K, std::vector<double>(N, 0.0));
+    dstd::Vector<dstd::Vector<double>> resp(K, dstd::Vector<double>(N, 0.0));
     double prev_ll = -std::numeric_limits<double>::infinity();
 
-    std::vector<double> log_comp(K);
+    dstd::Vector<double> log_comp(K);
     for (int it = 0; it < options.max_iter; ++it) {
         // E-step: responsibilities via log-sum-exp.
         double ll = 0.0;
@@ -227,8 +228,8 @@ Sampler make_sampler(const FittedMixture& mix, dstd::Optional<double> min_bound,
 }
 
 dstd::Optional<ModelSelection> select_best_model(
-    const std::vector<FittedDistribution>& single_fits,
-    const std::vector<FittedMixture>& mixtures) {
+    const dstd::Vector<FittedDistribution>& single_fits,
+    const dstd::Vector<FittedMixture>& mixtures) {
     dstd::Optional<ModelSelection> best;
     for (const auto& f : single_fits) {
         if (!f.valid) continue;

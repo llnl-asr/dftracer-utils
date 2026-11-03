@@ -97,7 +97,7 @@ ChunkExtractorUtility::extract_and_write(
     writer_config.compress = input.compress;
     writer_config.memory_budget = input.memory_budget;
 
-    ChunkWriter writer(writer_config);
+    ChunkWriter writer(std::move(writer_config));
     co_await writer.open();
 
     std::size_t content_hash = 0;
@@ -106,7 +106,7 @@ ChunkExtractorUtility::extract_and_write(
     for (std::size_t i = 0; i < input.files.size(); ++i) {
         const auto& file = input.files[i];
         auto line_gen = lines::sources::async_streaming_gz_lines(
-            file, 0, 0, true,
+            dstd::String(file), 0, 0, true,
             i < input.open_files.size() ? input.open_files[i] : nullptr);
         for (;;) {
             auto line_opt = co_await line_gen.next();
@@ -129,7 +129,8 @@ ChunkExtractorUtility::extract_and_write(
 
     co_await writer.close();
 
-    result.chunks = writer.chunks();
+    // keep std: ChunkExtractorUtilityOutput::chunks is a std::vector
+    result.chunks.assign(writer.chunks().begin(), writer.chunks().end());
     result.events = writer.total_events_written();
     result.event_hash = content_hash;
     result.peak_bytes = writer.peak_reserved_bytes();

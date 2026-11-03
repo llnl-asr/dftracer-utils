@@ -3,23 +3,21 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_LINE_STREAM_H
 
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 
 #include <cstring>
-#include <memory>
-#include <span>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
 class LineStream : public ReaderStream {
    private:
-    std::unique_ptr<internal::ReaderStream> underlying_stream_;
+    dstd::UniquePtr<internal::ReaderStream> underlying_stream_;
     dstd::Span<const char> current_span_;
-    std::string line_accumulator_;
-    std::string current_line_;
+    dstd::String line_accumulator_;
+    dstd::String current_line_;
     bool is_finished_;
     bool has_pending_line_;
     std::size_t current_line_number_;
@@ -38,7 +36,7 @@ class LineStream : public ReaderStream {
     };
 
    public:
-    explicit LineStream(std::unique_ptr<ReaderStream> underlying_stream,
+    explicit LineStream(dstd::UniquePtr<ReaderStream> underlying_stream,
                         std::size_t start_line = 0, std::size_t end_line = 0,
                         std::size_t initial_line = 1)
         : underlying_stream_(std::move(underlying_stream)),

@@ -325,7 +325,7 @@ TEST_SUITE("View") {
                                              opts.output_path, i, true))
                             .value();
              ++i) {
-            partsA.push_back(
+            partsA.emplace_back(
                 utilities::fileio::gzip_part_path(opts.output_path, i, true));
             partsB.push_back(
                 dirB + "/" +

@@ -3,9 +3,10 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_PARALLEL_LAYOUT_H
 
 #include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstddef>
-#include <string>
 
 namespace dftracer::utils::utilities::fileio::parallel {
 
@@ -23,7 +24,7 @@ struct LayoutInfo {
 
 /// Detect layout for a path (the file need not exist yet; falls back to the
 /// parent directory). NFS maps to SHARDED, everything else to STRIPED.
-LayoutInfo detect_layout(const std::string& path) noexcept;
+LayoutInfo detect_layout(dstd::CStringView path) noexcept;
 
 struct WriterSizing {
     std::size_t num_workers;

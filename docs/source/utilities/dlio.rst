@@ -82,7 +82,7 @@ trace_loader
 Returns an ``AggregatedTraces`` with:
 
 - ``fetch_block_trace`` / ``fetch_iter_trace`` / ``getitem_trace`` -
-  per-rank ``std::vector<std::vector<double>>`` of seconds, in pid-ascending
+  per-rank ``dstd::Vector<dstd::Vector<double>>`` of seconds, in pid-ascending
   then time-bucket-ascending order.
 - ``computation_times`` / ``preprocess_times`` - flat sample arrays in seconds
   (the input to ``fit_all_single_distributions``).
@@ -168,7 +168,7 @@ yaml_emit
    write_dlio_yaml(out, &comp, &prep);
 
    // Or render to a string:
-   std::string yaml = render_dlio_yaml(&comp, &prep);
+   dstd::String yaml = render_dlio_yaml(&comp, &prep);
 
 Renders both single distributions and mixtures into the DLIO schema
 (``type: <family>`` + family-specific params, or ``type: mixture`` +

@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/barrier_simulator.h>
 #include <dftracer/utils/utilities/dlio/statistic.h>
 #include <dftracer/utils/utilities/dlio/worker_queue.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
-#include <vector>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::dlio;
 
 namespace {
@@ -25,32 +26,32 @@ constexpr double EPSILON = 1e-9;
 
 TEST_SUITE("sweep_union") {
     TEST_CASE("empty") {
-        std::vector<Boundary> b;
+        dstd::Vector<Boundary> b;
         CHECK(sweep_union(b) == doctest::Approx(0.0));
     }
 
     TEST_CASE("single interval - returns its width in seconds") {
         // 1 second = 1,000,000 us.
-        std::vector<Boundary> b{{0, +1}, {1'000'000, -1}};
+        dstd::Vector<Boundary> b{{0, +1}, {1'000'000, -1}};
         CHECK(sweep_union(b) == doctest::Approx(1.0));
     }
 
     TEST_CASE("two disjoint intervals - sum of widths") {
-        std::vector<Boundary> b{
+        dstd::Vector<Boundary> b{
             {0, +1}, {500'000, -1}, {1'000'000, +1}, {1'500'000, -1}};
         CHECK(sweep_union(b) == doctest::Approx(1.0));
     }
 
     TEST_CASE("two overlapping intervals - merged width") {
         // [0, 1s] and [0.5s, 1.5s] -> union is [0, 1.5s] = 1.5s.
-        std::vector<Boundary> b{
+        dstd::Vector<Boundary> b{
             {0, +1}, {1'000'000, -1}, {500'000, +1}, {1'500'000, -1}};
         CHECK(sweep_union(b) == doctest::Approx(1.5));
     }
 
     TEST_CASE("nested intervals - outer width") {
         // [0, 2s] contains [0.5s, 1.5s].
-        std::vector<Boundary> b{
+        dstd::Vector<Boundary> b{
             {0, +1}, {2'000'000, -1}, {500'000, +1}, {1'500'000, -1}};
         CHECK(sweep_union(b) == doctest::Approx(2.0));
     }
@@ -58,21 +59,21 @@ TEST_SUITE("sweep_union") {
 
 TEST_SUITE("cdf_similarity") {
     TEST_CASE("identical samples - exactly 1.0") {
-        std::vector<double> a{0.1, 0.2, 0.3, 0.4};
+        dstd::Vector<double> a{0.1, 0.2, 0.3, 0.4};
         CHECK(cdf_similarity(a, a) == doctest::Approx(1.0));
     }
 
     TEST_CASE("fully disjoint samples") {
         // a in [0, 0.4], b in [10, 10.4]: at every value v < 10 the trace CDF
         // is 0 while sim CDF is 1 -> KS = 1, similarity = 0.
-        std::vector<double> a{0.1, 0.2, 0.3, 0.4};
-        std::vector<double> b{10.0, 10.1, 10.2, 10.4};
+        dstd::Vector<double> a{0.1, 0.2, 0.3, 0.4};
+        dstd::Vector<double> b{10.0, 10.1, 10.2, 10.4};
         CHECK(cdf_similarity(a, b) == doctest::Approx(0.0));
     }
 
     TEST_CASE("empty inputs") {
-        std::vector<double> a{1.0, 2.0};
-        std::vector<double> empty;
+        dstd::Vector<double> a{1.0, 2.0};
+        dstd::Vector<double> empty;
         CHECK(cdf_similarity(a, empty) == doctest::Approx(0.0));
         CHECK(cdf_similarity(empty, a) == doctest::Approx(0.0));
     }
@@ -151,10 +152,10 @@ TEST_SUITE("BarrierSimulator") {
 
         // Pre-loaded fetch_iter trace lets the simulator skip RNG-driven path.
         ctx.fetch_iter_trace.assign(num_ranks,
-                                    std::vector<double>(num_steps, 0.05));
+                                    dstd::Vector<double>(num_steps, 0.05));
         // Trace fetch_block values (used by CDF similarity check).
         ctx.fetch_block_trace.assign(num_ranks,
-                                     std::vector<double>(num_steps, 0.1));
+                                     dstd::Vector<double>(num_steps, 0.1));
 
         ctx.fetch_iter_stats = constant_stat(0.05);
         ctx.fetch_block_stats = constant_stat(0.1);

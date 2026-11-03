@@ -27,7 +27,9 @@ set(_dirs
     include/dftracer/utils/duql
     src/dftracer/utils/duql
     include/dftracer/utils/plugins
-    src/dftracer/utils/plugins)
+    src/dftracer/utils/plugins
+    include/dftracer/utils/utilities
+    src/dftracer/utils/utilities)
 
 # The Task, TaskGraph and Pipeline trees move in a later step.
 set(_skip

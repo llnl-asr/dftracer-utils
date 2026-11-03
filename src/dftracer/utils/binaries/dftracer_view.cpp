@@ -1063,12 +1063,9 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 stats = co_await shard_view.sink_trace(topts);
                 auto rank_outs = transport.all_gather(rank_out);
                 if (transport.rank() == 0) {
-                    // keep std: unswept API
-                    std::vector<std::string> parts(rank_outs.begin(),
-                                                   rank_outs.end());
                     const auto merge_rc =
                         co_await fileio::parallel::merge_shards(final_output,
-                                                                parts);
+                                                                rank_outs);
                     if (merge_rc != 0) {
                         DFTRACER_UTILS_LOG_ERROR("merge_shards failed for %s",
                                                  final_output.c_str());

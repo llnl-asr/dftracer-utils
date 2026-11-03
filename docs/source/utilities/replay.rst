@@ -54,8 +54,8 @@ Types
    // bin_fields). cat/func_name/fhash/hhash are non-owning views into a
    // process-wide StringIntern pool.
    struct Trace {
-       std::string_view cat;        // Category (e.g., "posix", "stdio")
-       std::string_view func_name;  // Function name (e.g., "read", "write")
+       dstd::StringView cat;        // Category (e.g., "posix", "stdio")
+       dstd::StringView func_name;  // Function name (e.g., "read", "write")
        double duration;             // Duration in microseconds
        std::uint64_t time_start;
        std::uint64_t time_end;
@@ -76,8 +76,8 @@ Types
        std::size_t filtered_events = 0;
        std::size_t failed_events = 0;
        std::chrono::microseconds total_duration{0};
-       std::unordered_map<std::string_view, std::size_t> function_counts;
-       std::unordered_map<std::string_view, std::size_t> category_counts;
+       dstd::HashMap<dstd::StringView, std::size_t> function_counts;
+       dstd::HashMap<dstd::StringView, std::size_t> category_counts;
        void print_summary() const;
    };
 

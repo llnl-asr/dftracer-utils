@@ -6,7 +6,6 @@
 #include <dftracer/utils/dstd/span.h>
 
 #include <cstddef>
-#include <span>
 
 namespace dftracer::utils::utilities::reader::internal {
 

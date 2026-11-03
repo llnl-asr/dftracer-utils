@@ -7,8 +7,6 @@
 #include <dftracer/utils/utilities/fileio/file_process_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 
-#include <memory>
-
 namespace dftracer::utils::utilities::fileio {
 
 /**

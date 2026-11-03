@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #include <fcntl.h>
 #include <unistd.h>
-
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio::parallel {
 
@@ -13,7 +14,7 @@ namespace {
 
 constexpr std::size_t COPY_BUFFER_BYTES = 256 * 1024;
 
-coro::CoroTask<int> stream_shard_to_fd(int out_fd, const std::string& shard) {
+coro::CoroTask<int> stream_shard_to_fd(int out_fd, dstd::CStringView shard) {
     ssize_t in_fd =
         co_await ::dftracer::utils::io::open(shard.c_str(), O_RDONLY, 0);
     if (in_fd < 0) {
@@ -21,7 +22,7 @@ coro::CoroTask<int> stream_shard_to_fd(int out_fd, const std::string& shard) {
                                  shard.c_str());
         co_return -1;
     }
-    std::vector<char> buf(COPY_BUFFER_BYTES);
+    dstd::Vector<char> buf(COPY_BUFFER_BYTES);
     while (true) {
         auto n = co_await ::dftracer::utils::io::read(static_cast<int>(in_fd),
                                                       buf.data(), buf.size());
@@ -54,8 +55,8 @@ coro::CoroTask<int> stream_shard_to_fd(int out_fd, const std::string& shard) {
 
 }  // namespace
 
-coro::CoroTask<int> merge_shards(const std::string& target,
-                                 const std::vector<std::string>& shards) {
+coro::CoroTask<int> merge_shards(dstd::CStringView target,
+                                 const dstd::Vector<dstd::String>& shards) {
     if (shards.empty()) co_return 0;
 
     ssize_t out_fd = co_await ::dftracer::utils::io::open(

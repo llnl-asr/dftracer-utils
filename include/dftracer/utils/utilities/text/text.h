@@ -17,8 +17,8 @@
  * using namespace dftracer::utils::utilities::text;
  *
  * // Filter lines
- * auto filter = std::make_shared<LinesFilter>([](const Line& line) {
- *     return line.content.find("ERROR") != std::string::npos;
+ * auto filter = dstd::make_shared<LinesFilter>([](const Line& line) {
+ *     return line.content.find("ERROR") != dstd::String::npos;
  * });
  * Lines errors = filter->process(lines);
  * @endcode

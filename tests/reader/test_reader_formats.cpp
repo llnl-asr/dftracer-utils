@@ -298,7 +298,7 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
              line <= std::min(total_lines, static_cast<std::uint64_t>(10));
              ++line) {
             try {
-                std::string line_content = reader->read_lines(line, line);
+                dstd::String line_content = reader->read_lines(line, line);
                 if (!line_content.empty()) {
                     line_count++;
                     CHECK(line_content.size() > 0);
@@ -326,7 +326,7 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
 
             try {
                 // Convert to 1-based indexing
-                std::string line_content =
+                dstd::String line_content =
                     reader->read_lines(line_num + 1, line_num + 1);
                 CHECK(!line_content.empty());
                 CHECK(line_content.find("\"id\":") != std::string::npos);

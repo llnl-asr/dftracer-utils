@@ -11,10 +11,6 @@
 #include <dftracer/utils/utilities/dlio/statistic.h>
 
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::utilities::dlio {
 
@@ -32,20 +28,20 @@ inline constexpr dstd::StringView EVENT_ITEM = "item";
 
 /// A (category, name) pair selecting one DLIO component.
 struct EventSelector {
-    std::string cat;
-    std::string name;
+    dstd::String cat;
+    dstd::String name;
 };
 
 struct AggregatedTraces {
     /// Per-rank concatenated sample sequences (seconds), in pid-ascending,
     /// then time-bucket-ascending order.
-    std::vector<std::vector<double>> fetch_block_trace;
-    std::vector<std::vector<double>> fetch_iter_trace;
-    std::vector<std::vector<double>> getitem_trace;
+    dstd::Vector<dstd::Vector<double>> fetch_block_trace;
+    dstd::Vector<dstd::Vector<double>> fetch_iter_trace;
+    dstd::Vector<dstd::Vector<double>> getitem_trace;
 
     /// Flat sample arrays for distribution fitting (seconds).
-    std::vector<double> computation_times;  ///< fetch.block
-    std::vector<double> preprocess_times;   ///< preprocess
+    dstd::Vector<double> computation_times;  ///< fetch.block
+    dstd::Vector<double> preprocess_times;   ///< preprocess
 
     /// Duration quantiles merged across all (rank, bucket) entries for each
     /// component. Null when the component has no events.
@@ -62,7 +58,7 @@ struct AggregatedTraces {
     /// Aggregate metrics (seconds).
     double trace_e2e_duration = 0.0;
     double trace_rank_variance = 0.0;
-    std::vector<double> trace_per_rank_throughput;
+    dstd::Vector<double> trace_per_rank_throughput;
 
     /// Per-component accumulated / union times. Both computed from actual
     /// (ts, te) boundaries in the CF rather than a fixed-ratio heuristic.
@@ -71,7 +67,7 @@ struct AggregatedTraces {
     ComponentTimeMetrics trace_fetch_block_metrics;
 
     /// Discovered PIDs (sorted) - index in this list defines rank ID.
-    std::vector<std::uint64_t> rank_pids;
+    dstd::Vector<std::uint64_t> rank_pids;
 
     int num_ranks = 0;
     int num_steps = 0;  ///< min length across ranks of fetch_block_trace
@@ -102,13 +98,13 @@ struct TraceLoaderOptions {
     std::uint64_t seed = 0xD15710;
 
     /// Per-component (cat, name) selectors; defaults are the DLIO event names.
-    EventSelector fetch_block{std::string(CATEGORY_DATALOADER),
-                              std::string(EVENT_FETCH_BLOCK)};
-    EventSelector fetch_iter{std::string(CATEGORY_DATALOADER),
-                             std::string(EVENT_FETCH_ITER)};
-    EventSelector preprocess{std::string(CATEGORY_DATA),
-                             std::string(EVENT_PREPROCESS)};
-    EventSelector item{std::string(CATEGORY_DATA), std::string(EVENT_ITEM)};
+    EventSelector fetch_block{dstd::String(CATEGORY_DATALOADER),
+                              dstd::String(EVENT_FETCH_BLOCK)};
+    EventSelector fetch_iter{dstd::String(CATEGORY_DATALOADER),
+                             dstd::String(EVENT_FETCH_ITER)};
+    EventSelector preprocess{dstd::String(CATEGORY_DATA),
+                             dstd::String(EVENT_PREPROCESS)};
+    EventSelector item{dstd::String(CATEGORY_DATA), dstd::String(EVENT_ITEM)};
 };
 
 /// Loads aggregated DLIO trace data with one aggregation query over `files`,
@@ -117,7 +113,7 @@ struct TraceLoaderOptions {
 /// Blocks until the query ends and throws @ref
 /// dftracer::utils::common::DFTUtilsException "DFTUtilsException" on failure.
 AggregatedTraces load_aggregated_traces(
-    const std::string& index_path, const dstd::Vector<dstd::String>& files,
+    dstd::StringView index_path, const dstd::Vector<dstd::String>& files,
     const index::schemas::dft::agg::AggregationConfig& config,
     const TraceLoaderOptions& options = {});
 
@@ -126,7 +122,7 @@ AggregatedTraces load_aggregated_traces(
 /// and item each take an optional `cat` and `name`; omitted keys and fields are
 /// left untouched. Throws @ref dftracer::utils::common::DFTUtilsException
 /// "DFTUtilsException" on a missing file or parse error.
-void load_event_map(const std::string& path, TraceLoaderOptions& options);
+void load_event_map(dstd::StringView path, TraceLoaderOptions& options);
 
 /// Convenience: build a @ref BarrierSimulatorContext from loaded traces.
 BarrierSimulatorContext make_simulator_context(const AggregatedTraces& traces,

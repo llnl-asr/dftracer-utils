@@ -5,6 +5,7 @@
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
@@ -14,10 +15,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <unordered_map>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -80,8 +77,8 @@ struct ParsedArgs {
     dstd::Optional<std::int64_t> epoch, step, size_sum, ret;
     dstd::Optional<std::int64_t> offset, image_idx, image_size;
     // Other int/float args, kept for profile/sys columns.
-    std::unordered_map<std::string, std::int64_t> int_map;
-    std::unordered_map<std::string, double> float_map;
+    dstd::HashMap<dstd::String, std::int64_t> int_map;
+    dstd::HashMap<dstd::String, double> float_map;
 };
 
 // Parse a row's "args" object (already located during the single top-level
@@ -123,9 +120,9 @@ ParsedArgs parse_row_args(simdjson::ondemand::value &args_val) {
             if (auto i = SVH::get_int64(val)) a.image_size = i;
         } else {
             if (auto i = SVH::get_int64(val)) {
-                a.int_map[std::string(key)] = *i;
+                a.int_map[dstd::String(key)] = *i;
             } else if (auto d = SVH::get_double(val)) {
-                a.float_map[std::string(key)] = *d;
+                a.float_map[dstd::String(key)] = *d;
             }
         }
     }
@@ -134,7 +131,7 @@ ParsedArgs parse_row_args(simdjson::ondemand::value &args_val) {
 
 void append_profile_columns(
     RecordBatchBuilder &builder,
-    const std::unordered_map<std::string, std::int64_t> &int_map) {
+    const dstd::HashMap<dstd::String, std::int64_t> &int_map) {
     static const char *profile_keys[] = {
         "count",      "count_max",  "count_min",  "count_sum",  "dftu_cnt",
         "dur",        "dur_max",    "dur_min",    "dur_sum",    "epoch",
@@ -152,7 +149,7 @@ void append_profile_columns(
 
 void append_system_columns(
     RecordBatchBuilder &builder,
-    const std::unordered_map<std::string, double> &float_map) {
+    const dstd::HashMap<dstd::String, double> &float_map) {
     static const char *sys_keys[] = {
         "user_pct", "system_pct",  "iowait_pct",   "idle_pct",
         "irq_pct",  "softirq_pct", "MemAvailable", "MemFree",

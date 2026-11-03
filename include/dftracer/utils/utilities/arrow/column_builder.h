@@ -6,20 +6,17 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <initializer_list>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <vector>
 
 namespace dftracer::utils::utilities::arrow {
 
@@ -52,11 +49,11 @@ enum class ColumnType {
 };
 
 struct ColumnSpec {
-    std::string name;
+    dstd::String name;
     ColumnType type;
     /// Inner struct field specs, used only for STRUCT_LIST (each a scalar
     /// type).
-    std::vector<ColumnSpec> fields = {};
+    dstd::Vector<ColumnSpec> fields = {};
 };
 
 /// One inner-struct field value for append_struct_list; the member matching the
@@ -70,41 +67,41 @@ struct StructCell {
 };
 
 struct ColumnData {
-    std::string name;
+    dstd::String name;
     ColumnType type;
-    std::vector<std::int64_t> int64_values;
-    std::vector<std::uint64_t> uint64_values;
-    std::vector<double> double_values;
-    std::vector<std::int32_t> string_offsets;
-    std::vector<char> string_data;
-    std::vector<std::uint8_t> bool_values;
-    std::vector<std::uint8_t> validity;
+    dstd::Vector<std::int64_t> int64_values;
+    dstd::Vector<std::uint64_t> uint64_values;
+    dstd::Vector<double> double_values;
+    dstd::Vector<std::int32_t> string_offsets;
+    dstd::Vector<char> string_data;
+    dstd::Vector<std::uint8_t> bool_values;
+    dstd::Vector<std::uint8_t> validity;
     std::size_t count = 0;
     bool has_nulls = false;
 
     /// Dictionary encoding support (for DICT_STRING)
-    std::vector<std::int32_t> dict_indices;  ///< indices into dict_values
-    std::deque<std::string> dict_values;     ///< unique strings (dictionary)
-    std::unordered_map<dstd::StringView, std::int32_t>
-        dict_map;                            ///< string -> index
+    dstd::Vector<std::int32_t> dict_indices;  ///< indices into dict_values
+    dstd::Deque<dstd::String> dict_values;    ///< unique strings (dictionary)
+    dstd::HashMap<dstd::StringView, std::int32_t>
+        dict_map;                             ///< string -> index
 
     /// HIST support: flattened buckets across rows, plus each row's end offset
     /// into hist_bins (parallel to string_offsets).
-    std::vector<dataframe::HistogramBin> hist_bins;
-    std::vector<std::int32_t> hist_offsets;
+    dstd::Vector<dataframe::HistogramBin> hist_bins;
+    dstd::Vector<std::int32_t> hist_offsets;
 
     /// STRING_LIST support: elements flattened into string_data/string_offsets
     /// (one offset per element), plus each row's end offset into that element
     /// stream. INT64_LIST reuses list_offsets over the flat int64_values
     /// stream.
-    std::vector<std::int32_t> list_offsets;
+    dstd::Vector<std::int32_t> list_offsets;
 
     /// STRUCT_LIST support: struct_fields names/types each inner field;
     /// struct_children[f] holds that field's flat cells across all inner
     /// entries (its primitive vectors only), and list_offsets marks each row's
     /// end offset into that inner-entry stream.
-    std::vector<ColumnSpec> struct_fields;
-    std::vector<ColumnData> struct_children;
+    dstd::Vector<ColumnSpec> struct_fields;
+    dstd::Vector<ColumnData> struct_children;
 };
 
 /**
@@ -126,7 +123,7 @@ class RecordBatchBuilder {
 
     /// Static schema mode - call once before any appends.
     void declare_schema(std::initializer_list<ColumnSpec> specs);
-    void declare_schema(const std::vector<ColumnSpec>& specs);
+    void declare_schema(const dstd::Vector<ColumnSpec>& specs);
 
     /// Dynamic schema mode - returns column index.
     /// Creates column (backfilling nulls) if it doesn't exist.
@@ -155,17 +152,17 @@ class RecordBatchBuilder {
     void append_bool(std::size_t col_idx, bool value);
     /// Append one row's histogram (a list of buckets) to a HIST column.
     void append_hist(std::size_t col_idx,
-                     const std::vector<dataframe::HistogramBin>& bins);
+                     const dstd::Vector<dataframe::HistogramBin>& bins);
     /// Append one row's list of strings to a STRING_LIST column.
     void append_string_list(std::size_t col_idx,
-                            const std::vector<dstd::StringView>& values);
+                            const dstd::Vector<dstd::StringView>& values);
     /// Append one row's list of int64 values to an INT64_LIST column.
     void append_int64_list(std::size_t col_idx,
-                           const std::vector<std::int64_t>& values);
+                           const dstd::Vector<std::int64_t>& values);
     /// Append one row's list of inner structs to a STRUCT_LIST column; each
     /// inner row carries one @ref StructCell per struct field, in field order.
     void append_struct_list(std::size_t col_idx,
-                            const std::vector<std::vector<StructCell>>& rows);
+                            const dstd::Vector<dstd::Vector<StructCell>>& rows);
     void append_null(std::size_t col_idx);
 
     /// End current row. In dynamic mode, backfills nulls for untouched
@@ -199,13 +196,13 @@ class RecordBatchBuilder {
     std::size_t num_columns() const noexcept { return columns_.size(); }
 
    private:
-    std::vector<ColumnData> columns_;
+    dstd::Vector<ColumnData> columns_;
     dstd::StringViewMap<std::size_t> name_to_index_;
     std::size_t num_rows_ = 0;
     std::size_t row_touched_count_ = 0;
     bool schema_declared_ = false;
     bool schema_locked_ = false;
-    std::vector<bool> touched_;
+    dstd::Vector<bool> touched_;
 
     void init_column(ColumnData& col, ColumnType type, dstd::StringView name);
     void backfill_nulls(ColumnData& col, std::size_t target_count);

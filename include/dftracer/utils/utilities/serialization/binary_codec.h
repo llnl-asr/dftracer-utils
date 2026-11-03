@@ -9,20 +9,20 @@
 
 #include <cstdint>
 #include <cstring>
-#include <span>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::utilities::serialization {
 
-/// u16 length, then the bytes.
-inline void put_str(std::string& out, dstd::StringView s) {
+/// u16 length, then the bytes. Appends to any byte string, as the dstd
+/// append_*_be helpers do.
+template <typename Buf>
+inline void put_str(Buf& out, dstd::StringView s) {
     dstd::append_u16_be(out, static_cast<std::uint16_t>(s.size()));
     out.append(s.data(), s.size());
 }
 
 /// u32 length, then the bytes.
-inline void put_blob(std::string& out, dstd::Span<const std::uint8_t> data) {
+template <typename Buf>
+inline void put_blob(Buf& out, dstd::Span<const std::uint8_t> data) {
     dstd::append_u32_be(out, static_cast<std::uint32_t>(data.size()));
     out.append(reinterpret_cast<const char*>(data.data()), data.size());
 }

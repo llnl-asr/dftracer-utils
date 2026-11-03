@@ -6,29 +6,30 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 
 #include <algorithm>
-#include <string>
-#include <string_view>
-#include <vector>
+#include <iterator>
 
 namespace dftracer::utils::utilities::filesystem {
 
 /// The suffixes directory discovery lists as traces: JSON records, one per
 /// line, in .pfw, .jsonl or .ndjson files, plain or gzip. A .json file is
 /// not listed, since directories hold other JSON such as summaries.
-inline const std::vector<std::string>& trace_file_patterns() {
-    static const std::vector<std::string> PATTERNS = {
-        ".pfw", ".pfw.gz", ".jsonl", ".jsonl.gz", ".ndjson", ".ndjson.gz"};
-    return PATTERNS;
+inline constexpr dstd::StringView TRACE_FILE_SUFFIXES[] = {
+    ".pfw", ".pfw.gz", ".jsonl", ".jsonl.gz", ".ndjson", ".ndjson.gz"};
+
+inline dstd::Vector<dstd::String> trace_file_patterns() {
+    return dstd::Vector<dstd::String>(std::begin(TRACE_FILE_SUFFIXES),
+                                      std::end(TRACE_FILE_SUFFIXES));
 }
 
 /// Whether `path` ends in one of trace_file_patterns().
 inline bool is_trace_file(dstd::StringView path) {
-    const auto& patterns = trace_file_patterns();
-    return std::any_of(patterns.begin(), patterns.end(),
-                       [&](const std::string& p) { return path.ends_with(p); });
+    return std::any_of(std::begin(TRACE_FILE_SUFFIXES),
+                       std::end(TRACE_FILE_SUFFIXES),
+                       [&](dstd::StringView p) { return path.ends_with(p); });
 }
 
 /**
@@ -38,12 +39,13 @@ struct PatternDirectoryScannerUtilityInput {
     dstd::Path path;
     bool recursive = false;
     bool populate_size = true;
-    std::vector<std::string> patterns;  ///< e.g., {".pfw", ".pfw.gz", "*.txt"}
+    dstd::Vector<dstd::String>
+        patterns;  ///< e.g., {".pfw", ".pfw.gz", "*.txt"}
 
     PatternDirectoryScannerUtilityInput() = default;
 
     PatternDirectoryScannerUtilityInput(dstd::StringView p,
-                                        std::vector<std::string> pats,
+                                        dstd::Vector<dstd::String> pats,
                                         bool rec = false, bool with_size = true)
         : path(p),
           recursive(rec),
@@ -57,7 +59,7 @@ struct PatternDirectoryScannerUtilityInput {
     }
 
     PatternDirectoryScannerUtilityInput& with_patterns(
-        std::vector<std::string> pats) {
+        dstd::Vector<dstd::String> pats) {
         patterns = std::move(pats);
         return *this;
     }
@@ -94,16 +96,16 @@ class PatternDirectoryScannerUtility {
      * @param input Directory path, patterns, and recursive flag
      * @return Vector of file entries matching patterns
      */
-    coro::CoroTask<std::vector<FileEntry>> operator()(
+    coro::CoroTask<dstd::Vector<FileEntry>> operator()(
         coro::Scope& ctx,
         const PatternDirectoryScannerUtilityInput& input) const {
         DirectoryScannerUtilityInput dir_input{
             input.path.str(), input.recursive, input.populate_size};
-        std::vector<FileEntry> all_entries =
+        dstd::Vector<FileEntry> all_entries =
             co_await base_scanner_(ctx, dir_input);
 
         // Step 2: Filter by patterns
-        std::vector<FileEntry> matched_entries;
+        dstd::Vector<FileEntry> matched_entries;
 
         for (const auto& entry : all_entries) {
             // Only consider regular files
@@ -119,7 +121,7 @@ class PatternDirectoryScannerUtility {
     }
 
     /// Scope-less overload: opens its own scope on the current executor.
-    coro::CoroTask<std::vector<FileEntry>> operator()(
+    coro::CoroTask<dstd::Vector<FileEntry>> operator()(
         const PatternDirectoryScannerUtilityInput& input) const {
         return coro::with_scope(
             [this, input](coro::Scope& s) { return (*this)(s, input); });
@@ -132,7 +134,7 @@ class PatternDirectoryScannerUtility {
      * @brief Check if a path matches any of the given patterns.
      */
     bool matches_any_pattern(dstd::StringView path,
-                             const std::vector<std::string>& patterns) const {
+                             const dstd::Vector<dstd::String>& patterns) const {
         if (patterns.empty()) {
             return true;  // No patterns = match everything
         }
@@ -155,7 +157,7 @@ class PatternDirectoryScannerUtility {
      * - Prefix glob: "*.txt" matches any file ending with ".txt"
      */
     bool matches_pattern(dstd::StringView path,
-                         const std::string& pattern) const {
+                         const dstd::String& pattern) const {
         if (pattern.empty()) {
             return true;
         }

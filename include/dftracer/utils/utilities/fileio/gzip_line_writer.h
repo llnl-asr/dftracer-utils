@@ -5,6 +5,8 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/utilities/fileio/json_line_format.h>
@@ -12,10 +14,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -58,23 +56,23 @@ struct GzipWriterOptions {
     /// part_header and part_footer still bracket the file.
     bool ordered = true;
     /// Path of part `i`; empty uses gzip_part_path.
-    std::function<std::string(std::size_t)> part_name;
+    dstd::Function<dstd::String(std::size_t)> part_name;
     /// Each is a member of its own at the start / end of every part. Not
     /// lines, not counted in part_size or @ref MemberInfo, not sent to
     /// on_member.
-    std::string part_header;
-    std::string part_footer;
+    dstd::String part_header;
+    dstd::String part_footer;
     /// Once per part, after its file is closed. `uc_bytes` and `lines` count
     /// appended data only. Must not throw.
-    std::function<void(std::size_t part, const std::string& path,
-                       std::uint64_t uc_bytes, std::uint64_t lines)>
+    dstd::Function<void(std::size_t part, dstd::StringView path,
+                        std::uint64_t uc_bytes, std::uint64_t lines)>
         on_part;
     /// In member order, on the writer step. Must not throw. Refused with
     /// ordered = false.
-    std::function<void(const MemberInfo&)> on_member;
+    dstd::Function<void(const MemberInfo&)> on_member;
     /// Once per member on a compress worker, concurrently across members.
     /// `plaintext` is valid only during the call.
-    std::function<void(const MemberRef& ref, dstd::StringView plaintext)> fold;
+    dstd::Function<void(const MemberRef& ref, dstd::StringView plaintext)> fold;
 };
 
 struct WriteSummary {
@@ -89,7 +87,7 @@ struct WriteSummary {
 
 /// `<stem>-<idx>.pfw[.gz]` from a base like `<stem>.pfw[.gz]`; `base` itself
 /// when `multi` is false.
-std::string gzip_part_path(const std::string& base, int idx, bool multi);
+dstd::String gzip_part_path(dstd::StringView base, int idx, bool multi);
 
 /// Memory: the writer reserves bytes against `memory_budget` (see
 /// @ref GzipWriterOptions) and waits instead of growing past it. Reserved are
@@ -135,7 +133,7 @@ class GzipLineWriter {
         /// producer's buffer.
         coro::CoroTask<common::Result<void>> append_with(
             std::size_t max_bytes,
-            std::function<std::size_t(char*, std::size_t)> fill);
+            dstd::Function<std::size_t(char*, std::size_t)> fill);
 
         /// append_with of one line; the call adds the '\n', so a format has
         /// none. `Fmt` is a compile-time format (a wrong argument count or type
@@ -198,7 +196,7 @@ class GzipLineWriter {
         coro::CoroTask<common::Result<void>> submit_full();
         void release_extra();
         Impl* impl_;
-        std::string buf_;
+        dstd::String buf_;
         std::size_t units_ = 0;  ///< reservation held, in 1 KiB units
     };
 
@@ -206,7 +204,7 @@ class GzipLineWriter {
     common::Result<Producer> producer();
 
     static coro::CoroTask<common::Result<GzipLineWriter>> open(
-        std::string path, GzipWriterOptions opts);
+        dstd::String path, GzipWriterOptions opts);
 
     /// Empty; only open() produces a usable writer.
     GzipLineWriter();
@@ -225,7 +223,7 @@ class GzipLineWriter {
     /// it, so concurrent calls share no state.
     coro::CoroTask<common::Result<void>> append_with(
         std::size_t max_bytes,
-        std::function<std::size_t(char*, std::size_t)> fill);
+        dstd::Function<std::size_t(char*, std::size_t)> fill);
 
     /// append_with of one line; the call adds the '\n', so a format has none.
     /// `Fmt` is a compile-time format (a wrong argument count or type does not
@@ -287,14 +285,14 @@ class GzipLineWriter {
     coro::CoroTask<common::Result<WriteSummary>> close(dstd::StringView tail);
 
    private:
-    explicit GzipLineWriter(std::unique_ptr<Impl> impl);
-    std::unique_ptr<Impl> impl_;
+    explicit GzipLineWriter(dstd::UniquePtr<Impl> impl);
+    dstd::UniquePtr<Impl> impl_;
 };
 
 /// The same operations, blocking on the default runtime.
 class GzipLineWriterBlocking {
    public:
-    static common::Result<GzipLineWriterBlocking> open(std::string path,
+    static common::Result<GzipLineWriterBlocking> open(dstd::String path,
                                                        GzipWriterOptions opts);
 
     GzipLineWriterBlocking(GzipLineWriterBlocking&&) noexcept;
@@ -304,14 +302,14 @@ class GzipLineWriterBlocking {
     common::Result<void> append(dstd::StringView lines);
     common::Result<void> append_with(
         std::size_t max_bytes,
-        std::function<std::size_t(char*, std::size_t)> fill);
+        dstd::Function<std::size_t(char*, std::size_t)> fill);
     common::Result<void> cut();
     common::Result<WriteSummary> close();
     common::Result<WriteSummary> close(dstd::StringView tail);
 
    private:
     explicit GzipLineWriterBlocking(GzipLineWriter w);
-    std::unique_ptr<GzipLineWriter> w_;
+    dstd::UniquePtr<GzipLineWriter> w_;
 };
 
 }  // namespace dftracer::utils::utilities::fileio

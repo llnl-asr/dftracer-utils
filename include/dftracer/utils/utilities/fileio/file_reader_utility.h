@@ -9,8 +9,6 @@
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 #include <dftracer/utils/utilities/text/shared.h>
 
-#include <fstream>
-#include <sstream>
 #include <stdexcept>
 
 namespace dftracer::utils::utilities::fileio {
@@ -36,7 +34,7 @@ namespace dftracer::utils::utilities::fileio {
  *
  * Usage:
  * @code
- * auto reader = std::make_shared<FileReader>();
+ * auto reader = dstd::make_shared<FileReader>();
  *
  * FileEntry file{"/path/to/file.txt"};
  * text::Text content = reader->process(file);
@@ -46,8 +44,8 @@ namespace dftracer::utils::utilities::fileio {
  *
  * Composition with DirectoryScanner:
  * @code
- * auto scanner = std::make_shared<DirectoryScanner>();
- * auto reader = std::make_shared<FileReader>();
+ * auto scanner = dstd::make_shared<DirectoryScanner>();
+ * auto reader = dstd::make_shared<FileReader>();
  *
  * auto files = scanner->process(Directory{"."});
  * for (const auto& file : files) {
@@ -85,17 +83,14 @@ class FileReaderUtility {
                                 input.path.str()));
         }
 
-        std::ifstream file(input.path.c_str(), std::ios::binary);
-        if (!file) {
+        auto content = dstd::fs::read_file(input.path.view());
+        if (!content) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Io,
                 common::str_cat("Cannot open file: ", input.path.str()));
         }
 
-        std::ostringstream content;
-        content << file.rdbuf();
-
-        co_return text::Text{content.str()};
+        co_return text::Text{std::move(*content)};
     }
 };
 

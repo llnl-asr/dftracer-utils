@@ -97,7 +97,7 @@ coro::CoroTask<void> validate_file(dstd::String path, FileValResult* result) {
         // navigates into.
         simdjson::dom::parser parser;
         // A cut trace is invalid here, not recovered.
-        auto gen = async_streaming_gz_lines(std_path, 0, 0,
+        auto gen = async_streaming_gz_lines(result->path, 0, 0,
                                             /*recover_truncated=*/false);
         for (;;) {
             auto line_opt = co_await gen.next();

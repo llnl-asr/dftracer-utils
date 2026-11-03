@@ -4,6 +4,10 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <doctest/doctest.h>
@@ -15,9 +19,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <string>
-#include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -27,14 +28,14 @@ namespace {
 
 constexpr std::size_t STRIPE = 1 * 1024 * 1024;  // 1 MB stripe for the test
 
-std::string tmp_path(const char* name) {
-    return std::string(dftu_utils_test::make_unique_test_path(name).str());
+dstd::String tmp_path(const char* name) {
+    return dstd::String(dftu_utils_test::make_unique_test_path(name).str());
 }
 
 // Compress `data` into a standalone gzip member with zlib.
-std::vector<std::uint8_t> gzip_member(const std::string& data) {
+dstd::Vector<std::uint8_t> gzip_member(const dstd::String& data) {
     uLongf bound = compressBound(data.size()) + 64;
-    std::vector<std::uint8_t> out(bound);
+    dstd::Vector<std::uint8_t> out(bound);
     z_stream s{};
     REQUIRE(deflateInit2(&s, Z_BEST_SPEED, Z_DEFLATED, 15 | 16, 8,
                          Z_DEFAULT_STRATEGY) == Z_OK);
@@ -48,16 +49,16 @@ std::vector<std::uint8_t> gzip_member(const std::string& data) {
     return out;
 }
 
-dstd::ByteView as_bv(const std::vector<std::uint8_t>& v) {
+dstd::ByteView as_bv(const dstd::Vector<std::uint8_t>& v) {
     return dstd::ByteView(reinterpret_cast<const std::byte*>(v.data()),
                           v.size());
 }
 
 // Decompress the whole file via gzread (spans concatenated members natively).
-std::string gunzip_all(const std::string& path) {
+dstd::String gunzip_all(const dstd::String& path) {
     gzFile g = gzopen(path.c_str(), "rb");
     REQUIRE(g != nullptr);
-    std::string out;
+    dstd::String out;
     char buf[4096];
     int n;
     while ((n = gzread(g, buf, sizeof(buf))) > 0) {
@@ -70,17 +71,17 @@ std::string gunzip_all(const std::string& path) {
 }  // namespace
 
 TEST_CASE("PaddedStripedWriter - gzip -t passes and payload round-trips") {
-    std::string path = tmp_path("test_padded_basic.json.gz");
+    dstd::String path = tmp_path("test_padded_basic.json.gz");
     std::remove(path.c_str());
 
-    std::string hdr_payload = "HDR\n";
-    std::string w0_payload = R"({"ev":0})"
-                             "\n";
-    std::string w1_payload = R"({"ev":1})"
-                             "\n";
-    std::string w2_payload = R"({"ev":2})"
-                             "\n";
-    std::string ftr_payload = "]\n";
+    dstd::String hdr_payload = "HDR\n";
+    dstd::String w0_payload = R"({"ev":0})"
+                              "\n";
+    dstd::String w1_payload = R"({"ev":1})"
+                              "\n";
+    dstd::String w2_payload = R"({"ev":2})"
+                              "\n";
+    dstd::String ftr_payload = "]\n";
 
     auto hdr_mem = gzip_member(hdr_payload);
     auto w0_mem = gzip_member(w0_payload);
@@ -91,39 +92,40 @@ TEST_CASE("PaddedStripedWriter - gzip -t passes and payload round-trips") {
     Runtime runtime(2);
     int result = -1;
     runtime
-        .submit(coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
-                    auto w = make_padded_striped_writer(STRIPE);
-                    if (co_await w->open(path, 3, true, &s) != 0) {
-                        result = 1;
-                        co_return;
-                    }
-                    if (co_await w->write_header(as_bv(hdr_mem)) != 0) {
-                        result = 2;
-                        co_return;
-                    }
-                    if (co_await w->write_chunk(0, as_bv(w0_mem)) != 0) {
-                        result = 3;
-                        co_return;
-                    }
-                    if (co_await w->write_chunk(1, as_bv(w1_mem)) != 0) {
-                        result = 4;
-                        co_return;
-                    }
-                    if (co_await w->write_chunk(2, as_bv(w2_mem)) != 0) {
-                        result = 5;
-                        co_return;
-                    }
-                    if (co_await w->write_footer(as_bv(ftr_mem)) != 0) {
-                        result = 6;
-                        co_return;
-                    }
-                    if (co_await w->close() != 0) {
-                        result = 7;
-                        co_return;
-                    }
-                    result = 0;
-                }),
-                "padded_basic")
+        .submit(
+            coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
+                auto w = make_padded_striped_writer(STRIPE);
+                if (co_await w->open(dstd::String(path), 3, true, &s) != 0) {
+                    result = 1;
+                    co_return;
+                }
+                if (co_await w->write_header(as_bv(hdr_mem)) != 0) {
+                    result = 2;
+                    co_return;
+                }
+                if (co_await w->write_chunk(0, as_bv(w0_mem)) != 0) {
+                    result = 3;
+                    co_return;
+                }
+                if (co_await w->write_chunk(1, as_bv(w1_mem)) != 0) {
+                    result = 4;
+                    co_return;
+                }
+                if (co_await w->write_chunk(2, as_bv(w2_mem)) != 0) {
+                    result = 5;
+                    co_return;
+                }
+                if (co_await w->write_footer(as_bv(ftr_mem)) != 0) {
+                    result = 6;
+                    co_return;
+                }
+                if (co_await w->close() != 0) {
+                    result = 7;
+                    co_return;
+                }
+                result = 0;
+            }),
+            "padded_basic")
         .get();
     CHECK(result == 0);
 
@@ -145,13 +147,13 @@ TEST_CASE("PaddedStripedWriter - gzip -t passes and payload round-trips") {
 // and joins that scope before it calls close(). A packer started in that scope
 // could only end in close(), so the join never returned.
 TEST_CASE("PaddedStripedWriter - the caller's scope joins before close") {
-    std::string path = tmp_path("test_padded_join.json.gz");
+    dstd::String path = tmp_path("test_padded_join.json.gz");
     std::remove(path.c_str());
     constexpr std::size_t WORKERS = 8;
-    std::vector<std::string> payloads;
-    std::vector<std::vector<std::uint8_t>> members;
+    dstd::Vector<dstd::String> payloads;
+    dstd::Vector<dstd::Vector<std::uint8_t>> members;
     for (std::size_t i = 0; i < WORKERS; ++i) {
-        payloads.push_back(R"({"w":)" + std::to_string(i) + "}\n");
+        payloads.push_back(R"({"w":)" + dstd::to_string(i) + "}\n");
         members.push_back(gzip_member(payloads.back()));
     }
     Runtime runtime(4);
@@ -160,8 +162,9 @@ TEST_CASE("PaddedStripedWriter - the caller's scope joins before close") {
         .submit(
             coro::with_scope([&](coro::Scope&) -> CoroTask<void> {
                 auto w = make_padded_striped_writer(STRIPE);
-                auto jobs = std::make_unique<coro::Scope>();
-                if (co_await w->open(path, WORKERS, true, jobs.get()) != 0) {
+                auto jobs = dstd::make_unique<coro::Scope>();
+                if (co_await w->open(dstd::String(path), WORKERS, true,
+                                     jobs.get()) != 0) {
                     result = 1;
                     co_return;
                 }
@@ -181,8 +184,8 @@ TEST_CASE("PaddedStripedWriter - the caller's scope joins before close") {
             "padded_join")
         .get();
     REQUIRE(result == 0);
-    std::string all = gunzip_all(path);
-    for (const auto& p : payloads) CHECK(all.find(p) != std::string::npos);
+    dstd::String all = gunzip_all(path);
+    for (const auto& p : payloads) CHECK(all.find(p) != dstd::String::npos);
     CHECK(all.size() == [&] {
         std::size_t n = 0;
         for (const auto& p : payloads) n += p.size();
@@ -193,12 +196,12 @@ TEST_CASE("PaddedStripedWriter - the caller's scope joins before close") {
 
 TEST_CASE(
     "PaddedStripedWriter - a member larger than a stripe takes whole stripes") {
-    std::string path = tmp_path("test_padded_oversize.gz");
+    dstd::String path = tmp_path("test_padded_oversize.gz");
     std::remove(path.c_str());
 
     // Text that does not compress, so its member spans more than two stripes,
     // as a member copied whole from an input file can.
-    std::string big_payload;
+    dstd::String big_payload;
     std::uint64_t x = 88172645463325252ULL;
     while (big_payload.size() < 2 * STRIPE + STRIPE / 2) {
         x ^= x << 13;
@@ -206,11 +209,11 @@ TEST_CASE(
         x ^= x << 17;
         big_payload.push_back(static_cast<char>(' ' + x % 94));
     }
-    const std::string small0 = R"({"ev":0})"
-                               "\n";
-    const std::string small1 = R"({"ev":1})"
-                               "\n";
-    const std::string ftr_payload = "]\n";
+    const dstd::String small0 = R"({"ev":0})"
+                                "\n";
+    const dstd::String small1 = R"({"ev":1})"
+                                "\n";
+    const dstd::String ftr_payload = "]\n";
     const auto big = gzip_member(big_payload);
     REQUIRE(big.size() > 2 * STRIPE);
     const auto m0 = gzip_member(small0);
@@ -220,31 +223,32 @@ TEST_CASE(
     Runtime runtime(2);
     int result = -1;
     runtime
-        .submit(coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
-                    auto w = make_padded_striped_writer(STRIPE);
-                    if (co_await w->open(path, 1, true, &s) != 0) {
-                        result = 1;
-                        co_return;
-                    }
-                    if (co_await w->write_chunk(0, as_bv(m0)) != 0) {
-                        result = 2;
-                        co_return;
-                    }
-                    if (co_await w->write_chunk(0, as_bv(big)) != 0) {
-                        result = 3;
-                        co_return;
-                    }
-                    if (co_await w->write_chunk(0, as_bv(m1)) != 0) {
-                        result = 4;
-                        co_return;
-                    }
-                    if (co_await w->write_footer(as_bv(ftr)) != 0) {
-                        result = 5;
-                        co_return;
-                    }
-                    result = co_await w->close() == 0 ? 0 : 6;
-                }),
-                "padded_oversize")
+        .submit(
+            coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
+                auto w = make_padded_striped_writer(STRIPE);
+                if (co_await w->open(dstd::String(path), 1, true, &s) != 0) {
+                    result = 1;
+                    co_return;
+                }
+                if (co_await w->write_chunk(0, as_bv(m0)) != 0) {
+                    result = 2;
+                    co_return;
+                }
+                if (co_await w->write_chunk(0, as_bv(big)) != 0) {
+                    result = 3;
+                    co_return;
+                }
+                if (co_await w->write_chunk(0, as_bv(m1)) != 0) {
+                    result = 4;
+                    co_return;
+                }
+                if (co_await w->write_footer(as_bv(ftr)) != 0) {
+                    result = 5;
+                    co_return;
+                }
+                result = co_await w->close() == 0 ? 0 : 6;
+            }),
+            "padded_oversize")
         .get();
     REQUIRE(result == 0);
 
@@ -256,11 +260,11 @@ TEST_CASE(
 
 TEST_CASE(
     "PaddedStripedWriter - file-level gzip integrity (decompress twice)") {
-    std::string path = tmp_path("test_padded_integrity.json.gz");
+    dstd::String path = tmp_path("test_padded_integrity.json.gz");
     std::remove(path.c_str());
 
     // Bigger payload so the test meaningfully exercises padding members.
-    std::string big;
+    dstd::String big;
     big.reserve(200 * 1024);
     for (int i = 0; i < 2000; ++i) {
         char line[128];
@@ -276,29 +280,30 @@ TEST_CASE(
     Runtime runtime(2);
     int result = -1;
     runtime
-        .submit(coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
-                    auto w = make_padded_striped_writer(STRIPE);
-                    if (co_await w->open(path, 1, true, &s) != 0) {
-                        result = 1;
-                        co_return;
-                    }
-                    // Two chunks of the same payload; packer coalesces both
-                    // into a single stripe since they fit together.
-                    if (co_await w->write_chunk(0, as_bv(mem)) != 0) {
-                        result = 2;
-                        co_return;
-                    }
-                    if (co_await w->write_chunk(0, as_bv(mem)) != 0) {
-                        result = 3;
-                        co_return;
-                    }
-                    if (co_await w->close() != 0) {
-                        result = 4;
-                        co_return;
-                    }
-                    result = 0;
-                }),
-                "padded_integrity")
+        .submit(
+            coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
+                auto w = make_padded_striped_writer(STRIPE);
+                if (co_await w->open(dstd::String(path), 1, true, &s) != 0) {
+                    result = 1;
+                    co_return;
+                }
+                // Two chunks of the same payload; packer coalesces both
+                // into a single stripe since they fit together.
+                if (co_await w->write_chunk(0, as_bv(mem)) != 0) {
+                    result = 2;
+                    co_return;
+                }
+                if (co_await w->write_chunk(0, as_bv(mem)) != 0) {
+                    result = 3;
+                    co_return;
+                }
+                if (co_await w->close() != 0) {
+                    result = 4;
+                    co_return;
+                }
+                result = 0;
+            }),
+            "padded_integrity")
         .get();
     CHECK(result == 0);
 
@@ -317,9 +322,9 @@ namespace {
 // A gzip member of exactly `total` bytes: `head`, then `fill` up to the size
 // that stored deflate blocks of 65535 bytes leave, and an FEXTRA field of a
 // few bytes for the rest. The decoded bytes go to `payload`.
-std::vector<std::uint8_t> exact_member(const std::string& head, char fill,
-                                       std::size_t total,
-                                       std::string& payload) {
+dstd::Vector<std::uint8_t> exact_member(const dstd::String& head, char fill,
+                                        std::size_t total,
+                                        dstd::String& payload) {
     std::size_t blocks = (total - 20 + 65539) / 65540;
     std::size_t size = total - 20 - 5 * blocks;
     while ((size + 65534) / 65535 > blocks) {
@@ -327,10 +332,10 @@ std::vector<std::uint8_t> exact_member(const std::string& head, char fill,
         size = total - 20 - 5 * blocks;
     }
     REQUIRE(size > head.size());
-    payload = head + std::string(size - head.size() - 1, fill) + "\n";
+    payload = head + dstd::String(size - head.size() - 1, fill) + "\n";
     const std::size_t xlen = total - (20 + payload.size() + 5 * blocks);
     REQUIRE(xlen <= 65535);
-    std::vector<std::uint8_t> m = {0x1f, 0x8b, 8, 0x04, 0, 0, 0, 0, 0, 0xff};
+    dstd::Vector<std::uint8_t> m = {0x1f, 0x8b, 8, 0x04, 0, 0, 0, 0, 0, 0xff};
     m.push_back(static_cast<std::uint8_t>(xlen & 0xff));
     m.push_back(static_cast<std::uint8_t>(xlen >> 8));
     m.insert(m.end(), xlen, 0);
@@ -360,34 +365,34 @@ std::vector<std::uint8_t> exact_member(const std::string& head, char fill,
 }  // namespace
 
 TEST_CASE("PaddedStripedWriter - a drop without close on an executor joins") {
-    std::string path = tmp_path("test_padded_dropped.json.gz");
+    dstd::String path = tmp_path("test_padded_dropped.json.gz");
     std::remove(path.c_str());
-    const std::string payload = "{\"dropped\":1}\n";
+    const dstd::String payload = "{\"dropped\":1}\n";
     const auto member = gzip_member(payload);
     std::atomic<bool> on_executor{false};
     int result = -1;
     Runtime runtime(4);
     runtime
-        .submit(coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
-                    auto w = make_padded_striped_writer(STRIPE);
-                    if (co_await w->open(path, 2, true, &s) != 0) {
-                        result = 1;
-                        co_return;
-                    }
-                    result =
-                        co_await w->write_chunk(0, as_bv(member)) == 0 ? 0 : 2;
-                    on_executor = coro::Executor::current() != nullptr;
-                    w.reset();
-                }),
-                "padded_dropped")
+        .submit(
+            coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
+                auto w = make_padded_striped_writer(STRIPE);
+                if (co_await w->open(dstd::String(path), 2, true, &s) != 0) {
+                    result = 1;
+                    co_return;
+                }
+                result = co_await w->write_chunk(0, as_bv(member)) == 0 ? 0 : 2;
+                on_executor = coro::Executor::current() != nullptr;
+                w.reset();
+            }),
+            "padded_dropped")
         .get();
     REQUIRE(result == 0);
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (gunzip_all(path).find(payload) == std::string::npos &&
+    while (gunzip_all(path).find(payload) == dstd::String::npos &&
            std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    CHECK(gunzip_all(path).find(payload) != std::string::npos);
+    CHECK(gunzip_all(path).find(payload) != dstd::String::npos);
     CHECK(on_executor.load());
     runtime.shutdown();
     (void)dstd::fs::remove(path);
@@ -398,36 +403,37 @@ TEST_CASE("PaddedStripedWriter - every stripe ends in whole gzip members") {
     // member plus k: a k below the 25-byte minimum of a member must not stay
     // zero, or gzip stops reading there.
     constexpr std::size_t PAD_MAX = 25 + 65535;
-    std::vector<std::string> payloads(31);
-    std::vector<std::vector<std::uint8_t>> members;
+    dstd::Vector<dstd::String> payloads(31);
+    dstd::Vector<dstd::Vector<std::uint8_t>> members;
     for (std::size_t k = 0; k < payloads.size(); ++k)
-        members.push_back(exact_member("{\"k\":" + std::to_string(k) + "}\n",
+        members.push_back(exact_member("{\"k\":" + dstd::to_string(k) + "}\n",
                                        static_cast<char>('a' + k % 26),
                                        STRIPE - PAD_MAX - k, payloads[k]));
-    std::string path = tmp_path("test_padded_whole_members.json.gz");
+    dstd::String path = tmp_path("test_padded_whole_members.json.gz");
     std::remove(path.c_str());
     Runtime runtime(2);
     int result = -1;
     runtime
-        .submit(coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
-                    auto w = make_padded_striped_writer(STRIPE);
-                    if (co_await w->open(path, 1, true, &s) != 0) {
-                        result = 1;
+        .submit(
+            coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
+                auto w = make_padded_striped_writer(STRIPE);
+                if (co_await w->open(dstd::String(path), 1, true, &s) != 0) {
+                    result = 1;
+                    co_return;
+                }
+                for (const auto& m : members) {
+                    if (co_await w->write_chunk(0, as_bv(m)) != 0) {
+                        result = 2;
                         co_return;
                     }
-                    for (const auto& m : members) {
-                        if (co_await w->write_chunk(0, as_bv(m)) != 0) {
-                            result = 2;
-                            co_return;
-                        }
-                    }
-                    result = co_await w->close() == 0 ? 0 : 3;
-                }),
-                "padded_whole_members")
+                }
+                result = co_await w->close() == 0 ? 0 : 3;
+            }),
+            "padded_whole_members")
         .get();
     REQUIRE(result == 0);
     CHECK(dstd::fs::file_size(path).value() == (members.size() + 1) * STRIPE);
-    std::string want;
+    dstd::String want;
     for (const auto& p : payloads) want += p;
     CHECK(gunzip_all(path) == want);
     (void)dstd::fs::remove(path);

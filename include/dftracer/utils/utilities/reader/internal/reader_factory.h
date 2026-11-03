@@ -3,13 +3,13 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_FACTORY_H
 
 #include <dftracer/utils/common/format_detector.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 
-#include <memory>
-#include <string>
 namespace dftracer::utils::utilities::reader::internal {
 
 /**
@@ -21,7 +21,7 @@ class ReaderFactory {
      * Create a reader for any supported archive format (returns Reader)
      */
     static dstd::SharedPtr<Reader> create(
-        const std::string &archive_path, const std::string &index_path,
+        dstd::CStringView archive_path, dstd::StringView index_path,
         std::size_t index_ckpt_size = dftracer::utils::index::gzip::
             CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE);
 

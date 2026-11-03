@@ -625,14 +625,14 @@ TEST_CASE("C++ Reader Streaming API - Format identification") {
     REQUIRE(reader != nullptr);
 
     SUBCASE("Check format name") {
-        std::string format = reader->get_format_name();
+        dstd::String format = reader->get_format_name();
         CHECK(!format.empty());
         MESSAGE("Format: ", format);
     }
 
     SUBCASE("Verify metadata access") {
-        CHECK(reader->get_archive_path() == gz_file);
-        CHECK(reader->get_index_path() == idx_file);
+        CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
+        CHECK(dstd::StringView(reader->get_index_path()) == idx_file);
         CHECK(reader->get_max_bytes() > 0);
     }
 }

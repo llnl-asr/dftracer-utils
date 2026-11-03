@@ -535,8 +535,7 @@ class GroupReader {
         dstd::Optional<dstd::String> error;
         try {
             // An unfinished run is skipped, not counted from a recovered tail.
-            // keep std: the line generator takes a std::string path
-            auto gen = async_streaming_gz_lines(std::string(file), 0, 0,
+            auto gen = async_streaming_gz_lines(dstd::String(file), 0, 0,
                                                 /*recover_truncated=*/false);
             std::size_t n = 0;
             for (;;) {

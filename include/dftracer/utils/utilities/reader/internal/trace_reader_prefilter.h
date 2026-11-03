@@ -3,15 +3,14 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_TRACE_READER_PREFILTER_H
 
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <simdjson.h>
 
 #include <cstdint>
 #include <cstring>
-#include <optional>
 #include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -31,23 +30,23 @@ namespace dftracer::utils::utilities::reader::internal {
 // wyhash + per-field std::string allocation per row). Anything more
 // complex (OR/NOT/IN/range) falls back to the generic visitor.
 struct CompiledEqProbe {
-    std::string top_key;     // "pid", "args", "name", etc.
-    std::string nested_key;  // "" for top-level, else e.g. "fhash"
+    dstd::String top_key;     // "pid", "args", "name", etc.
+    dstd::String nested_key;  // "" for top-level, else e.g. "fhash"
     // A bare key missing (or null) at the top level is read under "args".
     bool args_fallback = false;
     enum class Kind { String, Int64, UInt64, Double, Bool };
     Kind kind = Kind::String;
-    std::string s_val;
+    dstd::String s_val;
     std::int64_t i64_val = 0;
     std::uint64_t u64_val = 0;
     double d_val = 0.0;
     bool b_val = false;
 };
 
-dstd::Optional<std::vector<CompiledEqProbe>> try_compile_eq_probes(
+dstd::Optional<dstd::Vector<CompiledEqProbe>> try_compile_eq_probes(
     const duql::QueryNode& node);
 
-bool eval_compiled_eq(const std::vector<CompiledEqProbe>& probes,
+bool eval_compiled_eq(const dstd::Vector<CompiledEqProbe>& probes,
                       simdjson::ondemand::document_reference doc);
 
 }  // namespace dftracer::utils::utilities::reader::internal

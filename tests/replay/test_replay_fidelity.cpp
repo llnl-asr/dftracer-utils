@@ -118,7 +118,8 @@ FidelityStats analyze(const std::vector<DispatchSample>& samples) {
     return out;
 }
 
-void run_pipelined(ReplayEngine& engine, const std::vector<std::string>& files,
+void run_pipelined(ReplayEngine& engine,
+                   const dstd::Vector<dstd::String>& files,
                    ReplayResult& result, std::size_t threads) {
     Pipeline pipeline(PipelineConfig::parallel(threads));
     auto root = make_task(
@@ -214,7 +215,7 @@ TEST_CASE("Replay fidelity - sync path") {
         rec.record(t, now);
     };
 
-    ReplayEngine engine(config);
+    ReplayEngine engine(std::move(config));
     auto result = engine.replay(trace_file);
     CHECK(result.total_events == N);
 
@@ -245,9 +246,9 @@ TEST_CASE("Replay fidelity - pipelined path") {
         rec.record(t, now);
     };
 
-    ReplayEngine engine(config);
+    ReplayEngine engine(std::move(config));
     ReplayResult result;
-    std::vector<std::string> files = {trace_file};
+    dstd::Vector<dstd::String> files = {dstd::String(trace_file)};
 
     Pipeline pipeline(PipelineConfig::parallel(4));
     auto root = make_task(
@@ -288,7 +289,7 @@ TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
         rec.record(t, now);
     };
 
-    ReplayEngine engine(config);
+    ReplayEngine engine(std::move(config));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -341,9 +342,10 @@ TEST_CASE("Replay pipelined - files replay at the same time") {
             gave_up = true;
     };
 
-    ReplayEngine engine(config);
+    ReplayEngine engine(std::move(config));
     ReplayResult result;
-    run_pipelined(engine, {file_a, file_b}, result, 4);
+    run_pipelined(engine, {dstd::String(file_a), dstd::String(file_b)}, result,
+                  4);
 
     CHECK_FALSE(gave_up);
     CHECK(result.total_events == 2 * N);
@@ -381,9 +383,10 @@ TEST_CASE("Replay pipelined - each file keeps its own timeline") {
         (t.pid == PID_A ? rec_a : rec_b).record(t, now);
     };
 
-    ReplayEngine engine(config);
+    ReplayEngine engine(std::move(config));
     ReplayResult result;
-    run_pipelined(engine, {file_a, file_b}, result, 4);
+    run_pipelined(engine, {dstd::String(file_a), dstd::String(file_b)}, result,
+                  4);
 
     CHECK(result.total_events == 2 * N);
     REQUIRE(rec_a.samples.size() == N);
@@ -403,11 +406,11 @@ TEST_CASE("Replay pipelined - max_events caps the whole run") {
     constexpr std::size_t FILES = 3;
     constexpr std::size_t N = 50;
     constexpr std::size_t MAX_EVENTS = 60;
-    std::vector<std::string> files;
+    dstd::Vector<dstd::String> files;
     for (std::size_t i = 0; i < FILES; ++i) {
-        files.push_back(std::string(
+        files.push_back(dstd::String(
             (temp_dir / ("f" + std::to_string(i) + ".pfw.gz")).str()));
-        write_evenly_spaced_trace(files.back(), N, 1,
+        write_evenly_spaced_trace(std::string(files.back()), N, 1,
                                   static_cast<std::uint32_t>(100 + i));
     }
 
@@ -416,7 +419,7 @@ TEST_CASE("Replay pipelined - max_events caps the whole run") {
     config.dry_run = true;
     config.max_events = MAX_EVENTS;
 
-    ReplayEngine engine(config);
+    ReplayEngine engine(std::move(config));
     ReplayResult result;
     run_pipelined(engine, files, result, 4);
 

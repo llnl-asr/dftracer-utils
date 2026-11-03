@@ -64,7 +64,8 @@ TEST_CASE("member cache: fills from a read then returns" * doctest::skip()) {
 
     std::int64_t lines = 0;
     run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        TraceReader reader(TraceReaderConfig{gz, index_dir});
+        TraceReader reader(
+            TraceReaderConfig{dstd::String(gz), dstd::String(index_dir)});
         auto gen = reader.read_lines(ReadConfig{});
         while (co_await gen.next()) ++lines;
         co_return;

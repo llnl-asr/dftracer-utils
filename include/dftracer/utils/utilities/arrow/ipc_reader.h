@@ -5,14 +5,14 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::arrow::detail {
 /// Store block info separately from decoder state
@@ -51,7 +51,7 @@ class IpcReader {
     IpcReader& operator=(IpcReader&& other) noexcept;
 
     /// Open file for reading. Returns 0 on success.
-    int open(const std::string& path);
+    int open(dstd::CStringView path);
 
     /// Close the file.
     void close();
@@ -68,11 +68,11 @@ class IpcReader {
     ArrowExportResult read_batch(std::size_t index);
 
     /// Read all batches and return as a vector.
-    std::vector<ArrowExportResult> read_all();
+    dstd::Vector<ArrowExportResult> read_all();
 
     /// Iterate over all batches, calling callback for each.
     /// Returns 0 on success, non-zero if callback returns non-zero or on error.
-    int for_each_batch(std::function<int(ArrowExportResult&)> callback);
+    int for_each_batch(dstd::Function<int(ArrowExportResult&)> callback);
 
    private:
     /// Memory-mapped file data
@@ -87,7 +87,7 @@ class IpcReader {
     dstd::SharedPtr<void> shared_schema_;  ///< ArrowSchema*, ref-counted
 
     /// Block metadata
-    std::vector<detail::IpcBlock> blocks_;
+    dstd::Vector<detail::IpcBlock> blocks_;
     std::size_t num_batches_ = 0;
     std::int64_t total_rows_ = 0;
 

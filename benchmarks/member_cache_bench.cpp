@@ -37,7 +37,7 @@
 using namespace dftracer::utils;
 namespace compress = dftracer::utils::utilities::fileio::compress;
 
-using Bytes = dstd::SharedPtr<const std::vector<std::uint8_t>>;
+using Bytes = dstd::SharedPtr<const dstd::Vector<std::uint8_t>>;
 
 namespace {
 
@@ -45,7 +45,7 @@ std::atomic<std::uint64_t> g_decodes{0};
 
 // A compressed gzip member plus its decoded size, shared by all keys.
 struct Blob {
-    std::vector<std::uint8_t> compressed;
+    dftracer::utils::dstd::Vector<std::uint8_t> compressed;
     std::size_t uncompressed = 0;
 };
 
@@ -76,7 +76,7 @@ coro::CoroTask<Bytes> decode(const Blob* blob) {
         std::fprintf(stderr, "decode failed\n");
         std::exit(1);
     }
-    co_return std::make_shared<const std::vector<std::uint8_t>>(
+    co_return dstd::make_shared<const dstd::Vector<std::uint8_t>>(
         std::move(*out));
 }
 

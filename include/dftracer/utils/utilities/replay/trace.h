@@ -2,16 +2,11 @@
 #ifndef DFTRACER_UTILS_UTILITIES_REPLAY_TRACE_H
 #define DFTRACER_UTILS_UTILITIES_REPLAY_TRACE_H
 
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <vector>
 
 namespace dftracer::utils::utilities::replay {
 
@@ -30,8 +25,8 @@ enum class TraceType {
 /**
  * Type aliases for trace fields
  */
-using BinFields = std::unordered_map<std::string, std::int32_t>;
-using ViewFields = std::unordered_map<std::string, std::string>;
+using BinFields = dstd::HashMap<dstd::String, std::int32_t>;
+using ViewFields = dstd::HashMap<dstd::String, dstd::String>;
 
 /**
  * Trace structure representing a single trace event from DFTracer
@@ -43,8 +38,8 @@ struct Trace {
     /// (fhash/hhash) are non-owning views into a program-lifetime
     /// @ref dstd::StringIntern pool.
     dstd::StringView cat;        ///< Category (e.g., "posix", "stdio", "h5py")
-    std::string io_cat;          ///< I/O category (read, write, metadata)
-    std::string acc_pat;         ///< Access pattern
+    dstd::String io_cat;         ///< I/O category (read, write, metadata)
+    dstd::String acc_pat;        ///< Access pattern
     dstd::StringView func_name;  ///< Function name (e.g., "read", "write")
 
     /// Timing information

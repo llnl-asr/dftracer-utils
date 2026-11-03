@@ -5,8 +5,10 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -20,9 +22,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <optional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -98,7 +97,7 @@ class ReaderInflater {
     coro::CoroTask<bool> seek_to_member(
         int fd, off_t& offset,
         const dftracer::utils::index::gzip::GzipMemberRecord& member,
-        const std::string& window, std::size_t expected_out = 0) {
+        dstd::StringView window, std::size_t expected_out = 0) {
         DFTRACER_UTILS_LOG_DEBUG("Seeking to member %" PRIu64
                                  ": c_offset=%" PRIu64 ", uc_offset=%" PRIu64,
                                  member.member_idx, member.c_offset,
@@ -374,13 +373,13 @@ class ReaderInflater {
                 throw common::DFTUtilsException(common::ErrorCode::Compression,
                                                 "gzip member decode failed");
             }
-            co_return std::make_shared<const DecodedMember>(
+            co_return dstd::make_shared<const DecodedMember>(
                 std::move(*decoded));
         };
 
         try {
-            member_shared_ =
-                co_await cache_->get_or_decode(file_token_, off, produce);
+            member_shared_ = co_await cache_->get_or_decode(file_token_, off,
+                                                            std::move(produce));
         } catch (...) {
             co_return false;
         }
@@ -425,7 +424,7 @@ class ReaderInflater {
             }
             if (next_read_ >= file_size_) {
                 // The last member was cut short: keep its complete lines.
-                std::vector<std::uint8_t> kept;
+                dstd::Vector<std::uint8_t> kept;
                 auto keep = compress::decode_truncated_member(
                     comp_.data(), comp_.size(), kept);
                 if (!keep) co_return false;
@@ -472,8 +471,8 @@ class ReaderInflater {
         too_big = false;
         compress::GzipMemberDecompressor dec;
         if (!dec.valid()) co_return dstd::nullopt;
-        std::vector<unsigned char> comp;
-        std::vector<std::uint8_t> out(INIT_OUT);
+        dstd::Vector<unsigned char> comp;
+        dstd::Vector<std::uint8_t> out(INIT_OUT);
         std::uint64_t next_read = off;
         compress::DecompressResult res{};
 
@@ -528,7 +527,7 @@ class ReaderInflater {
     bool exhausted_ = false;
 
     compress::GzipStreamInflater zs_;
-    std::vector<unsigned char> tail_;
+    dstd::Vector<unsigned char> tail_;
     std::uint64_t stream_base_ = 0;
     bool stream_open_ = false;
     bool stream_raw_ = false;

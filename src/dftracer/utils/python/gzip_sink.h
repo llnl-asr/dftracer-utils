@@ -25,7 +25,7 @@ class GzipSink : public trace::views::ExportSink {
         opts.level = level;
         writer_.emplace(
             common::unwrap(utilities::fileio::GzipLineWriterBlocking::open(
-                path, std::move(opts))));
+                dstd::String(path), std::move(opts))));
     }
     ~GzipSink() override {
         if (writer_) (void)writer_->close(tail_);

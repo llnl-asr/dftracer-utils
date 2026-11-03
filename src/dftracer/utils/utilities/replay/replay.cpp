@@ -8,7 +8,12 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/dataframe/containment.h>
+#include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -24,11 +29,9 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
-#include <map>
 #include <random>
-#include <thread>
-#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace dftracer::utils::utilities::replay {
 
@@ -69,25 +72,25 @@ coro::CoroTask<void> wait_for(std::chrono::microseconds wait) {
 // ReplayEngine Implementation
 // =============================================================================
 
-ReplayEngine::ReplayEngine(const ReplayConfig& config) : config_(config) {}
+ReplayEngine::ReplayEngine(ReplayConfig config) : config_(std::move(config)) {}
 
-ReplayEngine::ReplayEngine(const std::string& /* trace_file */,
-                           const ReplayConfig& config)
-    : config_(config) {}
+ReplayEngine::ReplayEngine(dstd::StringView /* trace_file */,
+                           ReplayConfig config)
+    : config_(std::move(config)) {}
 
 ReplayEngine::~ReplayEngine() = default;
 
 ReplayEngine::Lane ReplayEngine::make_lane() const {
     Lane lane;
     if (config_.dftracer_mode) {
-        lane.executor = std::make_unique<DFTracerExecutor>();
+        lane.executor = dstd::make_unique<DFTracerExecutor>();
     } else {
-        lane.executor = std::make_unique<PosixExecutor>();
+        lane.executor = dstd::make_unique<PosixExecutor>();
     }
     return lane;
 }
 
-coro::AsyncGenerator<Trace> ReplayEngine::stream_traces(std::string file) {
+coro::AsyncGenerator<Trace> ReplayEngine::stream_traces(dstd::String file) {
     using reader::ReadConfig;
     using reader::TraceReader;
     using reader::TraceReaderConfig;
@@ -110,7 +113,7 @@ coro::AsyncGenerator<Trace> ReplayEngine::stream_traces(std::string file) {
     }
 }
 
-coro::CoroTask<void> ReplayEngine::replay_file(std::string file, Lane& lane,
+coro::CoroTask<void> ReplayEngine::replay_file(dstd::String file, Lane& lane,
                                                std::size_t channel_capacity) {
     coro::Channel<Trace> ch_instance(channel_capacity);
     auto* channel = &ch_instance;
@@ -152,10 +155,10 @@ coro::CoroTask<void> ReplayEngine::replay_file(std::string file, Lane& lane,
 }
 
 coro::CoroTask<void> ReplayEngine::run_pipelined(
-    coro::Scope& scope, const std::vector<std::string>& files,
+    coro::Scope& scope, const dstd::Vector<dstd::String>& files,
     ReplayResult& result, std::size_t channel_capacity) {
     admitted_.store(0, std::memory_order_relaxed);
-    std::vector<Lane> lanes(files.size());
+    dstd::Vector<Lane> lanes(files.size());
     coro::Executor* executor = coro::resume_executor_for(nullptr);
     const std::size_t threads =
         executor != nullptr ? executor->concurrency() : 1;
@@ -187,8 +190,8 @@ namespace {
 // Sync drive used by the existing replay(file)/replay(vector) entry points.
 // Pipeline-driven callers use ReplayEngine::run_pipelined instead.
 template <typename OnEvent>
-coro::CoroTask<void> read_file_events(std::string trace_file,
-                                      std::string index_file,
+coro::CoroTask<void> read_file_events(dstd::String trace_file,
+                                      dstd::String index_file,
                                       OnEvent on_event) {
     using reader::ReadConfig;
     using reader::TraceReader;
@@ -214,22 +217,24 @@ coro::CoroTask<void> read_file_events(std::string trace_file,
 
 }  // namespace
 
-ReplayResult ReplayEngine::replay(const std::string& trace_file,
-                                  const std::string& index_file) {
+ReplayResult ReplayEngine::replay(dstd::StringView trace_file,
+                                  dstd::StringView index_file) {
     admitted_.store(0, std::memory_order_relaxed);
     return replay_file_sync(trace_file, index_file);
 }
 
-ReplayResult ReplayEngine::replay_file_sync(const std::string& trace_file,
-                                            const std::string& index_file) {
+ReplayResult ReplayEngine::replay_file_sync(dstd::StringView trace_file,
+                                            dstd::StringView index_file) {
     Lane lane = make_lane();
 
-    DFTRACER_UTILS_LOG_DEBUG("Starting replay of file: %s", trace_file.c_str());
+    DFTRACER_UTILS_LOG_DEBUG("Starting replay of file: %.*s",
+                             static_cast<int>(trace_file.size()),
+                             trace_file.data());
 
     auto start_time = std::chrono::steady_clock::now();
 
     try {
-        read_file_events(trace_file, index_file,
+        read_file_events(dstd::String(trace_file), dstd::String(index_file),
                          [this, &lane](json::JsonParser& parser) {
                              Trace trace;
                              if (parse_trace_json(parser, trace))
@@ -238,7 +243,7 @@ ReplayResult ReplayEngine::replay_file_sync(const std::string& trace_file,
             .get();
     } catch (const std::exception& e) {
         lane.result.error_messages.push_back("Exception during replay: " +
-                                             std::string(e.what()));
+                                             dstd::String(e.what()));
     }
     ReplayResult result = std::move(lane.result);
 
@@ -254,7 +259,8 @@ ReplayResult ReplayEngine::replay_file_sync(const std::string& trace_file,
     return result;
 }
 
-ReplayResult ReplayEngine::replay(const std::vector<std::string>& trace_files) {
+ReplayResult ReplayEngine::replay(
+    const dstd::Vector<dstd::String>& trace_files) {
     ReplayResult aggregated_result;
 
     admitted_.store(0, std::memory_order_relaxed);
@@ -286,11 +292,11 @@ bool ReplayEngine::admit(const Trace& trace, Lane& lane,
 
     // Track I/O bytes
     if (trace.size > 0) {
-        if (trace.func_name.find("read") != std::string::npos ||
-            trace.func_name.find("Read") != std::string::npos) {
+        if (trace.func_name.find("read") != dstd::String::npos ||
+            trace.func_name.find("Read") != dstd::String::npos) {
             result.total_bytes_read += static_cast<std::size_t>(trace.size);
-        } else if (trace.func_name.find("write") != std::string::npos ||
-                   trace.func_name.find("Write") != std::string::npos) {
+        } else if (trace.func_name.find("write") != dstd::String::npos ||
+                   trace.func_name.find("Write") != dstd::String::npos) {
             result.total_bytes_written += static_cast<std::size_t>(trace.size);
         }
     }
@@ -345,7 +351,7 @@ void ReplayEngine::execute(const Trace& trace, Lane& lane) {
             result.executed_events++;
         } else {
             result.failed_events++;
-            std::string msg = "Failed to execute ";
+            dstd::String msg = "Failed to execute ";
             msg.append(trace.func_name);
             msg += " with ";
             msg += executor->get_name();
@@ -519,14 +525,14 @@ bool ReplayEngine::should_execute_trace(const Trace& trace) const {
     }
 
     if (!config_.filter_functions.empty()) {
-        std::string key(trace.func_name);
+        dstd::String key(trace.func_name);
         if (config_.filter_functions.find(key) ==
             config_.filter_functions.end()) {
             return false;
         }
     }
     if (!config_.exclude_functions.empty()) {
-        std::string key(trace.func_name);
+        dstd::String key(trace.func_name);
         if (config_.exclude_functions.find(key) !=
             config_.exclude_functions.end()) {
             return false;
@@ -535,14 +541,14 @@ bool ReplayEngine::should_execute_trace(const Trace& trace) const {
 
     // Check category filters
     if (!config_.filter_categories.empty()) {
-        std::string key(trace.cat);
+        dstd::String key(trace.cat);
         if (config_.filter_categories.find(key) ==
             config_.filter_categories.end()) {
             return false;
         }
     }
     if (!config_.exclude_categories.empty()) {
-        std::string key(trace.cat);
+        dstd::String key(trace.cat);
         if (config_.exclude_categories.find(key) !=
             config_.exclude_categories.end()) {
             return false;
@@ -584,12 +590,12 @@ bool ReplayEngine::should_execute_trace(const Trace& trace) const {
 
 namespace {
 // Files under `dir` whose name ends with `pattern`'s suffix (e.g. "*.pfw.gz").
-std::vector<std::string> glob_trace_files(const std::string& dir,
-                                          const std::string& pattern) {
-    std::string suffix = pattern;
-    if (auto star = suffix.find('*'); star != std::string::npos)
+dstd::Vector<dstd::String> glob_trace_files(dstd::StringView dir,
+                                            dstd::StringView pattern) {
+    dstd::String suffix(pattern);
+    if (auto star = suffix.find('*'); star != dstd::String::npos)
         suffix = suffix.substr(star + 1);
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     // An unreadable directory ends the walk with the files found so far.
     (void)dstd::fs::walk(dstd::PathView(dir), [&](dstd::PathView path,
                                                   dstd::fs::FileKind kind) {
@@ -614,24 +620,24 @@ std::vector<std::string> glob_trace_files(const std::string& dir,
 }  // namespace
 
 ReplayResult ReplayEngine::replay_with_call_tree(
-    const std::string& trace_directory, const std::string& pattern) {
+    dstd::StringView trace_directory, dstd::StringView pattern) {
     admitted_.store(0, std::memory_order_relaxed);
     Lane lane = make_lane();
     ReplayResult& result = lane.result;
     auto start_time = std::chrono::steady_clock::now();
     try {
-        std::vector<std::string> files =
+        dstd::Vector<dstd::String> files =
             glob_trace_files(trace_directory, pattern);
         if (files.empty()) {
-            result.error_messages.push_back("No trace files in directory: " +
-                                            trace_directory);
+            result.error_messages.push_back(common::str_cat(
+                "No trace files in directory: ", trace_directory));
             return std::move(lane.result);
         }
 
         // Read every event once.
-        std::vector<Trace> events;
+        dstd::Vector<Trace> events;
         [&]() -> coro::CoroTask<void> {
-            for (const std::string& file : files) {
+            for (const dstd::String& file : files) {
                 auto gen = stream_traces(file);
                 for (;;) {
                     auto opt = co_await gen.next();
@@ -657,24 +663,25 @@ ReplayResult ReplayEngine::replay_with_call_tree(
         // Lanes by (pid,tid); each is an independent nesting stack.
         // containment_ walk assigns level (depth) and parent (enclosing event's
         // index).
-        std::map<dstd::Pair<std::uint64_t, std::uint64_t>,
-                 std::vector<std::int64_t>>
+        dstd::Map<dstd::Pair<std::uint64_t, std::uint64_t>,
+                  dstd::Vector<std::int64_t>>
             lane_map;
         for (std::int64_t i = 0; i < n; ++i)
             lane_map[{events[static_cast<std::size_t>(i)].pid,
                       events[static_cast<std::size_t>(i)].tid}]
                 .push_back(i);
-        std::vector<std::int64_t> level(static_cast<std::size_t>(n), 0);
-        std::vector<std::int64_t> parent(static_cast<std::size_t>(n), -1);
+        dstd::Vector<std::int64_t> level(static_cast<std::size_t>(n), 0);
+        dstd::Vector<std::int64_t> parent(static_cast<std::size_t>(n), -1);
         for (auto& kv : lane_map) {
             auto& rows = kv.second;
-            std::stable_sort(rows.begin(), rows.end(),
-                             [&](std::int64_t a, std::int64_t b) {
-                                 if (start(a) != start(b))
-                                     return start(a) < start(b);
-                                 return end(a) > end(b);
-                             });
-            std::vector<dstd::Pair<std::int64_t, std::int64_t>> stack;
+            dstd::stable_sort(rows.begin(), rows.end(),
+                              [&](std::int64_t a, std::int64_t b) {
+                                  if (start(a) != start(b))
+                                      return start(a) < start(b);
+                                  return end(a) > end(b);
+                              });
+            // keep std: containment_walk takes a std::vector
+            std::vector<std::pair<std::int64_t, std::int64_t>> stack;
             dataframe::containment_walk(
                 static_cast<std::int64_t>(rows.size()),
                 [&](std::int64_t k) { return start(rows[k]); },
@@ -691,7 +698,7 @@ ReplayResult ReplayEngine::replay_with_call_tree(
 
         result.total_nodes = static_cast<std::size_t>(n);
         std::int64_t max_level = 0;
-        std::unordered_set<std::uint64_t> pids;
+        dstd::HashSet<std::uint64_t> pids;
         for (std::int64_t i = 0; i < n; ++i) {
             max_level = std::max(max_level, level[static_cast<std::size_t>(i)]);
             pids.insert(events[static_cast<std::size_t>(i)].pid);
@@ -700,9 +707,9 @@ ReplayResult ReplayEngine::replay_with_call_tree(
         result.unique_processes = pids.size();
 
         if (config_.hierarchical_replay) {
-            std::vector<std::vector<std::int64_t>> children(
+            dstd::Vector<dstd::Vector<std::int64_t>> children(
                 static_cast<std::size_t>(n));
-            std::vector<std::int64_t> roots;
+            dstd::Vector<std::int64_t> roots;
             for (std::int64_t i = 0; i < n; ++i) {
                 if (parent[static_cast<std::size_t>(i)] < 0)
                     roots.push_back(i);
@@ -714,11 +721,11 @@ ReplayResult ReplayEngine::replay_with_call_tree(
             auto by_start = [&](std::int64_t a, std::int64_t b) {
                 return start(a) < start(b);
             };
-            std::stable_sort(roots.begin(), roots.end(), by_start);
+            dstd::stable_sort(roots.begin(), roots.end(), by_start);
             for (auto& ch : children)
-                std::stable_sort(ch.begin(), ch.end(), by_start);
-            std::function<void(std::int64_t, int)> dfs = [&](std::int64_t idx,
-                                                             int depth) {
+                dstd::stable_sort(ch.begin(), ch.end(), by_start);
+            dstd::Function<void(std::int64_t, int)> dfs = [&](std::int64_t idx,
+                                                              int depth) {
                 if (config_.max_level >= 0 && depth > config_.max_level) {
                     result.filtered_events++;
                     return;
@@ -740,7 +747,7 @@ ReplayResult ReplayEngine::replay_with_call_tree(
         }
     } catch (const std::exception& e) {
         result.error_messages.push_back("Exception during call tree replay: " +
-                                        std::string(e.what()));
+                                        dstd::String(e.what()));
     }
     auto end_time = std::chrono::steady_clock::now();
     result.total_duration =

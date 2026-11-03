@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -284,7 +285,7 @@ GzipStreamInflater::~GzipStreamInflater() { end(); }
 
 bool GzipStreamInflater::init(int window_bits) {
     end();
-    if (!impl_) impl_ = std::make_unique<Impl>();
+    if (!impl_) impl_ = dstd::make_unique<Impl>();
     impl_->zs = zng_stream{};
     impl_->raw = window_bits < 0;
     if (open_inflate_stream(impl_->zs, impl_->raw ? window_bits : -MAX_WBITS) !=

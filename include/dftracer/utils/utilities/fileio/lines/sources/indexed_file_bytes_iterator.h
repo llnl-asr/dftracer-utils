@@ -14,9 +14,7 @@
 
 #include <cstring>
 #include <iterator>
-#include <memory>
 #include <stdexcept>
-#include <string>
 
 namespace dftracer::utils::utilities::fileio::lines::sources {
 
@@ -42,14 +40,14 @@ class IndexedFileBytesIterator {
    private:
     dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
         reader_;
-    std::unique_ptr<dftracer::utils::utilities::reader::internal::ReaderStream>
+    dstd::UniquePtr<dftracer::utils::utilities::reader::internal::ReaderStream>
         stream_;
     std::size_t start_byte_;
     std::size_t end_byte_;
     std::size_t current_line_num_;
     std::size_t buffer_size_;
-    mutable std::string line_buffer_;    ///< Buffer to hold current line data
-    mutable std::string stream_buffer_;  ///< Buffer for reading from stream
+    mutable dstd::String line_buffer_;    ///< Buffer to hold current line data
+    mutable dstd::String stream_buffer_;  ///< Buffer for reading from stream
     mutable bool stream_done_;
     mutable bool
         has_buffered_line_;  ///< True if line_buffer_ contains a valid line

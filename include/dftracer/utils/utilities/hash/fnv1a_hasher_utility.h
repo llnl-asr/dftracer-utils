@@ -4,13 +4,12 @@
 
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/hash/types.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
 #include <type_traits>
-#include <vector>
 
 namespace dftracer::utils::utilities::hash {
 
@@ -86,7 +85,7 @@ class Fnv1aHasherUtility {
             dstd::StringView(reinterpret_cast<const char*>(&value), sizeof(T)));
     }
 
-    void update(const std::vector<unsigned char>& data) {
+    void update(const dstd::Vector<unsigned char>& data) {
         update(dstd::StringView(reinterpret_cast<const char*>(data.data()),
                                 data.size()));
     }

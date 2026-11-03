@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #define PY_SSIZE_T_CLEAN
@@ -34,9 +36,12 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
         return nullptr;
     }
 
-    // Convert paths to vector<string>
-    std::vector<std::string> paths;
-    if (!parse_str_list(paths_obj, "paths", paths)) return nullptr;
+    // keep std: parse_str_list fills a std::vector<std::string>
+    std::vector<std::string> parsed_paths;
+    if (!parse_str_list(paths_obj, "paths", parsed_paths)) return nullptr;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
+    paths.reserve(parsed_paths.size());
+    for (const auto& p : parsed_paths) paths.emplace_back(p);
 
     // Get runtime
     Runtime* runtime = nullptr;

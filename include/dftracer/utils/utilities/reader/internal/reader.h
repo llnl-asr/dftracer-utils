@@ -3,14 +3,14 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_READER_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/reader/internal/line_processor.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -25,8 +25,8 @@ class Reader {
     // Core metadata accessors
     virtual std::size_t get_max_bytes() const = 0;
     virtual std::size_t get_num_lines() const = 0;
-    virtual const std::string &get_archive_path() const = 0;
-    virtual const std::string &get_index_path() const = 0;
+    virtual const dstd::String &get_archive_path() const = 0;
+    virtual const dstd::String &get_index_path() const = 0;
     virtual void set_buffer_size(std::size_t size) = 0;
 
     // Estimate line count for a byte range (for pre-allocation)
@@ -48,7 +48,7 @@ class Reader {
     virtual coro::CoroTask<std::size_t> read_line_bytes_async(
         std::size_t start_bytes, std::size_t end_bytes, char *buffer,
         std::size_t buffer_size) = 0;
-    virtual coro::CoroTask<std::string> read_lines_async(
+    virtual coro::CoroTask<dstd::String> read_lines_async(
         std::size_t start_line, std::size_t end_line) = 0;
     virtual coro::CoroTask<void> read_lines_with_processor_async(
         std::size_t start_line, std::size_t end_line,
@@ -68,7 +68,7 @@ class Reader {
                                      buffer_size)
             .get();
     }
-    std::string read_lines(std::size_t start_line, std::size_t end_line) {
+    dstd::String read_lines(std::size_t start_line, std::size_t end_line) {
         return read_lines_async(start_line, end_line).get();
     }
     // Stream creation
@@ -108,7 +108,7 @@ class Reader {
      * @param config Stream configuration (use @ref StreamConfig fluent API)
      * @return Unique pointer to stream, or nullptr on error
      */
-    virtual std::unique_ptr<ReaderStream> stream(
+    virtual dstd::UniquePtr<ReaderStream> stream(
         const StreamConfig &config) = 0;
 
     // State management
@@ -116,7 +116,7 @@ class Reader {
     virtual bool is_valid() const = 0;
 
     // Format identification
-    virtual std::string get_format_name() const = 0;
+    virtual dstd::String get_format_name() const = 0;
 
    protected:
     Reader() = default;

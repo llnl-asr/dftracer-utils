@@ -6,18 +6,18 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/arrow/ipc_writer.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::arrow {
 
 struct PartitionWriteStats {
-    std::vector<std::string> files;
-    std::vector<int64_t> row_counts;
+    dstd::Vector<dstd::String> files;
+    dstd::Vector<int64_t> row_counts;
     int64_t total_rows = 0;
     int64_t total_uncompressed_bytes = 0;
 };
@@ -37,7 +37,7 @@ class PartitionWriter {
     PartitionWriter& operator=(PartitionWriter&& other) noexcept;
 
     coro::CoroTask<int> open(
-        const std::string& output_dir, int64_t chunk_size_bytes,
+        dstd::StringView output_dir, int64_t chunk_size_bytes,
         IpcCompression compression = DEFAULT_ARROW_IPC_COMPRESSION);
 
     coro::CoroTask<int> write_batch(ArrowExportResult& batch);
@@ -49,7 +49,7 @@ class PartitionWriter {
     size_t file_count() const noexcept { return file_index_; }
 
    private:
-    std::string output_dir_;
+    dstd::String output_dir_;
     int64_t chunk_size_bytes_ = 0;
     IpcCompression compression_ = DEFAULT_ARROW_IPC_COMPRESSION;
 
@@ -62,10 +62,10 @@ class PartitionWriter {
     int64_t total_bytes_ = 0;
     int64_t total_rows_ = 0;
 
-    std::vector<std::string> files_;
-    std::vector<int64_t> row_counts_;
+    dstd::Vector<dstd::String> files_;
+    dstd::Vector<int64_t> row_counts_;
 
-    std::string generate_filename() const;
+    dstd::String generate_filename() const;
     coro::CoroTask<int> rotate_file();
     int64_t calculate_uncompressed_size(ArrowExportResult& batch);
 };

@@ -36,6 +36,7 @@
 // Helpers
 // ============================================================================
 
+using namespace dftracer::utils;
 namespace {
 
 std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
@@ -58,7 +59,9 @@ std::string make_multimember_pfw_gz(dftu_utils_test::TestEnvironment& env,
     if (single.empty()) return "";
     std::string mm = env.get_dir() + "/mm_" + std::to_string(id) + ".pfw.gz";
     namespace gzc = dftracer::utils::utilities::fileio::compress;
-    gzc::gzip_rechunk_to_members(single, mm, member_bytes, 6).get();
+    gzc::gzip_rechunk_to_members(dstd::String(single), dstd::String(mm),
+                                 member_bytes, 6)
+        .get();
     (void)dftracer::utils::dstd::fs::remove(single);
     return mm;
 }

@@ -2,10 +2,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_SPEC_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_SPEC_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <cstddef>
-#include <string>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -16,18 +16,18 @@ namespace dftracer::utils::utilities::fileio {
  * Used for chunked file processing and splitting operations.
  */
 struct ChunkSpec {
-    std::string file_path;
-    std::string index_path;  ///< Empty for plain text files
+    dstd::String file_path;
+    dstd::String index_path;  ///< Empty for plain text files
     double size_mb;
-    std::size_t start_byte;  ///< Starting byte offset (0-based)
-    std::size_t end_byte;    ///< Ending byte offset (exclusive)
+    std::size_t start_byte;   ///< Starting byte offset (0-based)
+    std::size_t end_byte;     ///< Ending byte offset (exclusive)
 
     ChunkSpec() : size_mb(0.0), start_byte(0), end_byte(0) {}
 
-    ChunkSpec(std::string path, std::string idx, double mb, std::size_t start,
-              std::size_t end)
-        : file_path(std::move(path)),
-          index_path(std::move(idx)),
+    ChunkSpec(dstd::StringView path, dstd::StringView idx, double mb,
+              std::size_t start, std::size_t end)
+        : file_path(path),
+          index_path(idx),
           size_mb(mb),
           start_byte(start),
           end_byte(end) {}

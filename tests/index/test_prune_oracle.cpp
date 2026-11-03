@@ -295,7 +295,8 @@ std::size_t count_json(const std::string& trace, const std::string& index_dir,
                        const std::string& text, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
         utilities::reader::TraceReader reader(
-            {.file_path = trace, .index_dir = index_dir});
+            {.file_path = dstd::String(trace),
+             .index_dir = dstd::String(index_dir)});
         utilities::reader::ReadConfig cfg;
         cfg.query = text;
         cfg.skip_pruning = skip_pruning;
@@ -541,7 +542,7 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
 TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     Corpus corpus;
     auto spill = corpus_options(corpus);
-    spill.index_dir = corpus.env.get_dir() + "/idx_spill";
+    spill.index_dir = dstd::String(corpus.env.get_dir()) + "/idx_spill";
     spill.memory_budget = 64 * 1024;
     index::Indexer::open(corpus.traces, spill).build();
     // The aggregation tier keys its rows by interned string ids that follow the

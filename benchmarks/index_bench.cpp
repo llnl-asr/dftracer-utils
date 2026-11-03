@@ -198,8 +198,8 @@ coro::CoroTask<QuerySet> sample_queries(std::string file) {
     std::map<std::string, int> names, cats, args;
     std::vector<std::int64_t> stamps;
     simdjson::dom::parser parser;
-    auto gen =
-        utilities::fileio::lines::sources::async_streaming_gz_lines(file);
+    auto gen = utilities::fileio::lines::sources::async_streaming_gz_lines(
+        dftracer::utils::dstd::String(file));
     int seen = 0;
     while (auto line = co_await gen.next()) {
         dstd::StringView l = line->content;
@@ -276,8 +276,8 @@ coro::CoroTask<std::map<std::string, std::string>> sample_genesis(
     std::map<std::string, std::vector<double>> metrics;
     int shape = 0;  // 1 long, 2 wide
     simdjson::dom::parser parser;
-    auto gen =
-        utilities::fileio::lines::sources::async_streaming_gz_lines(file);
+    auto gen = utilities::fileio::lines::sources::async_streaming_gz_lines(
+        dftracer::utils::dstd::String(file));
     int seen = 0;
     while (auto line = co_await gen.next()) {
         dstd::StringView l = line->content;

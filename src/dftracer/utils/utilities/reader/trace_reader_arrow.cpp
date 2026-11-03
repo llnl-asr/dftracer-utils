@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/trace/schema.h>
@@ -17,10 +18,7 @@
 #include <simdjson.h>
 
 #include <cstring>
-#include <optional>
-#include <span>
 #include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader {
 
@@ -38,14 +36,14 @@ using utilities::arrow::ColumnType;
 using utilities::arrow::RecordBatchBuilder;
 
 struct ArrowKeyHint {
-    std::string key;
+    dstd::String key;
     std::size_t col_idx = 0;
     ColumnType type = ColumnType::Int64;
     bool valid = false;
 };
 
 inline std::size_t resolve_col_idx(RecordBatchBuilder& builder,
-                                   std::vector<ArrowKeyHint>& hints,
+                                   dstd::Vector<ArrowKeyHint>& hints,
                                    std::size_t pos, dstd::StringView key_sv,
                                    ColumnType type) {
     if (pos < hints.size()) {
@@ -89,7 +87,7 @@ inline std::size_t resolve_col_idx(RecordBatchBuilder& builder,
 // Append a typed scalar value under `key_sv`. Nested objects/arrays are
 // always round-tripped as JSON strings (flattening is one level only).
 void append_scalar_or_json(RecordBatchBuilder& builder,
-                           std::vector<ArrowKeyHint>& hints, std::size_t& pos,
+                           dstd::Vector<ArrowKeyHint>& hints, std::size_t& pos,
                            dstd::StringView key_sv,
                            simdjson::ondemand::value val,
                            simdjson::ondemand::json_type type) {
@@ -160,7 +158,7 @@ void append_scalar_or_json(RecordBatchBuilder& builder,
 // columns; deeper nesting still lands as a JSON string under the flattened
 // key. Returns false on error paths so callers can skip the row.
 bool arrow_row_from_doc(RecordBatchBuilder& builder,
-                        std::vector<ArrowKeyHint>& hints,
+                        dstd::Vector<ArrowKeyHint>& hints,
                         simdjson::ondemand::document_reference doc,
                         bool flatten_objects = false) {
     auto obj_result = doc.get_object();
@@ -217,9 +215,9 @@ void collect_query_fields(simdjson::ondemand::document_reference doc,
 // Build a simdjson-padded buffer containing only the lines in `chunk` that
 // pass the line-level prefilter. For queries with no useful prefilter, the
 // caller should skip this and feed the raw chunk directly.
-std::string collect_matching_lines(dstd::Span<const char> chunk,
-                                   const index::plan::Prefilter& prefilter) {
-    std::string out;
+dstd::String collect_matching_lines(dstd::Span<const char> chunk,
+                                    const index::plan::Prefilter& prefilter) {
+    dstd::String out;
     out.reserve(chunk.size());
     const char* data = chunk.data();
     std::size_t len = chunk.size();
@@ -290,7 +288,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     // the chunk that has the predicate field matches the literal. We still
     // need to skip events that lack the field (e.g., metadata "ph":"M"
     // events lack pid), since the original predicate would reject them.
-    std::vector<std::string> presence_check_paths;
+    dstd::Vector<dstd::String> presence_check_paths;
     if (query && config.chunk_prune_only) {
         const auto& fset = query->fields();
         presence_check_paths.assign(fset.begin(), fset.end());
@@ -302,7 +300,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     // For AND-of-EQ predicates, evaluate directly against simdjson without
     // ValueMap (avoids wyhash + per-field std::string allocation per row).
     // Falls back to the ValueMap path on unsupported AST shapes.
-    std::vector<CompiledEqProbe> compiled_probes;
+    dstd::Vector<CompiledEqProbe> compiled_probes;
     bool use_compiled = false;
     if (query && !config.chunk_prune_only) {
         if (auto p = try_compile_eq_probes(query->root())) {
@@ -318,7 +316,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         auto json_gen = read_json(config);
         RecordBatchBuilder builder;
         dstd::StringArena arena;
-        std::vector<ArrowKeyHint> hints;
+        dstd::Vector<ArrowKeyHint> hints;
         builder.reserve(batch_size);
         for (;;) {
             auto opt = co_await json_gen.next();
@@ -358,7 +356,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     simdjson::ondemand::parser bulk_parser;
     RecordBatchBuilder builder;
     dstd::StringArena arena;
-    std::vector<ArrowKeyHint> hints;
+    dstd::Vector<ArrowKeyHint> hints;
     builder.reserve(batch_size);
 
     auto maybe_flush = [&builder, &arena, batch_size](

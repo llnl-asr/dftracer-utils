@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -23,7 +24,7 @@ constexpr std::size_t INITIAL_TAIL = 1u << 20;  // 1 MiB
 // for the gzip magic finds its start, validated by decompressing to exactly
 // that size. Window grows until the member fits or the whole file is scanned.
 bool decompress_last_member(std::ifstream& in, std::streamoff fsize,
-                            std::vector<std::uint8_t>& out) {
+                            dstd::Vector<std::uint8_t>& out) {
     unsigned char isz[4];
     in.seekg(fsize - 4);
     in.read(reinterpret_cast<char*>(isz), 4);
@@ -63,7 +64,7 @@ bool decompress_last_member(std::ifstream& in, std::streamoff fsize,
 // small single-member file), and decompresses it. Best-effort: fails (caller
 // defaults to US) for a single-member file larger than the prefix.
 bool decompress_first_member(std::ifstream& in, std::streamoff fsize,
-                             std::vector<std::uint8_t>& out) {
+                             dstd::Vector<std::uint8_t>& out) {
     const std::size_t cap =
         std::min<std::size_t>(INITIAL_TAIL, static_cast<std::size_t>(fsize));
     std::vector<unsigned char> buf(cap);
@@ -107,7 +108,7 @@ TimeMetric read_time_metric(const std::string& trace_path) {
     const std::streamoff fsize = in.tellg();
     if (fsize < 18) return TimeMetric::Us;
 
-    std::vector<std::uint8_t> uc;
+    dstd::Vector<std::uint8_t> uc;
     if (!decompress_first_member(in, fsize, uc)) return TimeMetric::Us;
 
     simdjson::dom::parser parser;
@@ -160,7 +161,7 @@ std::vector<TraceConfig> read_trace_config(const std::string& trace_path) {
     const std::streamoff fsize = in.tellg();
     if (fsize < 18) return out;  // smaller than an empty gzip member
 
-    std::vector<std::uint8_t> uc;
+    dstd::Vector<std::uint8_t> uc;
     if (!decompress_last_member(in, fsize, uc)) return out;
 
     std::size_t pos = 0;

@@ -4,6 +4,8 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/file_decompressor_utility.h>
@@ -15,18 +17,16 @@
 
 #include <cstdint>
 #include <mutex>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::utilities {
 namespace {
 
 using dataframe::Series;
 
-std::string to_string(const char* p, std::int32_t n) {
-    return (p && n > 0) ? std::string(p, static_cast<std::size_t>(n))
-                        : std::string();
+dstd::String to_string(const char* p, std::int32_t n) {
+    return (p && n > 0) ? dstd::String(p, static_cast<std::size_t>(n))
+                        : dstd::String();
 }
 
 // The utilities are coroutines; a registry op is synchronous. Drive one to
@@ -43,9 +43,9 @@ bool run_sync(const char* name, Fn body) {
     }
 }
 
-dftu_series* paths_column(const std::vector<filesystem::FileEntry>& entries,
+dftu_series* paths_column(const dstd::Vector<filesystem::FileEntry>& entries,
                           bool files_only) {
-    std::vector<std::string> paths;
+    dstd::Vector<dstd::StringView> paths;
     paths.reserve(entries.size());
     for (const filesystem::FileEntry& e : entries) {
         if (files_only && !e.is_regular_file) continue;
@@ -57,7 +57,7 @@ dftu_series* paths_column(const std::vector<filesystem::FileEntry>& entries,
 dftu_series* scan_dir(const char* root, std::int32_t root_len) {
     filesystem::DirectoryScannerUtilityInput input{
         dstd::StringView(root, static_cast<std::size_t>(root_len))};
-    std::vector<filesystem::FileEntry> entries;
+    dstd::Vector<filesystem::FileEntry> entries;
     if (!run_sync("dftu.fs.scan_dir",
                   [&](coro::Scope& scope) -> coro::CoroTask<void> {
                       filesystem::DirectoryScannerUtility scanner;
@@ -72,7 +72,7 @@ dftu_series* scan_dir_pattern(const char* root, std::int32_t root_len,
                               const char* pattern, std::int32_t pattern_len) {
     filesystem::PatternDirectoryScannerUtilityInput input(
         to_string(root, root_len), {to_string(pattern, pattern_len)});
-    std::vector<filesystem::FileEntry> entries;
+    dstd::Vector<filesystem::FileEntry> entries;
     if (!run_sync("dftu.fs.scan_dir_pattern",
                   [&](coro::Scope& scope) -> coro::CoroTask<void> {
                       filesystem::PatternDirectoryScannerUtility scanner;

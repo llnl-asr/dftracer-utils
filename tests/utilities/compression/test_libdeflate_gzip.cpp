@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <latch>
-#include <string>
 #include <thread>
-#include <vector>
 
+using namespace dftracer::utils;
 using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
 using dftracer::utils::utilities::fileio::compress::GzipMemberDecompressor;
 
 namespace {
 
-std::vector<std::uint8_t> make_payload(std::size_t n, unsigned seed) {
+dstd::Vector<std::uint8_t> make_payload(std::size_t n, unsigned seed) {
     // Deterministic, compressible-ish bytes (no Math.random equivalent needed).
-    std::vector<std::uint8_t> v(n);
+    dstd::Vector<std::uint8_t> v(n);
     std::uint32_t x = seed * 2654435761u + 1u;
     for (std::size_t i = 0; i < n; ++i) {
         x = x * 1664525u + 1013904223u;
@@ -37,13 +38,13 @@ TEST_SUITE("libdeflate_gzip") {
             0xff, 0x4b, 0x49, 0x2b, 0x29, 0x4a, 0x4c, 0x4e, 0x2d,
             0x52, 0x48, 0x19, 0x65, 0x8c, 0x32, 0x48, 0x67, 0x00,
             0x00, 0x13, 0xc0, 0xd8, 0x38, 0x40, 0x02, 0x00, 0x00};
-        std::string want;
+        dstd::String want;
         for (int i = 0; i < 64; ++i) want += "dftracer ";
 
         constexpr int THREADS = 8;
         std::latch start(THREADS);
-        std::vector<int> ok(THREADS, 0);
-        std::vector<std::thread> threads;
+        dstd::Vector<int> ok(THREADS, 0);
+        dstd::Vector<std::thread> threads;
         for (int t = 0; t < THREADS; ++t)
             threads.emplace_back([&, t] {
                 start.arrive_and_wait();
@@ -51,7 +52,7 @@ TEST_SUITE("libdeflate_gzip") {
                 auto out =
                     dec.decompress_member(MEMBER, sizeof(MEMBER), want.size());
                 ok[static_cast<std::size_t>(t)] =
-                    out && std::string(out->begin(), out->end()) == want;
+                    out && dstd::String(out->begin(), out->end()) == want;
             });
         for (auto& th : threads) th.join();
         for (int v : ok) CHECK(v == 1);
@@ -87,13 +88,13 @@ TEST_SUITE("libdeflate_gzip") {
         REQUIRE(mb.has_value());
 
         // Concatenate the two gzip members into one buffer (multi-member gzip).
-        std::vector<std::uint8_t> file;
+        dstd::Vector<std::uint8_t> file;
         file.insert(file.end(), ma->begin(), ma->end());
         file.insert(file.end(), mb->begin(), mb->end());
 
         // Member 1: decode from offset 0; in_bytes tells us where member 2
         // starts.
-        std::vector<std::uint8_t> out_a(a.size());
+        dstd::Vector<std::uint8_t> out_a(a.size());
         auto r1 = dec.decompress(file.data(), file.size(), out_a.data(),
                                  out_a.size());
         REQUIRE(r1.has_value());
@@ -105,7 +106,7 @@ TEST_SUITE("libdeflate_gzip") {
         // Member 2: decode starting exactly after member 1.
         const std::uint8_t* m2 = file.data() + r1->in_bytes;
         const std::size_t m2_len = file.size() - r1->in_bytes;
-        std::vector<std::uint8_t> out_b(b.size());
+        dstd::Vector<std::uint8_t> out_b(b.size());
         auto r2 = dec.decompress(m2, m2_len, out_b.data(), out_b.size());
         REQUIRE(r2.has_value());
         CHECK(r2->out_bytes == b.size());
@@ -131,7 +132,7 @@ TEST_SUITE("libdeflate_gzip") {
         auto member = comp.compress_member(payload.data(), payload.size());
         REQUIRE(member.has_value());
 
-        std::vector<std::uint8_t> too_small(payload.size() / 2);
+        dstd::Vector<std::uint8_t> too_small(payload.size() / 2);
         auto out = dec.decompress(member->data(), member->size(),
                                   too_small.data(), too_small.size());
         CHECK_FALSE(out.has_value());
@@ -139,8 +140,8 @@ TEST_SUITE("libdeflate_gzip") {
 
     TEST_CASE("rejects non-gzip input") {
         GzipMemberDecompressor dec;
-        const std::vector<std::uint8_t> junk(64, 0xAB);
-        std::vector<std::uint8_t> out(256);
+        const dstd::Vector<std::uint8_t> junk(64, 0xAB);
+        dstd::Vector<std::uint8_t> out(256);
         auto r =
             dec.decompress(junk.data(), junk.size(), out.data(), out.size());
         CHECK_FALSE(r.has_value());

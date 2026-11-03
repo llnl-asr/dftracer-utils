@@ -76,7 +76,8 @@ std::uint64_t run_writer(
     o.member_size = member;
     o.level = level;
     o.compress = comp;
-    auto w = fileio::GzipLineWriterBlocking::open(path, std::move(o));
+    auto w = fileio::GzipLineWriterBlocking::open(
+        dftracer::utils::dstd::String(path), std::move(o));
     if (!w) {
         std::fprintf(stderr, "open failed\n");
         std::exit(1);
@@ -107,7 +108,7 @@ std::uint64_t run_pgzip(const std::string& data, const std::string& path) {
 
     auto worker = [&] {
         compress::GzipMemberCompressor c(6);
-        std::vector<std::uint8_t> scratch;
+        dftracer::utils::dstd::Vector<std::uint8_t> scratch;
         for (;;) {
             std::size_t i;
             {

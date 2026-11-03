@@ -335,8 +335,8 @@ TEST_SUITE("IndexedFileReader") {
             REQUIRE(reader != nullptr);
 
             CHECK(reader->get_num_lines() == 10);
-            CHECK(reader->get_archive_path() == gz_path);
-            CHECK(reader->get_index_path() ==
+            CHECK(dstd::StringView(reader->get_archive_path()) == gz_path);
+            CHECK(dstd::StringView(reader->get_index_path()) ==
                   determine_index_path(gz_path, ""));
         }
     }

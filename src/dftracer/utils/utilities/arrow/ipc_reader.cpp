@@ -2,7 +2,11 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/ipc_reader.h>
 #include <nanoarrow/nanoarrow.h>
 #include <nanoarrow/nanoarrow_ipc.h>
@@ -107,7 +111,7 @@ void IpcReader::close() {
 // open / read_footer
 // ---------------------------------------------------------------------------
 
-int IpcReader::open(const std::string& path) {
+int IpcReader::open(dstd::CStringView path) {
     if (is_open()) return -1;
 
 #ifdef _WIN32
@@ -324,8 +328,8 @@ ArrowExportResult IpcReader::read_batch(std::size_t index) {
 // read_all / for_each_batch
 // ---------------------------------------------------------------------------
 
-std::vector<ArrowExportResult> IpcReader::read_all() {
-    std::vector<ArrowExportResult> results;
+dstd::Vector<ArrowExportResult> IpcReader::read_all() {
+    dstd::Vector<ArrowExportResult> results;
     results.reserve(num_batches_);
 
     for (std::size_t i = 0; i < num_batches_; ++i) {
@@ -338,7 +342,8 @@ std::vector<ArrowExportResult> IpcReader::read_all() {
     return results;
 }
 
-int IpcReader::for_each_batch(std::function<int(ArrowExportResult&)> callback) {
+int IpcReader::for_each_batch(
+    dstd::Function<int(ArrowExportResult&)> callback) {
     for (std::size_t i = 0; i < num_batches_; ++i) {
         auto batch = read_batch(i);
         if (!batch.valid()) {

@@ -6,6 +6,8 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_partition.h>
 #include <dftracer/utils/index/index.h>
@@ -64,12 +66,16 @@ static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
         return NULL;
     }
 
-    std::vector<std::string> patterns;
+    // keep std: parse_string_seq fills a std::vector<std::string>
+    std::vector<std::string> parsed_patterns;
     if (patterns_obj && patterns_obj != Py_None) {
         if (!parse_string_seq(patterns_obj, "patterns must be a sequence",
-                              patterns))
+                              parsed_patterns))
             return NULL;
     }
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> patterns;
+    patterns.reserve(parsed_patterns.size());
+    for (const auto &p : parsed_patterns) patterns.emplace_back(p);
 
     Runtime *rt = nullptr;
     if (runtime_arg && runtime_arg != Py_None) {
@@ -92,7 +98,7 @@ static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
 
     PatternDirectoryScannerUtilityInput input(directory, patterns,
                                               recursive != 0, true);
-    std::vector<FileEntry> entries;
+    dftracer::utils::dstd::Vector<FileEntry> entries;
     if (!run_blocking([&] {
             rt->submit(dftracer::utils::coro::with_scope(
                            [in = std::move(input),
@@ -131,6 +137,7 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
     if (!PyArg_ParseTuple(args, "On", &entries_obj, &num_workers)) return NULL;
     if (num_workers <= 0) num_workers = 1;
 
+    // keep std: plan_lpt_partition takes a std::vector
     std::vector<FileEntry> entries;
     PyObject *seq = PySequence_Fast(entries_obj,
                                     "entries must be a sequence of "

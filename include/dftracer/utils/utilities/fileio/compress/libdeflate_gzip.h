@@ -3,11 +3,10 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_LIBDEFLATE_GZIP_H
 
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
-#include <vector>
 
 /// Opaque handles keep <libdeflate.h> out of this header.
 struct libdeflate_decompressor;
@@ -56,7 +55,7 @@ class GzipMemberDecompressor {
                                  void* out, std::size_t out_cap,
                                  DecompressResult& result) const;
 
-    dstd::Optional<std::vector<std::uint8_t>> decompress_member(
+    dstd::Optional<dstd::Vector<std::uint8_t>> decompress_member(
         const void* comp, std::size_t comp_len,
         std::size_t uncompressed_size) const;
 
@@ -75,7 +74,7 @@ class GzipMemberDecompressor {
 /// invalid rather than short, so corruption is never recovered. The kept bytes
 /// are not checksum-verified.
 dstd::Optional<std::size_t> decode_truncated_member(
-    const void* comp, std::size_t comp_len, std::vector<std::uint8_t>& out);
+    const void* comp, std::size_t comp_len, dstd::Vector<std::uint8_t>& out);
 
 /// Compresses a whole buffer into one gzip member. Reusable, not thread-safe,
 /// move-only.
@@ -99,12 +98,12 @@ class GzipMemberCompressor {
     /// `out`'s capacity is reused when large enough and the worst-case buffer
     /// is never allocated in `out`. Returns false on failure, leaving `out` in
     /// an unspecified state. Prefer this over compress_member() on hot paths.
-    bool compress_member_into(std::vector<std::uint8_t>& out, const void* data,
+    bool compress_member_into(dstd::Vector<std::uint8_t>& out, const void* data,
                               std::size_t len) const;
 
     /// One-shot convenience: allocates a fresh buffer per call. Prefer
     /// compress_member_into() when compressing repeatedly.
-    dstd::Optional<std::vector<std::uint8_t>> compress_member(
+    dstd::Optional<dstd::Vector<std::uint8_t>> compress_member(
         const void* data, std::size_t len) const;
 
     bool valid() const { return c_ != nullptr; }

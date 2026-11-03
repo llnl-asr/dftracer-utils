@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/cache/mv_store.h>
@@ -335,7 +336,7 @@ coro::CoroTask<ScanPlan> from_directory(std::string dir,
         /*recursive=*/true,
         /*populate_size=*/false);
 
-    std::vector<utilities::filesystem::FileEntry> entries;
+    dstd::Vector<utilities::filesystem::FileEntry> entries;
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         entries = co_await scanner(scope, input);
     });

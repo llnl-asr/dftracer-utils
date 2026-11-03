@@ -61,7 +61,8 @@ std::size_t count_rows(const std::string& trace, const std::string& index_dir,
                        const std::string& query, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
         utilities::reader::TraceReader reader(
-            {.file_path = trace, .index_dir = index_dir});
+            {.file_path = dstd::String(trace),
+             .index_dir = dstd::String(index_dir)});
         utilities::reader::ReadConfig cfg;
         cfg.query = query;
         cfg.skip_pruning = skip_pruning;

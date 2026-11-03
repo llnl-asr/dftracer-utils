@@ -13,8 +13,6 @@
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -22,9 +20,9 @@ namespace dftracer::utils::utilities::fileio {
  * @brief Input for file compression workflow.
  */
 struct FileCompressionUtilityInput {
-    std::string input_path;   ///< Input file path
-    std::string output_path;  ///< Output .gz file path (empty = auto-generate)
-    int compression_level;    ///< libdeflate level (0-12)
+    dstd::String input_path;   ///< Input file path
+    dstd::String output_path;  ///< Output .gz file path (empty = auto-generate)
+    int compression_level;     ///< libdeflate level (0-12)
     /// Uncompressed bytes per gzip member; the output is multi-member so it can
     /// be inflated/indexed in parallel.
     std::size_t member_size;
@@ -33,20 +31,20 @@ struct FileCompressionUtilityInput {
      * @brief Create input with auto-generated output path.
      */
     static FileCompressionUtilityInput from_file(
-        const std::string& input_path, int compression_level = 6,
+        dstd::StringView input_path, int compression_level = 6,
         std::size_t member_size =
             common::constants::indexer::DEFAULT_CHECKPOINT_SIZE) {
         return FileCompressionUtilityInput{
-            input_path,
-            input_path + ".gz",  // Auto-generate output path
+            dstd::String(input_path),
+            dstd::String(input_path) + ".gz",  // Auto-generate output path
             compression_level, member_size};
     }
 
     /**
      * @brief Set output path.
      */
-    FileCompressionUtilityInput& with_output(const std::string& path) {
-        output_path = path;
+    FileCompressionUtilityInput& with_output(dstd::StringView path) {
+        output_path = dstd::String(path);
         return *this;
     }
 
@@ -74,8 +72,8 @@ struct FileCompressionUtilityInput {
  * struct carries only the successful-result data.
  */
 struct FileCompressionUtilityOutput {
-    std::string input_path;       ///< Original input file path
-    std::string output_path;      ///< Compressed output file path
+    dstd::String input_path;      ///< Original input file path
+    dstd::String output_path;     ///< Compressed output file path
     std::size_t original_size;    ///< Original file size (bytes)
     std::size_t compressed_size;  ///< Compressed file size (bytes)
 
@@ -100,13 +98,13 @@ struct FileCompressionUtilityOutput {
  * Usage:
  * @code
  * // Single file compression
- * auto compressor = std::make_shared<FileCompressor>();
+ * auto compressor = dstd::make_shared<FileCompressor>();
  * auto input = FileCompressionInput::from_file("large_file.txt")
  *                  .with_compression_level(9);
  * auto result = compressor->process(input);
  *
  * // Parallel batch compression
- * auto batch_compressor = std::make_shared<
+ * auto batch_compressor = dstd::make_shared<
  *     BatchProcessor<FileCompressionUtilityInput,
  * FileCompressionUtilityOutput>>( [compressor](const
  * FileCompressionUtilityInput& input, coro::Scope& ctx) { return
@@ -114,7 +112,7 @@ struct FileCompressionUtilityOutput {
  *         }
  * );
  *
- * std::vector<FileCompressionInput> files = { ... };
+ * dstd::Vector<FileCompressionInput> files = { ... };
  * auto results = batch_compressor->process(files);
  * @endcode
  */
@@ -158,10 +156,10 @@ class FileCompressorUtility {
             GzipWriterOptions opts;
             opts.member_size = member_size;
             opts.level = level;
-            auto writer = common::unwrap(
-                co_await GzipLineWriter::open(input.output_path, opts));
+            auto writer = common::unwrap(co_await GzipLineWriter::open(
+                input.output_path, std::move(opts)));
 
-            std::string carry;
+            dstd::String carry;
             auto gen = fileio::read_binary_file(dstd::Path(input.input_path),
                                                 member_size);
             for (;;) {
@@ -192,7 +190,7 @@ class FileCompressorUtility {
 
             co_return common::make_error(
                 common::ErrorCode::Compression,
-                std::string("Compression failed: ") + e.what());
+                dstd::String("Compression failed: ") + e.what());
         }
 
         FileCompressionUtilityOutput payload;

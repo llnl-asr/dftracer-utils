@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -10,11 +12,8 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <map>
 #include <random>
 #include <stdexcept>
-#include <string_view>
-#include <unordered_set>
 #include <utility>
 
 namespace dftracer::utils::utilities::dlio {
@@ -31,10 +30,10 @@ struct ComponentAccumulator {
     // Per-(pid, time_bucket) entries used to materialize per-rank sample seqs.
     // Outer map sorts by pid for deterministic rank assignment; inner sorts by
     // time_bucket so the resulting sample sequence is in trace order.
-    std::map<std::uint64_t, std::map<std::uint64_t, std::vector<double>>>
+    dstd::Map<std::uint64_t, dstd::Map<std::uint64_t, dstd::Vector<double>>>
         per_pid_bucket_samples;
     // Boundary list (in microseconds) for sweep_union of trace-side wall clock.
-    std::vector<Boundary> boundaries;
+    dstd::Vector<Boundary> boundaries;
     // Merged duration quantiles across all entries, null until one has values.
     dstd::SharedPtr<QuantileStore> quantiles;
     // Aggregate accumulators.
@@ -62,7 +61,7 @@ void apply_minmax(ComponentAccumulator& acc, double min_us, double max_us) {
 // clamped to `max_samples` if non-zero.
 void synthesize_samples(const agg::AggPartial& partial,
                         std::uint64_t max_samples, std::mt19937_64& rng,
-                        std::vector<double>& out) {
+                        dstd::Vector<double>& out) {
     if (partial.count == 0) return;
     const auto desired =
         max_samples == 0 ? partial.count : std::min(partial.count, max_samples);
@@ -87,13 +86,13 @@ void synthesize_samples(const agg::AggPartial& partial,
 
 // Drains the per-(pid, bucket) sample buckets in `acc` into per-rank flat
 // vectors, in pid-ascending and then bucket-ascending order.
-std::vector<std::vector<double>> flatten_per_rank(
+dstd::Vector<dstd::Vector<double>> flatten_per_rank(
     const ComponentAccumulator& acc,
-    const std::vector<std::uint64_t>& rank_pids) {
-    std::vector<std::vector<double>> out;
+    const dstd::Vector<std::uint64_t>& rank_pids) {
+    dstd::Vector<dstd::Vector<double>> out;
     out.reserve(rank_pids.size());
     for (auto pid : rank_pids) {
-        std::vector<double> rank_samples;
+        dstd::Vector<double> rank_samples;
         auto it = acc.per_pid_bucket_samples.find(pid);
         if (it == acc.per_pid_bucket_samples.end()) {
             out.emplace_back();
@@ -111,7 +110,7 @@ std::vector<std::vector<double>> flatten_per_rank(
 
 }  // namespace
 
-AggregatedTraces load_aggregated_traces(const std::string& index_path,
+AggregatedTraces load_aggregated_traces(dstd::StringView index_path,
                                         const dstd::Vector<dstd::String>& files,
                                         const agg::AggregationConfig& config,
                                         const TraceLoaderOptions& options) {
@@ -141,7 +140,7 @@ AggregatedTraces load_aggregated_traces(const std::string& index_path,
     if (!queried) {
         throw common::DFTUtilsException(
             common::ErrorCode::Io, "dlio: aggregation query failed: " +
-                                       std::string(queried.error().format()));
+                                       dstd::String(queried.error().format()));
     }
     trace::AggQueryResult& result = *queried;
     out.chunks_reread = result.stats.chunks_reread;
@@ -152,7 +151,7 @@ AggregatedTraces load_aggregated_traces(const std::string& index_path,
     ComponentAccumulator acc_preprocess;
     ComponentAccumulator acc_getitem;
 
-    std::unordered_set<std::uint64_t> pid_set;
+    dstd::HashSet<std::uint64_t> pid_set;
     std::mt19937_64 rng(options.seed);
 
     // The row map has no order, and the sample draws share one generator, so
@@ -234,7 +233,7 @@ AggregatedTraces load_aggregated_traces(const std::string& index_path,
 
     // Rank PIDs are the pids that emitted at least one fetch.block event.
     // fetch_iter is intentionally not required since some traces omit it.
-    std::vector<std::uint64_t> rank_pids;
+    dstd::Vector<std::uint64_t> rank_pids;
     rank_pids.reserve(acc_fetch_block.per_pid_bucket_samples.size());
     for (const auto& [pid, _] : acc_fetch_block.per_pid_bucket_samples) {
         rank_pids.push_back(pid);
@@ -307,7 +306,7 @@ AggregatedTraces load_aggregated_traces(const std::string& index_path,
     // approximate rank wall clock as sum(per-entry te-ts) for that rank's
     // fetch_block keys; matches the granularity available without raw events.
     out.trace_per_rank_throughput.reserve(rank_pids.size());
-    std::vector<double> per_rank_wall;
+    dstd::Vector<double> per_rank_wall;
     per_rank_wall.reserve(rank_pids.size());
     for (auto pid : rank_pids) {
         double wall_us = 0.0;
@@ -373,26 +372,30 @@ void overlay_selector(const YAML::Node& root, const char* key,
                       EventSelector& sel) {
     const auto node = root[key];
     if (!node || !node.IsMap()) return;
+    // keep std: yaml-cpp converts to std::string
     if (const auto cat = node["cat"]) sel.cat = cat.as<std::string>();
+    // keep std: yaml-cpp converts to std::string
     if (const auto name = node["name"]) sel.name = name.as<std::string>();
 }
 
 }  // namespace
 
-void load_event_map(const std::string& path, TraceLoaderOptions& options) {
+void load_event_map(dstd::StringView path, TraceLoaderOptions& options) {
     YAML::Node root;
     try {
-        root = YAML::LoadFile(path);
+        root = YAML::LoadFile(
+            std::string(path));  // keep std: yaml-cpp uses std::string
     } catch (const YAML::Exception& e) {
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
-            "dlio: failed to parse event map " + path + ": " + e.what());
+            common::str_cat("dlio: failed to parse event map ", path, ": ",
+                            e.what()));
     }
     if (!root.IsMap()) {
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
-            "dlio: event map " + path +
-                " must be a mapping of component names");
+            common::str_cat("dlio: event map ", path,
+                            " must be a mapping of component names"));
     }
     overlay_selector(root, "fetch_block", options.fetch_block);
     overlay_selector(root, "fetch_iter", options.fetch_iter);

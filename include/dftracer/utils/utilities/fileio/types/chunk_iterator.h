@@ -5,11 +5,11 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/vector.h>
 
-#include <fstream>
+#include <cstdio>
 #include <iterator>
-#include <memory>
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -26,14 +26,14 @@ class ChunkIterator {
     struct State {
         dstd::Path path;
         std::size_t chunk_size;
-        std::ifstream file;
-        std::vector<unsigned char> buffer;
+        dstd::ScopedFile file;
+        dstd::Vector<unsigned char> buffer;
         dstd::ByteView current_view;
         bool is_end = false;
 
         State(dstd::Path p, std::size_t cs)
             : path(std::move(p)), chunk_size(cs), buffer(cs) {
-            file.open(path.c_str(), std::ios::binary);
+            file.reset(std::fopen(path.c_str(), "rb"));
             if (!file) {
                 is_end = true;
             } else {
@@ -42,13 +42,11 @@ class ChunkIterator {
         }
 
         void read_next_chunk() {
-            file.read(reinterpret_cast<char*>(buffer.data()),
-                      static_cast<std::streamsize>(chunk_size));
-            std::streamsize bytes_read = file.gcount();
+            const std::size_t bytes_read =
+                std::fread(buffer.data(), 1, chunk_size, file.get());
 
             if (bytes_read > 0) {
-                current_view = dstd::ByteView(
-                    buffer.data(), static_cast<std::size_t>(bytes_read));
+                current_view = dstd::ByteView(buffer.data(), bytes_read);
             } else {
                 is_end = true;
             }
@@ -67,7 +65,7 @@ class ChunkIterator {
     ChunkIterator() : state_(nullptr) {}
 
     ChunkIterator(dstd::Path path, std::size_t chunk_size = 64 * 1024)
-        : state_(std::make_shared<State>(std::move(path), chunk_size)) {
+        : state_(dstd::make_shared<State>(std::move(path), chunk_size)) {
         if (state_->is_end) {
             state_ = nullptr;
         }
@@ -96,7 +94,8 @@ class ChunkIterator {
         if (!state_ && !other.state_) return true;
         if (!state_ || !other.state_) return false;
         return state_->path.str() == other.state_->path.str() &&
-               state_->file.tellg() == other.state_->file.tellg();
+               std::ftell(state_->file.get()) ==
+                   std::ftell(other.state_->file.get());
     }
 
     bool operator!=(const ChunkIterator& other) const {

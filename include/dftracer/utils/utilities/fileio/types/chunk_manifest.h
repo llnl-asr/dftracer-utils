@@ -2,9 +2,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_MANIFEST_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_MANIFEST_H
 
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/types/chunk_spec.h>
-
-#include <vector>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -15,12 +14,12 @@ namespace dftracer::utils::utilities::fileio {
  * source files or file ranges to be processed together.
  */
 struct ChunkManifest {
-    std::vector<ChunkSpec> specs;
+    dstd::Vector<ChunkSpec> specs;
     double total_size_mb;
 
     ChunkManifest() : total_size_mb(0.0) {}
 
-    ChunkManifest(std::vector<ChunkSpec> chunk_specs, double total_mb)
+    ChunkManifest(dstd::Vector<ChunkSpec> chunk_specs, double total_mb)
         : specs(std::move(chunk_specs)), total_size_mb(total_mb) {}
 
     bool operator==(const ChunkManifest& other) const {

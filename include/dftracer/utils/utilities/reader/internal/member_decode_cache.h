@@ -5,8 +5,10 @@
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/cache/eviction_policy.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <array>
@@ -16,7 +18,6 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -24,7 +25,7 @@ namespace dftracer::utils::utilities::reader::internal {
 /// consumed size is cached alongside the bytes because a cache *hit* still
 /// needs it to advance the reader to the next member.
 struct DecodedMember {
-    std::vector<std::uint8_t> data;
+    dstd::Vector<std::uint8_t> data;
     std::uint64_t compressed_size = 0;
 };
 
@@ -73,7 +74,7 @@ namespace dftracer::utils::utilities::reader::internal {
 class MemberDecodeCache {
    public:
     using Bytes = dstd::SharedPtr<const DecodedMember>;
-    using Producer = std::function<coro::CoroTask<Bytes>()>;
+    using Producer = dstd::Function<coro::CoroTask<Bytes>()>;
 
     static constexpr std::size_t NSHARDS = 16;
     static_assert((NSHARDS & (NSHARDS - 1)) == 0,
@@ -118,7 +119,7 @@ class MemberDecodeCache {
                     shard.policy->touch(key);
                 }
             } else {
-                entry = std::make_shared<Entry>();
+                entry = dstd::make_shared<Entry>();
                 shard.map.emplace(key, entry);
                 // Not tracked for eviction until ready, so in-flight entries
                 // are never evicted out from under their waiters.
@@ -170,6 +171,7 @@ class MemberDecodeCache {
     struct Shard {
         std::mutex mu;
         ankerl::unordered_dense::map<MemberKey, dstd::SharedPtr<Entry>> map;
+        // keep std: make_eviction_policy returns a std::unique_ptr
         std::unique_ptr<dstd::cache::EvictionPolicy<MemberKey>> policy;
     };
 

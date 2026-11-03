@@ -10,7 +10,6 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
-#include <thread>
 
 namespace dftracer::utils::utilities::replay {
 
@@ -19,8 +18,8 @@ namespace {
 /**
  * Create directory path if it doesn't exist
  */
-bool ensure_directory_exists(const std::string& path) {
-    std::string dir_path = path.substr(0, path.find_last_of('/'));
+bool ensure_directory_exists(dstd::StringView path) {
+    dstd::String dir_path(path.substr(0, path.rfind('/')));
     if (dir_path.empty() || dir_path == path) return true;
 
     struct stat st;
@@ -81,7 +80,7 @@ bool PosixExecutor::execute_open(const Trace& trace,
     DFTRACER_UTILS_LOG_DEBUG("Executing POSIX open");
 
     if (!trace.fhash.empty()) {
-        std::string file_path;
+        dstd::String file_path;
         if (config.output_directory.empty()) {
             file_path.reserve(12 + trace.fhash.size());
             file_path = "replay_file_";

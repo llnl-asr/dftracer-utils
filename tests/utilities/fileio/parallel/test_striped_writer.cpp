@@ -3,6 +3,9 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <doctest/doctest.h>
@@ -10,7 +13,6 @@
 
 #include <cstdio>
 #include <fstream>
-#include <set>
 #include <sstream>
 #include <string>
 
@@ -20,31 +22,32 @@ using namespace dftracer::utils::utilities::fileio::parallel;
 
 namespace {
 
-std::string tmp_path(const char* name) {
-    return std::string(dftu_utils_test::make_unique_test_path(name).str());
+dstd::String tmp_path(const char* name) {
+    return dstd::String(dftu_utils_test::make_unique_test_path(name).str());
 }
 
-std::string read_all(const std::string& path) {
+dstd::String read_all(const dstd::String& path) {
     std::ifstream f(path.c_str(), std::ios::binary);
     std::stringstream ss;
     ss << f.rdbuf();
-    return ss.str();
+    return dstd::String(ss.str());
 }
 
-dstd::ByteView sv(const std::string& s) {
+dstd::ByteView sv(const dstd::String& s) {
     return dstd::ByteView(s.data(), s.size());
 }
 
 }  // namespace
 
 TEST_CASE("StripedWriter - header, chunks, footer land in single file") {
-    std::string path = tmp_path("test_striped_basic.txt");
+    dstd::String path = tmp_path("test_striped_basic.txt");
     std::remove(path.c_str());
 
     Runtime runtime(2);
     auto task = [&]() -> CoroTask<int> {
         auto w = make_striped_writer();
-        if (co_await w->open(path, 4, false, nullptr) != 0) co_return 1;
+        if (co_await w->open(dstd::String(path), 4, false, nullptr) != 0)
+            co_return 1;
         if (co_await w->write_header(sv("HDR\n")) != 0) co_return 2;
         if (co_await w->write_chunk(0, sv("worker0\n")) != 0) co_return 3;
         if (co_await w->write_chunk(1, sv("worker1\n")) != 0) co_return 4;
@@ -59,11 +62,11 @@ TEST_CASE("StripedWriter - header, chunks, footer land in single file") {
     auto content = read_all(path);
     // All bytes must be present regardless of interleave order.
     CHECK(content.size() ==
-          std::string("HDR\nworker0\nworker1\nworker2\nEND\n").size());
+          dstd::String("HDR\nworker0\nworker1\nworker2\nEND\n").size());
 
-    std::set<std::string> lines;
+    dstd::Set<dstd::String> lines;
     std::stringstream ss(content);
-    std::string line;
+    dstd::String line;
     while (std::getline(ss, line)) lines.insert(line);
     CHECK(lines.count("HDR") == 1);
     CHECK(lines.count("worker0") == 1);
@@ -75,13 +78,14 @@ TEST_CASE("StripedWriter - header, chunks, footer land in single file") {
 }
 
 TEST_CASE("StripedWriter - empty chunks are no-ops") {
-    std::string path = tmp_path("test_striped_empty.txt");
+    dstd::String path = tmp_path("test_striped_empty.txt");
     std::remove(path.c_str());
 
     Runtime runtime(2);
     auto task = [&]() -> CoroTask<int> {
         auto w = make_striped_writer();
-        if (co_await w->open(path, 2, false, nullptr) != 0) co_return 1;
+        if (co_await w->open(dstd::String(path), 2, false, nullptr) != 0)
+            co_return 1;
         if (co_await w->write_chunk(0, dstd::ByteView()) != 0) co_return 2;
         if (co_await w->write_chunk(1, dstd::ByteView()) != 0) co_return 3;
         if (co_await w->close() != 0) co_return 4;
@@ -94,14 +98,15 @@ TEST_CASE("StripedWriter - empty chunks are no-ops") {
 }
 
 TEST_CASE("StripedWriter - output_paths returns single entry") {
-    std::string path = tmp_path("test_striped_paths.txt");
+    dstd::String path = tmp_path("test_striped_paths.txt");
     std::remove(path.c_str());
 
     Runtime runtime(2);
-    std::vector<std::string> paths;
+    dstd::Vector<dstd::String> paths;
     auto task = [&]() -> CoroTask<int> {
         auto w = make_striped_writer();
-        if (co_await w->open(path, 4, false, nullptr) != 0) co_return 1;
+        if (co_await w->open(dstd::String(path), 4, false, nullptr) != 0)
+            co_return 1;
         paths = w->output_paths();
         co_await w->close();
         co_return 0;

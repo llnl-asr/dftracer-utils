@@ -54,7 +54,8 @@ void write_single_member(const std::string& path, const std::string& content) {
 std::int64_t read_line_count(const std::string& gz, const std::string& idx) {
     std::int64_t count = 0;
     run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        TraceReader reader(TraceReaderConfig{gz, idx});
+        TraceReader reader(
+            TraceReaderConfig{dstd::String(gz), dstd::String(idx)});
         auto gen = reader.read_lines(ReadConfig{});
         while (co_await gen.next()) ++count;
         co_return;
@@ -76,7 +77,8 @@ TEST_SUITE("member_cache_integration") {
         write_single_member(src, make_trace(n));
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await utilities::fileio::compress::gzip_rechunk_to_members(
-                src, gz, /*member_size=*/4096, /*level=*/6);
+                dstd::String(src), dstd::String(gz), /*member_size=*/4096,
+                /*level=*/6);
             co_return;
         });
         {
@@ -110,7 +112,8 @@ TEST_SUITE("member_cache_integration") {
                 tasks.push_back(
                     [](std::string gzp,
                        std::string idxp) -> coro::CoroTask<std::int64_t> {
-                        TraceReader reader(TraceReaderConfig{gzp, idxp});
+                        TraceReader reader(TraceReaderConfig{
+                            dstd::String(gzp), dstd::String(idxp)});
                         auto gen = reader.read_lines(ReadConfig{});
                         std::int64_t c = 0;
                         while (co_await gen.next()) ++c;

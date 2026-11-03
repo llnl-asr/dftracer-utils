@@ -2,11 +2,11 @@
 #ifndef DFTRACER_UTILS_UTILITIES_DLIO_OPTIMIZER_H
 #define DFTRACER_UTILS_UTILITIES_DLIO_OPTIMIZER_H
 
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/barrier_simulator.h>
 #include <dftracer/utils/utilities/dlio/mixture.h>
 
 #include <cstdint>
-#include <vector>
 
 namespace dftracer::utils::utilities::dlio {
 
@@ -44,11 +44,11 @@ struct OptimizerResult {
 ///   error.
 OptimizerResult optimize_max_bound_percentile(
     const BarrierSimulatorContext& context, const BestModel& model,
-    std::vector<double> sample_times, const OptimizerOptions& options = {});
+    dstd::Vector<double> sample_times, const OptimizerOptions& options = {});
 
 /// Helper: percentile by sorted index (linear interpolation between adjacent
 /// samples). Returns 0 if data is empty.
-double percentile(const std::vector<double>& sorted_data, double pct);
+double percentile(const dstd::Vector<double>& sorted_data, double pct);
 
 }  // namespace dftracer::utils::utilities::dlio
 

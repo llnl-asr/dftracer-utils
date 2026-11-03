@@ -4,17 +4,16 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_bytes_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_line_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
-
-#include <memory>
-#include <string>
 
 namespace dftracer::utils::utilities::fileio::lines {
 
@@ -32,20 +31,20 @@ namespace dftracer::utils::utilities::fileio::lines {
  */
 class StreamingLineReaderConfig {
    private:
-    std::string file_path_;
-    std::string index_path_;
+    dstd::String file_path_;
+    dstd::String index_path_;
     std::size_t start_line_ = 0;
     std::size_t end_line_ = 0;
 
    public:
     StreamingLineReaderConfig() = default;
 
-    StreamingLineReaderConfig& with_file(const std::string& file_path) {
+    StreamingLineReaderConfig& with_file(dstd::StringView file_path) {
         file_path_ = file_path;
         return *this;
     }
 
-    StreamingLineReaderConfig& with_index(const std::string& index_path) {
+    StreamingLineReaderConfig& with_index(dstd::StringView index_path) {
         index_path_ = index_path;
         return *this;
     }
@@ -57,8 +56,8 @@ class StreamingLineReaderConfig {
         return *this;
     }
 
-    const std::string& file_path() const { return file_path_; }
-    const std::string& index_path() const { return index_path_; }
+    dstd::CStringView file_path() const { return file_path_; }
+    dstd::CStringView index_path() const { return index_path_; }
     std::size_t start_line() const { return start_line_; }
     std::size_t end_line() const { return end_line_; }
 };
@@ -86,8 +85,8 @@ class StreamingLineReader {
      */
     static coro::AsyncGenerator<Line> read_async(
         const StreamingLineReaderConfig& config) {
-        const std::string& file_path = config.file_path();
-        const std::string& index_path = config.index_path();
+        dstd::CStringView file_path = config.file_path();
+        dstd::CStringView index_path = config.index_path();
         bool is_compressed = is_compressed_format(file_path);
 
         // Only use the indexed path when an index was explicitly
@@ -95,7 +94,7 @@ class StreamingLineReader {
         // override callers that intentionally omit the index to
         // get single-pass streaming decompression.
         bool has_index = false;
-        std::string actual_index_path;
+        dstd::String actual_index_path;
         if (!index_path.empty()) {
             actual_index_path = index_path;
             const auto found =
@@ -114,7 +113,8 @@ class StreamingLineReader {
             }
             return sources::async_indexed_file_lines(iter_config);
         }
-        return sources::async_streaming_gz_lines(file_path, config.start_line(),
+        return sources::async_streaming_gz_lines(dstd::String(file_path.view()),
+                                                 config.start_line(),
                                                  config.end_line());
     }
 
@@ -122,7 +122,7 @@ class StreamingLineReader {
     /**
      * @brief Check if file extension indicates compressed format.
      */
-    static bool is_compressed_format(const std::string& file_path) {
+    static bool is_compressed_format(dstd::StringView file_path) {
         return dstd::PathView(file_path).extension() == ".gz";
     }
 };

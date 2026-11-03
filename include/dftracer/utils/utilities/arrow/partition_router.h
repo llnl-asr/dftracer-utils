@@ -6,23 +6,22 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/arrow/partition_writer.h>
 
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace dftracer::utils::utilities::arrow {
 
 struct RouterWriteStats {
-    std::unordered_map<std::string, PartitionWriteStats> partitions;
+    dstd::HashMap<dstd::String, PartitionWriteStats> partitions;
     int64_t total_rows = 0;
     int64_t total_uncompressed_bytes = 0;
 };
@@ -36,13 +35,13 @@ struct PartitionConfig {
     };
 
     Mode mode = Mode::None;
-    std::vector<std::string> partition_columns;
+    dstd::Vector<dstd::String> partition_columns;
     int num_buckets = 0;
-    std::vector<dstd::Pair<std::string, dstd::Optional<std::string>>> views;
+    dstd::Vector<dstd::Pair<dstd::String, dstd::Optional<dstd::String>>> views;
 };
 
 using PredicateEvaluator =
-    std::function<bool(const std::unordered_map<std::string, std::string>&)>;
+    dstd::Function<bool(const dstd::HashMap<dstd::String, dstd::String>&)>;
 
 /**
  * Routes Arrow record batches to partitioned output directories.
@@ -58,7 +57,7 @@ class PartitionRouter {
     PartitionRouter(PartitionRouter&& other) noexcept;
     PartitionRouter& operator=(PartitionRouter&& other) noexcept;
 
-    int open(const std::string& output_dir, const PartitionConfig& config,
+    int open(dstd::StringView output_dir, const PartitionConfig& config,
              int64_t chunk_size_bytes,
              IpcCompression compression = DEFAULT_ARROW_IPC_COMPRESSION);
 
@@ -68,19 +67,19 @@ class PartitionRouter {
     bool is_open() const noexcept { return is_open_; }
 
    private:
-    std::string output_dir_;
+    dstd::String output_dir_;
     PartitionConfig config_;
     int64_t chunk_size_bytes_ = 0;
     IpcCompression compression_ = DEFAULT_ARROW_IPC_COMPRESSION;
     bool is_open_ = false;
 
-    std::unordered_map<std::string, std::unique_ptr<PartitionWriter>> writers_;
-    std::unordered_map<std::string, PredicateEvaluator> predicates_;
+    dstd::HashMap<dstd::String, dstd::UniquePtr<PartitionWriter>> writers_;
+    dstd::HashMap<dstd::String, PredicateEvaluator> predicates_;
 
     coro::CoroTask<PartitionWriter*> get_or_create_writer(
-        const std::string& partition_key);
-    std::string partition_path(const std::string& partition_key) const;
-    int compute_bucket(const std::vector<std::string>& values) const;
+        dstd::StringView partition_key);
+    dstd::String partition_path(dstd::StringView partition_key) const;
+    int compute_bucket(const dstd::Vector<dstd::String>& values) const;
 
     coro::CoroTask<int> route_none(ArrowExportResult& batch);
     coro::CoroTask<int> route_column(ArrowExportResult& batch);

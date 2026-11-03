@@ -21,10 +21,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <span>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::utilities::reader {
 
@@ -49,8 +45,8 @@ enum class TimeNormalization {
 
 /// File-level configuration for @ref TraceReader.
 struct TraceReaderConfig {
-    std::string file_path;  ///< Path to trace file (.pfw.gz or plain).
-    std::string index_dir;  ///< Directory containing `.dftindex` roots.
+    dstd::String file_path;  ///< Path to trace file (.pfw.gz or plain).
+    dstd::String index_dir;  ///< Directory containing `.dftindex` roots.
     std::size_t checkpoint_size =
         common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;  ///< Checkpoint
                                                               ///< interval.
@@ -73,7 +69,7 @@ struct ReadConfig {
     /// When set and an index exists, chunk pruning skips non-matching
     /// chunks. Per-event filtering always applies unless chunk_prune_only
     /// is set.
-    std::string query;
+    dstd::String query;
 
     /// When true, the query is used only for chunk-level pruning via
     /// the index. Per-line filtering is skipped (caller handles it).
@@ -149,7 +145,7 @@ class TraceReader {
    private:
     TraceReaderConfig config_;
     bool has_index_ = false;
-    std::string index_path_;
+    dstd::String index_path_;
     common::ArchiveFormat format_ = common::ArchiveFormat::Unknown;
     std::size_t cached_max_bytes_ = 0;
     std::size_t cached_num_lines_ = 0;

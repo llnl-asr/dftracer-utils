@@ -2,6 +2,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -11,25 +14,25 @@
 #include <testing_utilities.h>
 
 #include <fstream>
-#include <string>
 
+using namespace dftracer::utils;
 namespace gzc = dftracer::utils::utilities::fileio::compress;
 
 namespace {
 
 // Multi-line, mildly compressible NDJSON-ish payload.
-std::string make_lines(std::size_t n) {
-    std::string s;
+dstd::String make_lines(std::size_t n) {
+    dstd::String s;
     s.reserve(n * 48);
     for (std::size_t i = 0; i < n; ++i) {
-        s += "{\"id\":" + std::to_string(i) +
+        s += "{\"id\":" + dstd::to_string(i) +
              ",\"name\":\"read\",\"cat\":\"POSIX\",\"dur\":42}\n";
     }
     return s;
 }
 
-std::string write_single_member_gz(const std::string& path,
-                                   const std::string& payload) {
+dstd::String write_single_member_gz(const dstd::String& path,
+                                    const dstd::String& payload) {
     gzc::GzipMemberCompressor comp;
     auto member = comp.compress_member(payload.data(), payload.size());
     REQUIRE(member.has_value());
@@ -41,8 +44,8 @@ std::string write_single_member_gz(const std::string& path,
 }
 
 // Decode every member; returns (concatenated bytes, per-member last byte).
-dftracer::utils::dstd::Pair<std::string, std::vector<char>> decode_members(
-    const std::string& path) {
+dftracer::utils::dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
+    const dstd::String& path) {
     int fd = ::open(path.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
     dftracer::utils::dstd::ScopedFd sfd(fd);
@@ -50,8 +53,8 @@ dftracer::utils::dstd::Pair<std::string, std::vector<char>> decode_members(
     REQUIRE(::fstat(sfd.get(), &st) == 0);
     const auto size = static_cast<std::uint64_t>(st.st_size);
 
-    std::string out;
-    std::vector<char> last_bytes;
+    dstd::String out;
+    dstd::Vector<char> last_bytes;
     [&]() -> dftracer::utils::coro::CoroTask<void> {
         auto gen = gzc::decode_gzip_members(sfd.get(), size);
         while (auto chunk = co_await gen.next()) {
@@ -63,13 +66,13 @@ dftracer::utils::dstd::Pair<std::string, std::vector<char>> decode_members(
     return {out, last_bytes};
 }
 
-dftracer::utils::dstd::Pair<std::string, int> decode_all(
-    const std::string& path) {
+dftracer::utils::dstd::Pair<dstd::String, int> decode_all(
+    const dstd::String& path) {
     auto [bytes, lasts] = decode_members(path);
     return {bytes, static_cast<int>(lasts.size())};
 }
 
-bool needs_rechunk(const std::string& path, std::size_t cap) {
+bool needs_rechunk(const dstd::String& path, std::size_t cap) {
     int fd = ::open(path.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
     dftracer::utils::dstd::ScopedFd sfd(fd);
@@ -87,7 +90,7 @@ TEST_SUITE("gzip_rechunker") {
     TEST_CASE("needs_rechunk flags a member over the cap only") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_probe");
         REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-        const std::string gz = std::string((dir / "one.pfw.gz").str());
+        const dstd::String gz = dstd::String((dir / "one.pfw.gz").str());
         const auto payload = make_lines(2000);  // ~90 KB uncompressed
         write_single_member_gz(gz, payload);
 
@@ -100,7 +103,7 @@ TEST_SUITE("gzip_rechunker") {
     TEST_CASE("first_member samples past a tiny first member") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_sample");
         REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-        const std::string gz = std::string((dir / "wrapped.pfw.gz").str());
+        const dstd::String gz = dstd::String((dir / "wrapped.pfw.gz").str());
         const auto payload = make_lines(5000);
         {
             gzc::GzipMemberCompressor comp;
@@ -142,8 +145,8 @@ TEST_SUITE("gzip_rechunker") {
     TEST_CASE("rechunk preserves bytes and produces multiple members") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_split");
         REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-        const std::string in = std::string((dir / "big.pfw.gz").str());
-        const std::string out = std::string((dir / "out.pfw.gz").str());
+        const dstd::String in = dstd::String((dir / "big.pfw.gz").str());
+        const dstd::String out = dstd::String((dir / "out.pfw.gz").str());
         const auto payload = make_lines(5000);
         write_single_member_gz(in, payload);
 
@@ -167,9 +170,9 @@ TEST_SUITE("gzip_rechunker") {
     TEST_CASE("rechunk handles a payload with no trailing newline") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_nonl");
         REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
-        const std::string in = std::string((dir / "in.pfw.gz").str());
-        const std::string out = std::string((dir / "out.pfw.gz").str());
-        std::string payload = make_lines(1000);
+        const dstd::String in = dstd::String((dir / "in.pfw.gz").str());
+        const dstd::String out = dstd::String((dir / "out.pfw.gz").str());
+        dstd::String payload = make_lines(1000);
         payload += "{\"id\":99999,\"trailing\":true}";  // no final '\n'
         write_single_member_gz(in, payload);
 

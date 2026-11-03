@@ -16,10 +16,10 @@
  *
  * using namespace dftracer::utils::utilities::filesystem;
  *
- * auto scanner = std::make_shared<DirectoryScannerUtility>();
+ * auto scanner = dstd::make_shared<DirectoryScannerUtility>();
  * auto files = scanner->process(DirectoryScannerUtilityInput{"/path/to/dir"});
  *
- * auto pattern_scanner = std::make_shared<PatternDirectoryScannerUtility>();
+ * auto pattern_scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
  * auto pfw_files = pattern_scanner->process(
  *     PatternDirectoryScannerUtilityInput{"/path/to/dir", {".pfw", ".pfw.gz"}}
  * );

@@ -26,8 +26,8 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
         auto indexer =
             CheckpointIndexerFactory::create(gz_file, idx_file, 1024 * 1024);
         REQUIRE(indexer != nullptr);
-        CHECK(indexer->get_archive_path() == gz_file);
-        CHECK(indexer->get_index_path() == db_root);
+        CHECK(dstd::StringView(indexer->get_archive_path()) == gz_file);
+        CHECK(dstd::StringView(indexer->get_index_path()) == db_root);
     }
 
     SUBCASE("ReaderFactory creates valid reader") {
@@ -39,8 +39,8 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
         auto reader = ReaderFactory::create(indexer);
         REQUIRE(reader != nullptr);
         CHECK(reader->is_valid());
-        CHECK(reader->get_archive_path() == gz_file);
-        CHECK(reader->get_index_path() == db_root);
+        CHECK(dstd::StringView(reader->get_archive_path()) == gz_file);
+        CHECK(dstd::StringView(reader->get_index_path()) == db_root);
     }
 
     SUBCASE("Reader factory from files") {
@@ -84,7 +84,7 @@ TEST_CASE("Basic Reading Operations") {
     SUBCASE("Line-based reading") {
         std::size_t num_lines = reader->get_num_lines();
         if (num_lines > 0) {
-            std::string content = reader->read_lines(
+            dstd::String content = reader->read_lines(
                 1, std::min(num_lines, static_cast<std::size_t>(5)));
             CHECK(!content.empty());
             CHECK(content.find("\"id\":") != std::string::npos);

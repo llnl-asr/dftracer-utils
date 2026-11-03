@@ -275,8 +275,8 @@ void index_build(const Paths& p) {
 
 coro::CoroTask<void> read_lines(dstd::String file) {
     simdjson::dom::parser parser;
-    auto gen = utilities::fileio::lines::sources::async_streaming_gz_lines(
-        std::string(file.data(), file.size()));
+    auto gen =
+        utilities::fileio::lines::sources::async_streaming_gz_lines(file);
     std::uint64_t parsed = 0;
     while (auto line = co_await gen.next()) {
         dstd::StringView l = line->content;

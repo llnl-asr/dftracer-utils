@@ -13,10 +13,7 @@
 
 #include <cstdint>
 #include <cstdio>
-#include <optional>
 #include <random>
-#include <string>
-#include <vector>
 
 /// Synthetic chrome/Perfetto trace emission (gzip .pfw.gz). A production
 /// utility for generating trace files with known patterns; consumed by the
@@ -30,13 +27,13 @@ namespace dftracer::utils::utilities::trace_gen {
 // ---------------------------------------------------------------------------
 class TraceWriter {
    public:
-    explicit TraceWriter(const std::string& path,
+    explicit TraceWriter(dstd::StringView path,
                          std::size_t flush_threshold = 4 * 1024 * 1024)
         : flush_threshold_(flush_threshold) {
         fileio::GzipWriterOptions opts;
         opts.member_size = flush_threshold;
-        writer_.emplace(common::unwrap(
-            fileio::GzipLineWriterBlocking::open(path, std::move(opts))));
+        writer_.emplace(common::unwrap(fileio::GzipLineWriterBlocking::open(
+            dstd::String(path), std::move(opts))));
         buf_.reserve(flush_threshold * 2);
     }
 
@@ -77,19 +74,19 @@ class TraceWriter {
     }
 
     dstd::Optional<fileio::GzipLineWriterBlocking> writer_;
-    std::string buf_;
+    dstd::String buf_;
     std::size_t flush_threshold_;
 };
 
 /// Deterministic 16-char hex hash using the project's HasherUtility
-inline std::string make_hash(const std::string& name) {
+inline dstd::String make_hash(dstd::StringView name) {
     hash::HasherUtility hasher;
     hasher.reset();
     auto h = hasher.process(name);
     char buf[17];
     std::snprintf(buf, sizeof(buf), "%016llx",
                   static_cast<unsigned long long>(h.value));
-    return std::string(buf);
+    return dstd::String(buf);
 }
 
 /// +/-30% random variance around base
@@ -103,10 +100,10 @@ namespace dft = trace;
 /// Metadata event: {"name":"HH"/"FH"/"SH","ph":4,"type":1,
 ///                  "args":{"hhash":"...","name":"...","value":"..."}}
 /// Hash and tracer-bookkeeping metadata is the DFTRACER layer.
-inline void emit_metadata(TraceWriter& w, const std::string& kind,
-                          const std::string& hhash,
-                          const std::string& resolved_name,
-                          const std::string& hash_value) {
+inline void emit_metadata(TraceWriter& w, dstd::StringView kind,
+                          dstd::StringView hhash,
+                          dstd::StringView resolved_name,
+                          dstd::StringView hash_value) {
     static constexpr int PH_M = dft::phase_to_int(dft::RecordPhase::Metadata);
     static constexpr int TY_DFT =
         dft::event_type_to_int(dft::EventType::Dftracer);
@@ -134,18 +131,18 @@ struct EventArgs {
     std::uint64_t id = 0;
     std::uint64_t pid = 0;
     std::uint64_t tid = 0;
-    std::string name;
-    std::string cat;
+    dstd::String name;
+    dstd::String cat;
     std::uint64_t ts = 0;
     std::uint64_t dur = 0;
     int level = 0;
-    std::string hhash;
-    std::string fhash;
-    std::string cmd_hash;
+    dstd::String hhash;
+    dstd::String fhash;
+    dstd::String cmd_hash;
     /// Instrumentation layer. Unknown lets emit_event infer it from cat.
     dft::EventType type = dft::EventType::Unknown;
     /// Optional extra args appended verbatim (no leading comma)
-    std::string extra;
+    dstd::String extra;
 };
 
 inline void emit_event(TraceWriter& w, const EventArgs& a) {

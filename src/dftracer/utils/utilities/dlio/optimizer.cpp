@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/optimizer.h>
 
 #include <algorithm>
@@ -8,7 +9,7 @@
 
 namespace dftracer::utils::utilities::dlio {
 
-double percentile(const std::vector<double>& sorted_data, double pct) {
+double percentile(const dstd::Vector<double>& sorted_data, double pct) {
     if (sorted_data.empty()) return 0.0;
     const double p = std::clamp(pct, 0.0, 100.0) / 100.0;
     const double idx = p * static_cast<double>(sorted_data.size() - 1);
@@ -21,7 +22,7 @@ double percentile(const std::vector<double>& sorted_data, double pct) {
 
 OptimizerResult optimize_max_bound_percentile(
     const BarrierSimulatorContext& context, const BestModel& model,
-    std::vector<double> sample_times, const OptimizerOptions& options) {
+    dstd::Vector<double> sample_times, const OptimizerOptions& options) {
     OptimizerResult out;
     out.best_percentile = options.initial_percentile;
 

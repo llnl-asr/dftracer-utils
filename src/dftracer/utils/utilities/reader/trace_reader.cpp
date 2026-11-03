@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
@@ -34,10 +35,7 @@
 
 #include <algorithm>
 #include <cstring>
-#include <optional>
-#include <span>
 #include <type_traits>
-#include <unordered_map>
 
 namespace dftracer::utils::utilities::reader {
 
@@ -57,7 +55,7 @@ thread_local dftracer::utils::json::RecordParser tl_parser;
 /// that was never compressed fails at the reader instead of silently taking
 /// a path with no index, no pruning and no random access.
 void reject_unless_gzip(common::ArchiveFormat format,
-                        const std::string& file_path) {
+                        const dstd::String& file_path) {
     if (format == common::ArchiveFormat::Gzip) return;
     throw ReaderError(ReaderError::InvalidArgument,
                       "Not a gzip trace: " + file_path +
@@ -79,7 +77,7 @@ struct LineRange {
 };
 
 coro::AsyncGenerator<Line> yield_lines_from_stream(
-    std::unique_ptr<internal::ReaderStream> stream, std::size_t start_line_num,
+    dstd::UniquePtr<internal::ReaderStream> stream, std::size_t start_line_num,
     const Query* query, bool chunk_prune_only = false,
     const index::plan::Prefilter* prefilter = nullptr) {
     std::size_t line_num = start_line_num;
@@ -124,7 +122,7 @@ coro::AsyncGenerator<Line> yield_lines_from_stream(
 }
 
 coro::AsyncGenerator<Line> yield_lines_from_ranges(
-    dstd::SharedPtr<internal::Reader> reader, std::vector<LineRange> ranges,
+    dstd::SharedPtr<internal::Reader> reader, dstd::Vector<LineRange> ranges,
     std::size_t buffer_size, Query query, bool chunk_prune_only = false,
     index::plan::Prefilter prefilter = {}) {
     for (const auto& range : ranges) {
@@ -151,7 +149,7 @@ coro::AsyncGenerator<Line> yield_lines_from_ranges(
 // (multi-line boundary respected by stream type). Used by read_json to run
 // simdjson iterate_many over each chunk instead of parsing line by line.
 coro::AsyncGenerator<dstd::Span<const char>> yield_chunks_from_stream(
-    std::unique_ptr<internal::ReaderStream> stream,
+    dstd::UniquePtr<internal::ReaderStream> stream,
     const index::plan::Prefilter* prefilter = nullptr) {
     while (!stream->done()) {
         auto chunk = co_await stream->read_async();
@@ -166,7 +164,7 @@ coro::AsyncGenerator<dstd::Span<const char>> yield_chunks_from_stream(
 }
 
 coro::AsyncGenerator<dstd::Span<const char>> yield_chunks_from_ranges(
-    dstd::SharedPtr<internal::Reader> reader, std::vector<LineRange> ranges,
+    dstd::SharedPtr<internal::Reader> reader, dstd::Vector<LineRange> ranges,
     std::size_t buffer_size, index::plan::Prefilter prefilter = {}) {
     for (const auto& range : ranges) {
         auto stream =
@@ -186,8 +184,8 @@ coro::AsyncGenerator<dstd::Span<const char>> yield_chunks_from_ranges(
 }
 
 coro::AsyncGenerator<Line> read_lines_indexed(
-    dstd::SharedPtr<internal::Reader> reader, std::string index_path,
-    std::string file_path, ReadConfig config, dstd::Optional<Query> query,
+    dstd::SharedPtr<internal::Reader> reader, dstd::String index_path,
+    dstd::String file_path, ReadConfig config, dstd::Optional<Query> query,
     bool chunk_prune_only = false) {
     index::plan::Prefilter prefilter =
         query ? index::plan::Prefilter(*query) : index::plan::Prefilter{};
@@ -211,12 +209,16 @@ coro::AsyncGenerator<Line> read_lines_indexed(
 
     if (query && !index_path.empty() &&
         range_type == internal::RangeType::ByteRange) {
+        // keep std: open_snapshot and PruneRequest take std::string
+        const std::string index_path_std(index_path.data(), index_path.size());
+        // keep std: PruneRequest takes std::string
+        const std::string file_path_std(file_path.data(), file_path.size());
         auto snapshot = common::unwrap(
-            dftracer::utils::index::plan::open_snapshot(index_path));
+            dftracer::utils::index::plan::open_snapshot(index_path_std));
         // GCC 12 destroys a temporary built inside co_await twice.
         dftracer::utils::index::plan::PruneRequest prune_req{
-            .index_path = index_path,
-            .file_path = file_path,
+            .index_path = index_path_std,
+            .file_path = file_path_std,
             .query = &*query,
             .snapshot = &snapshot,
             .metadata = dftracer::utils::index::plan::MetadataUse::All};
@@ -235,7 +237,7 @@ coro::AsyncGenerator<Line> read_lines_indexed(
                 auto spans = common::unwrap(
                     dftracer::utils::index::spans(snapshot, *file));
 
-                std::vector<LineRange> ranges;
+                dstd::Vector<LineRange> ranges;
                 std::uint64_t prev_idx = UINT64_MAX;
 
                 for (auto ckpt_idx : pruned->candidates) {
@@ -282,7 +284,7 @@ coro::AsyncGenerator<Line> read_lines_indexed(
     }
 }
 
-coro::AsyncGenerator<Line> read_lines_gz(std::string file_path,
+coro::AsyncGenerator<Line> read_lines_gz(dstd::String file_path,
                                          ReadConfig config,
                                          dstd::Optional<Query> query,
                                          bool chunk_prune_only = false) {
@@ -318,8 +320,8 @@ coro::AsyncGenerator<Line> read_lines_gz(std::string file_path,
 namespace internal {
 
 coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
-    dstd::SharedPtr<internal::Reader> reader, std::string index_path,
-    std::string file_path, ReadConfig config, dstd::Optional<Query> query,
+    dstd::SharedPtr<internal::Reader> reader, dstd::String index_path,
+    dstd::String file_path, ReadConfig config, dstd::Optional<Query> query,
     bool extend_to_line_boundary) {
     index::plan::Prefilter prefilter =
         query ? index::plan::Prefilter(*query) : index::plan::Prefilter{};
@@ -342,12 +344,16 @@ coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
     }
 
     if (query && !index_path.empty() && !config.skip_pruning) {
+        // keep std: open_snapshot and PruneRequest take std::string
+        const std::string index_path_std(index_path.data(), index_path.size());
+        // keep std: PruneRequest takes std::string
+        const std::string file_path_std(file_path.data(), file_path.size());
         auto snapshot = common::unwrap(
-            dftracer::utils::index::plan::open_snapshot(index_path));
+            dftracer::utils::index::plan::open_snapshot(index_path_std));
         // GCC 12 destroys a temporary built inside co_await twice.
         dftracer::utils::index::plan::PruneRequest prune_req{
-            .index_path = index_path,
-            .file_path = file_path,
+            .index_path = index_path_std,
+            .file_path = file_path_std,
             .query = &*query,
             .snapshot = &snapshot,
             .metadata = dftracer::utils::index::plan::MetadataUse::All};
@@ -366,7 +372,7 @@ coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
                 auto spans = common::unwrap(
                     dftracer::utils::index::spans(snapshot, *file));
 
-                std::vector<LineRange> ranges;
+                dstd::Vector<LineRange> ranges;
                 std::uint64_t prev_idx = UINT64_MAX;
                 for (auto ckpt_idx : pruned->candidates) {
                     if (ckpt_idx >= spans.size()) continue;
@@ -437,9 +443,13 @@ TraceReader::TraceReader(TraceReaderConfig config)
 }
 
 void TraceReader::probe_index() {
-    format_ = CheckpointIndexerFactory::detect_format(config_.file_path);
-    index_path_ = dftu_internal::determine_index_path(config_.file_path,
-                                                      config_.index_dir);
+    format_ = CheckpointIndexerFactory::detect_format(
+        // keep std: detect_format takes std::string
+        std::string(config_.file_path.data(), config_.file_path.size()));
+    // keep std: determine_index_path returns std::string
+    const std::string determined = dftu_internal::determine_index_path(
+        config_.file_path, config_.index_dir);
+    index_path_ = dstd::String(determined.data(), determined.size());
     has_index_ = format_ == common::ArchiveFormat::Gzip &&
                  common::unwrap(dstd::fs::exists(dstd::PathView(
                      dftracer::utils::index::store_dir(index_path_))));
@@ -448,8 +458,8 @@ void TraceReader::probe_index() {
     // freshness predicate, so a record with no stored stat is treated as stale
     // rather than trusted on existence alone.
     if (has_index_) {
-        auto snapshot =
-            dftracer::utils::index::plan::open_snapshot(index_path_);
+        // keep std: open_snapshot takes std::string
+        auto snapshot = dftracer::utils::index::plan::open_snapshot(determined);
         if (snapshot) {
             dftracer::utils::common::InputFileStat st;
             dftracer::utils::index::SourceStat now;
@@ -524,8 +534,13 @@ std::size_t TraceReader::get_num_lines() {
 }
 
 dstd::SharedPtr<internal::Reader> TraceReader::create_indexed_reader() {
+    // keep std: CheckpointIndexerFactory::create takes std::string
+    const std::string file_path_std(config_.file_path.data(),
+                                    config_.file_path.size());
+    // keep std: CheckpointIndexerFactory::create takes std::string
+    const std::string index_path_std(index_path_.data(), index_path_.size());
     auto indexer = CheckpointIndexerFactory::create(
-        config_.file_path, index_path_, config_.checkpoint_size, false);
+        file_path_std, index_path_std, config_.checkpoint_size, false);
     return internal::ReaderFactory::create(indexer);
 }
 
@@ -574,7 +589,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
     // predicate field matches; we still need to skip events lacking the
     // field (e.g., metadata "ph":"M" events). Field-presence probe is
     // cheaper than full ValueMap eval.
-    std::vector<std::string> presence_check_paths;
+    dstd::Vector<dstd::String> presence_check_paths;
     if (query && config.chunk_prune_only) {
         const auto& fset = query->fields();
         presence_check_paths.assign(fset.begin(), fset.end());
@@ -712,7 +727,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                 continue;
         } else if (query) {
             duql::ValueMap fields;
-            std::vector<std::string> nested_keys;
+            dstd::Vector<dstd::String> nested_keys;
             parser.for_each_field([&](dstd::StringView key,
                                       simdjson::ondemand::value val) {
                 auto type = val.type().value_unsafe();
@@ -764,12 +779,18 @@ coro::AsyncGenerator<dstd::Span<const char>> TraceReader::read_raw(
             range_type == internal::RangeType::ByteRange) {
             auto parsed = Query::from_string(config.query);
             if (!parsed) throw duql::DuqlParseError(parsed.error());
+            // keep std: open_snapshot and PruneRequest take std::string
+            const std::string index_path_std(index_path_.data(),
+                                             index_path_.size());
+            // keep std: PruneRequest takes std::string
+            const std::string file_path_std(config_.file_path.data(),
+                                            config_.file_path.size());
             auto snapshot = common::unwrap(
-                dftracer::utils::index::plan::open_snapshot(index_path_));
+                dftracer::utils::index::plan::open_snapshot(index_path_std));
             // GCC 12 destroys a temporary built inside co_await twice.
             dftracer::utils::index::plan::PruneRequest prune_req{
-                .index_path = index_path_,
-                .file_path = config_.file_path,
+                .index_path = index_path_std,
+                .file_path = file_path_std,
                 .query = &*parsed,
                 .snapshot = &snapshot,
                 .metadata = dftracer::utils::index::plan::MetadataUse::All};

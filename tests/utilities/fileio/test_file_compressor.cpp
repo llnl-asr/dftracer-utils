@@ -4,16 +4,18 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <zlib.h>
 
 #include <fstream>
-#include <memory>
 #include <random>
-#include <string>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::fileio;
 
 static dftracer::utils::dstd::Path create_test_dir() {
@@ -32,9 +34,9 @@ TEST_SUITE("FileCompressor") {
             });
 
         SUBCASE("Compress small text file") {
-            std::string test_file =
-                std::string((test_dir / "test_compress.txt").str());
-            std::string expected_output = test_file + ".gz";
+            dstd::String test_file =
+                dstd::String((test_dir / "test_compress.txt").str());
+            dstd::String expected_output = test_file + ".gz";
 
             std::ofstream ofs(test_file.c_str());
             for (int i = 0; i < 100; ++i) {
@@ -65,11 +67,11 @@ TEST_SUITE("FileCompressor") {
         }
 
         SUBCASE("File without a final newline") {
-            std::string test_file =
-                std::string((test_dir / "no_newline.txt").str());
-            std::string content;
+            dstd::String test_file =
+                dstd::String((test_dir / "no_newline.txt").str());
+            dstd::String content;
             for (int i = 0; i < 500; ++i) {
-                content += "line " + std::to_string(i) + " of the file\n";
+                content += "line " + dstd::to_string(i) + " of the file\n";
             }
             content += "last line without newline";
             {
@@ -85,7 +87,7 @@ TEST_SUITE("FileCompressor") {
 
             gzFile g = gzopen(result->output_path.c_str(), "rb");
             REQUIRE(g != nullptr);
-            std::string decoded;
+            dstd::String decoded;
             char buf[4096];
             int n;
             while ((n = gzread(g, buf, sizeof(buf))) > 0)
@@ -95,10 +97,10 @@ TEST_SUITE("FileCompressor") {
         }
 
         SUBCASE("Compress with custom output path") {
-            std::string test_file =
-                std::string((test_dir / "test_input.txt").str());
-            std::string custom_output =
-                std::string((test_dir / "custom_output.gz").str());
+            dstd::String test_file =
+                dstd::String((test_dir / "test_input.txt").str());
+            dstd::String custom_output =
+                dstd::String((test_dir / "custom_output.gz").str());
 
             std::ofstream ofs(test_file.c_str());
             ofs << "Test content for custom output path\n";
@@ -126,8 +128,8 @@ TEST_SUITE("FileCompressor") {
             });
 
         SUBCASE("Different compression levels") {
-            std::string test_file =
-                std::string((test_dir / "test_levels.txt").str());
+            dstd::String test_file =
+                dstd::String((test_dir / "test_levels.txt").str());
 
             std::ofstream ofs(test_file.c_str());
             for (int i = 0; i < 1000; ++i) {
@@ -137,10 +139,10 @@ TEST_SUITE("FileCompressor") {
 
             FileCompressorUtility compressor;
 
-            std::string level1_output =
-                std::string((test_dir / "level1.gz").str());
-            std::string level9_output =
-                std::string((test_dir / "level9.gz").str());
+            dstd::String level1_output =
+                dstd::String((test_dir / "level1.gz").str());
+            dstd::String level9_output =
+                dstd::String((test_dir / "level9.gz").str());
 
             auto input1 = FileCompressionUtilityInput::from_file(test_file)
                               .with_output(level1_output)
@@ -166,8 +168,8 @@ TEST_SUITE("FileCompressor") {
             });
 
         SUBCASE("Compress file with different chunk sizes") {
-            std::string test_file =
-                std::string((test_dir / "test_chunks.txt").str());
+            dstd::String test_file =
+                dstd::String((test_dir / "test_chunks.txt").str());
 
             std::ofstream ofs(test_file.c_str());
             std::random_device rd;
@@ -184,10 +186,10 @@ TEST_SUITE("FileCompressor") {
 
             FileCompressorUtility compressor;
 
-            std::string small_output =
-                std::string((test_dir / "small_chunks.gz").str());
-            std::string large_output =
-                std::string((test_dir / "large_chunks.gz").str());
+            dstd::String small_output =
+                dstd::String((test_dir / "small_chunks.gz").str());
+            dstd::String large_output =
+                dstd::String((test_dir / "large_chunks.gz").str());
 
             auto input_small = FileCompressionUtilityInput::from_file(test_file)
                                    .with_output(small_output)
@@ -225,8 +227,8 @@ TEST_SUITE("FileCompressor") {
         SUBCASE("Non-existent input file") {
             FileCompressorUtility compressor;
 
-            std::string non_existent =
-                std::string((test_dir / "non_existent.txt").str());
+            dstd::String non_existent =
+                dstd::String((test_dir / "non_existent.txt").str());
             auto input = FileCompressionUtilityInput::from_file(non_existent);
             auto result = compressor(input).get();
 
@@ -234,14 +236,15 @@ TEST_SUITE("FileCompressor") {
             CHECK(result.error().is_code(
                 dftracer::utils::common::ErrorCode::NotFound));
             CHECK(result.error().message().find("does not exist") !=
-                  std::string::npos);
+                  dstd::String::npos);
             CHECK(!dftracer::utils::dstd::fs::exists(non_existent + ".gz")
                        .value());
         }
 
         SUBCASE("Empty file") {
-            std::string test_file = std::string((test_dir / "empty.txt").str());
-            std::string output_file = test_file + ".gz";
+            dstd::String test_file =
+                dstd::String((test_dir / "empty.txt").str());
+            dstd::String output_file = test_file + ".gz";
 
             std::ofstream ofs(test_file.c_str());
             ofs.close();
@@ -258,7 +261,8 @@ TEST_SUITE("FileCompressor") {
         }
 
         SUBCASE("Invalid compression level") {
-            std::string test_file = std::string((test_dir / "test.txt").str());
+            dstd::String test_file =
+                dstd::String((test_dir / "test.txt").str());
 
             std::ofstream ofs(test_file.c_str());
             ofs << "Test content";
@@ -285,16 +289,16 @@ TEST_SUITE("FileCompressor") {
             });
 
         SUBCASE("Compress binary data") {
-            std::string test_file =
-                std::string((test_dir / "binary.dat").str());
-            std::string output_file = test_file + ".gz";
+            dstd::String test_file =
+                dstd::String((test_dir / "binary.dat").str());
+            dstd::String output_file = test_file + ".gz";
 
             std::ofstream ofs(test_file.c_str(), std::ios::binary);
             std::random_device rd;
             std::mt19937 gen(rd());
             std::uniform_int_distribution<> dis(0, 255);
 
-            std::vector<unsigned char> data(10000);
+            dstd::Vector<unsigned char> data(10000);
             for (auto& byte : data) {
                 byte = static_cast<unsigned char>(dis(gen));
             }

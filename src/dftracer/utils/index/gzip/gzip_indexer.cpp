@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
@@ -129,7 +130,7 @@ decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
         }
         if (next_read >= file_size) {
             if (comp.empty()) co_return dstd::nullopt;
-            std::vector<std::uint8_t> cut;
+            dstd::Vector<std::uint8_t> cut;
             auto keep = compress::decode_truncated_member(comp.data(),
                                                           comp.size(), cut);
             if (!keep) co_return dstd::nullopt;

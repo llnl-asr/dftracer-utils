@@ -2055,8 +2055,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     target_set_warnings(${bench_name})
   endforeach()
 
-  # The zlib side of gzip_crc_bench is the system zlib.
-  target_link_libraries(gzip_crc_bench PRIVATE z)
+  target_link_libraries(gzip_crc_bench PRIVATE dftracer::zlib)
 
   # `--smoke` runs one tiny case. ctest sees these only when
   # DFTRACER_UTILS_TESTS is ON, which the `bench` preset sets.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Benchmark: streaming gzip inflate with zlib's own CRC32 versus raw inflate
-// plus libdeflate's CRC32 (GzipStreamInflater). Both verify every member CRC.
-// The zlib side is the system zlib.
+// Benchmark: streaming gzip inflate with zlib-ng's own CRC32 versus raw
+// inflate plus libdeflate's CRC32 (GzipStreamInflater). Both verify every
+// member CRC. The zlib-ng side is the copy the library builds with.
 //
 // Not a unit test: built only with DFTRACER_UTILS_BUILD_BENCHMARKS=ON, or by
 // hand against the utilities library, and run manually.
@@ -12,7 +12,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <zlib.h>
+#include <zlib-ng.h>
 
 #include <algorithm>
 #include <chrono>
@@ -70,18 +70,18 @@ int main(int argc, char** argv) {
     auto zlib_gzip = [](const dftracer::utils::dstd::Vector<std::uint8_t>& in,
                         dftracer::utils::dstd::Vector<unsigned char>& out,
                         std::size_t& total) {
-        z_stream zs{};
-        inflateInit2(&zs, 31);
-        zs.next_in = const_cast<Bytef*>(in.data());
-        zs.avail_in = static_cast<uInt>(in.size());
+        zng_stream zs{};
+        if (zng_inflateInit2(&zs, 31) != Z_OK) std::exit(2);
+        zs.next_in = in.data();
+        zs.avail_in = static_cast<std::uint32_t>(in.size());
         int rc;
         do {
             zs.next_out = out.data();
-            zs.avail_out = static_cast<uInt>(out.size());
-            rc = inflate(&zs, Z_NO_FLUSH);
+            zs.avail_out = static_cast<std::uint32_t>(out.size());
+            rc = zng_inflate(&zs, Z_NO_FLUSH);
             total += out.size() - zs.avail_out;
         } while (rc == Z_OK);
-        inflateEnd(&zs);
+        zng_inflateEnd(&zs);
         if (rc != Z_STREAM_END) std::exit(2);
     };
     auto libdeflate_crc =
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
     const double mbs = static_cast<double>(text.size()) / (1 << 20);
     std::printf("input %.0f MB uncompressed, %.1f MB compressed, best of %d\n",
                 mbs, static_cast<double>(gz.size()) / (1 << 20), rounds);
-    std::printf("zlib gzip (zlib crc32):          %7.1f MB/s  %.3f s\n",
+    std::printf("zlib-ng gzip (zlib-ng crc32):    %7.1f MB/s  %.3f s\n",
                 mbs / best_zlib, best_zlib);
     std::printf("raw inflate + libdeflate crc32:  %7.1f MB/s  %.3f s\n",
                 mbs / best_new, best_new);
@@ -119,8 +119,9 @@ int main(int argc, char** argv) {
     std::uint32_t sink = 0;
     for (int r = 0; r < rounds; ++r) {
         auto t0 = std::chrono::steady_clock::now();
-        sink += static_cast<std::uint32_t>(crc32_z(
-            0, reinterpret_cast<const Bytef*>(text.data()), text.size()));
+        sink += static_cast<std::uint32_t>(
+            zng_crc32_z(0, reinterpret_cast<const std::uint8_t*>(text.data()),
+                        text.size()));
         auto t1 = std::chrono::steady_clock::now();
         sink += gzc::gzip_crc32(0, text.data(), text.size());
         auto t2 = std::chrono::steady_clock::now();
@@ -129,7 +130,7 @@ int main(int argc, char** argv) {
         crc_new =
             std::min(crc_new, std::chrono::duration<double>(t2 - t1).count());
     }
-    std::printf("crc32 only, zlib crc32_z:        %7.1f MB/s\n",
+    std::printf("crc32 only, zlib-ng crc32_z:     %7.1f MB/s\n",
                 mbs / crc_zlib);
     std::printf("crc32 only, libdeflate:          %7.1f MB/s (sink %u)\n",
                 mbs / crc_new, sink);

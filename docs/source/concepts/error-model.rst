@@ -53,7 +53,7 @@ A subsystem opts in with a ``constexpr`` table of ``ErrorCodeInfo`` entries (dom
 ``make_error(DuqlErrc::Pattern, "...")`` then finds the domain and the condition from the enum type alone.
 The ``dstd::ErrorEnum`` concept checks that ``error_info`` exists, so a code of one subsystem cannot be attached to the domain of another, and the compiler checks it.
 An error holds a pointer to its table entry, so making one costs no lookup.
-``duql/errc.h`` is the worked example, and ``ErrorCode`` in ``common/error.h`` is the core domain's table.
+``ErrorCode`` in ``common/error.h`` is the worked example: the core domain's table.
 
 .. mermaid::
 

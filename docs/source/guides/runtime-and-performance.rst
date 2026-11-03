@@ -26,23 +26,9 @@ Tune threads and memory, and build your own concurrent workflows on the coroutin
 
       Fan-out, fan-in, racing tasks and streaming channels.
 
-   .. grid-item-card:: Build a task graph
-      :link: runtime/task-graphs
-      :link-type: doc
-
-      Express a computation as a DAG of coroutine tasks.
-
-   .. grid-item-card:: The pipeline
-      :link: ../pipeline
-      :link-type: doc
-
-      The executor, scopes and structured concurrency.
-
 .. toctree::
    :hidden:
 
    runtime/performance
    runtime/memory-budget
    pipelines/patterns
-   runtime/task-graphs
-   ../pipeline

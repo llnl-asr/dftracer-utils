@@ -148,9 +148,7 @@ Classes
    * - reading records as objects
      - ``TraceViewer.rows(A)``; ``A(**fields)``, ``None`` for a field not
        given
-     - ``trace::views::rows<A>(view)`` in
-       ``dftracer/utils/trace/views/typed_rows.h``; ``decode_row<A>`` for
-       one parsed record
+     - none
 
 Built-in schemas
 ----------------

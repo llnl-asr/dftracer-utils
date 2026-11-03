@@ -24,7 +24,6 @@ layer that composes all below it.
    runtime
    coro
    io
-   task_graph
 
 .. toctree::
    :maxdepth: 1

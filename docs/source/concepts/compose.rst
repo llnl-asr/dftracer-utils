@@ -118,7 +118,7 @@ method, opt-in cross-cutting behavior via marker tags (``Parallelizable``,
 (``UtilityExecutor``) that interpreted the tags at each call site. That
 machinery has been deleted from the codebase.
 
-Two things made it worth removing:
+The reason it was removed:
 
 - **The tag/behavior chain was indirection with no matching payoff.** Every
   cross-cutting concern (retry, caching, monitoring) had to be threaded
@@ -126,20 +126,6 @@ Two things made it worth removing:
   concern is just another op a caller wraps around the one it modifies. A
   plain function composes with ``|`` the same way a tagged ``Utility`` did,
   without the base class or the tag vocabulary.
-- **TaskGraph was already callable-native.** The :doc:`task-graph
-  <task-graph>` DAG (``runtime/task_graph/``) takes any ``CoroScope&, Args... ->
-  CoroTask<T>`` callable at its nodes - it never needed a ``Utility`` to plug
-  in. A compose pipeline drops straight into a graph node with no adapter:
-
-.. code-block:: cpp
-
-   auto pipe = u::op(Doubler{}) | u::op([](int x) -> coro::CoroTask<int> {
-                   co_return x + 1;
-               });
-   auto mapped = graph.map<int>(
-       wrapped,
-       [pipe](CoroScope&, int v) -> coro::CoroTask<int> { co_return co_await pipe(v); },
-       {.name = "compose"});
 
 With the base class gone, an op is exactly what its signature says it is: a
 callable from ``I`` to ``CoroTask<O>``, composed with the same four operators
@@ -170,7 +156,5 @@ serves.
 See also
 --------
 
-- :doc:`task-graph` for how ops become DAG nodes.
 - :doc:`async-runtime` for ``CoroTask``, ``CoroScope``, and the runtime that
   drives both.
-- :doc:`../guides/runtime/task-graphs` for the how-to of building a DAG.

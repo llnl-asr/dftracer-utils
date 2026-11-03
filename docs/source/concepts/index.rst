@@ -1,4 +1,4 @@
-:description: Explanations of how dftracer-utils works and why: the runtime, compose, task graph, dataframe, SIMD, indexing, and error models.
+:description: Explanations of how dftracer-utils works and why: the runtime, compose, dataframe, SIMD, indexing and error models.
 
 Concepts
 ========
@@ -13,7 +13,6 @@ the :doc:`Reference <../reference/index>` documents.
    architecture
    async-runtime
    compose
-   task-graph
    dataframe-model
    python-typing
    simd

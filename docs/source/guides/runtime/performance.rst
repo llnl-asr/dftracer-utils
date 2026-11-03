@@ -368,6 +368,5 @@ See also
 - :doc:`../../concepts/async-runtime` for the coroutine/executor model these
   knobs configure.
 - :doc:`memory-budget` for bounding memory instead of CPU parallelism.
-- :doc:`task-graphs` for building an explicit DAG on top of this runtime.
 - :doc:`../../concepts/coroutine-caveats` for rules to follow before sharing
   state across a parallel body.

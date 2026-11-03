@@ -77,8 +77,6 @@ set(_extra_files
 # The Task, TaskGraph and Pipeline trees move in a later step.
 set(_skip
     include/dftracer/utils/runtime/tasks
-    include/dftracer/utils/runtime/task_graph
-    include/dftracer/utils/runtime/pipeline
     src/dftracer/utils/runtime/tasks
     src/dftracer/utils/runtime/task_graph
     src/dftracer/utils/runtime/pipeline

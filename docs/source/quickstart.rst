@@ -257,58 +257,49 @@ raises ``ValueError``.
 C++ Quick Start
 ---------------
 
-Building Parallel Pipelines
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Streaming Between Tasks
+~~~~~~~~~~~~~~~~~~~~~~~
 
-Create and execute parallel data processing tasks using coroutines:
+Run a producer and a consumer as parallel coroutines that share a channel:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/runtime/pipeline/pipeline.h>
-   #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
-   #include <dftracer/utils/runtime/tasks/task.h>
    #include <dftracer/utils/coro/channel.h>
+   #include <dftracer/utils/coro/scope.h>
+   #include <dftracer/utils/runtime/runtime.h>
    #include <iostream>
+   #include <string>
 
    using namespace dftracer::utils;
    using namespace dftracer::utils::coro;
 
    int main() {
-       // Configure executor
-       auto config = PipelineConfig()
-           .with_name("MyPipeline")
-           .with_compute_threads(4);
+       Runtime rt(4);
 
-       // Create channel for data streaming
+       // Channel for data streaming
        auto channel = make_channel<std::string>(100);
 
-       // Producer task - reads data and sends through channel
-       auto producer = make_task(
-           [ch = channel->producer()](CoroScope& scope) mutable
-               -> CoroTask<void> {
-               auto guard = ch.guard();
+       // Producer reads data and sends it through the channel
+       auto producer = [ch = channel->producer()]() mutable -> CoroTask<void> {
+           auto guard = ch.guard();
+           for (int i = 0; i < 100; i++) {
+               std::string data = "item-" + std::to_string(i);
+               co_await ch.send(std::move(data));
+           }
+       };
 
-               for (int i = 0; i < 100; i++) {
-                   std::string data = "item-" + std::to_string(i);
-                   co_await ch.send(std::move(data));
-               }
-               co_return;
-           }, "Producer");
-
-       // Consumer task - reads from channel and processes
-       auto consumer = make_task([channel](CoroScope& scope) -> CoroTask<void> {
+       // Consumer reads from the channel and processes
+       auto consumer = [channel]() -> CoroTask<void> {
            while (auto item = co_await channel->receive()) {
                std::cout << "Processing: " << *item << std::endl;
            }
+       };
+
+       rt.block_on(named("stream", with_scope([&](Scope& scope) -> CoroTask<void> {
+           scope.spawn(std::move(producer));
+           scope.spawn(std::move(consumer));
            co_return;
-       }, "Consumer");
-
-       // Execute pipeline
-       Pipeline pipeline(config);
-       pipeline.set_source({producer});
-       pipeline.set_destination(consumer);
-       pipeline.execute();
-
+       })));
        return 0;
    }
 
@@ -319,31 +310,40 @@ Spawn multiple tasks to run in parallel:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/runtime/tasks/task.h>
-   #include <dftracer/utils/runtime/tasks/coro_scope.h>
+   #include <dftracer/utils/coro/scope.h>
+   #include <dftracer/utils/runtime/runtime.h>
+   #include <iostream>
+   #include <vector>
 
-   auto task = make_task([](CoroScope& scope) -> CoroTask<void> {
+   using namespace dftracer::utils;
+   using namespace dftracer::utils::coro;
+
+   CoroTask<int> total(Scope& scope) {
        std::vector<SpawnFuture<int>> futures;
-       
+
        // Spawn 10 parallel workers
        for (int i = 0; i < 10; ++i) {
-           auto future = scope.spawn([i](CoroScope& s) -> CoroTask<int> {
+           futures.push_back(scope.spawn_future([i]() -> CoroTask<int> {
                // Each worker processes item i
-               int result = compute(i);
-               co_return result;
-           });
-           futures.push_back(std::move(future));
+               co_return compute(i);
+           }));
        }
-       
+
        // Collect results
-       int total = 0;
+       int sum = 0;
        for (auto& fut : futures) {
-           total += co_await fut;
+           sum += co_await fut;
        }
-       
-       std::cout << "Total: " << total << std::endl;
-       co_return;
-   });
+       co_return sum;
+   }
+
+   int run(Runtime& rt) {
+       return rt.block_on(with_scope([](Scope& scope) -> CoroTask<int> {
+           int sum = co_await total(scope);
+           std::cout << "Total: " << sum << std::endl;
+           co_return sum;
+       }));
+   }
 
 Using Async Generators for Streaming Data
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -352,9 +352,11 @@ Process data lazily without materializing everything in memory:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/runtime/tasks/task.h>
-   #include <dftracer/utils/runtime/tasks/coro_scope.h>
    #include <dftracer/utils/coro/async_generator.h>
+   #include <dftracer/utils/runtime/runtime.h>
+
+   using namespace dftracer::utils;
+   using namespace dftracer::utils::coro;
 
    // Streaming data source (lazy evaluation)
    AsyncGenerator<std::string> read_lines_async(
@@ -363,17 +365,17 @@ Process data lazily without materializing everything in memory:
        // ... streaming implementation ...
    }
 
-   auto task = make_task([](CoroScope& scope) -> CoroTask<void> {
+   CoroTask<void> process_file() {
        auto gen = read_lines_async("trace.pfw.gz");
-       
+
        // Iterate asynchronously - each call to next() yields one item
        while (auto line = co_await gen.next()) {
            // Process line lazily as it's read
            parse_and_process(*line);
        }
-       
-       co_return;
-   });
+   }
+
+   void run(Runtime& rt) { rt.block_on(process_file()); }
 
 C Quick Start
 -------------
@@ -427,7 +429,7 @@ caller and freed with its ``_free`` call.
 Next Steps
 ----------
 
-- Read :doc:`pipeline` for comprehensive coroutine pipeline guide
+- Read :doc:`guides/pipelines/patterns` for the coroutine concurrency patterns
 - Check :doc:`api/index` for detailed Python API documentation
 - See :doc:`cpp_api/index` for C++ API reference
 - Visit :doc:`utilities` for built-in composable components
@@ -435,7 +437,7 @@ Next Steps
 
 Key Resources:
 
-- **Pipeline patterns**: :doc:`pipeline` covers CoroScope, channels, fan-out/fan-in, async generators
+- **Concurrency patterns**: :doc:`guides/pipelines/patterns` covers scopes, channels and fan-out/fan-in
 - **CLI tools**: :doc:`cli` lists all available command-line utilities
 - **Python bindings**: Use ``from dftracer.utils import TraceViewer, Indexer`` for Python scripts
 - **C++ integration**: Link ``dftracer-utils`` library and include headers from ``include/dftracer/utils/``

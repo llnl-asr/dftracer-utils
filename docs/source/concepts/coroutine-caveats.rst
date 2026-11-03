@@ -5,7 +5,7 @@ Coroutine caveats
 
 The async core of dftracer-utils is built on C++20 coroutines: ``CoroTask``,
 channels, ``when_all`` / ``when_any``, and the ``CoroScope`` runtime. Coroutines
-are what make the pipeline, the task graph, and the plugin engine read like
+are what make the runtime and the plugin engine read like
 straight-line code while running concurrently. They also come with lifetime
 rules and compiler bugs that are easy to trip over and hard to debug, because
 the failures are silent memory corruption rather than clean errors.

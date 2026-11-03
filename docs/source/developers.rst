@@ -568,7 +568,7 @@ Never store it across the parser's or the input buffer's lifetime.
 
 **Instantiating Executor directly**
 
-``Executor`` (``coro/executor.h``) is internal to the Pipeline. Never create it directly; use ``Pipeline`` or the task framework instead.
+``Executor`` (``coro/executor.h``) is internal to the runtime, and ``Pipeline`` is an internal class that is not installed. Never create an ``Executor`` directly; use ``Runtime`` instead.
 
 **Per-event SQL indexing**
 

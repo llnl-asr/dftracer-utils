@@ -91,39 +91,32 @@ applied at the I/O boundary: one abstraction, several platform-specific
 implementations, and a compile-time choice of which ones are even compiled
 in.
 
-Runtime, Executor, and Pipeline
------------------------------------
+Runtime and Executor
+--------------------
 
-Three levels of "run this coroutine" exist, for different callers:
+Two levels of "run this coroutine" exist, for different callers:
 
 - ``Runtime`` (``runtime/runtime.h``) is the lightweight entry point: an
   ``Executor`` plus a ``Watchdog``, with no DAG or scheduler overhead. It is
-  what the Python bindings and other non-pipeline callers use to run
+  what the Python bindings and other callers use to run
   coroutines on a thread pool. Its worker count is elastic when configured
   with a ``min_workers`` floor below the ``num_threads`` cap, so a
   mostly-idle process does not pin a full thread pool on a shared HPC login
   node.
 - ``Executor`` (``coro/executor.h``) is the thread pool and run
   queue that actually resumes coroutine frames.
-- ``Pipeline`` and **task graphs** (``runtime/pipeline/pipeline.h``,
-  ``runtime/task_graph/``) sit above the executor for callers that need a DAG:
-  fan-out/fan-in, map/reduce stages, dependency validation. They delegate
-  execution back down to the same ``Executor``.
 
 .. mermaid::
 
    graph TB
-       Pipeline["Pipeline / TaskGraph<br/>(DAG orchestration)"]
        Runtime["Runtime<br/>(Executor + Watchdog)"]
        Executor["Executor<br/>(thread pool, run queue)"]
        IoBackend["IoBackend<br/>(io_uring / kqueue / epoll)"]
-       Pipeline --> Executor
        Runtime --> Executor
        Executor --> IoBackend
 
-A caller that just needs "run these coroutines concurrently" reaches for
-``Runtime``; a caller that needs a validated DAG with typed stage outputs
-reaches for ``Pipeline``. Both bottom out in the same ``Executor``, so there
+A caller that needs "run these coroutines concurrently" reaches for
+``Runtime``, which runs on the same ``Executor`` as the rest of the engine, so there
 is one thread pool and one io backend selection for the whole process, not
 one per subsystem.
 

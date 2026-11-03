@@ -16,5 +16,3 @@ Composition and inheritance across the trace-analysis types:
 
 .. include:: /cpp_api/_generated/trace.rst.inc
 .. include:: /cpp_api/_generated/trace.views.rst.inc
-.. include:: /cpp_api/_generated/trace.statistics.rst.inc
-.. include:: /cpp_api/_generated/trace.provenance.rst.inc

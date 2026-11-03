@@ -46,7 +46,6 @@ INCLUDE_ROOT = "dftracer/utils"
 GUIDE_PAGES: dict[str, str] = {
     "coro": "coro",
     "io": "io",
-    "task_graph": "task_graph",
     "index": "indexer",
     "utilities.composites.dft.aggregators": "dft_aggregators",
     "utilities.composites.dft.indexing": "dft_indexing",
@@ -66,7 +65,6 @@ TITLE_OVERRIDES: dict[str, str] = {
     "hash": "Hashing",
     "coro": "Coroutine Primitives",
     "io": "Async I/O",
-    "task_graph": "Task Graph",
     "server": "HTTP Server",
     "mpi": "MPI Utilities",
     "utilities.common.statistics": "Statistics (DDSketch, Histogram)",

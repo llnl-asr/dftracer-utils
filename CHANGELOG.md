@@ -387,6 +387,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Remove `DFTUtilsException::code()`. Read `condition()`, `error()`, `domain()` or `code_int()` instead, or `errorcode_of(e.error())` for the coarse code an `ErrorCode` names.
 - Stop installing the C++ headers under `dftracer/utils/server/` and `dftracer/utils/utilities/`, except `utilities/filesystem/types.h`, `utilities/hash/types.h` and `utilities/hash/fnv1a_hasher_utility.h`, and the `utilities/utilities.h` umbrella. They are now private to the library.
 - Stop installing the C++ `trace/trace.h` umbrella, the `trace/comparator/` headers, the `trace/event_collector_utility.h`, `trace/chunk_extractor_utility.h` and `trace/metadata_collector_utility.h` headers and `index/build/chunk_indexer.h`. `CompareView` is no longer a public C++ API; compare traces with `TraceViewer.compare` in Python.
+- Stop installing the C++ `Pipeline`, `TaskGraph` and `Task` headers under `dftracer/utils/runtime/` (`pipeline/`, `task_graph/`, `tasks/` except `coro_scope.h`) and `runtime/abi.h`, the `coro/task_abi.h` header, the duql `errc.h`, `pattern.h`, `subsumption.h` and `internal/` headers and the trace statistics, provenance, `sharded_view.h`, `typed_rows.h`, `event_id.h`, `parse_inflated.h`, `chunk_verifier_utility.h` and `internal/` headers. `ShardedView` and the typed `rows` reader are no longer public C++ APIs; query shard sets with `dftracer_view` and use `TraceViewer.rows` in Python.
 
 ### Fixed
 

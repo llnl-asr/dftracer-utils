@@ -531,28 +531,6 @@ after the viewer's filters and time window:
       ``rows`` collects the fields first, so use ``collect()`` for bulk
       work.
 
-   .. tab-item:: C++
-
-      .. code-block:: cpp
-
-         #include <dftracer/utils/trace/views/typed_rows.h>
-
-         namespace tv = dftracer::utils::trace::views;
-
-         std::vector<AccessLog> logs =
-             co_await tv::rows<AccessLog>(
-                 tv::View::from_file("access.ndjson.gz").duql("status >= 500"));
-         for (const AccessLog& log : logs)
-             std::printf("%s %f\n", log.upstream->c_str(), *log.request_time);
-
-      The scan workers decode each record straight into the class, which
-      is about twice as fast as ``collect()`` followed by reading the same
-      columns. A member whose value is missing or does not convert keeps
-      its default (empty for ``std::optional``). Rows from different workers
-      arrive in no fixed order. ``rows<T>(view, tv::LAZY)`` defers the read
-      for ``collect_all()`` or a session. The class does not need to be
-      registered to read rows.
-
 Bound the memory an index build uses
 -------------------------------------
 

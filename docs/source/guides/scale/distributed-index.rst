@@ -95,6 +95,7 @@ when ``index_path`` is empty or neither ``directory`` nor
 ``files`` is given, and ``ImportError`` when dask is not installed.
 
 The build runs in four steps.
+
 1. Each worker builds its files as a complete index root at
    ``<index_path>/shards/<worker>``, staging the build on node-local disk with
    the scratch helpers in ``dftracer/utils/common/scratch.h`` when
@@ -141,42 +142,76 @@ Query a shard set
 ``distributed_index`` merges its shards into the index root, so a reader needs
 no shard support. A producer that keeps its per-worker indexes unmerged can
 leave them as a set of immutable index shards in ``<root>/shards/<n>`` next to
-the ``<root>/shards.json`` manifest. ``ShardedView`` (C++,
-``dftracer/utils/trace/views/sharded_view.h``) queries that set as one logical
-index, without opening or rebuilding a merged store: it enumerates every
-shard's files, aggregates each shard independently with
-``aggregate_partial()``, and reduces the partials - the in-process form of the
+the ``<root>/shards.json`` manifest. ``dftracer_view`` queries that set as one
+logical index, without opening or rebuilding a merged store: it aggregates
+each shard independently and reduces the partials - the in-process form of the
 :doc:`distributed-aggregation` fan-in pattern.
 
-.. code-block:: cpp
-
-   #include <dftracer/utils/trace/views/sharded_view.h>
-
-   using namespace dftracer::utils::trace::views;
-
-   ShardedView sv = ShardedView::from_manifest("/shared/index-shards");
-   // or, bypassing the manifest:
-   ShardedView sv2 = ShardedView::from_shard_dirs({"/shared/s0", "/shared/s1"});
-
-   auto configure = [](View v) {
-       return v.group_by({GroupKey::name()})
-               .agg({{AggOp::Count, "", "count"}, {AggOp::Sum, "dur", "sum_dur"}});
-   };
-   dftracer::utils::dataframe::DataFrame table = sv.aggregate(configure).get();
-
-   // Or emit the merged aggregation as ph="C" counter events. ExportSink is
-   // abstract (just write(std::string_view)), so a caller implements one:
-   struct StringSink : ExportSink {
-       std::string data;
-       void write(std::string_view chunk) override { data.append(chunk); }
-   };
-   StringSink sink;
-   ExportStats stats = sv.aggregate_counters(configure, sink).get();
-
-``ShardedView`` is fully read-only: it never builds, rebuilds, or persists a
+A shard set is read-only: a query never builds, rebuilds, or persists a
 rollup, so it takes no write lock and is safe against shards on a read-only
-mount or NFS. It only answers aggregate/counter queries (``configure`` must
-set a ``group_by``/``agg``) - there is no raw-event read across a shard set.
+mount or NFS. It only answers aggregate/counter queries (the query must set a
+group-by and aggregations) - there is no raw-event read across a shard set.
+
+Build and query a shard set by hand
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A shard is a directory that holds its own traces and its own ``.dftindex``,
+as if one worker had indexed its slice alone. Make a different trace for each:
+
+.. code-block:: python
+
+   import gzip
+   import os
+
+   os.makedirs("shard-a", exist_ok=True)
+   os.makedirs("shard-b", exist_ok=True)
+
+   with gzip.open("shard-a/trace.pfw.gz", "wt") as f:
+       for i in range(200):
+           f.write(
+               f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,'
+               f'"ts":{1000 + i},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+           )
+
+   with gzip.open("shard-b/trace.pfw.gz", "wt") as f:
+       for i in range(300):
+           f.write(
+               f'{{"name":"read","cat":"POSIX","pid":2,"tid":1,'
+               f'"ts":{2000 + i},"dur":{5 + i},"ph":"X","args":{{}}}}\n'
+           )
+
+Index each shard with no coordination between them:
+
+.. code-block:: console
+
+   $ dftracer_index shard-a
+   $ dftracer_index shard-b
+
+Then catalog the shards into the manifest of an index root with
+``write_shard_set(root, shard_dirs)``, and pass absolute shard paths:
+
+.. code-block:: python
+
+   import os
+   from dftracer.utils import write_shard_set
+
+   os.makedirs("set/.dftindex", exist_ok=True)
+   write_shard_set(
+       "set/.dftindex",
+       [os.path.abspath("shard-a"), os.path.abspath("shard-b")],
+   )
+
+Query the set through its folder. With 200 events in ``shard-a`` and 300 in
+``shard-b``, the partials reduce into one row:
+
+.. code-block:: console
+
+   $ dftracer_view set --group-by cat --agg count,sum:dur
+   {"cat":"posix","count":500,"sum_dur":68250}
+
+To end with one ordinary index, put the shards under
+``set/.dftindex/shards/<n>`` and call ``consolidate_shard_set("set/.dftindex")``
+as described below.
 
 The shard-set format
 ~~~~~~~~~~~~~~~~~~~~~
@@ -193,7 +228,7 @@ independently.
 The ``index`` line of ``VERSION`` sets ``format_version``, and a reader
 rejects a manifest that holds another version.
 
-Three free functions manage the set:
+Two free functions manage the set:
 
 - ``write_shard_set(root, shard_dirs)`` - catalog an existing set of shard
   directories into a manifest at ``root``. Atomic (write-temp-then-rename), so
@@ -203,10 +238,6 @@ Three free functions manage the set:
   manifest and the emptied shard directories. A move that fails leaves the
   manifest and the remaining shards in place and throws, so a later call
   retries the merge without a rebuild.
-- ``merge_shard_set(root, out_root)`` - merge the shards' aggregation partials
-  into one consolidated index at ``out_root`` **without** re-reading traces
-  (re-keys each shard's interned strings into a unified dictionary and copies
-  the partials and the column blocks). The shards stay where they are.
 
 The shards of a root live in ``<root>/shards/<n>`` and the manifest is
 ``<root>/shards.json`` (``shard_root`` and ``shard_manifest_path``), so the
@@ -219,7 +250,7 @@ CLI: dftracer_view autodetects a shard set
 ``dftracer_view`` resolves a shard-set root from its folder input or
 ``--index-dir`` (adding ``.dftindex`` to the path when the path is not an
 index root yet, then reading ``shards.json``) and, when found, routes the
-query through ``ShardedView`` instead of scanning trace files directly. A
+query through the shard set instead of scanning trace files directly. A
 shard set only supports aggregate/counter queries:
 
 .. code-block:: bash
@@ -236,7 +267,7 @@ See also
 
 - :doc:`../../trace-viewer` - query the index this builds.
 - :doc:`distributed-aggregation` - the partial-aggregate fan-in pattern
-  ``ShardedView`` runs in-process, and the pattern to use when reducing
+  a shard-set query runs in-process, and the pattern to use when reducing
   partials yourself (e.g. across MPI ranks).
 - :doc:`mpi` - the MPI modes of ``dftracer_view``, the other cross-node path.
 - :doc:`../io/compression` - ``checkpoint_size`` is the gzip member size.

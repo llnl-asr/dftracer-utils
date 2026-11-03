@@ -4,7 +4,6 @@
 #include <yaml-cpp/yaml.h>
 
 #include <cmath>
-#include <ostream>
 #include <variant>
 
 namespace dftracer::utils::utilities::dlio {
@@ -98,13 +97,6 @@ dstd::String render_dlio_yaml(const DlioTimingBlock* computation,
     emit.SetSeqFormat(YAML::Block);
     emit << root;
     return dstd::String(emit.c_str());
-}
-
-bool write_dlio_yaml(std::ostream& out, const DlioTimingBlock* computation,
-                     const DlioTimingBlock* preprocess) {
-    out << render_dlio_yaml(computation, preprocess);
-    out << "\n";
-    return static_cast<bool>(out);
 }
 
 }  // namespace dftracer::utils::utilities::dlio

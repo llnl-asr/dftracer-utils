@@ -341,6 +341,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove the C++ `dlio::write_dlio_yaml(std::ostream&, ...)`. Use `render_dlio_yaml` and write the string to a file.
 - Remove the `ghc::filesystem` dependency and `common/filesystem.h`. The library and the tests use `dstd::fs` and `dstd::Path`.
 - Remove the C++ `IndexDatabase` class and its header `index/store/index_database.h`. Use `Index` from `index/index.h` instead.
   `index::release_root()` and `index::release_all_roots()` replace `release_index()` and `close_index_writers()`.

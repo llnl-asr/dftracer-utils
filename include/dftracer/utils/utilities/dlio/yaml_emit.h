@@ -5,8 +5,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/dlio/mixture.h>
 
-#include <iosfwd>
-
 namespace dftracer::utils::utilities::dlio {
 
 /// Parameters needed to emit one timing block in the DLIO config.
@@ -31,10 +29,6 @@ struct DlioTimingBlock {
 /// Either or both blocks can be omitted by passing `nullptr`.
 dstd::String render_dlio_yaml(const DlioTimingBlock* computation,
                               const DlioTimingBlock* preprocess);
-
-/// Writes the YAML to `out` (e.g. an ofstream). Returns true on success.
-bool write_dlio_yaml(std::ostream& out, const DlioTimingBlock* computation,
-                     const DlioTimingBlock* preprocess);
 
 }  // namespace dftracer::utils::utilities::dlio
 

@@ -164,11 +164,8 @@ yaml_emit
    DlioTimingBlock comp{best_comp_model, comp_max_bound};
    DlioTimingBlock prep{best_prep_model, prep_max_bound};
 
-   std::ofstream out("dlio_config.yaml");
-   write_dlio_yaml(out, &comp, &prep);
-
-   // Or render to a string:
    dstd::String yaml = render_dlio_yaml(&comp, &prep);
+   auto wrote = dstd::fs::write_file("dlio_config.yaml", yaml);
 
 Renders both single distributions and mixtures into the DLIO schema
 (``type: <family>`` + family-specific params, or ``type: mixture`` +

@@ -56,8 +56,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <thread>
-#include <utility>
 
 using namespace dftracer::utils;
 namespace df = dftracer::utils::dataframe;

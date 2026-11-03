@@ -20,7 +20,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <random>
-#include <string>
 
 namespace df = dftracer::utils::dataframe;
 using df::DataFrame;

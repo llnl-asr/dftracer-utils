@@ -16,15 +16,13 @@
 //   nonzero)
 
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <memory_probe.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <string>
-#include <string_view>
-#include <vector>
 
 #ifndef __APPLE__
 #include <fcntl.h>
@@ -41,16 +39,16 @@ constexpr std::size_t SMOKE_READS = 100;
 constexpr double CORE_SHARE = 0.001;
 
 struct Row {
-    std::string name;
+    dftracer::utils::dstd::String name;
     double ns_per_read;
 };
 
 volatile std::uint64_t sink = 0;
 
 template <class Fn>
-bool measure(const std::string& name, std::size_t reads, Fn read_once,
-             std::vector<Row>& rows) {
-    std::vector<double> runs;
+bool measure(const dftracer::utils::dstd::String& name, std::size_t reads,
+             Fn read_once, dftracer::utils::dstd::Vector<Row>& rows) {
+    dftracer::utils::dstd::Vector<double> runs;
     bool nonzero = true;
     for (std::size_t r = 0; r < RUNS; ++r) {
         const auto t0 = std::chrono::steady_clock::now();
@@ -81,7 +79,7 @@ std::uint64_t task_footprint() {
     return info.phys_footprint;
 }
 
-bool run_platform(std::size_t reads, std::vector<Row>& rows) {
+bool run_platform(std::size_t reads, dftracer::utils::dstd::Vector<Row>& rows) {
     return measure("task_info TASK_VM_INFO", reads, task_footprint, rows);
 }
 
@@ -97,7 +95,7 @@ struct Buffer {
 
 class KeptFd {
    public:
-    explicit KeptFd(const std::string& path)
+    explicit KeptFd(const dftracer::utils::dstd::String& path)
         : fd_(::open(path.c_str(), O_RDONLY | O_CLOEXEC)) {}
     ~KeptFd() {
         if (fd_ >= 0) ::close(fd_);
@@ -118,7 +116,7 @@ class KeptFd {
     int fd_;
 };
 
-bool read_once_file(const std::string& path, Buffer& b) {
+bool read_once_file(const dftracer::utils::dstd::String& path, Buffer& b) {
     const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;
     const ssize_t n = ::read(fd, b.data, BUFFER_BYTES - 1);
@@ -158,15 +156,15 @@ std::uint64_t parse_status(const Buffer& b) {
     while (pos < text.size()) {
         std::size_t eol = text.find('\n', pos);
         if (eol == dftracer::utils::dstd::StringView::npos) eol = text.size();
-        const std::string line(text.substr(pos, eol - pos));
-        if (const auto v = mp::detail::kib_field(line, "RssAnon:")) return v;
+        if (const auto v = mp::detail::kib_field(b.data + pos, "RssAnon:"))
+            return v;
         pos = eol + 1;
     }
     return 0;
 }
 
-std::string cgroup_dir() {
-    std::string path;
+dftracer::utils::dstd::String cgroup_dir() {
+    dftracer::utils::dstd::String path;
     Buffer b;
     if (!read_once_file("/proc/self/cgroup", b)) return path;
     const dftracer::utils::dstd::StringView text(b.data, b.size);
@@ -177,15 +175,17 @@ std::string cgroup_dir() {
         const dftracer::utils::dstd::StringView line =
             text.substr(pos, eol - pos);
         if (line.starts_with("0::"))
-            path = std::string(CGROUP_ROOT) + std::string(line.substr(3));
+            path = dftracer::utils::dstd::String(CGROUP_ROOT) +
+                   dftracer::utils::dstd::String(line.substr(3));
         pos = eol + 1;
     }
     return path;
 }
 
 template <class Parse>
-bool measure_file(const std::string& label, const std::string& path,
-                  std::size_t reads, Parse parse, std::vector<Row>& rows) {
+bool measure_file(const dftracer::utils::dstd::String& label,
+                  const dftracer::utils::dstd::String& path, std::size_t reads,
+                  Parse parse, dftracer::utils::dstd::Vector<Row>& rows) {
     bool ok = true;
     Buffer b;
     ok &= measure(
@@ -202,9 +202,9 @@ bool measure_file(const std::string& label, const std::string& path,
     return ok;
 }
 
-bool run_platform(std::size_t reads, std::vector<Row>& rows) {
+bool run_platform(std::size_t reads, dftracer::utils::dstd::Vector<Row>& rows) {
     bool ok = true;
-    const std::string dir = cgroup_dir();
+    const dftracer::utils::dstd::String dir = cgroup_dir();
     if (dir.empty()) {
         std::printf("cgroup v2 is absent, timing /proc/self/status only\n");
     } else {
@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::size_t reads = smoke ? SMOKE_READS : FULL_READS;
-    std::vector<Row> rows;
+    dftracer::utils::dstd::Vector<Row> rows;
     bool ok = run_platform(reads, rows);
     ok &= measure(
         "memory_probe::read()", reads, [] { return mp::read().anon; }, rows);

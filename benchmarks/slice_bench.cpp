@@ -46,6 +46,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -63,13 +65,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <functional>
 #include <numeric>
-#include <optional>
 #include <random>
 #include <stdexcept>
-#include <string>
-#include <thread>
 
 namespace df = dftracer::utils::dataframe;
 
@@ -451,22 +449,21 @@ double join_inner(const Scale& s) {
 
 struct Case {
     dftracer::utils::dstd::String name;
-    std::function<double(const Scale&)> run;
+    dftracer::utils::dstd::Function<double(const Scale&)> run;
 };
 
 dftracer::utils::dstd::Vector<Case> make_cases() {
-    dftracer::utils::dstd::Vector<Case> cases{
-        {"slice int64", slice_int64},
-        {"slice depth 4", slice_depth4},
-        {"slice string", slice_string},
-        {"slice nullable aligned",
-         [](const Scale& s) { return slice_nullable(s, 0); }},
-        {"slice nullable unaligned",
-         [](const Scale& s) { return slice_nullable(s, 3); }},
-        {"head tail", head_tail},
-        {"filter half", filter_half},
-        {"concat 1000 slices", concat_slices},
-    };
+    dftracer::utils::dstd::Vector<Case> cases;
+    cases.push_back({"slice int64", slice_int64});
+    cases.push_back({"slice depth 4", slice_depth4});
+    cases.push_back({"slice string", slice_string});
+    cases.push_back({"slice nullable aligned",
+                     [](const Scale& s) { return slice_nullable(s, 0); }});
+    cases.push_back({"slice nullable unaligned",
+                     [](const Scale& s) { return slice_nullable(s, 3); }});
+    cases.push_back({"head tail", head_tail});
+    cases.push_back({"filter half", filter_half});
+    cases.push_back({"concat 1000 slices", concat_slices});
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     cases.push_back({"arrow round trip", arrow_round_trip});
 #endif
@@ -539,7 +536,7 @@ int drive(const dftracer::utils::dstd::String& self,
                cases.size()));
     auto rss = ns;
     std::printf("slice_bench label=\"%s\" rounds=%d hw=%u\n", label.c_str(),
-                rounds, std::thread::hardware_concurrency());
+                rounds, dftracer::utils::dstd::Thread::hardware_concurrency());
     for (std::size_t side = 0; side < sides.size(); ++side) {
         std::printf("side %zu: %s\n", side, sides[side].c_str());
     }

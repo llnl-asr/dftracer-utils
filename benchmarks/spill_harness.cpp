@@ -50,10 +50,12 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
@@ -74,12 +76,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <functional>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string>
-#include <thread>
 
 namespace df = dftracer::utils::dataframe;
 namespace coro = dftracer::utils::coro;
@@ -325,8 +322,9 @@ LazyFrame window_lag(const LazyFrame& plan) {
 
 struct Case {
     dftracer::utils::dstd::String name;
-    std::function<LazyFrame(const Inputs&)> plan;
-    std::function<bool(std::int64_t out_rows, const Inputs&)> rows_ok;
+    dftracer::utils::dstd::Function<LazyFrame(const Inputs&)> plan;
+    dftracer::utils::dstd::Function<bool(std::int64_t out_rows, const Inputs&)>
+        rows_ok;
 };
 
 bool any_rows(std::int64_t out, const Inputs&) { return out > 0; }
@@ -338,86 +336,106 @@ bool at_most_groups(std::int64_t out, const Inputs& in) {
 dftracer::utils::dstd::Vector<Case> make_cases() {
     dftracer::utils::dstd::Vector<df::GroupAgg> aggs{
         {df::Agg::Sum, "v", "sum_v"}, {df::Agg::Count, "v", "count_v"}};
-    return {
-        {"sort_by", [](const Inputs& in) { return in.main().sort_by("s"); },
-         all_rows},
-        {"group_by",
-         [aggs](const Inputs& in) { return in.main().group_by("g", aggs); },
-         at_most_groups},
-        {"unique", [](const Inputs& in) { return in.main().unique({"g"}); },
-         at_most_groups},
-        {"is_duplicated",
-         [](const Inputs& in) {
-             return in.main().select({"g"}).is_duplicated();
-         },
-         all_rows},
-        {"join inner",
-         [](const Inputs& in) {
-             LazyFrame dim =
-                 in.scan({{{"g", Gen::Time, 0, 1}, {"w", Gen::Float}},
-                          DIM_ROWS,
-                          SEED + 1});
-             return in.main().join(
-                 dim,
-                 dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                     "g"});
-         },
-         any_rows},
-        {"join grace",
-         [](const Inputs& in) {
-             LazyFrame big =
-                 in.scan({{{"k", Gen::Random, std::int64_t{1} << 40},
-                           {"g", Gen::Skewed, in.groups()},
-                           {"p", Gen::Random, PARTITIONS},
-                           {"t", Gen::Time, 0, TIME_STEP},
-                           {"v", Gen::Float},
-                           {"s", Gen::Text}},
-                          in.rows,
-                          SEED + 2});
-             return in.main().join(
-                 big,
-                 dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
-                     "g"});
-         },
-         any_rows},
-        {"asof",
-         [](const Inputs& in) {
-             LazyFrame right = in.scan({{{"t", Gen::Time, 0, 2 * TIME_STEP, 5},
-                                         {"p", Gen::Random, PARTITIONS},
-                                         {"w", Gen::Float}},
-                                        std::max<std::int64_t>(in.rows / 2, 1),
-                                        SEED + 3});
-             return in.main().asof(right, "t", {"p"},
-                                   df::AsofDirection::Backward);
-         },
-         all_rows},
-        {"interval",
-         [](const Inputs& in) {
-             LazyFrame ranges =
-                 in.scan({{{"lo", Gen::Time, 0, RANGE_SPACING},
-                           {"hi", Gen::Time, 0, RANGE_SPACING, RANGE_LENGTH},
-                           {"p", Gen::Random, PARTITIONS},
-                           {"w", Gen::Float}},
-                          std::max<std::int64_t>(in.rows / 16, 1),
-                          SEED + 4});
-             return in.main().interval(ranges, "t", "lo", "hi", {"p"});
-         },
-         any_rows},
-        {"topk", [](const Inputs& in) { return in.main().topk("k", TOPK); },
-         [](std::int64_t out, const Inputs& in) {
-             return out == std::min(TOPK, in.rows);
-         }},
-        {"head_by",
-         [](const Inputs& in) { return in.main().head_by({"g"}, HEAD_BY_N); },
-         [](std::int64_t out, const Inputs& in) {
-             return out > 0 && out <= HEAD_BY_N * in.groups();
-         }},
-        {"window", [](const Inputs& in) { return window_lag(in.main()); },
-         all_rows},
-        {"pivot",
-         [](const Inputs& in) { return in.main().pivot("g", "p", "v", "sum"); },
-         at_most_groups},
-    };
+    dftracer::utils::dstd::Vector<Case> cases;
+    auto add =
+        [&cases](
+            dftracer::utils::dstd::String name,
+            dftracer::utils::dstd::Function<LazyFrame(const Inputs&)> plan,
+            dftracer::utils::dstd::Function<bool(std::int64_t, const Inputs&)>
+                rows_ok) {
+            cases.push_back(
+                Case{std::move(name), std::move(plan), std::move(rows_ok)});
+        };
+    add(
+        "sort_by", [](const Inputs& in) { return in.main().sort_by("s"); },
+        all_rows);
+    add(
+        "group_by",
+        [aggs](const Inputs& in) { return in.main().group_by("g", aggs); },
+        at_most_groups);
+    add(
+        "unique", [](const Inputs& in) { return in.main().unique({"g"}); },
+        at_most_groups);
+    add(
+        "is_duplicated",
+        [](const Inputs& in) {
+            return in.main().select({"g"}).is_duplicated();
+        },
+        all_rows);
+    add(
+        "join inner",
+        [](const Inputs& in) {
+            LazyFrame dim =
+                in.scan({{{"g", Gen::Time, 0, 1}, {"w", Gen::Float}},
+                         DIM_ROWS,
+                         SEED + 1});
+            return in.main().join(
+                dim,
+                dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                    "g"});
+        },
+        any_rows);
+    add(
+        "join grace",
+        [](const Inputs& in) {
+            LazyFrame big = in.scan({{{"k", Gen::Random, std::int64_t{1} << 40},
+                                      {"g", Gen::Skewed, in.groups()},
+                                      {"p", Gen::Random, PARTITIONS},
+                                      {"t", Gen::Time, 0, TIME_STEP},
+                                      {"v", Gen::Float},
+                                      {"s", Gen::Text}},
+                                     in.rows,
+                                     SEED + 2});
+            return in.main().join(
+                big,
+                dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                    "g"});
+        },
+        any_rows);
+    add(
+        "asof",
+        [](const Inputs& in) {
+            LazyFrame right = in.scan({{{"t", Gen::Time, 0, 2 * TIME_STEP, 5},
+                                        {"p", Gen::Random, PARTITIONS},
+                                        {"w", Gen::Float}},
+                                       std::max<std::int64_t>(in.rows / 2, 1),
+                                       SEED + 3});
+            return in.main().asof(right, "t", {"p"},
+                                  df::AsofDirection::Backward);
+        },
+        all_rows);
+    add(
+        "interval",
+        [](const Inputs& in) {
+            LazyFrame ranges =
+                in.scan({{{"lo", Gen::Time, 0, RANGE_SPACING},
+                          {"hi", Gen::Time, 0, RANGE_SPACING, RANGE_LENGTH},
+                          {"p", Gen::Random, PARTITIONS},
+                          {"w", Gen::Float}},
+                         std::max<std::int64_t>(in.rows / 16, 1),
+                         SEED + 4});
+            return in.main().interval(ranges, "t", "lo", "hi", {"p"});
+        },
+        any_rows);
+    add(
+        "topk", [](const Inputs& in) { return in.main().topk("k", TOPK); },
+        [](std::int64_t out, const Inputs& in) {
+            return out == std::min(TOPK, in.rows);
+        });
+    add(
+        "head_by",
+        [](const Inputs& in) { return in.main().head_by({"g"}, HEAD_BY_N); },
+        [](std::int64_t out, const Inputs& in) {
+            return out > 0 && out <= HEAD_BY_N * in.groups();
+        });
+    add(
+        "window", [](const Inputs& in) { return window_lag(in.main()); },
+        all_rows);
+    add(
+        "pivot",
+        [](const Inputs& in) { return in.main().pivot("g", "p", "v", "sum"); },
+        at_most_groups);
+    return cases;
 }
 
 coro::CoroTask<std::int64_t> drain(LazyFrame plan) {
@@ -607,7 +625,8 @@ int drive(const dftracer::utils::dstd::String& self) {
     std::printf(
         "spill_harness hw=%u budget=LazyFrame::memory_budget "
         "spilled=%s spill_headroom=%.1f MiB\n",
-        std::thread::hardware_concurrency(), written_source(), mib(headroom));
+        dftracer::utils::dstd::Thread::hardware_concurrency(), written_source(),
+        mib(headroom));
     std::printf(
         "\n| op | budget | data MiB | runs | peak above baseline MiB | "
         "spilled MiB | wall ms | over budget | over budget + headroom |\n"

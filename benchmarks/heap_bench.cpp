@@ -56,9 +56,13 @@
 // up. Instructions are counted over the whole run of a case, set-up included.
 
 #include <bench_counters.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -73,13 +77,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
-#include <optional>
 #include <random>
-#include <string>
-#include <string_view>
 #include <thread>
-#include <utility>
 #include <vector>
 
 namespace mem = dftracer::utils::memory;
@@ -138,6 +137,7 @@ double elapsed_ns(Clock::time_point start, Clock::time_point end) {
 
 template <class A>
 Outcome small_case(std::size_t size, bool lifo, const Scale &scale) {
+    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<void *> blocks(scale.batch);
     auto start = Clock::now();
     for (std::size_t rep = 0; rep < scale.reps; ++rep) {
@@ -164,6 +164,7 @@ template <class A>
 Outcome medium_free_case(const Scale &scale) {
     double total_ns = 0;
     std::size_t frees = 0;
+    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<void *> blocks(scale.medium_count);
     for (int rep = 0; rep < 8; ++rep) {
         for (auto &b : blocks) {
@@ -221,9 +222,11 @@ void consume(Ring &ring, std::size_t blocks) {
 
 template <class A>
 Outcome cross_case(std::size_t pairs, const Scale &scale) {
+    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<Ring> rings(pairs);
     std::atomic<std::size_t> ready{0};
     std::atomic<bool> go{false};
+    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<std::thread> threads;
     auto body = [&](bool producer, std::size_t pair) {
         ready.fetch_add(1);
@@ -252,8 +255,10 @@ struct Step {
     std::uint32_t size;
 };
 
+// keep std: scaffolding must not allocate from the heap under measurement
 std::vector<Step> mixed_trace(const Scale &scale) {
     std::mt19937_64 rng(SEED);
+    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<Step> trace;
     trace.reserve(scale.mixed_steps);
     for (std::size_t i = 0; i < scale.mixed_steps; ++i) {
@@ -276,8 +281,11 @@ std::vector<Step> mixed_trace(const Scale &scale) {
 
 template <class A>
 Outcome mixed_case(const Scale &scale) {
+    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<Step> trace = mixed_trace(scale);
+    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<void *> live(scale.mixed_slots, nullptr);
+    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<std::uint32_t> sizes(scale.mixed_slots, 0);
     auto start = Clock::now();
     for (const Step &step : trace) {
@@ -307,23 +315,24 @@ Outcome mixed_budget_case(const Scale &scale, std::size_t budget) {
 }
 
 struct Case {
-    std::string name;
-    std::function<Outcome(bool heap, const Scale &)> run;
+    dftracer::utils::dstd::String name;
+    dftracer::utils::dstd::Function<Outcome(bool heap, const Scale &)> run;
 };
 
 template <class Fn>
-std::function<Outcome(bool, const Scale &)> both(Fn fn) {
+dftracer::utils::dstd::Function<Outcome(bool, const Scale &)> both(Fn fn) {
     return [fn](bool heap, const Scale &scale) {
         return heap ? fn(HeapPolicy{}, scale) : fn(MallocPolicy{}, scale);
     };
 }
 
-std::vector<Case> make_cases() {
-    std::vector<Case> cases;
+dftracer::utils::dstd::Vector<Case> make_cases() {
+    dftracer::utils::dstd::Vector<Case> cases;
     for (std::size_t size : SMALL_SIZES) {
         for (bool lifo : {false, true}) {
-            std::string name = "small " + std::to_string(size) + "B " +
-                               (lifo ? "lifo" : "batch");
+            dftracer::utils::dstd::String name =
+                "small " + dftracer::utils::dstd::to_string(size) + "B " +
+                (lifo ? "lifo" : "batch");
             cases.push_back(
                 {name, both([size, lifo](auto policy, const Scale &scale) {
                      using A = decltype(policy);
@@ -334,13 +343,14 @@ std::vector<Case> make_cases() {
     cases.push_back({"medium free", both([](auto policy, const Scale &scale) {
                          return medium_free_case<decltype(policy)>(scale);
                      })});
-    std::size_t cores =
-        std::max<std::size_t>(std::thread::hardware_concurrency() / 2, 1);
-    std::vector<std::size_t> pair_counts{1, 8};
+    std::size_t cores = std::max<std::size_t>(
+        dftracer::utils::dstd::Thread::hardware_concurrency() / 2, 1);
+    dftracer::utils::dstd::Vector<std::size_t> pair_counts{1, 8};
     if (cores != 1 && cores != 8) pair_counts.push_back(cores);
     for (std::size_t pairs : pair_counts) {
-        std::string name = "xthread " + std::to_string(pairs) + "p" +
-                           std::to_string(pairs) + "c";
+        dftracer::utils::dstd::String name =
+            "xthread " + dftracer::utils::dstd::to_string(pairs) + "p" +
+            dftracer::utils::dstd::to_string(pairs) + "c";
         if (pairs == cores) name += " (all cores)";
         cases.push_back({name, both([pairs](auto policy, const Scale &scale) {
                              return cross_case<decltype(policy)>(pairs, scale);
@@ -361,7 +371,7 @@ std::vector<Case> make_cases() {
     return cases;
 }
 
-double median(std::vector<double> values) {
+double median(dftracer::utils::dstd::Vector<double> values) {
     std::sort(values.begin(), values.end());
     return values[values.size() / 2];
 }
@@ -373,9 +383,8 @@ struct ChildResult {
     double rss_mib;
 };
 
-dftracer::utils::dstd::Optional<ChildResult> run_child(const char *self,
-                                                       const std::string &name,
-                                                       bool heap) {
+dftracer::utils::dstd::Optional<ChildResult> run_child(
+    const char *self, const dftracer::utils::dstd::String &name, bool heap) {
     int fds[2];
     if (::pipe(fds) != 0) return dftracer::utils::dstd::nullopt;
     pid_t pid = ::fork();
@@ -388,7 +397,7 @@ dftracer::utils::dstd::Optional<ChildResult> run_child(const char *self,
         ::_exit(127);
     }
     ::close(fds[1]);
-    std::string out;
+    dftracer::utils::dstd::String out;
     char buffer[256];
     ssize_t n;
     while ((n = ::read(fds[0], buffer, sizeof(buffer))) > 0) {
@@ -415,7 +424,7 @@ dftracer::utils::dstd::Optional<ChildResult> run_child(const char *self,
 
 // What --record stores and --check compares, for the page heap side of a case.
 struct Recorded {
-    std::string name;
+    dftracer::utils::dstd::String name;
     double instr = 0.0;
     double allocs = 1.0;
     double heap = 0.0;
@@ -426,7 +435,8 @@ constexpr double CHECK_INSTR_PCT = 2.0;
 constexpr double CHECK_ALLOC_SLACK = 0.001;
 constexpr double CHECK_HEAP_PCT = 5.0;
 
-bool write_record(const char *path, const std::vector<Recorded> &rows) {
+bool write_record(const char *path,
+                  const dftracer::utils::dstd::Vector<Recorded> &rows) {
     std::FILE *f = std::fopen(path, "w");
     if (f == nullptr) return false;
     std::fprintf(f, "{\n");
@@ -442,7 +452,8 @@ bool write_record(const char *path, const std::vector<Recorded> &rows) {
     return std::fclose(f) == 0;
 }
 
-bool read_record(const char *path, std::vector<Recorded> &rows) {
+bool read_record(const char *path,
+                 dftracer::utils::dstd::Vector<Recorded> &rows) {
     std::FILE *f = std::fopen(path, "r");
     if (f == nullptr) return false;
     char line[512];
@@ -467,8 +478,9 @@ double pct_change(double now, double base) {
     return base > 0.0 ? (now / base - 1.0) * 100.0 : 0.0;
 }
 
-int check_record(const char *path, const std::vector<Recorded> &now) {
-    std::vector<Recorded> base;
+int check_record(const char *path,
+                 const dftracer::utils::dstd::Vector<Recorded> &now) {
+    dftracer::utils::dstd::Vector<Recorded> base;
     if (!read_record(path, base)) {
         std::fprintf(stderr, "cannot read record: %s\n", path);
         return 1;
@@ -501,16 +513,17 @@ int check_record(const char *path, const std::vector<Recorded> &now) {
 }
 
 int drive(const char *self, int rounds, const char *record, const char *check) {
-    std::vector<Case> cases = make_cases();
-    std::vector<std::vector<double>> ns[2];
-    std::vector<std::vector<double>> rss[2];
-    std::vector<std::vector<double>> instr[2];
-    std::vector<double> heap_bytes(cases.size(), 0.0);
+    dftracer::utils::dstd::Vector<Case> cases = make_cases();
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Vector<double>> ns[2];
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Vector<double>> rss[2];
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Vector<double>>
+        instr[2];
+    dftracer::utils::dstd::Vector<double> heap_bytes(cases.size(), 0.0);
     for (auto &side : ns) side.resize(cases.size());
     for (auto &side : rss) side.resize(cases.size());
     for (auto &side : instr) side.resize(cases.size());
     std::printf("heap_bench rounds=%d order=system,heap per case, hw=%u\n",
-                rounds, std::thread::hardware_concurrency());
+                rounds, dftracer::utils::dstd::Thread::hardware_concurrency());
     for (int round = 0; round < rounds; ++round) {
         for (std::size_t c = 0; c < cases.size(); ++c) {
             for (int side = 0; side < 2; ++side) {
@@ -541,7 +554,7 @@ int drive(const char *self, int rounds, const char *record, const char *check) {
         "instr/op "
         "| heap instr/op | peak RSS system MiB | peak RSS heap MiB | heap "
         "bytes |\n|---|---|---|---|---|---|---|---|---|\n");
-    std::vector<Recorded> rows;
+    dftracer::utils::dstd::Vector<Recorded> rows;
     for (std::size_t c = 0; c < cases.size(); ++c) {
         double sys = median(ns[0][c]);
         double heap = median(ns[1][c]);
@@ -567,7 +580,7 @@ int drive(const char *self, int rounds, const char *record, const char *check) {
 }
 
 int smoke() {
-    std::vector<Case> cases = make_cases();
+    dftracer::utils::dstd::Vector<Case> cases = make_cases();
     int failures = 0;
     for (const Case &c : cases) {
         for (bool heap : {false, true}) {
@@ -585,7 +598,8 @@ int smoke() {
     return failures == 0 ? 0 : 1;
 }
 
-int run_one(const std::string &name, const std::string &alloc) {
+int run_one(const dftracer::utils::dstd::String &name,
+            const dftracer::utils::dstd::String &alloc) {
     bool heap = alloc == "heap";
     for (const Case &c : make_cases()) {
         if (c.name != name) continue;

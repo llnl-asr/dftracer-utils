@@ -18,6 +18,7 @@
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -28,11 +29,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <memory>
 #include <mutex>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace compress = dftracer::utils::utilities::fileio::compress;
@@ -51,7 +48,7 @@ struct Blob {
 
 Blob make_blob(std::size_t uncompressed_bytes) {
     // Mildly compressible bytes so decode does real work (not all-zero).
-    std::vector<std::uint8_t> raw(uncompressed_bytes);
+    dstd::Vector<std::uint8_t> raw(uncompressed_bytes);
     std::uint32_t x = 0x12345678u;
     for (std::size_t i = 0; i < raw.size(); ++i) {
         x = x * 1664525u + 1013904223u;
@@ -95,14 +92,14 @@ struct MutexCoalesce {
         Bytes bytes;
     };
     std::mutex m_;
-    std::unordered_map<std::uint64_t, dstd::SharedPtr<Entry>> map_;
+    dstd::HashMap<std::uint64_t, dstd::SharedPtr<Entry>> map_;
 
     coro::CoroTask<Bytes> get(std::uint64_t key, const Blob* blob) {
         dstd::SharedPtr<Entry> e;
         {
             std::lock_guard<std::mutex> g(m_);
             auto& slot = map_[key];
-            if (!slot) slot = std::make_shared<Entry>();
+            if (!slot) slot = dstd::make_shared<Entry>();
             e = slot;
         }
         co_await e->mutex.lock();
@@ -118,15 +115,14 @@ struct MutexCoalesce {
 // --- strategy: AsyncOnce single-flight (broadcast wake) ----------------------
 struct OnceCoalesce {
     std::mutex m_;
-    std::unordered_map<std::uint64_t, dstd::SharedPtr<coro::AsyncOnce<Bytes>>>
-        map_;
+    dstd::HashMap<std::uint64_t, dstd::SharedPtr<coro::AsyncOnce<Bytes>>> map_;
 
     coro::CoroTask<Bytes> get(std::uint64_t key, const Blob* blob) {
         dstd::SharedPtr<coro::AsyncOnce<Bytes>> once;
         {
             std::lock_guard<std::mutex> g(m_);
             auto& slot = map_[key];
-            if (!slot) slot = std::make_shared<coro::AsyncOnce<Bytes>>();
+            if (!slot) slot = dstd::make_shared<coro::AsyncOnce<Bytes>>();
             once = slot;
         }
         co_return co_await once->get([blob]() -> coro::CoroTask<Bytes> {
@@ -182,7 +178,7 @@ double bench_mutex_wake(Runtime& rt, int rounds, int waiters) {
                     bool ready = false;
                     int value = 0;
                 };
-                auto e = std::make_shared<Entry>();
+                auto e = dstd::make_shared<Entry>();
                 dstd::Vector<coro::CoroTask<int>> tasks;
                 tasks.reserve(waiters);
                 for (int w = 0; w < waiters; ++w) {
@@ -211,7 +207,7 @@ double bench_once_wake(Runtime& rt, int rounds, int waiters) {
     auto task = coro::with_scope(
         [rounds, waiters](coro::Scope&) -> coro::CoroTask<void> {
             for (int r = 0; r < rounds; ++r) {
-                auto once = std::make_shared<coro::AsyncOnce<int>>();
+                auto once = dstd::make_shared<coro::AsyncOnce<int>>();
                 dstd::Vector<coro::CoroTask<int>> tasks;
                 tasks.reserve(waiters);
                 for (int w = 0; w < waiters; ++w) {

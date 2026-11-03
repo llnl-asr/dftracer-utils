@@ -8,6 +8,8 @@
 //
 //   gzip_crc_bench [uncompressed_MB] [rounds]
 
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <zlib.h>
@@ -18,8 +20,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <random>
-#include <string>
-#include <vector>
 
 namespace gzc = dftracer::utils::utilities::fileio::compress;
 
@@ -27,10 +27,10 @@ namespace {
 
 constexpr std::size_t OUT_CHUNK = 1u << 20;
 
-std::string hex_lines(std::size_t bytes) {
+dftracer::utils::dstd::String hex_lines(std::size_t bytes) {
     std::mt19937 rng(11);
     static const char HEX[] = "0123456789abcdef";
-    std::string s;
+    dftracer::utils::dstd::String s;
     s.reserve(bytes + 128);
     while (s.size() < bytes) {
         s += "{\"id\":\"";
@@ -43,7 +43,7 @@ std::string hex_lines(std::size_t bytes) {
 template <typename Inflate>
 double run(const dftracer::utils::dstd::Vector<std::uint8_t>& gz,
            std::size_t expect, Inflate&& inflate_fn) {
-    std::vector<unsigned char> out(OUT_CHUNK);
+    dftracer::utils::dstd::Vector<unsigned char> out(OUT_CHUNK);
     const auto t0 = std::chrono::steady_clock::now();
     std::size_t total = 0;
     inflate_fn(gz, out, total);
@@ -61,14 +61,15 @@ double run(const dftracer::utils::dstd::Vector<std::uint8_t>& gz,
 int main(int argc, char** argv) {
     const std::size_t mb = argc > 1 ? std::strtoul(argv[1], nullptr, 10) : 64;
     const int rounds = argc > 2 ? std::atoi(argv[2]) : 5;
-    const std::string text = hex_lines(mb << 20);
+    const dftracer::utils::dstd::String text = hex_lines(mb << 20);
 
     gzc::GzipMemberCompressor c(6);
     dftracer::utils::dstd::Vector<std::uint8_t> gz;
     if (!c.compress_member_into(gz, text.data(), text.size())) return 1;
 
     auto zlib_gzip = [](const dftracer::utils::dstd::Vector<std::uint8_t>& in,
-                        std::vector<unsigned char>& out, std::size_t& total) {
+                        dftracer::utils::dstd::Vector<unsigned char>& out,
+                        std::size_t& total) {
         z_stream zs{};
         inflateInit2(&zs, 31);
         zs.next_in = const_cast<Bytef*>(in.data());
@@ -85,7 +86,8 @@ int main(int argc, char** argv) {
     };
     auto libdeflate_crc =
         [](const dftracer::utils::dstd::Vector<std::uint8_t>& in,
-           std::vector<unsigned char>& out, std::size_t& total) {
+           dftracer::utils::dstd::Vector<unsigned char>& out,
+           std::size_t& total) {
             gzc::GzipStreamInflater inf;
             inf.init(31);
             inf.set_input(in.data(), in.size());

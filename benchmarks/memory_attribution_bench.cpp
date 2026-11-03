@@ -49,6 +49,7 @@
 #include <cstdlib>
 #include <thread>
 #include <utility>
+#include <vector>
 
 using namespace dftracer::utils;
 namespace df = dftracer::utils::dataframe;
@@ -208,6 +209,7 @@ class Sampler {
             std::max(result_.peak_group_reserved, group_reserved);
     }
 
+    // keep std: memory::pool_stats is below dstd
     bool parent_in_group(const std::vector<memory::PoolStats>& pools,
                          const memory::PoolStats& p) const {
         std::uint16_t id = p.parent;

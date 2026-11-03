@@ -3,7 +3,7 @@
 //
 // group_agg already fans out per-chunk AggStates through parallel_for and
 // merges the partials. With no backend installed it runs serial; this bench
-// installs a std::thread backend and reports group_by wall-clock at 1/2/4/8
+// installs a dstd::Thread backend and reports group_by wall-clock at 1/2/4/8
 // workers so the speedup is measured, not assumed.
 //
 // Built only with DFTRACER_UTILS_BUILD_BENCHMARKS=ON; run manually. Use an
@@ -22,6 +22,7 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -32,7 +33,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <thread>
 #include <utility>
 
 using namespace dftracer::utils::dataframe;
@@ -65,7 +65,7 @@ void thread_backend(void*, std::int64_t n, std::int64_t grain,
             body(bctx, b, e);
         }
     };
-    dftracer::utils::dstd::Vector<std::thread> pool;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Thread> pool;
     for (int t = 1; t < g_threads; ++t) pool.emplace_back(worker);
     worker();
     for (auto& th : pool) th.join();
@@ -302,8 +302,8 @@ int main(int argc, char** argv) {
     dup_df.names = {"k"};
     dup_df.columns.push_back(Series::flat_i64(k.data(), rows));
 
-    auto bit_at = [](const Series& s, std::int64_t idx) -> int {
-        return (s.data<std::uint8_t>()[idx >> 3] >> (idx & 7)) & 1;
+    auto bit_at = [](const Series& col, std::int64_t idx) -> int {
+        return (col.data<std::uint8_t>()[idx >> 3] >> (idx & 7)) & 1;
     };
 
     auto time_unique_dup = [&](int reps) {
@@ -780,7 +780,7 @@ int main(int argc, char** argv) {
         iin_ser, iin_par, iin_ser / iin_par, iin_ok ? "OK" : "MISMATCH");
     ok = ok && iin_ok;
 
-    // sort_by_multi: std::stable_sort of indices with a multi-col comparator.
+    // sort_by_multi: stable sort of indices with a multi-col comparator.
     DataFrame multi_df;
     multi_df.names = {"k", "v"};
     multi_df.columns.push_back(Series::flat_i64(k.data(), rows));
@@ -1127,7 +1127,8 @@ int main(int argc, char** argv) {
     for (std::int64_t i = 0; i < rows; ++i) {
         interp_v[static_cast<std::size_t>(i)] = static_cast<double>(i % 1000);
         if (i % 32 != 0)
-            interp_valid[static_cast<std::size_t>(i >> 3)] &= ~(1u << (i & 7));
+            interp_valid[static_cast<std::size_t>(i >> 3)] &=
+                static_cast<std::uint8_t>(~(1u << (i & 7)));
     }
     Series interp_col = Series::flat(TypeId::Float64, interp_v.data(), rows,
                                      interp_valid.data());
@@ -1405,13 +1406,13 @@ int main(int argc, char** argv) {
     auto time_it = [&](auto&& fn, int reps) {
         double best = 1e300;
         for (int r = 0; r < reps; ++r) {
-            const auto t0 = std::chrono::steady_clock::now();
+            const auto start = std::chrono::steady_clock::now();
             DataFrame out = fn();
-            const auto t1 = std::chrono::steady_clock::now();
+            const auto stop = std::chrono::steady_clock::now();
             do_not_optimize(out.num_rows());
             best = std::min(
-                best,
-                std::chrono::duration<double, std::milli>(t1 - t0).count());
+                best, std::chrono::duration<double, std::milli>(stop - start)
+                          .count());
         }
         return best;
     };

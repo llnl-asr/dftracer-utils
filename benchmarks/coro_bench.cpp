@@ -49,6 +49,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -70,10 +71,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace {
 
@@ -290,13 +287,13 @@ Result read_loop(std::size_t n) {
     int fd = ::mkstemp(path);
     if (fd < 0) std::abort();
     ::unlink(path);
-    std::string block(READ_BLOCK * READ_FILE_BLOCKS, 'x');
+    dstd::String block(READ_BLOCK * READ_FILE_BLOCKS, 'x');
     if (::write(fd, block.data(), block.size()) !=
         static_cast<ssize_t>(block.size())) {
         std::abort();
     }
     Result result = run_on_executor([n, fd](Result &r) -> coro::CoroTask<void> {
-        std::vector<char> buf(READ_BLOCK);
+        dstd::Vector<char> buf(READ_BLOCK);
         std::size_t good = 0;
         Meter start = begin_meter();
         for (std::size_t i = 0; i < n; ++i) {
@@ -316,9 +313,9 @@ Result read_loop(std::size_t n) {
 struct Case {
     const char *name;
     std::size_t full_ops;
-    std::function<Result(std::size_t)> run;
+    dstd::Function<Result(std::size_t)> run;
     // Ops a run does for a requested size; the contended cases round down.
-    std::function<std::size_t(std::size_t)> ops;
+    dstd::Function<std::size_t(std::size_t)> ops;
 };
 
 std::size_t exact(std::size_t n) { return n; }
@@ -327,18 +324,23 @@ std::size_t per_worker(std::size_t n) {
     return (n / workers) * workers;
 }
 
-std::vector<Case> make_cases() {
-    return {
-        {"semaphore_uncontended", 25000000, semaphore_uncontended, exact},
-        {"semaphore_contended", 25000000, semaphore_contended, per_worker},
-        {"mutex_uncontended", 50000000, mutex_uncontended, exact},
-        {"mutex_contended", 50000000, mutex_contended, per_worker},
-        {"when_all_ready", 1000000, when_all_ready, exact},
-        {"when_all_yield", 200000, when_all_yield, exact},
-        {"when_any_ready", 1000000, when_any_ready, exact},
-        {"when_any_loser_yield", 4000, when_any_loser_yield, exact},
-        {"read_loop", 40000, read_loop, exact},
+dstd::Vector<Case> make_cases() {
+    dstd::Vector<Case> cases;
+    auto add = [&cases](const char *name, std::size_t full_ops,
+                        dstd::Function<Result(std::size_t)> run,
+                        dstd::Function<std::size_t(std::size_t)> ops) {
+        cases.push_back(Case{name, full_ops, std::move(run), std::move(ops)});
     };
+    add("semaphore_uncontended", 25000000, semaphore_uncontended, exact);
+    add("semaphore_contended", 25000000, semaphore_contended, per_worker);
+    add("mutex_uncontended", 50000000, mutex_uncontended, exact);
+    add("mutex_contended", 50000000, mutex_contended, per_worker);
+    add("when_all_ready", 1000000, when_all_ready, exact);
+    add("when_all_yield", 200000, when_all_yield, exact);
+    add("when_any_ready", 1000000, when_any_ready, exact);
+    add("when_any_loser_yield", 4000, when_any_loser_yield, exact);
+    add("read_loop", 40000, read_loop, exact);
+    return cases;
 }
 
 struct Stats {
@@ -348,7 +350,7 @@ struct Stats {
     double spread_pct;
 };
 
-Stats summarize(std::vector<double> values) {
+Stats summarize(dstd::Vector<double> values) {
     std::sort(values.begin(), values.end());
     Stats s{};
     s.median = values[values.size() / 2];
@@ -373,7 +375,7 @@ constexpr double CHECK_PEAK_PCT = 5.0;
 constexpr double READ_LOOP_INSTR_PCT = 3.0;
 
 struct Recorded {
-    std::string name;
+    dstd::String name;
     double ns = 0.0;
     double instr = 0.0;
     double allocs = 0.0;
@@ -381,7 +383,7 @@ struct Recorded {
     double instr_spread_pct = 0.0;
 };
 
-bool write_record(const char *path, const std::vector<Recorded> &rows) {
+bool write_record(const char *path, const dstd::Vector<Recorded> &rows) {
     std::FILE *f = std::fopen(path, "w");
     if (f == nullptr) return false;
     std::fprintf(f, "{\n");
@@ -398,7 +400,7 @@ bool write_record(const char *path, const std::vector<Recorded> &rows) {
     return std::fclose(f) == 0;
 }
 
-bool read_record(const char *path, std::vector<Recorded> &rows) {
+bool read_record(const char *path, dstd::Vector<Recorded> &rows) {
     std::FILE *f = std::fopen(path, "r");
     if (f == nullptr) return false;
     char line[512];
@@ -423,8 +425,8 @@ double pct_change(double now, double base) {
     return base > 0.0 ? (now / base - 1.0) * 100.0 : 0.0;
 }
 
-int check_record(const char *path, const std::vector<Recorded> &now) {
-    std::vector<Recorded> base;
+int check_record(const char *path, const dstd::Vector<Recorded> &now) {
+    dstd::Vector<Recorded> base;
     if (!read_record(path, base)) {
         std::fprintf(stderr, "cannot read record: %s\n", path);
         return 1;
@@ -457,9 +459,9 @@ int check_record(const char *path, const std::vector<Recorded> &now) {
     return worse == 0 ? 0 : 1;
 }
 
-int run(const std::vector<Case> &cases, int reps, bool smoke, bool csv,
+int run(const dstd::Vector<Case> &cases, int reps, bool smoke, bool csv,
         const char *record, const char *check) {
-    std::vector<Recorded> rows;
+    dstd::Vector<Recorded> rows;
     if (csv) {
         std::printf(
             "name,median_ns_per_op,min,max,spread_pct,instr_per_op,"
@@ -483,9 +485,9 @@ int run(const std::vector<Case> &cases, int reps, bool smoke, bool csv,
                         64)
                   : c.full_ops;
         std::size_t ops = c.ops(requested);
-        std::vector<double> per_op;
-        std::vector<double> instr_per_op;
-        std::vector<double> allocs_per_op;
+        dstd::Vector<double> per_op;
+        dstd::Vector<double> instr_per_op;
+        dstd::Vector<double> allocs_per_op;
         double peak = 0.0;
         bool ok = true;
         for (int rep = 0; rep < reps; ++rep) {
@@ -549,7 +551,7 @@ int main(int argc, char **argv) {
     int reps = DEFAULT_REPS;
     bool smoke = false;
     bool csv = false;
-    std::string only;
+    dstd::String only;
     const char *record = nullptr;
     const char *check = nullptr;
     for (int i = 1; i < argc; ++i) {
@@ -576,11 +578,11 @@ int main(int argc, char **argv) {
     if (smoke) reps = 1;
     if (reps <= 0) return usage();
 
-    std::vector<Case> cases = make_cases();
+    dstd::Vector<Case> cases = make_cases();
     if (!only.empty()) {
-        std::vector<Case> picked;
-        for (const Case &c : cases) {
-            if (only == c.name) picked.push_back(c);
+        dstd::Vector<Case> picked;
+        for (Case &c : cases) {
+            if (only == c.name) picked.push_back(std::move(c));
         }
         if (picked.empty()) {
             std::fprintf(stderr, "unknown case: %s\n", only.c_str());

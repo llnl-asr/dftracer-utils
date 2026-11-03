@@ -23,7 +23,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <utility>
 
 namespace df = dftracer::utils::dataframe;
 using df::DataFrame;

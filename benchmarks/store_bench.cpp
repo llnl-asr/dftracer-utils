@@ -46,6 +46,7 @@
 #include <bench_counters.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
@@ -58,6 +59,8 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -74,15 +77,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <iomanip>
 #include <iostream>
 #include <numeric>
 #include <random>
-#include <sstream>
-#include <string>
-#include <thread>
 #include <utility>
-#include <vector>
 
 namespace {
 
@@ -161,22 +159,22 @@ const char* filesystem_name(dftracer::utils::common::FilesystemKind kind) {
 struct Options {
     bool smoke = false;
     bool help = false;
-    std::string dir;
-    std::vector<int> threads{1, 16, 96};
-    std::vector<std::string> modes{"shared", "per-thread"};
+    dstd::String dir;
+    dstd::Vector<int> threads{1, 16, 96};
+    dstd::Vector<dstd::String> modes{"shared", "per-thread"};
     std::uint64_t payload_mib = 256;
     std::size_t value_bytes = 200;
     bool trace_values = true;
     std::size_t keys_per_batch = 256;
-    std::vector<std::uint64_t> scopes{10, 1000, 100000};
+    dstd::Vector<std::uint64_t> scopes{10, 1000, 100000};
     std::uint64_t commits = 20000;
     std::uint64_t gets = POINT_GETS;
-    std::vector<std::uint64_t> fold_scopes{1000, 8404};
+    dstd::Vector<std::uint64_t> fold_scopes{1000, 8404};
     std::uint64_t fold_keys = 1024;
-    std::string which = "all";
-    std::string keep;
-    std::string reuse;
-    std::string space;
+    dstd::String which = "all";
+    dstd::String keep;
+    dstd::String reuse;
+    dstd::String space;
     store::PageCodec codec = store::PageCodec::Zstd;
 };
 
@@ -195,20 +193,18 @@ void apply_smoke(Options& opt) {
     opt.which = "all";
 }
 
-std::vector<std::uint64_t> parse_u64_list(const std::string& text) {
-    std::vector<std::uint64_t> out;
+dstd::Vector<std::uint64_t> parse_u64_list(const dstd::String& text) {
+    dstd::Vector<std::uint64_t> out;
     std::size_t at = 0;
     while (at <= text.size()) {
         const std::size_t end = text.find(',', at);
-        const std::string item =
-            text.substr(at, end == std::string::npos ? end : end - at);
+        const dstd::String item =
+            text.substr(at, end == dstd::String::npos ? end : end - at);
         if (item.empty()) return {};
-        try {
-            out.push_back(std::stoull(item));
-        } catch (...) {
-            return {};
-        }
-        if (end == std::string::npos) break;
+        const auto number = dstd::from_chars<std::uint64_t>(item);
+        if (!number) return {};
+        out.push_back(*number);
+        if (end == dstd::String::npos) break;
         at = end + 1;
     }
     return out;
@@ -217,7 +213,7 @@ std::vector<std::uint64_t> parse_u64_list(const std::string& text) {
 bool parse_args(int argc, char** argv, Options& opt) {
     for (int i = 1; i < argc; ++i) {
         const dftracer::utils::dstd::StringView arg = argv[i];
-        const auto value = [&]() -> std::string {
+        const auto value = [&]() -> dstd::String {
             if (i + 1 < argc) return argv[++i];
             return {};
         };
@@ -228,7 +224,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (arg == "--dir") {
             opt.dir = value();
         } else if (arg == "--threads") {
-            std::vector<std::uint64_t> parsed = parse_u64_list(value());
+            dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
             if (parsed.empty()) return false;
             opt.threads.clear();
             for (std::uint64_t threads : parsed) {
@@ -236,7 +232,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 opt.threads.push_back(static_cast<int>(threads));
             }
         } else if (arg == "--mode") {
-            const std::string mode = value();
+            const dstd::String mode = value();
             if (mode == "shared") {
                 opt.modes = {"shared"};
             } else if (mode == "per-thread") {
@@ -247,11 +243,11 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 return false;
             }
         } else if (arg == "--payload-mib") {
-            const std::vector<std::uint64_t> parsed = parse_u64_list(value());
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
             if (parsed.size() != 1 || parsed[0] == 0) return false;
             opt.payload_mib = parsed[0];
         } else if (arg == "--codec") {
-            const std::string codec = value();
+            const dstd::String codec = value();
             if (codec == "zstd") {
                 opt.codec = store::PageCodec::Zstd;
             } else if (codec == "none") {
@@ -260,7 +256,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 return false;
             }
         } else if (arg == "--value-kind") {
-            const std::string kind = value();
+            const dstd::String kind = value();
             if (kind == "trace") {
                 opt.trace_values = true;
             } else if (kind == "repeat") {
@@ -269,11 +265,11 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 return false;
             }
         } else if (arg == "--value-bytes") {
-            const std::vector<std::uint64_t> parsed = parse_u64_list(value());
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
             if (parsed.size() != 1 || parsed[0] == 0) return false;
             opt.value_bytes = parsed[0];
         } else if (arg == "--keys-per-batch") {
-            const std::vector<std::uint64_t> parsed = parse_u64_list(value());
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
             if (parsed.size() != 1 || parsed[0] == 0) return false;
             opt.keys_per_batch = parsed[0];
         } else if (arg == "--scopes") {
@@ -283,11 +279,11 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 if (scopes == 0) return false;
             }
         } else if (arg == "--commits") {
-            const std::vector<std::uint64_t> parsed = parse_u64_list(value());
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
             if (parsed.size() != 1 || parsed[0] == 0) return false;
             opt.commits = parsed[0];
         } else if (arg == "--gets") {
-            const std::vector<std::uint64_t> parsed = parse_u64_list(value());
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
             if (parsed.size() != 1 || parsed[0] == 0) return false;
             opt.gets = parsed[0];
         } else if (arg == "--fold-scopes") {
@@ -297,7 +293,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 if (scopes == 0) return false;
             }
         } else if (arg == "--fold-keys") {
-            const std::vector<std::uint64_t> parsed = parse_u64_list(value());
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
             if (parsed.size() != 1 || parsed[0] == 0 ||
                 parsed[0] >= FOLD_KEY_LIMIT) {
                 return false;
@@ -313,7 +309,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.space = value();
             if (opt.space.empty()) return false;
         } else if (arg == "--case") {
-            const std::string which = value();
+            const dstd::String which = value();
             if (which != "write" && which != "query" && which != "scopes" &&
                 which != "fold" && which != "all") {
                 return false;
@@ -345,64 +341,61 @@ dftracer::utils::dstd::String dstring(dftracer::utils::dstd::StringView text) {
     return dftracer::utils::dstd::String(text.data(), text.size());
 }
 
-std::string to_std(const dftracer::utils::dstd::Error& error) {
+dstd::String to_std(const dftracer::utils::dstd::Error& error) {
     const dftracer::utils::dstd::StringView message = error.message();
-    if (message.empty()) return std::string(error.name());
-    return std::string(error.name()) + ": " + std::string(message);
+    if (message.empty()) return dstd::String(error.name());
+    return dstd::String(error.name()) + ": " + dstd::String(message);
 }
 
-std::string format_ms(std::uint64_t nanos) {
-    std::ostringstream out;
-    out << std::fixed << std::setprecision(3)
-        << static_cast<double>(nanos) / 1e6;
-    return out.str();
+dstd::String fixed(double value, int precision) {
+    return dftracer::utils::common::string_format("%.*f", precision, value);
+}
+
+dstd::String general(double value, int precision) {
+    return dftracer::utils::common::string_format("%.*g", precision, value);
+}
+
+dstd::String format_ms(std::uint64_t nanos) {
+    return fixed(static_cast<double>(nanos) / 1e6, 3);
 }
 
 /// Every block the snapshot has read so far: the commits it verified, the
 /// blocks of them, the read calls that covered them and the bytes. An open
 /// leaves these at zero, and the first query for a copy pays its commits.
-std::string format_read_stats(const store::engine::ReadStats& reads) {
-    std::ostringstream out;
-    out << "commits_read=" << reads.commits_verified
-        << " extents_read=" << reads.extents_read
-        << " pages_decoded=" << reads.pages_decoded
-        << " page_hits=" << reads.page_hits
-        << " page_reads=" << reads.page_reads
-        << " windows_warmed=" << reads.windows_warmed
-        << " files_filtered=" << reads.files_filtered
-        << " metadata_blocks_read=" << reads.metadata_blocks_read
-        << " read_calls=" << reads.read_calls << " mib_read=" << std::fixed
-        << std::setprecision(1)
-        << static_cast<double>(reads.bytes_read) /
-               static_cast<double>(MIB_BYTES);
-    return out.str();
+dstd::String format_read_stats(const store::engine::ReadStats& reads) {
+    return dftracer::utils::common::str_cat(
+        "commits_read=", reads.commits_verified,
+        " extents_read=", reads.extents_read,
+        " pages_decoded=", reads.pages_decoded, " page_hits=", reads.page_hits,
+        " page_reads=", reads.page_reads,
+        " windows_warmed=", reads.windows_warmed,
+        " files_filtered=", reads.files_filtered,
+        " metadata_blocks_read=", reads.metadata_blocks_read,
+        " read_calls=", reads.read_calls, " mib_read=",
+        fixed(static_cast<double>(reads.bytes_read) /
+                  static_cast<double>(MIB_BYTES),
+              1));
 }
 
 /// What one open did, and what the snapshot has read so far, as one extra
 /// column.
-std::string format_stats(const store::engine::OpenStats& stats,
-                         const store::engine::ReadStats& reads) {
-    std::ostringstream out;
-    out << "files=" << stats.files << " extents=" << stats.extents << " "
-        << format_read_stats(reads) << " ms list=" << std::setprecision(3)
-        << stats.ms_list << " files=" << stats.ms_open_files
-        << " tables=" << stats.ms_tables << " total=" << stats.ms_total;
-    return out.str();
+dstd::String format_stats(const store::engine::OpenStats& stats,
+                          const store::engine::ReadStats& reads) {
+    return dftracer::utils::common::str_cat(
+        "files=", stats.files, " extents=", stats.extents, " ",
+        format_read_stats(reads), " ms list=", general(stats.ms_list, 3),
+        " files=", general(stats.ms_open_files, 3),
+        " tables=", general(stats.ms_tables, 3),
+        " total=", general(stats.ms_total, 3));
 }
 
-std::string format_ms_value(double ms) {
-    std::ostringstream out;
-    out << std::setprecision(3) << ms;
-    return out.str();
-}
+dstd::String format_ms_value(double ms) { return general(ms, 3); }
 
-std::string format_rate(std::uint64_t rows, std::uint64_t nanos) {
-    std::ostringstream out;
-    out << std::fixed << std::setprecision(1)
-        << (nanos > 0
-                ? static_cast<double>(rows) * 1e9 / static_cast<double>(nanos)
-                : 0);
-    return out.str();
+dstd::String format_rate(std::uint64_t rows, std::uint64_t nanos) {
+    return fixed(
+        nanos > 0 ? static_cast<double>(rows) * 1e9 / static_cast<double>(nanos)
+                  : 0,
+        1);
 }
 
 double seconds_between(std::chrono::steady_clock::time_point from,
@@ -461,24 +454,24 @@ class ValuePool {
         static const char* const CATS[] = {"POSIX", "STDIO", "MPI"};
         values_.reserve(VALUE_POOL);
         for (std::size_t i = 0; i < VALUE_POOL; ++i) {
-            std::string line =
-                "{\"id\":" + std::to_string(rng() % 100000000) +
+            dstd::String line =
+                "{\"id\":" + dstd::to_string(rng() % 100000000) +
                 ",\"name\":\"" + NAMES[rng() % 6] + "\",\"cat\":\"" +
                 CATS[rng() % 3] +
-                "\",\"pid\":" + std::to_string(rng() % 65536) +
-                ",\"tid\":" + std::to_string(rng() % 65536) +
-                ",\"ts\":" + std::to_string(rng() % 10000000000000ULL) +
-                ",\"dur\":" + std::to_string(rng() % 100000) +
-                ",\"args\":{\"fhash\":\"" + std::to_string(rng()) +
-                "\",\"size_t\":" + std::to_string(rng() % 1048576) + "}}";
+                "\",\"pid\":" + dstd::to_string(rng() % 65536) +
+                ",\"tid\":" + dstd::to_string(rng() % 65536) +
+                ",\"ts\":" + dstd::to_string(rng() % 10000000000000ULL) +
+                ",\"dur\":" + dstd::to_string(rng() % 100000) +
+                ",\"args\":{\"fhash\":\"" + dstd::to_string(rng()) +
+                "\",\"size_t\":" + dstd::to_string(rng() % 1048576) + "}}";
             while (line.size() < value_bytes) line += line;
             line.resize(value_bytes);
             values_.push_back(std::move(line));
         }
     }
 
-    const std::string& for_key(const std::uint8_t* key,
-                               std::size_t size) const {
+    const dstd::String& for_key(const std::uint8_t* key,
+                                std::size_t size) const {
         std::uint64_t hash =
             dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
         for (std::size_t i = 0; i < size; ++i) {
@@ -490,18 +483,18 @@ class ValuePool {
    private:
     static constexpr std::size_t VALUE_POOL = 4096;
     static constexpr std::uint64_t VALUE_SEED = 0x5eed;
-    std::vector<std::string> values_;
+    dstd::Vector<dstd::String> values_;
 };
 
-std::string scope_name(std::uint64_t coro, std::uint64_t slot) {
-    return "/bench/c" + std::to_string(coro) + "-s" + std::to_string(slot) +
+dstd::String scope_name(std::uint64_t coro, std::uint64_t slot) {
+    return "/bench/c" + dstd::to_string(coro) + "-s" + dstd::to_string(slot) +
            ".dft";
 }
 
 /// The key of one fold entry: 'k' and six digits, so a lexicographic scan
 /// yields the keys in key-number order and a key needs no table.
-std::string fold_key(std::uint64_t index) {
-    std::string key(FOLD_KEY_BYTES, '0');
+dstd::String fold_key(std::uint64_t index) {
+    dstd::String key(FOLD_KEY_BYTES, '0');
     key[0] = 'k';
     for (std::size_t at = FOLD_KEY_BYTES; at-- > 1;) {
         key[at] = static_cast<char>('0' + index % 10);
@@ -510,8 +503,8 @@ std::string fold_key(std::uint64_t index) {
     return key;
 }
 
-std::vector<std::string> fold_key_names(std::uint64_t keys) {
-    std::vector<std::string> names;
+dstd::Vector<dstd::String> fold_key_names(std::uint64_t keys) {
+    dstd::Vector<dstd::String> names;
     names.reserve(static_cast<std::size_t>(keys));
     for (std::uint64_t at = 0; at < keys; ++at) {
         names.push_back(fold_key(at));
@@ -542,9 +535,9 @@ std::uint64_t fold_value(std::uint64_t scope, std::uint64_t key) {
 /// What a fold scan over `scopes` scopes must sum one key to: the two
 /// segments of every scope, the first (scope + key) mod FOLD_VALUE_MODULUS and
 /// the second one.
-std::vector<std::int64_t> fold_expectation(std::uint64_t scopes,
-                                           std::uint64_t keys) {
-    std::vector<std::int64_t> expected(static_cast<std::size_t>(keys), 0);
+dstd::Vector<std::int64_t> fold_expectation(std::uint64_t scopes,
+                                            std::uint64_t keys) {
+    dstd::Vector<std::int64_t> expected(static_cast<std::size_t>(keys), 0);
     for (std::uint64_t key = 0; key < keys; ++key) {
         std::int64_t sum = 0;
         for (std::uint64_t scope = 0; scope < scopes; ++scope) {
@@ -557,16 +550,16 @@ std::vector<std::int64_t> fold_expectation(std::uint64_t scopes,
 
 /// A fresh directory under `base`, so concurrent runs never share one. The
 /// caller removes it.
-std::string make_temp_dir(const dftracer::utils::dstd::Path& base) {
-    const std::string pattern((base / "dftu_store_bench_XXXXXX").str());
-    std::vector<char> buffer(pattern.begin(), pattern.end());
+dstd::String make_temp_dir(const dftracer::utils::dstd::Path& base) {
+    const dstd::String pattern((base / "dftu_store_bench_XXXXXX").str());
+    dstd::Vector<char> buffer(pattern.begin(), pattern.end());
     buffer.push_back('\0');
     const char* made = ::mkdtemp(buffer.data());
-    return made == nullptr ? std::string() : std::string(made);
+    return made == nullptr ? dstd::String() : dstd::String(made);
 }
 
 /// The bytes of every regular file under `dir`, at any depth.
-std::uint64_t directory_bytes(const std::string& dir) {
+std::uint64_t directory_bytes(const dstd::String& dir) {
     std::uint64_t total = 0;
     auto walked = dftracer::utils::dstd::fs::walk(
         dir, [&](dftracer::utils::dstd::PathView p,
@@ -643,7 +636,7 @@ coro::CoroTask<bool> commit_retrying(Writer& writer, Batch batch,
 }
 
 struct WriteRow {
-    std::string mode;
+    dstd::String mode;
     int threads = 0;
     std::uint64_t payload = 0;
     double seconds = 0;
@@ -658,15 +651,15 @@ struct WriteRow {
     std::uint64_t read_keys = 0;
     std::uint64_t disk_bytes = 0;
     /// The directory the query case reads, when this case keeps one.
-    std::string keep_dir;
+    dstd::String keep_dir;
 };
 
 struct QueryRow {
-    std::string op;
+    dstd::String op;
     std::uint64_t count = 0;
     double ms_total = 0;
     double ns_per_item = 0;
-    std::string extra;
+    dstd::String extra;
     double rss_growth_mib = 0;
 };
 
@@ -707,10 +700,10 @@ struct QueryScan {
 };
 
 struct QueryPlan {
-    std::vector<ScopeKey> scopes;
-    std::vector<QueryItem> hits;
-    std::vector<QueryItem> misses;
-    std::vector<QueryScan> scans;
+    dstd::Vector<ScopeKey> scopes;
+    dstd::Vector<QueryItem> hits;
+    dstd::Vector<QueryItem> misses;
+    dstd::Vector<QueryScan> scans;
 };
 
 /// One field of a space report, so the mode prints every report alike.
@@ -755,8 +748,8 @@ constexpr SpaceField SPACE_FIELDS[] = {
 
 /// Prints the space report of every data file of `dir`, then the sum and the
 /// bytes of its summary file: one `name value` per line.
-bool print_space(const std::string& dir) {
-    std::vector<std::string> names;
+bool print_space(const dstd::String& dir) {
+    dstd::Vector<dstd::String> names;
     auto handle = dftracer::utils::dstd::fs::Dir::open(dir);
     if (!handle) {
         std::cerr << "store_bench: cannot list " << dir << "\n";
@@ -770,12 +763,12 @@ bool print_space(const std::string& dir) {
             continue;
         if (dftracer::utils::dstd::PathView(entry.name).extension() != ".dfs")
             continue;
-        names.push_back(std::string(entry.name));
+        names.push_back(dstd::String(entry.name));
     }
     std::sort(names.begin(), names.end());
     store::engine::SpaceReport sum;
-    for (const std::string& name : names) {
-        const std::string path = dir + "/" + name;
+    for (const dstd::String& name : names) {
+        const dstd::String path = dir + "/" + name;
         auto report = store::engine::space_report(path);
         if (!report) {
             std::cerr << "store_bench: " << path << ": "
@@ -799,8 +792,8 @@ bool print_space(const std::string& dir) {
 
 struct Bench {
     Options opt;
-    std::string root;
-    std::string backend = "none";
+    dstd::String root;
+    dstd::String backend = "none";
     bool backend_known = false;
     bool write_header_written = false;
     bool query_header_written = false;
@@ -810,7 +803,7 @@ struct Bench {
     bool failed = false;
     std::uint32_t extent_size = 0;
     std::uint64_t case_index = 0;
-    std::vector<QueryRow> query_rows;
+    dstd::Vector<QueryRow> query_rows;
 
     NamespaceSpec spec() const {
         NamespaceSpec namespace_spec;
@@ -829,7 +822,7 @@ struct Bench {
         return options;
     }
 
-    void fail(const std::string& message) {
+    void fail(const dstd::String& message) {
         failed = true;
         std::cerr << "store_bench: " << message << "\n";
     }
@@ -849,13 +842,13 @@ struct Bench {
         const auto made_base =
             dftracer::utils::dstd::fs::create_directories(base);
         if (!made_base) {
-            fail("cannot create " + std::string(base.str()) + ": " +
+            fail("cannot create " + dstd::String(base.str()) + ": " +
                  to_std(made_base.error()));
             return false;
         }
         root = make_temp_dir(base);
         if (root.empty()) {
-            fail("cannot create a directory under " + std::string(base.str()));
+            fail("cannot create a directory under " + dstd::String(base.str()));
             return false;
         }
         auto chosen = store::engine::extent_size_for(root);
@@ -869,8 +862,8 @@ struct Bench {
 
     void cleanup() { (void)dftracer::utils::dstd::fs::remove_all(root); }
 
-    std::string case_dir(const std::string& name) {
-        return root + "/" + std::to_string(case_index++) + "-" + name;
+    dstd::String case_dir(const dstd::String& name) {
+        return root + "/" + dstd::to_string(case_index++) + "-" + name;
     }
 
     void note_backend(Runtime& runtime) {
@@ -949,38 +942,38 @@ struct Bench {
 
     bool run();
     WriteRow run_write_case(Runtime& runtime, const Workload& workload,
-                            const std::string& dir, bool per_thread,
+                            const dstd::String& dir, bool per_thread,
                             bool keep_dir);
     QueryPlan make_query_plan(const Workload& workload) const;
     bool run_kept();
-    bool run_query_case(const Workload& workload, const std::string& dir);
-    bool query_store(const Workload& workload, const std::string& dir,
+    bool run_query_case(const Workload& workload, const dstd::String& dir);
+    bool query_store(const Workload& workload, const dstd::String& dir,
                      const QueryPlan& plan);
     ScopeRow run_scope_case(Runtime& runtime, std::uint64_t scopes);
     NamespaceSpec fold_spec() const;
-    bool write_fold(Runtime& runtime, const std::string& dir,
+    bool write_fold(Runtime& runtime, const dstd::String& dir,
                     std::uint64_t scopes, std::uint64_t keys);
     FoldScan fold_scan(const Snapshot& snapshot,
                        const NamespaceSpec& namespace_spec,
-                       const std::vector<ScopeKey>& scopes, std::uint64_t keys,
+                       const dstd::Vector<ScopeKey>& scopes, std::uint64_t keys,
                        std::uint64_t threads,
-                       const std::vector<std::int64_t>& expected);
+                       const dstd::Vector<std::int64_t>& expected);
     bool run_fold_case(Runtime& runtime, std::uint64_t scopes);
     void print_write_row(const WriteRow& row);
     void print_query_row(const QueryRow& row);
     void print_scope_row(const ScopeRow& row);
     void print_fold_row(const FoldRow& row);
     bool check_write_row(const WriteRow& row);
-    std::uint64_t count_keys(const std::string& dir);
+    std::uint64_t count_keys(const dstd::String& dir);
     void close_writers(Runtime& runtime,
                        dstd::Vector<dstd::UniquePtr<Writer>>& writers,
                        std::atomic<int>& errors);
-    bool report_single_thread_open(const std::string& dir,
-                                   const std::string& prefix, bool print_now);
+    bool report_single_thread_open(const dstd::String& dir,
+                                   const dstd::String& prefix, bool print_now);
 };
 
-QueryRow query_row(std::string op, std::uint64_t count, std::uint64_t nanos,
-                   std::uint64_t rss_before, std::string extra) {
+QueryRow query_row(dstd::String op, std::uint64_t count, std::uint64_t nanos,
+                   std::uint64_t rss_before, dstd::String extra) {
     QueryRow row;
     row.op = std::move(op);
     row.count = count;
@@ -1016,59 +1009,55 @@ void Bench::print_write_row(const WriteRow& row) {
     const auto writes_of = [&counts](io_fault::WriteKind kind) {
         return counts.writes[static_cast<std::size_t>(kind)];
     };
-    std::ostringstream line;
-    line << row.mode << '\t' << row.threads << '\t' << row.payload << '\t'
-         << std::fixed << std::setprecision(6) << seconds << '\t'
-         << std::setprecision(4) << gib_per_s << '\t' << std::setprecision(6)
-         << row.seconds_flushed << '\t' << row.seconds_compacted << '\t'
-         << writes_of(io_fault::WriteKind::Extent) << '\t'
-         << indexed(counts, io_fault::WriteKind::Extent) << '\t'
-         << writes_of(io_fault::WriteKind::Big) << '\t'
-         << indexed(counts, io_fault::WriteKind::Big) << '\t'
-         << writes_of(io_fault::WriteKind::Record) << '\t'
-         << indexed(counts, io_fault::WriteKind::Record) << '\t'
-         << writes_of(io_fault::WriteKind::Header) << '\t'
-         << indexed(counts, io_fault::WriteKind::Header) << '\t'
-         << indexed(counts, io_fault::WriteKind::Footer) << '\t'
-         << indexed(counts, io_fault::WriteKind::Trailer) << '\t'
-         << counts.syncs << '\t' << total << '\t' << std::setprecision(4)
-         << write_amp << '\t' << row.disk_bytes << '\t' << std::setprecision(4)
-         << disk_amp << '\t' << row.busy << '\t'
-         << counts.max_bytes[static_cast<std::size_t>(
-                io_fault::WriteKind::Extent)]
-         << '\t' << std::setprecision(1) << commits_per_s;
-    std::cout << line.str() << '\n';
+    const dstd::String line = dftracer::utils::common::str_cat(
+        row.mode, '\t', row.threads, '\t', row.payload, '\t', fixed(seconds, 6),
+        '\t', fixed(gib_per_s, 4), '\t', fixed(row.seconds_flushed, 6), '\t',
+        fixed(row.seconds_compacted, 6), '\t',
+        writes_of(io_fault::WriteKind::Extent), '\t',
+        indexed(counts, io_fault::WriteKind::Extent), '\t',
+        writes_of(io_fault::WriteKind::Big), '\t',
+        indexed(counts, io_fault::WriteKind::Big), '\t',
+        writes_of(io_fault::WriteKind::Record), '\t',
+        indexed(counts, io_fault::WriteKind::Record), '\t',
+        writes_of(io_fault::WriteKind::Header), '\t',
+        indexed(counts, io_fault::WriteKind::Header), '\t',
+        indexed(counts, io_fault::WriteKind::Footer), '\t',
+        indexed(counts, io_fault::WriteKind::Trailer), '\t', counts.syncs, '\t',
+        total, '\t', fixed(write_amp, 4), '\t', row.disk_bytes, '\t',
+        fixed(disk_amp, 4), '\t', row.busy, '\t',
+        counts.max_bytes[static_cast<std::size_t>(io_fault::WriteKind::Extent)],
+        '\t', fixed(commits_per_s, 1));
+    std::cout << line << '\n';
 }
 
 void Bench::print_query_row(const QueryRow& row) {
     ensure_query_header();
     ensure_comment();
-    std::ostringstream line;
-    line << row.op << '\t' << row.count << '\t' << std::fixed
-         << std::setprecision(3) << row.ms_total << '\t' << std::setprecision(1)
-         << row.ns_per_item << '\t' << row.extra << '\t' << std::setprecision(3)
-         << row.rss_growth_mib;
-    std::cout << line.str() << '\n';
+    const dstd::String line = dftracer::utils::common::str_cat(
+        row.op, '\t', row.count, '\t', fixed(row.ms_total, 3), '\t',
+        fixed(row.ns_per_item, 1), '\t', row.extra, '\t',
+        fixed(row.rss_growth_mib, 3));
+    std::cout << line << '\n';
 }
 
 void Bench::print_scope_row(const ScopeRow& row) {
     ensure_scope_header();
     ensure_comment();
-    std::ostringstream line;
-    line << row.scopes << '\t' << std::fixed << std::setprecision(1)
-         << row.ns_new_scope << '\t' << row.ns_commit;
-    std::cout << line.str() << '\n';
+    const dstd::String line = dftracer::utils::common::str_cat(
+        row.scopes, '\t', fixed(row.ns_new_scope, 1), '\t',
+        fixed(row.ns_commit, 1));
+    std::cout << line << '\n';
 }
 
 void Bench::print_fold_row(const FoldRow& row) {
     ensure_fold_header();
     ensure_comment();
-    std::ostringstream line;
-    line << row.scopes << '\t' << row.keys << '\t' << row.threads << '\t'
-         << std::fixed << std::setprecision(3) << row.ms_open << '\t'
-         << row.ms_scan << '\t' << std::setprecision(1) << row.ns_per_key
-         << '\t' << row.mismatches << '\t' << format_read_stats(row.reads);
-    std::cout << line.str() << '\n';
+    const dstd::String line = dftracer::utils::common::str_cat(
+        row.scopes, '\t', row.keys, '\t', row.threads, '\t',
+        fixed(row.ms_open, 3), '\t', fixed(row.ms_scan, 3), '\t',
+        fixed(row.ns_per_key, 1), '\t', row.mismatches, '\t',
+        format_read_stats(row.reads));
+    std::cout << line << '\n';
 }
 
 /// Opens `dir` a second time under a one-thread default runtime, restores the
@@ -1076,8 +1065,8 @@ void Bench::print_fold_row(const FoldRow& row) {
 /// One worker still coalesces the runs, so read_calls shows what the split
 /// alone gives and the time shows what the other workers add. A case whose
 /// rows are printed as they come asks for the row to be printed here.
-bool Bench::report_single_thread_open(const std::string& dir,
-                                      const std::string& prefix,
+bool Bench::report_single_thread_open(const dstd::String& dir,
+                                      const dstd::String& prefix,
                                       bool print_now) {
     const std::size_t previous = dftracer::utils::default_runtime().threads();
     dftracer::utils::configure_default_runtime({.threads = 1});
@@ -1117,7 +1106,7 @@ bool Bench::check_write_row(const WriteRow& row) {
     bool ok = true;
     const auto require = [&](bool condition, const char* what) {
         if (!condition) {
-            fail(row.mode + " " + std::to_string(row.threads) +
+            fail(row.mode + " " + dstd::to_string(row.threads) +
                  " threads: " + what);
             ok = false;
         }
@@ -1144,7 +1133,7 @@ bool Bench::check_write_row(const WriteRow& row) {
     return ok;
 }
 
-std::uint64_t Bench::count_keys(const std::string& dir) {
+std::uint64_t Bench::count_keys(const dstd::String& dir) {
     auto snapshot = Snapshot::open(dir);
     if (!snapshot) {
         fail("snapshot of " + dir + ": " + to_std(snapshot.error()));
@@ -1183,7 +1172,7 @@ void Bench::close_writers(Runtime& runtime,
 }
 
 WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
-                               const std::string& dir, bool per_thread,
+                               const dstd::String& dir, bool per_thread,
                                bool keep_dir) {
     WriteRow row;
     row.mode = per_thread ? "per-thread" : "shared";
@@ -1200,7 +1189,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
     const std::size_t writers_count =
         per_thread ? static_cast<std::size_t>(workload.threads) : 1;
     dstd::Vector<dstd::UniquePtr<Writer>> writers(writers_count);
-    std::vector<NamespaceId> namespaces(writers_count, NamespaceId{0});
+    dstd::Vector<NamespaceId> namespaces(writers_count, NamespaceId{0});
     for (std::size_t at = 0; at < writers_count; ++at) {
         auto created =
             Writer::create(dir, *runtime.executor(), writer_options());
@@ -1240,7 +1229,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
                                 static_cast<std::uint32_t>(at),
                                 static_cast<std::uint32_t>(batch_index),
                                 static_cast<std::uint32_t>(k));
-                            const std::string& value =
+                            const dstd::String& value =
                                 values.for_key(key.data(), key.size());
                             batch.put(ByteView{key.data(), key.size()},
                                       ByteView{value.data(), value.size()});
@@ -1267,7 +1256,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
         row.busy += WriterTestHook::extents(*writer).busy;
     }
     if (errors.load() > 0) {
-        fail(row.mode + " " + std::to_string(workload.threads) +
+        fail(row.mode + " " + dstd::to_string(workload.threads) +
              " threads: a commit or a close failed");
     }
     row.read_keys = count_keys(dir);
@@ -1294,7 +1283,7 @@ QueryPlan Bench::make_query_plan(const Workload& workload) const {
     }
 
     std::mt19937_64 random(QUERY_SEED);
-    const auto add = [&](std::vector<QueryItem>& items, std::uint64_t count,
+    const auto add = [&](dstd::Vector<QueryItem>& items, std::uint64_t count,
                          bool absent) {
         items.reserve(items.size() + static_cast<std::size_t>(count));
         for (std::uint64_t at = 0; at < count; ++at) {
@@ -1317,7 +1306,7 @@ QueryPlan Bench::make_query_plan(const Workload& workload) const {
     add(plan.misses, std::max<std::uint64_t>(1, opt.gets / GETS_PER_MISS),
         true);
 
-    std::vector<std::size_t> every_scope(scopes);
+    dstd::Vector<std::size_t> every_scope(scopes);
     std::iota(every_scope.begin(), every_scope.end(), std::size_t{0});
     std::mt19937_64 scan_random(QUERY_SEED ^ 0x9E3779B97F4A7C15ULL);
     std::shuffle(every_scope.begin(), every_scope.end(), scan_random);
@@ -1332,7 +1321,7 @@ QueryPlan Bench::make_query_plan(const Workload& workload) const {
     return plan;
 }
 
-bool Bench::query_store(const Workload& workload, const std::string& dir,
+bool Bench::query_store(const Workload& workload, const dstd::String& dir,
                         const QueryPlan& plan) {
     const NamespaceSpec namespace_spec = spec();
 
@@ -1424,11 +1413,11 @@ bool Bench::query_store(const Workload& workload, const std::string& dir,
             nanos_between(started, std::chrono::steady_clock::now());
         query_rows.push_back(
             query_row("get_hit", plan.hits.size(), nanos, rss,
-                      "mismatches=" + std::to_string(mismatches) + " " +
+                      "mismatches=" + dstd::to_string(mismatches) + " " +
                           format_read_stats(snapshot.read_stats())));
     }
     if (mismatches > 0) {
-        fail(std::to_string(mismatches) + " point gets of " + dir +
+        fail(dstd::to_string(mismatches) + " point gets of " + dir +
              " did not return the value written");
     }
     mismatches = 0;
@@ -1449,11 +1438,11 @@ bool Bench::query_store(const Workload& workload, const std::string& dir,
             nanos_between(started, std::chrono::steady_clock::now());
         query_rows.push_back(
             query_row("get_miss", plan.misses.size(), nanos, rss,
-                      "mismatches=" + std::to_string(mismatches) + " " +
+                      "mismatches=" + dstd::to_string(mismatches) + " " +
                           format_read_stats(snapshot.read_stats())));
     }
     if (mismatches > 0) {
-        fail(std::to_string(mismatches) + " absent keys of " + dir +
+        fail(dstd::to_string(mismatches) + " absent keys of " + dir +
              " were found");
     }
 
@@ -1478,19 +1467,19 @@ bool Bench::query_store(const Workload& workload, const std::string& dir,
         }
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
-        std::ostringstream extra;
-        extra << "scopes=" << plan.scans.size()
-              << " rows_per_scope=" << std::fixed << std::setprecision(1)
-              << (plan.scans.empty()
+        const dstd::String extra = dftracer::utils::common::str_cat(
+            "scopes=", plan.scans.size(), " rows_per_scope=",
+            fixed(plan.scans.empty()
                       ? 0
                       : static_cast<double>(scanned) /
-                            static_cast<double>(plan.scans.size()))
-              << " " << format_read_stats(snapshot.read_stats());
+                            static_cast<double>(plan.scans.size()),
+                  1),
+            " ", format_read_stats(snapshot.read_stats()));
         query_rows.push_back(
-            query_row("scan_scope", scanned, nanos, rss, extra.str()));
+            query_row("scan_scope", scanned, nanos, rss, extra));
     }
     if (wrong_scopes > 0) {
-        fail(std::to_string(wrong_scopes) + " scopes of " + dir +
+        fail(dstd::to_string(wrong_scopes) + " scopes of " + dir +
              " hold another row count than written");
     }
 
@@ -1511,17 +1500,17 @@ bool Bench::query_store(const Workload& workload, const std::string& dir,
         query_rows.push_back(query_row(
             "full_scan", rows, nanos, rss,
             "rows_per_s=" + format_rate(rows, nanos) +
-                " rows_expected=" + std::to_string(workload.total_keys) + " " +
+                " rows_expected=" + dstd::to_string(workload.total_keys) + " " +
                 format_read_stats(snapshot.read_stats())));
         if (rows != workload.total_keys) {
-            fail("the full scan of " + dir + " read " + std::to_string(rows) +
-                 " rows, not " + std::to_string(workload.total_keys));
+            fail("the full scan of " + dir + " read " + dstd::to_string(rows) +
+                 " rows, not " + dstd::to_string(workload.total_keys));
         }
     }
     return true;
 }
 
-bool Bench::run_query_case(const Workload& workload, const std::string& dir) {
+bool Bench::run_query_case(const Workload& workload, const dstd::String& dir) {
     if (dir.empty()) {
         ensure_comment();
         std::cout << "# the query case reads the data of the shared write case,"
@@ -1535,7 +1524,7 @@ bool Bench::run_query_case(const Workload& workload, const std::string& dir) {
 ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
     ScopeRow row;
     row.scopes = scopes;
-    const std::string dir = case_dir("scopes-" + std::to_string(scopes));
+    const dstd::String dir = case_dir("scopes-" + dstd::to_string(scopes));
     const auto made = dftracer::utils::dstd::fs::create_directories(dir);
     if (!made) {
         fail("cannot create " + dir + ": " + to_std(made.error()));
@@ -1553,7 +1542,7 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
         return row;
     }
 
-    const std::string value(opt.value_bytes, 'v');
+    const dstd::String value(opt.value_bytes, 'v');
     std::atomic<bool> ok{true};
     std::uint64_t new_scope_nanos = 0;
     std::uint64_t commit_nanos = 0;
@@ -1563,7 +1552,7 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
             const auto new_started = std::chrono::steady_clock::now();
             for (std::uint64_t at = 0; at < scopes; ++at) {
                 const ScopeKey scope_key =
-                    ScopeKey::file("/bench/s" + std::to_string(at) + ".dft");
+                    ScopeKey::file("/bench/s" + dstd::to_string(at) + ".dft");
                 Batch batch = writer->batch(*namespace_id, scope_key, 0);
                 const auto key =
                     make_key(0, ordinal, static_cast<std::uint32_t>(at));
@@ -1585,7 +1574,7 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
             for (std::uint64_t at = 0; at < opt.commits; ++at) {
                 const std::uint64_t scope_index = random() % scopes;
                 const ScopeKey scope_key = ScopeKey::file(
-                    "/bench/s" + std::to_string(scope_index) + ".dft");
+                    "/bench/s" + dstd::to_string(scope_index) + ".dft");
                 Batch batch = writer->batch(*namespace_id, scope_key, 0);
                 const auto key = make_key(
                     0, ordinal, static_cast<std::uint32_t>(scope_index));
@@ -1610,7 +1599,8 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
                 ok.store(false, std::memory_order_relaxed);
             }
         }()));
-    if (!ok.load()) fail("scope case of " + std::to_string(scopes) + " scopes");
+    if (!ok.load())
+        fail("scope case of " + dstd::to_string(scopes) + " scopes");
     row.ns_new_scope =
         static_cast<double>(new_scope_nanos) / static_cast<double>(scopes);
     row.ns_commit =
@@ -1629,7 +1619,7 @@ NamespaceSpec Bench::fold_spec() const {
     return namespace_spec;
 }
 
-bool Bench::write_fold(Runtime& runtime, const std::string& dir,
+bool Bench::write_fold(Runtime& runtime, const dstd::String& dir,
                        std::uint64_t scopes, std::uint64_t keys) {
     const auto made = dftracer::utils::dstd::fs::create_directories(dir);
     if (!made) {
@@ -1651,9 +1641,9 @@ bool Bench::write_fold(Runtime& runtime, const std::string& dir,
     // Two batches per scope, so every scope holds two segments and the scan
     // folds across them: the first with fold_value(scope, key), the second
     // with 1 for every key.
-    const std::vector<std::string> names = fold_key_names(keys);
-    std::vector<std::uint8_t> values(static_cast<std::size_t>(keys) *
-                                     FOLD_VALUE_BYTES);
+    const dstd::Vector<dstd::String> names = fold_key_names(keys);
+    dstd::Vector<std::uint8_t> values(static_cast<std::size_t>(keys) *
+                                      FOLD_VALUE_BYTES);
     std::array<std::uint8_t, FOLD_VALUE_BYTES> one{};
     dftracer::utils::dstd::write_u64_le(one.data(), 1);
     std::atomic<bool> ok{true};
@@ -1704,16 +1694,16 @@ bool Bench::write_fold(Runtime& runtime, const std::string& dir,
 
 FoldScan Bench::fold_scan(const Snapshot& snapshot,
                           const NamespaceSpec& namespace_spec,
-                          const std::vector<ScopeKey>& scopes,
+                          const dstd::Vector<ScopeKey>& scopes,
                           std::uint64_t keys, std::uint64_t threads,
-                          const std::vector<std::int64_t>& expected) {
+                          const dstd::Vector<std::int64_t>& expected) {
     FoldScan scan;
-    std::vector<std::vector<std::int64_t>> parts(
+    dstd::Vector<dstd::Vector<std::int64_t>> parts(
         static_cast<std::size_t>(threads),
-        std::vector<std::int64_t>(static_cast<std::size_t>(keys), 0));
+        dstd::Vector<std::int64_t>(static_cast<std::size_t>(keys), 0));
     std::atomic<int> errors{0};
     const auto started = std::chrono::steady_clock::now();
-    std::vector<std::thread> workers;
+    dstd::Vector<dstd::Thread> workers;
     workers.reserve(static_cast<std::size_t>(threads));
     for (std::uint64_t at = 0; at < threads; ++at) {
         workers.emplace_back([&, at] {
@@ -1721,7 +1711,7 @@ FoldScan Bench::fold_scan(const Snapshot& snapshot,
             const std::size_t count = static_cast<std::size_t>(threads);
             const std::size_t begin = scopes.size() * part / count;
             const std::size_t end = scopes.size() * (part + 1) / count;
-            std::vector<std::int64_t>& sums = parts[part];
+            dstd::Vector<std::int64_t>& sums = parts[part];
             auto cursor =
                 snapshot.scan(namespace_spec,
                               dftracer::utils::dstd::Span<const ScopeKey>(
@@ -1757,7 +1747,7 @@ FoldScan Bench::fold_scan(const Snapshot& snapshot,
     for (std::uint64_t key = 0; key < keys; ++key) {
         const std::size_t at = static_cast<std::size_t>(key);
         std::int64_t total = 0;
-        for (const std::vector<std::int64_t>& sums : parts) total += sums[at];
+        for (const dstd::Vector<std::int64_t>& sums : parts) total += sums[at];
         if (total != expected[at]) ++scan.mismatches;
     }
     return scan;
@@ -1765,13 +1755,13 @@ FoldScan Bench::fold_scan(const Snapshot& snapshot,
 
 bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
     const std::uint64_t keys = opt.fold_keys;
-    const std::vector<std::int64_t> expected = fold_expectation(scopes, keys);
-    std::vector<ScopeKey> scope_keys;
+    const dstd::Vector<std::int64_t> expected = fold_expectation(scopes, keys);
+    dstd::Vector<ScopeKey> scope_keys;
     scope_keys.reserve(static_cast<std::size_t>(scopes));
     for (std::uint64_t scope = 0; scope < scopes; ++scope) {
         scope_keys.push_back(ScopeKey::file(scope_name(0, scope)));
     }
-    const std::string dir = case_dir("fold-" + std::to_string(scopes));
+    const dstd::String dir = case_dir("fold-" + dstd::to_string(scopes));
     bool ok = true;
     if (!write_fold(runtime, dir, scopes, keys)) {
         ok = false;
@@ -1786,8 +1776,8 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
             ok = false;
         } else {
             Snapshot snapshot = std::move(*opened);
-            const std::string scope_column =
-                "scopes=" + std::to_string(scopes) + " ";
+            const dstd::String scope_column =
+                "scopes=" + dstd::to_string(scopes) + " ";
             // This case prints its rows as they come, so the open rows of
             // this directory are printed here and not queued.
             print_query_row(
@@ -1814,7 +1804,7 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
                 row.mismatches = scan.mismatches;
                 print_fold_row(row);
                 if (scan.mismatches > 0) {
-                    fail(std::to_string(scan.mismatches) + " fold sums of " +
+                    fail(dstd::to_string(scan.mismatches) + " fold sums of " +
                          dir + " differ from the ones written");
                     ok = false;
                 }
@@ -1828,17 +1818,17 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
 
 bool Bench::run_kept() {
     const bool keep = !opt.keep.empty();
-    const std::string& base = keep ? opt.keep : opt.reuse;
-    for (const std::string& mode : opt.modes) {
+    const dstd::String& base = keep ? opt.keep : opt.reuse;
+    for (const dstd::String& mode : opt.modes) {
         const bool per_thread = mode == "per-thread";
         for (int threads : opt.threads) {
             Runtime runtime(static_cast<std::size_t>(threads));
             note_backend(runtime);
             const Workload workload =
                 workload_of(opt, static_cast<std::uint64_t>(threads));
-            const std::string name = mode + "-" + std::to_string(threads) +
-                                     "-" + std::to_string(opt.payload_mib);
-            const std::string dir = base + "/" + name;
+            const dstd::String name = mode + "-" + dstd::to_string(threads) +
+                                      "-" + dstd::to_string(opt.payload_mib);
+            const dstd::String dir = base + "/" + name;
             const bool exists =
                 dftracer::utils::dstd::fs::exists(dir).value_or(false);
             if (keep && exists) {
@@ -1869,8 +1859,8 @@ bool Bench::run() {
     const bool do_fold = opt.which == "fold" || opt.which == "all";
     // The query case reads what the shared write case wrote, so with no write
     // rows asked for it writes that one case and prints only the query rows.
-    const std::vector<std::string> modes =
-        print_writes ? opt.modes : std::vector<std::string>{"shared"};
+    const dstd::Vector<dstd::String> modes =
+        print_writes ? opt.modes : dstd::Vector<dstd::String>{"shared"};
 
     if (print_writes || do_query) {
         for (int threads : opt.threads) {
@@ -1878,12 +1868,13 @@ bool Bench::run() {
             note_backend(runtime);
             const Workload workload =
                 workload_of(opt, static_cast<std::uint64_t>(threads));
-            std::string query_dir;
-            for (const std::string& mode : modes) {
+            dstd::String query_dir;
+            for (const dstd::String& mode : modes) {
                 const bool per_thread = mode == "per-thread";
                 const bool keep_dir = do_query && !per_thread;
-                const std::string name = mode + "-" + std::to_string(threads) +
-                                         "-" + std::to_string(opt.payload_mib);
+                const dstd::String name = mode + "-" +
+                                          dstd::to_string(threads) + "-" +
+                                          dstd::to_string(opt.payload_mib);
                 const WriteRow row = run_write_case(
                     runtime, workload, case_dir(name), per_thread, keep_dir);
                 if (print_writes) print_write_row(row);

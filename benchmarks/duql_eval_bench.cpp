@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_value.h>
@@ -21,8 +22,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <string>
-#include <tuple>
 
 namespace duql = dftracer::utils::duql;
 using dftracer::utils::json::JsonValue;
@@ -217,8 +216,10 @@ int main(int argc, char** argv) {
     }
     std::printf("\n%-44s %10s\n", "DataFrame expr string predicate", "ns/row");
     for (const auto& [label, op, lit] :
-         {std::tuple{"starts_with", df::StrPredOp::StartsWith, "MPI_"},
-          std::tuple{"contains", df::StrPredOp::Contains, "Memcpy"}}) {
+         {dftracer::utils::dstd::Tuple{"starts_with", df::StrPredOp::StartsWith,
+                                       "MPI_"},
+          dftracer::utils::dstd::Tuple{"contains", df::StrPredOp::Contains,
+                                       "Memcpy"}}) {
         const dftracer::utils::dstd::Vector<const df::Series*> in0{&col};
         const df::Expr lit_e = df::expr_str_pred(op, df::expr_col(0), lit);
         const double lit_ns = ns_per_record(n, rounds, [&] {
@@ -278,10 +279,12 @@ int main(int argc, char** argv) {
         for (const auto& v : own) views.push_back(v);
         const df::Series longs = df::Series::strings(views);
         for (const auto& [label, fn, pattern] :
-             {std::tuple{"str_search /scratch/.*\\.h5$",
-                         &df::Series::str_search, "/scratch/.*\\.h5$"},
-              std::tuple{"str_matches .*/scratch/.*", &df::Series::str_matches,
-                         ".*/scratch/.*"}}) {
+             {dftracer::utils::dstd::Tuple{"str_search /scratch/.*\\.h5$",
+                                           &df::Series::str_search,
+                                           "/scratch/.*\\.h5$"},
+              dftracer::utils::dstd::Tuple{"str_matches .*/scratch/.*",
+                                           &df::Series::str_matches,
+                                           ".*/scratch/.*"}}) {
             const double ns = ns_per_record(m, rounds, [&] {
                 const df::Series r = (longs.*fn)(pattern);
                 if (!r.handle()) std::abort();

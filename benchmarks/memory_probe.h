@@ -19,8 +19,6 @@
 
 #include <cstdio>
 #include <cstring>
-#include <fstream>
-#include <string>
 #endif
 
 /**
@@ -97,37 +95,45 @@ inline std::size_t block_size(void* p) { return malloc_size(p); }
 
 namespace detail {
 
-inline std::uint64_t kib_field(const std::string& line, const char* key) {
+inline std::uint64_t kib_field(const char* line, const char* key) {
     const std::size_t n = std::strlen(key);
-    if (line.compare(0, n, key) != 0) return 0;
-    return std::strtoull(line.c_str() + n, nullptr, 10) * 1024;
+    if (std::strncmp(line, key, n) != 0) return 0;
+    return std::strtoull(line + n, nullptr, 10) * 1024;
 }
 
 inline bool cgroup_anon_bytes(std::uint64_t& out) {
-    std::ifstream self("/proc/self/cgroup");
-    std::string line;
-    std::string path;
-    while (std::getline(self, line)) {
-        if (line.compare(0, 3, "0::") == 0) path = line.substr(3);
+    char path[4096];
+    path[0] = '\0';
+    if (std::FILE* self = std::fopen("/proc/self/cgroup", "r")) {
+        char line[4096];
+        while (std::fgets(line, sizeof line, self) != nullptr) {
+            if (std::strncmp(line, "0::", 3) != 0) continue;
+            line[std::strcspn(line, "\n")] = '\0';
+            std::snprintf(path, sizeof path, "%s", line + 3);
+        }
+        std::fclose(self);
     }
-    if (path.empty()) return false;
-    std::ifstream stat(("/sys/fs/cgroup" + path + "/memory.stat").c_str());
-    if (!stat) return false;
+    if (path[0] == '\0') return false;
+    char file[4200];
+    std::snprintf(file, sizeof file, "/sys/fs/cgroup%s/memory.stat", path);
+    std::FILE* stat = std::fopen(file, "r");
+    if (stat == nullptr) return false;
     std::uint64_t anon = 0;
     std::uint64_t shmem = 0;
     bool have_anon = false;
     bool have_shmem = false;
-    std::string key;
-    std::uint64_t value = 0;
-    while (stat >> key >> value) {
-        if (key == "anon") {
+    char key[64];
+    unsigned long long value = 0;
+    while (std::fscanf(stat, "%63s %llu", key, &value) == 2) {
+        if (std::strcmp(key, "anon") == 0) {
             anon = value;
             have_anon = true;
-        } else if (key == "shmem") {
+        } else if (std::strcmp(key, "shmem") == 0) {
             shmem = value;
             have_shmem = true;
         }
     }
+    std::fclose(stat);
     out = anon + shmem;
     return have_anon && have_shmem;
 }
@@ -136,11 +142,14 @@ inline bool cgroup_anon_bytes(std::uint64_t& out) {
 
 inline Reading read() {
     Reading r;
-    std::ifstream status("/proc/self/status");
-    std::string line;
-    while (std::getline(status, line)) {
-        if (const auto v = detail::kib_field(line, "VmRSS:")) r.current_rss = v;
-        if (const auto v = detail::kib_field(line, "RssAnon:")) r.anon = v;
+    if (std::FILE* status = std::fopen("/proc/self/status", "r")) {
+        char line[512];
+        while (std::fgets(line, sizeof line, status) != nullptr) {
+            if (const auto v = detail::kib_field(line, "VmRSS:"))
+                r.current_rss = v;
+            if (const auto v = detail::kib_field(line, "RssAnon:")) r.anon = v;
+        }
+        std::fclose(status);
     }
     rusage u{};
     getrusage(RUSAGE_SELF, &u);

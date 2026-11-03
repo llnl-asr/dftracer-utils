@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 
 #include <algorithm>
@@ -16,9 +17,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace df = dftracer::utils::dataframe;
 namespace duql = dftracer::utils::duql;
@@ -28,9 +26,9 @@ namespace {
 df::DataFrame frame(std::int64_t rows) {
     constexpr dftracer::utils::dstd::StringView NAMES[] = {
         "read", "write", "open64", "MPI_Send", "fwrite", "lseek64"};
-    std::vector<std::int64_t> dur, size, retry;
-    std::vector<std::uint8_t> retry_valid((rows + 7) / 8, 0);
-    std::vector<dftracer::utils::dstd::StringView> name;
+    dftracer::utils::dstd::Vector<std::int64_t> dur, size, retry;
+    dftracer::utils::dstd::Vector<std::uint8_t> retry_valid((rows + 7) / 8, 0);
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> name;
     for (std::int64_t i = 0; i < rows; ++i) {
         dur.push_back((i * 37) % 200);
         size.push_back((i * 131) % 4096);
@@ -68,7 +66,7 @@ int main(int argc, char** argv) {
             std::printf("%-32s %10s\n", q, "n/a");
             continue;
         }
-        std::vector<double> t;
+        dftracer::utils::dstd::Vector<double> t;
         std::int64_t kept = 0;
         for (int r = 0; r < rounds; ++r) {
             const auto t0 = std::chrono::steady_clock::now();

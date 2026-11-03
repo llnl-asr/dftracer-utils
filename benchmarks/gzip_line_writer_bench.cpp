@@ -9,8 +9,12 @@
 //   gzip_line_writer_bench <input.pfw> [workdir]
 
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function_ref.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
@@ -20,13 +24,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
-#include <functional>
-#include <map>
 #include <mutex>
-#include <string>
-#include <thread>
-#include <vector>
 
 namespace fileio = dftracer::utils::utilities::fileio;
 namespace compress = dftracer::utils::utilities::fileio::compress;
@@ -51,15 +49,15 @@ void require_ok(const dftracer::utils::dstd::Expected<
 constexpr std::size_t MIB = 1024 * 1024;
 constexpr int ROUNDS = 3;
 
-std::vector<dftracer::utils::dstd::StringView> split_appends(
-    const std::string& data) {
-    std::vector<dftracer::utils::dstd::StringView> out;
+dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> split_appends(
+    const dftracer::utils::dstd::String& data) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> out;
     std::size_t pos = 0;
     while (pos < data.size()) {
         std::size_t end = std::min(pos + MIB, data.size());
         if (end < data.size()) {
             auto nl = data.rfind('\n', end - 1);
-            end = (nl == std::string::npos || nl < pos)
+            end = (nl == dftracer::utils::dstd::String::npos || nl < pos)
                       ? data.find('\n', end) + 1
                       : nl + 1;
         }
@@ -70,14 +68,15 @@ std::vector<dftracer::utils::dstd::StringView> split_appends(
 }
 
 std::uint64_t run_writer(
-    const std::vector<dftracer::utils::dstd::StringView>& appends,
-    const std::string& path, std::size_t member, int level, bool comp) {
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView>&
+        appends,
+    const dftracer::utils::dstd::String& path, std::size_t member, int level,
+    bool comp) {
     fileio::GzipWriterOptions o;
     o.member_size = member;
     o.level = level;
     o.compress = comp;
-    auto w = fileio::GzipLineWriterBlocking::open(
-        dftracer::utils::dstd::String(path), std::move(o));
+    auto w = fileio::GzipLineWriterBlocking::open(path, std::move(o));
     if (!w) {
         std::fprintf(stderr, "open failed\n");
         std::exit(1);
@@ -95,14 +94,15 @@ std::uint64_t run_writer(
     return s->c_bytes;
 }
 
-std::uint64_t run_pgzip(const std::string& data, const std::string& path) {
+std::uint64_t run_pgzip(const dftracer::utils::dstd::String& data,
+                        const dftracer::utils::dstd::String& path) {
     constexpr std::size_t CHUNK = 4 * MIB;
     const std::size_t workers =
-        std::max(1u, std::thread::hardware_concurrency());
+        std::max(1u, dftracer::utils::dstd::Thread::hardware_concurrency());
     const std::size_t nchunks = (data.size() + CHUNK - 1) / CHUNK;
     std::mutex mu;
     std::condition_variable cv;
-    std::map<std::size_t, std::string> done;
+    dftracer::utils::dstd::Map<std::size_t, dftracer::utils::dstd::String> done;
     std::size_t next_claim = 0, next_write = 0;
     std::uint64_t out_bytes = 0;
 
@@ -122,10 +122,10 @@ std::uint64_t run_pgzip(const std::string& data, const std::string& path) {
             }
             std::size_t off = i * CHUNK;
             std::size_t len = std::min(CHUNK, data.size() - off);
-            std::string chunk(data.data() + off, len);
+            dftracer::utils::dstd::String chunk(data.data() + off, len);
             c.compress_member_into(scratch, chunk.data(), chunk.size());
-            std::string res(reinterpret_cast<const char*>(scratch.data()),
-                            scratch.size());
+            dftracer::utils::dstd::String res(
+                reinterpret_cast<const char*>(scratch.data()), scratch.size());
             {
                 std::lock_guard<std::mutex> lk(mu);
                 done.emplace(i, std::move(res));
@@ -133,12 +133,12 @@ std::uint64_t run_pgzip(const std::string& data, const std::string& path) {
             cv.notify_all();
         }
     };
-    std::vector<std::thread> pool;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Thread> pool;
     for (std::size_t t = 0; t < workers; ++t) pool.emplace_back(worker);
 
-    std::ofstream ofs(path.c_str(), std::ios::binary);
+    require_ok(dftracer::utils::dstd::fs::write_file(path, {}), "write_file");
     while (next_write < nchunks) {
-        std::string blob;
+        dftracer::utils::dstd::String blob;
         {
             std::unique_lock<std::mutex> lk(mu);
             cv.wait(lk, [&] { return done.count(next_write) != 0; });
@@ -148,18 +148,18 @@ std::uint64_t run_pgzip(const std::string& data, const std::string& path) {
             ++next_write;
         }
         cv.notify_all();
-        ofs.write(blob.data(), static_cast<std::streamsize>(blob.size()));
+        require_ok(dftracer::utils::dstd::fs::append_file(path, blob),
+                   "append_file");
         out_bytes += blob.size();
     }
-    ofs.close();
     for (auto& t : pool) t.join();
     return out_bytes;
 }
 
-double memcpy_loop(
-    const std::vector<dftracer::utils::dstd::StringView>& appends,
-    std::size_t member) {
-    std::vector<char> buf(member + 2 * MIB);
+double memcpy_loop(const dftracer::utils::dstd::Vector<
+                       dftracer::utils::dstd::StringView>& appends,
+                   std::size_t member) {
+    dftracer::utils::dstd::Vector<char> buf(member + 2 * MIB);
     auto t0 = Clock::now();
     std::size_t fill = 0;
     for (auto a : appends) {
@@ -174,10 +174,12 @@ double memcpy_loop(
 
 double run_case(const char* name, std::size_t in_bytes,
                 const dftracer::utils::dstd::Path& dir,
-                const std::function<std::uint64_t(const std::string&)>& fn) {
-    std::vector<double> ms;
+                dftracer::utils::dstd::FunctionRef<
+                    std::uint64_t(const dftracer::utils::dstd::String&)>
+                    fn) {
+    dftracer::utils::dstd::Vector<double> ms;
     std::uint64_t out = 0;
-    const std::string path((dir / "out.pfw.gz").str());
+    const dftracer::utils::dstd::String path((dir / "out.pfw.gz").str());
     for (int r = 0; r < ROUNDS; ++r) {
         auto t0 = Clock::now();
         out = fn(path);
@@ -202,17 +204,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "usage: %s <input.pfw> [workdir]\n", argv[0]);
         return 2;
     }
-    std::string data;
-    {
-        std::ifstream ifs(argv[1], std::ios::binary | std::ios::ate);
-        if (!ifs) {
-            std::fprintf(stderr, "cannot open %s\n", argv[1]);
-            return 2;
-        }
-        data.resize(static_cast<std::size_t>(ifs.tellg()));
-        ifs.seekg(0);
-        ifs.read(data.data(), static_cast<std::streamsize>(data.size()));
+    auto input = dftracer::utils::dstd::fs::read_file(argv[1]);
+    if (!input) {
+        std::fprintf(stderr, "cannot open %s\n", argv[1]);
+        return 2;
     }
+    dftracer::utils::dstd::String data = std::move(*input);
     if (data.empty() || data.back() != '\n') data.push_back('\n');
     dftracer::utils::dstd::Path base =
         argc > 2 ? dftracer::utils::dstd::Path(argv[2])
@@ -222,14 +219,15 @@ int main(int argc, char** argv) {
                "create_directories");
     auto appends = split_appends(data);
 
-    std::printf("input %.1f MB, %zu appends\n", data.size() / 1e6,
-                appends.size());
+    std::printf("input %.1f MB, %zu appends\n",
+                static_cast<double>(data.size()) / 1e6, appends.size());
     std::printf("%-28s %12s %14s %13s\n", "case", "ms", "MB/s", "out_MB");
 
     auto writer_case = [&](const char* n, std::size_t m, int lvl, bool comp) {
-        return run_case(n, data.size(), dir, [&](const std::string& p) {
-            return run_writer(appends, p, m, lvl, comp);
-        });
+        return run_case(n, data.size(), dir,
+                        [&](const dftracer::utils::dstd::String& p) {
+                            return run_writer(appends, p, m, lvl, comp);
+                        });
     };
     writer_case("writer 4MiB L1", 4 * MIB, 1, true);
     writer_case("writer 4MiB L6", 4 * MIB, 6, true);
@@ -237,9 +235,11 @@ int main(int argc, char** argv) {
     writer_case("writer 32MiB L6", 32 * MIB, 6, true);
     writer_case("writer 4MiB compress=false", 4 * MIB, 6, false);
     run_case("pgzip loop 4MiB L6", data.size(), dir,
-             [&](const std::string& p) { return run_pgzip(data, p); });
+             [&](const dftracer::utils::dstd::String& p) {
+                 return run_pgzip(data, p);
+             });
 
-    std::vector<double> cp;
+    dftracer::utils::dstd::Vector<double> cp;
     for (int r = 0; r < ROUNDS; ++r)
         cp.push_back(memcpy_loop(appends, 4 * MIB));
     std::sort(cp.begin(), cp.end());

@@ -28,8 +28,12 @@
 //                                              and every result must be
 //                                              positive and correct)
 
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #ifdef __APPLE__
 #include <pthread/qos.h>
@@ -43,11 +47,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
-#include <string>
-#include <string_view>
-#include <thread>
-#include <vector>
 
 namespace {
 
@@ -70,22 +69,25 @@ double elapsed_ns(Clock::time_point start, Clock::time_point end) {
     return std::chrono::duration<double, std::nano>(end - start).count();
 }
 
-std::vector<std::string> make_strings(std::size_t count) {
+dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> make_strings(
+    std::size_t count) {
     static const char* const DIRS[] = {
         "/p/lustre1/user/run", "/usr/lib/x86_64-linux-gnu", "/scratch/data/ds",
         "/home/worker/.cache", "/mnt/pfs/checkpoints"};
     static const char* const FUNCS[] = {"read",     "write",     "pread64",
                                         "openat",   "fsync",     "H5Dread",
                                         "MPI_Send", "torch.save"};
-    std::vector<std::string> out;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
     out.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
-        std::string s;
+        dftracer::utils::dstd::String s;
         if (i % 4 == 3) {
-            s = std::string(FUNCS[i % 8]) + "::" + std::to_string(i);
+            s = dftracer::utils::dstd::String(FUNCS[i % 8]) +
+                "::" + dftracer::utils::dstd::to_string(i);
         } else {
-            s = std::string(DIRS[i % 5]) + "/part" + std::to_string(i / 5) +
-                "/shard_" + std::to_string(i) + ".dat";
+            s = dftracer::utils::dstd::String(DIRS[i % 5]) + "/part" +
+                dftracer::utils::dstd::to_string(i / 5) + "/shard_" +
+                dftracer::utils::dstd::to_string(i) + ".dat";
         }
         out.push_back(std::move(s));
     }
@@ -126,7 +128,7 @@ Result get_or_insert_new(std::size_t n) {
 Result resolve(std::size_t n) {
     auto strings = make_strings(KNOWN_STRINGS);
     StringIntern table;
-    std::vector<std::uint32_t> ids;
+    dftracer::utils::dstd::Vector<std::uint32_t> ids;
     for (const auto& s : strings) ids.push_back(table.get_or_insert(s));
     std::size_t bytes = 0;
     auto start = Clock::now();
@@ -150,7 +152,7 @@ Result get_or_insert_mt8(std::size_t n) {
     std::atomic<std::size_t> ready{0};
     std::atomic<bool> go{false};
     std::atomic<std::uint64_t> total{0};
-    std::vector<std::thread> threads;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Thread> threads;
     for (std::size_t t = 0; t < THREADS; ++t) {
         threads.emplace_back([&, t] {
             ready.fetch_add(1);
@@ -179,20 +181,28 @@ Result get_or_insert_mt8(std::size_t n) {
 struct Case {
     const char* name;
     std::size_t full_ops;
-    std::function<Result(std::size_t)> run;
-    std::function<std::size_t(std::size_t)> ops;
+    dftracer::utils::dstd::Function<Result(std::size_t)> run;
+    dftracer::utils::dstd::Function<std::size_t(std::size_t)> ops;
 };
 
 std::size_t exact(std::size_t n) { return n; }
 std::size_t per_thread(std::size_t n) { return (n / THREADS) * THREADS; }
 
-std::vector<Case> make_cases() {
-    return {
-        {"get_or_insert_known", 20000000, get_or_insert_known, exact},
-        {"get_or_insert_new", NEW_STRINGS, get_or_insert_new, exact},
-        {"resolve", 50000000, resolve, exact},
-        {"get_or_insert_mt8", 16000000, get_or_insert_mt8, per_thread},
-    };
+dftracer::utils::dstd::Vector<Case> make_cases() {
+    dftracer::utils::dstd::Vector<Case> cases;
+    auto add =
+        [&cases](
+            const char* name, std::size_t full_ops,
+            dftracer::utils::dstd::Function<Result(std::size_t)> run,
+            dftracer::utils::dstd::Function<std::size_t(std::size_t)> ops) {
+            cases.push_back(
+                Case{name, full_ops, std::move(run), std::move(ops)});
+        };
+    add("get_or_insert_known", 20000000, get_or_insert_known, exact);
+    add("get_or_insert_new", NEW_STRINGS, get_or_insert_new, exact);
+    add("resolve", 50000000, resolve, exact);
+    add("get_or_insert_mt8", 16000000, get_or_insert_mt8, per_thread);
+    return cases;
 }
 
 struct Stats {
@@ -202,7 +212,7 @@ struct Stats {
     double spread_pct;
 };
 
-Stats summarize(std::vector<double> values) {
+Stats summarize(dftracer::utils::dstd::Vector<double> values) {
     std::sort(values.begin(), values.end());
     Stats s{};
     s.median = values[values.size() / 2];
@@ -215,12 +225,13 @@ Stats summarize(std::vector<double> values) {
 constexpr double CHECK_MIN_PCT = 3.0;
 
 struct Recorded {
-    std::string name;
+    dftracer::utils::dstd::String name;
     double median = 0.0;
     double spread_pct = 0.0;
 };
 
-bool write_record(const char* path, const std::vector<Recorded>& rows) {
+bool write_record(const char* path,
+                  const dftracer::utils::dstd::Vector<Recorded>& rows) {
     std::FILE* f = std::fopen(path, "w");
     if (f == nullptr) return false;
     std::fprintf(f, "{\n");
@@ -234,7 +245,8 @@ bool write_record(const char* path, const std::vector<Recorded>& rows) {
     return std::fclose(f) == 0;
 }
 
-bool read_record(const char* path, std::vector<Recorded>& rows) {
+bool read_record(const char* path,
+                 dftracer::utils::dstd::Vector<Recorded>& rows) {
     std::FILE* f = std::fopen(path, "r");
     if (f == nullptr) return false;
     char line[512];
@@ -252,8 +264,9 @@ bool read_record(const char* path, std::vector<Recorded>& rows) {
     return !rows.empty();
 }
 
-int check_record(const char* path, const std::vector<Recorded>& now) {
-    std::vector<Recorded> base;
+int check_record(const char* path,
+                 const dftracer::utils::dstd::Vector<Recorded>& now) {
+    dftracer::utils::dstd::Vector<Recorded> base;
     if (!read_record(path, base)) {
         std::fprintf(stderr, "cannot read record: %s\n", path);
         return 1;
@@ -276,9 +289,9 @@ int check_record(const char* path, const std::vector<Recorded>& now) {
     return slower == 0 ? 0 : 1;
 }
 
-int run(const std::vector<Case>& cases, int reps, bool smoke, bool csv,
-        const char* record, const char* check) {
-    std::vector<Recorded> rows;
+int run(const dftracer::utils::dstd::Vector<Case>& cases, int reps, bool smoke,
+        bool csv, const char* record, const char* check) {
+    dftracer::utils::dstd::Vector<Recorded> rows;
     if (csv) {
         std::printf("name,median_ns_per_op,min,max,spread_pct\n");
     } else {
@@ -297,7 +310,7 @@ int run(const std::vector<Case>& cases, int reps, bool smoke, bool csv,
                         64)
                   : c.full_ops;
         std::size_t ops = c.ops(requested);
-        std::vector<double> per_op;
+        dftracer::utils::dstd::Vector<double> per_op;
         bool ok = true;
         for (int rep = 0; rep < reps; ++rep) {
             Result r = c.run(requested);
@@ -347,7 +360,7 @@ int main(int argc, char** argv) {
     int reps = DEFAULT_REPS;
     bool smoke = false;
     bool csv = false;
-    std::string only;
+    dftracer::utils::dstd::String only;
     const char* record = nullptr;
     const char* check = nullptr;
     for (int i = 1; i < argc; ++i) {
@@ -374,11 +387,11 @@ int main(int argc, char** argv) {
     if (smoke) reps = 1;
     if (reps <= 0) return usage();
 
-    std::vector<Case> cases = make_cases();
+    dftracer::utils::dstd::Vector<Case> cases = make_cases();
     if (!only.empty()) {
-        std::vector<Case> picked;
-        for (const Case& c : cases) {
-            if (only == c.name) picked.push_back(c);
+        dftracer::utils::dstd::Vector<Case> picked;
+        for (Case& c : cases) {
+            if (only == c.name) picked.push_back(std::move(c));
         }
         if (picked.empty()) {
             std::fprintf(stderr, "unknown case: %s\n", only.c_str());

@@ -248,6 +248,7 @@ class Writer {
            TaskExecutor& executor, const WriterOptions& options);
 
     template <class T, class... Args>
+        requires(!std::is_array_v<T>)
     friend dstd::UniquePtr<T> dstd::make_unique(Args&&... args);
 
     NamespaceEntry* find_namespace(std::uint32_t id);

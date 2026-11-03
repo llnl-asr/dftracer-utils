@@ -6,9 +6,9 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/parked.h>
 #include <dftracer/utils/coro/resumption_helper.h>
+#include <dftracer/utils/dstd/concurrent_queue.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/vendor/concurrentqueue.h>
 
 #include <atomic>
 #include <cassert>
@@ -518,7 +518,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     };
 
    private:
-    moodycamel::ConcurrentQueue<T> queue_;
+    dstd::ConcurrentQueue<T> queue_;
 
     std::size_t capacity_;
     std::size_t available_slots_;

@@ -8,11 +8,11 @@
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_u64
 #include <dftracer/utils/dataframe/kernels/sort.h>          // argsort
 #include <dftracer/utils/dataframe/parallel.h>              // parallel_for
+#include <dftracer/utils/dstd/concurrent_queue.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>       // string key hashing
 #include <dftracer/utils/dstd/hash/splitmix64.h>  // row hashing
 #include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/vendor/concurrentqueue.h>
 
 #include <algorithm>
 #include <atomic>
@@ -586,7 +586,7 @@ dstd::Optional<DataFrame> group_agg_partitioned(
     // busy, so memory is the partial pages plus little.
     struct Partition {
         std::atomic<bool> held{false};  // the state's owner
-        moodycamel::ConcurrentQueue<std::unique_ptr<std::uint64_t[]>> queue;
+        dstd::ConcurrentQueue<std::unique_ptr<std::uint64_t[]>> queue;
         AggStatePtr state;
     };
     std::vector<Partition> partitions(PARTITIONS);

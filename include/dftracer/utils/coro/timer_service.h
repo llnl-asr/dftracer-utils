@@ -2,12 +2,12 @@
 #ifndef DFTRACER_UTILS_CORO_TIMER_SERVICE_H
 #define DFTRACER_UTILS_CORO_TIMER_SERVICE_H
 
+#include <dftracer/utils/dstd/concurrent_queue.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/queue.h>
 #include <dftracer/utils/dstd/thread.h>
-#include <dftracer/utils/dstd/vendor/concurrentqueue.h>
 #include <dftracer/utils/memory/manager.h>
 
 #include <atomic>
@@ -48,7 +48,7 @@ class TimerService {
     };
 
     dstd::PriorityQueue<Timer, std::greater<Timer>> timer_heap_;
-    moodycamel::ConcurrentQueue<TimerRequest> pending_timers_;
+    dstd::ConcurrentQueue<TimerRequest> pending_timers_;
     dstd::Map<TimerId, dstd::SharedPtr<std::atomic<bool>>> cancellation_tokens_;
     mutable std::mutex tokens_mutex_;  ///< Protects cancellation_tokens_
     dstd::Thread timer_thread_;
@@ -105,6 +105,9 @@ class TimerService {
     void retire() {
         retired_.store(true, std::memory_order_release);
         stop();
+        // Frees the queue blocks of a process-lifetime service. Callers retire
+        // it after every producer is gone, as a queue swap is not concurrent.
+        pending_timers_ = decltype(pending_timers_)(0);
     }
 
     /// Whether the timer thread is running.

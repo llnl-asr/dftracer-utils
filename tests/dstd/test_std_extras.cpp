@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/concurrent_queue.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -224,4 +225,69 @@ TEST_CASE("from_chars stops at the first byte that is not part of a number") {
           std::errc::result_out_of_range);
     CHECK(dstd::from_chars<float>("0.25") == 0.25f);
     CHECK_FALSE(dstd::from_chars<float>("1e300").has_value());
+}
+
+TEST_CASE("ConcurrentQueue takes its blocks from the memory library") {
+    const std::size_t before = memory::Manager::get().root().blocks();
+    const std::size_t general_before =
+        memory::Manager::get().general().blocks();
+    {
+        dstd::ConcurrentQueue<std::int64_t> queue;
+        CHECK(memory::Manager::get().root().blocks() > before);
+        CHECK(memory::Manager::get().general().blocks() == general_before);
+        dstd::Thread producer([&] {
+            for (std::int64_t i = 0; i < 10000; ++i) REQUIRE(queue.enqueue(i));
+        });
+        producer.join();
+        std::int64_t sum = 0;
+        std::int64_t item = 0;
+        while (queue.try_dequeue(item)) sum += item;
+        CHECK(sum == 10000LL * 9999 / 2);
+    }
+    CHECK(memory::Manager::get().root().blocks() == before);
+}
+
+TEST_CASE("ConcurrentQueue takes its blocks from the memory library") {
+    const std::size_t before = memory::Manager::get().root().blocks();
+    const std::size_t general_before =
+        memory::Manager::get().general().blocks();
+    {
+        dstd::ConcurrentQueue<std::int64_t> queue;
+        CHECK(memory::Manager::get().root().blocks() > before);
+        CHECK(memory::Manager::get().general().blocks() == general_before);
+        dstd::Thread producer([&] {
+            for (std::int64_t i = 0; i < 10000; ++i) (void)queue.enqueue(i);
+        });
+        producer.join();
+        std::int64_t sum = 0;
+        std::int64_t count = 0;
+        std::int64_t item = 0;
+        while (queue.try_dequeue(item)) {
+            sum += item;
+            ++count;
+        }
+        CHECK(count == 10000);
+        CHECK(sum == 10000LL * 9999 / 2);
+    }
+    CHECK(memory::Manager::get().root().blocks() == before);
+}
+
+TEST_CASE("UniquePtr array form zeroes on make_unique and frees its block") {
+    const std::size_t before = memory::Manager::get().general().blocks();
+    {
+        auto zeroed = dstd::make_unique<std::uint64_t[]>(4096);
+        bool all_zero = true;
+        for (std::size_t i = 0; i < 4096; ++i)
+            all_zero = all_zero && zeroed[i] == 0;
+        CHECK(all_zero);
+        auto raw = dstd::make_unique_for_overwrite<char[]>(100);
+        raw[99] = 'x';
+        CHECK(raw[99] == 'x');
+        dstd::UniquePtr<std::uint64_t[]> moved = std::move(zeroed);
+        CHECK(zeroed == nullptr);
+        CHECK(moved[4095] == 0);
+        auto empty = dstd::make_unique<int[]>(0);
+        CHECK(empty != nullptr);
+    }
+    CHECK(memory::Manager::get().general().blocks() == before);
 }

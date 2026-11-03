@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/parked.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/timer_service.h>
+#include <dftracer/utils/dstd/concurrent_queue.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -16,7 +17,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/dstd/vendor/concurrentqueue.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 
@@ -174,7 +174,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
         long long monitor_id{-1};  // coroutine monitor id, -1 if untracked
     };
 
-    moodycamel::ConcurrentQueue<RunQueueEntry> run_queue_;
+    dstd::ConcurrentQueue<RunQueueEntry> run_queue_;
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
         std::atomic<std::uint64_t> work_signal_{0};
     // Enqueues from threads outside this pool still running. The handle they

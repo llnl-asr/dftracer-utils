@@ -14,7 +14,7 @@ namespace dftracer::utils::common {
  * which selects the default (a third of available memory for the budget, no
  * cap). A bad value is an ErrorCode::InvalidArgument naming the variable.
  */
-Result<memory::Config> memory_config_from_env();
+dstd::Result<memory::Config> memory_config_from_env();
 
 /**
  * Applies memory_config_from_env() to the memory library once per process.
@@ -22,7 +22,7 @@ Result<memory::Config> memory_config_from_env();
  * Later calls apply nothing and return the first call's result, so a bad value
  * fails every caller alike.
  */
-Result<void> configure_memory_from_env();
+dstd::Result<void> configure_memory_from_env();
 
 /**
  * OverBudget, OverCap and Pending map to MemoryBudgetExceeded. PoolTableFull

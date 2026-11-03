@@ -127,11 +127,11 @@ class GzipLineWriter {
         ~Producer();
 
         /// Like GzipLineWriter::append, into this producer's buffer.
-        coro::CoroTask<common::Result<void>> append(dstd::StringView lines);
+        coro::CoroTask<dstd::Result<void>> append(dstd::StringView lines);
 
         /// Like GzipLineWriter::append_with, formatting at the tail of this
         /// producer's buffer.
-        coro::CoroTask<common::Result<void>> append_with(
+        coro::CoroTask<dstd::Result<void>> append_with(
             std::size_t max_bytes,
             dstd::Function<std::size_t(char*, std::size_t)> fill);
 
@@ -145,12 +145,12 @@ class GzipLineWriter {
         template <line_format::FixedString Fmt, line_format::LineArg... A>
             requires(Fmt.line_safe() &&
                      sizeof...(A) == line_format::detail::HOLES<Fmt>)
-        coro::CoroTask<common::Result<void>> append_fmt(const A&... args) {
+        coro::CoroTask<dstd::Result<void>> append_fmt(const A&... args) {
             co_return co_await append_view<line_format::PlainEscape>(
                 line_format::view<Fmt>(), args...);
         }
         template <line_format::LineArg... A>
-        coro::CoroTask<common::Result<void>> append_fmt(
+        coro::CoroTask<dstd::Result<void>> append_fmt(
             const line_format::LineFormat& fmt, const A&... args) {
             co_return co_await append_view<line_format::PlainEscape>(fmt.view(),
                                                                      args...);
@@ -158,19 +158,19 @@ class GzipLineWriter {
         template <line_format::FixedString Fmt, line_format::LineArg... A>
             requires(Fmt.line_safe() &&
                      sizeof...(A) == line_format::detail::HOLES<Fmt>)
-        coro::CoroTask<common::Result<void>> append_json(const A&... args) {
+        coro::CoroTask<dstd::Result<void>> append_json(const A&... args) {
             co_return co_await append_view<line_format::JsonEscape>(
                 line_format::view<Fmt>(), args...);
         }
         template <line_format::LineArg... A>
-        coro::CoroTask<common::Result<void>> append_json(
+        coro::CoroTask<dstd::Result<void>> append_json(
             const line_format::JsonLineFormat& fmt, const A&... args) {
             co_return co_await append_view<line_format::JsonEscape>(fmt.view(),
                                                                     args...);
         }
 
         template <class E, line_format::LineArg... A>
-        coro::CoroTask<common::Result<void>> append_view(
+        coro::CoroTask<dstd::Result<void>> append_view(
             line_format::detail::View f, const A&... args) {
             if (f.holes != sizeof...(A))
                 co_return common::make_error(
@@ -187,13 +187,13 @@ class GzipLineWriter {
         }
 
         /// Submits the pending bytes as a member; no-op when empty.
-        coro::CoroTask<common::Result<void>> flush();
+        coro::CoroTask<dstd::Result<void>> flush();
 
        private:
         friend class GzipLineWriter;
         explicit Producer(Impl* impl);
         coro::CoroTask<void> reserve_for(std::size_t extra);
-        coro::CoroTask<common::Result<void>> submit_full();
+        coro::CoroTask<dstd::Result<void>> submit_full();
         void release_extra();
         Impl* impl_;
         dstd::String buf_;
@@ -201,9 +201,9 @@ class GzipLineWriter {
     };
 
     /// A new producer. Fails with INVALID_ARGUMENT in ordered mode.
-    common::Result<Producer> producer();
+    dstd::Result<Producer> producer();
 
-    static coro::CoroTask<common::Result<GzipLineWriter>> open(
+    static coro::CoroTask<dstd::Result<GzipLineWriter>> open(
         dstd::String path, GzipWriterOptions opts);
 
     /// Empty; only open() produces a usable writer.
@@ -214,14 +214,14 @@ class GzipLineWriter {
 
     /// Copies `lines`. A non-empty span must end with '\n'; otherwise the call
     /// fails with INVALID_ARGUMENT and the writer stays usable.
-    coro::CoroTask<common::Result<void>> append(dstd::StringView lines);
+    coro::CoroTask<dstd::Result<void>> append(dstd::StringView lines);
 
     /// Formats lines in place. `fill(dst, cap)` writes whole lines to `dst`
     /// (cap >= max_bytes) and returns the bytes written; a non-empty span must
     /// end with '\n', otherwise the call fails like append. Cuts as append
     /// does. In unordered mode the call fills a member of its own and submits
     /// it, so concurrent calls share no state.
-    coro::CoroTask<common::Result<void>> append_with(
+    coro::CoroTask<dstd::Result<void>> append_with(
         std::size_t max_bytes,
         dstd::Function<std::size_t(char*, std::size_t)> fill);
 
@@ -235,12 +235,12 @@ class GzipLineWriter {
     template <line_format::FixedString Fmt, line_format::LineArg... A>
         requires(Fmt.line_safe() &&
                  sizeof...(A) == line_format::detail::HOLES<Fmt>)
-    coro::CoroTask<common::Result<void>> append_fmt(const A&... args) {
+    coro::CoroTask<dstd::Result<void>> append_fmt(const A&... args) {
         co_return co_await append_view<line_format::PlainEscape>(
             line_format::view<Fmt>(), args...);
     }
     template <line_format::LineArg... A>
-    coro::CoroTask<common::Result<void>> append_fmt(
+    coro::CoroTask<dstd::Result<void>> append_fmt(
         const line_format::LineFormat& fmt, const A&... args) {
         co_return co_await append_view<line_format::PlainEscape>(fmt.view(),
                                                                  args...);
@@ -248,20 +248,20 @@ class GzipLineWriter {
     template <line_format::FixedString Fmt, line_format::LineArg... A>
         requires(Fmt.line_safe() &&
                  sizeof...(A) == line_format::detail::HOLES<Fmt>)
-    coro::CoroTask<common::Result<void>> append_json(const A&... args) {
+    coro::CoroTask<dstd::Result<void>> append_json(const A&... args) {
         co_return co_await append_view<line_format::JsonEscape>(
             line_format::view<Fmt>(), args...);
     }
     template <line_format::LineArg... A>
-    coro::CoroTask<common::Result<void>> append_json(
+    coro::CoroTask<dstd::Result<void>> append_json(
         const line_format::JsonLineFormat& fmt, const A&... args) {
         co_return co_await append_view<line_format::JsonEscape>(fmt.view(),
                                                                 args...);
     }
 
     template <class E, line_format::LineArg... A>
-    coro::CoroTask<common::Result<void>> append_view(
-        line_format::detail::View f, const A&... args) {
+    coro::CoroTask<dstd::Result<void>> append_view(line_format::detail::View f,
+                                                   const A&... args) {
         if (f.holes != sizeof...(A))
             co_return common::make_error(common::ErrorCode::InvalidArgument,
                                          "line format argument count mismatch");
@@ -276,13 +276,13 @@ class GzipLineWriter {
     }
 
     /// Ends the current member now; no-op when it is empty.
-    coro::CoroTask<common::Result<void>> cut();
+    coro::CoroTask<dstd::Result<void>> cut();
 
-    coro::CoroTask<common::Result<WriteSummary>> close();
+    coro::CoroTask<dstd::Result<WriteSummary>> close();
 
     /// Like close(), with `tail` (any bytes, may lack '\n') appended to the
     /// last member; it forms its own member when none is pending.
-    coro::CoroTask<common::Result<WriteSummary>> close(dstd::StringView tail);
+    coro::CoroTask<dstd::Result<WriteSummary>> close(dstd::StringView tail);
 
    private:
     explicit GzipLineWriter(dstd::UniquePtr<Impl> impl);
@@ -292,20 +292,20 @@ class GzipLineWriter {
 /// The same operations, blocking on the default runtime.
 class GzipLineWriterBlocking {
    public:
-    static common::Result<GzipLineWriterBlocking> open(dstd::String path,
-                                                       GzipWriterOptions opts);
+    static dstd::Result<GzipLineWriterBlocking> open(dstd::String path,
+                                                     GzipWriterOptions opts);
 
     GzipLineWriterBlocking(GzipLineWriterBlocking&&) noexcept;
     GzipLineWriterBlocking& operator=(GzipLineWriterBlocking&&) noexcept;
     ~GzipLineWriterBlocking();
 
-    common::Result<void> append(dstd::StringView lines);
-    common::Result<void> append_with(
+    dstd::Result<void> append(dstd::StringView lines);
+    dstd::Result<void> append_with(
         std::size_t max_bytes,
         dstd::Function<std::size_t(char*, std::size_t)> fill);
-    common::Result<void> cut();
-    common::Result<WriteSummary> close();
-    common::Result<WriteSummary> close(dstd::StringView tail);
+    dstd::Result<void> cut();
+    dstd::Result<WriteSummary> close();
+    dstd::Result<WriteSummary> close(dstd::StringView tail);
 
    private:
     explicit GzipLineWriterBlocking(GzipLineWriter w);

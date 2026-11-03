@@ -29,14 +29,14 @@ static dstd::Path create_test_dir() {
     return dir;
 }
 
-// Exercises DFTU_TRY: binds the decompression payload on success, or propagates
-// the error to the caller. Proves the macro compiles and is frame-safe inside a
-// coroutine that returns Result<...>.
+// Exercises DFTRACER_UTILS_CO_TRY: binds the decompression payload on success,
+// or propagates the error to the caller. Proves the macro compiles and is
+// frame-safe inside a coroutine that returns dstd::Result<...>.
 static dftracer::utils::coro::CoroTask<
-    dftracer::utils::common::Result<std::size_t>>
+    dftracer::utils::dstd::Result<std::size_t>>
 decompressed_size_via_dft_try(FileDecompressorUtility& decompressor,
                               const FileDecompressionUtilityInput& input) {
-    DFTU_TRY(auto out, co_await decompressor(input));
+    DFTRACER_UTILS_CO_TRY(auto out, co_await decompressor(input));
     co_return out.decompressed_size;
 }
 
@@ -322,17 +322,18 @@ TEST_SUITE("FileDecompressor") {
         }
     }
 
-    TEST_CASE("FileDecompressor - DFTU_TRY propagation") {
+    TEST_CASE("FileDecompressor - DFTRACER_UTILS_CO_TRY propagation") {
         auto test_dir = create_test_dir();
         auto cleanup_dir = dstd::SharedPtr<void>(nullptr, [&](void*) {
             dstd::fs::remove_all(test_dir).has_value();
         });
 
-        SUBCASE("DFTU_TRY binds value on success") {
+        SUBCASE("DFTRACER_UTILS_CO_TRY binds value on success") {
             dstd::String original_file =
                 dstd::String((test_dir / "dftu_try.txt").str());
             dstd::String compressed_file = original_file + ".gz";
-            dstd::String original_content = "DFTU_TRY happy path content\n";
+            dstd::String original_content =
+                "DFTRACER_UTILS_CO_TRY happy path content\n";
 
             (void)dstd::fs::write_file(dstd::PathView(original_file),
                                        original_content);
@@ -354,7 +355,7 @@ TEST_SUITE("FileDecompressor") {
             CHECK(*r == original_content.size());
         }
 
-        SUBCASE("DFTU_TRY propagates error on bad input") {
+        SUBCASE("DFTRACER_UTILS_CO_TRY propagates error on bad input") {
             dstd::String non_existent =
                 dstd::String((test_dir / "missing.gz").str());
             FileDecompressorUtility decompressor;

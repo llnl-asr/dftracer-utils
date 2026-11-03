@@ -68,9 +68,9 @@ Values versus exceptions
 
 Two channels carry an error, chosen by whether the immediate caller is expected to handle the failure.
 
-- ``Result<T>`` (``dstd::Expected<T, dstd::Error>``) is the channel for a failure in the ordinary course of use, such as a query that does not parse or a key that is not found.
+- ``dstd::Result<T>`` (``dstd::Expected<T, dstd::Error>``) is the channel for a failure in the ordinary course of use, such as a query that does not parse or a key that is not found.
   The function returns it, and the caller checks it.
-  ``make_error(code, message)`` builds the error side, and ``DFTU_TRY`` propagates it in a coroutine.
+  ``make_error(code, message)`` builds the error side, and ``DFTRACER_UTILS_CO_TRY`` propagates it in a coroutine.
 - ``DFTUtilsException`` is for the case the caller cannot handle.
   It is thrown, not returned, and it holds a ``dstd::Error``.
   It crosses the Python boundary with its ``domain()``, ``code_int()`` and ``condition()`` intact, so a ``try`` and ``except`` in Python can branch on the same identity as a C++ caller.

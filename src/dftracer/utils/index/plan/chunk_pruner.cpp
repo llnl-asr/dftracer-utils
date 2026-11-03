@@ -257,7 +257,7 @@ coro::CoroTask<ChunkPrunerOutput> ChunkPruner::operator()(
     co_return prune_file_chunks(*snapshot, input.file_path, input.query);
 }
 
-common::Result<ChunkPrunerBatchOutput> ChunkPruner::process_batch(
+dstd::Result<ChunkPrunerBatchOutput> ChunkPruner::process_batch(
     const ChunkPrunerBatchInput& input) {
     ChunkPrunerBatchOutput batch_out;
     try {

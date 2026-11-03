@@ -387,7 +387,7 @@ bool ComparisonFilter::same_cut(const ComparisonFilter& other) const {
            ts_begin == other.ts_begin && ts_end == other.ts_end;
 }
 
-common::Result<ComparisonFilter> filter_from_query(const duql::Query& query) {
+dstd::Result<ComparisonFilter> filter_from_query(const duql::Query& query) {
     Translator t;
     auto f = t.node(query.root());
     if (f) return std::move(*f);
@@ -529,7 +529,7 @@ CollapsedMap collapse_by_group(const AggQueryResult& windows,
     return result;
 }
 
-coro::CoroTask<common::Result<SideAggregate>> aggregate_side(
+coro::CoroTask<dstd::Result<SideAggregate>> aggregate_side(
     dstd::Span<const dstd::String> files, dstd::StringView index_dir,
     const dstd::Vector<ComparisonFilter>& filters, std::uint64_t window_us,
     std::size_t workers, dstd::StringIntern& strings) {

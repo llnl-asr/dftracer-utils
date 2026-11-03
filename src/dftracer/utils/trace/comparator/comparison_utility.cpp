@@ -228,7 +228,7 @@ NodeResult ComparisonUtility::build_result_tree(
     return result;
 }
 
-coro::CoroTask<common::Result<ComparisonUtilityOutput>>
+coro::CoroTask<dstd::Result<ComparisonUtilityOutput>>
 ComparisonUtility::operator()(const ComparisonUtilityInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("compare");
     ComparisonUtilityOutput output;

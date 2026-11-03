@@ -782,7 +782,7 @@ class Seeder {
     const dftracer::utils::index::plan::GroupResolver* resolver_ = nullptr;
 };
 
-AggQueryResult run_or_throw(common::Result<AggQueryResult>&& r) {
+AggQueryResult run_or_throw(dstd::Result<AggQueryResult>&& r) {
     if (!r) throw common::DFTUtilsException(r.error());
     return std::move(*r);
 }

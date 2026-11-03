@@ -226,7 +226,7 @@ template <class Escape>
 class BasicLineFormat {
    public:
     /// INVALID_ARGUMENT for a format containing a newline or carriage return.
-    static common::Result<BasicLineFormat> parse(dstd::StringView fmt) {
+    static dstd::Result<BasicLineFormat> parse(dstd::StringView fmt) {
         BasicLineFormat f;
         const char* err = detail::scan(
             fmt, [&](char c) { f.text_.push_back(c); },

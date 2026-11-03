@@ -25,9 +25,9 @@ namespace dftracer::utils::common {
 
 namespace detail {
 
-Result<dstd::Path> choose_spill_dir(dstd::StringView env,
-                                    const dstd::Path& local_root,
-                                    const dstd::Vector<dstd::Path>& fallbacks) {
+dstd::Result<dstd::Path> choose_spill_dir(
+    dstd::StringView env, const dstd::Path& local_root,
+    const dstd::Vector<dstd::Path>& fallbacks) {
     if (!env.empty()) {
         dstd::StringView reason;
         const dstd::Path env_path{env};
@@ -78,7 +78,7 @@ Result<dstd::Path> choose_spill_dir(dstd::StringView env,
 
 }  // namespace detail
 
-Result<dstd::Path> spill_dir() {
+dstd::Result<dstd::Path> spill_dir() {
     const auto env = Env::get(constants::SPILL_DIR_ENV);
     dstd::Vector<dstd::Path> fallbacks;
     const dstd::Path tmp = dstd::fs::temp_directory();
@@ -236,7 +236,8 @@ void sweep_stale(dstd::PathView root, dstd::StringView prefix) {
 
 }  // namespace
 
-Result<ScopedSpillSubdir> ScopedSpillSubdir::create(dstd::StringView prefix) {
+dstd::Result<ScopedSpillSubdir> ScopedSpillSubdir::create(
+    dstd::StringView prefix) {
     auto root = spill_dir();
     if (!root) return dstd::Unexpected(std::move(root).error());
     SweptPrefixes& swept = dstd::Singleton<SweptPrefixes>::get();

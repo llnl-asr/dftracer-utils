@@ -21,14 +21,14 @@ class SpillFile {
    public:
     /// IO error naming the directory and the variable when the file cannot be
     /// created.
-    static Result<dstd::UniquePtr<SpillFile>> create();
+    static dstd::Result<dstd::UniquePtr<SpillFile>> create();
 
     SpillFile(const SpillFile&) = delete;
     SpillFile& operator=(const SpillFile&) = delete;
 
     /// Writes `n` bytes at a fresh offset and returns it. IO error when the
     /// write fails (a full disk included).
-    Result<std::uint64_t> append(const void* data, std::size_t n);
+    dstd::Result<std::uint64_t> append(const void* data, std::size_t n);
 
     /// Takes `bytes` at an offset that is a multiple of `align` without
     /// writing, for a caller that writes it with write_at() and maps it.
@@ -36,14 +36,15 @@ class SpillFile {
 
     /// Writes `n` bytes at `offset`, one taken by reserve(). IO error when the
     /// write fails (a full disk included).
-    Result<void> write_at(std::uint64_t offset, const void* data,
-                          std::size_t n);
+    dstd::Result<void> write_at(std::uint64_t offset, const void* data,
+                                std::size_t n);
 
     /// The descriptor, for a caller that maps the file.
     int fd() const noexcept { return fd_.get(); }
 
     /// Reads exactly `n` bytes at `offset`. IO error on a short read.
-    Result<void> read(std::uint64_t offset, void* out, std::size_t n) const;
+    dstd::Result<void> read(std::uint64_t offset, void* out,
+                            std::size_t n) const;
 
     std::uint64_t size() const noexcept {
         return end_.load(std::memory_order_relaxed);

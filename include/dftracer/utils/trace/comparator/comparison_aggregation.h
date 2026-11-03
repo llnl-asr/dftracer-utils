@@ -55,7 +55,7 @@ struct ComparisonFilter {
 /// comparisons against integers and of `or` between sets of one field becomes
 /// sets and a range. Any other query becomes `expr`. Fails with Internal when
 /// the rewritten query does not parse.
-common::Result<ComparisonFilter> filter_from_query(const duql::Query& query);
+dstd::Result<ComparisonFilter> filter_from_query(const duql::Query& query);
 
 /// One side of the comparison, collapsed once per filter.
 struct SideAggregate {
@@ -74,7 +74,7 @@ struct SideAggregate {
 /// re-reading the chunks a partial cannot answer (see `group_chunks_reread`).
 /// Memory is the rows of the per-window query for one cut at a time, then the
 /// collapsed groups.
-coro::CoroTask<common::Result<SideAggregate>> aggregate_side(
+coro::CoroTask<dstd::Result<SideAggregate>> aggregate_side(
     dstd::Span<const dstd::String> files, dstd::StringView index_dir,
     const dstd::Vector<ComparisonFilter>& filters, std::uint64_t window_us,
     std::size_t workers, dstd::StringIntern& strings);

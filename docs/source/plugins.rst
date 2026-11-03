@@ -1031,7 +1031,7 @@ shared scan must stay wide enough for every branch):
    auto set = Plugins::builder()
                   .add("./name_edges.so", R"({"duql": "cat == \"POSIX\""})")
                   .add("./dur_stats.so")
-                  .build();                      // Result<Plugins>: a bad path,
+                  .build();                      // dstd::Result<Plugins>: a bad path,
    if (!set) throw std::runtime_error(set.error().message);   // ABI or graph fault
    PluginRun run = co_await set->run(View::from_files(files));
    // NamedResult is a variant: bytes, OwnedArrow, OwnedDataFrame, OwnedLazyFrame.

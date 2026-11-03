@@ -1679,12 +1679,12 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     mem.state->raise_limit(memory_share / 4 +
                            (mem.calls->limit() - mem.calls->reserved()));
     if (progress) progress->enter(GroupProgress::Phase::Walk);
-    dstd::Vector<coro::SpawnFuture<common::Result<void>>> walks;
+    dstd::Vector<coro::SpawnFuture<dstd::Result<void>>> walks;
     walks.reserve(ways);
     for (std::size_t w = 0; w < ways; ++w)
         walks.push_back(ctx.spawn_future(
             [&sorters, &partials, &r, w,
-             progress]() -> coro::CoroTask<common::Result<void>> {
+             progress]() -> coro::CoroTask<dstd::Result<void>> {
                 dstd::Deque<SetAcc>& part_sets = partials[w];
                 std::uint64_t fed = 0;
                 auto walked = sorters[w].drain([&](const SortRec& s) {

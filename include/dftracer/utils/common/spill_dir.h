@@ -21,7 +21,7 @@ namespace dftracer::utils::common {
 /// missing. A set variable that cannot be used is an IO error naming the
 /// directory and the variable, with no fallback to another directory; when no
 /// directory off RAM exists, an IO error names the variable.
-Result<dstd::Path> spill_dir();
+dstd::Result<dstd::Path> spill_dir();
 
 /// True when `dir` is on a RAM-backed file system (tmpfs). Decided once per
 /// directory. The first such directory logs one warning per process naming it
@@ -59,7 +59,7 @@ class SpillCharge {
 /// it are released when it is removed, not when one of its files is.
 class ScopedSpillSubdir {
    public:
-    static Result<ScopedSpillSubdir> create(dstd::StringView prefix);
+    static dstd::Result<ScopedSpillSubdir> create(dstd::StringView prefix);
 
     ScopedSpillSubdir(ScopedSpillSubdir&& other) noexcept;
     ScopedSpillSubdir& operator=(ScopedSpillSubdir&& other) noexcept;

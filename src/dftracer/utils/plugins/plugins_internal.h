@@ -32,7 +32,7 @@ dstd::Optional<duql::Query> plugin_union_prune_query(
 /// Test seam: build a set from already-built plugins, skipping dlopen and the
 /// ABI gate. The caller keeps ownership of each struct (no destroy, no dlclose
 /// runs for it) and must outlive the set.
-common::Result<Plugins> build_injected_plugins(
+dstd::Result<Plugins> build_injected_plugins(
     dstd::Vector<dftu_plugin*> plugins);
 
 /// The fold order build() computed: a permutation of plugin indices with every

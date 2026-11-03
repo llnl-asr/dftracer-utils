@@ -110,7 +110,7 @@ indexed in parallel.
        .with_output("trace-0.pfw.gz");
 
    FileCompressorUtility compress;
-   // operator() is a coroutine returning Result<Output>; run it on a scope
+   // operator() is a coroutine returning dstd::Result<Output>; run it on a scope
    // (see the concurrency guide) and unwrap with -> or .value().
    auto out = co_await compress(input);
    double ratio = out->compression_ratio();

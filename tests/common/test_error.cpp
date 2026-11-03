@@ -45,7 +45,7 @@ TEST_CASE("a duql error keeps its domain and maps by its condition") {
 }
 
 TEST_CASE("make_error carries the code and the message") {
-    const common::Result<int> r =
+    const dstd::Result<int> r =
         common::make_error(common::ErrorCode::Parse, "bad line");
     REQUIRE(!r);
     CHECK(r.error().is_code(common::ErrorCode::Parse));

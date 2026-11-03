@@ -13,7 +13,7 @@ namespace {
 
 // Unset or empty leaves the field at zero. A value that does not parse is an
 // error that names the variable.
-Result<std::size_t> read_bytes(const char* name) {
+dstd::Result<std::size_t> read_bytes(const char* name) {
     auto raw = Env::get<dstd::StringView>(name);
     if (!raw) return std::size_t{0};
     auto parsed = parse_bytes(*raw);
@@ -28,7 +28,7 @@ Result<std::size_t> read_bytes(const char* name) {
 
 }  // namespace
 
-Result<memory::Config> memory_config_from_env() {
+dstd::Result<memory::Config> memory_config_from_env() {
     memory::Config config;
     struct Field {
         const char* name;
@@ -50,9 +50,9 @@ Result<memory::Config> memory_config_from_env() {
     return config;
 }
 
-Result<void> configure_memory_from_env() {
+dstd::Result<void> configure_memory_from_env() {
     static std::once_flag once;
-    static Result<void> first;
+    static dstd::Result<void> first;
     std::call_once(once, [] {
         auto config = memory_config_from_env();
         if (!config) {

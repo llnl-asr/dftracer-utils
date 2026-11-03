@@ -58,8 +58,8 @@ ViewPlannerInput& ViewPlannerInput::with_snapshot(const index::Snapshot* s) {
     return *this;
 }
 
-coro::CoroTask<common::Result<ViewPlannerOutput>>
-ViewPlannerUtility::operator()(const ViewPlannerInput& input) {
+coro::CoroTask<dstd::Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
+    const ViewPlannerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("build view");
     ViewPlannerOutput output;
 

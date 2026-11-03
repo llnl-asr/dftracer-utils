@@ -241,8 +241,8 @@ dstd::String config_violation(const dftu_plugin* plugin,
 // ConfigTree::from_json_string throws; convert that into the plugin set's
 // Result so a malformed literal fails at build() alongside every other
 // plugin load error, not by throwing out of Builder::add.
-common::Result<ConfigTree> parse_config_json(const dstd::String& path,
-                                             const dstd::String& json) {
+dstd::Result<ConfigTree> parse_config_json(const dstd::String& path,
+                                           const dstd::String& json) {
     try {
         return ConfigTree::from_json_string(json);
     } catch (const std::exception& e) {
@@ -273,8 +273,8 @@ void expose_dataframe_abi() {
     dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
 }
 
-common::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
-                                                  const dftu_value* config) {
+dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
+                                                const dftu_value* config) {
     expose_dataframe_abi();
     void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
@@ -441,7 +441,7 @@ dstd::Vector<dstd::String> name_list(const char* const* (*slot)(void*),
 
 /// Order the fold so every provider of a name runs before the plugins that
 /// consume it, from the plugins' declared provides/consumes.
-common::Result<void> settle_order(Plugins::Impl& impl) {
+dstd::Result<void> settle_order(Plugins::Impl& impl) {
     for (std::size_t i = 0; i < impl.plugins.size(); ++i) {
         const dftu_plugin* pl = impl.plugins[i].plugin;
         for (const auto* slot : {&pl->provides, &pl->consumes})
@@ -568,7 +568,7 @@ Plugins::Builder& Plugins::Builder::add(dstd::String path) {
     return *this;
 }
 
-common::Result<Plugins> Plugins::Builder::build() {
+dstd::Result<Plugins> Plugins::Builder::build() {
     auto impl = dstd::make_unique<Impl>();
     impl->plugins.reserve(state_->pending.size());
     for (auto& pending : state_->pending) {
@@ -638,7 +638,7 @@ View Plugins::prune(const View& view) const {
     return impl_->prune ? view.filter(*impl_->prune) : view;
 }
 
-coro::CoroTask<common::Result<PluginRun>> Plugins::run(const View& view) const {
+coro::CoroTask<dstd::Result<PluginRun>> Plugins::run(const View& view) const {
     dftracer::utils::dstd::StringIntern intern;
     PluginRun out;
     // One registry for the whole scan; every plugin's finalize publishes its
@@ -703,7 +703,7 @@ trace::views::Deferred<PluginRun> Plugins::attach(
     return {out, executed};
 }
 
-common::Result<Plugins> build_injected_plugins(
+dstd::Result<Plugins> build_injected_plugins(
     dstd::Vector<dftu_plugin*> plugins) {
     auto impl = dstd::make_unique<Plugins::Impl>();
     impl->plugins.reserve(plugins.size());

@@ -12,9 +12,9 @@ namespace dftracer::utils::common::detail {
 /// when unset), `local_root` is local_spill_root(), and `fallbacks` are tried
 /// in order when both are empty. A fallback on a RAM-backed file system is
 /// never used; a network one is.
-Result<dstd::Path> choose_spill_dir(dstd::StringView env,
-                                    const dstd::Path& local_root,
-                                    const dstd::Vector<dstd::Path>& fallbacks);
+dstd::Result<dstd::Path> choose_spill_dir(
+    dstd::StringView env, const dstd::Path& local_root,
+    const dstd::Vector<dstd::Path>& fallbacks);
 
 }  // namespace dftracer::utils::common::detail
 

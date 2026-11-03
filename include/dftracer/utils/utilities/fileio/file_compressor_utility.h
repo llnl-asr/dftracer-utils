@@ -68,7 +68,7 @@ struct FileCompressionUtilityInput {
 /**
  * @brief Success payload from file compression workflow.
  *
- * Failures are reported via Result<FileCompressionUtilityOutput>, so this
+ * Failures are reported via dstd::Result<FileCompressionUtilityOutput>, so this
  * struct carries only the successful-result data.
  */
 struct FileCompressionUtilityOutput {
@@ -124,7 +124,7 @@ class FileCompressorUtility {
      * @param input Compression configuration
      * @return Compression payload, or an error on failure.
      */
-    coro::CoroTask<common::Result<FileCompressionUtilityOutput>> operator()(
+    coro::CoroTask<dstd::Result<FileCompressionUtilityOutput>> operator()(
         const FileCompressionUtilityInput& input) const {
         std::size_t original_size = 0;
         std::size_t compressed_size = 0;

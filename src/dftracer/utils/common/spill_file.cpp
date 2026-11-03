@@ -14,7 +14,7 @@
 
 namespace dftracer::utils::common {
 
-Result<dstd::UniquePtr<SpillFile>> SpillFile::create() {
+dstd::Result<dstd::UniquePtr<SpillFile>> SpillFile::create() {
     auto dir = spill_dir();
     if (!dir) return dstd::Unexpected(dir.error());
     dstd::String path((dir->view() / "dftu_spill_XXXXXX").str());
@@ -43,8 +43,8 @@ std::uint64_t SpillFile::reserve(std::size_t bytes, std::size_t align) {
     }
 }
 
-Result<void> SpillFile::write_at(std::uint64_t offset, const void* data,
-                                 std::size_t n) {
+dstd::Result<void> SpillFile::write_at(std::uint64_t offset, const void* data,
+                                       std::size_t n) {
     const char* p = static_cast<const char*>(data);
     std::size_t done = 0;
     while (done < n) {
@@ -64,15 +64,15 @@ Result<void> SpillFile::write_at(std::uint64_t offset, const void* data,
     return {};
 }
 
-Result<std::uint64_t> SpillFile::append(const void* data, std::size_t n) {
+dstd::Result<std::uint64_t> SpillFile::append(const void* data, std::size_t n) {
     const std::uint64_t at = reserve(n);
     auto written = write_at(at, data, n);
     if (!written) return dstd::Unexpected(written.error());
     return at;
 }
 
-Result<void> SpillFile::read(std::uint64_t offset, void* out,
-                             std::size_t n) const {
+dstd::Result<void> SpillFile::read(std::uint64_t offset, void* out,
+                                   std::size_t n) const {
     char* p = static_cast<char*>(out);
     std::size_t done = 0;
     while (done < n) {

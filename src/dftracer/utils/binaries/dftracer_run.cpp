@@ -188,7 +188,7 @@ static bool block_has_config(const SharedConfig& shared,
 // --describe and the real run so both go through the same load-time
 // validation (ABI gate, reserved-name refusal, duplicate-provides, unmet
 // consumes).
-static common::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
+static dstd::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
     auto builder = Plugins::builder();
     for (const auto& block : plugin_args.blocks) {
         if (block_has_config(plugin_args.shared, block)) {

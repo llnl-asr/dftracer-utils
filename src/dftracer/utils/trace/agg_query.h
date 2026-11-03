@@ -235,7 +235,7 @@ class AggQueryResult {
 /// Memory is the result map plus a map of one file's groups per running task.
 /// Fails with NotFound for a file that is not in its index, Parse for a
 /// malformed partial or block, and what the reader reports for a chunk.
-coro::CoroTask<common::Result<AggQueryResult>> run_agg_query(
+coro::CoroTask<dstd::Result<AggQueryResult>> run_agg_query(
     const AggQuery& query);
 
 }  // namespace dftracer::utils::trace

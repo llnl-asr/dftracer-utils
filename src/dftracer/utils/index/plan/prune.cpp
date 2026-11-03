@@ -48,7 +48,7 @@ class Reads {
     explicit Reads(const PruneRequest& request)
         : request_(request), snapshot_(request.snapshot) {}
 
-    common::Result<const index::Snapshot*> get() {
+    dstd::Result<const index::Snapshot*> get() {
         if (!snapshot_) {
             auto taken = open_snapshot(request_.index_path);
             if (!taken) return dstd::Unexpected(std::move(taken).error());
@@ -64,7 +64,7 @@ class Reads {
     dstd::Optional<index::Snapshot> owned_;
 };
 
-coro::CoroTask<common::Result<PruneResult>> prune_data(
+coro::CoroTask<dstd::Result<PruneResult>> prune_data(
     const PruneRequest& request, Reads& reads) {
     PruneResult result;
 
@@ -137,14 +137,14 @@ coro::CoroTask<common::Result<PruneResult>> prune_data(
 
 }  // namespace
 
-common::Result<index::Snapshot> open_snapshot(dstd::StringView index_path) {
+dstd::Result<index::Snapshot> open_snapshot(dstd::StringView index_path) {
     auto opened =
         Index::open(store::internal::normalize_index_root(index_path));
     if (!opened) return dstd::Unexpected(std::move(opened).error());
     return opened->snapshot();
 }
 
-coro::CoroTask<common::Result<PruneResult>> prune_file(PruneRequest request) {
+coro::CoroTask<dstd::Result<PruneResult>> prune_file(PruneRequest request) {
     PruneResult result;
     Reads reads(request);
     if (request.metadata != MetadataUse::Records) {

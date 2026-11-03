@@ -527,7 +527,7 @@ GzipLineWriter::~GzipLineWriter() {
     release_long_lived(std::move(impl_), "gzip_line_writer_abort");
 }
 
-coro::CoroTask<common::Result<GzipLineWriter>> GzipLineWriter::open(
+coro::CoroTask<dstd::Result<GzipLineWriter>> GzipLineWriter::open(
     dstd::String path, GzipWriterOptions opts) {
     if (opts.member_size == 0)
         co_return common::make_error(common::ErrorCode::InvalidArgument,
@@ -578,14 +578,14 @@ dstd::Vector<dstd::String> take_members(dstd::String& buf, std::size_t size) {
 }
 }  // namespace
 
-coro::CoroTask<common::Result<void>> GzipLineWriter::append(
+coro::CoroTask<dstd::Result<void>> GzipLineWriter::append(
     dstd::StringView lines) {
     Impl& s = *impl_;
     if (s.failed()) {
         dstd::Error err = co_await s.fail();
         co_return dstd::Unexpected(std::move(err));
     }
-    if (lines.empty()) co_return common::Result<void>{};
+    if (lines.empty()) co_return dstd::Result<void>{};
     if (lines.back() != '\n')
         co_return common::make_error(common::ErrorCode::InvalidArgument,
                                      "appended lines must end with a newline");
@@ -600,10 +600,10 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::append(
         dstd::Error err = co_await s.fail();
         co_return dstd::Unexpected(std::move(err));
     }
-    co_return common::Result<void>{};
+    co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<common::Result<void>> GzipLineWriter::append_with(
+coro::CoroTask<dstd::Result<void>> GzipLineWriter::append_with(
     std::size_t max_bytes,
     dstd::Function<std::size_t(char*, std::size_t)> fill) {
     Impl& s = *impl_;
@@ -647,7 +647,7 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::append_with(
         dstd::Error err = co_await s.fail();
         co_return dstd::Unexpected(std::move(err));
     }
-    co_return common::Result<void>{};
+    co_return dstd::Result<void>{};
 }
 
 GzipLineWriter::Producer::Producer(Impl* impl) : impl_(impl) {}
@@ -669,7 +669,7 @@ GzipLineWriter::Producer::~Producer() {
     if (impl_) impl_->unreserve(*impl_->prod_mem, units_);
 }
 
-common::Result<GzipLineWriter::Producer> GzipLineWriter::producer() {
+dstd::Result<GzipLineWriter::Producer> GzipLineWriter::producer() {
     if (!impl_->unordered())
         return common::make_error(common::ErrorCode::InvalidArgument,
                                   "producers need unordered mode");
@@ -697,7 +697,7 @@ void GzipLineWriter::Producer::release_extra() {
     }
 }
 
-coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::submit_full() {
+coro::CoroTask<dstd::Result<void>> GzipLineWriter::Producer::submit_full() {
     Impl& s = *impl_;
     auto members = take_members(buf_, s.opts.member_size);
     for (auto& m : members) co_await s.submit(std::move(m));
@@ -706,17 +706,17 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::submit_full() {
         dstd::Error err = co_await s.fail();
         co_return dstd::Unexpected(std::move(err));
     }
-    co_return common::Result<void>{};
+    co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::append(
+coro::CoroTask<dstd::Result<void>> GzipLineWriter::Producer::append(
     dstd::StringView lines) {
     Impl& s = *impl_;
     if (s.failed()) {
         dstd::Error err = co_await s.fail();
         co_return dstd::Unexpected(std::move(err));
     }
-    if (lines.empty()) co_return common::Result<void>{};
+    if (lines.empty()) co_return dstd::Result<void>{};
     if (lines.back() != '\n')
         co_return common::make_error(common::ErrorCode::InvalidArgument,
                                      "appended lines must end with a newline");
@@ -725,7 +725,7 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::append(
     co_return co_await submit_full();
 }
 
-coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::append_with(
+coro::CoroTask<dstd::Result<void>> GzipLineWriter::Producer::append_with(
     std::size_t max_bytes,
     dstd::Function<std::size_t(char*, std::size_t)> fill) {
     Impl& s = *impl_;
@@ -747,13 +747,13 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::append_with(
     co_return co_await submit_full();
 }
 
-coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::flush() {
+coro::CoroTask<dstd::Result<void>> GzipLineWriter::Producer::flush() {
     Impl& s = *impl_;
     if (s.failed()) {
         dstd::Error err = co_await s.fail();
         co_return dstd::Unexpected(std::move(err));
     }
-    if (buf_.empty()) co_return common::Result<void>{};
+    if (buf_.empty()) co_return dstd::Result<void>{};
     dstd::String pending = std::move(buf_);
     buf_.clear();
     co_await s.submit(std::move(pending));
@@ -762,10 +762,10 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::Producer::flush() {
         dstd::Error err = co_await s.fail();
         co_return dstd::Unexpected(std::move(err));
     }
-    co_return common::Result<void>{};
+    co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<common::Result<void>> GzipLineWriter::cut() {
+coro::CoroTask<dstd::Result<void>> GzipLineWriter::cut() {
     Impl& s = *impl_;
     if (s.failed()) {
         dstd::Error err = co_await s.fail();
@@ -777,14 +777,14 @@ coro::CoroTask<common::Result<void>> GzipLineWriter::cut() {
         pending.swap(s.buf);
     }
     if (!pending.empty()) co_await s.submit(std::move(pending));
-    co_return common::Result<void>{};
+    co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<common::Result<WriteSummary>> GzipLineWriter::close() {
+coro::CoroTask<dstd::Result<WriteSummary>> GzipLineWriter::close() {
     co_return co_await close(dstd::StringView{});
 }
 
-coro::CoroTask<common::Result<WriteSummary>> GzipLineWriter::close(
+coro::CoroTask<dstd::Result<WriteSummary>> GzipLineWriter::close(
     dstd::StringView tail) {
     Impl& s = *impl_;
     if (s.cleaned) co_return dstd::Unexpected(s.get_error());
@@ -825,8 +825,8 @@ GzipLineWriterBlocking::~GzipLineWriterBlocking() = default;
 
 namespace {
 template <typename T, typename F>
-common::Result<T> run_on_default(const char* name, F&& f) {
-    dstd::Optional<common::Result<T>> out;
+dstd::Result<T> run_on_default(const char* name, F&& f) {
+    dstd::Optional<dstd::Result<T>> out;
     default_runtime().block_on(coro::named(name, [&]() -> coro::CoroTask<void> {
         out.emplace(co_await f());
         co_return;
@@ -835,7 +835,7 @@ common::Result<T> run_on_default(const char* name, F&& f) {
 }
 }  // namespace
 
-common::Result<GzipLineWriterBlocking> GzipLineWriterBlocking::open(
+dstd::Result<GzipLineWriterBlocking> GzipLineWriterBlocking::open(
     dstd::String path, GzipWriterOptions opts) {
     auto r = run_on_default<GzipLineWriter>("gzip_line_writer_open", [&] {
         return GzipLineWriter::open(std::move(path), std::move(opts));
@@ -844,12 +844,12 @@ common::Result<GzipLineWriterBlocking> GzipLineWriterBlocking::open(
     return GzipLineWriterBlocking(std::move(*r));
 }
 
-common::Result<void> GzipLineWriterBlocking::append(dstd::StringView lines) {
+dstd::Result<void> GzipLineWriterBlocking::append(dstd::StringView lines) {
     return run_on_default<void>("gzip_line_writer_append",
                                 [&] { return w_->append(lines); });
 }
 
-common::Result<void> GzipLineWriterBlocking::append_with(
+dstd::Result<void> GzipLineWriterBlocking::append_with(
     std::size_t max_bytes,
     dstd::Function<std::size_t(char*, std::size_t)> fill) {
     return run_on_default<void>("gzip_line_writer_append_with", [&] {
@@ -857,16 +857,16 @@ common::Result<void> GzipLineWriterBlocking::append_with(
     });
 }
 
-common::Result<void> GzipLineWriterBlocking::cut() {
+dstd::Result<void> GzipLineWriterBlocking::cut() {
     return run_on_default<void>("gzip_line_writer_cut",
                                 [&] { return w_->cut(); });
 }
 
-common::Result<WriteSummary> GzipLineWriterBlocking::close() {
+dstd::Result<WriteSummary> GzipLineWriterBlocking::close() {
     return close(dstd::StringView{});
 }
 
-common::Result<WriteSummary> GzipLineWriterBlocking::close(
+dstd::Result<WriteSummary> GzipLineWriterBlocking::close(
     dstd::StringView tail) {
     return run_on_default<WriteSummary>("gzip_line_writer_close",
                                         [&] { return w_->close(tail); });

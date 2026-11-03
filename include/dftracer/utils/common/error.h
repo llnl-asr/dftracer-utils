@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <cstdarg>
@@ -117,11 +118,8 @@ inline ErrorCode errorcode_of(const dstd::Error& error) noexcept {
     return errorcode_of(error.condition());
 }
 
-/// Recoverable-failure channel; reserve exceptions for the unrecoverable.
-template <typename T>
-using Result = dstd::Expected<T, dstd::Error>;
-
-/// dstd::Unexpected converts to any Result<T>, so no type argument is needed.
+/// dstd::Unexpected converts to any dstd::Result<T>, so no type argument is
+/// needed.
 inline dstd::Unexpected<dstd::Error> make_error(ErrorCode code,
                                                 dstd::StringView message) {
     return dstd::Unexpected<dstd::Error>(dstd::Error{code, message});
@@ -129,7 +127,7 @@ inline dstd::Unexpected<dstd::Error> make_error(ErrorCode code,
 
 /// Build an error from a domain enum. The enum type selects its error_info via
 /// ADL, so a code cannot be paired with the wrong domain. The result converts
-/// to any Result<T>.
+/// to any dstd::Result<T>.
 template <dstd::ErrorEnum E>
 dstd::Unexpected<dstd::Error> make_error(E code, dstd::StringView message) {
     return dstd::Unexpected<dstd::Error>(dstd::Error{code, message});
@@ -181,25 +179,11 @@ class DFTUtilsException : public std::exception {
 
 /// The value of `r`, or throws @ref DFTUtilsException with its error.
 template <typename T>
-T unwrap(Result<T>&& r) {
+T unwrap(dstd::Result<T>&& r) {
     if (!r) throw DFTUtilsException(r.error());
     if constexpr (!std::is_void_v<T>) return std::move(*r);
 }
 
 }  // namespace dftracer::utils::common
-
-/// DFTU_TRY: error-propagation helper for coroutines returning Result<...>.
-/// Evaluates a Result-returning `expr`; on failure it co_returns the error,
-/// otherwise it binds the moved-out value to `decl`. The temporary is named
-/// with a line-derived suffix so multiple uses in one scope do not collide.
-/// Usage: DFTU_TRY(auto value, co_await something_returning_result());
-#define DFTU_TRY_CONCAT_(a, b) a##b
-#define DFTU_TRY_CONCAT(a, b) DFTU_TRY_CONCAT_(a, b)
-#define DFTU_TRY(decl, expr)                                          \
-    auto DFTU_TRY_CONCAT(dftu_try_, __LINE__) = (expr);               \
-    if (!DFTU_TRY_CONCAT(dftu_try_, __LINE__))                        \
-        co_return ::dftracer::utils::dstd::Unexpected(                \
-            std::move(DFTU_TRY_CONCAT(dftu_try_, __LINE__)).error()); \
-    decl = *std::move(DFTU_TRY_CONCAT(dftu_try_, __LINE__))
 
 #endif  // DFTRACER_UTILS_COMMON_ERROR_H

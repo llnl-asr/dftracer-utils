@@ -37,7 +37,7 @@ class ExternalSorter {
         : less_(std::move(less)),
           cap_(std::max<std::size_t>(1, budget_bytes / sizeof(Rec))) {}
 
-    Result<void> add(const Rec& r) {
+    dstd::Result<void> add(const Rec& r) {
         if (buf_.size() == buf_.capacity())
             buf_.reserve(std::min(
                 cap_, std::max<std::size_t>(1024, buf_.capacity() * 2)));
@@ -49,7 +49,7 @@ class ExternalSorter {
     /// Sorts `run` and writes it as a run of its own, then clears it, for a
     /// caller that fills buffers on several threads. Calls of add_run() may
     /// overlap each other, not add() or drain().
-    Result<void> add_run(dstd::Vector<Rec>& run) {
+    dstd::Result<void> add_run(dstd::Vector<Rec>& run) {
         std::sort(run.begin(), run.end(), less_);
         SpillFile* file = nullptr;
         {
@@ -75,7 +75,7 @@ class ExternalSorter {
 
     /// Calls `f(const Rec&)` for every record in order. One-shot.
     template <class F>
-    Result<void> drain(F&& f) {
+    dstd::Result<void> drain(F&& f) {
         if (runs_.empty()) {
             std::sort(buf_.begin(), buf_.end(), less_);
             for (const Rec& r : buf_) f(r);
@@ -102,7 +102,7 @@ class ExternalSorter {
         std::uint64_t next = 0;
     };
 
-    Result<void> flush() {
+    dstd::Result<void> flush() {
         std::sort(buf_.begin(), buf_.end(), less_);
         if (!file_) {
             auto created = SpillFile::create();
@@ -117,7 +117,7 @@ class ExternalSorter {
     }
 
     /// 1 when a chunk was read, 0 at the end of the run.
-    Result<bool> refill(std::size_t run, Reader& rd, std::size_t chunk) {
+    dstd::Result<bool> refill(std::size_t run, Reader& rd, std::size_t chunk) {
         const Run& r = runs_[run];
         if (rd.next >= r.count) return false;
         const std::size_t n = static_cast<std::size_t>(
@@ -132,7 +132,7 @@ class ExternalSorter {
     }
 
     template <class F>
-    Result<void> merge(F& f) {
+    dstd::Result<void> merge(F& f) {
         const std::size_t chunk =
             std::max<std::size_t>(64, cap_ / runs_.size());
         dstd::Vector<Reader> readers(runs_.size());

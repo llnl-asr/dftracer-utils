@@ -40,7 +40,7 @@ struct ComparisonUtilityInput {
 };
 
 /// Success payload from ComparisonUtility::process(); failures are
-/// reported via Result<ComparisonUtilityOutput>.
+/// reported via dstd::Result<ComparisonUtilityOutput>.
 struct ComparisonUtilityOutput {
     /// Hierarchical comparison result tree.
     NodeResult result;
@@ -52,7 +52,7 @@ struct ComparisonUtilityOutput {
 class ComparisonUtility {
    public:
     /// Run the comparison pipeline.
-    coro::CoroTask<common::Result<ComparisonUtilityOutput>> operator()(
+    coro::CoroTask<dstd::Result<ComparisonUtilityOutput>> operator()(
         const ComparisonUtilityInput& input);
 
    private:

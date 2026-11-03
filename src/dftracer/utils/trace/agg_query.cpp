@@ -1025,7 +1025,7 @@ bool Task::add_chunk_columns(
 
 }  // namespace
 
-coro::CoroTask<common::Result<AggQueryResult>> run_agg_query(
+coro::CoroTask<dstd::Result<AggQueryResult>> run_agg_query(
     const AggQuery& query) {
     AggQueryResult result;
     try {

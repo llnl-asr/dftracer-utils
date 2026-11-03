@@ -52,7 +52,7 @@ struct ViewChunkCandidate {
     std::size_t end_byte = 0;
 };
 
-// Success payload; failures are reported via Result<ViewPlannerOutput>.
+// Success payload; failures are reported via dstd::Result<ViewPlannerOutput>.
 struct ViewPlannerOutput {
     bool file_may_match = false;
     dstd::Vector<ViewChunkCandidate> candidates;
@@ -61,7 +61,7 @@ struct ViewPlannerOutput {
 };
 
 struct ViewPlannerUtility {
-    coro::CoroTask<common::Result<ViewPlannerOutput>> operator()(
+    coro::CoroTask<dstd::Result<ViewPlannerOutput>> operator()(
         const ViewPlannerInput& input);
 };
 

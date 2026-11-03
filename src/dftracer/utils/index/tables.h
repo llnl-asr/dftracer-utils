@@ -61,9 +61,6 @@ const char* column_type_name(ColumnType t);
 
 }  // namespace store
 
-template <class T>
-using Result = dstd::Expected<T, dstd::Error>;
-
 /// (granule, payload) in granule order.
 using GranuleList = dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>>;
 
@@ -89,75 +86,74 @@ dftracer::utils::store::NamespaceSpec plugin_spec(dstd::StringView name,
 
 // Readers. An absent record is an empty result or nullopt, never an error.
 
-Result<dstd::Vector<gzip::GzipMemberRecord>> members(const Snapshot& snapshot,
-                                                     const FileRef& file);
+dstd::Result<dstd::Vector<gzip::GzipMemberRecord>> members(
+    const Snapshot& snapshot, const FileRef& file);
 /// `[i]` describes pruner chunk `i`. Empty when the file has no ready members.
-Result<dstd::Vector<gzip::ChunkSpan>> spans(const Snapshot& snapshot,
-                                            const FileRef& file);
-Result<dstd::Optional<dstd::String>> restart_window(const Snapshot& snapshot,
-                                                    const FileRef& file,
-                                                    std::uint64_t member_idx);
-Result<dstd::Optional<store::FileMetadataResult>> file_metadata(
+dstd::Result<dstd::Vector<gzip::ChunkSpan>> spans(const Snapshot& snapshot,
+                                                  const FileRef& file);
+dstd::Result<dstd::Optional<dstd::String>> restart_window(
+    const Snapshot& snapshot, const FileRef& file, std::uint64_t member_idx);
+dstd::Result<dstd::Optional<store::FileMetadataResult>> file_metadata(
     const Snapshot& snapshot, const FileRef& file);
 
-Result<dstd::Vector<schemas::dft::ChunkStatisticsResult>> chunk_stats(
+dstd::Result<dstd::Vector<schemas::dft::ChunkStatisticsResult>> chunk_stats(
     const Snapshot& snapshot, const FileRef& file);
-Result<dstd::Optional<schemas::dft::MergedStatisticsResult>> scalar_stats(
+dstd::Result<dstd::Optional<schemas::dft::MergedStatisticsResult>> scalar_stats(
     const Snapshot& snapshot, const FileRef& file);
-Result<dstd::Optional<dstd::StringViewMap<std::uint64_t>>> pid_tid_counts(
+dstd::Result<dstd::Optional<dstd::StringViewMap<std::uint64_t>>> pid_tid_counts(
     const Snapshot& snapshot, const FileRef& file);
 /// Nullopt when the metadata extension is not ready for the file.
-Result<dstd::Optional<dstd::HashMap<std::uint64_t, store::ChunkMetadata>>>
+dstd::Result<dstd::Optional<dstd::HashMap<std::uint64_t, store::ChunkMetadata>>>
 chunk_meta(const Snapshot& snapshot, const FileRef& file);
 
 /// The file's path catalog, sorted by path.
-Result<dstd::Vector<dstd::Pair<dstd::String, store::PathStat>>> catalog(
+dstd::Result<dstd::Vector<dstd::Pair<dstd::String, store::PathStat>>> catalog(
     const Snapshot& snapshot, const FileRef& file);
 /// The id of the schema the file was indexed with.
-Result<dstd::Optional<dstd::String>> schema(const Snapshot& snapshot,
-                                            const FileRef& file);
-Result<dstd::Optional<dstd::String>> rowset(const Snapshot& snapshot,
-                                            const FileRef& file,
-                                            dstd::StringView name);
+dstd::Result<dstd::Optional<dstd::String>> schema(const Snapshot& snapshot,
+                                                  const FileRef& file);
+dstd::Result<dstd::Optional<dstd::String>> rowset(const Snapshot& snapshot,
+                                                  const FileRef& file,
+                                                  dstd::StringView name);
 
 /// The paths a path-keyed extension indexed for the file.
-Result<dstd::Vector<dstd::String>> paths(const Snapshot& snapshot,
-                                         const FileRef& file,
-                                         store::IndexExtension ext);
-Result<GranuleList> granules(const Snapshot& snapshot, const FileRef& file,
-                             store::IndexExtension ext, dstd::StringView path);
-/// The file-level payload of `path`.
-Result<dstd::Optional<dstd::String>> path_file(const Snapshot& snapshot,
+dstd::Result<dstd::Vector<dstd::String>> paths(const Snapshot& snapshot,
                                                const FileRef& file,
-                                               store::IndexExtension ext,
-                                               dstd::StringView path);
-
-Result<bool> has_postings(const Snapshot& snapshot, const FileRef& file,
-                          dstd::StringView path);
-Result<bool> has_posting(const Snapshot& snapshot, const FileRef& file,
-                         dstd::StringView path, std::uint64_t value_hash);
-Result<dstd::Vector<std::uint64_t>> posting_granules(const Snapshot& snapshot,
+                                               store::IndexExtension ext);
+dstd::Result<GranuleList> granules(const Snapshot& snapshot,
+                                   const FileRef& file,
+                                   store::IndexExtension ext,
+                                   dstd::StringView path);
+/// The file-level payload of `path`.
+dstd::Result<dstd::Optional<dstd::String>> path_file(const Snapshot& snapshot,
                                                      const FileRef& file,
-                                                     dstd::StringView path,
-                                                     std::uint64_t value_hash);
+                                                     store::IndexExtension ext,
+                                                     dstd::StringView path);
+
+dstd::Result<bool> has_postings(const Snapshot& snapshot, const FileRef& file,
+                                dstd::StringView path);
+dstd::Result<bool> has_posting(const Snapshot& snapshot, const FileRef& file,
+                               dstd::StringView path, std::uint64_t value_hash);
+dstd::Result<dstd::Vector<std::uint64_t>> posting_granules(
+    const Snapshot& snapshot, const FileRef& file, dstd::StringView path,
+    std::uint64_t value_hash);
 
 /// Every plugin extension built for the file, by name.
-Result<dstd::Vector<PluginCopy>> plugins(const Snapshot& snapshot,
-                                         const FileRef& file);
+dstd::Result<dstd::Vector<PluginCopy>> plugins(const Snapshot& snapshot,
+                                               const FileRef& file);
 /// Nullopt when no copy of plugin `name` exists for the file.
-Result<dstd::Optional<PluginData>> plugin(const Snapshot& snapshot,
-                                          const FileRef& file,
-                                          dstd::StringView name);
+dstd::Result<dstd::Optional<PluginData>> plugin(const Snapshot& snapshot,
+                                                const FileRef& file,
+                                                dstd::StringView name);
 /// The granules alone, in granule order. Nullopt when no copy of plugin `name`
 /// exists for the file.
-Result<dstd::Optional<GranuleList>> plugin_granules(const Snapshot& snapshot,
-                                                    const FileRef& file,
-                                                    dstd::StringView name);
+dstd::Result<dstd::Optional<GranuleList>> plugin_granules(
+    const Snapshot& snapshot, const FileRef& file, dstd::StringView name);
 /// The file payload alone. Nullopt when the file has none, or holds no copy of
 /// plugin `name`.
-Result<dstd::Optional<dstd::String>> plugin_file(const Snapshot& snapshot,
-                                                 const FileRef& file,
-                                                 dstd::StringView name);
+dstd::Result<dstd::Optional<dstd::String>> plugin_file(const Snapshot& snapshot,
+                                                       const FileRef& file,
+                                                       dstd::StringView name);
 
 /// The aggregation tier of one file. `bytes` is the serialized AggPartial and
 /// stays valid during the call.
@@ -170,23 +166,25 @@ using AggChunkColumnsFn = dstd::Function<bool(
 
 /// Calls fn for each partial of the file until fn returns false. A malformed
 /// record is an error, not a throw.
-Result<void> for_each_agg_partial(const Snapshot& snapshot, const FileRef& file,
-                                  const AggPartialFn& fn);
+dstd::Result<void> for_each_agg_partial(const Snapshot& snapshot,
+                                        const FileRef& file,
+                                        const AggPartialFn& fn);
 /// `block.texts` holds the text of each id of `block.ids`, empty where the file
 /// holds none.
-Result<void> for_each_agg_chunk_columns(const Snapshot& snapshot,
-                                        const FileRef& file,
-                                        const AggChunkColumnsFn& fn);
-Result<dstd::Optional<schemas::dft::agg::ChunkColumns>> agg_chunk_columns(
+dstd::Result<void> for_each_agg_chunk_columns(const Snapshot& snapshot,
+                                              const FileRef& file,
+                                              const AggChunkColumnsFn& fn);
+dstd::Result<dstd::Optional<schemas::dft::agg::ChunkColumns>> agg_chunk_columns(
     const Snapshot& snapshot, const FileRef& file, std::uint64_t chunk);
-Result<void> agg_file_texts(const Snapshot& snapshot, const FileRef& file,
-                            dstd::HashMap<std::uint32_t, dstd::String>& texts);
+dstd::Result<void> agg_file_texts(
+    const Snapshot& snapshot, const FileRef& file,
+    dstd::HashMap<std::uint32_t, dstd::String>& texts);
 /// Every dictionary entry the index holds, in key order.
-Result<void> agg_dictionary(const Snapshot& snapshot,
-                            schemas::dft::agg::AggInternTable& table);
+dstd::Result<void> agg_dictionary(const Snapshot& snapshot,
+                                  schemas::dft::agg::AggInternTable& table);
 /// The index-wide aggregation record `name`.
-Result<dstd::Optional<dstd::String>> agg_meta(const Snapshot& snapshot,
-                                              dstd::StringView name);
+dstd::Result<dstd::Optional<dstd::String>> agg_meta(const Snapshot& snapshot,
+                                                    dstd::StringView name);
 
 /// The hash the file was indexed with.
 dstd::Optional<std::uint64_t> file_hash(const Snapshot& snapshot,
@@ -202,7 +200,7 @@ bool extension_current(const Snapshot& snapshot, const FileRef& file,
                        store::IndexExtension ext);
 /// The type of each catalog path, in path order, without the paths whose
 /// observed values have none.
-Result<dstd::Vector<dstd::Pair<dstd::String, store::ColumnType>>>
+dstd::Result<dstd::Vector<dstd::Pair<dstd::String, store::ColumnType>>>
 file_column_types(const Snapshot& snapshot, const FileRef& file);
 
 // Writers. Each writes the keys and values of the current format into the
@@ -297,7 +295,7 @@ void clear_chunk_copies(FileBuild& build);
 
 /// Starts a build of a file the index holds, with the stat it was indexed
 /// with, to add or replace extensions at query time.
-Result<FileBuild> rebuild(const Index& index, dstd::StringView path);
+dstd::Result<FileBuild> rebuild(const Index& index, dstd::StringView path);
 
 /// Marks the extension failed for `params_hash`. The failure lands after the
 /// publish of the finished extensions, not in the same record.
@@ -317,7 +315,7 @@ class Claim {
     /// Commits the building batches the claim's task put so far, so their
     /// memory is released, and publishes nothing. Later puts join the same
     /// building copies, and commit() publishes all of them.
-    coro::CoroTask<Result<void>> stage();
+    coro::CoroTask<dstd::Result<void>> stage();
 
    private:
     FileBuild* build_;
@@ -338,22 +336,22 @@ coro::CoroTask<dstd::UniquePtr<Claim>> claim(FileBuild& build);
 // arguments must stay alive until the task ends.
 
 /// Replaces the index-wide aggregation record `name` with `payload`.
-coro::CoroTask<Result<void>> put_agg_meta(const Index& index,
-                                          dstd::StringView name,
-                                          dstd::StringView payload);
+coro::CoroTask<dstd::Result<void>> put_agg_meta(const Index& index,
+                                                dstd::StringView name,
+                                                dstd::StringView payload);
 /// Deletes the index-wide aggregation record `name`. A missing record is not an
 /// error.
-coro::CoroTask<Result<void>> delete_agg_meta(const Index& index,
-                                             dstd::StringView name);
+coro::CoroTask<dstd::Result<void>> delete_agg_meta(const Index& index,
+                                                   dstd::StringView name);
 /// Drops the copy of one built-in extension of every file in `paths`. A file
 /// without a copy is skipped.
-coro::CoroTask<Result<void>> remove_extension(
+coro::CoroTask<dstd::Result<void>> remove_extension(
     const Index& index, store::IndexExtension ext,
     dstd::Span<const dstd::StringView> paths);
 
 /// Drops the copy of plugin extension `name` of every file in `paths`. A file
 /// without a copy, and a name the index holds no copy of, are skipped.
-coro::CoroTask<Result<void>> remove_plugin(
+coro::CoroTask<dstd::Result<void>> remove_plugin(
     const Index& index, dstd::StringView name,
     dstd::Span<const dstd::StringView> paths);
 

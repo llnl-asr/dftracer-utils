@@ -53,7 +53,7 @@ dstd::String line(std::size_t i, std::size_t pad = 0) {
 struct Written {
     dstd::Vector<MemberInfo> members;
     WriteSummary summary;
-    common::Result<void> err = {};
+    dstd::Result<void> err = {};
 };
 
 Written write_all(const dstd::String& path, GzipWriterOptions o,

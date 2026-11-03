@@ -57,8 +57,8 @@ struct FileDecompressionUtilityInput {
 /**
  * @brief Success payload from file decompression workflow.
  *
- * Failures are reported via Result<FileDecompressionUtilityOutput>, so this
- * struct carries only the successful-result data.
+ * Failures are reported via dstd::Result<FileDecompressionUtilityOutput>, so
+ * this struct carries only the successful-result data.
  */
 struct FileDecompressionUtilityOutput {
     dstd::String input_path;        ///< Original .gz input file path
@@ -118,7 +118,7 @@ class FileDecompressorUtility {
      * @param input Decompression configuration
      * @return Decompression payload, or an error on failure.
      */
-    coro::CoroTask<common::Result<FileDecompressionUtilityOutput>> operator()(
+    coro::CoroTask<dstd::Result<FileDecompressionUtilityOutput>> operator()(
         const FileDecompressionUtilityInput& input) const {
         std::size_t compressed_size = 0;
         std::size_t decompressed_size = 0;

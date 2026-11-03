@@ -63,7 +63,7 @@ static_assert(within<dftracer::utils::trace::views::detail::FoldEvent,
                      FOLD_EVENT_BUDGET, 8>());
 static_assert(within<dftracer::utils::duql::TLookup, LOOKUP_BUDGET, 8>());
 static_assert(within<dstd::Error, ERROR_BUDGET, alignof(void*)>());
-static_assert(within<dftracer::utils::common::Result<void>, RESULT_VOID_BUDGET,
+static_assert(within<dftracer::utils::dstd::Result<void>, RESULT_VOID_BUDGET,
                      alignof(void*)>());
 static_assert(within<dftracer::utils::store::engine::RecordItem,
                      RECORD_ITEM_BUDGET, 8>());
@@ -82,7 +82,7 @@ TEST_CASE("the layout budgets hold") {
           FOLD_EVENT_BUDGET);
     CHECK(sizeof(dftracer::utils::duql::TLookup) <= LOOKUP_BUDGET);
     CHECK(sizeof(dstd::Error) <= ERROR_BUDGET);
-    CHECK(sizeof(dftracer::utils::common::Result<void>) <= RESULT_VOID_BUDGET);
+    CHECK(sizeof(dftracer::utils::dstd::Result<void>) <= RESULT_VOID_BUDGET);
     CHECK(sizeof(dftracer::utils::store::engine::RecordItem) <=
           RECORD_ITEM_BUDGET);
     CHECK(sizeof(dstd::fs::FileStat) <= FILE_STAT_BUDGET);

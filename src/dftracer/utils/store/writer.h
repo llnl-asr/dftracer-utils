@@ -27,7 +27,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <mutex>
 
 namespace dftracer::utils {
@@ -106,7 +105,7 @@ class Writer {
    public:
     /// InvalidArgument when the executor has no I/O backend, and when
     /// `options.extent_size` is set but out of range.
-    static dstd::Expected<std::unique_ptr<Writer>, dstd::Error> create(
+    static dstd::Expected<dstd::UniquePtr<Writer>, dstd::Error> create(
         dstd::StringView dir, TaskExecutor& executor,
         const WriterOptions& options = WriterOptions{});
 
@@ -247,6 +246,9 @@ class Writer {
            dstd::Vector<ScopeGeneration> generations, DataFileWriter file,
            memory::PoolHandle extent_pool, std::uint64_t extent_quota,
            TaskExecutor& executor, const WriterOptions& options);
+
+    template <class T, class... Args>
+    friend dstd::UniquePtr<T> dstd::make_unique(Args&&... args);
 
     NamespaceEntry* find_namespace(std::uint32_t id);
     NamespaceEntry* find_namespace(dstd::StringView name);

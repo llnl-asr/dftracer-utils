@@ -2,12 +2,12 @@
 #ifndef DFTRACER_UTILS_PLUGINS_BUILD_HOST_H
 #define DFTRACER_UTILS_PLUGINS_BUILD_HOST_H
 
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/state_registry.h>
 
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::plugins {
 
@@ -22,16 +22,16 @@ namespace dftracer::utils::plugins {
 /// there. What a factory may do is enforced here, not documented.
 class BuildHost {
    public:
-    explicit BuildHost(std::string plugin_name);
+    explicit BuildHost(dstd::String plugin_name);
 
     /// Handed to the factory; valid only for that call.
     dftu_plugin_host* host() { return &host_; }
 
     /// The first service the factory was denied, empty when it stayed inside
     /// the registration surface.
-    const std::string& denied() const { return denied_; }
+    const dstd::String& denied() const { return denied_; }
 
-    const std::string& plugin_name() const { return plugin_name_; }
+    const dstd::String& plugin_name() const { return plugin_name_; }
 
     /// Record `what` as denied; only the first is kept, so the loader reports
     /// the call that first stepped outside the build phase.
@@ -45,52 +45,52 @@ class BuildHost {
     /// The op names the factory registered with dftu_op_register, moved out
     /// once it returns. The loader must unregister each of these before it
     /// dlcloses the plugin, or the registry keeps a dangling name and fn.
-    std::vector<std::string> take_registered_ops() {
+    dstd::Vector<dstd::String> take_registered_ops() {
         return std::move(registered_ops_);
     }
 
-    std::vector<std::string>& registered_ops() { return registered_ops_; }
+    dstd::Vector<dstd::String>& registered_ops() { return registered_ops_; }
 
     /// The provider names the factory registered with
     /// dftu_svc_providers::register_provider, moved out once it returns. The
     /// loader must unregister each of these before it dlcloses the plugin, or
     /// the provider registry keeps a dangling vt/self.
-    std::vector<std::string> take_registered_providers() {
+    dstd::Vector<dstd::String> take_registered_providers() {
         return std::move(registered_providers_);
     }
 
-    std::vector<std::string>& registered_providers() {
+    dstd::Vector<dstd::String>& registered_providers() {
         return registered_providers_;
     }
 
     /// The node names the factory registered with
     /// dftu_svc_nodes::register_node; unregistered before dlclose, as the
     /// providers are.
-    std::vector<std::string> take_registered_nodes() {
+    dstd::Vector<dstd::String> take_registered_nodes() {
         return std::move(registered_nodes_);
     }
 
-    std::vector<std::string>& registered_nodes() { return registered_nodes_; }
+    dstd::Vector<dstd::String>& registered_nodes() { return registered_nodes_; }
 
     /// The index extension names registered with
     /// dftu_svc_index::register_extension; unregistered before dlclose, as the
     /// providers are.
-    std::vector<std::string> take_registered_index_extensions() {
+    dstd::Vector<dstd::String> take_registered_index_extensions() {
         return std::move(registered_index_extensions_);
     }
 
-    std::vector<std::string>& registered_index_extensions() {
+    dstd::Vector<dstd::String>& registered_index_extensions() {
         return registered_index_extensions_;
     }
 
    private:
-    std::string plugin_name_;
-    std::string denied_;
+    dstd::String plugin_name_;
+    dstd::String denied_;
     StateRegistry states_;
-    std::vector<std::string> registered_ops_;
-    std::vector<std::string> registered_providers_;
-    std::vector<std::string> registered_nodes_;
-    std::vector<std::string> registered_index_extensions_;
+    dstd::Vector<dstd::String> registered_ops_;
+    dstd::Vector<dstd::String> registered_providers_;
+    dstd::Vector<dstd::String> registered_nodes_;
+    dstd::Vector<dstd::String> registered_index_extensions_;
     dftu_plugin_host host_{};
 };
 

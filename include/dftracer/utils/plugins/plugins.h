@@ -4,14 +4,14 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <vector>
 
 // Load plugin shared libraries and run them as folds over one fused scan of a
 // View. Free of the C ABI: the ABI types and the test seams live in
@@ -40,16 +40,16 @@ class Plugins {
         Builder& operator=(Builder&&) noexcept;
 
         /// Queue a shared library and the config tree its factory receives.
-        Builder& add(std::string path, ConfigTree config);
+        Builder& add(dstd::String path, ConfigTree config);
 
         /// Queue a shared library and a JSON object literal for its config.
         /// The caller owns @p config_json only for the duration of this call;
         /// it is copied and parsed at build(), so a parse failure or a
         /// non-object root is reported there, as a `build()` error naming
         /// this plugin's path, not thrown by add().
-        Builder& add(std::string path, std::string config_json);
+        Builder& add(dstd::String path, dstd::String config_json);
 
-        Builder& add(std::string path);
+        Builder& add(dstd::String path);
 
         /// dlopen and gate the ABI version in queue order, then order the fold
         /// from the plugins' declared provides/consumes. The first failure
@@ -59,7 +59,7 @@ class Plugins {
 
        private:
         struct State;
-        std::unique_ptr<State> state_;
+        dstd::UniquePtr<State> state_;
     };
 
     static Builder builder();
@@ -79,26 +79,26 @@ class Plugins {
     /// only way to discover a compiled plugin's provides/consumes without its
     /// source.
     struct PluginInfo {
-        std::string path;  ///< the shared-library path given to Builder::add
+        dstd::String path;  ///< the shared-library path given to Builder::add
         std::uint32_t abi_version = 0;
         bool has_plan_duql =
-            false;         ///< true if the plugin declares a plan_duql
-        std::vector<std::string> provides;
-        std::vector<std::string> consumes;
+            false;          ///< true if the plugin declares a plan_duql
+        dstd::Vector<dstd::String> provides;
+        dstd::Vector<dstd::String> consumes;
         /// One entry per op the plugin's factory added to the host op
         /// registry: `name(arg, ...) -> ret [kind]`.
-        std::vector<std::string> ops;
+        dstd::Vector<dstd::String> ops;
         /// The batch columns the plugin declared it reads. Empty means it
         /// declared none, so it is handed every column.
-        std::vector<std::string> reads;
+        dstd::Vector<dstd::String> reads;
         /// One entry per declared config key: `name (kind[, required]) - doc`.
         /// Empty when the plugin declares none, in which case its config is
         /// not validated either.
-        std::vector<std::string> config_keys;
+        dstd::Vector<dstd::String> config_keys;
     };
 
     /// One entry per loaded plugin, in registration order.
-    std::vector<PluginInfo> describe() const;
+    dstd::Vector<PluginInfo> describe() const;
 
     /// Drive every plugin as a fold over one fused, pruned scan of `view`.
     coro::CoroTask<common::Result<PluginRun>> run(
@@ -123,7 +123,7 @@ class Plugins {
         trace::views::ViewSession& session) const;
 
    private:
-    explicit Plugins(std::unique_ptr<Impl> impl);
+    explicit Plugins(dstd::UniquePtr<Impl> impl);
     friend struct PluginsInternalAccess;
 
     /// `view` narrowed by the union of the plugins' plan_duql filters (the
@@ -133,7 +133,7 @@ class Plugins {
     /// narrowing as attach() does.
     trace::views::View prune(const trace::views::View& view) const;
 
-    std::unique_ptr<Impl> impl_;
+    dstd::UniquePtr<Impl> impl_;
 };
 
 }  // namespace dftracer::utils::plugins

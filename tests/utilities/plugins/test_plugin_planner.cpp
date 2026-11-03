@@ -8,7 +8,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugins_internal.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -38,7 +40,7 @@ using test_plugin_common::index_trace;
 
 namespace {
 
-std::vector<const char*> qs(std::vector<const char*> v) { return v; }
+dstd::Vector<const char*> qs(dstd::Vector<const char*> v) { return v; }
 
 // A plugin that counts the events its own filter keeps. on_batch sees events
 // already filtered by plan_duql, so its count is invariant to host pruning;
@@ -114,7 +116,7 @@ std::string make_homog_trace(dftu_utils_test::TestEnvironment& env,
     return gz;
 }
 
-ExportStats run_host(std::vector<dftu_plugin*> plugins,
+ExportStats run_host(dstd::Vector<dftu_plugin*> plugins,
                      std::vector<ViewFile> files) {
     auto set = build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());

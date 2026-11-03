@@ -3,19 +3,16 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_SOURCE_H
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <concepts>
 #include <cstdint>
 #include <exception>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 /* A LazyFrame source written as a C++ class. source_vtable<S>() adapts S to
  * dftu_source_vt; register it with PluginBuilder::source<S>() (or
@@ -24,7 +21,7 @@
  * is freed through its own vtable.
  *
  * S provides:
- *   std::vector<std::string> names() const;
+ *   dstd::Vector<dstd::String> names() const;
  *   ScanResult<C> scan(const ScanView&) const;
  * where C is a cursor type with
  *   dstd::Optional<OwnedFrame> next(std::int64_t max_rows);
@@ -35,7 +32,7 @@
  * and optionally
  *   void schema(SchemaBuilder&) const;               // column types
  *   dstd::Optional<Applied<S>> apply_filter(ExprView) const;
- *   dstd::Optional<Applied<S>> apply_projection(const std::vector<NamedExpr>&)
+ *   dstd::Optional<Applied<S>> apply_projection(const dstd::Vector<NamedExpr>&)
  * const; dstd::Optional<Applied<S>> apply_aggregation(const AggregationView&)
  * const; dstd::Optional<Applied<S>> apply_sort(const SortView&) const;
  *   dstd::Optional<Applied<S>> apply_topn(const SortView&, std::int64_t k)
@@ -167,7 +164,7 @@ class ExprView {
     }
 
     /// Evaluate over `inputs`; an empty result on a malformed expression.
-    OwnedSeries eval(const std::vector<const dftu_series*>& inputs) const {
+    OwnedSeries eval(const dstd::Vector<const dftu_series*>& inputs) const {
         if (!e_) return {};
         return OwnedSeries(dftu_expr_eval(
             e_, inputs.data(), static_cast<std::int32_t>(inputs.size())));
@@ -238,43 +235,43 @@ struct AggView {
 };
 
 struct AggregationView {
-    std::vector<NamedExpr> keys;
-    std::vector<AggView> aggs;
+    dstd::Vector<NamedExpr> keys;
+    dstd::Vector<AggView> aggs;
 };
 
 struct SortView {
-    std::vector<dstd::StringView> by;
-    std::vector<bool> descending;
+    dstd::Vector<dstd::StringView> by;
+    dstd::Vector<bool> descending;
 };
 
 template <class S>
 struct JoinView {
     const S& other;  ///< the right side, fully absorbed into its own source
-    std::vector<dstd::StringView> left_on;
-    std::vector<dstd::StringView> right_on;
+    dstd::Vector<dstd::StringView> left_on;
+    dstd::Vector<dstd::StringView> right_on;
     dftu_join_how how;
     dstd::StringView suffix;
 };
 
 struct ScanView {
-    std::vector<dstd::StringView> projection;  ///< empty: every column
-    std::vector<ExprView> filters;  ///< positional against the projection
-    std::int64_t limit = -1;        ///< -1: none
+    dstd::Vector<dstd::StringView> projection;  ///< empty: every column
+    dstd::Vector<ExprView> filters;  ///< positional against the projection
+    std::int64_t limit = -1;         ///< -1: none
     std::uint64_t memory_budget = 0;
 };
 
 template <class Cursor>
 struct ScanResult {
-    std::unique_ptr<Cursor> cursor;
+    dstd::UniquePtr<Cursor> cursor;
     /// One entry per ScanView::filters; missing entries read as NO.
-    std::vector<dftu_pushed> filters;
+    dstd::Vector<dftu_pushed> filters;
 };
 
 enum class Apply { Exact, Inexact };
 
 template <class S>
 struct Applied {
-    std::unique_ptr<S> source;
+    dstd::UniquePtr<S> source;
     Apply status = Apply::Exact;
 };
 
@@ -296,16 +293,16 @@ namespace detail {
 
 template <class S>
 struct SourceBox {
-    std::unique_ptr<S> source;
-    std::vector<std::string> names;
-    std::vector<const char*> name_ptrs;
+    dstd::UniquePtr<S> source;
+    dstd::Vector<dstd::String> names;
+    dstd::Vector<const char*> name_ptrs;
     bool named = false;
 };
 
 template <class C>
 struct CursorBox {
-    std::unique_ptr<C> cursor;
-    std::string error;
+    dstd::UniquePtr<C> cursor;
+    dstd::String error;
 };
 
 template <class C>
@@ -388,7 +385,7 @@ concept HasSchema = requires(const S& s, SchemaBuilder& b) { s.schema(b); };
 template <class S>
 concept HasApply =
     requires(const S& s) { s.apply_filter(ExprView{}); } ||
-    requires(const S& s, const std::vector<NamedExpr>& v) {
+    requires(const S& s, const dstd::Vector<NamedExpr>& v) {
         s.apply_projection(v);
     } ||
     requires(const S& s, const AggregationView& v) {
@@ -401,9 +398,9 @@ concept HasApply =
     requires(const S& s) { s.apply_tail(std::int64_t{}); } ||
     requires(const S& s, const JoinView<S>& v) { s.apply_join(v); };
 
-inline std::vector<dstd::StringView> string_views(const char* const* p,
-                                                  std::int32_t n) {
-    std::vector<dstd::StringView> out;
+inline dstd::Vector<dstd::StringView> string_views(const char* const* p,
+                                                   std::int32_t n) {
+    dstd::Vector<dstd::StringView> out;
     out.reserve(static_cast<std::size_t>(n > 0 ? n : 0));
     for (std::int32_t i = 0; i < n; ++i) out.emplace_back(p[i] ? p[i] : "");
     return out;
@@ -419,7 +416,7 @@ struct SourceVt {
             if (!box->named) {
                 box->names = box->source->names();
                 box->name_ptrs.clear();
-                for (const std::string& n : box->names)
+                for (const dstd::String& n : box->names)
                     box->name_ptrs.push_back(n.c_str());
                 box->named = true;
             }
@@ -479,10 +476,10 @@ struct SourceVt {
                     return s.apply_filter(ExprView(req.u.filter.predicate));
                 break;
             case DFTU_APPLY_PROJECTION:
-                if constexpr (requires(const std::vector<NamedExpr>& v) {
+                if constexpr (requires(const dstd::Vector<NamedExpr>& v) {
                                   s.apply_projection(v);
                               }) {
-                    std::vector<NamedExpr> exprs;
+                    dstd::Vector<NamedExpr> exprs;
                     for (std::int32_t i = 0; i < req.u.projection.n_exprs; ++i)
                         exprs.push_back(
                             {req.u.projection.exprs[i].name,
@@ -599,7 +596,7 @@ const dftu_source_vt* source_vtable() {
 /// Wrap `source` as the `self` its vtable expects. Ownership passes to whoever
 /// calls the vtable's destroy() on it.
 template <class S>
-void* make_source_self(std::unique_ptr<S> source) {
+void* make_source_self(dstd::UniquePtr<S> source) {
     return new detail::SourceBox<S>{std::move(source), {}, {}, false};
 }
 

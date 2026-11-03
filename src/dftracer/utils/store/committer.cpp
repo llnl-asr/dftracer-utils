@@ -3,6 +3,9 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scope_exit.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/io_fault.h>
 #include <unistd.h>
@@ -36,7 +39,7 @@ dstd::Error io_error(const char* message) {
 
 /// True when `id` had not been announced yet. Ids are dense from 1, so one
 /// grown byte vector answers this without hashing.
-bool announce(std::vector<std::uint8_t>& announced, std::uint32_t id) {
+bool announce(dstd::Vector<std::uint8_t>& announced, std::uint32_t id) {
     if (id >= announced.size()) {
         announced.resize(static_cast<std::size_t>(id) + 1U, 0);
     }
@@ -88,7 +91,12 @@ struct Committer::WakeState {
 /// the counter under, so a wake that arrives first is not lost.
 struct Committer::WaitForWork {
     Committer& committer;
-    dstd::SharedPtr<WakeState> state = std::make_shared<WakeState>();
+    // A timer can hold the state after the writer's pool closed, so it is
+    // charged to the general pool.
+    dstd::SharedPtr<WakeState> state = [] {
+        memory::Scope general(memory::Manager::get().general());
+        return dstd::make_shared<WakeState>();
+    }();
 
     bool await_ready() const {
         std::lock_guard<std::mutex> lock(committer.queue_mutex_);

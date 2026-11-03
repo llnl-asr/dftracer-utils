@@ -7,6 +7,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugins_internal.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -57,8 +59,8 @@ dftu_plugin make_bare_plugin(void* self) {
 
 // A plugin whose provides/consumes come from `self`, for the graph checks.
 struct NameLists {
-    std::vector<const char*> provides{nullptr};
-    std::vector<const char*> consumes{nullptr};
+    dstd::Vector<const char*> provides{nullptr};
+    dstd::Vector<const char*> consumes{nullptr};
 };
 
 const char* const* names_provides(void* self) {
@@ -147,7 +149,7 @@ std::string make_trace(dftu_utils_test::TestEnvironment& env,
     return gz;
 }
 
-void run_host(std::vector<dftu_plugin*> plugins, std::vector<ViewFile> files) {
+void run_host(dstd::Vector<dftu_plugin*> plugins, std::vector<ViewFile> files) {
     auto set = build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));
@@ -188,7 +190,7 @@ TEST_SUITE("PluginFoldOrder") {
         dftu_plugin producer = make_producer();
         auto set = build_injected_plugins({&consumer, &producer});
         REQUIRE(set.has_value());
-        std::vector<std::size_t> order = fold_order(*set);
+        dstd::Vector<std::size_t> order = fold_order(*set);
         REQUIRE(order.size() == 2);
         CHECK(order[0] == 1);
         CHECK(order[1] == 0);
@@ -200,7 +202,7 @@ TEST_SUITE("PluginFoldOrder") {
         dftu_plugin pb = make_graph_plugin(&b);
         auto set = build_injected_plugins({&pa, &pb});
         REQUIRE(set.has_value());
-        std::vector<std::size_t> order = fold_order(*set);
+        dstd::Vector<std::size_t> order = fold_order(*set);
         REQUIRE(order.size() == 2);
         CHECK(order[0] == 0);
         CHECK(order[1] == 1);

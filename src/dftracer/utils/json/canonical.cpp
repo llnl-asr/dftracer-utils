@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -7,7 +8,6 @@
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/record_parser.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <utility>
 
@@ -37,7 +37,7 @@ void append_canonical_json(dstd::String& out, simdjson::dom::element v) {
                 members;
             const simdjson::dom::object obj = v.get_object().value_unsafe();
             for (auto kv : obj) members.emplace_back(kv.key, kv.value);
-            std::stable_sort(
+            dstd::stable_sort(
                 members.begin(), members.end(),
                 [](const auto& a, const auto& b) { return a.first < b.first; });
             out += '{';

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -61,7 +62,8 @@ inline std::string result_text(dftracer::utils::plugins::PluginRun& run,
                                const char* name) {
     auto it = run.results.results().find(name);
     if (it == run.results.results().end()) return "(missing)";
-    const auto& bytes = std::get<std::vector<std::byte>>(it->second);
+    const auto& bytes =
+        std::get<dftracer::utils::dstd::Vector<std::byte>>(it->second);
     return std::string(reinterpret_cast<const char*>(bytes.data()),
                        bytes.size());
 }

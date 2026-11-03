@@ -58,7 +58,7 @@ inline dstd::String ondemand_value_to_string(simdjson::ondemand::value& val) {
             }
             auto d = val.get_double();
             if (!d.error()) {
-                // %f is what std::to_string(double) prints; 512 bytes holds
+                // %f is what dstd::to_string(double) prints; 512 bytes holds
                 // every magnitude.
                 char text[512];
                 const int n =

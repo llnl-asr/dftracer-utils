@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/pattern_engine.h>
@@ -19,10 +21,8 @@
 #include <numeric>
 #include <optional>
 #include <stdexcept>
-#include <string>
 #include <utility>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -114,6 +114,7 @@ struct Failure {
 
 class Vectorizer {
    public:
+    // keep std: view_duql and mask pass std::vector<VectorColumn>
     Vectorizer(const std::vector<VectorColumn>& columns, bool args_fallback)
         : columns_(columns), args_fallback_(args_fallback) {}
 
@@ -123,6 +124,7 @@ class Vectorizer {
     }
 
    private:
+    // keep std: view_duql and mask pass std::vector<VectorColumn>
     const std::vector<VectorColumn>& columns_;
     bool args_fallback_;
 
@@ -324,7 +326,7 @@ class Vectorizer {
     }
 
     // One kind for the operands of a value-choosing form, or a compile error.
-    static K common(const std::vector<V>& vs, dstd::StringView what) {
+    static K common(const dstd::Vector<V>& vs, dstd::StringView what) {
         K out = K::Nul;
         for (const V& v : vs) {
             if (v.k == K::Nul) continue;
@@ -364,8 +366,9 @@ class Vectorizer {
                                                : arith_kind(b.op, l.k, r.k)};
     }
 
-    static V coalesce(std::vector<V> vs, dstd::StringView what) {
+    static V coalesce(dstd::Vector<V> vs, dstd::StringView what) {
         const K k = common(vs, what);
+        // keep std: df::expr_* take dstd::Vector<Expr>
         std::vector<Expr> args;
         for (const V& v : vs)
             if (v.k != K::Nul) args.push_back(v.e);
@@ -393,7 +396,7 @@ class Vectorizer {
 
     V node(const TIn& in) {
         const V v = (*this)(*in.subject);
-        std::vector<V> items;
+        dstd::Vector<V> items;
         for (const auto& item : in.list) {
             V x = (*this)(*item);
             if (x.k != K::Nul && comparable(v.k, x.k)) items.push_back(x);
@@ -591,7 +594,7 @@ class Vectorizer {
             case Fn::Exists:
                 return present(*c.args[0]);
             case Fn::Coalesce: {
-                std::vector<V> vs;
+                dstd::Vector<V> vs;
                 for (const auto& a : c.args) vs.push_back((*this)(*a));
                 return coalesce(std::move(vs), "coalesce()");
             }
@@ -649,6 +652,7 @@ class Vectorizer {
                         no_kernel("min() and max() of a list");
                     return null();
                 }
+                // keep std: df::expr_* take dstd::Vector<Expr>
                 std::vector<Expr> args;
                 K k = K::Nul;
                 for (const auto& a : c.args) {
@@ -684,6 +688,7 @@ class Vectorizer {
                 return null();
             }
             case Fn::Concat: {
+                // keep std: df::expr_* take dstd::Vector<Expr>
                 std::vector<Expr> args;
                 for (const auto& a : c.args) {
                     const V t = text((*this)(*a));
@@ -913,6 +918,7 @@ class Vectorizer {
 }  // namespace
 
 dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
+    // keep std: view_duql and mask pass std::vector<VectorColumn>
     const Term& t, const std::vector<VectorColumn>& columns,
     bool args_fallback) {
     try {
@@ -924,6 +930,7 @@ dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
     }
 }
 
+// keep std: view_duql and mask pass std::vector<VectorColumn>
 bool is_null_term(const Term& t, const std::vector<VectorColumn>& columns,
                   bool args_fallback) {
     try {
@@ -936,11 +943,13 @@ bool is_null_term(const Term& t, const std::vector<VectorColumn>& columns,
 namespace {
 
 // The key columns of `l` for `rows` rows: each key term evaluated, FLAT.
-std::vector<df::Series> key_columns(
+dstd::Vector<df::Series> key_columns(
+    // keep std: dataframe::eval and agg take std::vector<const Series*>
     const TLookup& l, const std::vector<const df::Series*>& inputs,
+    // keep std: view_duql and mask pass std::vector<VectorColumn>
     const std::vector<VectorColumn>& columns, std::int64_t rows,
     bool args_fallback) {
-    std::vector<df::Series> out;
+    dstd::Vector<df::Series> out;
     for (const auto& k : l.keys) {
         const V v = Vectorizer(columns, args_fallback)(*k);
         out.push_back(v.k == K::Nul || v.k == K::Other || v.k == K::List
@@ -959,13 +968,16 @@ const LookupTable& bound(const TLookup& l) {
 }  // namespace
 
 dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
+    // keep std: dataframe::eval and agg take std::vector<const Series*>
     const TLookup& l, const std::vector<const dataframe::Series*>& inputs,
+    // keep std: view_duql and mask pass std::vector<VectorColumn>
     const std::vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
     try {
         bound(l);
-        const std::vector<df::Series> keys =
+        const dstd::Vector<df::Series> keys =
             key_columns(l, inputs, columns, rows, args_fallback);
+        // keep std: dataframe::eval and agg take std::vector<const Series*>
         std::vector<const df::Series*> ptrs;
         for (const auto& k : keys) ptrs.push_back(&k);
         return lookup_column(l, ptrs, rows);
@@ -975,20 +987,23 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
 }
 
 dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
+    // keep std: dataframe::eval and agg take std::vector<const Series*>
     const TQuant& q, const std::vector<const dataframe::Series*>& inputs,
+    // keep std: view_duql and mask pass std::vector<VectorColumn>
     const std::vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
     const df::Series unknown = df::Series::nulls(TypeId::Bool, rows);
     try {
         // Each row's elements are values[starts[r], starts[r + 1]).
         df::Series values;
-        std::vector<std::int64_t> starts;
-        std::vector<std::uint8_t> present(static_cast<std::size_t>(rows), 0);
+        dstd::Vector<std::int64_t> starts;
+        dstd::Vector<std::uint8_t> present(static_cast<std::size_t>(rows), 0);
         if (const auto* l = std::get_if<TLookup>(&q.subject->node);
             l && l->all) {
             const LookupTable& t = bound(*l);
-            const std::vector<df::Series> keys =
+            const dstd::Vector<df::Series> keys =
                 key_columns(*l, inputs, columns, rows, args_fallback);
+            // keep std: dataframe::eval and agg take std::vector<const Series*>
             std::vector<const df::Series*> ptrs;
             for (const auto& k : keys) ptrs.push_back(&k);
             Matches m = match(t, ptrs, rows);
@@ -1011,7 +1026,7 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
             if (off[0] == 0 && child.length() == n) {
                 values = child.share();
             } else {
-                std::vector<std::int64_t> at(static_cast<std::size_t>(n));
+                dstd::Vector<std::int64_t> at(static_cast<std::size_t>(n));
                 std::iota(at.begin(), at.end(), std::int64_t{off[0]});
                 values = child.take(at);
             }
@@ -1020,7 +1035,7 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
             for (std::int64_t r = 0; r < rows; ++r)
                 present[static_cast<std::size_t>(r)] = !list.is_null(r);
         }
-        std::vector<std::int64_t> parent;
+        dstd::Vector<std::int64_t> parent;
         parent.reserve(static_cast<std::size_t>(starts.back()));
         for (std::int64_t r = 0; r < rows; ++r)
             for (std::int64_t e = starts[static_cast<std::size_t>(r)];
@@ -1028,7 +1043,8 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
                 parent.push_back(r);
         const auto n = static_cast<std::int64_t>(parent.size());
 
-        std::vector<df::Series> owned;
+        dstd::Vector<df::Series> owned;
+        // keep std: view_duql and mask pass std::vector<VectorColumn>
         std::vector<VectorColumn> cols;
         owned.push_back(std::move(values));
         cols.push_back({".", owned.back().data_type()});
@@ -1039,7 +1055,7 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
                     {"." + owned.front().field_name(i), field.data_type()});
                 owned.push_back(std::move(field));
             }
-        std::vector<dstd::String> read;
+        dstd::Vector<dstd::String> read;
         for_each_term_field(*q.cond,
                             [&](const TField& f) { read.push_back(f.base); });
         auto reads = [&](const VectorColumn& c) {
@@ -1058,11 +1074,12 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
             owned.push_back(reads(columns[i]) ? inputs[i]->take(parent)
                                               : inputs[i]->share());
         }
+        // keep std: dataframe::eval and agg take std::vector<const Series*>
         std::vector<const df::Series*> frame;
         for (const auto& c : owned) frame.push_back(&c);
         const V cond = Vectorizer(cols, args_fallback)(*q.cond);
-        std::vector<std::uint8_t> yes(static_cast<std::size_t>(n), 0);
-        std::vector<std::uint8_t> known(static_cast<std::size_t>(n), 0);
+        dstd::Vector<std::uint8_t> yes(static_cast<std::size_t>(n), 0);
+        dstd::Vector<std::uint8_t> known(static_cast<std::size_t>(n), 0);
         if (cond.k == K::Bool && n > 0) {
             const df::Series t = df::eval(cond.e, frame).materialize();
             const auto* bits = t.data<std::uint8_t>();
@@ -1073,9 +1090,9 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
                     (bits[e >> 3] >> (e & 7)) & 1;
             }
         }
-        std::vector<std::uint8_t> out((static_cast<std::size_t>(rows) + 7) / 8,
-                                      0);
-        std::vector<std::uint8_t> valid(
+        dstd::Vector<std::uint8_t> out((static_cast<std::size_t>(rows) + 7) / 8,
+                                       0);
+        dstd::Vector<std::uint8_t> valid(
             (static_cast<std::size_t>(rows) + 7) / 8, 0);
         for (std::int64_t r = 0; r < rows; ++r) {
             if (!present[static_cast<std::size_t>(r)]) continue;
@@ -1101,6 +1118,7 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
 }
 
 dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError>
+// keep std: view_duql and mask pass std::vector<VectorColumn>
 vectorize_condition(const Term& t, const std::vector<VectorColumn>& columns,
                     bool args_fallback) {
     try {
@@ -1123,7 +1141,7 @@ bool is_list_type(const df::DataType& t) {
 struct ListParts {
     df::Series list;
     df::Series child;
-    std::vector<std::int64_t> off;
+    dstd::Vector<std::int64_t> off;
 };
 
 dstd::Optional<ListParts> list_parts(const df::Series& s) {
@@ -1142,13 +1160,14 @@ dstd::Optional<ListParts> list_parts(const df::Series& s) {
 
 // A LIST column of `rows[offsets[r], offsets[r + 1])` of `values`, null
 // where `valid` is false.
-df::Series make_list(const std::vector<std::int64_t>& offsets,
-                     df::Series values, const std::vector<bool>& valid) {
+df::Series make_list(const dstd::Vector<std::int64_t>& offsets,
+                     df::Series values, const dstd::Vector<bool>& valid) {
+    // keep std: Series::list takes std::vector<std::int32_t>
     std::vector<std::int32_t> off(offsets.begin(), offsets.end());
     df::Series out = df::Series::list(off, std::move(values));
     if (std::all_of(valid.begin(), valid.end(), [](bool v) { return v; }))
         return out;
-    std::vector<std::int64_t> rows(valid.size());
+    dstd::Vector<std::int64_t> rows(valid.size());
     for (std::size_t r = 0; r < valid.size(); ++r)
         rows[r] = valid[r] ? static_cast<std::int64_t>(r) : -1;
     return out.take(rows);
@@ -1168,6 +1187,7 @@ std::int64_t clamp_at(std::int64_t i, std::int64_t size) {
     return std::min(i, size);
 }
 
+// keep std: view_duql passes std::vector for these
 df::Series slice_column(const std::vector<df::Series>& args) {
     auto p = list_parts(args[0]);
     const std::int64_t n = args[0].length();
@@ -1175,9 +1195,9 @@ df::Series slice_column(const std::vector<df::Series>& args) {
     const df::Series to = args.size() > 2
                               ? args[2].cast(TypeId::Int64).materialize()
                               : df::Series::nulls(TypeId::Int64, n);
-    std::vector<std::int64_t> offsets{0};
-    std::vector<std::int64_t> take;
-    std::vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::int64_t> offsets{0};
+    dstd::Vector<std::int64_t> take;
+    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
     for (std::int64_t r = 0; r < n; ++r) {
         const auto b = int_at(from, r);
         const auto e = int_at(to, r);
@@ -1200,9 +1220,9 @@ df::Series flatten_column(const df::Series& arg) {
     const std::int64_t n = arg.length();
     auto inner = list_parts(p->child);
     if (!inner) return p->list.share();
-    std::vector<std::int64_t> offsets{0};
-    std::vector<std::int64_t> take;
-    std::vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::int64_t> offsets{0};
+    dstd::Vector<std::int64_t> take;
+    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
     for (std::int64_t r = 0; r < n; ++r) {
         if (!p->list.is_null(r)) {
             valid[static_cast<std::size_t>(r)] = true;
@@ -1223,9 +1243,10 @@ df::Series flatten_column(const df::Series& arg) {
 }
 
 // The object's fields as (key, column), in the byte order of the keys.
-std::vector<dstd::Pair<dstd::String, df::Series>> object_fields(
+dstd::Vector<dstd::Pair<dstd::String, df::Series>> object_fields(
+    // keep std: view_duql passes std::vector for these
     const std::vector<df::Series>& args, const std::vector<std::string>& keys) {
-    std::vector<dstd::Pair<dstd::String, df::Series>> out;
+    dstd::Vector<dstd::Pair<dstd::String, df::Series>> out;
     if (args.size() == 1 && args[0].type() == TypeId::Struct) {
         const df::Series st = flat_of(args[0]);
         for (std::int64_t i = 0; i < st.num_children(); ++i)
@@ -1234,21 +1255,23 @@ std::vector<dstd::Pair<dstd::String, df::Series>> object_fields(
         for (std::size_t i = 0; i < args.size(); ++i)
             out.emplace_back(keys[i], flat_of(args[i]));
     }
-    std::stable_sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+    dstd::stable_sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
         return a.first < b.first;
     });
     return out;
 }
 
+// keep std: view_duql passes std::vector for these
 df::Series members_column(const std::vector<df::Series>& args,
+                          // keep std: view_duql passes std::vector for these
                           const std::vector<std::string>& keys, bool names,
                           const df::DataType& type) {
     const std::int64_t n = args.empty() ? 0 : args[0].length();
     const auto fields = object_fields(args, keys);
     const bool whole = args.size() == 1 && args[0].type() == TypeId::Struct;
-    std::vector<std::int64_t> offsets{0};
-    std::vector<std::int64_t> take;
-    std::vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::int64_t> offsets{0};
+    dstd::Vector<std::int64_t> take;
+    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
     for (std::int64_t r = 0; r < n; ++r) {
         const std::size_t before = take.size();
         if (!whole || !args[0].is_null(r))
@@ -1262,7 +1285,7 @@ df::Series members_column(const std::vector<df::Series>& args,
         offsets.push_back(static_cast<std::int64_t>(take.size()));
     }
     if (names) {
-        std::vector<dstd::StringView> all;
+        dstd::Vector<dstd::StringView> all;
         for (const auto& f : fields) all.push_back(f.first);
         return make_list(
             offsets,
@@ -1271,7 +1294,8 @@ df::Series members_column(const std::vector<df::Series>& args,
             valid);
     }
     const TypeId elem = type.fields.front().type.id;
-    std::vector<df::DataFrame> frames(fields.size());
+    dstd::Vector<df::DataFrame> frames(fields.size());
+    // keep std: df::concat takes std::vector<const DataFrame*>
     std::vector<const df::DataFrame*> ptrs;
     for (std::size_t k = 0; k < fields.size(); ++k) {
         frames[k].names.push_back("v");
@@ -1288,8 +1312,8 @@ df::Series parse_column(const df::Series& arg) {
     const df::Series s = flat_of(arg);
     const std::int64_t n = s.length();
     dftracer::utils::json::RecordParser parser;
-    std::vector<dstd::String> text(static_cast<std::size_t>(n));
-    std::vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<dstd::String> text(static_cast<std::size_t>(n));
+    dstd::Vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
     for (std::int64_t r = 0; r < n; ++r) {
         if (s.is_null(r)) continue;
         const dstd::StringView in = s.string_at(r);
@@ -1300,7 +1324,7 @@ df::Series parse_column(const df::Series& arg) {
         bits[static_cast<std::size_t>(r) >> 3] |=
             static_cast<std::uint8_t>(1u << (r & 7));
     }
-    const std::vector<dstd::StringView> views(text.begin(), text.end());
+    const dstd::Vector<dstd::StringView> views(text.begin(), text.end());
     return df::Series::strings(views, bits.data());
 }
 
@@ -1308,9 +1332,9 @@ df::Series split_column(const df::Series& arg, const df::Series& sep_arg) {
     const df::Series s = flat_of(arg);
     const df::Series sep = flat_of(sep_arg);
     const std::int64_t n = s.length();
-    std::vector<std::int64_t> offsets{0};
-    std::vector<dstd::StringView> parts;
-    std::vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::int64_t> offsets{0};
+    dstd::Vector<dstd::StringView> parts;
+    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
     for (std::int64_t r = 0; r < n; ++r) {
         if (!s.is_null(r) && !sep.is_null(r) && !sep.string_at(r).empty()) {
             const dstd::StringView text = s.string_at(r);
@@ -1379,11 +1403,12 @@ class Cells {
 };
 
 // The element at each row's index, 0-based and from the end when negative.
+// keep std: view_duql passes std::vector for these
 df::Series index_column(const std::vector<df::Series>& args) {
     auto p = list_parts(args[0]);
     const std::int64_t n = args[0].length();
     const Cells at(args[1]);
-    std::vector<std::int64_t> take(static_cast<std::size_t>(n), -1);
+    dstd::Vector<std::int64_t> take(static_cast<std::size_t>(n), -1);
     for (std::int64_t r = 0; r < n; ++r) {
         if (p->list.is_null(r) || at.null(r)) continue;
         const Number num = std::get<Number>(at.at(r));
@@ -1410,8 +1435,8 @@ df::Series index_of_column(const df::Series& arg, const df::Series& value) {
     const std::int64_t n = arg.length();
     const Cells elems(p->child);
     const Cells v(value);
-    std::vector<std::int64_t> out(static_cast<std::size_t>(n), 0);
-    std::vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<std::int64_t> out(static_cast<std::size_t>(n), 0);
+    dstd::Vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
     for (std::int64_t r = 0; r < n; ++r) {
         if (p->list.is_null(r) || v.null(r)) continue;
         const Cell x = v.at(r);
@@ -1436,10 +1461,10 @@ df::Series sort_column(const df::Series& arg) {
     auto p = list_parts(arg);
     const std::int64_t n = arg.length();
     const Cells cells(p->child);
-    std::vector<std::int64_t> offsets{0};
-    std::vector<std::int64_t> take;
-    std::vector<std::int64_t> present;
-    std::vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::int64_t> offsets{0};
+    dstd::Vector<std::int64_t> take;
+    dstd::Vector<std::int64_t> present;
+    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
     for (std::int64_t r = 0; r < n; ++r) {
         if (!p->list.is_null(r)) {
             const std::int64_t lo = p->off[static_cast<std::size_t>(r)];
@@ -1452,11 +1477,11 @@ df::Series sort_column(const df::Series& arg) {
                 ok = cmp_cell(cells.at(present[i]), cells.at(present[0]))
                          .has_value();
             if (ok) {
-                std::stable_sort(present.begin(), present.end(),
-                                 [&](std::int64_t a, std::int64_t b) {
-                                     return *cmp_cell(cells.at(a),
-                                                      cells.at(b)) < 0;
-                                 });
+                dstd::stable_sort(present.begin(), present.end(),
+                                  [&](std::int64_t a, std::int64_t b) {
+                                      return *cmp_cell(cells.at(a),
+                                                       cells.at(b)) < 0;
+                                  });
                 take.insert(take.end(), present.begin(), present.end());
                 take.insert(take.end(),
                             static_cast<std::size_t>(hi - lo) - present.size(),
@@ -1480,9 +1505,9 @@ df::Series unique_column(const df::Series& arg) {
         const auto o = cmp_cell(cells.at(a), cells.at(b));
         return o && *o == 0;
     };
-    std::vector<std::int64_t> offsets{0};
-    std::vector<std::int64_t> take;
-    std::vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::int64_t> offsets{0};
+    dstd::Vector<std::int64_t> take;
+    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
     for (std::int64_t r = 0; r < n; ++r) {
         if (!p->list.is_null(r)) {
             valid[static_cast<std::size_t>(r)] = true;
@@ -1509,9 +1534,9 @@ df::Series join_column(const df::Series& arg, const df::Series& sep_arg) {
     const bool strings = kind_of(elems.type()) == K::Str;
     const df::Series sep = flat_of(sep_arg);
     dstd::String buf;
-    std::vector<dstd::Pair<std::size_t, std::size_t>> spans(
+    dstd::Vector<dstd::Pair<std::size_t, std::size_t>> spans(
         static_cast<std::size_t>(n));
-    std::vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
     for (std::int64_t r = 0; r < n; ++r) {
         if (p->list.is_null(r) || sep.is_null(r)) continue;
         const std::size_t begin = buf.size();
@@ -1537,24 +1562,26 @@ df::Series join_column(const df::Series& arg, const df::Series& sep_arg) {
         bits[static_cast<std::size_t>(r) >> 3] |=
             static_cast<std::uint8_t>(1u << (r & 7));
     }
-    std::vector<dstd::StringView> views;
+    dstd::Vector<dstd::StringView> views;
     views.reserve(spans.size());
     for (const auto& [b, e] : spans) views.emplace_back(buf.data() + b, e - b);
     return df::Series::strings(views, bits.data());
 }
 
 // One list per row of the items' values at that row.
+// keep std: view_duql passes std::vector for these
 df::Series list_column(const std::vector<df::Series>& items, std::int64_t n,
                        const df::DataType& type) {
     const TypeId elem = type.fields.front().type.id;
     const auto m = static_cast<std::int64_t>(items.size());
-    std::vector<std::int64_t> offsets(static_cast<std::size_t>(n) + 1, 0);
+    dstd::Vector<std::int64_t> offsets(static_cast<std::size_t>(n) + 1, 0);
     for (std::int64_t r = 0; r <= n; ++r)
         offsets[static_cast<std::size_t>(r)] = r * m;
-    const std::vector<bool> valid(static_cast<std::size_t>(n), true);
+    const dstd::Vector<bool> valid(static_cast<std::size_t>(n), true);
     if (items.empty())
         return make_list(offsets, df::Series::nulls(elem, 0), valid);
-    std::vector<df::DataFrame> frames(items.size());
+    dstd::Vector<df::DataFrame> frames(items.size());
+    // keep std: df::concat takes std::vector<const DataFrame*>
     std::vector<const df::DataFrame*> ptrs;
     for (std::size_t k = 0; k < items.size(); ++k) {
         const df::Series s = items[k].null_count() == n
@@ -1565,7 +1592,7 @@ df::Series list_column(const std::vector<df::Series>& items, std::int64_t n,
                                                      : s.cast(elem));
         ptrs.push_back(&frames[k]);
     }
-    std::vector<std::int64_t> take;
+    dstd::Vector<std::int64_t> take;
     take.reserve(static_cast<std::size_t>(n * m));
     for (std::int64_t r = 0; r < n; ++r)
         for (std::int64_t k = 0; k < m; ++k) take.push_back(k * n + r);
@@ -1589,8 +1616,10 @@ bool is_column_term(const Term& t) {
            std::holds_alternative<TList>(t.node);
 }
 
-dstd::Optional<df::DataType> call_type(const Term& t,
-                                       const std::vector<df::DataType>& args) {
+dstd::Optional<df::DataType> call_type(
+    const Term& t,
+    // keep std: view_duql passes std::vector for these
+    const std::vector<df::DataType>& args) {
     auto integer = [](const df::DataType& d) {
         return kind_of(d.id) == K::Int || kind_of(d.id) == K::Uint;
     };
@@ -1640,6 +1669,7 @@ dstd::Optional<df::DataType> call_type(const Term& t,
             if (args.empty()) return dstd::nullopt;
             return df::list_of(df::scalar(TypeId::String));
         case Fn::Values: {
+            // keep std: view_duql passes std::vector for these
             std::vector<df::DataType> fields = args;
             if (args.size() == 1 && args[0].id == TypeId::Struct) {
                 fields.clear();
@@ -1694,7 +1724,9 @@ dstd::Optional<df::DataType> call_type(const Term& t,
     }
 }
 
+// keep std: view_duql passes std::vector for these
 df::Series call_column(const Term& t, const std::vector<df::Series>& args,
+                       // keep std: view_duql passes std::vector for these
                        const std::vector<std::string>& keys,
                        const df::DataType& type, std::int64_t rows) {
     if (std::holds_alternative<TIndex>(t.node)) return index_column(args);

@@ -2,7 +2,9 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_REGISTER_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_REGISTER_H
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin/async.h>
 #include <dftracer/utils/plugins/plugin/map.h>
@@ -17,11 +19,7 @@
 #include <cstring>
 #include <exception>
 #include <iterator>
-#include <memory>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::plugins {
 
@@ -137,8 +135,8 @@ class Config {
     }
     /// The ARRAY at `key` coerced to int64 per element (dftu_as_i64 rules);
     /// empty if the key is absent or not an array.
-    std::vector<std::int64_t> get_int_array(dstd::StringView key) const {
-        std::vector<std::int64_t> out;
+    dstd::Vector<std::int64_t> get_int_array(dstd::StringView key) const {
+        dstd::Vector<std::int64_t> out;
         if (const dftu_value* a = raw_array(key)) {
             out.reserve(a->count);
             for (std::uint32_t i = 0; i < a->count; ++i)
@@ -148,8 +146,8 @@ class Config {
     }
     /// The ARRAY at `key` coerced to double per element (dftu_as_f64 rules);
     /// empty if the key is absent or not an array.
-    std::vector<double> get_double_array(dstd::StringView key) const {
-        std::vector<double> out;
+    dstd::Vector<double> get_double_array(dstd::StringView key) const {
+        dstd::Vector<double> out;
         if (const dftu_value* a = raw_array(key)) {
             out.reserve(a->count);
             for (std::uint32_t i = 0; i < a->count; ++i)
@@ -160,8 +158,9 @@ class Config {
     /// The ARRAY at `key` as string_views (non-STR elements yield an empty
     /// view); the views borrow the host-owned config tree. Empty if the key is
     /// absent or not an array.
-    std::vector<dstd::StringView> get_string_array(dstd::StringView key) const {
-        std::vector<dstd::StringView> out;
+    dstd::Vector<dstd::StringView> get_string_array(
+        dstd::StringView key) const {
+        dstd::Vector<dstd::StringView> out;
         if (const dftu_value* a = raw_array(key)) {
             out.reserve(a->count);
             for (std::uint32_t i = 0; i < a->count; ++i) {
@@ -192,7 +191,7 @@ template <class Slice>
 struct Holder {
     dftu_plugin vt{};
     Config config;
-    std::string plan; /**< backs plan_duql's const char* */
+    dstd::String plan; /**< backs plan_duql's const char* */
 };
 
 template <class Slice>
@@ -305,8 +304,8 @@ enum class NameList { Provides, Consumes, Reads };
 // which is the lifetime dftu_plugin::provides/consumes/reads require.
 template <class Slice, NameList Which>
 const char* const* name_list_thunk(void*) {
-    static const std::vector<const char*> names = [] {
-        std::vector<const char*> v;
+    static const dstd::Vector<const char*> names = [] {
+        dstd::Vector<const char*> v;
         if constexpr (Which == NameList::Provides) {
             for (const char* n : Slice::provides()) v.push_back(n);
         } else if constexpr (Which == NameList::Consumes) {
@@ -335,8 +334,8 @@ concept DeclaresConfigKeys = requires {
 // `query` an unknown one.
 template <class Slice>
 const dftu_config_key* config_key_thunk(void*) {
-    static const std::vector<dftu_config_key> keys = [] {
-        std::vector<dftu_config_key> v;
+    static const dstd::Vector<dftu_config_key> keys = [] {
+        dstd::Vector<dftu_config_key> v;
         for (const dftu_config_key& k : Slice::config_keys()) v.push_back(k);
         v.push_back({"duql", DFTU_VAL_STR, 0,
                      "coarse DSL predicate the scan is pruned by"});
@@ -366,7 +365,7 @@ template <class Slice>
 dftu_plugin* make_plugin(const dftu_value* config) {
     auto* hd = new detail::Holder<Slice>();
     hd->config = Config(config);
-    hd->plan = std::string(hd->config.get("duql"));
+    hd->plan = hd->config.get("duql");
 
     dftu_plugin& vt = hd->vt;
     vt.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
@@ -485,7 +484,7 @@ concept FrameFinalize = requires(State& s) {
 /// spill it under the scan's memory budget.
 template <class State>
 concept Spillable = requires(const State& s, dstd::StringView b) {
-    { s.serialize() } -> std::convertible_to<std::string>;
+    { s.serialize() } -> std::convertible_to<dstd::String>;
     { State::deserialize(b) } -> std::same_as<State*>;
 };
 
@@ -511,7 +510,7 @@ struct EmptySlice {
 template <class State>
 struct StateBox {
     State state;
-    std::string scratch;
+    dstd::String scratch;
 };
 
 /// The dftu_state_desc for `State`, filled from what State actually offers.
@@ -554,13 +553,13 @@ const dftu_state_desc& state_desc_of(const char* name) {
             d.serialize = [](const void* s, dftu_bytes* out,
                              dftu_error*) -> int {
                 try {
-                    auto* buf = new std::string(
+                    auto* buf = new dstd::String(
                         static_cast<const Box*>(s)->state.serialize());
                     out->data = buf->data();
                     out->len = buf->size();
                     out->ud = buf;
                     out->free_fn = [](void*, void* ud) {
-                        delete static_cast<std::string*>(ud);
+                        delete static_cast<dstd::String*>(ud);
                     };
                     return 0;
                 } catch (...) {
@@ -569,8 +568,8 @@ const dftu_state_desc& state_desc_of(const char* name) {
             };
             d.deserialize = [](void*, dftu_bytes in, dftu_error*) -> void* {
                 try {
-                    auto box = std::make_unique<Box>();
-                    std::unique_ptr<State> s{State::deserialize(
+                    auto box = dstd::make_unique<Box>();
+                    dstd::UniquePtr<State> s{State::deserialize(
                         dstd::StringView{static_cast<const char*>(in.data),
                                          static_cast<std::size_t>(in.len)})};
                     if (!s) return nullptr;
@@ -649,7 +648,7 @@ class PluginBuilder {
     /// `<plugin>.<name>`; see plugin/source.h for what S provides. The host
     /// owns it once registered and destroys it when the provider goes away.
     template <class S>
-    PluginBuilder& source(const char* name, std::unique_ptr<S> src) {
+    PluginBuilder& source(const char* name, dstd::UniquePtr<S> src) {
         const dftu_svc_providers* p =
             ext<dftu_svc_providers>(DFTU_SVC_PROVIDERS);
         if (!p || !p->register_provider)
@@ -667,7 +666,7 @@ class PluginBuilder {
     /// `<plugin>.<name>`; see plugin/node.h for what N provides. The host
     /// owns it once registered and unregisters it before the plugin unloads.
     template <class N>
-    PluginBuilder& node(const char* name, std::unique_ptr<N> node) {
+    PluginBuilder& node(const char* name, dstd::UniquePtr<N> node) {
         const dftu_svc_nodes* p = ext<dftu_svc_nodes>(DFTU_SVC_NODES);
         if (!p || !p->register_node) return fail("no node registry at load");
         const dftu_node_vt* vt = node_vtable<N>();

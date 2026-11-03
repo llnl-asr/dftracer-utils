@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/lookup.h>
 
 #include <algorithm>
@@ -12,7 +13,6 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -94,7 +94,8 @@ dstd::String key_text(dstd::StringView key) {
     return parts > 1 ? "(" + out + ")" : out;
 }
 
-const std::vector<std::int64_t>* LookupTable::find(dstd::StringView key) const {
+const dstd::Vector<std::int64_t>* LookupTable::find(
+    dstd::StringView key) const {
     const auto it = rows.find(key);
     return it == rows.end() ? nullptr : &it->second;
 }

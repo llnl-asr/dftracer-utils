@@ -19,13 +19,12 @@
 #include <fstream>
 #include <optional>
 #include <string>
-#include <string_view>
-#include <vector>
 
 #ifndef INDEX_MINMAX_PLUGIN_PATH
 #error "INDEX_MINMAX_PLUGIN_PATH must be defined by CMake"
 #endif
 
+using namespace dftracer::utils;
 namespace {
 
 using dftracer::utils::index::FileExplain;
@@ -55,7 +54,7 @@ std::string write_records(dftu_utils_test::TestEnvironment& env,
     return gz;
 }
 
-Plugins load(const std::string& config = "") {
+Plugins load(const dstd::String& config = "") {
     auto builder = Plugins::builder();
     if (config.empty())
         builder.add(INDEX_MINMAX_PLUGIN_PATH);

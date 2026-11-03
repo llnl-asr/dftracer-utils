@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/overlap.h>
 #include <dftracer/utils/duql/vectorize.h>
 
@@ -9,7 +10,6 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -31,8 +31,8 @@ bool is_number(df::TypeId t) {
 
 template <class T>
 struct Numbers {
-    std::vector<T> value;
-    std::vector<std::uint8_t> ok;
+    dstd::Vector<T> value;
+    dstd::Vector<std::uint8_t> ok;
 };
 
 template <class T, class U>
@@ -53,7 +53,7 @@ Numbers<T> read_numbers(const df::Series& s, const char* what) {
              dstd::String(df::type_name(s.type())) + ", not a number")
                 .c_str());
     const auto n = static_cast<std::size_t>(s.length());
-    Numbers<T> out{std::vector<T>(n), std::vector<std::uint8_t>(n)};
+    Numbers<T> out{dstd::Vector<T>(n), dstd::Vector<std::uint8_t>(n)};
     switch (s.type()) {
         case df::TypeId::Int8:
             copy_column<T, std::int8_t>(s, out);
@@ -112,9 +112,9 @@ bool valid_interval(T start, T duration, bool ok) {
 // One frame's intervals as numbers; a row that cannot match has ok == 0.
 template <class T>
 struct Intervals {
-    std::vector<T> start;
-    std::vector<T> duration;
-    std::vector<std::uint8_t> ok;
+    dstd::Vector<T> start;
+    dstd::Vector<T> duration;
+    dstd::Vector<std::uint8_t> ok;
 };
 
 template <class T>
@@ -135,7 +135,7 @@ Intervals<T> read_intervals(const OverlapColumns& c) {
     return out;
 }
 
-bool row_key(dstd::String& out, const std::vector<df::Series>& keys,
+bool row_key(dstd::String& out, const dstd::Vector<df::Series>& keys,
              std::int64_t r) {
     out.clear();
     for (const df::Series& k : keys)
@@ -168,7 +168,7 @@ class Group {
     }
 
     // The side rows overlapping `[a, a + d)`, unordered, appended to `out`.
-    void matches(T a, T d, std::vector<std::int64_t>& out) const {
+    void matches(T a, T d, dstd::Vector<std::int64_t>& out) const {
         const T stop = add_saturating(a, d);
         const auto first_after =
             std::upper_bound(starts_.begin(), starts_.end(), a);
@@ -196,7 +196,8 @@ class Group {
 
     // The items of `[lo, hi)` below `prefix` with an end after `a`.
     void report(std::size_t node, std::size_t lo, std::size_t hi,
-                std::size_t prefix, T a, std::vector<std::int64_t>& out) const {
+                std::size_t prefix, T a,
+                dstd::Vector<std::int64_t>& out) const {
         if (lo >= prefix || !(tree_[node] > a)) return;
         if (hi - lo == 1) {
             out.push_back(items_[lo].row);
@@ -207,9 +208,9 @@ class Group {
         report(2 * node + 1, mid, hi, prefix, a, out);
     }
 
-    std::vector<Item> items_;
-    std::vector<T> starts_;
-    std::vector<T> tree_;
+    dstd::Vector<Item> items_;
+    dstd::Vector<T> starts_;
+    dstd::Vector<T> tree_;
     std::size_t size_ = 1;
 };
 
@@ -233,7 +234,7 @@ OverlapMatches run(const OverlapColumns& rows, const OverlapColumns& side) {
     const auto n = static_cast<std::int64_t>(mine.start.size());
     out.offsets.reserve(static_cast<std::size_t>(n) + 1);
     out.offsets.push_back(0);
-    std::vector<std::int64_t> found;
+    dstd::Vector<std::int64_t> found;
     for (std::int64_t i = 0; i < n; ++i) {
         const auto at = static_cast<std::size_t>(i);
         if (mine.ok[at] && row_key(key, rows.keys, i)) {

@@ -17,8 +17,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <variant>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 struct DataFrame;
@@ -62,14 +60,14 @@ struct RangeIndex {
         std::int64_t best = -1;
     };
     /// By position: the frame row and its range value; MIN, MAX: its value.
-    std::vector<std::int64_t> rows;
-    std::vector<Ordered> values;
-    std::vector<dstd::Optional<Ordered>> args;
+    dstd::Vector<std::int64_t> rows;
+    dstd::Vector<Ordered> values;
+    dstd::Vector<dstd::Optional<Ordered>> args;
     /// Each key's positions [first, second).
     dstd::StringViewMap<dstd::Pair<std::int64_t, std::int64_t>> keys;
     /// The tree of the key at [b, e) is at [2b, 2e), leaf i at 2b + (e - b)
     /// + i; empty for ROWS and COUNT.
-    std::vector<Node> tree;
+    dstd::Vector<Node> tree;
     /// SUM, MEAN: the value column holds integers.
     bool integral = false;
     /// The strings of `values` and `args` read from JSON cells.
@@ -84,17 +82,17 @@ void build_range_tree(RangeIndex& index, RangeRead read,
 struct LookupTable {
     dstd::String name;
     dstd::SharedPtr<const dataframe::DataFrame> frame;
-    dstd::StringViewMap<std::vector<std::int64_t>> rows;
+    dstd::StringViewMap<dstd::Vector<std::int64_t>> rows;
     /// The columns the rows are keyed by.
-    std::vector<std::size_t> key_columns;
+    dstd::Vector<std::size_t> key_columns;
     /// ARROW: the column the lookup reads, none when the row set lacks it.
     dstd::Optional<std::size_t> value;
     /// The cells of `value` (SCALAR: of the only column) for the row
     /// evaluator; empty for a list or object cell, which it cannot read.
-    std::vector<dstd::Optional<Cell>> cells;
+    dstd::Vector<dstd::Optional<Cell>> cells;
     /// A range lookup's rows by key and range value; `rows` is then empty.
     dstd::SharedPtr<const RangeIndex> range;
-    const std::vector<std::int64_t>* find(dstd::StringView key) const;
+    const dstd::Vector<std::int64_t>* find(dstd::StringView key) const;
 };
 
 /// What a range lookup gives for one enclosing row: the number of rows in

@@ -3,12 +3,11 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGINS_INTERNAL_H
 
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/plugins.h>
 
 #include <cstddef>
-#include <optional>
-#include <vector>
 
 struct dftu_plugin;
 
@@ -26,7 +25,7 @@ namespace detail {
 /// plugin wants every event, or a query failed to parse. Identical strings are
 /// deduplicated so the union never repeats a term.
 dstd::Optional<duql::Query> plugin_union_prune_query(
-    const std::vector<const char*>& plan_queries);
+    const dstd::Vector<const char*>& plan_queries);
 
 }  // namespace detail
 
@@ -34,12 +33,12 @@ dstd::Optional<duql::Query> plugin_union_prune_query(
 /// ABI gate. The caller keeps ownership of each struct (no destroy, no dlclose
 /// runs for it) and must outlive the set.
 common::Result<Plugins> build_injected_plugins(
-    std::vector<dftu_plugin*> plugins);
+    dstd::Vector<dftu_plugin*> plugins);
 
 /// The fold order build() computed: a permutation of plugin indices with every
 /// name's provider before the plugins that consume it. Independent plugins keep
 /// their registration order.
-std::vector<std::size_t> fold_order(const Plugins& set);
+dstd::Vector<std::size_t> fold_order(const Plugins& set);
 
 }  // namespace dftracer::utils::plugins
 

@@ -14,6 +14,8 @@
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -42,6 +44,7 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/utilities/arrow/ipc_reader.h>
 #include <dftracer/utils/utilities/arrow/ipc_writer.h>
 #endif
@@ -53,7 +56,6 @@
 #include <cstring>
 #include <new>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -123,11 +125,11 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 ::dftu_task* io_open(void* h, const char* path, int flags, int mode,
                      int* out_fd) {
     return static_cast<PluginFold*>(h)->emplace_task(
-        [](std::string p, int fl, int md, int* ofd) -> coro::CoroTask<void> {
+        [](dstd::String p, int fl, int md, int* ofd) -> coro::CoroTask<void> {
             int fd = static_cast<int>(
                 co_await io::open(p.c_str(), fl, static_cast<mode_t>(md)));
             if (ofd) *ofd = fd;
-        }(std::string(path ? path : ""), flags, mode, out_fd));
+        }(dstd::String(path ? path : ""), flags, mode, out_fd));
 }
 
 ::dftu_task* io_close(void* h, int fd, int* out_rc) {
@@ -407,12 +409,15 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
 
 ::dftu_task* host_merge_shards(void* h, const char* target,
                                const char* const* shards, std::uint32_t n) {
+    // keep std: fileio parallel::merge_shards takes std::string
     std::string tgt(target ? target : "");
+    // keep std: fileio parallel::merge_shards takes std::vector<std::string>
     std::vector<std::string> sv;
     sv.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i)
         sv.emplace_back(shards[i] ? shards[i] : "");
     return static_cast<PluginFold*>(h)->emplace_task(
+        // keep std: the lambda forwards to merge_shards
         [](std::string t, std::vector<std::string> s) -> coro::CoroTask<void> {
             co_await parallel::merge_shards(t, s);
         }(std::move(tgt), std::move(sv)));
@@ -426,8 +431,9 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
 ::dftu_task* host_writer_open(void* h, ::dftu_writer* w) {
     return static_cast<PluginFold*>(h)->emplace_task(
         [](PluginWriter* pw) -> coro::CoroTask<void> {
-            co_await pw->writer->open(pw->path, pw->num_workers, pw->gzip,
-                                      nullptr);
+            // keep std: fileio ParallelWriter::open takes std::string
+            co_await pw->writer->open(std::string(pw->path), pw->num_workers,
+                                      pw->gzip, nullptr);
         }(reinterpret_cast<PluginWriter*>(w)));
 }
 
@@ -493,7 +499,7 @@ void host_sketch_free(void*, ::dftu_sketch* s) {
     delete reinterpret_cast<SketchBox*>(s);
 }
 
-void append_json_escaped(std::string& out, dstd::StringView s) {
+void append_json_escaped(dstd::String& out, dstd::StringView s) {
     for (char c : s) {
         switch (c) {
             case '"':
@@ -530,7 +536,7 @@ void append_json_escaped(std::string& out, dstd::StringView s) {
 // needs every dyn column, not a lookup by name (see plugins::Batch's
 // per-batch column cache for the per-row-loop counterpart).
 struct DynCols {
-    std::vector<dstd::Pair<dstd::StringView, dftu_series*>> cols;
+    dstd::Vector<dstd::Pair<dstd::StringView, dftu_series*>> cols;
 
     explicit DynCols(const dftu_dataframe* df) {
         static constexpr dstd::StringView ARGS_PREFIX = "args.";
@@ -551,7 +557,7 @@ struct DynCols {
     DynCols& operator=(const DynCols&) = delete;
 };
 
-void serialize_row(std::string& out, const dftu_dataframe* df,
+void serialize_row(dstd::String& out, const dftu_dataframe* df,
                    const DynCols& dyn, std::int64_t row, std::uint64_t id) {
     auto str_col = [&](const char* name, dstd::StringView* out_sv) {
         dftu_series* c = dftu_dataframe_column(df, name);
@@ -597,23 +603,23 @@ void serialize_row(std::string& out, const dftu_dataframe* df,
     const std::uint64_t dur = u64_col("dur");
 
     out += "{\"id\":";
-    out += std::to_string(id);
+    out += dstd::to_string(id);
     out += ",\"name\":\"";
     append_json_escaped(out, name_v);
     out += "\",\"cat\":\"";
     append_json_escaped(out, cat_v);
     out += "\",\"ph\":";
-    out += std::to_string(has_ph ? ph
-                                 : static_cast<std::int64_t>(DFTU_PH_UNKNOWN));
+    out += dstd::to_string(has_ph ? ph
+                                  : static_cast<std::int64_t>(DFTU_PH_UNKNOWN));
     out += ",\"pid\":";
-    out += std::to_string(pid);
+    out += dstd::to_string(pid);
     out += ",\"tid\":";
-    out += std::to_string(tid);
+    out += dstd::to_string(tid);
     out += ",\"ts\":";
-    out += std::to_string(ts);
+    out += dstd::to_string(ts);
     if (has_ph && ph == DFTU_PH_COMPLETE) {
         out += ",\"dur\":";
-        out += std::to_string(dur);
+        out += dstd::to_string(dur);
     }
     bool args_open = false;
     for (const auto& [key, c] : dyn.cols) {
@@ -640,7 +646,7 @@ void serialize_row(std::string& out, const dftu_dataframe* df,
                 break;
             }
             case DFTU_TYPE_INT64:
-                out += std::to_string(
+                out += dstd::to_string(
                     static_cast<const std::int64_t*>(dftu_series_data(c))[row]);
                 break;
             case DFTU_TYPE_FLOAT64: {
@@ -673,6 +679,7 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
         ArrowArrayMove(a, array.get());
         arr::ArrowExportResult res(std::move(schema), std::move(array));
         int rc = -1;
+        // keep std: arrow IpcWriter::open takes const std::string&
         std::string p(path);
         dftracer::utils::default_runtime().block_on(
             coro::named("dft-plugin-ipc", [&]() -> coro::CoroTask<void> {
@@ -706,7 +713,8 @@ int host_arrow_read_ipc(void*, [[maybe_unused]] const char* path,
     namespace arr = utilities::arrow;
     try {
         arr::IpcReader reader;
-        if (reader.open(std::string(path)) != 0) return -1;
+        if (reader.open(std::string(path)) != 0)  // keep std: arrow reader
+            return -1;
         if (reader.num_batches() == 0) return -1;
         arr::ArrowExportResult res = reader.read_batch(0);
         if (!res.get_array() || !res.get_schema() ||
@@ -761,6 +769,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
     namespace views = trace::views;
     try {
+        // keep std: index and trace views take std::string paths
         std::string p(path);
         dftracer::utils::default_runtime().block_on(
             coro::named("dft-plugin-trace-read", [&]() -> coro::CoroTask<void> {
@@ -774,6 +783,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                 views::View v = views::View::from_file(p);
                 co_await v.for_each_batch(
                     [&](std::size_t,
+                        // keep std: for_each_batch yields a std::vector
                         const std::vector<dstd::StringView>& events) {
                         batch_events.clear();
                         for (dstd::StringView ev : events) {
@@ -795,9 +805,9 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                             views::detail::build_row_frame(
                                 batch_events.events(), intern, {}, 1.0,
                                 by_path);
-                        std::vector<dftu_series*> handles;
+                        dstd::Vector<dftu_series*> handles;
                         handles.reserve(df.columns.size());
-                        std::vector<const char*> names;
+                        dstd::Vector<const char*> names;
                         names.reserve(df.names.size());
                         for (const auto& c : df.columns)
                             handles.push_back(dftu_series_share(c.handle()));
@@ -891,7 +901,7 @@ const void* host_get_service(void*, const char* ext_id) {
 ::dftu_task* PluginFold::emplace_task(coro::CoroTask<void>&& task) {
     try {
         task_arena_.push_back(
-            std::make_unique<coro::CoroTask<void>>(std::move(task)));
+            dstd::make_unique<coro::CoroTask<void>>(std::move(task)));
         return reinterpret_cast<::dftu_task*>(task_arena_.back().get());
     } catch (...) {
         return nullptr;
@@ -914,7 +924,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     if (op->kind == Kind::Then) {
         ComposeOp* a = op->children[0];
         ComposeOp* b = op->children[1];
-        std::vector<char> mid(a->out_size);
+        dstd::Vector<char> mid(a->out_size);
         int rc = co_await eval_compose(self, a, in, mid.data());
         if (rc != 0) co_return rc;
         co_return co_await eval_compose(self, b, mid.data(), out);
@@ -935,7 +945,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
         co_return 0;
     }
     // WHEN_ANY: each child writes its own buffer; copy the winner into out.
-    std::vector<std::vector<char>> bufs(op->children.size());
+    dstd::Vector<dstd::Vector<char>> bufs(op->children.size());
     dstd::Vector<coro::CoroTask<int>> kids;
     kids.reserve(op->children.size());
     for (std::size_t i = 0; i < op->children.size(); ++i) {
@@ -1003,7 +1013,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
 ::dftu_op* PluginFold::compose_when_all(::dftu_op* const* ops,
                                         std::uint32_t n) {
     if (!ops || n == 0) return nullptr;
-    std::vector<ComposeOp*> kids;
+    dstd::Vector<ComposeOp*> kids;
     kids.reserve(n);
     ComposeOp* first = reinterpret_cast<ComposeOp*>(ops[0]);
     std::uint32_t out_total = 0;
@@ -1039,7 +1049,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
                                         std::uint32_t n) {
     if (!ops || n == 0) return nullptr;
     ComposeOp* first = reinterpret_cast<ComposeOp*>(ops[0]);
-    std::vector<ComposeOp*> kids;
+    dstd::Vector<ComposeOp*> kids;
     kids.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i) {
         ComposeOp* c = reinterpret_cast<ComposeOp*>(ops[i]);
@@ -1085,7 +1095,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
 ::dftu_writer* PluginFold::create_writer(const char* path,
                                          std::uint32_t num_workers, int gzip) {
     try {
-        auto pw = std::make_unique<PluginWriter>();
+        auto pw = dstd::make_unique<PluginWriter>();
         pw->writer = parallel::make_sharded_writer();
         pw->path = path ? path : "";
         pw->num_workers = num_workers ? num_workers : 1;
@@ -1100,7 +1110,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
 ::dftu_trace_writer* PluginFold::create_trace_writer(const char* path) {
     if (!path) return nullptr;
     try {
-        auto tw = std::make_unique<PluginTraceWriter>();
+        auto tw = dstd::make_unique<PluginTraceWriter>();
         tw->path = path;
         trace_writers_.push_back(std::move(tw));
         return reinterpret_cast<::dftu_trace_writer*>(
@@ -1120,8 +1130,9 @@ int PluginFold::close_trace_writer(::dftu_trace_writer* w) {
     try {
         fio::GzipWriterOptions opts;
         opts.member_size = common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
-        auto writer =
-            common::unwrap(fio::GzipLineWriterBlocking::open(tw->path, opts));
+        // keep std: fileio GzipLineWriterBlocking::open takes std::string
+        auto writer = common::unwrap(fio::GzipLineWriterBlocking::open(
+            std::string(tw->path), opts));  // keep std: open takes std::string
         const dstd::StringView buf = tw->buffer;
         const std::size_t end = buf.rfind('\n') + 1;
         std::size_t pos = 0;
@@ -1149,7 +1160,7 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
                        dftracer::utils::dstd::StringIntern& intern,
                        SharedResultRegistry* results,
                        NamedResultRegistry* named_results,
-                       std::string plugin_name, std::uint64_t memory_budget,
+                       dstd::String plugin_name, std::uint64_t memory_budget,
                        const StateRegistry* states)
     : plugin_(plugin),
       plugin_name_(std::move(plugin_name)),
@@ -1163,7 +1174,7 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
         state_accums_.reserve(states_->size());
         for (const RegisteredState& reg : *states_)
             state_accums_.push_back(
-                std::make_unique<StateAccum>(reg, memory_budget_));
+                dstd::make_unique<StateAccum>(reg, memory_budget_));
     }
 
     host_.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
@@ -1217,15 +1228,17 @@ int PluginFold::match_query(const Query& q, const dftu_dataframe* df,
     match_qmap_.clear();
     for (dstd::StringView f : q.fields()) {
         // A path-decoded frame names each column by its path.
-        dftu_series* c = dftu_dataframe_column(df, std::string(f).c_str());
+        // keep std: C ABI needs a terminated string
+        dftu_series* c = dftu_dataframe_column(df, dstd::String(f).c_str());
         const bool top = f == "cat" || f == "name" || f == "fhash" ||
                          f == "hhash" || f == "pid" || f == "tid" ||
                          f == "ts" || f == "dur";
-        if (!c && !top)
-            c = dftu_dataframe_column(
-                df, (std::string("args.") +
-                     std::string(common::strip_args_prefix(f)))
-                        .c_str());
+        if (!c && !top) {
+            dstd::String args_name("args.");
+            args_name.append(common::strip_args_prefix(f));
+            // keep std: C ABI needs a terminated string
+            c = dftu_dataframe_column(df, args_name.c_str());
+        }
         if (!c) continue;
         if (!dftu_series_is_null(c, row)) {
             switch (dftu_series_type(c)) {
@@ -1279,7 +1292,9 @@ void PluginFold::step(const FoldBatch& batch) {
     task_arena_.clear();
 
     // A transform sees the whole batch, whatever it declared in reads.
+    // keep std: build_row_frame takes std::vector<std::string>
     static const std::vector<std::string> every_column;
+    // keep std: build_row_frame takes std::vector<std::string>
     const std::vector<std::string>& projection =
         has_transform ? every_column : projection_;
 
@@ -1306,9 +1321,9 @@ void PluginFold::step(const FoldBatch& batch) {
 
     // dftu_dataframe_new takes ownership of the column handles, so pass shared
     // copies (a refcount bump, no data copy); df keeps its own.
-    std::vector<dftu_series*> handles;
+    dstd::Vector<dftu_series*> handles;
     handles.reserve(df.columns.size());
-    std::vector<const char*> names;
+    dstd::Vector<const char*> names;
     names.reserve(df.names.size());
     for (const auto& c : df.columns)
         handles.push_back(dftu_series_share(c.handle()));
@@ -1351,13 +1366,14 @@ void PluginFold::step(const FoldBatch& batch) {
 // rows pass unfiltered rather than being dropped.
 dataframe::DataFrame PluginFold::rewritten_batch(
     const dataframe::DataFrame& frame,
-    const std::vector<std::string>& projection) {
+    const std::vector<std::string>& projection) {  // keep std: DataFrame
     dataframe::DataFrame df;
     if (projection.empty()) {
         df.names = frame.names;
         for (const dataframe::Series& c : frame.columns)
             df.columns.push_back(c.share());
     } else {
+        // keep std: DataFrame::names holds std::string
         for (const std::string& name : projection) {
             for (std::size_t i = 0; i < frame.names.size(); ++i) {
                 if (frame.names[i] != name) continue;
@@ -1420,9 +1436,9 @@ void PluginFold::merge(Fold& other) {
     // the engine's single merge path (agg_merge). An accumulator new to the
     // master is moved in whole; a shared name merges the two AggStates.
     for (const auto& [key, idx] : o.aggs_.index()) {
-        std::unique_ptr<AggAccum>& src = o.aggs_[idx];
+        dstd::UniquePtr<AggAccum>& src = o.aggs_[idx];
         if (!src || !src->state) continue;
-        std::unique_ptr<AggAccum>* dst = aggs_.find(key);
+        dstd::UniquePtr<AggAccum>* dst = aggs_.find(key);
         if (!dst) {
             aggs_.push(key, std::move(src));
         } else if ((*dst)->state) {

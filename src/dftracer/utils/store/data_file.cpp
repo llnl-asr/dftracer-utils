@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -27,9 +32,7 @@
 #include <cstring>
 #include <limits>
 #include <random>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::store::engine {
 
@@ -81,8 +84,8 @@ io_fault::WriteKind fault_kind_of(RecordKind kind) {
                                       : io_fault::WriteKind::Record;
 }
 
-std::string path_string(dstd::StringView path) {
-    return std::string(path.data(), path.size());
+dstd::String path_string(dstd::StringView path) {
+    return dstd::String(path.data(), path.size());
 }
 
 dstd::Expected<void, dstd::Error> pwrite_all(int fd, const std::uint8_t* data,
@@ -401,7 +404,7 @@ dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
         if (keep(c)) out.push_back(c);
     }
     out.push_back('-');
-    const std::string pid_text = std::to_string(pid);
+    const dstd::String pid_text = dstd::to_string(pid);
     out.append(pid_text.data(), pid_text.size());
     out.push_back('-');
     std::array<char, 17> hex{};
@@ -491,16 +494,16 @@ namespace {
 constexpr dstd::StringView SUMMARY_MAGIC = "DFSM";
 constexpr std::size_t SUMMARY_ENTRY_HEADER_BYTES = 12;
 
-dstd::Pair<std::string, std::string> split_path(dstd::StringView path) {
-    const std::string whole(path.data(), path.size());
+dstd::Pair<dstd::String, dstd::String> split_path(dstd::StringView path) {
+    const dstd::String whole(path.data(), path.size());
     const std::size_t slash = whole.find_last_of('/');
-    if (slash == std::string::npos) return {".", whole};
-    return {slash == 0 ? std::string("/") : whole.substr(0, slash),
+    if (slash == dstd::String::npos) return {".", whole};
+    return {slash == 0 ? dstd::String("/") : whole.substr(0, slash),
             whole.substr(slash + 1)};
 }
 
-std::string summary_path(const std::string& dir) {
-    std::string path = dir;
+dstd::String summary_path(const dstd::String& dir) {
+    dstd::String path = dir;
     if (!path.empty() && path.back() != '/') path.push_back('/');
     path.append(SUMMARY_FILE_NAME.data(), SUMMARY_FILE_NAME.size());
     return path;
@@ -536,7 +539,8 @@ void append_summary(dstd::StringView data_path, std::uint64_t needed_bytes,
 dstd::Expected<dstd::Vector<SummaryEntry>, dstd::Error> read_summary(
     dstd::StringView dir) {
     dstd::Vector<SummaryEntry> entries;
-    const std::string path = summary_path(std::string(dir.data(), dir.size()));
+    const dstd::String path =
+        summary_path(dstd::String(dir.data(), dir.size()));
     const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
         if (errno == ENOENT) return entries;
@@ -600,7 +604,7 @@ dstd::Expected<DataFileWriter, dstd::Error> DataFileWriter::create(
     }
     if (host.size() > 255 || label.size() > 255) return invalid_error();
 
-    const std::string path_std = path_string(path);
+    const dstd::String path_std = path_string(path);
     const int fd =
         ::open(path_std.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
     if (fd < 0) return io_error();
@@ -880,10 +884,10 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
         if (extent != nullptr && !extent->segments.empty())
             extents.push_back(extent);
     }
-    std::stable_sort(extents.begin(), extents.end(),
-                     [](const ExtentRefItem* a, const ExtentRefItem* b) {
-                         return a->offset < b->offset;
-                     });
+    dstd::stable_sort(extents.begin(), extents.end(),
+                      [](const ExtentRefItem* a, const ExtentRefItem* b) {
+                          return a->offset < b->offset;
+                      });
     std::size_t kept = 0;
     for (std::size_t i = 0; i < extents.size(); ++i) {
         if (kept > 0 && extents[kept - 1]->offset == extents[i]->offset)
@@ -1300,7 +1304,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::sync_data() {
 
 dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     dstd::StringView path, FooterItems footer) {
-    const std::string path_std = path_string(path);
+    const dstd::String path_std = path_string(path);
     const int fd = ::open(path_std.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return io_error();
 
@@ -1521,7 +1525,7 @@ dstd::Expected<int, dstd::Error> DataFileReader::descriptor() const {
     std::lock_guard<std::mutex> locked(*open_mutex_);
     const int again = fd_.load(std::memory_order_acquire);
     if (again >= 0) return again;
-    const std::string path = path_string(path_);
+    const dstd::String path = path_string(path_);
     const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return io_error();
     struct stat st{};
@@ -1696,7 +1700,7 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_extents(
     };
 
     BlockReads counts;
-    std::vector<struct iovec> vecs;
+    dstd::Vector<struct iovec> vecs;
     std::size_t at = 0;
     while (at < refs.size()) {
         if (!in_file(refs[at])) {
@@ -1802,10 +1806,10 @@ DataFileReader::all_extent_refs() const {
             refs.push_back({commit.sequence, std::move(extent)});
         }
     }
-    std::stable_sort(refs.begin(), refs.end(),
-                     [](const IndexedExtentRef& a, const IndexedExtentRef& b) {
-                         return a.sequence < b.sequence;
-                     });
+    dstd::stable_sort(refs.begin(), refs.end(),
+                      [](const IndexedExtentRef& a, const IndexedExtentRef& b) {
+                          return a.sequence < b.sequence;
+                      });
     return refs;
 }
 
@@ -1856,10 +1860,10 @@ struct SpaceScan {
 dstd::Expected<void, dstd::Error> space_extents(SpaceScan& scan) {
     auto refs = scan.reader->all_extent_refs();
     if (!refs) return dstd::Unexpected<dstd::Error>(refs.error());
-    std::stable_sort(refs->begin(), refs->end(),
-                     [](const IndexedExtentRef& a, const IndexedExtentRef& b) {
-                         return a.ref.offset < b.ref.offset;
-                     });
+    dstd::stable_sort(refs->begin(), refs->end(),
+                      [](const IndexedExtentRef& a, const IndexedExtentRef& b) {
+                          return a.ref.offset < b.ref.offset;
+                      });
     dstd::RawBuffer<std::uint8_t> head;
     dstd::RawBuffer<std::uint8_t> table_bytes;
     dstd::Vector<DictRef> dicts;
@@ -2017,8 +2021,8 @@ dstd::Expected<void, dstd::Error> space_directory(
 /// Every commit and checkpoint record of the file, found by the record magic.
 /// A record a block already covers is skipped.
 dstd::Expected<void, dstd::Error> space_records(SpaceScan& scan) {
-    std::stable_sort(scan.ranges.begin(), scan.ranges.end(),
-                     space_range_before);
+    dstd::stable_sort(scan.ranges.begin(), scan.ranges.end(),
+                      space_range_before);
     const std::uint64_t file_bytes = scan.report.file_bytes;
     dstd::RawBuffer<std::uint8_t> head;
     std::uint64_t offset = FILE_HEADER_BYTES;
@@ -2116,10 +2120,10 @@ dstd::Expected<SpaceReport, dstd::Error> space_report(dstd::StringView path) {
     dstd::Vector<BlockHandle> segment_blocks;
     auto directory = space_directory(scan, tail, segment_blocks);
     if (!directory) return dstd::Unexpected<dstd::Error>(directory.error());
-    std::stable_sort(segment_blocks.begin(), segment_blocks.end(),
-                     [](const BlockHandle& a, const BlockHandle& b) {
-                         return a.offset < b.offset;
-                     });
+    dstd::stable_sort(segment_blocks.begin(), segment_blocks.end(),
+                      [](const BlockHandle& a, const BlockHandle& b) {
+                          return a.offset < b.offset;
+                      });
     for (std::size_t at = 0; at < segment_blocks.size();) {
         const BlockHandle handle = segment_blocks[at];
         std::size_t end = at + 1;
@@ -2135,8 +2139,8 @@ dstd::Expected<SpaceReport, dstd::Error> space_report(dstd::StringView path) {
     if (!records) return dstd::Unexpected<dstd::Error>(records.error());
     if (scan.report.extents != tail.extent_count) return parse_error();
 
-    std::stable_sort(scan.ranges.begin(), scan.ranges.end(),
-                     space_range_before);
+    dstd::stable_sort(scan.ranges.begin(), scan.ranges.end(),
+                      space_range_before);
     std::uint64_t classified_end = 0;
     for (const SpaceRange& range : scan.ranges) {
         if (range.offset < classified_end) return parse_error();

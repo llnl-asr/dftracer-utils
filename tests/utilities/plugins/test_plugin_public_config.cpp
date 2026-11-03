@@ -9,6 +9,8 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -33,6 +35,7 @@ using test_plugin_common::run_set;
 #error "CONFIG_KEYS_PLUGIN_PATH must be defined by CMake"
 #endif
 
+using namespace dftracer::utils;
 namespace {
 
 constexpr int NUM_EVENTS = 5;
@@ -61,7 +64,7 @@ TEST_CASE(
     "plugin receives it") {
     auto set = Plugins::builder()
                    .add(CONFIG_KEYS_PLUGIN_PATH,
-                        std::string(R"({"label": "rows", "stride": 3})"))
+                        dstd::String(R"({"label": "rows", "stride": 3})"))
                    .build();
     INFO(
         (set.has_value() ? std::string{} : std::string(set.error().message())));
@@ -74,14 +77,14 @@ TEST_CASE(
 
     // rows = NUM_EVENTS * stride; a wrong stride (the config default is 1)
     // would report NUM_EVENTS instead.
-    CHECK(result_text(run, "config_keys_plugin.rows") ==
-          std::to_string(NUM_EVENTS * 3));
+    CHECK(dstd::StringView(result_text(run, "config_keys_plugin.rows")) ==
+          dstd::to_string(NUM_EVENTS * 3));
 }
 
 TEST_CASE("add(path, json) fails at build(), not at add()") {
     Plugins::Builder builder = Plugins::builder();
     REQUIRE_NOTHROW(
-        builder.add(CONFIG_KEYS_PLUGIN_PATH, std::string("{not json")));
+        builder.add(CONFIG_KEYS_PLUGIN_PATH, dstd::String("{not json")));
 
     auto set = builder.build();
     REQUIRE(!set.has_value());

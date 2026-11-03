@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/varint.h>
 
@@ -202,9 +206,9 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
     const auto by_id = [](const auto* a, const auto* b) {
         return a->local_id < b->local_id;
     };
-    std::stable_sort(namespace_ids.begin(), namespace_ids.end(), by_id);
-    std::stable_sort(scope_ids.begin(), scope_ids.end(), by_id);
-    std::stable_sort(copy_ids.begin(), copy_ids.end(), by_id);
+    dstd::stable_sort(namespace_ids.begin(), namespace_ids.end(), by_id);
+    dstd::stable_sort(scope_ids.begin(), scope_ids.end(), by_id);
+    dstd::stable_sort(copy_ids.begin(), copy_ids.end(), by_id);
 
     dstd::Vector<Draft> drafts;
     for (const CopyItem& copy : copies) {
@@ -242,10 +246,10 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
         draft.erases.push_back(&erase);
         drafts.push_back(std::move(draft));
     }
-    std::stable_sort(drafts.begin(), drafts.end(),
-                     [](const Draft& a, const Draft& b) {
-                         return compare_drafts(a, b) < 0;
-                     });
+    dstd::stable_sort(drafts.begin(), drafts.end(),
+                      [](const Draft& a, const Draft& b) {
+                          return compare_drafts(a, b) < 0;
+                      });
     dstd::Vector<Draft> entries;
     for (Draft& draft : drafts) {
         if (!entries.empty() && compare_drafts(entries.back(), draft) == 0) {

@@ -53,8 +53,12 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/data_file.h>
@@ -72,12 +76,10 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
-#include <memory>
 #include <numeric>
 #include <random>
 #include <sstream>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -971,7 +973,7 @@ struct Bench {
     bool check_write_row(const WriteRow& row);
     std::uint64_t count_keys(const std::string& dir);
     void close_writers(Runtime& runtime,
-                       std::vector<std::unique_ptr<Writer>>& writers,
+                       dstd::Vector<dstd::UniquePtr<Writer>>& writers,
                        std::atomic<int>& errors);
     bool report_single_thread_open(const std::string& dir,
                                    const std::string& prefix, bool print_now);
@@ -1161,7 +1163,7 @@ std::uint64_t Bench::count_keys(const std::string& dir) {
 }
 
 void Bench::close_writers(Runtime& runtime,
-                          std::vector<std::unique_ptr<Writer>>& writers,
+                          dstd::Vector<dstd::UniquePtr<Writer>>& writers,
                           std::atomic<int>& errors) {
     runtime.block_on(coro::named(
         "store_bench close",
@@ -1197,7 +1199,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
 
     const std::size_t writers_count =
         per_thread ? static_cast<std::size_t>(workload.threads) : 1;
-    std::vector<std::unique_ptr<Writer>> writers(writers_count);
+    dstd::Vector<dstd::UniquePtr<Writer>> writers(writers_count);
     std::vector<NamespaceId> namespaces(writers_count, NamespaceId{0});
     for (std::size_t at = 0; at < writers_count; ++at) {
         auto created =
@@ -1544,7 +1546,7 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
         fail("writer of " + dir + ": " + to_std(created.error()));
         return row;
     }
-    std::unique_ptr<Writer> writer = std::move(*created);
+    dstd::UniquePtr<Writer> writer = std::move(*created);
     auto namespace_id = writer->add_namespace(spec());
     if (!namespace_id) {
         fail("namespace of " + dir + ": " + to_std(namespace_id.error()));
@@ -1639,7 +1641,7 @@ bool Bench::write_fold(Runtime& runtime, const std::string& dir,
         fail("writer of " + dir + ": " + to_std(created.error()));
         return false;
     }
-    std::unique_ptr<Writer> writer = std::move(*created);
+    dstd::UniquePtr<Writer> writer = std::move(*created);
     auto namespace_id = writer->add_namespace(fold_spec());
     if (!namespace_id) {
         fail("namespace of " + dir + ": " + to_std(namespace_id.error()));

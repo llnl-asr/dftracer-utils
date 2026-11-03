@@ -596,8 +596,8 @@ the registry is settled.
              void merge(Graph& other);
              dftu_dataframe* finalize();               // or a bytes result
              std::uint64_t bytes() const;              // optional: the budget measure
-             std::string serialize() const;            // optional pair: spill
-             static Graph* deserialize(std::string_view);
+             dstd::String serialize() const;           // optional pair: spill
+             static Graph* deserialize(dstd::StringView);
          };
 
          extern "C" dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
@@ -1103,27 +1103,27 @@ throwing cursor surfaces as a scan error and a throwing hook as no change.
 
    class Range {                        // rows id = lo..hi-1
     public:
-       std::vector<std::string> names() const { return {"id"}; }
+       dstd::Vector<dstd::String> names() const { return {"id"}; }
        struct Cursor {
            pl::OwnedFrame frame;
-           std::optional<pl::OwnedFrame> next(std::int64_t) {
-               if (!frame) return std::nullopt;
+           dstd::Optional<pl::OwnedFrame> next(std::int64_t) {
+               if (!frame) return dstd::nullopt;
                return std::move(frame);
            }
        };
        pl::ScanResult<Cursor> scan(const pl::ScanView&) const;
        // `id > k` becomes a narrower range; anything else stays with the engine.
-       std::optional<pl::Applied<Range>> apply_filter(pl::ExprView p) const {
+       dstd::Optional<pl::Applied<Range>> apply_filter(pl::ExprView p) const {
            auto c = p.as_compare();
-           if (!c || c->column != 0 || c->op != DFTU_CMP_GT) return std::nullopt;
+           if (!c || c->column != 0 || c->op != DFTU_CMP_GT) return dstd::nullopt;
            return pl::Applied<Range>{
-               std::make_unique<Range>(c->rhs.value.i + 1, hi_)};
+               dstd::make_unique<Range>(c->rhs.value.i + 1, hi_)};
        }
        // ...
    };
 
    return pl::plugin(h, config)
-       .source<Range>("me.range", std::make_unique<Range>(0, 1000))
+       .source<Range>("me.range", dstd::make_unique<Range>(0, 1000))
        .build();
 
 **A plan node** (``DFTU_SVC_NODES``; ``dftu_node_register`` in the
@@ -1160,16 +1160,16 @@ node when ``open`` succeeds and by the host when it fails.
                           pl::SchemaBuilder& out) const { in.copy_all(out); }
        struct Cursor {
            pl::InputCursor in;
-           std::optional<pl::OwnedFrame> next(std::int64_t rows);  // pull, transform
+           dstd::Optional<pl::OwnedFrame> next(std::int64_t rows);  // pull, transform
        };
-       std::unique_ptr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
+       dstd::UniquePtr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
                                     std::uint64_t) const {
-           return std::make_unique<Cursor>(Cursor{std::move(in)});
+           return dstd::make_unique<Cursor>(Cursor{std::move(in)});
        }
    };
 
    return pl::plugin(h, config).node<Double>("me.double",
-                                             std::make_unique<Double>()).build();
+                                             dstd::make_unique<Double>()).build();
 
 **Plans inside a plugin.** ``OwnedLazyFrame`` (``result_registry.h``) is the
 fluent facade over ``dftu.lazy.*``: build a plan from a frame

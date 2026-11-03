@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/completion_latch.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -13,8 +17,6 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
-#include <string>
-#include <thread>
 #include <utility>
 
 namespace dftracer::utils::store::engine {
@@ -412,7 +414,7 @@ dstd::Error ExtentWriter::latched_error() const {
     return dstd::Error(
         dstd::Condition::Io,
         "store extent write failed with errno " +
-            std::to_string(latched_errno_.load(std::memory_order_acquire)));
+            dstd::to_string(latched_errno_.load(std::memory_order_acquire)));
 }
 
 void ExtentWriter::begin_write() {

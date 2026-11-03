@@ -12,12 +12,12 @@
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
 
-#include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -29,7 +29,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
-#include <span>
 #include <string>
 #include <variant>
 #include <vector>
@@ -270,7 +269,7 @@ RunResult run_state(bool spillable, std::uint64_t budget, int n_slices) {
 
     auto it = named.results().find(STATE_NAME);
     REQUIRE(it != named.results().end());
-    const auto& bytes = std::get<std::vector<std::byte>>(it->second);
+    const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
     out.totals =
         decode(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     return out;

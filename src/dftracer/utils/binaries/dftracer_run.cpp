@@ -3,6 +3,8 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
@@ -197,7 +199,8 @@ static common::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
     for (const auto& block : plugin_args.blocks) {
         if (block_has_config(plugin_args.shared, block)) {
             try {
-                builder.add(block.path,
+                builder.add(dftracer::utils::dstd::String(block.path.data(),
+                                                          block.path.size()),
                             build_config(plugin_args.shared, block));
             } catch (const std::exception& e) {
                 return common::make_error(
@@ -205,18 +208,20 @@ static common::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
                     "plugin '" + block.path + "' config error: " + e.what());
             }
         } else {
-            builder.add(block.path);
+            builder.add(dftracer::utils::dstd::String(block.path.data(),
+                                                      block.path.size()));
         }
     }
     return builder.build();
 }
 
-static std::string join_or_none(const std::vector<std::string>& names) {
+static std::string join_or_none(
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& names) {
     if (names.empty()) return "(none)";
     std::string out;
     for (const auto& name : names) {
         if (!out.empty()) out += ", ";
-        out += name;
+        out.append(name.data(), name.size());
     }
     return out;
 }

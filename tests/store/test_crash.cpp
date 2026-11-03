@@ -5,7 +5,10 @@
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -26,7 +29,6 @@
 #include <cstring>
 #include <fstream>
 #include <map>
-#include <memory>
 #include <random>
 #include <set>
 #include <string>
@@ -795,7 +797,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     auto created =
         Writer::create(dir.str(), *store_runtime().executor(), options);
     REQUIRE(created.has_value());
-    std::unique_ptr<Writer> writer = std::move(*created);
+    dstd::UniquePtr<Writer> writer = std::move(*created);
 
     // Record what the writer issues from here on. Create() wrote the header
     // before this, so no image carries it and every image that carries a

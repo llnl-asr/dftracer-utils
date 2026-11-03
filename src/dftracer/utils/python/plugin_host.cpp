@@ -31,7 +31,9 @@
 #include <dftracer/utils/python/lazyframe.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/arrow_helpers.h>
 #include <nanoarrow/nanoarrow.h>
 #endif
@@ -42,7 +44,6 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -79,7 +80,7 @@ struct PluginHostState {
     NamedResultRegistry results;
     // wire id -> attribute name, so a caller indexes results[...] with the
     // plugin's declared name rather than its package-qualified wire identity.
-    std::unordered_map<std::string, std::string> result_names;
+    dstd::Map<dstd::String, dstd::String> result_names;
 };
 
 }  // namespace dftracer::utils::python
@@ -165,7 +166,7 @@ bool collect_inputs(PyObject* traces, std::vector<std::string>& out) {
 // multi-batch map result to a pull-based pyarrow.RecordBatchReader. Returns a
 // new reference, or nullptr with a Python error set.
 PyObject* result_to_py(NamedResult& result) {
-    if (auto* blob = std::get_if<std::vector<std::byte>>(&result))
+    if (auto* blob = std::get_if<dstd::Vector<std::byte>>(&result))
         return PyBytes_FromStringAndSize(
             reinterpret_cast<const char*>(blob->data()),
             static_cast<Py_ssize_t>(blob->size()));
@@ -223,9 +224,9 @@ PyObject* results_to_dict(PluginHostState* st) {
             return nullptr;
         }
         auto it = st->result_names.find(wire_name);
-        const std::string& key =
-            it != st->result_names.end() ? it->second : wire_name;
-        if (PyDict_SetItemString(d, key.c_str(), val) < 0) {
+        const char* key = it != st->result_names.end() ? it->second.c_str()
+                                                       : wire_name.c_str();
+        if (PyDict_SetItemString(d, key, val) < 0) {
             Py_DECREF(val);
             Py_DECREF(d);
             return nullptr;
@@ -250,7 +251,7 @@ void ph_dealloc(PluginHostObject* self) {
 }
 
 bool parse_result_names(PyObject* obj,
-                        std::unordered_map<std::string, std::string>& out) {
+                        dstd::Map<dstd::String, dstd::String>& out) {
     if (!obj || obj == Py_None) return true;
     if (!PyDict_Check(obj)) {
         PyErr_SetString(PyExc_TypeError, "result_names must be a dict or None");

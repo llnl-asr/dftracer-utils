@@ -10,12 +10,12 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/term.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 
 namespace dftracer::utils::duql {
 
@@ -32,6 +32,7 @@ namespace dftracer::utils::duql {
 /// the column of that computed index or list literal, likewise. `term` marks
 /// a column that holds the values of that term, computed per batch.
 struct VectorColumn {
+    // keep std: view_duql builds names as std::string
     std::string name;
     dataframe::DataType type;
     bool json = false;
@@ -56,16 +57,19 @@ struct VectorizeError {
 /// column names reads the column of that name under `args.`; the same holds
 /// for the functions below.
 dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
+    // keep std: view_duql and mask pass std::vector<VectorColumn>
     const Term& t, const std::vector<VectorColumn>& columns,
     bool args_fallback);
 
 /// Whether `t` compiles to a null in every row: the literal null or a field no
 /// column names.
+// keep std: view_duql and mask pass std::vector<VectorColumn>
 bool is_null_term(const Term& t, const std::vector<VectorColumn>& columns,
                   bool args_fallback);
 
 /// `t` as a Bool column: its truth, null where it is not a bool.
 dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError>
+// keep std: view_duql and mask pass std::vector<VectorColumn>
 vectorize_condition(const Term& t, const std::vector<VectorColumn>& columns,
                     bool args_fallback);
 
@@ -76,13 +80,17 @@ vectorize_condition(const Term& t, const std::vector<VectorColumn>& columns,
 /// subject that is a lookup of every match reads the matching rows' values,
 /// null where none matches.
 dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
+    // keep std: dataframe::eval and agg take std::vector<const Series*>
     const TQuant& q, const std::vector<const dataframe::Series*>& inputs,
+    // keep std: view_duql and mask pass std::vector<VectorColumn>
     const std::vector<VectorColumn>& columns, bool args_fallback);
 
 /// The column the bound lookup `l` (not `l.all`) gives for each row of
 /// `inputs`. Throws DFTUtilsException for a query error of the lookup.
 dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
+    // keep std: dataframe::eval and agg take std::vector<const Series*>
     const TLookup& l, const std::vector<const dataframe::Series*>& inputs,
+    // keep std: view_duql and mask pass std::vector<VectorColumn>
     const std::vector<VectorColumn>& columns, bool args_fallback);
 
 /// Whether `fn` runs on columns only through call_column(): slice, flatten,
@@ -103,16 +111,19 @@ bool is_column_term(const Term& t);
 /// of one scalar type, and sort() or unique() of an array of arrays or
 /// objects.
 dstd::Optional<dataframe::DataType> call_type(
+    // keep std: view_duql passes std::vector for these
     const Term& t, const std::vector<dataframe::DataType>& args);
 
 /// The column of `t` over its arguments' columns `args`, as `type`, of
 /// `rows` rows. For keys and values, `args` are the object's fields named
 /// `keys`, or its one struct column. parse_json gives canonical JSON text.
-dataframe::Series call_column(const Term& t,
-                              const std::vector<dataframe::Series>& args,
-                              const std::vector<std::string>& keys,
-                              const dataframe::DataType& type,
-                              std::int64_t rows);
+dataframe::Series call_column(
+    const Term& t,
+    // keep std: view_duql passes std::vector for these
+    const std::vector<dataframe::Series>& args,
+    // keep std: view_duql passes std::vector for these
+    const std::vector<std::string>& keys, const dataframe::DataType& type,
+    std::int64_t rows);
 
 /// The key of row `r` of the FLAT column `s`; false when it has none.
 bool append_cell_key(dstd::String& out, const dataframe::Series& s,
@@ -138,29 +149,32 @@ dstd::SharedPtr<const LookupTable> make_lookup_table(
 /// A table over `frame` keyed by `columns`.
 dstd::SharedPtr<const LookupTable> make_lookup_table(
     dstd::String name, dstd::SharedPtr<const dataframe::DataFrame> frame,
-    const std::vector<std::size_t>& columns);
+    const dstd::Vector<std::size_t>& columns);
 
 /// Each row's matching rows: row r's are rows[offsets[r], offsets[r + 1]);
 /// keyed[r] is 0 when a key part is null or missing.
 struct Matches {
-    std::vector<std::int64_t> offsets;
-    std::vector<std::int64_t> rows;
-    std::vector<std::uint8_t> keyed;
+    dstd::Vector<std::int64_t> offsets;
+    dstd::Vector<std::int64_t> rows;
+    dstd::Vector<std::uint8_t> keyed;
 };
 
 /// The key of row `r` of the key columns `keys`, for messages.
+// keep std: dataframe::eval and agg take std::vector<const Series*>
 dstd::String row_key(const std::vector<const dataframe::Series*>& keys,
                      std::int64_t r);
 
 /// The matches in `table` of each of the `n` rows of the key columns `keys`.
-Matches match(const LookupTable& table,
-              const std::vector<const dataframe::Series*>& keys,
-              std::int64_t n);
+Matches match(
+    const LookupTable& table,
+    // keep std: dataframe::eval and agg take std::vector<const Series*>
+    const std::vector<const dataframe::Series*>& keys, std::int64_t n);
 
 /// The column the bound lookup `t` gives for `n` rows with key columns
 /// `keys`: IN a Bool, ARROW the value (throwing, naming the row set and the
 /// key, when matching rows differ), SCALAR its cell. Not for `t.all`.
 dataframe::Series lookup_column(
+    // keep std: dataframe::eval and agg take std::vector<const Series*>
     const TLookup& t, const std::vector<const dataframe::Series*>& keys,
     std::int64_t n);
 
@@ -168,6 +182,7 @@ dataframe::Series lookup_column(
 /// where no side row matched): TRUE on a match (FALSE when `negated`), the
 /// opposite without one, null when one of the first `subject` key columns
 /// has no value.
+// keep std: dataframe::eval and agg take std::vector<const Series*>
 dataframe::Series in_column(const std::vector<const dataframe::Series*>& keys,
                             std::size_t subject,
                             const dataframe::Series& matched, bool negated);
@@ -177,6 +192,7 @@ dataframe::Series in_column(const std::vector<const dataframe::Series*>& keys,
 /// the one-row `empty` (else null) for none. Throws the query error naming
 /// the sub-query `name` and the key for several rows.
 dataframe::Series scalar_column(
+    // keep std: dataframe::eval and agg take std::vector<const Series*>
     const dstd::String& name, const std::vector<const dataframe::Series*>& keys,
     const dataframe::Series& nest, std::size_t field,
     const dataframe::DataFrame* empty);

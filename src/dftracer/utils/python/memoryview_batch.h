@@ -7,21 +7,19 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <atomic>
 #include <cstddef>
 #include <exception>
-#include <future>
-#include <memory>
 #include <mutex>
-#include <vector>
 
 namespace dftracer::utils::python {
 
 struct MemoryViewBatchData {
-    std::vector<char> buffer;
-    std::vector<Py_ssize_t> offsets;
-    std::vector<Py_ssize_t> lengths;
+    dstd::Vector<char> buffer;
+    dstd::Vector<Py_ssize_t> offsets;
+    dstd::Vector<Py_ssize_t> lengths;
 
     std::size_t num_entries() const { return offsets.size(); }
 };

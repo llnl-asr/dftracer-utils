@@ -43,7 +43,6 @@
 #include <nanoarrow/nanoarrow.hpp>
 #endif
 #include <new>
-#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -994,8 +993,8 @@ PyObject* DataFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
         const long long s = PyLong_AsLongLong(start_obj);
         const long long e = PyLong_AsLongLong(end_obj);
         if (PyErr_Occurred()) return nullptr;
-        range = std::make_pair(static_cast<std::int64_t>(s),
-                               static_cast<std::int64_t>(e));
+        range = dftracer::utils::dstd::Pair<std::int64_t, std::int64_t>{
+            static_cast<std::int64_t>(s), static_cast<std::int64_t>(e)};
     }
     return run_batch_op([&] {
         return dataframe::gap_fill(to_dataframe(b), pcols, time,

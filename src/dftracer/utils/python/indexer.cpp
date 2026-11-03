@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
@@ -18,7 +19,6 @@
 #include <structmember.h>
 
 #include <cstring>
-#include <memory>
 
 static void CheckpointIndexer_dealloc(CheckpointIndexerObject *self) {
     if (self->handle) {
@@ -167,15 +167,15 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
             return NULL;
         }
 
-        auto batch_config = std::make_shared<IndexBuildBatchConfig>();
+        auto batch_config = dstd::make_shared<IndexBuildBatchConfig>();
         batch_config->file_paths.emplace_back(gz);
         batch_config->checkpoint_size =
             static_cast<std::size_t>(self->checkpoint_size);
         batch_config->parallelism = 1;
 
-        std::string idx_str(idx);
+        const dstd::StringView idx_str(idx);
         auto pos = idx_str.find_last_of('/');
-        if (pos != std::string::npos) {
+        if (pos != dstd::StringView::npos) {
             batch_config->index_dir = idx_str.substr(0, pos);
         }
 
@@ -204,7 +204,7 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
         }
     } else {
         // Simple checkpoint-only build
-        std::string error;
+        dftracer::utils::dstd::String error;
         Py_BEGIN_ALLOW_THREADS try {
             (*self->handle)->build();
         } catch (const std::exception &e) {

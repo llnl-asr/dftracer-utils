@@ -5,12 +5,12 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <nanoarrow/nanoarrow.hpp>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace dftracer::utils::python {
 
@@ -33,15 +33,15 @@ class SchemaReconciler {
     int64_t num_known_columns() const {
         return static_cast<int64_t>(child_schemas_.size());
     }
-    const std::string &last_error() const { return last_error_; }
+    const dstd::String &last_error() const { return last_error_; }
 
    private:
-    std::vector<std::string> names_;
-    std::vector<nanoarrow::UniqueSchema> child_schemas_;
-    std::unordered_map<std::string, int64_t> name_to_idx_;
+    dstd::Vector<dstd::String> names_;
+    dstd::Vector<nanoarrow::UniqueSchema> child_schemas_;
+    dstd::HashMap<dstd::String, int64_t> name_to_idx_;
     nanoarrow::UniqueSchema locked_schema_;
     bool finalized_ = false;
-    mutable std::string last_error_;
+    mutable dstd::String last_error_;
 };
 
 }  // namespace dftracer::utils::python

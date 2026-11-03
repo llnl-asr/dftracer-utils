@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -36,10 +37,8 @@
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
-#include <charconv>
 #include <chrono>
 #include <cstdio>
-#include <optional>
 
 using namespace dftracer::utils;
 
@@ -621,7 +620,8 @@ std::uint64_t pid_of(dftracer::utils::dstd::StringView key) {
         colon == dftracer::utils::dstd::StringView::npos ? key
                                                          : key.substr(0, colon);
     std::uint64_t pid = 0;
-    std::from_chars(digits.data(), digits.data() + digits.size(), pid);
+    dftracer::utils::dstd::from_chars(digits.data(),
+                                      digits.data() + digits.size(), pid);
     return pid;
 }
 

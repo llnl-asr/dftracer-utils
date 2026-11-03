@@ -8,8 +8,6 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 
-#include <string>
-
 // Private seam shared by the Series extension translation units (series.cpp
 // plus series/{arith,math,window,stats,reduce,string,arrow}.cpp). series.cpp
 // owns the SeriesType type object and defines make_series/as_series; every

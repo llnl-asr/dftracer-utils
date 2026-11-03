@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/py_frame_op_helpers.h>
 #include <dftracer/utils/python/series_detail.h>
 
 #include <cstdint>
 #include <exception>
-#include <vector>
 
 namespace dftracer::utils::python::series_detail {
 
@@ -176,7 +176,7 @@ PyObject* Series_take(PyObject* self, PyObject* seq) {
     PyObject* fast = PySequence_Fast(seq, "take() expects a sequence of ints");
     if (!fast) return nullptr;
     Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
-    std::vector<std::int64_t> idx;
+    dstd::Vector<std::int64_t> idx;
     idx.reserve(static_cast<std::size_t>(n));
     for (Py_ssize_t i = 0; i < n; ++i) {
         long long v = PyLong_AsLongLong(PySequence_Fast_GET_ITEM(fast, i));

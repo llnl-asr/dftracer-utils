@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/series_detail.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -11,7 +12,6 @@
 #include <exception>
 #include <new>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::python::series_detail {
 
@@ -231,7 +231,7 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
     const std::int64_t n = view->shape ? view->shape[0] : 0;
 
     // Null rows: a byte per row, nonzero where null.
-    std::vector<std::uint8_t> validity;
+    dstd::Vector<std::uint8_t> validity;
     if (mask_obj != Py_None) {
         Py_buffer m{};
         if (PyObject_GetBuffer(mask_obj, &m, PyBUF_SIMPLE) != 0) {
@@ -258,8 +258,8 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
     const std::uint8_t* valid = validity.empty() ? nullptr : validity.data();
 
     if (type == TypeId::Bool) {  // one byte per bool -> bit-packed
-        std::vector<std::uint8_t> packed(static_cast<std::size_t>((n + 7) / 8),
-                                         0);
+        dstd::Vector<std::uint8_t> packed(static_cast<std::size_t>((n + 7) / 8),
+                                          0);
         const auto* bytes = static_cast<const std::uint8_t*>(view->buf);
         for (std::int64_t i = 0; i < n; ++i)
             if (bytes[i])

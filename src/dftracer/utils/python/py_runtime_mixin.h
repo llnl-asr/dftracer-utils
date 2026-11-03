@@ -5,13 +5,12 @@
 #include <Python.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/runtime.h>
 
 #include <exception>
-#include <memory>
 #include <stdexcept>
-#include <string>
 
 // Shared implementation for utility objects whose layout is exactly:
 //     typedef struct { PyObject_HEAD PyObject *runtime_obj; } XObject;
@@ -103,7 +102,7 @@ int runtime_backed_init(T *self, PyObject *args, PyObject *kwds) {
 template <typename F>
 bool run_blocking(F &&body) {
     bool failed = false;
-    std::string error_msg;
+    dftracer::utils::dstd::String error_msg;
     PyObject *exc_type = nullptr;  // pointer read only; no Python API off-GIL
     Py_BEGIN_ALLOW_THREADS try {
         body();

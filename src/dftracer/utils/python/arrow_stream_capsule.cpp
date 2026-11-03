@@ -5,8 +5,10 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/arrow_stream_capsule.h>
 #include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/py_method.h>
@@ -15,11 +17,8 @@
 
 #include <cerrno>
 #include <cstring>
-#include <deque>
 #include <exception>
 #include <mutex>
-#include <optional>
-#include <string>
 
 using ArrowExportResult = dftracer::utils::utilities::arrow::ArrowExportResult;
 
@@ -33,14 +32,14 @@ struct StreamPrivate {
     dftracer::utils::dstd::SharedPtr<ArrowIteratorState> state;
     dftracer::utils::python::SchemaReconciler reconciler;
     // Drained during discovery, emitted first from get_next.
-    std::deque<ArrowExportResult> pending;
-    std::string last_error;
+    dftracer::utils::dstd::Deque<ArrowExportResult> pending;
+    dftracer::utils::dstd::String last_error;
     bool initialized = false;
     // Sticky: once set, all entry points short-circuit to EIO.
     bool error_set = false;
 };
 
-static void mark_error(StreamPrivate *p, std::string msg) {
+static void mark_error(StreamPrivate *p, dftracer::utils::dstd::String msg) {
     if (p->last_error.empty()) p->last_error = std::move(msg);
     p->error_set = true;
     p->initialized = true;

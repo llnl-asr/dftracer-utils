@@ -233,7 +233,8 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
             js->bytes_in_queue.fetch_sub(dequeued_bytes,
                                          std::memory_order_acq_rel);
             self->json_dict_current_batch =
-                std::make_shared<JsonDictBatch>(std::move(*batch));
+                dftracer::utils::dstd::make_shared<JsonDictBatch>(
+                    std::move(*batch));
             self->json_dict_index = 0;
         }
     }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
@@ -9,7 +10,6 @@
 #include <dlfcn.h>
 
 #include <cstddef>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -60,7 +60,7 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
         return nullptr;
     }
 
-    std::vector<char> out_buf(static_cast<std::size_t>(out_size));
+    dstd::Vector<char> out_buf(static_cast<std::size_t>(out_size));
     int rc = -1;
     bool ran = false;
     {

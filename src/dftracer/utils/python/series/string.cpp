@@ -525,8 +525,9 @@ PyObject* Series_dt_format(PyObject* self, PyObject* args) {
     }
     Series out = a->dt_format(fmt, static_cast<dataframe::TimeUnit>(unit));
     if (!out.valid()) {
-        std::string msg = "dt_format: invalid format '" + std::string(fmt) +
-                          "' or not a Timestamp, Date or Int64 column";
+        dstd::String msg = "dt_format: invalid format '";
+        msg.append(fmt);
+        msg.append("' or not a Timestamp, Date or Int64 column");
         PyErr_SetString(PyExc_ValueError, msg.c_str());
         return nullptr;
     }

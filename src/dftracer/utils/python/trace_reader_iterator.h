@@ -9,7 +9,6 @@
 #include <dftracer/utils/trace/args_map.h>
 #include <dftracer/utils/utilities/reader/internal/json_dict_builder.h>
 
-#include <memory>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>

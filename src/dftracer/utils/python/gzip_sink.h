@@ -8,9 +8,8 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
-#include <optional>
-#include <string>
-#include <string_view>
+#include <cstddef>
+#include <utility>
 
 namespace dftracer::utils::python {
 
@@ -19,7 +18,7 @@ namespace dftracer::utils::python {
 // the last newline wait for the next piece or the end of the stream.
 class GzipSink : public trace::views::ExportSink {
    public:
-    GzipSink(const std::string& path, int level) {
+    GzipSink(dstd::StringView path, int level) {
         utilities::fileio::GzipWriterOptions opts;
         opts.member_size = 4 * 1024 * 1024;
         opts.level = level;
@@ -48,7 +47,7 @@ class GzipSink : public trace::views::ExportSink {
 
    private:
     dstd::Optional<utilities::fileio::GzipLineWriterBlocking> writer_;
-    std::string tail_;
+    dstd::String tail_;
 };
 
 }  // namespace dftracer::utils::python

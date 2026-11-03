@@ -31,7 +31,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <memory>
 #include <new>
 
 using dftracer::utils::Runtime;

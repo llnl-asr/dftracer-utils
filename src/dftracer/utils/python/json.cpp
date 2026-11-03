@@ -17,7 +17,8 @@ PyObject *dftracer::utils::python::args_value_to_pyobject(const ArgsValue &v) {
             using T = std::decay_t<decltype(val)>;
             if constexpr (std::is_same_v<T, dftracer::utils::dstd::Monostate>) {
                 Py_RETURN_NONE;
-            } else if constexpr (std::is_same_v<T, std::string>) {
+            } else if constexpr (std::is_same_v<
+                                     T, dftracer::utils::dstd::String>) {
                 return PyUnicode_FromStringAndSize(val.data(), val.size());
             } else if constexpr (std::is_same_v<T, std::uint64_t>) {
                 return PyLong_FromUnsignedLongLong(val);

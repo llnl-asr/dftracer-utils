@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -42,10 +43,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <string>
 #include <utility>
 
 namespace {
@@ -1075,7 +1072,7 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
     });
     views::SessionBranch attach = [set, results, keep](views::ViewSession& s) {
         views::Deferred<dftracer::utils::plugins::PluginRun> h = set->attach(s);
-        return std::function<void(const ExportStats&)>(
+        return dftracer::utils::dstd::Function<void(const ExportStats&)>(
             [h, results, keep](const ExportStats&) mutable {
                 *results = std::move(h.get().results);
             });

@@ -2,7 +2,9 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/schema_reconcile.h>
 
 #include <cstdint>
@@ -54,7 +56,7 @@ int build_null_array(const ArrowSchema *child_schema, int64_t length,
     return 0;
 }
 
-void json_escape(dstd::StringView in, std::string &out) {
+void json_escape(dstd::StringView in, dstd::String &out) {
     for (char c : in) {
         switch (c) {
             case '"':
@@ -89,7 +91,7 @@ void json_escape(dstd::StringView in, std::string &out) {
 // `view` is prepared once per column (init + SetArray) by the caller; a null
 // view signals a column that failed to bind and always emits JSON null.
 void append_json_scalar(const ArrowArrayView *view, ArrowType t, int64_t row,
-                        std::string &out) {
+                        dstd::String &out) {
     if (!view || ArrowArrayViewIsNull(view, row)) {
         out.append("null");
         return;
@@ -152,7 +154,7 @@ bool SchemaReconciler::merge(const ArrowSchema *incoming) {
     for (int64_t i = 0; i < incoming->n_children; ++i) {
         const ArrowSchema *child = incoming->children[i];
         if (!child || !child->name) continue;
-        std::string name(child->name);
+        dstd::String name(child->name);
         if (name == EXTRA_COLUMN_NAME) continue;  // reserved
         if (name_to_idx_.count(name)) continue;
         nanoarrow::UniqueSchema copy;
@@ -234,7 +236,7 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
     }
 
     // Build: input-name -> input-child-index
-    std::unordered_map<std::string, int64_t> in_idx;
+    dstd::HashMap<dstd::String, int64_t> in_idx;
     in_idx.reserve(static_cast<size_t>(in_schema->n_children));
     for (int64_t i = 0; i < in_schema->n_children; ++i) {
         const ArrowSchema *c = in_schema->children[i];
@@ -245,7 +247,7 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
     // it from the input batch. If missing, null-pad.
     int64_t n_known = num_known_columns();
     for (int64_t i = 0; i < n_known; ++i) {
-        const std::string &name = names_[static_cast<size_t>(i)];
+        const dstd::String &name = names_[static_cast<size_t>(i)];
         auto it = in_idx.find(name);
         if (it != in_idx.end()) {
             // Release the pre-initialized placeholder child and move the
@@ -266,11 +268,12 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
     }
 
     // Find input children whose names aren't in the union: these feed _extra.
-    std::vector<int64_t> unknown_in;
+    dstd::Vector<int64_t> unknown_in;
     for (int64_t i = 0; i < in_schema->n_children; ++i) {
         const ArrowSchema *c = in_schema->children[i];
         if (!c || !c->name) continue;
-        if (!name_to_idx_.count(c->name)) unknown_in.push_back(i);
+        if (!name_to_idx_.count(dstd::StringView(c->name)))
+            unknown_in.push_back(i);
     }
 
     // Build the _extra column. Fast path: no unknowns -> all nulls.
@@ -306,7 +309,7 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
             ArrowType type = NANOARROW_TYPE_NA;
             bool valid = false;
         };
-        std::vector<UnknownColumn> unknown_views(unknown_in.size());
+        dstd::Vector<UnknownColumn> unknown_views(unknown_in.size());
         for (size_t k = 0; k < unknown_in.size(); ++k) {
             int64_t u = unknown_in[k];
             const ArrowSchema *cs = in_schema->children[u];
@@ -324,7 +327,7 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
             }
         }
 
-        std::string buf;
+        dstd::String buf;
         for (int64_t row = 0; row < num_rows; ++row) {
             buf.clear();
             buf.push_back('{');

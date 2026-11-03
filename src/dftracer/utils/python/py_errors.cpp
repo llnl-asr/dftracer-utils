@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/python/py_errors.h>
 
 #include <stdexcept>
-#include <string>
 
 namespace dftracer::utils::python {
 
@@ -25,8 +25,8 @@ namespace {
 // keep a strong ref in *slot.
 int add_exc(PyObject *m, const char *short_name, PyObject *base,
             PyObject **slot) {
-    const std::string qualified =
-        std::string("dftracer_utils_ext.") + short_name;
+    dstd::String qualified("dftracer_utils_ext.");
+    qualified.append(short_name);
     PyObject *exc = PyErr_NewException(qualified.c_str(), base, nullptr);
     if (exc == nullptr) return -1;
     Py_INCREF(exc);  // keep one strong ref in *slot in addition to the module's

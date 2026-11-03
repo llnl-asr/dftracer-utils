@@ -5,21 +5,19 @@
 #include <Python.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/queue.h>
 
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <exception>
-#include <functional>
-#include <future>
 #include <mutex>
-#include <optional>
-#include <queue>
 #include <utility>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dstd/future.h>
-#include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
 #endif
 
@@ -123,7 +121,7 @@ class StreamingState {
         ItemT item;
         std::size_t size;
     };
-    std::queue<QueueEntry> queue_;
+    dstd::Queue<QueueEntry> queue_;
     std::mutex mtx_;
     std::condition_variable cv_producer_;
     std::condition_variable cv_consumer_;
@@ -144,14 +142,14 @@ using utilities::arrow::ArrowExportResult;
 struct ArrowStreamingIteratorState {
     dstd::SharedPtr<void> state;
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    std::function<dstd::Optional<ArrowExportResult>()> pull_next;
+    dstd::Function<dstd::Optional<ArrowExportResult>()> pull_next;
 #endif
     // When set, the iterator yields native DataFrame chunks instead of Arrow
     // batches (pull_next is then unused). Keeps Arrow off the streaming path.
-    std::function<dstd::Optional<dftracer::utils::dataframe::DataFrame>()>
+    dstd::Function<dstd::Optional<dftracer::utils::dataframe::DataFrame>()>
         pull_df;
-    std::function<std::exception_ptr()> get_error;
-    std::function<void()> cancel;
+    dstd::Function<std::exception_ptr()> get_error;
+    dstd::Function<void()> cancel;
 };
 
 /// Type-erased Arrow streaming iterator for Python.

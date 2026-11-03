@@ -13,7 +13,6 @@
 #include <dftracer/utils/python/runtime.h>
 
 #include <chrono>
-#include <memory>
 
 dftracer::utils::Runtime *dftracer::utils::python::get_default_runtime() {
     return &dftracer::utils::default_runtime();

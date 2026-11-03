@@ -6,8 +6,6 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/runtime.h>
 
-#include <memory>
-
 typedef struct {
     PyObject_HEAD dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime>
         runtime;

@@ -6,8 +6,6 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 
-#include <memory>
-
 typedef struct {
     PyObject_HEAD dftracer::utils::dstd::SharedPtr<JsonDictBatch> batch;
     std::size_t event_index;

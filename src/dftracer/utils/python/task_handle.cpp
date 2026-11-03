@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/any.h>
 #include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/task_handle.h>
 
-#include <any>
 #include <chrono>
 #include <future>
-#include <string>
 
 static void TaskHandle_dealloc(TaskHandleObject *self) {
     self->future.~shared_future();
@@ -26,8 +26,8 @@ static PyObject *TaskHandle_new(PyTypeObject *type, PyObject * /*args*/,
     if (self) {
         new (&self->future) dftracer::utils::dstd::SharedFuture<void>();
         new (&self->typed_future)
-            dftracer::utils::dstd::SharedFuture<std::any>();
-        new (&self->name) std::string();
+            dftracer::utils::dstd::SharedFuture<dftracer::utils::dstd::Any>();
+        new (&self->name) dftracer::utils::dstd::String();
         self->has_typed_future = false;
         self->task_id = -1;
     }
@@ -40,18 +40,17 @@ static PyObject *TaskHandle_get(TaskHandleObject *self,
         Py_RETURN_NONE;
     }
     if (self->has_typed_future) {
-        std::any result;
+        dftracer::utils::dstd::Any result;
         if (!run_blocking_r([&] { return self->typed_future.get(); }, result))
             return NULL;
         if (result.has_value()) {
-            try {
-                PyObject *obj = std::any_cast<PyObject *>(result);
-                if (obj) {
-                    Py_INCREF(obj);
-                    return obj;
+            // Not a PyObject* falls through to None
+            if (PyObject **obj =
+                    dftracer::utils::dstd::any_cast<PyObject *>(&result)) {
+                if (*obj) {
+                    Py_INCREF(*obj);
+                    return *obj;
                 }
-            } catch (const std::bad_any_cast &) {
-                // Not a PyObject* — fall through to None
             }
         }
         Py_RETURN_NONE;

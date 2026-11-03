@@ -7,7 +7,6 @@
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 
 #include <cstdint>
-#include <memory>
 
 typedef struct {
     PyObject_HEAD dftracer::utils::dstd::SharedPtr<

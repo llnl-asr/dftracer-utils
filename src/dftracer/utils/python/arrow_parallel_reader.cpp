@@ -15,9 +15,6 @@
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/utilities/arrow/parallel_reader.h>
 
-#include <string>
-#include <vector>
-
 namespace dftracer::utils::python {
 
 using utilities::arrow::ArrowExportResult;

@@ -29,15 +29,13 @@ static dstd::Path create_test_dir() {
     return dir;
 }
 
-// Exercises DFTRACER_UTILS_CO_TRY: binds the decompression payload on success,
-// or propagates the error to the caller. Proves the macro compiles and is
-// frame-safe inside a coroutine that returns dstd::Result<...>.
 static dftracer::utils::coro::CoroTask<
     dftracer::utils::dstd::Result<std::size_t>>
-decompressed_size_via_dft_try(FileDecompressorUtility& decompressor,
-                              const FileDecompressionUtilityInput& input) {
-    DFTRACER_UTILS_CO_TRY(auto out, co_await decompressor(input));
-    co_return out.decompressed_size;
+decompressed_size(FileDecompressorUtility& decompressor,
+                  const FileDecompressionUtilityInput& input) {
+    auto out = co_await decompressor(input);
+    if (!out) co_return dftracer::utils::dstd::Unexpected(out.error());
+    co_return out->decompressed_size;
 }
 
 TEST_SUITE("FileDecompressor") {
@@ -322,18 +320,18 @@ TEST_SUITE("FileDecompressor") {
         }
     }
 
-    TEST_CASE("FileDecompressor - DFTRACER_UTILS_CO_TRY propagation") {
+    TEST_CASE(
+        "FileDecompressor - a calling coroutine gets the value or the error") {
         auto test_dir = create_test_dir();
         auto cleanup_dir = dstd::SharedPtr<void>(nullptr, [&](void*) {
             dstd::fs::remove_all(test_dir).has_value();
         });
 
-        SUBCASE("DFTRACER_UTILS_CO_TRY binds value on success") {
+        SUBCASE("the value comes through on success") {
             dstd::String original_file =
-                dstd::String((test_dir / "dftu_try.txt").str());
+                dstd::String((test_dir / "value.txt").str());
             dstd::String compressed_file = original_file + ".gz";
-            dstd::String original_content =
-                "DFTRACER_UTILS_CO_TRY happy path content\n";
+            dstd::String original_content = "happy path content\n";
 
             (void)dstd::fs::write_file(dstd::PathView(original_file),
                                        original_content);
@@ -349,18 +347,18 @@ TEST_SUITE("FileDecompressor") {
             FileDecompressorUtility decompressor;
             auto input =
                 FileDecompressionUtilityInput::from_file(compressed_file);
-            auto r = decompressed_size_via_dft_try(decompressor, input).get();
+            auto r = decompressed_size(decompressor, input).get();
 
             REQUIRE(r.has_value());
             CHECK(*r == original_content.size());
         }
 
-        SUBCASE("DFTRACER_UTILS_CO_TRY propagates error on bad input") {
+        SUBCASE("the error comes through on bad input") {
             dstd::String non_existent =
                 dstd::String((test_dir / "missing.gz").str());
             FileDecompressorUtility decompressor;
             auto input = FileDecompressionUtilityInput::from_file(non_existent);
-            auto r = decompressed_size_via_dft_try(decompressor, input).get();
+            auto r = decompressed_size(decompressor, input).get();
 
             REQUIRE(!r);
             CHECK(r.error().is_code(

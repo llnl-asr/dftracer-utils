@@ -384,8 +384,6 @@ ArrowExportResult ViewScannerBatch::to_arrow() const {
 ArrowExportResult ViewScannerBatch::to_arrow(
     RecordBatchBuilder& builder) const {
     builder.reserve(events.size());
-    // keep std: simdjson::minify returns std::string
-    std::vector<std::string> held_serialized;
     dftracer::utils::json::RecordParser parser;
 
     for (const auto& event_str : events) {
@@ -422,8 +420,7 @@ ArrowExportResult ViewScannerBatch::to_arrow(
                 if (existing) builder.append_null(*existing);
             } else {
                 auto ci = builder.add_or_get_column(key_sv, ColumnType::String);
-                held_serialized.push_back(simdjson::minify(val));
-                builder.append_string(ci, held_serialized.back());
+                builder.append_string(ci, simdjson::minify(val));
             }
         }
         builder.end_row();

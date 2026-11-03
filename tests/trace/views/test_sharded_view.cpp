@@ -70,19 +70,27 @@ void build_shard_index(const std::string& gz,
     dftracer::utils::index::IndexerOptions options;
     options.aggregation = config;
     options.index_dir = index_dir;
-    dftracer::utils::index::Indexer::open({gz}, options).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
+                                          options)
+        .build();
 }
 
 // The trace files the root's store holds a current index for.
 std::vector<std::string> indexed_files(const std::string& root,
                                        const std::vector<std::string>& files) {
     dftracer::utils::index::IndexerOptions options;
-    options.index_dir = root;
+    options.index_dir =
+        dftracer::utils::dstd::String(dftracer::utils::dstd::StringView(root));
     options.aggregation = aggregators::AggregationConfig{};
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
+    for (const auto& file : files) paths.emplace_back(file);
     auto status =
-        dftracer::utils::index::Indexer::open(files, options).status();
+        dftracer::utils::index::Indexer::open(std::move(paths), options)
+            .status();
     REQUIRE(status.needs_work.empty());
-    return status.ready;
+    std::vector<std::string> ready;
+    for (const auto& file : status.ready) ready.emplace_back(file);
+    return ready;
 }
 
 // Render a DataFrame canonically (String columns are the group keys, numeric
@@ -149,8 +157,8 @@ void check_merged_partials(const std::string& tag,
     REQUIRE(env.is_valid());
     std::string a = make_x_trace(env, tag + "alpha", 30, 20);
     std::string b = make_x_trace(env, tag + "beta", 10, 40);
-    std::string ia = determine_index_path(a, "");
-    std::string ib = determine_index_path(b, "");
+    std::string ia = std::string(determine_index_path(a, ""));
+    std::string ib = std::string(determine_index_path(b, ""));
     build_shard_index(a, config);
     build_shard_index(b, config);
 
@@ -158,7 +166,7 @@ void check_merged_partials(const std::string& tag,
     write_shard_set(root, {ia, ib});
     std::string out = env.get_dir() + "/merged";
     merge_shard_set(root, out);
-    std::string merged_idx = determine_index_path("x", out);
+    std::string merged_idx = std::string(determine_index_path("x", out));
 
     (void)dstd::fs::remove(a);
     (void)dstd::fs::remove(b);
@@ -207,8 +215,8 @@ TEST_SUITE("ShardedView") {
         REQUIRE(env.is_valid());
         std::string a = make_x_trace(env, "a", 30, 20);
         std::string b = make_x_trace(env, "b", 10, 40);
-        std::string ia = determine_index_path(a, "");
-        std::string ib = determine_index_path(b, "");
+        std::string ia = std::string(determine_index_path(a, ""));
+        std::string ib = std::string(determine_index_path(b, ""));
         build_shard_index(a);
         build_shard_index(b);
 
@@ -231,8 +239,8 @@ TEST_SUITE("ShardedView") {
         REQUIRE(env.is_valid());
         std::string a = create_counter_file(env, "ca", {40, 40});
         std::string b = create_counter_file(env, "cb", {80, 80});
-        std::string ia = determine_index_path(a, "");
-        std::string ib = determine_index_path(b, "");
+        std::string ia = std::string(determine_index_path(a, ""));
+        std::string ib = std::string(determine_index_path(b, ""));
         build_shard_index(a);
         build_shard_index(b);
 
@@ -266,16 +274,20 @@ TEST_SUITE("ShardedView") {
         REQUIRE(env.is_valid());
         std::string a = make_x_trace(env, "ma", 30, 20);
         std::string b = make_x_trace(env, "mb", 10, 40);
-        std::string ia = determine_index_path(a, "");
-        std::string ib = determine_index_path(b, "");
+        std::string ia = std::string(determine_index_path(a, ""));
+        std::string ib = std::string(determine_index_path(b, ""));
         build_shard_index(a);
         build_shard_index(b);
 
         IndexShardManifest manifest;
         manifest.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
-        manifest.shards.push_back({ia, 1, 0});
-        manifest.shards.push_back({ib, 1, 0});
+        manifest.shards.push_back({dftracer::utils::dstd::String(
+                                       dftracer::utils::dstd::StringView(ia)),
+                                   1, 0});
+        manifest.shards.push_back({dftracer::utils::dstd::String(
+                                       dftracer::utils::dstd::StringView(ib)),
+                                   1, 0});
         std::string root = env.get_dir() + "/set";
         write_shard_manifest(root, manifest);
 
@@ -298,8 +310,8 @@ TEST_SUITE("ShardedView") {
         REQUIRE(env.is_valid());
         std::string a = make_x_trace(env, "ta", 30, 20);
         std::string b = make_x_trace(env, "tb", 10, 40);
-        std::string ia = determine_index_path(a, "");
-        std::string ib = determine_index_path(b, "");
+        std::string ia = std::string(determine_index_path(a, ""));
+        std::string ib = std::string(determine_index_path(b, ""));
         build_shard_index(a);
         build_shard_index(b);
 
@@ -322,8 +334,8 @@ TEST_SUITE("ShardedView") {
         REQUIRE(env.is_valid());
         std::string a = make_x_trace(env, "wa", 30, 20);
         std::string b = make_x_trace(env, "wb", 10, 40);
-        std::string ia = determine_index_path(a, "");
-        std::string ib = determine_index_path(b, "");
+        std::string ia = std::string(determine_index_path(a, ""));
+        std::string ib = std::string(determine_index_path(b, ""));
         build_shard_index(a);
         build_shard_index(b);
 
@@ -355,8 +367,8 @@ TEST_SUITE("ShardedView") {
         REQUIRE(env.is_valid());
         std::string a = make_x_trace(env, "roa", 30, 20);
         std::string b = make_x_trace(env, "rob", 10, 40);
-        std::string ia = determine_index_path(a, "");
-        std::string ib = determine_index_path(b, "");
+        std::string ia = std::string(determine_index_path(a, ""));
+        std::string ib = std::string(determine_index_path(b, ""));
         build_shard_index(a);
         build_shard_index(b);
 
@@ -383,7 +395,7 @@ TEST_SUITE("ShardedView") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string a = make_x_trace(env, "rel", 30, 20);
-        std::string ia = determine_index_path(a, "");
+        std::string ia = std::string(determine_index_path(a, ""));
         build_shard_index(a);
 
         // Copy the index into a directory that holds no traces of its own. Copy
@@ -402,7 +414,9 @@ TEST_SUITE("ShardedView") {
         IndexShardManifest m;
         m.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
-        m.shards.push_back({moved, 1, 0});
+        m.shards.push_back({dftracer::utils::dstd::String(
+                                dftracer::utils::dstd::StringView(moved)),
+                            1, 0});
         std::string root = env.get_dir() + "/set";
         write_shard_manifest(root, m);
         auto got = ShardedView::from_manifest(root).aggregate(scan_cfg).get();
@@ -423,7 +437,8 @@ TEST_SUITE("ShardedView") {
         const std::string root = env.get_dir() + "/root/.dftindex";
         std::vector<std::string> shards;
         for (std::size_t i = 0; i < files.size(); ++i) {
-            shards.push_back(dftracer::utils::index::shard_root(root, i));
+            shards.emplace_back(
+                std::string(dftracer::utils::index::shard_root(root, i)));
             build_shard_index(files[i], {}, shards.back());
         }
         write_shard_set(root, shards);
@@ -471,15 +486,15 @@ TEST_SUITE("ShardedView") {
         const std::string root = env.get_dir() + "/root/.dftindex";
         std::vector<std::string> shards;
         for (std::size_t i = 0; i < files.size(); ++i) {
-            shards.push_back(dftracer::utils::index::shard_root(root, i));
+            shards.emplace_back(
+                std::string(dftracer::utils::index::shard_root(root, i)));
             build_shard_index(files[i], {}, shards.back());
         }
         write_shard_set(root, shards);
 
         // A regular file where the second shard's store belongs, so listing it
         // fails whatever user the merge runs as.
-        const std::string store_b =
-            dftracer::utils::index::store_dir(shards[1]);
+        const std::string store_b(dftracer::utils::index::store_dir(shards[1]));
         const std::string held = store_b + ".held";
         REQUIRE(dstd::fs::rename(store_b, held).has_value());
         {
@@ -517,8 +532,8 @@ TEST_SUITE("ShardedView") {
         REQUIRE(env.is_valid());
         std::string a = make_x_trace(env, "malpha", 30, 20);
         std::string b = make_x_trace(env, "mbeta", 10, 40);
-        std::string ia = determine_index_path(a, "");
-        std::string ib = determine_index_path(b, "");
+        std::string ia = std::string(determine_index_path(a, ""));
+        std::string ib = std::string(determine_index_path(b, ""));
         build_shard_index(a);
         build_shard_index(b);
 
@@ -543,7 +558,7 @@ TEST_SUITE("ShardedView") {
 
         (void)dstd::fs::remove(a);
         (void)dstd::fs::remove(b);
-        const std::string out_idx = determine_index_path("x", out);
+        const std::string out_idx = std::string(determine_index_path("x", out));
         auto merged =
             canon(configure(View::from_files({{a, out_idx}, {b, out_idx}}))
                       .collect()

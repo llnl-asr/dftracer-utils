@@ -5,10 +5,12 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/file_group.h>
 #include <dftracer/utils/index/index.h>
@@ -28,13 +30,8 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
-#include <set>
-#include <span>
-#include <string>
-#include <string_view>
 #include <thread>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -66,12 +63,12 @@ constexpr IndexExtension BUILT_IN[] = {
     IndexExtension::Catalog, IndexExtension::Profile,  IndexExtension::Metadata,
     IndexExtension::Agg,     IndexExtension::Rowset};
 
-std::string str(dstd::StringView view) {
-    return std::string(view.data(), view.size());
+dstd::String str(dstd::StringView view) {
+    return dstd::String(view.data(), view.size());
 }
 
-std::string str(const dstd::String& value) {
-    return std::string(value.data(), value.size());
+dstd::String str(const dstd::String& value) {
+    return dstd::String(value.data(), value.size());
 }
 
 dstd::Expected<void, dstd::Error> run(
@@ -98,20 +95,21 @@ void ok(dstd::Expected<void, dstd::Error> result) {
     REQUIRE(result.has_value());
 }
 
-std::string build_into(const std::string& dir,
-                       const std::vector<std::string>& traces) {
+dstd::String build_into(const dstd::String& dir,
+                        const dstd::Vector<dstd::String>& traces) {
     const auto index_path = dir + "/.dftindex";
     for (const auto& trace : traces)
-        REQUIRE(dftu_utils_test::build_index(trace, index_path, CHECKPOINT));
+        REQUIRE(dftu_utils_test::build_index(
+            std::string(trace), std::string(index_path), CHECKPOINT));
     return index_path;
 }
 
-void put_plugin_extension(const std::string& index_path,
-                          const std::vector<std::string>& traces) {
+void put_plugin_extension(const dstd::String& index_path,
+                          const dstd::Vector<dstd::String>& traces) {
     auto opened = Index::open(index_path);
     REQUIRE(opened.has_value());
     for (const auto& trace : traces) {
-        const std::string key = index_store::internal::get_logical_path(trace);
+        const dstd::String key = index_store::internal::get_logical_path(trace);
         auto build = take(index::rebuild(*opened, key));
         index::put_plugin(
             build, PLUGIN, 3, 7,
@@ -121,13 +119,14 @@ void put_plugin_extension(const std::string& index_path,
     }
 }
 
-std::vector<std::string> create_traces(dftu_utils_test::TestEnvironment& env,
-                                       const dftracer::utils::dstd::Path& dir) {
-    std::vector<std::string> traces;
+dstd::Vector<dstd::String> create_traces(
+    dftu_utils_test::TestEnvironment& env,
+    const dftracer::utils::dstd::Path& dir) {
+    dstd::Vector<dstd::String> traces;
     for (const char* name : {"c.pfw.gz", "a.pfw.gz", "b.pfw.gz"}) {
         const std::string created = env.create_dft_test_gzip_file(120);
         REQUIRE_FALSE(created.empty());
-        const std::string renamed((dir / name).str());
+        const dstd::String renamed((dir / name).str());
         REQUIRE(
             dftracer::utils::dstd::fs::rename(created, renamed).has_value());
         traces.push_back(renamed);
@@ -142,12 +141,12 @@ struct PartialRow {
     std::uint32_t host = 0;
     std::uint32_t extra = 0;
     agg::PartialKind kind = agg::PartialKind::Event;
-    std::string bytes;
+    dstd::String bytes;
 };
 
-std::vector<PartialRow> partials(const index::Snapshot& snapshot,
-                                 const FileRef& file) {
-    std::vector<PartialRow> rows;
+dstd::Vector<PartialRow> partials(const index::Snapshot& snapshot,
+                                  const FileRef& file) {
+    dstd::Vector<PartialRow> rows;
     ok(index::for_each_agg_partial(
         snapshot, file,
         [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
@@ -155,17 +154,17 @@ std::vector<PartialRow> partials(const index::Snapshot& snapshot,
             dstd::Span<const std::uint8_t> bytes) {
             rows.push_back(
                 {chunk, cat, name, host, extra, kind,
-                 std::string(reinterpret_cast<const char*>(bytes.data()),
-                             bytes.size())});
+                 dstd::String(reinterpret_cast<const char*>(bytes.data()),
+                              bytes.size())});
             return true;
         }));
     return rows;
 }
 
-using Blocks = std::vector<dstd::Pair<std::uint64_t, agg::ChunkColumns>>;
+using Blocks = dstd::Vector<dstd::Pair<std::uint64_t, agg::ChunkColumns>>;
 
 Blocks blocks(const index::Snapshot& snapshot, const FileRef& file) {
-    std::vector<dstd::Pair<std::uint64_t, agg::ChunkColumns>> out;
+    dstd::Vector<dstd::Pair<std::uint64_t, agg::ChunkColumns>> out;
     ok(index::for_each_agg_chunk_columns(
         snapshot, file,
         [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
@@ -256,7 +255,7 @@ void check_file(const index::Snapshot& snapshot, const FileRef& file,
         for (std::size_t i = 0; i < block.ids.size(); ++i) {
             const auto at = texts.find(block.ids[i]);
             CHECK(str(block.texts[i]) ==
-                  (at == texts.end() ? std::string() : str(at->second)));
+                  (at == texts.end() ? dstd::String() : str(at->second)));
         }
     }
     const std::uint64_t absent_chunk =
@@ -372,7 +371,7 @@ TEST_CASE("the index api reads a built index and a plugin extension") {
     const dftracer::utils::dstd::Path root(env.get_dir());
     REQUIRE(dftracer::utils::dstd::fs::create_directories(root).has_value());
     const auto traces = create_traces(env, root);
-    const auto index_path = build_into(std::string(root.str()), traces);
+    const auto index_path = build_into(dstd::String(root.str()), traces);
     put_plugin_extension(index_path, traces);
 
     auto opened = Index::open(index_path);
@@ -381,10 +380,10 @@ TEST_CASE("the index api reads a built index and a plugin extension") {
 
     const auto files = take(snapshot.files());
     REQUIRE(files.size() == 3);
-    std::vector<std::string> paths;
+    dstd::Vector<dstd::String> paths;
     for (const FileRef& file : files) paths.push_back(str(file.path()));
     CHECK(std::is_sorted(paths.begin(), paths.end()));
-    std::vector<std::string> expected;
+    dstd::Vector<dstd::String> expected;
     for (const auto& trace : traces)
         expected.push_back(index_store::internal::get_logical_path(trace));
     std::sort(expected.begin(), expected.end());
@@ -399,7 +398,7 @@ TEST_CASE("the index api reads a built index and a plugin extension") {
     for (const auto& trace : traces) {
         dftracer::utils::common::InputFileStat st;
         REQUIRE(dftracer::utils::common::stat_input(trace, st));
-        const std::string logical =
+        const dstd::String logical =
             index_store::internal::get_logical_path(trace);
         const Freshness got = snapshot.freshness(
             logical, stat_of(static_cast<std::uint64_t>(st.mtime), st.size));
@@ -426,7 +425,7 @@ TEST_CASE("the typed agg readers read what the aggregation store reads") {
     auto indexer = index::Indexer::open(traces, options);
     indexer.build();
 
-    const std::string index_path = std::string((root / ".dftindex").str());
+    const dstd::String index_path = dstd::String((root / ".dftindex").str());
     auto opened = Index::open(index_path);
     REQUIRE(opened.has_value());
     const auto snapshot = take(opened->snapshot());
@@ -462,7 +461,7 @@ TEST_CASE("the typed agg readers read what the aggregation store reads") {
         ok(index::agg_file_texts(snapshot, file, texts));
         REQUIRE(texts.size() > 0);
         for (const auto& [id, text] : texts)
-            CHECK(std::string(dictionary->intern.resolve(id)) == str(text));
+            CHECK(dstd::String(dictionary->intern.resolve(id)) == str(text));
         ok(index::for_each_agg_chunk_columns(
             snapshot, file, [&](std::uint64_t, const agg::ChunkColumns&) {
                 ++block_count;
@@ -480,7 +479,7 @@ TEST_CASE("a copy at another format version is not current") {
     const std::string root = env.get_dir() + "/.dftindex";
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/versioned.pfw.gz";
+    const dstd::String path = "/traces/versioned.pfw.gz";
     const SourceStat stat = stat_of(1000, 4000, 9);
 
     auto build = take(opened->build(path, stat));
@@ -490,7 +489,7 @@ TEST_CASE("a copy at another format version is not current") {
     auto store = kv::Store::open(root + "/store");
     REQUIRE(store.has_value());
     kv::NamespaceSpec spec;
-    const std::string name =
+    const dstd::String name =
         index_store::store_layout::namespace_name(IndexExtension::Profile);
     spec.name.assign(name.data(), name.size());
     spec.format_version =
@@ -522,7 +521,7 @@ TEST_CASE("a committed FileBuild is visible whole and only after the commit") {
     const std::string root = env.get_dir() + "/.dftindex";
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/one.pfw.gz";
+    const dstd::String path = "/traces/one.pfw.gz";
     const SourceStat stat = stat_of(1000, 4000, 9);
 
     const auto before = take(opened->snapshot());
@@ -604,7 +603,7 @@ TEST_CASE("a FileBuild that is never committed leaves no trace") {
     REQUIRE(env.is_valid());
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/dropped.pfw.gz";
+    const dstd::String path = "/traces/dropped.pfw.gz";
     {
         auto build = take(opened->build(path, stat_of(1, 2)));
         put_members(build, 2);
@@ -621,8 +620,8 @@ TEST_CASE("freshness reports current, stale, missing and failed") {
     REQUIRE(env.is_valid());
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
-    const std::string good = "/traces/good.pfw.gz";
-    const std::string bad = "/traces/bad.pfw.gz";
+    const dstd::String good = "/traces/good.pfw.gz";
+    const dstd::String bad = "/traces/bad.pfw.gz";
     const SourceStat stat = stat_of(500, 800);
 
     auto build = take(opened->build(good, stat));
@@ -657,7 +656,7 @@ TEST_CASE("a FileBuild with an unfinished extension does not commit") {
     REQUIRE(env.is_valid());
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/unfinished.pfw.gz";
+    const dstd::String path = "/traces/unfinished.pfw.gz";
     auto build = take(opened->build(path, stat_of(1, 2)));
     put_members(build, 1);
     index::put_chunk_statistics(build, 0, {});
@@ -670,9 +669,9 @@ TEST_CASE("a group of FileBuilds becomes visible together") {
     REQUIRE(env.is_valid());
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
-    const std::string a = "/traces/group_a.pfw.gz";
-    const std::string b = "/traces/group_b.pfw.gz";
-    const std::string bad = "/traces/group_bad.pfw.gz";
+    const dstd::String a = "/traces/group_a.pfw.gz";
+    const dstd::String b = "/traces/group_b.pfw.gz";
+    const dstd::String bad = "/traces/group_bad.pfw.gz";
     auto build_a = take(opened->build(a, stat_of(1, 2)));
     auto build_b = take(opened->build(b, stat_of(3, 4)));
     auto build_bad = take(opened->build(bad, stat_of(5, 6)));
@@ -710,11 +709,11 @@ TEST_CASE("a FileGroup publishes a repeated path in order and counts files") {
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
     namespace internal = dftracer::utils::index::store::internal;
-    const std::string plain = "/traces/rep.pfw.gz";
-    const std::string dotted = "/traces/./rep.pfw.gz";
-    const std::string other = "/traces/other.pfw.gz";
-    const std::string bad = "/traces/bad.pfw.gz";
-    const auto key = [](const std::string& path) {
+    const dstd::String plain = "/traces/rep.pfw.gz";
+    const dstd::String dotted = "/traces/./rep.pfw.gz";
+    const dstd::String other = "/traces/other.pfw.gz";
+    const dstd::String bad = "/traces/bad.pfw.gz";
+    const auto key = [](const dstd::String& path) {
         return internal::get_logical_path(path);
     };
     const auto run_task = [](auto task) {
@@ -758,7 +757,7 @@ TEST_CASE("a FileBuild writes the data the typed readers read") {
     const std::string root = env.get_dir() + "/.dftindex";
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/written.pfw.gz";
+    const dstd::String path = "/traces/written.pfw.gz";
     const SourceStat stat = stat_of(70, 90, 5);
 
     auto build = take(opened->build(path, stat));
@@ -824,9 +823,9 @@ void put_zonemap(index::FileBuild& build, dstd::StringView path,
     build.finish(IndexExtension::Zonemap, params_hash);
 }
 
-std::vector<std::string> zonemap_paths(const index::Snapshot& snapshot,
-                                       const FileRef& file) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> zonemap_paths(const index::Snapshot& snapshot,
+                                         const FileRef& file) {
+    dstd::Vector<dstd::String> out;
     for (const auto& path :
          take(index::paths(snapshot, file, IndexExtension::Zonemap)))
         out.push_back(str(path));
@@ -840,7 +839,7 @@ TEST_CASE("a rebuild keeps the extensions it neither writes nor clears") {
     REQUIRE(env.is_valid());
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/tier.pfw.gz";
+    const dstd::String path = "/traces/tier.pfw.gz";
     const SourceStat stat = stat_of(1000, 4000, 9);
 
     auto first = take(opened->build(path, stat));
@@ -939,7 +938,7 @@ TEST_CASE("staging commits the batches so far and publishes nothing") {
     REQUIRE(env.is_valid());
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/staged.pfw.gz";
+    const dstd::String path = "/traces/staged.pfw.gz";
     const SourceStat stat = stat_of(1000, 4000, 9);
     constexpr std::uint64_t ROUNDS = 4;
     constexpr std::uint64_t PER_ROUND = 60;
@@ -988,7 +987,7 @@ TEST_CASE("staging commits the batches so far and publishes nothing") {
         const auto file = after.file(path);
         REQUIRE(file.has_value());
         CHECK(zonemap_paths(after, *file) ==
-              std::vector<std::string>{"dur", "ts"});
+              dstd::Vector<dstd::String>{"dur", "ts"});
         CHECK(take(index::granules(after, *file, IndexExtension::Zonemap, "ts"))
                   .size() == 3);
         CHECK(
@@ -1032,7 +1031,7 @@ TEST_CASE("agg meta is replaced and deleted in one record at a time") {
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
 
-    std::string config;
+    dstd::String config;
     for (const std::uint64_t word : {std::uint64_t{60}, std::uint64_t{7}}) {
         for (int shift = 56; shift >= 0; shift -= 8)
             config.push_back(static_cast<char>((word >> shift) & 0xFF));
@@ -1069,9 +1068,9 @@ TEST_CASE("remove_extension drops one extension of many files in one record") {
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
     const SourceStat stat = stat_of(1000, 4000, 9);
-    const std::vector<std::string> paths{"/traces/a.pfw.gz", "/traces/b.pfw.gz",
-                                         "/traces/c.pfw.gz"};
-    for (const std::string& path : paths) {
+    const dstd::Vector<dstd::String> paths{
+        "/traces/a.pfw.gz", "/traces/b.pfw.gz", "/traces/c.pfw.gz"};
+    for (const dstd::String& path : paths) {
         auto build = take(opened->build(path, stat));
         put_members(build, 1);
         put_zonemap(build, "ts", 2, 15);
@@ -1081,7 +1080,7 @@ TEST_CASE("remove_extension drops one extension of many files in one record") {
     }
     const auto before = take(opened->snapshot());
 
-    const std::vector<dstd::StringView> targets{
+    const dstd::Vector<dstd::StringView> targets{
         dstd::StringView(paths[0].data(), paths[0].size()),
         dstd::StringView(paths[2].data(), paths[2].size()),
         dstd::StringView("/traces/unknown.pfw.gz")};
@@ -1095,7 +1094,7 @@ TEST_CASE("remove_extension drops one extension of many files in one record") {
                 .has_value());
 
     const auto after = take(opened->snapshot());
-    for (const std::string& path : paths) {
+    for (const dstd::String& path : paths) {
         const auto old_file = before.file(path);
         REQUIRE(old_file.has_value());
         CHECK(zonemap_paths(before, *old_file).size() == 1);
@@ -1117,7 +1116,7 @@ TEST_CASE("a second build of an extension replaces the first copy") {
     REQUIRE(env.is_valid());
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/co.pfw.gz";
+    const dstd::String path = "/traces/co.pfw.gz";
     const SourceStat stat = stat_of(1000, 4000, 9);
 
     auto first = take(opened->build(path, stat));
@@ -1132,7 +1131,7 @@ TEST_CASE("a second build of an extension replaces the first copy") {
     const auto snapshot = take(opened->snapshot());
     const auto file = snapshot.file(path);
     REQUIRE(file.has_value());
-    CHECK(zonemap_paths(snapshot, *file) == std::vector<std::string>{"b"});
+    CHECK(zonemap_paths(snapshot, *file) == dstd::Vector<dstd::String>{"b"});
     CHECK(take(index::granules(snapshot, *file, IndexExtension::Zonemap, "a"))
               .empty());
     CHECK(take(index::granules(snapshot, *file, IndexExtension::Zonemap, "b"))
@@ -1151,8 +1150,8 @@ TEST_CASE("commits land across many openings of one root") {
     for (int round = 0; round < ROUNDS; ++round) {
         auto opened = Index::open(root);
         REQUIRE(opened.has_value());
-        const std::string path =
-            "/traces/many_" + std::to_string(round) + ".pfw.gz";
+        const dstd::String path =
+            "/traces/many_" + dstd::to_string(round) + ".pfw.gz";
         const SourceStat stat =
             stat_of(1000 + static_cast<std::uint64_t>(round), 4000, 9);
         auto build = take(opened->build(path, stat));
@@ -1177,8 +1176,8 @@ TEST_CASE("FileBuild commits from concurrent tasks and an open reader") {
     CHECK_FALSE(reader.file("/traces/none.pfw.gz").has_value());
     constexpr int FILES = 24;
     const auto one = [](Index index, int i) -> coro::CoroTask<bool> {
-        const std::string path =
-            "/traces/conc_" + std::to_string(i) + ".pfw.gz";
+        const dstd::String path =
+            "/traces/conc_" + dstd::to_string(i) + ".pfw.gz";
         auto build = index.build(path, stat_of(1000, 4000, 9));
         if (!build) co_return false;
         put_members(*build, 2);
@@ -1198,7 +1197,7 @@ TEST_CASE("FileBuild commits from concurrent tasks and an open reader") {
     }
     const auto after = take(opened->snapshot());
     for (int i = 0; i < FILES; ++i) {
-        CHECK(after.file("/traces/conc_" + std::to_string(i) + ".pfw.gz")
+        CHECK(after.file("/traces/conc_" + dstd::to_string(i) + ".pfw.gz")
                   .has_value());
     }
     CHECK(take(after.files()).size() == FILES);
@@ -1209,7 +1208,7 @@ TEST_CASE("a rebuilt extension replaces only its own copy") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
     const std::string root = env.get_dir() + "/.dftindex";
-    const std::string path = "/traces/reopen.pfw.gz";
+    const dstd::String path = "/traces/reopen.pfw.gz";
     const SourceStat stat = stat_of(1000, 4000, 9);
     {
         auto opened = Index::open(root);
@@ -1253,7 +1252,7 @@ TEST_CASE("rebuilding one plugin leaves the other plugin of the file whole") {
     REQUIRE(env.is_valid());
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/plugins.pfw.gz";
+    const dstd::String path = "/traces/plugins.pfw.gz";
     const SourceStat stat = stat_of(1000, 4000, 9);
 
     auto first = take(opened->build(path, stat));
@@ -1321,7 +1320,7 @@ TEST_CASE("a finished extension without data is a current empty copy") {
     REQUIRE(env.is_valid());
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/empty.pfw.gz";
+    const dstd::String path = "/traces/empty.pfw.gz";
     auto build = take(opened->build(path, stat_of(1, 2)));
     put_members(build, 1);
     build.finish(IndexExtension::Catalog, 5);
@@ -1341,7 +1340,7 @@ TEST_CASE("erasing a path of a staged copy hides only its records") {
     REQUIRE(env.is_valid());
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/erase.pfw.gz";
+    const dstd::String path = "/traces/erase.pfw.gz";
     auto build = take(opened->build(path, stat_of(1, 2)));
     put_members(build, 1);
     index::put_path(build, IndexExtension::Zonemap, "args.name");
@@ -1363,7 +1362,7 @@ TEST_CASE("erasing a path of a staged copy hides only its records") {
     const auto file = snapshot.file(path);
     REQUIRE(file.has_value());
     CHECK(zonemap_paths(snapshot, *file) ==
-          std::vector<std::string>{"args.dur", "args.name"});
+          dstd::Vector<dstd::String>{"args.dur", "args.name"});
     const auto name = take(
         index::granules(snapshot, *file, IndexExtension::Zonemap, "args.name"));
     REQUIRE(name.size() == 1);
@@ -1382,11 +1381,11 @@ TEST_CASE("commits from many threads all land") {
     REQUIRE(opened.has_value());
     constexpr int THREADS = 4;
     constexpr int ROUNDS = 10;
-    std::vector<std::thread> threads;
+    dstd::Vector<std::thread> threads;
     std::atomic<int> failed{0};
     for (int t = 0; t < THREADS; ++t) {
         threads.emplace_back([&opened, &failed, t] {
-            const std::string path = "/traces/t" + std::to_string(t);
+            const dstd::String path = "/traces/t" + dstd::to_string(t);
             for (int round = 0; round < ROUNDS; ++round) {
                 auto build = opened->build(path, stat_of(1, 2));
                 if (!build) {
@@ -1394,7 +1393,7 @@ TEST_CASE("commits from many threads all land") {
                     continue;
                 }
                 put_members(*build, 1);
-                index::put_catalog_path(*build, "r" + std::to_string(round),
+                index::put_catalog_path(*build, "r" + dstd::to_string(round),
                                         index_store::PathStat{});
                 build->finish(IndexExtension::Catalog,
                               static_cast<std::uint64_t>(round));
@@ -1407,13 +1406,13 @@ TEST_CASE("commits from many threads all land") {
 
     const auto snapshot = take(opened->snapshot());
     for (int t = 0; t < THREADS; ++t) {
-        const auto file = snapshot.file("/traces/t" + std::to_string(t));
+        const auto file = snapshot.file("/traces/t" + dstd::to_string(t));
         REQUIRE(file.has_value());
         CHECK(snapshot.extension(*file, IndexExtension::Catalog, ROUNDS - 1) ==
               Freshness::Current);
         const auto catalog = take(index::catalog(snapshot, *file));
         REQUIRE(catalog.size() == 1);
-        CHECK(str(catalog[0].first) == "r" + std::to_string(ROUNDS - 1));
+        CHECK(str(catalog[0].first) == "r" + dstd::to_string(ROUNDS - 1));
     }
 }
 
@@ -1466,22 +1465,22 @@ TEST_CASE("a commit lands from a worker, a process worker and a plain thread") {
 
 namespace {
 
-std::string write_bytes(const dftracer::utils::dstd::Path& path,
-                        dstd::StringView contents) {
+dstd::String write_bytes(const dftracer::utils::dstd::Path& path,
+                         dstd::StringView contents) {
     std::ofstream out(path.c_str(), std::ios::binary | std::ios::trunc);
     out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
     out.close();
-    return std::string(path.str());
+    return dstd::String(path.str());
 }
 
-SourceStat stat_of_file(const std::string& path) {
+SourceStat stat_of_file(const dstd::String& path) {
     dftracer::utils::common::InputFileStat st;
     REQUIRE(dftracer::utils::common::stat_input(path, st));
     return stat_of(static_cast<std::uint64_t>(st.mtime), st.size);
 }
 
 void register_traces(const Index& index,
-                     const std::vector<std::string>& paths) {
+                     const dstd::Vector<dstd::String>& paths) {
     for (const auto& path : paths) {
         auto build = take(index.build(path, stat_of_file(path)));
         put_members(build, 1);
@@ -1549,18 +1548,18 @@ TEST_CASE("freshness follows the size and the mtime of the trace file") {
               Freshness::Missing);
         CHECK_FALSE(snapshot.file(added).has_value());
 
-        const std::set<std::string> wanted{a, added};
-        std::set<std::string> indexed;
+        const dstd::Set<dstd::String> wanted{a, added};
+        dstd::Set<dstd::String> indexed;
         for (const FileRef& file : take(snapshot.files()))
             indexed.insert(str(file.path()));
-        std::vector<std::string> removed;
+        dstd::Vector<dstd::String> removed;
         for (const auto& path : indexed)
             if (wanted.count(path) == 0) removed.push_back(path);
-        std::vector<std::string> unindexed;
+        dstd::Vector<dstd::String> unindexed;
         for (const auto& path : wanted)
             if (indexed.count(path) == 0) unindexed.push_back(path);
-        CHECK(removed == std::vector<std::string>{b});
-        CHECK(unindexed == std::vector<std::string>{added});
+        CHECK(removed == dstd::Vector<dstd::String>{b});
+        CHECK(unindexed == dstd::Vector<dstd::String>{added});
     }
 }
 
@@ -1570,14 +1569,15 @@ TEST_CASE("a snapshot sees a commit made after the first one") {
     const std::string trace = env.create_dft_test_gzip_file(50);
     REQUIRE_FALSE(trace.empty());
     const std::string index_path = env.get_dir() + "/.dftindex";
-    const std::string key = index_store::internal::get_logical_path(trace);
+    const dstd::String key = index_store::internal::get_logical_path(trace);
 
     auto opened = Index::open(index_path);
     REQUIRE(opened.has_value());
     const auto before = take(opened->snapshot());
     CHECK_FALSE(before.file(key).has_value());
 
-    REQUIRE(dftu_utils_test::build_index(trace, index_path, CHECKPOINT));
+    REQUIRE(dftu_utils_test::build_index(std::string(trace),
+                                         std::string(index_path), CHECKPOINT));
 
     const auto after = take(opened->snapshot());
     const auto file = after.file(key);
@@ -1593,7 +1593,7 @@ TEST_CASE("an index root without a store reads nothing and stays absent") {
     REQUIRE(env.is_valid());
     const auto root = dftracer::utils::dstd::Path(env.get_dir()) / "empty";
     REQUIRE(dftracer::utils::dstd::fs::create_directories(root).has_value());
-    const std::string trace = std::string((root / "a.pfw.gz").str());
+    const dstd::String trace = dstd::String((root / "a.pfw.gz").str());
 
     auto opened = Index::open((root / ".dftindex").str());
     REQUIRE(opened.has_value());
@@ -1609,7 +1609,7 @@ TEST_CASE("pid and tid counts round trip with large pids") {
     REQUIRE(env.is_valid());
     auto opened = Index::open(env.get_dir() + "/.dftindex");
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/pids.pfw.gz";
+    const dstd::String path = "/traces/pids.pfw.gz";
     auto build = take(opened->build(path, stat_of(1, 2)));
     put_members(build, 1);
     dstd::StringViewMap<std::uint64_t> counts;
@@ -1727,10 +1727,10 @@ TEST_CASE("opening a view root keeps its store inside the view root") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
     const std::string root = env.get_dir() + "/.dftindex";
-    const std::string view = index::view_root(root, "v1");
+    const dstd::String view = index::view_root(root, "v1");
     auto opened = Index::open(view);
     REQUIRE(opened.has_value());
-    const std::string path = "/traces/one.pfw.gz";
+    const dstd::String path = "/traces/one.pfw.gz";
     auto build = take(opened->build(path, stat_of(1000, 4000, 9)));
     put_members(build, 1);
     REQUIRE(run(build.commit()).has_value());

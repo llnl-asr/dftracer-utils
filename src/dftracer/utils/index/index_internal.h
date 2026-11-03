@@ -17,7 +17,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
-#include <string>
 
 namespace dftracer::utils::index {
 
@@ -30,8 +29,8 @@ struct FileRef::Data {
 };
 
 struct Index::Impl {
-    std::string root;
-    std::string store_dir;
+    dstd::String root;
+    dstd::String store_dir;
     std::mutex mutex;
     dstd::Optional<kv::Store> store;
 
@@ -61,7 +60,7 @@ struct FileBuild::Impl {
         bool failed = false;
     };
 
-    std::string root;
+    dstd::String root;
     kv::Store store;
     kv::ScopeKey scope;
     /// Held by the fold task that puts and stages a spilled run, so two tasks
@@ -81,7 +80,7 @@ struct FileBuild::Impl {
     dstd::Optional<dstd::Error> error;
     bool committed = false;
 
-    Impl(std::string index_root, kv::Store s, kv::ScopeKey key,
+    Impl(dstd::String index_root, kv::Store s, kv::ScopeKey key,
          const SourceStat& stat);
 
     Copy* copy_of(const kv::NamespaceSpec& spec);
@@ -103,7 +102,7 @@ struct IndexAccess {
     static FileRef make_file(dstd::String path, kv::ScopeKey scope,
                              const SourceStat& stat);
     static Snapshot make_snapshot(dstd::Optional<kv::Snapshot> snap);
-    static FileBuild make_build(std::string root, kv::Store store,
+    static FileBuild make_build(dstd::String root, kv::Store store,
                                 kv::ScopeKey scope, const SourceStat& stat);
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> remove_task(
         dstd::SharedPtr<Index::Impl> impl, dstd::String path);
@@ -136,7 +135,7 @@ struct IndexAccess {
     static void erase(FileBuild& build, const kv::NamespaceSpec& spec,
                       dstd::ByteView begin, dstd::ByteView end);
 
-    static const std::string& root(const Index& index);
+    static const dstd::String& root(const Index& index);
     /// Opens the store, which creates its directory.
     static dstd::Expected<kv::Store, dstd::Error> open_store(
         const Index& index);

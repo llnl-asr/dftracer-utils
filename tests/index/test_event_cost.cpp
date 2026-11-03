@@ -2,7 +2,11 @@
 // The cases count work, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/event_cost.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
@@ -18,9 +22,7 @@
 #include <ctime>
 #include <iterator>
 #include <sstream>
-#include <string>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
@@ -78,8 +80,8 @@ void build_one(const std::string& file, const std::string& index_dir) {
     Runtime rt(4);
     build::IndexBuildBatchResult result;
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = std::make_shared<build::IndexBuildBatchConfig>();
-        config->file_paths = {file};
+        auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+        config->file_paths = {dstd::String(dstd::StringView(file))};
         config->index_dir = index_dir;
         config->parallelism = 4;
         result = co_await build::BatchBuilder::process(std::move(config));
@@ -121,13 +123,13 @@ TEST_SUITE("IndexEventCost") {
         ext::ScalableBloomFilter bloom(64, 0.01);
         constexpr std::size_t DISTINCT = 500;
         for (std::size_t i = 0; i < DISTINCT; ++i)
-            bloom.add("value_" + std::to_string(i));
+            bloom.add("value_" + dstd::to_string(i));
         CHECK(bloom.hash_computations() == DISTINCT);
         for (std::size_t i = 0; i < DISTINCT; ++i)
-            bloom.add("value_" + std::to_string(i));
+            bloom.add("value_" + dstd::to_string(i));
         CHECK(bloom.hash_computations() == 2 * DISTINCT);
         for (std::size_t i = 0; i < DISTINCT; ++i)
-            CHECK(bloom.possibly_contains("value_" + std::to_string(i)));
+            CHECK(bloom.possibly_contains("value_" + dstd::to_string(i)));
         CHECK(bloom.size_bytes() > 0);
     }
 
@@ -171,7 +173,7 @@ TEST_SUITE("IndexEventCost") {
                                       pid, tid, ts, dur, has_dur);
         }
         const auto keys = [](const auto& map) {
-            std::vector<dstd::Pair<std::string, std::uint64_t>> out;
+            dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> out;
             for (const auto& [k, v] : map)
                 out.emplace_back(k, static_cast<std::uint64_t>(v));
             return out;
@@ -199,4 +201,10 @@ TEST_SUITE("IndexEventCost") {
         CHECK(Stats::serialize_sketch_map(by_slot.pid_duration_sketches) ==
               Stats::serialize_sketch_map(by_string.pid_duration_sketches));
     }
+}
+
+TEST_CASE("stored duration sums keep 17 significant digits") {
+    index::schemas::dft::ChunkStatistics stats;
+    stats.name_duration_sums["read"] = 0.1;
+    CHECK(stats.name_duration_sums_json() == R"({"read":0.10000000000000001})");
 }

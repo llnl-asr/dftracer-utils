@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
@@ -12,8 +13,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::index::gzip {
 
@@ -36,13 +35,13 @@ class CheckpointIndexer {
     virtual bool exists() const = 0;
 
     using VisitorList =
-        std::vector<std::reference_wrapper<index::build::IndexVisitor>>;
+        dstd::Vector<std::reference_wrapper<index::build::IndexVisitor>>;
 
     virtual void set_visitors(VisitorList) {}
 
     // Metadata accessors
-    virtual const std::string &get_index_path() const = 0;
-    virtual const std::string &get_archive_path() const = 0;
+    virtual const dstd::String &get_index_path() const = 0;
+    virtual const dstd::String &get_archive_path() const = 0;
     virtual std::uint64_t get_checkpoint_size() const = 0;
     virtual std::uint64_t get_max_bytes() const = 0;
     virtual std::uint64_t get_num_lines() const = 0;
@@ -54,7 +53,7 @@ class CheckpointIndexer {
 
     /// Every member record in file order. Empty when the file was never
     /// indexed.
-    virtual std::vector<GzipMemberRecord> get_members() const = 0;
+    virtual dstd::Vector<GzipMemberRecord> get_members() const = 0;
 
     /// The compressed offsets of the HEAD records, the members too big to hold
     /// whole. Empty when there are none or the file was never indexed.
@@ -62,7 +61,7 @@ class CheckpointIndexer {
 
     /// The 32 KiB inflate window of RESTART piece `member_idx`; empty when
     /// the index has none for it.
-    virtual std::string restart_window(std::uint64_t member_idx) const = 0;
+    virtual dstd::String restart_window(std::uint64_t member_idx) const = 0;
 
     // Archive format identification
     virtual common::ArchiveFormat get_format_type() const = 0;

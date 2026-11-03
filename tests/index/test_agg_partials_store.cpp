@@ -3,9 +3,12 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
@@ -32,14 +35,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
-#include <map>
-#include <set>
-#include <span>
 #include <sstream>
-#include <string>
 #include <thread>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace agg = dftracer::utils::index::schemas::dft::agg;
@@ -55,20 +53,20 @@ constexpr int EVENTS = 400;
 constexpr std::size_t CHECKPOINT_SIZE = 8192;
 constexpr std::uint64_t INTERVAL_US = 100'000;
 
-using Key = dstd::Pair<std::string, std::string>;
+using Key = dstd::Pair<dstd::String, dstd::String>;
 
 const char* const NAMES[] = {"read", "write", "open", "close"};
 
 std::string write_trace(const std::string& dir, int n,
-                        std::map<Key, std::vector<double>>& durations,
+                        dstd::Map<Key, dstd::Vector<double>>& durations,
                         int salt = 0) {
     std::ostringstream out;
     out << "[\n";
     for (int i = 0; i < EVENTS + salt; ++i) {
         const bool own = i % 5 == 0;
-        const std::string cat =
-            own ? "file" + std::to_string(n) : (i % 3 == 0 ? "STDIO" : "POSIX");
-        const std::string name = own ? "step" : NAMES[i % 4];
+        const dstd::String cat = own ? "file" + dstd::to_string(n)
+                                     : (i % 3 == 0 ? "STDIO" : "POSIX");
+        const dstd::String name = own ? "step" : NAMES[i % 4];
         const int dur = 1 + (i * 7 + n + salt) % 500;
         char fhash[24];
         std::snprintf(fhash, sizeof fhash, "%016x", 0x1000 + i % 7);
@@ -79,13 +77,14 @@ std::string write_trace(const std::string& dir, int n,
             << i * 512 << R"(,"level":)" << i % 3
             << R"(,"hhash":"a1b2c3d4e5f60718","fhash":")" << fhash << R"("}})"
             << "\n";
-        std::string lower = cat;
+        dstd::String lower = cat;
         std::transform(lower.begin(), lower.end(), lower.begin(),
                        [](unsigned char c) { return std::tolower(c); });
         durations[{lower, name}].push_back(dur);
     }
     out << "]\n";
-    const std::string pfw = dir + "/t" + std::to_string(n) + ".pfw";
+    const std::string pfw =
+        dir + "/t" + std::string(dstd::to_string(n)) + ".pfw";
     {
         std::ofstream file(pfw.c_str());
         file << out.str();
@@ -97,9 +96,9 @@ std::string write_trace(const std::string& dir, int n,
     return gz;
 }
 
-IndexerOptions options(const std::string& index_dir) {
+IndexerOptions options(dstd::StringView index_dir) {
     IndexerOptions o;
-    o.index_dir = index_dir;
+    o.index_dir = dstd::String(index_dir);
     o.checkpoint_size = CHECKPOINT_SIZE;
     o.parallelism = 4;
     agg::AggregationConfig c;
@@ -109,8 +108,8 @@ IndexerOptions options(const std::string& index_dir) {
     return o;
 }
 
-double build_seconds(const std::vector<std::string>& files,
-                     const std::string& index_dir) {
+double build_seconds(const dstd::Vector<dstd::String>& files,
+                     dstd::StringView index_dir) {
     auto ix = Indexer::open(files, options(index_dir));
     const auto t0 = std::chrono::steady_clock::now();
     ix.build();
@@ -119,17 +118,16 @@ double build_seconds(const std::vector<std::string>& files,
 }
 
 struct Stored {
-    std::map<Key, agg::AggPartial> merged;
+    dstd::Map<Key, agg::AggPartial> merged;
     std::size_t count = 0;
-    std::set<std::uint32_t> chunks;
+    dstd::Set<std::uint32_t> chunks;
 };
 
 index::Snapshot open_index(const std::string& index_path) {
     return common::unwrap(index::plan::open_snapshot(index_path));
 }
 
-index::FileRef file_of(const index::Snapshot& snapshot,
-                       const std::string& path) {
+index::FileRef file_of(const index::Snapshot& snapshot, dstd::StringView path) {
     auto file = snapshot.file(index::store::internal::get_logical_path(path));
     REQUIRE(file.has_value());
     return std::move(*file);
@@ -149,8 +147,8 @@ Stored read_partials(const index::Snapshot& snapshot,
             auto p = agg::AggPartial::deserialize(
                 dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()));
             REQUIRE(p.has_value());
-            const Key key{std::string(dictionary.intern.resolve(cat)),
-                          std::string(dictionary.intern.resolve(name))};
+            const Key key{dstd::String(dictionary.intern.resolve(cat)),
+                          dstd::String(dictionary.intern.resolve(name))};
             out.merged.try_emplace(key).first->second.merge(*p);
             return true;
         }));
@@ -159,7 +157,7 @@ Stored read_partials(const index::Snapshot& snapshot,
 
 // A sketch answers near the rank, within its relative accuracy.
 void check_quantiles(const agg::AggPartial& p, const agg::QuantileStore& q,
-                     std::vector<double> truth) {
+                     dstd::Vector<double> truth) {
     REQUIRE(q.count() == truth.size());
     std::sort(truth.begin(), truth.end());
     const std::size_t last = truth.size() - 1;
@@ -187,27 +185,27 @@ std::string index_dir_of(const dftu_utils_test::TestEnvironment& env) {
 
 // Every aggregation row of `file`, keyed by text in place of dictionary ids,
 // so two indexes compare whatever ids they gave.
-std::map<std::string, std::string> agg_rows(const std::string& file,
-                                            const std::string& index_dir) {
-    const auto index_path =
-        trace::internal::determine_index_path(file, index_dir);
+dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
+                                               dstd::StringView index_dir) {
+    const auto index_path = std::string(trace::internal::determine_index_path(
+        dstd::String(file), dstd::String(index_dir)));
     const auto snapshot = open_index(index_path);
     const auto stored_file = file_of(snapshot, file);
     auto dictionary = agg::make_intern_table();
     common::unwrap(index::agg_dictionary(snapshot, *dictionary));
     const auto text = [&](std::uint32_t id) {
-        return std::string(dictionary->intern.resolve(id));
+        return dstd::String(dictionary->intern.resolve(id));
     };
-    std::map<std::string, std::string> rows;
+    dstd::Map<dstd::String, dstd::String> rows;
     common::unwrap(index::for_each_agg_partial(
         snapshot, stored_file,
         [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
             dstd::Span<const std::uint8_t> bytes) {
-            rows.emplace("p " + std::to_string(chunk) + " " + text(cat) + " " +
+            rows.emplace("p " + dstd::to_string(chunk) + " " + text(cat) + " " +
                              text(name) + " " + text(host) + " " + text(extra) +
-                             " " + std::to_string(static_cast<int>(kind)),
-                         std::string(bytes.begin(), bytes.end()));
+                             " " + dstd::to_string(static_cast<int>(kind)),
+                         dstd::String(bytes.begin(), bytes.end()));
             return true;
         }));
     common::unwrap(index::for_each_agg_chunk_columns(
@@ -224,23 +222,23 @@ std::map<std::string, std::string> agg_rows(const std::string& file,
             for (const auto* numbers :
                  {&block.ts, &block.dur, &block.pid, &block.tid})
                 for (const std::uint64_t v : *numbers) value << ' ' << v;
-            rows.emplace("c " + std::to_string(chunk), value.str());
+            rows.emplace("c " + dstd::to_string(chunk), value.str());
             return true;
         }));
     return rows;
 }
 
-using Rows = std::map<std::string, std::string>;
+using Rows = dstd::Map<dstd::String, dstd::String>;
 
 // The first key whose row is missing from one side or differs, for a failed
 // comparison.
-std::string first_difference(const Rows& a, const Rows& b) {
+dstd::String first_difference(const Rows& a, const Rows& b) {
     for (const auto& [key, value] : a) {
         const auto at = b.find(key);
         if (at == b.end()) return "only left: " + key;
         if (at->second != value)
-            return "differs: " + key + " (" + std::to_string(value.size()) +
-                   " vs " + std::to_string(at->second.size()) + " bytes)";
+            return "differs: " + key + " (" + dstd::to_string(value.size()) +
+                   " vs " + dstd::to_string(at->second.size()) + " bytes)";
     }
     for (const auto& [key, value] : b)
         if (a.find(key) == a.end()) return "only right: " + key;
@@ -256,10 +254,10 @@ constexpr const char* CRASH_DIR_ENV = "DFTRACER_UTILS_TEST_AGG_CRASH_DIR";
 constexpr int CRASH_FILES = 3;
 constexpr std::uint64_t CRASH_RUNS = 2;
 
-std::vector<std::string> crash_files(const std::string& dir) {
-    std::vector<std::string> files;
+dstd::Vector<dstd::String> crash_files(const dstd::String& dir) {
+    dstd::Vector<dstd::String> files;
     for (int i = 0; i < CRASH_FILES; ++i)
-        files.push_back(dir + "/t" + std::to_string(i) + ".pfw.gz");
+        files.push_back(dir + "/t" + dstd::to_string(i) + ".pfw.gz");
     return files;
 }
 
@@ -268,22 +266,22 @@ std::vector<std::string> crash_files(const std::string& dir) {
 TEST_SUITE("AggPartialsStore") {
     TEST_CASE("48 small files store at most chunks x names partials") {
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
-        std::map<Key, std::vector<double>> durations;
+        dstd::Vector<dstd::String> files;
+        dstd::Map<Key, dstd::Vector<double>> durations;
         for (int i = 0; i < FILES; ++i)
-            files.push_back(write_trace(env.get_dir(), i, durations));
+            files.emplace_back(write_trace(env.get_dir(), i, durations));
         const auto index_dir = index_dir_of(env);
 
         const double seconds = build_seconds(files, index_dir);
         MESSAGE("index build of " << FILES << " files: " << seconds << " s");
 
-        const auto index_path =
-            trace::internal::determine_index_path(files[0], index_dir);
+        const auto index_path = std::string(
+            trace::internal::determine_index_path(files[0], index_dir));
         const auto snapshot = open_index(index_path);
         auto dictionary = agg::make_intern_table();
         common::unwrap(index::agg_dictionary(snapshot, *dictionary));
 
-        std::map<Key, agg::AggPartial> all;
+        dstd::Map<Key, agg::AggPartial> all;
         std::size_t stored = 0;
         std::size_t bound = 0;
         for (int n = 0; n < FILES; ++n) {
@@ -300,7 +298,7 @@ TEST_SUITE("AggPartialsStore") {
             stored += file.count;
             bound += members * file.merged.size();
 
-            const Key own{"file" + std::to_string(n), "step"};
+            const Key own{"file" + dstd::to_string(n), "step"};
             const auto mine = file.merged.find(own);
             REQUIRE(mine != file.merged.end());
             CHECK(mine->second.count == durations.at(own).size());
@@ -323,16 +321,16 @@ TEST_SUITE("AggPartialsStore") {
 
     TEST_CASE("an index without partials is built again") {
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
-        std::map<Key, std::vector<double>> durations;
+        dstd::Vector<dstd::String> files;
+        dstd::Map<Key, dstd::Vector<double>> durations;
         for (int i = 0; i < 3; ++i)
-            files.push_back(write_trace(env.get_dir(), i, durations));
+            files.emplace_back(write_trace(env.get_dir(), i, durations));
         const auto index_dir = index_dir_of(env);
         build_seconds(files, index_dir);
 
-        const auto index_path =
-            trace::internal::determine_index_path(files[0], index_dir);
-        std::vector<std::size_t> before;
+        const auto index_path = std::string(
+            trace::internal::determine_index_path(files[0], index_dir));
+        dstd::Vector<std::size_t> before;
         {
             const auto snapshot = open_index(index_path);
             auto dictionary = agg::make_intern_table();
@@ -357,8 +355,8 @@ TEST_SUITE("AggPartialsStore") {
             agg::tier::write_config(target, old);
 
             const auto snapshot = open_index(index_path);
-            std::vector<std::string> logical;
-            std::vector<index::SourceStat> stats;
+            dstd::Vector<dstd::String> logical;
+            dstd::Vector<index::SourceStat> stats;
             for (const auto& f : files) {
                 logical.push_back(index::store::internal::get_logical_path(f));
                 stats.push_back(file_of(snapshot, f).stat());
@@ -403,16 +401,16 @@ TEST_SUITE("AggPartialsStore") {
 
     TEST_CASE("partials of an older key layout are built again, not read") {
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
-        std::map<Key, std::vector<double>> durations;
+        dstd::Vector<dstd::String> files;
+        dstd::Map<Key, dstd::Vector<double>> durations;
         for (int i = 0; i < 3; ++i)
-            files.push_back(write_trace(env.get_dir(), i, durations));
+            files.emplace_back(write_trace(env.get_dir(), i, durations));
         const auto index_dir = index_dir_of(env);
         build_seconds(files, index_dir);
 
-        const auto index_path =
-            trace::internal::determine_index_path(files[0], index_dir);
-        std::vector<std::size_t> before;
+        const auto index_path = std::string(
+            trace::internal::determine_index_path(files[0], index_dir));
+        dstd::Vector<std::size_t> before;
         {
             const auto snapshot = open_index(index_path);
             auto dictionary = agg::make_intern_table();
@@ -439,10 +437,10 @@ TEST_SUITE("AggPartialsStore") {
             auto ns =
                 store->ns(index::ext_spec(index::store::IndexExtension::Agg));
             REQUIRE(ns.has_value());
-            std::string old_key(1,
-                                static_cast<char>(layout::agg_kind::PARTIAL));
+            dstd::String old_key(1,
+                                 static_cast<char>(layout::agg_kind::PARTIAL));
             old_key.append(12, '\0');
-            const std::string old_value = "old";
+            const dstd::String old_value = "old";
             const auto snapshot = open_index(index_path);
             const auto file = file_of(snapshot, files[0]);
             const auto state = index::extension_state(
@@ -484,10 +482,10 @@ TEST_SUITE("AggPartialsStore") {
 
     TEST_CASE("rows written through equal the rows held in memory") {
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
-        std::map<Key, std::vector<double>> durations;
+        dstd::Vector<dstd::String> files;
+        dstd::Map<Key, dstd::Vector<double>> durations;
         for (int i = 0; i < 3; ++i)
-            files.push_back(write_trace(env.get_dir(), i, durations));
+            files.emplace_back(write_trace(env.get_dir(), i, durations));
         const std::string held = env.get_dir() + "/held";
         const std::string through = env.get_dir() + "/through";
 
@@ -523,13 +521,13 @@ TEST_SUITE("AggPartialsStore") {
     // with its old rows or its new rows whole, and the next build ends well.
     TEST_CASE("a build killed while it writes through leaves whole rows") {
         dftu_utils_test::TestEnvironment env(10);
-        std::map<Key, std::vector<double>> durations;
-        std::vector<std::string> files;
+        dstd::Map<Key, dstd::Vector<double>> durations;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < CRASH_FILES; ++i)
-            files.push_back(write_trace(env.get_dir(), i, durations));
+            files.emplace_back(write_trace(env.get_dir(), i, durations));
         const auto index_dir = index_dir_of(env);
         build_seconds(files, index_dir);
-        std::vector<std::map<std::string, std::string>> before;
+        dstd::Vector<dstd::Map<dstd::String, dstd::String>> before;
         for (const auto& f : files) before.push_back(agg_rows(f, index_dir));
 
         for (int i = 0; i < CRASH_FILES; ++i)
@@ -562,7 +560,7 @@ TEST_SUITE("AggPartialsStore") {
         fresh_process::announce();
         const auto env_dir = common::Env::get<dstd::StringView>(CRASH_DIR_ENV);
         REQUIRE(env_dir.has_value());
-        const std::string dir(*env_dir);
+        const dstd::String dir(*env_dir);
         const auto files = crash_files(dir);
         agg::g_agg_run_bytes.store(1);
         std::atomic<bool> done{false};

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -13,9 +17,7 @@
 #include <chrono>
 #include <cstddef>
 #include <sstream>
-#include <string>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
@@ -39,10 +41,10 @@ std::string write_trace(const std::string& dir, int n) {
     }
     out << "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/t" + std::to_string(n) + ".pfw.gz", out.str());
+        dir + "/t" + std::string(dstd::to_string(n)) + ".pfw.gz", out.str());
 }
 
-std::size_t peak_live(const std::vector<std::string>& files,
+std::size_t peak_live(const dstd::Vector<dstd::String>& files,
                       const std::string& index_dir) {
     std::atomic<bool> done{false};
     std::atomic<std::size_t> peak{0};
@@ -61,8 +63,8 @@ std::size_t peak_live(const std::vector<std::string>& files,
     {
         Runtime rt(1);
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto config = std::make_shared<build::IndexBuildBatchConfig>();
-            config->file_paths = files;
+            auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+            config->file_paths.assign(files.begin(), files.end());
             config->index_dir = index_dir;
             config->parallelism = 1;
             result = co_await build::BatchBuilder::process(std::move(config));
@@ -82,10 +84,10 @@ std::size_t peak_live(const std::vector<std::string>& files,
 TEST_SUITE("IndexBuildPeak") {
     TEST_CASE("one worker holds the state of a file only until it is written") {
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < 256; ++i)
-            files.push_back(write_trace(env.get_dir(), i));
-        const std::vector<std::string> few(files.begin(), files.begin() + 64);
+            files.emplace_back(write_trace(env.get_dir(), i));
+        const dstd::Vector<dstd::String> few(files.begin(), files.begin() + 64);
         // The store trains each namespace's dictionary on samples that fill
         // within the first files, so 64 files hold as many sample bytes as 256.
         const auto samples =

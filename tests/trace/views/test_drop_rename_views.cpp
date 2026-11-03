@@ -78,8 +78,9 @@ View query_indexed(const std::string& gz, const std::string& schema) {
 }
 
 View full_index(const std::string& gz, const std::string& schema) {
-    dftracer::utils::index::Indexer::open({gz}).build();
-    return View::from_file(gz, determine_index_path(gz, ""))
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
+        .build();
+    return View::from_file(gz, std::string(determine_index_path(gz, "")))
         .record_schema(schema);
 }
 
@@ -129,8 +130,8 @@ namespace st = dftracer::utils::index::store;
 
 bool has_catalog(const std::string& gz) {
     try {
-        const auto snapshot =
-            dftu_utils_test::index_snapshot(determine_index_path(gz, ""));
+        const auto snapshot = dftu_utils_test::index_snapshot(
+            std::string(determine_index_path(gz, "")));
         const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
         return file && dftracer::utils::index::extension_current(
                            snapshot, *file, st::IndexExtension::Catalog);

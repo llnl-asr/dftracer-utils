@@ -389,10 +389,13 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
     } else {
         std::vector<views::ViewFile> vfiles;
         vfiles.reserve(paths.size());
-        for (const std::string& p : paths)
+        for (const std::string& p : paths) {
+            const auto index_path =
+                dftracer::utils::trace::internal::determine_index_path(
+                    p, index_dir);
             vfiles.push_back(views::ViewFile{
-                p, dftracer::utils::trace::internal::determine_index_path(
-                       p, index_dir)});
+                p, std::string(index_path.data(), index_path.size())});
+        }
         if (!run_blocking([&] { tv = View::from_files(std::move(vfiles)); }))
             return -1;
     }

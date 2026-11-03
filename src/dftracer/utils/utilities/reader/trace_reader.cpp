@@ -209,16 +209,12 @@ coro::AsyncGenerator<Line> read_lines_indexed(
 
     if (query && !index_path.empty() &&
         range_type == internal::RangeType::ByteRange) {
-        // keep std: open_snapshot and PruneRequest take std::string
-        const std::string index_path_std(index_path.data(), index_path.size());
-        // keep std: PruneRequest takes std::string
-        const std::string file_path_std(file_path.data(), file_path.size());
         auto snapshot = common::unwrap(
-            dftracer::utils::index::plan::open_snapshot(index_path_std));
+            dftracer::utils::index::plan::open_snapshot(index_path));
         // GCC 12 destroys a temporary built inside co_await twice.
         dftracer::utils::index::plan::PruneRequest prune_req{
-            .index_path = index_path_std,
-            .file_path = file_path_std,
+            .index_path = index_path,
+            .file_path = file_path,
             .query = &*query,
             .snapshot = &snapshot,
             .metadata = dftracer::utils::index::plan::MetadataUse::All};
@@ -344,16 +340,12 @@ coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
     }
 
     if (query && !index_path.empty() && !config.skip_pruning) {
-        // keep std: open_snapshot and PruneRequest take std::string
-        const std::string index_path_std(index_path.data(), index_path.size());
-        // keep std: PruneRequest takes std::string
-        const std::string file_path_std(file_path.data(), file_path.size());
         auto snapshot = common::unwrap(
-            dftracer::utils::index::plan::open_snapshot(index_path_std));
+            dftracer::utils::index::plan::open_snapshot(index_path));
         // GCC 12 destroys a temporary built inside co_await twice.
         dftracer::utils::index::plan::PruneRequest prune_req{
-            .index_path = index_path_std,
-            .file_path = file_path_std,
+            .index_path = index_path,
+            .file_path = file_path,
             .query = &*query,
             .snapshot = &snapshot,
             .metadata = dftracer::utils::index::plan::MetadataUse::All};
@@ -443,13 +435,9 @@ TraceReader::TraceReader(TraceReaderConfig config)
 }
 
 void TraceReader::probe_index() {
-    format_ = CheckpointIndexerFactory::detect_format(
-        // keep std: detect_format takes std::string
-        std::string(config_.file_path.data(), config_.file_path.size()));
-    // keep std: determine_index_path returns std::string
-    const std::string determined = dftu_internal::determine_index_path(
-        config_.file_path, config_.index_dir);
-    index_path_ = dstd::String(determined.data(), determined.size());
+    format_ = CheckpointIndexerFactory::detect_format(config_.file_path);
+    index_path_ = dftu_internal::determine_index_path(config_.file_path,
+                                                      config_.index_dir);
     has_index_ = format_ == common::ArchiveFormat::Gzip &&
                  common::unwrap(dstd::fs::exists(dstd::PathView(
                      dftracer::utils::index::store_dir(index_path_))));
@@ -458,8 +446,8 @@ void TraceReader::probe_index() {
     // freshness predicate, so a record with no stored stat is treated as stale
     // rather than trusted on existence alone.
     if (has_index_) {
-        // keep std: open_snapshot takes std::string
-        auto snapshot = dftracer::utils::index::plan::open_snapshot(determined);
+        auto snapshot =
+            dftracer::utils::index::plan::open_snapshot(index_path_);
         if (snapshot) {
             dftracer::utils::common::InputFileStat st;
             dftracer::utils::index::SourceStat now;
@@ -534,13 +522,8 @@ std::size_t TraceReader::get_num_lines() {
 }
 
 dstd::SharedPtr<internal::Reader> TraceReader::create_indexed_reader() {
-    // keep std: CheckpointIndexerFactory::create takes std::string
-    const std::string file_path_std(config_.file_path.data(),
-                                    config_.file_path.size());
-    // keep std: CheckpointIndexerFactory::create takes std::string
-    const std::string index_path_std(index_path_.data(), index_path_.size());
     auto indexer = CheckpointIndexerFactory::create(
-        file_path_std, index_path_std, config_.checkpoint_size, false);
+        config_.file_path, index_path_, config_.checkpoint_size, false);
     return internal::ReaderFactory::create(indexer);
 }
 
@@ -779,18 +762,12 @@ coro::AsyncGenerator<dstd::Span<const char>> TraceReader::read_raw(
             range_type == internal::RangeType::ByteRange) {
             auto parsed = Query::from_string(config.query);
             if (!parsed) throw duql::DuqlParseError(parsed.error());
-            // keep std: open_snapshot and PruneRequest take std::string
-            const std::string index_path_std(index_path_.data(),
-                                             index_path_.size());
-            // keep std: PruneRequest takes std::string
-            const std::string file_path_std(config_.file_path.data(),
-                                            config_.file_path.size());
             auto snapshot = common::unwrap(
-                dftracer::utils::index::plan::open_snapshot(index_path_std));
+                dftracer::utils::index::plan::open_snapshot(index_path_));
             // GCC 12 destroys a temporary built inside co_await twice.
             dftracer::utils::index::plan::PruneRequest prune_req{
-                .index_path = index_path_std,
-                .file_path = file_path_std,
+                .index_path = index_path_,
+                .file_path = config_.file_path,
                 .query = &*parsed,
                 .snapshot = &snapshot,
                 .metadata = dftracer::utils::index::plan::MetadataUse::All};

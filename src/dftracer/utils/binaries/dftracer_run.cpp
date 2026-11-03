@@ -269,10 +269,8 @@ static int describe_plugins(const PluginArgs& plugin_args) {
 
 static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
                                        const PluginArgs* plugin_args) {
-    // keep std: unswept API
-    const std::string directory(cli->inputs.directory);
-    // keep std: unswept API
-    const std::string index_dir(cli->indexing.index_dir);
+    const dstd::String directory(cli->inputs.directory);
+    const dstd::String index_dir(cli->indexing.index_dir);
     const auto checkpoint_size = cli->indexing.checkpoint_size;
     const bool no_auto_index = cli->no_auto_index;
 
@@ -282,8 +280,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
         co_return 1;
     }
 
-    // keep std: unswept API
-    std::vector<std::string> files;
+    dstd::Vector<dstd::String> files;
     if (!directory.empty()) {
         auto matched =
             binaries::scan_trace_files_on_pool(cli->pipeline, directory);
@@ -308,8 +305,10 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     view_files.reserve(files.size());
     for (const auto& file_path : files) {
         ViewFile vf;
-        vf.file_path = file_path;
-        vf.index_path = internal::determine_index_path(file_path, index_dir);
+        vf.file_path.assign(file_path.data(), file_path.size());
+        const dstd::String index_path =
+            internal::determine_index_path(file_path, index_dir);
+        vf.index_path.assign(index_path.data(), index_path.size());
         vf.checkpoint_size = checkpoint_size;
         view_files.push_back(std::move(vf));
     }

@@ -55,7 +55,7 @@ dstd::Optional<index::Snapshot> covering_index(const ViewPlan& plan) {
         auto snapshot = common::unwrap(index::plan::open_snapshot(index_path));
         const auto config = common::unwrap(agg::tier::read_config(snapshot));
         if (!config) return dstd::nullopt;
-        std::set<std::string> current;
+        std::set<std::string, std::less<>> current;
         for (const auto& file : common::unwrap(snapshot.files())) {
             if (snapshot.extension(file, store::IndexExtension::Agg,
                                    config->params_hash) ==
@@ -65,7 +65,9 @@ dstd::Optional<index::Snapshot> covering_index(const ViewPlan& plan) {
         if (current.size() != plan.files.size()) return dstd::nullopt;
         for (const auto& f : plan.files) {
             if (f.index_path != index_path) return dstd::nullopt;
-            if (!current.count(store::internal::get_logical_path(f.file_path)))
+            const dstd::String logical =
+                store::internal::get_logical_path(f.file_path);
+            if (current.find(std::string_view(logical)) == current.end())
                 return dstd::nullopt;
         }
         return snapshot;

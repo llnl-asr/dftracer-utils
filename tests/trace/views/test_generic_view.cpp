@@ -43,12 +43,13 @@ std::string write_ndjson(TestEnvironment& env, const std::string& name) {
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     (void)dstd::fs::remove(plain);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
+        .build();
     return gz;
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, determine_index_path(gz, ""));
+    return View::from_file(gz, std::string(determine_index_path(gz, "")));
 }
 
 std::set<std::string> names_of(const dataframe::DataFrame& df) {
@@ -166,9 +167,12 @@ TEST_SUITE("GenericView") {
         TestEnvironment env(10);
         const auto gz = write_ndjson(env, "m");
         const auto dft = create_mixed_trace(env, 5, 5);
-        dftracer::utils::index::Indexer::open({dft}).build();
-        View v = View::from_files({{gz, determine_index_path(gz, "")},
-                                   {dft, determine_index_path(dft, "")}});
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(dft))})
+            .build();
+        View v = View::from_files(
+            {{gz, std::string(determine_index_path(gz, ""))},
+             {dft, std::string(determine_index_path(dft, ""))}});
         try {
             v.collect().get();
             FAIL("no error");
@@ -209,7 +213,9 @@ TEST_SUITE("GenericView") {
                 .num_rows();
         };
         CHECK(rows() == 10);
-        dftracer::utils::index::Indexer::open({std::string(dir.str())}).build();
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(std::string(dir.str())))})
+            .build();
         CHECK(rows() == 10);
 
         TestEnvironment empty_env(10);

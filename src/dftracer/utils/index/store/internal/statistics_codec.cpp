@@ -5,12 +5,14 @@
 #include <dftracer/utils/index/store/internal/payload_codec.h>
 #include <dftracer/utils/index/store/internal/statistics_codec.h>
 
+#include <string>
+
 namespace dftracer::utils::index::store::internal {
 
-std::string encode_file_scalar_stats_value(
+dstd::String encode_file_scalar_stats_value(
     const index::schemas::dft::ChunkStatistics& stats,
     std::uint64_t num_chunks) {
-    std::string value;
+    dstd::String value;
     dstd::append_u64_be(value, stats.total_events);
     dstd::append_u64_be(value, stats.min_timestamp_us);
     dstd::append_u64_be(value, stats.max_timestamp_us);
@@ -60,8 +62,9 @@ index::schemas::dft::MergedStatisticsResult decode_file_scalar_stats_value(
 
     auto duration_histogram = cursor.str();
     if (!duration_histogram.empty()) {
-        stats.duration_histogram =
-            dataframe::Log2Histogram::from_json(duration_histogram);
+        stats.duration_histogram = dataframe::Log2Histogram::from_json(
+            // keep std: Log2Histogram::from_json takes std::string
+            std::string(duration_histogram));
     }
 
     result.num_chunks = cursor.u64();

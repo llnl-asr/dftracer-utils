@@ -3,19 +3,19 @@
 #define DFTRACER_UTILS_INDEX_BUILD_FILE_GROUP_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
 
 #include <cstddef>
-#include <string>
 
 namespace dftracer::utils::index::build {
 
 /// A file whose group publish failed.
 struct GroupFailure {
     std::size_t tag;
-    std::string path;
-    std::string message;
+    dstd::String path;
+    dstd::String message;
 };
 
 /// What a group published since its last commit().
@@ -39,8 +39,8 @@ class FileGroup {
     /// and adds it. `path` is the logical path the build is named by. One the
     /// group already holds publishes the group first, so the later build
     /// replaces the earlier one. Returns the staging error, empty on success.
-    coro::CoroTask<std::string> add(FileBuild build, std::size_t tag,
-                                    std::string path);
+    coro::CoroTask<dstd::String> add(FileBuild build, std::size_t tag,
+                                     dstd::String path);
 
     /// Publishes the group in one record and empties it. The result also
     /// covers the publishes `add` made since the last commit().
@@ -51,7 +51,7 @@ class FileGroup {
    private:
     struct Entry {
         std::size_t tag;
-        std::string path;
+        dstd::String path;
     };
 
     coro::CoroTask<void> publish();

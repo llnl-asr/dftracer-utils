@@ -2,15 +2,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schema_class.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace ix = dftracer::utils::index;
 
@@ -21,8 +20,8 @@ struct ClassNginx {
     ix::Field<std::int64_t, "status"> status;
     ix::Field<double, "request_time", ix::DurationRole<ix::TimeUnit::S>>
         request_time;
-    ix::Field<dftracer::utils::dstd::Optional<std::string>, "meta.host"> host;
-    ix::Field<std::string, "upstream", ix::AlwaysIndex> upstream;
+    ix::Field<dftracer::utils::dstd::Optional<dstd::String>, "meta.host"> host;
+    ix::Field<dstd::String, "upstream", ix::AlwaysIndex> upstream;
     ix::Field<dftracer::utils::dstd::Optional<ix::Json>, "tags"> tags;
 };
 
@@ -43,12 +42,12 @@ struct ClassWeb {
 struct ClassTimed {
     static constexpr dftracer::utils::dstd::StringView id = "class_timed";
     ix::Field<std::uint64_t, "ts_ms", ix::TimeRole<ix::TimeUnit::Ms>> ts_ms;
-    ix::Field<std::string, "worker", ix::EntityRole> worker;
+    ix::Field<dstd::String, "worker", ix::EntityRole> worker;
     ix::Field<dftracer::utils::dstd::Optional<bool>, "ok"> ok;
     ix::Field<dftracer::utils::dstd::Optional<std::int64_t>, "thread",
               ix::LaneRole>
         thread;
-    ix::Field<dftracer::utils::dstd::Optional<std::string>, "op", ix::NameRole>
+    ix::Field<dftracer::utils::dstd::Optional<dstd::String>, "op", ix::NameRole>
         op;
 };
 
@@ -59,11 +58,11 @@ TEST_SUITE("SchemaClass") {
         const auto& s = ix::register_schema<ClassNginx>("test_schema_class");
         CHECK(s.id == "class_nginx");
         CHECK(s.require ==
-              std::vector<std::string>{"status", "request_time", "upstream"});
+              dstd::Vector<dstd::String>{"status", "request_time", "upstream"});
         CHECK(s.roles.duration == "request_time");
         CHECK(s.roles.duration_unit == ix::TimeUnit::S);
         CHECK(s.always_index ==
-              std::vector<std::string>{"request_time", "upstream"});
+              dstd::Vector<dstd::String>{"request_time", "upstream"});
         REQUIRE(s.field_at("tags") != nullptr);
         CHECK(s.field_at("tags")->type == ix::FieldType::Json);
         CHECK(s.field_at("meta.host")->optional);
@@ -82,7 +81,7 @@ TEST_SUITE("SchemaClass") {
         const auto& s = ix::register_schema<ClassStep>("test_schema_class");
         CHECK(s.decoder == ix::Decoder::Dftracer);
         CHECK(s.require ==
-              std::vector<std::string>{"ph", "name", "ts", "args.step"});
+              dstd::Vector<dstd::String>{"ph", "name", "ts", "args.step"});
     }
 
     TEST_CASE("member types map to field types") {

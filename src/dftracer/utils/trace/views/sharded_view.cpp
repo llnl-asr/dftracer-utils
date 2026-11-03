@@ -27,7 +27,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -196,7 +195,7 @@ std::size_t consolidate_shard_set(const std::string& root) {
     for (const auto& shard_root : shard_roots)
         dftracer::utils::index::release_root(shard_root);
 
-    const std::string target = dftracer::utils::index::store_dir(root);
+    const dstd::String target = dftracer::utils::index::store_dir(root);
     for (const auto& shard_root : shard_roots) {
         common::unwrap(dftracer::utils::store::Store::adopt(
             dftracer::utils::index::store_dir(shard_root), target));
@@ -286,7 +285,7 @@ std::size_t merge_shard_set(const std::string& root,
                 dftracer::utils::index::shard_manifest_path(root));
     }
 
-    const std::string out_idx = internal::determine_index_path("x", out_root);
+    const dstd::String out_idx = internal::determine_index_path("x", out_root);
 
     agg::AggInternTable out_intern;
     std::size_t files = 0;

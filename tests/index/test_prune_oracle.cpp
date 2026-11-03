@@ -195,7 +195,8 @@ const std::vector<TimeRange> TIME_RANGES = {
     std::make_pair(1300000.0, 0.0),
 };
 
-std::string join(const std::vector<std::uint64_t>& v) {
+template <class Values>
+std::string join(const Values& v) {
     std::string s;
     for (auto x : v) {
         if (!s.empty()) s += ',';
@@ -221,10 +222,11 @@ struct Corpus {
             traces.push_back(write_trace(env.get_dir(), seed, 6000));
         index::IndexerOptions opts;
         opts.index_dir = index_dir;
-        index::Indexer::open(traces, opts).build();
+        index::Indexer::open(dftu_utils_test::dstd_paths(traces), opts).build();
     }
     std::string index_of(const std::string& trace) const {
-        return trace::internal::determine_index_path(trace, index_dir);
+        return std::string(
+            trace::internal::determine_index_path(trace, index_dir));
     }
 };
 
@@ -247,8 +249,10 @@ std::vector<std::string> run_oracle(const Corpus& c) {
             const std::string key = base + "|" + text + "|";
 
             plan::ChunkPruner pruner;
-            auto one =
-                pruner(plan::ChunkPrunerInput{index_path, trace, q}).get();
+            auto one = pruner(plan::ChunkPrunerInput{
+                                  dstd::String(dstd::StringView(index_path)),
+                                  dstd::String(dstd::StringView(trace)), q})
+                           .get();
             lines.push_back(key + "-|pruner|" + std::to_string(one.success) +
                             "/" + std::to_string(one.file_may_match) + "/" +
                             std::to_string(one.total_checkpoints) + "|" +
@@ -256,7 +260,7 @@ std::vector<std::string> run_oracle(const Corpus& c) {
 
             plan::ChunkPrunerBatchInput batch;
             batch.index_path = index_path;
-            batch.items.push_back({trace, q});
+            batch.items.push_back({dstd::String(dstd::StringView(trace)), q});
             auto many = pruner.process_batch(batch);
             REQUIRE(many);
             const auto& b = many->outputs.at(0);
@@ -399,9 +403,9 @@ TEST_CASE("pruning never drops a matching event") {
 
 namespace {
 
-std::vector<std::uint64_t> view_chunks(const std::string& trace,
-                                       const std::string& index_path,
-                                       const std::string& text) {
+dstd::Vector<std::uint64_t> view_chunks(const std::string& trace,
+                                        const std::string& index_path,
+                                        const std::string& text) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     trace::views::detail::ViewPlan vp;
@@ -414,19 +418,19 @@ std::vector<std::uint64_t> view_chunks(const std::string& trace,
     vp.query = duql::parse_or_throw(text);
     const auto vdef = trace::views::detail::make_vdef(vp, false);
     std::uint64_t skipped = 0;
-    std::vector<std::uint64_t> out;
+    dstd::Vector<std::uint64_t> out;
     for (const auto& u :
          trace::views::detail::gather_units(vp, vdef, skipped).get())
         out.push_back(u.checkpoint_idx);
     return out;
 }
 
-using Manifest = std::map<std::string, index::ExtensionEntry>;
+using Manifest = dstd::Map<dstd::String, index::ExtensionEntry>;
 
 Manifest manifest_of(const index::Indexer& ix, const std::string& trace) {
     Manifest out;
     for (const auto& f : ix.manifest())
-        if (f.path == trace)
+        if (dstd::StringView(f.path) == dstd::StringView(trace))
             for (const auto& e : f.extensions) out[e.name] = e;
     return out;
 }
@@ -454,7 +458,8 @@ index::IndexerOptions corpus_options(const Corpus& c) {
 
 TEST_CASE("explain reads the chunks a View scan reads") {
     Corpus corpus;
-    auto ix = index::Indexer::open(corpus.traces, corpus_options(corpus));
+    auto ix = index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
+                                   corpus_options(corpus));
     bool postings_removed = false;
     for (const auto& text : QUERIES) {
         const auto explained = ix.explain(text);
@@ -464,7 +469,8 @@ TEST_CASE("explain reads the chunks a View scan reads") {
             CAPTURE(text);
             CHECK(f.indexed);
             const auto view =
-                view_chunks(f.path, corpus.index_of(f.path), text);
+                view_chunks(std::string(f.path),
+                            corpus.index_of(std::string(f.path)), text);
             CHECK(f.may_match == !view.empty());
             if (f.may_match) CHECK(f.read == view);
             for (const auto& e : f.extensions)
@@ -481,7 +487,8 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
     Corpus corpus;
     const auto trace = corpus.traces.front();
     const auto expected_rows = rows(corpus);
-    auto ix = index::Indexer::open(corpus.traces, corpus_options(corpus));
+    auto ix = index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
+                                   corpus_options(corpus));
     const auto before = manifest_of(ix, trace);
     for (const char* name : {"core.members", "core.rowset", "zonemap", "bloom",
                              "counts", "postings", "dft.stats"}) {
@@ -502,7 +509,8 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
 
     auto without = corpus_options(corpus);
     without.extensions = {"zonemap", "bloom", "postings"};
-    auto subset = index::Indexer::open(corpus.traces, without);
+    auto subset = index::Indexer::open(
+        dftu_utils_test::dstd_paths(corpus.traces), without);
     subset.drop_extension("counts");
     CHECK(subset.status().needs_work.empty());
     CHECK(subset.build().indexed == 0);
@@ -512,7 +520,8 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
 
     auto other_rate = without;
     other_rate.bloom->false_positive_rate = 0.05;
-    auto rate = index::Indexer::open(corpus.traces, other_rate);
+    auto rate = index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
+                                     other_rate);
     CHECK(rate.status().needs_work.size() == corpus.traces.size());
     rate.build();
     const auto after = manifest_of(rate, trace);
@@ -535,8 +544,10 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
     }
     auto bad_options = corpus_options(corpus);
     bad_options.extensions = {"dft.stats"};
-    CHECK_THROWS_AS(index::Indexer::open(corpus.traces, bad_options),
-                    common::DFTUtilsException);
+    CHECK_THROWS_AS(
+        index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
+                             bad_options),
+        common::DFTUtilsException);
 }
 
 TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
@@ -544,7 +555,8 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     auto spill = corpus_options(corpus);
     spill.index_dir = dstd::String(corpus.env.get_dir()) + "/idx_spill";
     spill.memory_budget = 64 * 1024;
-    index::Indexer::open(corpus.traces, spill).build();
+    index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces), spill)
+        .build();
     // The aggregation tier keys its rows by interned string ids that follow the
     // build's file order, and a memory budget changes that order. Its bytes may
     // differ, its answers may not.
@@ -556,8 +568,8 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
         return out;
     };
     const auto& trace = corpus.traces.front();
-    const auto spilled =
-        trace::internal::determine_index_path(trace, spill.index_dir);
+    const auto spilled = std::string(
+        trace::internal::determine_index_path(trace, spill.index_dir));
     const auto a = contents(corpus.index_of(trace));
     const auto b = contents(spilled);
     CHECK(a.size() == b.size());
@@ -637,11 +649,15 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
     }
     index::IndexerOptions opts;
     opts.index_dir = index_dir;
-    index::Indexer::open(traces, opts).build();
-    const auto index_path =
-        trace::internal::determine_index_path(traces[0], index_dir);
+    index::Indexer::open(dftu_utils_test::dstd_paths(traces), opts).build();
+    const auto index_path = std::string(
+        trace::internal::determine_index_path(traces[0], index_dir));
     const auto rows = index::plan::stored_rowset(
-        {{traces[0], index_path}, {traces[1], index_path}}, "files");
+        {{dstd::String(dstd::StringView(traces[0])),
+          dstd::String(dstd::StringView(index_path))},
+         {dstd::String(dstd::StringView(traces[1])),
+          dstd::String(dstd::StringView(index_path))}},
+        "files");
     REQUIRE(rows);
     CHECK(rows->num_rows() == 2);
     for (const auto& trace : traces) {

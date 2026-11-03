@@ -32,7 +32,6 @@
 #include <algorithm>
 #include <bit>
 #include <map>
-#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -60,7 +59,7 @@ std::string tier_field(const ViewPlan& plan, dstd::StringView f) {
     namespace ix = dftracer::utils::index;
     const ix::RecordSchema& s = plan_record_schema(plan);
     const ix::Roles& r = s.roles;
-    auto exact = [&](const std::string& path, ix::FieldType type) {
+    auto exact = [&](dstd::StringView path, ix::FieldType type) {
         if (f.empty() || path != f) return false;
         const ix::FieldSpec* spec = s.field_at(path);
         return spec && !spec->optional && spec->type == type;
@@ -82,7 +81,7 @@ bool roles_complete(const ViewPlan& plan) {
     namespace ix = dftracer::utils::index;
     const ix::Roles& r = plan_record_schema(plan).roles;
     std::vector<dstd::StringView> paths;
-    for (const std::string* p :
+    for (const dstd::String* p :
          {&r.name, &r.entity, &r.lane, &r.duration, &r.time})
         if (!tier_field(plan, *p).empty()) paths.push_back(*p);
     if (paths.empty()) return true;
@@ -447,7 +446,7 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
 
     AggQuery& q = p.query;
     std::uint64_t interval_us = q.config.time_interval_us;
-    std::vector<std::string> build_extra;
+    dstd::Vector<dstd::String> build_extra;
     // The first root with a config fixes the span of a pre-aggregated counter
     // and the extra keys. A root without one says nothing about either.
     bool config_seen = false;
@@ -546,8 +545,11 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
                 // The joined text of the kept values cannot tell a missing
                 // one from an empty one, which the scan keeps apart, so a key
                 // the build did not keep declines on a trace too.
-                if (std::find(build_extra.begin(), build_extra.end(), gk.arg) ==
-                    build_extra.end())
+                if (std::none_of(build_extra.begin(), build_extra.end(),
+                                 [&](const dstd::String& e) {
+                                     return dstd::StringView(e) ==
+                                            dstd::StringView(gk.arg);
+                                 }))
                     return declined(
                         "a group key on an arg the build did "
                         "not keep");
@@ -563,9 +565,9 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
                 break;
         }
     }
-    p.extra = std::move(build_extra);
+    for (const auto& k : build_extra) p.extra.emplace_back(k.data(), k.size());
     q.config.time_interval_us = interval_us;
-    for (const auto& k : p.extra) q.config.extra_group_keys.push_back(k);
+    q.config.extra_group_keys = std::move(build_extra);
     q.by_kind = true;
     q.quantiles = wants_quantiles(plan);
     // The dftracer line parser does not read a path-decoded file.

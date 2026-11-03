@@ -223,7 +223,9 @@ TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
     dftu_utils_test::write_gz_trace(gz, text);
     dftracer::utils::index::IndexerOptions o;
     o.index_dir = env.get_dir();
-    dftracer::utils::index::Indexer::open({gz}, o).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
+                                          o)
+        .build();
 
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
     Scheduler scheduler(&executor);

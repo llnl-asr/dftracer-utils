@@ -15,7 +15,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <vector>
 
 namespace dftracer::utils::index::gzip {
 
@@ -58,12 +57,12 @@ inline constexpr std::size_t MEMBER_SCAN_WAYS = 16;
 /// results of tasks on different threads into one vector.
 inline coro::CoroTask<std::uint8_t> scan_member_ranges(
     int fd, std::uint64_t file_size, std::atomic<std::size_t>* next,
-    std::vector<std::vector<GzipHeaderHit>>* hits) {
+    dstd::Vector<dstd::Vector<GzipHeaderHit>>* hits) {
     // Four bytes behind the window for the ISIZE, nine past it so a header
     // that starts in the window is whole.
     constexpr std::size_t BEHIND = 4;
     constexpr std::size_t AHEAD = 9;
-    std::vector<unsigned char> buf(
+    dstd::Vector<unsigned char> buf(
         BEHIND + std::min<std::uint64_t>(MEMBER_SCAN_WINDOW, file_size) +
         AHEAD);
     for (;;) {
@@ -118,14 +117,14 @@ inline coro::CoroTask<std::uint8_t> scan_member_ranges(
 /// with a plausible header) are possible; callers must treat a returned
 /// list as "candidate" and validate at inflate time.
 inline coro::CoroTask<bool> enumerate_gzip_member_candidates(
-    int fd, std::uint64_t file_size, std::vector<GzipMember>& out) {
+    int fd, std::uint64_t file_size, dstd::Vector<GzipMember>& out) {
     out.clear();
     if (file_size < 18)
         co_return false;  // min gzip: 10 header + 2 deflate + 8 trailer
 
     const std::size_t ranges = static_cast<std::size_t>(
         (file_size + MEMBER_SCAN_RANGE - 1) / MEMBER_SCAN_RANGE);
-    std::vector<std::vector<GzipHeaderHit>> hits(ranges);
+    dstd::Vector<dstd::Vector<GzipHeaderHit>> hits(ranges);
     std::atomic<std::size_t> next{0};
     dstd::Vector<coro::CoroTask<std::uint8_t>> scans;
     const std::size_t ways = std::min(ranges, MEMBER_SCAN_WAYS);

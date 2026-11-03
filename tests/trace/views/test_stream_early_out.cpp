@@ -41,7 +41,7 @@ TEST_SUITE("View - streaming early-out") {
         // budget small enough that the producer must wait on the consumer.
         std::string gz =
             test_view_common::create_multimember_trace(env, 4000, 512);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         ProducerSentinel sentinel;
         {
@@ -70,7 +70,7 @@ TEST_SUITE("View - streaming early-out") {
         TestEnvironment env(200);
         std::string gz =
             test_view_common::create_multimember_trace(env, 500, 512);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         View v = View::from_file(gz, idx).memory_budget(4096);
 
         const std::int64_t rows =

@@ -2,14 +2,16 @@
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 
 #include <algorithm>
-#include <charconv>
 #include <cstring>
 #include <limits>
+#include <system_error>
 
 namespace dftracer::utils::index::extensions {
 
@@ -42,40 +44,40 @@ void ChunkDimensionStats::observe(dstd::StringView value) {
         return;
     }
 
-    auto [new_it, _] = value_counts->emplace(std::string(value), 1);
+    auto [new_it, _] = value_counts->emplace(dstd::String(value), 1);
     it = new_it;
     distinct_count = value_counts->size();
     last_key_ = &it->first;
     last_counter_ = &it->second;
 
-    const std::string& val_ref = it->first;
+    const dstd::StringView val_ref = it->first;
 
     if (value_type == "uint") {
         std::uint64_t val = 0;
         auto [ptr, ec] =
-            std::from_chars(value.data(), value.data() + value.size(), val);
+            dstd::from_chars(value.data(), value.data() + value.size(), val);
         if (ec == std::errc()) {
             if (min_value.empty()) {
-                min_value = val_ref;
-                max_value = val_ref;
+                min_value.assign(val_ref);
+                max_value.assign(val_ref);
             } else {
                 std::uint64_t cur_min = 0, cur_max = 0;
-                std::from_chars(min_value.data(),
-                                min_value.data() + min_value.size(), cur_min);
-                std::from_chars(max_value.data(),
-                                max_value.data() + max_value.size(), cur_max);
-                if (val < cur_min) min_value = val_ref;
-                if (val > cur_max) max_value = val_ref;
+                dstd::from_chars(min_value.data(),
+                                 min_value.data() + min_value.size(), cur_min);
+                dstd::from_chars(max_value.data(),
+                                 max_value.data() + max_value.size(), cur_max);
+                if (val < cur_min) min_value.assign(val_ref);
+                if (val > cur_max) max_value.assign(val_ref);
             }
             return;
         }
     }
 
     if (min_value.empty() || val_ref < min_value) {
-        min_value = val_ref;
+        min_value.assign(val_ref);
     }
     if (max_value.empty() || val_ref > max_value) {
-        max_value = val_ref;
+        max_value.assign(val_ref);
     }
 }
 
@@ -95,7 +97,7 @@ void ChunkDimensionStats::observe_range_only(std::uint64_t value) {
     distinct_count++;
     char buf[std::numeric_limits<std::uint64_t>::digits10 + 2];
     const auto text = [&] {
-        const auto end = std::to_chars(buf, buf + sizeof(buf), value).ptr;
+        const auto end = dstd::to_chars(buf, buf + sizeof(buf), value).ptr;
         return dstd::StringView(buf, static_cast<std::size_t>(end - buf));
     };
     if (min_value.empty()) {
@@ -103,19 +105,19 @@ void ChunkDimensionStats::observe_range_only(std::uint64_t value) {
         max_value = min_value;
     } else {
         std::uint64_t cur_min = 0, cur_max = 0;
-        std::from_chars(min_value.data(), min_value.data() + min_value.size(),
-                        cur_min);
-        std::from_chars(max_value.data(), max_value.data() + max_value.size(),
-                        cur_max);
+        dstd::from_chars(min_value.data(), min_value.data() + min_value.size(),
+                         cur_min);
+        dstd::from_chars(max_value.data(), max_value.data() + max_value.size(),
+                         cur_max);
         if (value < cur_min) min_value = text();
         if (value > cur_max) max_value = text();
     }
 }
 
-std::vector<std::uint8_t> ChunkDimensionStats::serialize_value_counts() const {
+dstd::Vector<std::uint8_t> ChunkDimensionStats::serialize_value_counts() const {
     if (!value_counts || value_counts->empty()) return {};
 
-    std::vector<std::uint8_t> buf;
+    dstd::Vector<std::uint8_t> buf;
     auto num = static_cast<std::uint32_t>(value_counts->size());
 
     buf.reserve(4 + num * 20);
@@ -136,7 +138,7 @@ std::vector<std::uint8_t> ChunkDimensionStats::serialize_value_counts() const {
     return buf;
 }
 
-dstd::Optional<std::vector<std::uint8_t>>
+dstd::Optional<dstd::Vector<std::uint8_t>>
 ChunkDimensionStats::compress_value_counts(std::size_t cap_bytes) const {
     auto raw = serialize_value_counts();
     if (raw.empty()) return dstd::nullopt;
@@ -151,7 +153,7 @@ ChunkDimensionStats::compress_value_counts(std::size_t cap_bytes) const {
     // Prefix the decoded length so the reader can size the output buffer
     // exactly instead of guessing.
     if (4 + member->size() > cap_bytes) return dstd::nullopt;
-    std::vector<std::uint8_t> out(4 + member->size());
+    dstd::Vector<std::uint8_t> out(4 + member->size());
     dstd::write_u32_le(out.data(), static_cast<std::uint32_t>(raw.size()));
     std::copy(member->begin(), member->end(), out.begin() + 4);
 
@@ -175,7 +177,7 @@ ChunkDimensionStats::deserialize_value_counts(const std::uint8_t* data,
 
         if (pos + key_len + 8 > len) break;
 
-        std::string key(reinterpret_cast<const char*>(data + pos), key_len);
+        dstd::String key(reinterpret_cast<const char*>(data + pos), key_len);
         pos += key_len;
 
         std::uint64_t count = dstd::read_u64_le(data + pos);
@@ -198,7 +200,7 @@ ChunkDimensionStats::decompress_value_counts(const std::uint8_t* data,
     compress::GzipMemberDecompressor decompressor;
     if (!decompressor.valid()) return {};
 
-    std::vector<std::uint8_t> decompressed(decoded_len);
+    dstd::Vector<std::uint8_t> decompressed(decoded_len);
     auto res = decompressor.decompress(data + 4, len - 4, decompressed.data(),
                                        decompressed.size());
     if (!res || res->out_bytes != decoded_len) return {};

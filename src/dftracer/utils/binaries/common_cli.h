@@ -48,7 +48,6 @@
 #include <iterator>
 #include <string>
 #include <type_traits>
-#include <vector>
 
 namespace dftracer::utils::binaries {
 
@@ -521,8 +520,7 @@ inline dstd::Path absolute_path(dstd::StringView path) {
 
 // The trace files under `directory`, scanned recursively on a pool of its own
 // (see scan_on_pool) with one I/O thread.
-// keep std: unswept API
-inline std::vector<utilities::filesystem::FileEntry> scan_trace_files_on_pool(
+inline dstd::Vector<utilities::filesystem::FileEntry> scan_trace_files_on_pool(
     const PipelineArgs& pipeline, dstd::StringView directory,
     bool populate_size = true) {
     auto scanned = utilities::filesystem::scan_on_pool<
@@ -531,10 +529,7 @@ inline std::vector<utilities::filesystem::FileEntry> scan_trace_files_on_pool(
         utilities::filesystem::PatternDirectoryScannerUtilityInput{
             dstd::String(directory),
             utilities::filesystem::trace_file_patterns(), true, populate_size});
-    // keep std: unswept API
-    return std::vector<utilities::filesystem::FileEntry>(
-        std::make_move_iterator(scanned.begin()),
-        std::make_move_iterator(scanned.end()));
+    return scanned;
 }
 
 // Parallel per-subdirectory scan of `directory` for trace files via
@@ -611,8 +606,7 @@ int run_single_task(const char* name, const PipelineArgs& pipeline,
 inline coro::CoroTask<int> ensure_indexes_fresh_task(
     coro::Scope& ctx, dstd::StringView directory,
     dstd::Vector<dstd::StringView> files, dstd::StringView index_dir,
-    // keep std: unswept API
-    bool force_rebuild, std::vector<utilities::filesystem::FileEntry>* entries,
+    bool force_rebuild, dstd::Vector<utilities::filesystem::FileEntry>* entries,
     dftracer::utils::index::schemas::dft::agg::AggregationConfig aggregation =
         dftracer::utils::index::schemas::dft::agg::
             standard_aggregation_config(),
@@ -643,8 +637,7 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     co_return 0;
 }
 
-// keep std: unswept API
-inline std::vector<utilities::filesystem::FileEntry>
+inline dstd::Vector<utilities::filesystem::FileEntry>
 ensure_indexes_fresh_blocking(
     const char* name, const PipelineArgs& pipeline, dstd::StringView directory,
     dstd::Vector<dstd::StringView> files, dstd::StringView index_dir,
@@ -653,8 +646,7 @@ ensure_indexes_fresh_blocking(
         dftracer::utils::index::schemas::dft::agg::
             standard_aggregation_config(),
     std::size_t checkpoint_size = 0) {
-    // keep std: unswept API
-    std::vector<utilities::filesystem::FileEntry> entries;
+    dstd::Vector<utilities::filesystem::FileEntry> entries;
     if (directory.empty() && files.empty()) return entries;
     run_single_task(
         name, pipeline, [&](coro::Scope& ctx) -> coro::CoroTask<int> {

@@ -45,7 +45,6 @@
 #include <cstring>
 #include <new>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -133,8 +132,14 @@ coro::CoroTask<void> run_host_scan(dftracer::utils::coro::Scope& scope,
             "no trace files found");
 
     if (auto_index) {
-        co_await dftracer::utils::index::build::ensure_indexes_fresh("", files,
-                                                                     index_dir);
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> to_check;
+        to_check.reserve(files.size());
+        for (const auto& file : files)
+            to_check.emplace_back(dftracer::utils::dstd::StringView(file));
+        dftracer::utils::dstd::String index_dir_arg{
+            dftracer::utils::dstd::StringView(index_dir)};
+        co_await dftracer::utils::index::build::ensure_indexes_fresh(
+            "", std::move(to_check), std::move(index_dir_arg));
     }
 
     std::vector<views::ViewFile> view_files;

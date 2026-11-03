@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
@@ -73,7 +74,7 @@ BloomFilter::BloomFilter(std::size_t expected_entries,
     bits_.assign(num_bits_ / 8, 0);
 }
 
-BloomFilter::BloomFilter(std::vector<unsigned char> bits, std::size_t num_bits,
+BloomFilter::BloomFilter(dstd::Vector<unsigned char> bits, std::size_t num_bits,
                          std::size_t num_hashes, std::size_t num_entries)
     : bits_(std::move(bits)),
       num_bits_(num_bits),
@@ -94,8 +95,8 @@ BloomFilter BloomFilter::from_blob(const unsigned char* data,
 
     std::size_t bit_bytes = size - HEADER_SIZE;
 
-    std::vector<unsigned char> bits(data + HEADER_SIZE,
-                                    data + HEADER_SIZE + bit_bytes);
+    dstd::Vector<unsigned char> bits(data + HEADER_SIZE,
+                                     data + HEADER_SIZE + bit_bytes);
 
     return BloomFilter(std::move(bits), static_cast<std::size_t>(num_bits),
                        static_cast<std::size_t>(num_hashes),
@@ -162,13 +163,13 @@ void BloomFilter::merge_from(const BloomFilter& other) {
     num_entries_ += other.num_entries_;
 }
 
-std::vector<unsigned char> BloomFilter::serialize() const {
-    std::vector<unsigned char> result;
+dstd::Vector<unsigned char> BloomFilter::serialize() const {
+    dstd::Vector<unsigned char> result;
     serialize_into(result);
     return result;
 }
 
-void BloomFilter::serialize_into(std::vector<unsigned char>& result) const {
+void BloomFilter::serialize_into(dstd::Vector<unsigned char>& result) const {
     result.resize(HEADER_SIZE + bits_.size());
     dstd::write_u32_le(result.data(), static_cast<std::uint32_t>(num_hashes_));
     dstd::write_u32_le(result.data() + 4,

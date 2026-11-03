@@ -3,11 +3,10 @@
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_SCALABLE_BLOOM_FILTER_H
 
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 
 #include <cstddef>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::index::extensions {
 
@@ -59,8 +58,8 @@ class ScalableBloomFilter {
     std::size_t hash_computations() const { return hashed_; }
     void merge_from(const ScalableBloomFilter& other);
 
-    std::vector<unsigned char> serialize() const;
-    void serialize_into(std::vector<unsigned char>& result) const;
+    dstd::Vector<unsigned char> serialize() const;
+    void serialize_into(dstd::Vector<unsigned char>& result) const;
 
     /// Approximate count of distinct values added. Exact up to the
     /// false-positive rate of the levels, since `add` skips values that
@@ -78,7 +77,7 @@ class ScalableBloomFilter {
 
     void open_level(std::size_t capacity);
 
-    std::vector<Level> levels_;
+    dstd::Vector<Level> levels_;
     std::size_t initial_capacity_;
     double false_positive_rate_;
     std::size_t distinct_ = 0;

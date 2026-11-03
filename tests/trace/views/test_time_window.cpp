@@ -51,12 +51,13 @@ std::string write_trace(TestEnvironment& env, const std::string& name,
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                member_bytes));
     (void)dstd::fs::remove(plain);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
+        .build();
     return gz;
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, determine_index_path(gz, ""));
+    return View::from_file(gz, std::string(determine_index_path(gz, "")));
 }
 
 std::int64_t rows_in(const std::string& gz, double b, double e) {

@@ -1182,7 +1182,7 @@ dstd::Optional<CacheKey> cache_key(const detail::ViewPlan& given,
     for (auto& f : plan.files)
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
-    const std::string path = ix::cache::lookup_cache_path(plan);
+    const dstd::String path = ix::cache::lookup_cache_path(plan);
     if (path.empty()) return dstd::nullopt;
     detail::plan_record_schema(plan);
     // A `data` side reads the View as given: its filters are part of it.
@@ -1199,7 +1199,7 @@ dstd::Optional<CacheKey> cache_key(const detail::ViewPlan& given,
     }
     const auto sig = ix::cache::lookup_signature(plan, key);
     if (!sig) return dstd::nullopt;
-    return CacheKey{path, *sig};
+    return CacheKey{std::string(path.data(), path.size()), *sig};
 }
 
 [[noreturn]] void over_rows(const std::string& name, std::uint64_t rows,
@@ -1256,7 +1256,7 @@ class Sides {
     std::vector<std::vector<duql::VectorColumn>> columns;
     std::vector<dstd::Optional<CacheKey>> keys;
     // The files of each source row set, and whether their indexes hold it.
-    std::vector<std::vector<ix::plan::RowSetFile>> files;
+    std::vector<dstd::Vector<ix::plan::RowSetFile>> files;
     std::vector<char> stored;
 
     dstd::SharedPtr<const df::DataFrame> frame(std::size_t i) {
@@ -1687,11 +1687,12 @@ class Applier {
                arrays_.end();
     }
 
-    bool is_json(const std::string& name) const {
+    bool is_json(dstd::StringView name) const {
         for (const auto& spec : schema_.fields)
             if (spec.type == ix::FieldType::Json &&
                 (name == spec.name || name == spec.path ||
-                 (schema_.args_fallback && name == "args." + spec.name)))
+                 (schema_.args_fallback && name.starts_with("args.") &&
+                  name.substr(5) == spec.name)))
                 return true;
         return false;
     }
@@ -5431,10 +5432,12 @@ dstd::Pair<View, std::vector<std::string>> View::duql_plan(
                 all->all_records = true;
                 return detail::view_of(std::move(all));
             }
-            case duql::InputKind::File:
-                return View::from_file(
-                    std::string(in.path),
-                    internal::determine_index_path(std::string(in.path), ""));
+            case duql::InputKind::File: {
+                const dstd::String index =
+                    internal::determine_index_path(std::string(in.path), "");
+                return View::from_file(std::string(in.path),
+                                       std::string(index.data(), index.size()));
+            }
         }
         return *this;
     };
@@ -5477,10 +5480,10 @@ dstd::Pair<View, std::vector<std::string>> View::duql_plan(
         if (side.rowset) {
             for (const auto& f : plan_->files)
                 sides.files[i].push_back(
-                    {f.file_path,
+                    {dstd::String(dstd::StringView(f.file_path)),
                      f.index_path.empty()
                          ? internal::determine_index_path(f.file_path, "")
-                         : f.index_path});
+                         : dstd::String(dstd::StringView(f.index_path))});
             sides.stored[i] = ix::plan::has_stored_rowsets(sides.files[i]);
         }
         sides.views[i] = std::move(b.view);

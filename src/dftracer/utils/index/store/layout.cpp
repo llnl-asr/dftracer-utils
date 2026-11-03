@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/layout.h>
 
 #include <algorithm>
@@ -67,8 +68,8 @@ std::uint64_t read_u64(dstd::StringView bytes) {
     return read_be_checked<std::uint64_t>(bytes);
 }
 
-std::string prefix_end(dstd::StringView prefix) {
-    std::string end(prefix);
+dstd::String prefix_end(dstd::StringView prefix) {
+    dstd::String end(prefix);
     while (!end.empty()) {
         auto& last = end.back();
         if (static_cast<unsigned char>(last) != 0xFFU) {
@@ -77,11 +78,11 @@ std::string prefix_end(dstd::StringView prefix) {
         }
         end.pop_back();
     }
-    return std::string(prefix) + std::string(8, '\xFF');
+    return dstd::String(prefix) + dstd::String(8, '\xFF');
 }
 
-std::string encode_path_stat(const PathStat& stat) {
-    std::string out;
+dstd::String encode_path_stat(const PathStat& stat) {
+    dstd::String out;
     out.push_back(static_cast<char>(stat.type));
     out.push_back(static_cast<char>(stat.seen));
     dstd::append_u64_be(out, stat.count);
@@ -103,8 +104,8 @@ namespace {
 // (nullopt) list is the count OVER_CAP.
 constexpr std::uint32_t OVER_CAP = 0xFFFFFFFFU;
 
-void append_list(std::string& out,
-                 const dstd::Optional<std::vector<std::string>>& list) {
+void append_list(dstd::String& out,
+                 const dstd::Optional<dstd::Vector<dstd::String>>& list) {
     if (!list) {
         dstd::append_u32_be(out, OVER_CAP);
         return;
@@ -117,7 +118,7 @@ void append_list(std::string& out,
 }
 
 bool read_list(dstd::StringView& in,
-               dstd::Optional<std::vector<std::string>>& list) {
+               dstd::Optional<dstd::Vector<dstd::String>>& list) {
     if (in.size() < 4) return false;
     const std::uint32_t n = read_u32(in);
     in.remove_prefix(4);
@@ -139,8 +140,8 @@ bool read_list(dstd::StringView& in,
 
 }  // namespace
 
-std::string encode_chunk_metadata(const ChunkMetadata& metadata) {
-    std::string body;
+dstd::String encode_chunk_metadata(const ChunkMetadata& metadata) {
+    dstd::String body;
     dstd::append_u64_be(body, metadata.records);
     append_list(body, metadata.names);
     append_list(body, metadata.paths);
@@ -171,7 +172,7 @@ dstd::Optional<IndexExtension> parse_extension(dstd::StringView name) {
     return dstd::nullopt;
 }
 
-void add_metadata_value(dstd::Optional<std::vector<std::string>>& list,
+void add_metadata_value(dstd::Optional<dstd::Vector<dstd::String>>& list,
                         dstd::StringView value) {
     if (!list) return;
     auto it = std::lower_bound(list->begin(), list->end(), value);

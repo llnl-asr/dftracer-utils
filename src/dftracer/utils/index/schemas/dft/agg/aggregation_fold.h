@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -24,11 +25,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <limits>
-#include <memory>
-#include <string>
-#include <string_view>
 #include <variant>
 
 namespace dftracer::utils::index {
@@ -150,7 +147,9 @@ class AggregationFold : public trace::views::detail::Fold {
     }
     bool needs_args() const override { return true; }
 
+    // keep std: trace::views::detail::Fold::slice returns std::unique_ptr
     std::unique_ptr<trace::views::detail::Fold> slice() const override {
+        // keep std: Fold::slice returns std::unique_ptr
         auto made = std::make_unique<AggregationFold>(*build_intern_,
                                                       agg_intern_, config_);
         made->has_file_ = has_file_;
@@ -292,7 +291,7 @@ class AggregationFold : public trace::views::detail::Fold {
     std::uint32_t last_host_ = NO_ID;
     PartialKind last_kind_ = PartialKind::Event;
     std::uint32_t empty_id_ = NO_ID;
-    std::string extra_buf_;
+    dstd::String extra_buf_;
     dftracer::utils::dstd::Vector<std::uint32_t> cat_ids_;
     dftracer::utils::dstd::Vector<std::uint32_t> name_ids_;
     dftracer::utils::dstd::Vector<std::uint32_t> host_ids_;

@@ -9,8 +9,6 @@
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::common {
 
@@ -70,8 +68,7 @@ class ScratchSession {
 /// times $DFTRACER_UTILS_INDEX_SIZE_FACTOR, or nullopt when no scratch mount
 /// has room. The caller publishes the store it builds there with publish_path.
 dstd::Optional<ScratchSession> staged_build_scratch(
-    // keep std: the index build and the python bindings fill this list
-    const std::vector<std::string>& files);
+    const dstd::Vector<dstd::String>& files);
 
 /// Move `src` (a directory or file built on scratch) to `dst`, replacing any
 /// existing `dst`. Renames when both live on one filesystem, else recursively

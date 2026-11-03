@@ -122,7 +122,7 @@ TEST_SUITE("ViewScanner") {
         auto scan = [&](std::size_t begin, std::size_t end) {
             ViewScannerInput input;
             input.with_file_path(gz)
-                .with_index_path(determine_index_path(gz, ""))
+                .with_index_path(std::string(determine_index_path(gz, "")))
                 .with_checkpoint_size(1024)
                 .with_batch_size(128)
                 .with_byte_range(begin, end);
@@ -149,7 +149,7 @@ TEST_SUITE("ViewScanner") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_pfw_gz(env, 50);
-        std::string db_root = determine_index_path(gz, "");
+        std::string db_root = std::string(determine_index_path(gz, ""));
 
         ViewScannerInput input;
         input.with_file_path(gz)
@@ -169,7 +169,7 @@ TEST_SUITE("ViewScanner") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_pfw_gz(env, 50);
-        std::string db_root = determine_index_path(gz, "");
+        std::string db_root = std::string(determine_index_path(gz, ""));
 
         ViewScannerInput input;
         input.with_file_path(gz)
@@ -192,7 +192,7 @@ TEST_SUITE("ViewScanner") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_pfw_gz(env, 50);
-        std::string db_root = determine_index_path(gz, "");
+        std::string db_root = std::string(determine_index_path(gz, ""));
 
         ViewScannerInput input;
         input.with_file_path(gz)
@@ -216,7 +216,7 @@ TEST_SUITE("ViewScanner") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_metadata_pfw_gz(env);
-        std::string db_root = determine_index_path(gz, "");
+        std::string db_root = std::string(determine_index_path(gz, ""));
 
         ViewScannerInput input;
         input.with_file_path(gz)

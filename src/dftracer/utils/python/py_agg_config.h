@@ -3,11 +3,10 @@
 #define DFTRACER_UTILS_PYTHON_PY_AGG_CONFIG_H
 
 #include <Python.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/python/py_str_helpers.h>
-
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::python {
 
@@ -50,7 +49,7 @@ inline index::schemas::dft::agg::AggregationConfig agg_config_from_py(
         return out > 0;
     };
     auto pull_strings = [&](const char *name) {
-        std::vector<std::string> out;
+        dstd::Vector<dstd::String> out;
         PyObject *v = attr(name);
         if (!v) return out;
         PyObject *seq = PySequence_Fast(v, "expected list of str");

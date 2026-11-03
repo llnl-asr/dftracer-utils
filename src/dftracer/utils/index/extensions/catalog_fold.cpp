@@ -9,7 +9,6 @@
 #include <dftracer/utils/index/tables.h>
 
 #include <exception>
-#include <string>
 
 namespace dftracer::utils::index::extensions {
 
@@ -22,8 +21,12 @@ void observe_catalog_path(index::store::PathStat& stat, std::uint8_t tag) {
 }
 
 void CatalogFold::step(const trace::views::detail::FoldBatch& batch) {
-    FileState& fs = files_[batch.unit.file_path];
-    if (fs.index_path.empty()) fs.index_path = batch.unit.index_path;
+    const dstd::StringView file = batch.unit.file_path;
+    auto it = files_.find(file);
+    if (it == files_.end()) it = files_.try_emplace(dstd::String(file)).first;
+    FileState& fs = it->second;
+    if (fs.index_path.empty())
+        fs.index_path.assign(dstd::StringView(batch.unit.index_path));
     for (const auto& e : batch.events) {
         if (e.phase == trace::RecordPhase::Metadata) continue;
         for (const auto& [leaf_id, tag] : e.schema_leaves)
@@ -54,7 +57,7 @@ coro::CoroTask<bool> CatalogFold::finalize(
         if (fs.index_path.empty() || fs.paths.empty()) continue;
         if (!covered.covers_file(file)) continue;
 
-        const std::string logical =
+        const dstd::String logical =
             index::store::internal::get_logical_path(file);
         try {
             auto at = snapshots.find(dstd::StringView(fs.index_path));
@@ -84,15 +87,15 @@ coro::CoroTask<bool> CatalogFold::finalize(
                          ? index::rebuild(*opened, logical)
                          : dstd::Expected<index::FileBuild, dstd::Error>(
                                dstd::Unexpected<dstd::Error>(opened.error()));
-        std::string failure;
+        dstd::String failure;
         if (build) {
             for (const auto& [id, stat] : fs.paths)
                 index::put_catalog_path(*build, intern_->resolve(id), stat);
             build->finish(IndexExtension::Catalog, params_hash_);
             auto committed = co_await build->commit();
-            if (!committed) failure = std::string(committed.error().message());
+            if (!committed) failure = dstd::String(committed.error().message());
         } else {
-            failure = std::string(build.error().message());
+            failure = dstd::String(build.error().message());
         }
         if (!failure.empty()) {
             DFTRACER_UTILS_LOG_WARN("catalog write skipped for %s: %s",

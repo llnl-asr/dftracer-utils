@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/frame.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -74,8 +75,9 @@ TEST_SUITE("sigill_regression") {
         REQUIRE(f != nullptr);
         REQUIRE(std::fwrite(comp.data(), 1, comp.size(), f) == comp.size());
         std::fclose(f);
-        auto indexer = std::make_shared<GzipIndexer>(gz_path, dir.file("idx"),
-                                                     1u << 20, true);
+        auto indexer = dstd::make_shared<GzipIndexer>(
+            dstd::String(dstd::StringView(gz_path)),
+            dstd::String(dstd::StringView(dir.file("idx"))), 1u << 20, true);
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await indexer->build_async();
         });

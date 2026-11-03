@@ -7,14 +7,11 @@
 #include <dftracer/utils/dataframe/timestamp_histogram.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <vector>
 
 namespace dftracer::utils::index::schemas::dft {
 
@@ -51,7 +48,7 @@ struct ChunkStatistics {
     dstd::StringViewMap<dataframe::Log2Histogram> name_duration_histograms;
     dstd::StringViewMap<double> name_duration_sums;
     dstd::StringViewMap<double> name_duration_sum_sqs;
-    dstd::StringViewMap<std::string> name_category;
+    dstd::StringViewMap<dstd::String> name_category;
 
     /// Per-category and per-pid duration DDSketches + sums, so the viz stats
     /// fast path can answer group-by-cat and group-by-pid from stored
@@ -106,27 +103,27 @@ struct ChunkStatistics {
     double duration_mean() const;
     double duration_variance() const;
 
-    std::string name_category_json() const;
-    std::string name_duration_histograms_json() const;
-    std::string name_duration_sums_json() const;
-    std::string name_duration_sum_sqs_json() const;
-    std::string cat_duration_sums_json() const;
-    std::string pid_duration_sums_json() const;
+    dstd::String name_category_json() const;
+    dstd::String name_duration_histograms_json() const;
+    dstd::String name_duration_sums_json() const;
+    dstd::String name_duration_sum_sqs_json() const;
+    dstd::String cat_duration_sums_json() const;
+    dstd::String pid_duration_sums_json() const;
 
     /// Serialize per-name DDSketches to a single binary blob.
-    std::vector<std::uint8_t> serialize_name_duration_sketches() const;
+    dstd::Vector<std::uint8_t> serialize_name_duration_sketches() const;
 
     /// Serialize an arbitrary key -> DDSketch map to one binary blob (same
     /// format as serialize_name_duration_sketches; used for cat/pid sketches).
-    static std::vector<std::uint8_t> serialize_sketch_map(
+    static dstd::Vector<std::uint8_t> serialize_sketch_map(
         const dstd::StringViewMap<dataframe::DDSketch>& sketches);
 
-    static dstd::StringViewMap<std::string> parse_string_map_json(
-        const std::string& json);
+    static dstd::StringViewMap<dstd::String> parse_string_map_json(
+        const dstd::String& json);
     static dstd::StringViewMap<double> parse_double_map_json(
-        const std::string& json);
+        const dstd::String& json);
     static dstd::StringViewMap<dataframe::Log2Histogram>
-    parse_histogram_map_json(const std::string& json);
+    parse_histogram_map_json(const dstd::String& json);
     static dstd::StringViewMap<dataframe::DDSketch>
     deserialize_name_duration_sketches(const std::uint8_t* data,
                                        std::size_t len);

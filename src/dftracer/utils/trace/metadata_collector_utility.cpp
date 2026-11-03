@@ -23,7 +23,6 @@
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <cinttypes>
-#include <memory>
 #include <mutex>
 #include <optional>
 
@@ -182,7 +181,7 @@ MetadataCollectorUtility::process_compressed(
                         DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
                                                  input.index_path.c_str());
                         dftracer::utils::index::release_root(input.index_path);
-                        const std::string store =
+                        const dstd::String store =
                             dftracer::utils::index::store_of(input.index_path);
                         common::unwrap(
                             dstd::fs::remove_all(dstd::PathView(store)));

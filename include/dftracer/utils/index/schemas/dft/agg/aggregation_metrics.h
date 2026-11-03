@@ -4,15 +4,13 @@
 
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <bit>
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
@@ -26,7 +24,7 @@ using dataframe::DDSketch;
 /// write it through `stat` directly.
 struct MetricStats {
     dftracer::utils::dataframe::FieldStat stat;
-    std::unique_ptr<DDSketch> sketch;
+    dstd::UniquePtr<DDSketch> sketch;
     double sketch_accuracy_ = 0.01;
 
     explicit MetricStats(double relative_accuracy = 0.01)
@@ -34,14 +32,14 @@ struct MetricStats {
 
     MetricStats(const MetricStats& other)
         : stat(other.stat),
-          sketch(other.sketch ? std::make_unique<DDSketch>(*other.sketch)
+          sketch(other.sketch ? dstd::make_unique<DDSketch>(*other.sketch)
                               : nullptr),
           sketch_accuracy_(other.sketch_accuracy_) {}
 
     MetricStats& operator=(const MetricStats& other) {
         if (this != &other) {
             stat = other.stat;
-            sketch = other.sketch ? std::make_unique<DDSketch>(*other.sketch)
+            sketch = other.sketch ? dstd::make_unique<DDSketch>(*other.sketch)
                                   : nullptr;
             sketch_accuracy_ = other.sketch_accuracy_;
         }
@@ -98,8 +96,9 @@ typename Map::mapped_type& find_or_create(Map& map, dstd::StringView name,
                                           double accuracy) {
     auto it = map.find(name);
     if (it == map.end()) {
-        it = map.emplace(std::string(name), typename Map::mapped_type(accuracy))
-                 .first;
+        it =
+            map.emplace(dstd::String(name), typename Map::mapped_type(accuracy))
+                .first;
     }
     return it->second;
 }

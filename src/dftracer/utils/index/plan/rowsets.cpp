@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -25,16 +26,15 @@
 #include <atomic>
 #include <exception>
 #include <latch>
-#include <map>
-#include <memory>
 #include <type_traits>
+#include <vector>
 
 namespace dftracer::utils::index::plan {
 
 namespace df = dftracer::utils::dataframe;
 
 const RecordSchema* recorded_schema(const Snapshot& snapshot,
-                                    const std::string& trace) {
+                                    dstd::CStringView trace) {
     const auto file =
         snapshot.file(index::store::internal::get_logical_path(trace));
     if (!file) return nullptr;
@@ -52,7 +52,7 @@ static dstd::Optional<FileRef> current_file(const Snapshot& snapshot,
         now.mtime = static_cast<std::uint64_t>(st.mtime);
         now.size = st.size;
     }
-    const std::string logical =
+    const dstd::String logical =
         index::store::internal::get_logical_path(f.trace);
     if (snapshot.freshness(logical, now) != Freshness::Current)
         return dstd::nullopt;
@@ -70,7 +70,7 @@ static const RecordSchema& detect_trace_schema(const RowSetFile& f) {
     return *explain_trace_schema(f).chosen;
 }
 
-static bool trace_exists(const std::string& path) {
+static bool trace_exists(const dstd::String& path) {
     common::InputFileStat st;
     return common::stat_input(path, st);
 }
@@ -125,10 +125,10 @@ void for_each_index(std::size_t n, Fn&& fn) {
 
 }  // namespace
 
-const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
+const RecordSchema& files_schema(const dstd::Vector<RowSetFile>& files) {
     // A missing trace with no recorded schema is read as dftracer here, and
     // the scan reports the missing trace.
-    dstd::Map<std::string, dstd::Optional<Snapshot>> snapshots;
+    dstd::Map<dstd::String, dstd::Optional<Snapshot>> snapshots;
     dstd::Vector<const Snapshot*> snapshot_of(files.size(), nullptr);
     for (std::size_t i = 0; i < files.size(); ++i) {
         const auto& f = files[i];
@@ -210,10 +210,10 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
 }
 
 dstd::Optional<df::DataFrame> stored_rowset(
-    const std::vector<RowSetFile>& files, dstd::StringView name) {
+    const dstd::Vector<RowSetFile>& files, dstd::StringView name) {
     if (files.empty()) return dstd::nullopt;
-    std::map<std::string, dstd::Optional<Snapshot>, std::less<>> snapshots;
-    std::vector<df::DataFrame> parts;
+    dstd::Map<dstd::String, dstd::Optional<Snapshot>, std::less<>> snapshots;
+    dstd::Vector<df::DataFrame> parts;
     try {
         for (const auto& f : files) {
             if (f.index.empty()) return dstd::nullopt;
@@ -233,14 +233,15 @@ dstd::Optional<df::DataFrame> stored_rowset(
         return dstd::nullopt;
     }
     if (parts.size() == 1) return std::move(parts.front());
+    // keep std: df::concat takes std::vector
     std::vector<const df::DataFrame*> ptrs;
     for (const auto& p : parts) ptrs.push_back(&p);
     return df::concat(ptrs, df::ConcatHow::Diagonal);
 }
 
-bool has_stored_rowsets(const std::vector<RowSetFile>& files) {
+bool has_stored_rowsets(const dstd::Vector<RowSetFile>& files) {
     if (files.empty()) return false;
-    std::map<std::string, dstd::Optional<Snapshot>, std::less<>> snapshots;
+    dstd::Map<dstd::String, dstd::Optional<Snapshot>, std::less<>> snapshots;
     try {
         for (const auto& f : files) {
             if (f.index.empty()) return false;

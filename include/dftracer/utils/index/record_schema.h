@@ -2,23 +2,21 @@
 #ifndef DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 #define DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 
-#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
+#include <system_error>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index {
 
@@ -60,7 +58,7 @@ dstd::Optional<std::int64_t> iso8601_micros(dstd::StringView text);
 inline std::int64_t entity_id(dstd::StringView text) {
     std::int64_t v = 0;
     const char* end = text.data() + text.size();
-    if (auto [ptr, ec] = std::from_chars(text.data(), end, v);
+    if (auto [ptr, ec] = dstd::from_chars(text.data(), end, v);
         ec == std::errc() && ptr == end && !text.empty())
         return v;
     return static_cast<std::int64_t>(
@@ -74,9 +72,9 @@ dstd::StringView field_type_name(FieldType type);
 struct FieldSpec {
     /// Identifies the field; a child field of the same name replaces the
     /// parent's.
-    std::string name;
+    dstd::String name;
     /// The JSON path, as the records write it; empty means `name`.
-    std::string path;
+    dstd::String path;
     FieldType type = FieldType::String;
     /// An optional field is not needed for detection; a schema whose fields
     /// are all optional is detected by any of them.
@@ -94,12 +92,12 @@ struct FieldSpec {
 /// fields; empty when the schema has no such role. `phase` is set only by the
 /// dftracer decoder.
 struct Roles {
-    std::string time;
-    std::string duration;
-    std::string entity;
-    std::string lane;
-    std::string name;
-    std::string phase;
+    dstd::String time;
+    dstd::String duration;
+    dstd::String entity;
+    dstd::String lane;
+    dstd::String name;
+    dstd::String phase;
     TimeUnit time_unit = TimeUnit::Us;
     TimeUnit duration_unit = TimeUnit::Us;
 };
@@ -109,30 +107,30 @@ struct Roles {
 /// members (by name), the path budget and the stats share override the
 /// parent's.
 struct SchemaSpec {
-    std::string id;
-    std::string extends = "generic";
-    std::vector<FieldSpec> fields;
+    dstd::String id;
+    dstd::String extends = "generic";
+    dstd::Vector<FieldSpec> fields;
     dstd::Optional<std::size_t> path_budget;
     dstd::Optional<double> stats_share;
     /// Added to the parent's `never_index` paths.
-    std::vector<std::string> never_index;
+    dstd::Vector<dstd::String> never_index;
     /// duql source members (`name = pipeline`, `def ...`), `;` separated.
-    std::string source;
+    dstd::String source;
 };
 
 /// A record format: how to detect it, decode it and read its roles.
 struct RecordSchema {
-    std::string id;
+    dstd::String id;
     Decoder decoder = Decoder::Path;
     /// Resolved fields, the parent's first, each with its path set.
-    std::vector<FieldSpec> fields;
+    dstd::Vector<FieldSpec> fields;
     /// The duql source: row sets (`name = pipeline`) and macros, as canonical
     /// text with the parent's members first. `data` is what a query with no
     /// `from` reads; empty reads every record.
-    std::string source;
+    dstd::String source;
     /// The condition of the source's `data` row set, as canonical text;
     /// empty when `data` reads every record.
-    std::string data;
+    dstd::String data;
     /// The source defines `args_fallback = true`: a bare name its records
     /// lack reads the field of that name under `args`.
     bool args_fallback = false;
@@ -142,21 +140,21 @@ struct RecordSchema {
     /// build's when unset.
     dstd::Optional<double> stats_share;
     /// Paths of the required fields; more paths make a more specific schema.
-    std::vector<std::string> require;
+    dstd::Vector<dstd::String> require;
     Roles roles;
     /// Paths indexed past the path budget: `always_index` fields and, for
     /// path-decoded records, the time field.
-    std::vector<std::string> always_index;
+    dstd::Vector<dstd::String> always_index;
     /// Paths the index build lists in the path catalog but keeps no evidence
     /// for and interns no value of (`index.never_index`); sorted and unique.
     /// Queries still read them.
-    std::vector<std::string> never_index;
+    dstd::Vector<dstd::String> never_index;
     /// The library's own definition (dftracer, generic, genesis).
     bool builtin = false;
     /// Whether a field has the JSON type.
     bool has_json = false;
     /// (path, index into `fields`), sorted by path, for field_at.
-    std::vector<dstd::Pair<std::string, std::size_t>> fields_by_path;
+    dstd::Vector<dstd::Pair<dstd::String, std::size_t>> fields_by_path;
 
     /// The field at `path`, or null.
     const FieldSpec* field_at(dstd::StringView path) const;
@@ -169,7 +167,7 @@ struct RecordSchema {
 /// "genesis" first, then user schemas in registration order. Schemas stay
 /// registered, and the pointers valid, until the process exits. The first
 /// registry access loads $DFTRACER_UTILS_SCHEMA_PATH. Thread-safe.
-std::vector<const RecordSchema*> registered_schemas();
+dstd::Vector<const RecordSchema*> registered_schemas();
 
 /// The registered schema `id`, or null.
 const RecordSchema* find_schema(dstd::StringView id);
@@ -206,7 +204,7 @@ void load_schemas(dstd::StringView path);
 /// The registered schemas as a JSON array of objects with id, decoder
 /// ("dftracer" or "path"), fields, require, path_budget (null when unset) and
 /// source (its text), in registration order.
-std::string schemas_json();
+dstd::String schemas_json();
 
 /// load_schemas on `<index_dir>/schemas` for the index at `index_path`
 /// (`<index_dir>/.dftindex`), when that directory exists.
@@ -230,7 +228,7 @@ struct SchemaScore {
 /// What detection saw: every registered schema's score, in registration
 /// order, and the schema it chooses.
 struct SchemaDetection {
-    std::vector<SchemaScore> scores;
+    dstd::Vector<SchemaScore> scores;
     const RecordSchema* chosen = nullptr;
     /// JSON objects sampled.
     std::size_t objects = 0;
@@ -256,26 +254,26 @@ SchemaDetection explain_schema(dstd::Span<const dstd::StringView> lines);
 /// newline. Cached per process by path, modification time, size and the
 /// registered schemas. Throws @ref dftracer::utils::common::DFTUtilsException
 /// "DFTUtilsException" IO when the file cannot be read.
-SchemaDetection explain_file_schema(const std::string& file_path);
+SchemaDetection explain_file_schema(dstd::CStringView file_path);
 
 /// The same over an open file of `size` bytes modified at `mtime_ns`
 /// nanoseconds since the epoch, read with pread. `fd` stays open and owned by
 /// the caller.
-SchemaDetection explain_file_schema(const std::string& file_path, int fd,
+SchemaDetection explain_file_schema(dstd::CStringView file_path, int fd,
                                     std::uint64_t size, std::int64_t mtime_ns);
 
 /// `d` as a JSON object: chosen (id), objects, records, and scores, each with
 /// id, required (the count of required paths) and share.
-std::string to_json(const SchemaDetection& d);
+dstd::String to_json(const SchemaDetection& d);
 
 /// explain_schema(lines).chosen.
 const RecordSchema& detect_schema(dstd::Span<const dstd::StringView> lines);
 
 /// explain_file_schema(file_path).chosen.
-const RecordSchema& detect_file_schema(const std::string& file_path);
+const RecordSchema& detect_file_schema(dstd::CStringView file_path);
 
 /// explain_file_schema(file_path, fd, size, mtime_ns).chosen.
-const RecordSchema& detect_file_schema(const std::string& file_path, int fd,
+const RecordSchema& detect_file_schema(dstd::CStringView file_path, int fd,
                                        std::uint64_t size,
                                        std::int64_t mtime_ns);
 

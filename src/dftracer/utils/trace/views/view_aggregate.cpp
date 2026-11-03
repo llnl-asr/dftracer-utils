@@ -90,11 +90,11 @@ resolver_column(GroupKey::Kind kind) {
     switch (kind) {
         case GroupKey::Kind::FilePath:
         case GroupKey::Kind::FileName:
-            return {{std::string(FILE_PATH), "files", "fhash", "path"}};
+            return {{dstd::String(FILE_PATH), "files", "fhash", "path"}};
         case GroupKey::Kind::HostName:
-            return {{std::string(HOST_NAME), "hosts", "hhash", "name"}};
+            return {{dstd::String(HOST_NAME), "hosts", "hhash", "name"}};
         case GroupKey::Kind::Rank:
-            return {{std::string(RANK), "ranks", "pid", "rank"}};
+            return {{dstd::String(RANK), "ranks", "pid", "rank"}};
         default:
             return dstd::nullopt;
     }
@@ -103,16 +103,17 @@ resolver_column(GroupKey::Kind kind) {
 const dftracer::utils::index::plan::GroupResolver* ensure_resolver(
     const ViewPlan& plan) {
     if (plan.resolver) return plan.resolver.get();
-    std::vector<dftracer::utils::index::plan::GroupResolver::Column> columns;
+    dstd::Vector<dftracer::utils::index::plan::GroupResolver::Column> columns;
     for (const auto& gk : plan.group_by)
         if (auto c = resolver_column(gk.kind)) columns.push_back(std::move(*c));
     if (columns.empty()) return nullptr;
-    std::vector<dftracer::utils::index::plan::RowSetFile> files;
+    dstd::Vector<dftracer::utils::index::plan::RowSetFile> files;
     for (const auto& f : plan.files) {
-        std::string index = f.index_path;
+        dstd::String index{dstd::StringView(f.index_path)};
         if (index.empty())
             index = trace::internal::determine_index_path(f.file_path, "");
-        files.push_back({f.file_path, std::move(index)});
+        files.push_back(
+            {dstd::String(dstd::StringView(f.file_path)), std::move(index)});
     }
     plan.resolver =
         std::make_shared<dftracer::utils::index::plan::GroupResolver>(files,
@@ -124,14 +125,19 @@ std::string resolve_group_value(
     const dftracer::utils::index::plan::GroupResolver& r, const GroupKey& gk,
     const std::string& hash) {
     const GroupKey::Kind kind = gk.kind;
-    if (kind == GroupKey::Kind::FilePath) return r.value(FILE_PATH, hash);
+    auto text = [](const dstd::String& v) {
+        return std::string(v.data(), v.size());
+    };
+    if (kind == GroupKey::Kind::FilePath) return text(r.value(FILE_PATH, hash));
     if (kind == GroupKey::Kind::FileName) {
-        const std::string& p = r.value(FILE_PATH, hash);
+        const dstd::String& p = r.value(FILE_PATH, hash);
         const std::size_t slash = p.find_last_of('/');
-        return slash == std::string::npos ? p : p.substr(slash + 1);
+        return slash == dstd::String::npos
+                   ? text(p)
+                   : std::string(p.data() + slash + 1, p.size() - slash - 1);
     }
-    if (kind == GroupKey::Kind::HostName) return r.value(HOST_NAME, hash);
-    if (kind == GroupKey::Kind::Rank) return r.value(RANK, hash);
+    if (kind == GroupKey::Kind::HostName) return text(r.value(HOST_NAME, hash));
+    if (kind == GroupKey::Kind::Rank) return text(r.value(RANK, hash));
     return hash;
 }
 

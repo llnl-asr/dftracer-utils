@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 
 #include <algorithm>
@@ -95,21 +96,21 @@ std::size_t ScalableBloomFilter::size_bytes() const {
     return total;
 }
 
-std::vector<unsigned char> ScalableBloomFilter::serialize() const {
-    std::vector<unsigned char> result;
+dstd::Vector<unsigned char> ScalableBloomFilter::serialize() const {
+    dstd::Vector<unsigned char> result;
     serialize_into(result);
     return result;
 }
 
 void ScalableBloomFilter::serialize_into(
-    std::vector<unsigned char>& result) const {
+    dstd::Vector<unsigned char>& result) const {
     result.clear();
     result.insert(result.end(), MAGIC, MAGIC + MAGIC_SIZE);
     result.resize(CHAIN_HEADER_SIZE);
     dstd::write_u32_le(result.data() + MAGIC_SIZE,
                        static_cast<std::uint32_t>(levels_.size()));
 
-    std::vector<unsigned char> blob;
+    dstd::Vector<unsigned char> blob;
     for (const auto& level : levels_) {
         level.filter.serialize_into(blob);
         const auto offset = result.size();

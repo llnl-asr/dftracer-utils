@@ -2,15 +2,15 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_CATALOG_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_CATALOG_FOLD_H
 
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/store/types.h>
 #include <dftracer/utils/trace/views/fold.h>
 
 #include <cstdint>
-#include <map>
-#include <memory>
-#include <string>
 
 namespace dftracer::utils::index::extensions {
 
@@ -38,7 +38,9 @@ class CatalogFold : public trace::views::detail::Fold {
     bool reads_never_indexed() const override { return false; }
     bool wants_metadata() const override { return false; }
 
+    // keep std: trace::views::detail::Fold::slice returns std::unique_ptr
     std::unique_ptr<trace::views::detail::Fold> slice() const override {
+        // keep std: Fold::slice returns std::unique_ptr
         return std::make_unique<CatalogFold>(*intern_, params_hash_);
     }
 
@@ -53,14 +55,14 @@ class CatalogFold : public trace::views::detail::Fold {
 
    private:
     struct FileState {
-        std::string index_path;
+        dstd::String index_path;
         ankerl::unordered_dense::map<std::uint32_t, index::store::PathStat>
             paths;
     };
 
     dftracer::utils::dstd::StringIntern* intern_;
     std::uint64_t params_hash_;
-    std::map<std::string, FileState> files_;
+    dstd::Map<dstd::String, FileState> files_;
 };
 
 }  // namespace dftracer::utils::index::extensions

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -9,7 +10,6 @@
 
 #include <algorithm>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index {
 
@@ -32,8 +32,8 @@ std::int64_t ns_per(TimeUnit unit) {
 }
 
 struct Member {
-    std::string name;
-    std::string text;
+    dstd::String name;
+    dstd::String text;
 };
 
 [[noreturn]] void bad(dstd::StringView origin, dstd::StringView why) {
@@ -48,12 +48,12 @@ syn::Program parse_members(dstd::StringView text, dstd::StringView origin) {
 }
 
 // The members of `text` in order, each as canonical text.
-std::vector<Member> members(dstd::StringView text, dstd::StringView origin) {
-    std::vector<Member> out;
+dstd::Vector<Member> members(dstd::StringView text, dstd::StringView origin) {
+    dstd::Vector<Member> out;
     if (text.empty()) return out;
     syn::Program tree = parse_members(text, origin);
     const auto& decl = std::get<syn::SourceDecl>(tree.decls.front());
-    auto add = [&](std::string name, std::string member) {
+    auto add = [&](dstd::String name, dstd::String member) {
         for (const auto& m : out)
             if (m.name == name) bad(origin, "'" + name + "' is declared twice");
         out.push_back({std::move(name), std::move(member)});
@@ -67,8 +67,8 @@ std::vector<Member> members(dstd::StringView text, dstd::StringView origin) {
                 !std::holds_alternative<syn::Where>(p.stages.front().node))
                 bad(origin, "'data' must be one 'where'");
         }
-        add(std::string(r.name),
-            std::string(r.name + " = " + syn::to_text(*r.pipeline)));
+        add(dstd::String(r.name),
+            dstd::String(r.name + " = " + syn::to_text(*r.pipeline)));
     }
     for (const auto& d : decl.defs) {
         dstd::String params;
@@ -80,11 +80,12 @@ std::vector<Member> members(dstd::StringView text, dstd::StringView origin) {
             }
             params += ")";
         }
-        add(std::string(d.name),
-            std::string("def " + d.name + params + " = " +
-                        (std::holds_alternative<syn::PipelinePtr>(d.body)
-                             ? syn::to_text(*std::get<syn::PipelinePtr>(d.body))
-                             : syn::to_text(*std::get<syn::ExprPtr>(d.body)))));
+        add(dstd::String(d.name),
+            dstd::String(
+                "def " + d.name + params + " = " +
+                (std::holds_alternative<syn::PipelinePtr>(d.body)
+                     ? syn::to_text(*std::get<syn::PipelinePtr>(d.body))
+                     : syn::to_text(*std::get<syn::ExprPtr>(d.body)))));
     }
     return out;
 }
@@ -99,7 +100,7 @@ duql::Roles duql_roles(const RecordSchema& s) {
     r.schema = s.id;
     if (const FieldSpec* t = s.field_at(s.roles.time))
         r.time_text = t->type == FieldType::String;
-    auto add = [&](const std::string& key, std::int64_t ns) {
+    auto add = [&](const dstd::String& key, std::int64_t ns) {
         if (!key.empty()) r.fields.emplace(key, ns);
     };
     add(s.roles.time, ns_per(s.roles.time_unit));
@@ -113,9 +114,9 @@ duql::Roles duql_roles(const RecordSchema& s) {
     return r;
 }
 
-std::string merge_source(dstd::StringView parent, dstd::StringView child,
-                         dstd::StringView origin) {
-    std::vector<Member> out = members(parent, origin);
+dstd::String merge_source(dstd::StringView parent, dstd::StringView child,
+                          dstd::StringView origin) {
+    dstd::Vector<Member> out = members(parent, origin);
     for (auto& m : members(child, origin)) {
         bool replaced = false;
         for (auto& p : out)
@@ -126,7 +127,7 @@ std::string merge_source(dstd::StringView parent, dstd::StringView child,
             }
         if (!replaced) out.push_back(std::move(m));
     }
-    std::string text;
+    dstd::String text;
     for (const auto& m : out) text += (text.empty() ? "" : ";\n") + m.text;
     return text;
 }
@@ -152,12 +153,12 @@ void check_source(const RecordSchema& schema, dstd::StringView origin) {
         }
 }
 
-std::string data_condition(const RecordSchema& schema) {
+dstd::String data_condition(const RecordSchema& schema) {
     if (schema.source.empty()) return {};
     syn::Program tree = parse_members(schema.source, schema.id);
     for (const auto& r : std::get<syn::SourceDecl>(tree.decls.front()).rowsets)
         if (r.name == "data")
-            return std::string(syn::to_text(
+            return dstd::String(syn::to_text(
                 *std::get<syn::Where>(r.pipeline->stages.front().node)
                      .condition));
     return {};
@@ -170,8 +171,8 @@ bool source_args_fallback(const RecordSchema& schema) {
         std::get<syn::SourceDecl>(tree.decls.front()).defs);
 }
 
-std::vector<IndexedRowSet> indexed_rowsets(const RecordSchema& schema) {
-    std::vector<IndexedRowSet> out;
+dstd::Vector<IndexedRowSet> indexed_rowsets(const RecordSchema& schema) {
+    dstd::Vector<IndexedRowSet> out;
     if (schema.source.empty()) return out;
     const duql::Roles roles = duql_roles(schema);
     auto program =

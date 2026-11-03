@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
@@ -16,12 +17,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index {
 class FileBuild;
@@ -79,14 +75,14 @@ class BloomCore {
             fixed_blooms;
         std::array<ChunkDimensionStats, FdCount> fixed_dim_stats;
         /// Blooms of the leading extra dimensions, observed value by value.
-        std::vector<index::extensions::ScalableBloomFilter> extra_blooms;
-        std::vector<ChunkDimensionStats> extra_dim_stats;
+        dstd::Vector<index::extensions::ScalableBloomFilter> extra_blooms;
+        dstd::Vector<ChunkDimensionStats> extra_dim_stats;
         /// The values of an extra dimension past extra_blooms, sorted and
         /// borrowed; write_chunk sizes its bloom for them.
-        std::vector<std::vector<dstd::StringView>> extra_values;
+        dstd::Vector<dstd::Vector<dstd::StringView>> extra_values;
         /// Nonzero where extra dimension `e` keeps no bloom for this chunk,
         /// so a probe answers "may match"; the file then keeps none for it.
-        std::vector<std::uint8_t> extra_bloom_skip;
+        dstd::Vector<std::uint8_t> extra_bloom_skip;
         ChunkStatistics statistics;
         index::store::ChunkMetadata metadata;
         std::size_t events_processed = 0;
@@ -152,7 +148,7 @@ class BloomCore {
     /// source-specific.
     static void init_chunk_state(ChunkState& chunk,
                                  const ChunkIndexerConfig& config,
-                                 const std::vector<std::string>& extra_dims);
+                                 const dstd::Vector<dstd::String>& extra_dims);
     static void observe_data(ChunkState& chunk, EventCache& cache,
                              std::uint32_t name_id, std::uint32_t cat_id,
                              dstd::StringView name, dstd::StringView cat,
@@ -213,12 +209,12 @@ class BloomCore {
 
     /// The extensions a tier write replaces: those of `config.extensions` that
     /// are pruning extensions, dft.stats and core.catalog.
-    static std::vector<index::store::IndexExtension> tier_extensions(
+    static dstd::Vector<index::store::IndexExtension> tier_extensions(
         const ChunkIndexerConfig& config);
 
     /// A file's path catalog; the paths are borrowed.
     using Catalog =
-        std::vector<dstd::Pair<dstd::StringView, index::store::PathStat>>;
+        dstd::Vector<dstd::Pair<dstd::StringView, index::store::PathStat>>;
 
     /// The file-level records a file's chunks add up to: file blooms, file
     /// statistics and the chunk count. write_chunk feeds it; finish_file
@@ -235,10 +231,10 @@ class BloomCore {
         ExtraBloom& extra(dstd::StringView dim);
 
         ChunkStatistics statistics;
-        std::vector<index::extensions::ScalableBloomFilter> fixed_blooms;
+        dstd::Vector<index::extensions::ScalableBloomFilter> fixed_blooms;
         dftracer::utils::dstd::StringViewMap<ExtraBloom> extras;
         std::uint64_t chunks = 0;
-        std::vector<unsigned char> blob;
+        dstd::Vector<unsigned char> blob;
 
        private:
         const ChunkIndexerConfig* config_;
@@ -251,7 +247,7 @@ class BloomCore {
     static void write_chunk(index::FileBuild& build,
                             std::uint64_t checkpoint_idx,
                             const ChunkState& chunk,
-                            const std::vector<std::string>& extra_dims,
+                            const dstd::Vector<dstd::String>& extra_dims,
                             const ChunkIndexerConfig& config,
                             FileAccumulator& acc);
 
@@ -268,7 +264,7 @@ class BloomCore {
     static ChunkStatistics finish_file(
         index::FileBuild& build, FileAccumulator& acc,
         const ChunkIndexerConfig& config,
-        const std::vector<std::string>& extra_dims, const Catalog& catalog);
+        const dstd::Vector<dstd::String>& extra_dims, const Catalog& catalog);
 };
 
 }  // namespace dftracer::utils::index::schemas::dft

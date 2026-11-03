@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_PYTHON_PY_SEQ_HELPERS_H
 
 #include <Python.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -44,6 +46,27 @@ inline bool parse_string_seq(PyObject* obj, const char* msg,
             o.emplace_back(s);
             return true;
         });
+}
+
+// The same into a dstd::Vector, for the index and runtime APIs.
+inline bool parse_string_seq(PyObject* obj, const char* msg,
+                             dstd::Vector<dstd::String>& out) {
+    PyObject* seq = PySequence_Fast(obj, msg);
+    if (!seq) return false;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    out.reserve(out.size() + static_cast<std::size_t>(n));
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        Py_ssize_t len = 0;
+        const char* s =
+            PyUnicode_AsUTF8AndSize(PySequence_Fast_GET_ITEM(seq, i), &len);
+        if (!s) {
+            Py_DECREF(seq);
+            return false;
+        }
+        out.emplace_back(s, static_cast<std::size_t>(len));
+    }
+    Py_DECREF(seq);
+    return true;
 }
 
 // Append the raw bytes of each item of a Python sequence to `out`; each item

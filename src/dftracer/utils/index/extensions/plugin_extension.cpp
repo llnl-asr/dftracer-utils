@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/tables.h>
 
-#include <map>
 #include <mutex>
 #include <shared_mutex>
 
@@ -18,7 +20,7 @@ constexpr std::uint64_t DEFAULT_MAX_PAYLOAD = std::uint64_t{1} << 20;
 
 struct Registry {
     std::shared_mutex mutex;
-    std::map<std::string, PluginExtensionPtr, std::less<>> by_name;
+    dstd::Map<dstd::String, PluginExtensionPtr, std::less<>> by_name;
 };
 
 Registry& registry() {
@@ -36,7 +38,7 @@ Registry& registry() {
 }
 
 struct Out {
-    std::string bytes;
+    dstd::String bytes;
     std::uint64_t cap = 0;
     bool over = false;
 };
@@ -67,8 +69,8 @@ bool register_plugin_extension(dstd::StringView name,
             static_cast<int>(name.size()), name.data());
         return false;
     }
-    auto ext = std::make_shared<PluginExtension>(
-        PluginExtension{std::string(name), *vt, self});
+    auto ext = dstd::make_shared<PluginExtension>(
+        PluginExtension{dstd::String(name), *vt, self});
     auto& r = registry();
     std::unique_lock lock(r.mutex);
     if (!r.by_name.emplace(ext->name, std::move(ext)).second) {
@@ -87,10 +89,10 @@ void unregister_plugin_extension(dstd::StringView name) {
         r.by_name.erase(it);
 }
 
-std::vector<PluginExtensionPtr> plugin_extensions() {
+dstd::Vector<PluginExtensionPtr> plugin_extensions() {
     auto& r = registry();
     std::shared_lock lock(r.mutex);
-    std::vector<PluginExtensionPtr> out;
+    dstd::Vector<PluginExtensionPtr> out;
     out.reserve(r.by_name.size());
     for (const auto& [name, ext] : r.by_name) out.push_back(ext);
     return out;
@@ -103,7 +105,7 @@ PluginExtensionPtr find_plugin_extension(dstd::StringView name) {
     return it == r.by_name.end() ? nullptr : it->second;
 }
 
-PluginBuilders::PluginBuilders(std::vector<PluginExtensionPtr> extensions) {
+PluginBuilders::PluginBuilders(dstd::Vector<PluginExtensionPtr> extensions) {
     built_.reserve(extensions.size());
     for (auto& ext : extensions) {
         void* b = ext->vt.make_builder(ext->self);
@@ -162,7 +164,7 @@ void PluginBuilders::finish() {
 
 void PluginBuilders::write(FileBuild& build) {
     for (auto& b : built_) {
-        const std::string& name = b.ext->name;
+        const dstd::String& name = b.ext->name;
         if (!b.builder) {
             index::fail_plugin(build, name, b.ext->vt.version,
                                b.ext->vt.params_hash);

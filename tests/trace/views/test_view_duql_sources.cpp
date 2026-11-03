@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
@@ -34,12 +35,12 @@ std::string write_records(TestEnvironment& env, const std::string& name,
     const std::string gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
     (void)dftracer::utils::dstd::fs::remove(plain);
-    ix::Indexer::open({gz}).build();
+    ix::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
     return gz;
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, determine_index_path(gz, ""));
+    return View::from_file(gz, std::string(determine_index_path(gz, "")));
 }
 
 df::DataFrame frame(const View& v) {

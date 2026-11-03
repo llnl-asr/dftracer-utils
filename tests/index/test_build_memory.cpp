@@ -79,9 +79,9 @@ build::IndexBuildBatchResult run_build(const std::vector<std::string>& files,
     build::IndexBuildBatchResult out;
     Runtime rt(4);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = std::make_shared<build::IndexBuildBatchConfig>();
-        config->file_paths = files;
-        config->index_dir = index_dir;
+        auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+        for (const auto& file : files) config->file_paths.emplace_back(file);
+        config->index_dir = dstd::String(index_dir);
         config->parallelism = parallelism;
         config->memory_budget = memory_budget;
         config->bloom_config.path_budget = path_budget;
@@ -95,13 +95,13 @@ build::IndexBuildBatchResult run_build(const std::vector<std::string>& files,
 }
 
 // Every live record of every family, in order.
-std::vector<dftu_utils_test::IndexRecord> contents(
+dstd::Vector<dftu_utils_test::IndexRecord> contents(
     const std::string& index_path) {
     return dftu_utils_test::dump_index(index_path);
 }
 
 std::string index_of(const std::string& trace, const std::string& dir) {
-    return trace::internal::determine_index_path(trace, dir);
+    return std::string(trace::internal::determine_index_path(trace, dir));
 }
 
 constexpr std::uint64_t MIB = std::uint64_t{1} << 20;
@@ -270,7 +270,7 @@ TEST_SUITE("IndexBuildMemory") {
     TEST_CASE("idle fold buffers are freed when a reservation asks for bytes") {
         Budget budget(64 * MIB);
         build::FoldBufferPool buffers;
-        std::vector<std::unique_ptr<build::FoldBufferPool::EventBuffer>> out;
+        dstd::Vector<dstd::UniquePtr<build::FoldBufferPool::EventBuffer>> out;
         for (int b = 0; b < 4; ++b) {
             out.push_back(buffers.take());
             for (int e = 0; e < 1000; ++e) out.back()->append();

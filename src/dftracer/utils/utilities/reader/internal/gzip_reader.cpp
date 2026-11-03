@@ -72,13 +72,9 @@ GzipReader::GzipReader(dstd::StringView gz_path_, dstd::StringView idx_path_,
       default_buffer_size(DEFAULT_READER_BUFFER_SIZE),
       indexer(nullptr) {
     try {
-        // keep std: CheckpointIndexerFactory::create takes std::string
-        const std::string gz_path_std(gz_path.data(), gz_path.size());
-        // keep std: CheckpointIndexerFactory::create takes std::string
-        const std::string index_path_std(index_path.data(), index_path.size());
         indexer =
             dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                gz_path_std, index_path_std, index_ckpt_size, false);
+                gz_path, index_path, index_ckpt_size, false);
         is_open = true;
 
         DFTRACER_UTILS_LOG_DEBUG(
@@ -452,8 +448,7 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
                 if (member.first_line_num > start) continue;
                 std::size_t first_owned = member.first_line_num;
                 if (member.kind == index::gzip::GzipRecordKind::Restart) {
-                    // keep std: restart_window returns std::string
-                    const std::string window =
+                    const dstd::String window =
                         indexer->restart_window(member.member_idx);
                     if (window.empty()) continue;
                     if (window.back() != '\n') ++first_owned;

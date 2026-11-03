@@ -44,8 +44,8 @@ TEST_SUITE("CompareView") {
         REQUIRE(var_env.is_valid());
         std::string base_gz = create_mixed_trace(base_env, 30, 20);
         std::string var_gz = create_mixed_trace(var_env, 40, 20);
-        std::string base_idx = determine_index_path(base_gz, "");
-        std::string var_idx = determine_index_path(var_gz, "");
+        std::string base_idx = std::string(determine_index_path(base_gz, ""));
+        std::string var_idx = std::string(determine_index_path(var_gz, ""));
 
         dftracer::utils::Runtime rt;
         dataframe::DataFrame result;

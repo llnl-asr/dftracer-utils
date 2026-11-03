@@ -70,7 +70,7 @@ std::string write_trace(const std::string& dir) {
 }
 
 int child_main(const std::string& mode, const std::string& gz) {
-    const std::string idx = determine_index_path(gz, "");
+    const std::string idx = std::string(determine_index_path(gz, ""));
     GroupKey key = GroupKey::cat();
     if (mode == "transform") {
         key.transform = GroupKey::Transform::Bucket;

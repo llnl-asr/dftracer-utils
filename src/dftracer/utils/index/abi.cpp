@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/abi.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -8,9 +10,9 @@
 #include <cstring>
 #include <exception>
 #include <new>
-#include <string>
 #include <utility>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::dstd::Condition;
 using dftracer::utils::index::IndexedFile;
@@ -20,27 +22,27 @@ using dftracer::utils::index::IndexStatus;
 
 struct dftu_indexer {
     Indexer indexer;
-    std::string error;
+    dstd::String error;
 };
 
 struct dftu_indexer_file_list {
-    std::vector<IndexedFile> files;
+    dstd::Vector<IndexedFile> files;
 };
 
 namespace {
 
-thread_local std::string handle_free_error;
-thread_local std::string schema_error;
+thread_local dstd::String handle_free_error;
+thread_local dstd::String schema_error;
 
-dftu_error fill_error(std::string& storage, Condition condition,
+dftu_error fill_error(dstd::String& storage, Condition condition,
                       std::uint64_t domain, std::int32_t code,
-                      std::string message) {
+                      dstd::String message) {
     storage = std::move(message);
     return dftu_error{domain, code, static_cast<std::int32_t>(condition),
                       storage.c_str()};
 }
 
-dftu_error current_error(std::string& storage) {
+dftu_error current_error(dstd::String& storage) {
     try {
         throw;
     } catch (const dftracer::utils::common::DFTUtilsException& e) {
@@ -59,7 +61,7 @@ dftu_error current_error(std::string& storage) {
     }
 }
 
-dftu_error invalid(std::string& storage, const char* message) {
+dftu_error invalid(dstd::String& storage, const char* message) {
     return fill_error(storage, Condition::InvalidArgument,
                       dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
                       static_cast<std::int32_t>(Condition::InvalidArgument),
@@ -83,7 +85,7 @@ dftu_indexer_string_result string_call(dftu_indexer* ix, Fn fn) {
         return r;
     }
     try {
-        const std::string s = fn(ix->indexer);
+        const dstd::String s = fn(ix->indexer);
         char* out = static_cast<char*>(std::malloc(s.size() + 1));
         if (!out) throw std::bad_alloc();
         std::memcpy(out, s.c_str(), s.size() + 1);
@@ -116,7 +118,7 @@ template <class Fn>
 dftu_indexer_string_result schema_call(Fn fn) {
     dftu_indexer_string_result r{};
     try {
-        const std::string s = fn();
+        const dstd::String s = fn();
         char* out = static_cast<char*>(std::malloc(s.size() + 1));
         if (!out) throw std::bad_alloc();
         std::memcpy(out, s.c_str(), s.size() + 1);
@@ -168,7 +170,7 @@ dftu_indexer_open_result dftu_indexer_open(
         return r;
     }
     try {
-        std::vector<std::string> list;
+        dstd::Vector<dstd::String> list;
         list.reserve(n);
         for (uint64_t i = 0; i < n; ++i) {
             if (!paths[i]) {

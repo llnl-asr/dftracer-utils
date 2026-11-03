@@ -25,7 +25,8 @@ TEST_SUITE("IndexedFileReader") {
         SUBCASE("Process gzip file without existing index") {
             TestEnvironment env(10);
             std::string gz_path = env.create_test_gzip_file();
-            std::string db_root = determine_index_path(gz_path, "");
+            std::string db_root =
+                std::string(determine_index_path(gz_path, ""));
 
             // Ensure no index exists initially
             if (dstd::fs::exists(db_root).value()) {
@@ -59,7 +60,8 @@ TEST_SUITE("IndexedFileReader") {
         SUBCASE("Process gzip file with existing index") {
             TestEnvironment env(5);
             std::string gz_path = env.create_test_gzip_file();
-            std::string db_root = determine_index_path(gz_path, "");
+            std::string db_root =
+                std::string(determine_index_path(gz_path, ""));
 
             // Create index first
             auto indexer =
@@ -84,7 +86,8 @@ TEST_SUITE("IndexedFileReader") {
         SUBCASE("Force rebuild existing index") {
             TestEnvironment env(5);
             std::string gz_path = env.create_test_gzip_file();
-            std::string db_root = determine_index_path(gz_path, "");
+            std::string db_root =
+                std::string(determine_index_path(gz_path, ""));
 
             // Create index first
             auto indexer =
@@ -117,7 +120,8 @@ TEST_SUITE("IndexedFileReader") {
         SUBCASE("Configure checkpoint size") {
             TestEnvironment env(20);
             std::string gz_path = env.create_test_gzip_file();
-            std::string db_root = determine_index_path(gz_path, "");
+            std::string db_root =
+                std::string(determine_index_path(gz_path, ""));
 
             IndexedFileReaderUtility reader_utility;
 
@@ -142,10 +146,11 @@ TEST_SUITE("IndexedFileReader") {
             IndexedFileReaderUtility reader_utility;
 
             // Test fluent API
-            auto input = IndexedReadInput::from_file(gz_path)
-                             .with_index(determine_index_path(gz_path, ""))
-                             .with_checkpoint_size(512)
-                             .with_force_rebuild(false);
+            auto input =
+                IndexedReadInput::from_file(gz_path)
+                    .with_index(std::string(determine_index_path(gz_path, "")))
+                    .with_checkpoint_size(512)
+                    .with_force_rebuild(false);
 
             auto reader = reader_utility(input).get();
 
@@ -156,7 +161,8 @@ TEST_SUITE("IndexedFileReader") {
         SUBCASE("Constructor with all parameters") {
             TestEnvironment env(5);
             std::string gz_path = env.create_test_gzip_file();
-            std::string db_root = determine_index_path(gz_path, "");
+            std::string db_root =
+                std::string(determine_index_path(gz_path, ""));
 
             IndexedFileReaderUtility reader_utility;
 
@@ -209,7 +215,7 @@ TEST_SUITE("IndexedFileReader") {
             IndexedFileReaderUtility reader_utility;
             IndexedReadInput input =
                 IndexedReadInput::from_file(gz_path).with_index(
-                    determine_index_path(gz_path, ""));
+                    std::string(determine_index_path(gz_path, "")));
 
             auto reader = reader_utility(input).get();
 
@@ -239,7 +245,8 @@ TEST_SUITE("IndexedFileReader") {
             TestEnvironment env(5);
             std::string gz_path = env.create_test_gzip_file();
             std::string index_path = gz_path + ".idx";
-            std::string db_root = determine_index_path(gz_path, "");
+            std::string db_root =
+                std::string(determine_index_path(gz_path, ""));
 
             // Create index
             auto indexer = CheckpointIndexerFactory::create(gz_path, index_path,
@@ -271,7 +278,8 @@ TEST_SUITE("IndexedFileReader") {
             TestEnvironment env(5);
             std::string gz_path = env.create_test_gzip_file();
             std::string index_path = gz_path + ".idx";
-            std::string db_root = determine_index_path(gz_path, "");
+            std::string db_root =
+                std::string(determine_index_path(gz_path, ""));
 
             // Create index
             auto indexer = CheckpointIndexerFactory::create(gz_path, index_path,
@@ -337,7 +345,7 @@ TEST_SUITE("IndexedFileReader") {
             CHECK(reader->get_num_lines() == 10);
             CHECK(dstd::StringView(reader->get_archive_path()) == gz_path);
             CHECK(dstd::StringView(reader->get_index_path()) ==
-                  determine_index_path(gz_path, ""));
+                  std::string(determine_index_path(gz_path, "")));
         }
     }
 }

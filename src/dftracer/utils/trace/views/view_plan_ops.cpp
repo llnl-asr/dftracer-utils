@@ -84,11 +84,11 @@ void strip_redundant_time_bucket(detail::ViewPlan& p) {
 // Whether `schema`'s source indexes row set `rowset` with columns `key` and
 // `value`.
 bool has_rowset(const dftracer::utils::index::RecordSchema& schema,
-                const std::string& rowset, const std::string& key,
-                const std::string& value) {
+                dstd::StringView rowset, dstd::StringView key,
+                dstd::StringView value) {
     for (const auto& r : dftracer::utils::index::indexed_rowsets(schema)) {
         if (r.name != rowset) continue;
-        auto has = [&](const std::string& c) {
+        auto has = [&](dstd::StringView c) {
             return std::any_of(r.columns.begin(), r.columns.end(),
                                [&](const auto& col) { return col.first == c; });
         };
@@ -106,8 +106,9 @@ void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
     if (!detail::plan_by_path(p)) return;
     const auto& schema = detail::plan_record_schema(p);
     const auto& roles = schema.roles;
-    auto role = [](const std::string& path, const char* field) {
-        return path.empty() ? std::string(field) : path;
+    auto role = [](const dstd::String& path, const char* field) {
+        return path.empty() ? std::string(field)
+                            : std::string(path.data(), path.size());
     };
     for (auto& k : keys) {
         bool field = true;
@@ -234,9 +235,9 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
             dftracer::utils::common::InputFileStat file_stat;
             if (!dftracer::utils::common::stat_input(f.file_path, file_stat))
                 continue;
-            const std::string logical =
+            const dstd::String logical =
                 st::internal::get_logical_path(f.file_path);
-            std::string key = logical;
+            std::string key(logical.data(), logical.size());
             key += '\n';
             key += std::to_string(static_cast<long long>(file_stat.mtime));
             key += '\n';
@@ -295,7 +296,8 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
         in.checkpoint_size = group.checkpoint_size;
         in.schema = group.schema;
         in.require_checkpoints = true;
-        for (const auto& p : pending) in.files.push_back(p.file);
+        for (const auto& p : pending)
+            in.files.emplace_back(dstd::StringView(p.file));
         ib::ResolverResult result = default_runtime().block_on(
             coro::named("view_index_freshness",
                         ib::resolve_and_build_index(std::move(in))));
@@ -345,8 +347,9 @@ coro::CoroTask<ScanPlan> from_directory(std::string dir,
     files.reserve(entries.size());
     for (auto& e : entries) {
         std::string fp(e.path.str());
-        files.push_back(
-            ViewFile{fp, internal::determine_index_path(fp, index_path)});
+        const dstd::String index =
+            internal::determine_index_path(fp, index_path);
+        files.push_back(ViewFile{fp, std::string(index.data(), index.size())});
     }
     std::sort(files.begin(), files.end(),
               [](const ViewFile& a, const ViewFile& b) {
@@ -425,7 +428,7 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
     // Distinct index roots (many files often share one index), each with the
     // logical paths of the view's files in it.
     std::vector<std::string> roots;
-    std::vector<std::vector<std::string>> root_files;
+    std::vector<dstd::Vector<dstd::String>> root_files;
     for (const auto& f : files) {
         if (f.index_path.empty()) continue;
         auto pos = std::find(roots.begin(), roots.end(), f.index_path);
@@ -458,7 +461,7 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
                     const ix::Snapshot snapshot =
                         common::unwrap(ix::plan::open_snapshot(
                             roots[static_cast<std::size_t>(i)]));
-                    for (const std::string& logical :
+                    for (const dstd::String& logical :
                          root_files[static_cast<std::size_t>(i)]) {
                         const auto file = snapshot.file(logical);
                         if (!file) continue;
@@ -636,11 +639,12 @@ std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
     namespace ix = dftracer::utils::index;
     const ix::RecordSchema& schema = detail::plan_record_schema(*plan_);
     for (const auto& f : schema.fields) {
-        auto [pos, inserted] = leaves.try_emplace(f.path);
+        auto [pos, inserted] =
+            leaves.try_emplace(std::string(f.path.data(), f.path.size()));
         SchemaLeaf& leaf = pos->second;
         if (inserted) {
             leaf.path = f.path;
-            const std::string below = f.path + ".";
+            const dstd::String below = f.path + ".";
             const bool has_leaves =
                 f.type == ix::FieldType::Json &&
                 std::any_of(merged.begin(), merged.end(), [&](const auto& kv) {
@@ -1217,7 +1221,9 @@ coro::CoroTask<ExportStats> run(ScanPlan plan_, const ProgressFn* progress) {
 
 std::string materialize_dir(const ScanPlan& plan_) {
     detail::plan_record_schema(*plan_);
-    return dftracer::utils::index::cache::materialize_view_dir(*plan_);
+    const dstd::String dir =
+        dftracer::utils::index::cache::materialize_view_dir(*plan_);
+    return std::string(dir.data(), dir.size());
 }
 
 void register_materialized(const ScanPlan& plan_, const std::string& dir) {

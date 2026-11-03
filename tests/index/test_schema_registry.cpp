@@ -3,8 +3,11 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -14,17 +17,14 @@
 #include <testing_utilities.h>
 
 #include <fstream>
-#include <functional>
 #include <sstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace ix = dftracer::utils::index;
 
 namespace {
 
-std::string error_of(const std::function<void()>& fn) {
+dstd::String error_of(const dstd::Function<void()>& fn) {
     try {
         fn();
     } catch (const std::exception& e) {
@@ -33,8 +33,8 @@ std::string error_of(const std::function<void()>& fn) {
     return "no error";
 }
 
-bool mentions(const std::string& text, const std::string& part) {
-    return text.find(part) != std::string::npos;
+bool mentions(const dstd::String& text, const dstd::String& part) {
+    return text.find(part) != dstd::String::npos;
 }
 
 // nginx-style JSON logs over small gzip members: `upstream` is constant for
@@ -57,8 +57,8 @@ std::string write_nginx(const std::string& dir, int records) {
     return gz;
 }
 
-std::size_t count_rows(const std::string& trace, const std::string& index_dir,
-                       const std::string& query, bool skip_pruning) {
+std::size_t count_rows(dstd::StringView trace, dstd::StringView index_dir,
+                       const dstd::String& query, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
         utilities::reader::TraceReader reader(
             {.file_path = dstd::String(trace),
@@ -92,13 +92,13 @@ TEST_SUITE("SchemaRegistry") {
         CHECK(s.id == "yaml_a");
         CHECK(s.decoder == ix::Decoder::Path);
         CHECK(s.require ==
-              std::vector<std::string>{"status", "request_time", "upstream"});
+              dstd::Vector<dstd::String>{"status", "request_time", "upstream"});
         CHECK(s.roles.time == "ts_ms");
         CHECK(s.roles.time_unit == ix::TimeUnit::Ms);
         CHECK(s.roles.duration == "request_time");
         CHECK(s.roles.duration_unit == ix::TimeUnit::S);
         CHECK(s.always_index ==
-              std::vector<std::string>{"request_time", "ts_ms", "upstream"});
+              dstd::Vector<dstd::String>{"request_time", "ts_ms", "upstream"});
         REQUIRE(s.field_at("meta.host") != nullptr);
         CHECK(s.field_at("meta.host")->name == "host");
         CHECK(s.path_budget == 8);
@@ -116,13 +116,13 @@ TEST_SUITE("SchemaRegistry") {
             "index: {never_index: [zz_nv_z, zz_nv_blob, zz_nv_z]}\n",
             "yaml_never.yaml");
         CHECK(s.never_index ==
-              std::vector<std::string>{"zz_nv_blob", "zz_nv_z"});
+              dstd::Vector<dstd::String>{"zz_nv_blob", "zz_nv_z"});
         CHECK(ix::schemas_json().find("\"never_index\":[\"zz_nv_blob\"") !=
-              std::string::npos);
+              dstd::String::npos);
         auto cfg = ix::build::ChunkIndexerConfig{};
         cfg.extra_dimensions = {"zz_nv_blob", "zz_nv_status"};
         CHECK(ix::build::for_schema(cfg, s).extra_dimensions ==
-              std::vector<std::string>{"zz_nv_status"});
+              dstd::Vector<dstd::String>{"zz_nv_status"});
 
         ix::RecordSchema fewer = s;
         fewer.never_index.pop_back();
@@ -133,7 +133,7 @@ TEST_SUITE("SchemaRegistry") {
             "index: {never_index: [zz_nv_a]}\n",
             "yaml_never_child.yaml");
         CHECK(child.never_index ==
-              std::vector<std::string>{"zz_nv_a", "zz_nv_blob", "zz_nv_z"});
+              dstd::Vector<dstd::String>{"zz_nv_a", "zz_nv_blob", "zz_nv_z"});
 
         CHECK(mentions(error_of([] {
                            ix::register_schema(
@@ -183,7 +183,7 @@ TEST_SUITE("SchemaRegistry") {
     TEST_CASE("the genesis built-in never indexes its sketches") {
         const auto& g = ix::get_schema("genesis");
         CHECK(g.never_index ==
-              std::vector<std::string>{"dur.sketch", "v.sketch"});
+              dstd::Vector<dstd::String>{"dur.sketch", "v.sketch"});
     }
 
     TEST_CASE("index.stats_share and index.path_budget override the build") {
@@ -199,7 +199,7 @@ TEST_SUITE("SchemaRegistry") {
         CHECK(cfg.stats_share == doctest::Approx(0.2));
         CHECK(cfg.path_budget == 50);
         CHECK(ix::schemas_json().find("\"stats_share\":0.2") !=
-              std::string::npos);
+              dstd::String::npos);
 
         const auto& unset = ix::register_schema(
             "id: yaml_share_unset\nfields: {zz_probe_b: {type: int}}\n",
@@ -262,7 +262,7 @@ TEST_SUITE("SchemaRegistry") {
         const auto& dft = ix::get_schema("dftracer");
         CHECK(s.decoder == ix::Decoder::Dftracer);
         CHECK(s.require ==
-              std::vector<std::string>{"ph", "name", "ts", "args.step"});
+              dstd::Vector<dstd::String>{"ph", "name", "ts", "args.step"});
         CHECK(s.roles.time == dft.roles.time);
         CHECK(s.roles.phase == "ph");
         CHECK(s.always_index.empty());
@@ -284,7 +284,7 @@ TEST_SUITE("SchemaRegistry") {
             "id: child_a\nextends: base_a\n"
             "fields: {lat_a: {type: float, optional: true}}\n",
             "child.yaml");
-        CHECK(s.require == std::vector<std::string>{"op_a"});
+        CHECK(s.require == dstd::Vector<dstd::String>{"op_a"});
         CHECK(s.fields.size() == 2);
     }
 
@@ -361,7 +361,7 @@ TEST_SUITE("SchemaRegistry") {
     TEST_CASE("the built-ins are declared with fields") {
         const auto& dft = ix::get_schema("dftracer");
         CHECK(dft.builtin);
-        CHECK(dft.require == std::vector<std::string>{"ph", "name", "ts"});
+        CHECK(dft.require == dstd::Vector<dstd::String>{"ph", "name", "ts"});
         CHECK(dft.roles.time == "ts");
         CHECK(dft.roles.duration == "dur");
         CHECK(dft.roles.entity == "pid");
@@ -377,28 +377,28 @@ TEST_SUITE("SchemaRegistry") {
         const auto& g = ix::get_schema("genesis");
         CHECK(g.builtin);
         CHECK(g.decoder == ix::Decoder::Path);
-        CHECK(g.require == std::vector<std::string>{"gtype", "run"});
+        CHECK(g.require == dstd::Vector<dstd::String>{"gtype", "run"});
         CHECK(g.roles.time == "ts");
         CHECK(mentions(g.source, "data = where gtype != \"run\""));
         CHECK(mentions(g.source, "runs = where gtype == \"run\""));
         CHECK_FALSE(mentions(g.source, "files = "));
 
-        std::vector<dstd::StringView> lines = {
+        dstd::Vector<dstd::StringView> lines = {
             R"({"gtype":"run","run":"ab","app":"laghos","nodes":1})"};
         for (int i = 0; i < 12; ++i)
             lines.push_back(
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"count":2})");
         CHECK(ix::detect_schema(lines).id == "genesis");
-        const std::vector<dstd::StringView> counters = {
+        const dstd::Vector<dstd::StringView> counters = {
             R"({"gtype":"counter","run":"ab","path":"main","metric":"m"})"};
         CHECK(ix::detect_schema(counters).id == "genesis");
-        const std::vector<dstd::StringView> dft = {
+        const dstd::Vector<dstd::StringView> dft = {
             R"({"id":1,"name":"read","cat":"POSIX","ph":"X","ts":1})"};
         CHECK(ix::detect_schema(dft).id == "dftracer");
-        const std::vector<dstd::StringView> other = {
+        const dstd::Vector<dstd::StringView> other = {
             R"({"kind":"x","id":"a"})"};
         CHECK(ix::detect_schema(other).id == "generic");
-        const std::vector<dstd::StringView> user = {
+        const dstd::Vector<dstd::StringView> user = {
             R"({"type":"run","run":1})", R"({"type":"run","run":2})"};
         CHECK(ix::detect_schema(user).id == "generic");
     }
@@ -429,10 +429,10 @@ TEST_SUITE("SchemaRegistry") {
             "fields: {status: {type: int}, request_time: {type: float}}\n",
             "det.yaml");
         ix::register_schema("id: aaa_empty\n", "empty.yaml");
-        const std::vector<dstd::StringView> nginx = {
+        const dstd::Vector<dstd::StringView> nginx = {
             R"({"status":200,"request_time":0.5})",
             R"({"status":404,"request_time":1.5,"x":1})"};
-        const std::vector<dstd::StringView> plain = {R"({"op":"read"})"};
+        const dstd::Vector<dstd::StringView> plain = {R"({"op":"read"})"};
         CHECK(ix::detect_schema(nginx).id == "det_nginx");
         CHECK(ix::detect_schema(plain).id == "generic");
     }
@@ -442,7 +442,7 @@ TEST_SUITE("SchemaRegistry") {
             "id: exp_nginx\n"
             "fields: {status: {type: int}, request_time: {type: float}}\n",
             "exp.yaml");
-        std::vector<dstd::StringView> lines;
+        dstd::Vector<dstd::StringView> lines;
         for (int i = 0; i < 8; ++i)
             lines.push_back(R"({"status":200,"request_time":0.5})");
         lines.push_back(R"({"status":200})");
@@ -476,7 +476,8 @@ TEST_SUITE("SchemaRegistry") {
                "index: {path_budget: 1}\n";
         ix::IndexerOptions o;
         o.index_dir = index_dir;
-        auto indexer = ix::Indexer::open({gz}, o);
+        auto indexer =
+            ix::Indexer::open({dstd::String(dstd::StringView(gz))}, o);
         indexer.build();
         const auto files = indexer.files();
         REQUIRE(files.size() == 1);
@@ -485,7 +486,7 @@ TEST_SUITE("SchemaRegistry") {
         const auto e = indexer.explain(R"(upstream == "u3")");
         REQUIRE(e.size() == 1);
         CHECK(e[0].read.size() < e[0].chunks);
-        const std::string q = R"(upstream == "u3")";
+        const dstd::String q = R"(upstream == "u3")";
         CHECK(count_rows(gz, index_dir, q, false) == 300);
         CHECK(count_rows(gz, index_dir, q, true) == 300);
         // Not always indexed and past the budget: correct but not pruned.
@@ -499,109 +500,112 @@ TEST_SUITE("SchemaRegistry") {
 }
 
 TEST_SUITE("SchemaDetection") {
-    static std::string dft_event(int i) {
-        return R"({"id":)" + std::to_string(i) +
+    static dstd::String dft_event(int i) {
+        return R"({"id":)" + dstd::to_string(i) +
                R"(,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":)" +
-               std::to_string(100 + i) +
+               dstd::to_string(100 + i) +
                R"(,"dur":5,"ph":"X","args":{"fhash":"f1","ret":4096}})";
     }
 
-    static std::string hash_line(const char* kind, int i) {
-        return R"({"id":)" + std::to_string(i) + R"(,"name":")" + kind +
+    static dstd::String hash_line(const char* kind, int i) {
+        return R"({"id":)" + dstd::to_string(i) + R"(,"name":")" + kind +
                R"(","cat":"dftracer","pid":1,"tid":2,"ph":"M","args":)"
                R"({"name":"/p/)" +
-               std::to_string(i) + R"(","value":"h)" + std::to_string(i) +
+               dstd::to_string(i) + R"(","value":"h)" + dstd::to_string(i) +
                "\"}}";
     }
 
-    static std::string genesis_record(int i) {
+    static dstd::String genesis_record(int i) {
         return R"({"gtype":"func","run":"r1","path":"main;f)" +
-               std::to_string(i) + R"(","name":"f","depth":1,"ts":)" +
-               std::to_string(i) + R"(,"count":2,"dur":{"n":2}})";
+               dstd::to_string(i) + R"(","name":"f","depth":1,"ts":)" +
+               dstd::to_string(i) + R"(,"count":2,"dur":{"n":2}})";
     }
 
-    const std::string RUN_LINE =
+    const dstd::String RUN_LINE =
         R"({"gtype":"run","run":"r1","app":"laghos","nodes":1})";
 
     // `text` as `name` under a fresh directory, gzip when `gz`.
-    static std::string write_file(dftu_utils_test::TestEnvironment & env,
-                                  const std::string& name,
-                                  const std::string& text, bool gz) {
-        const auto plain = env.get_dir() + "/" + name;
+    static dstd::String write_file(dftu_utils_test::TestEnvironment & env,
+                                   const dstd::String& name,
+                                   const dstd::String& text, bool gz) {
+        dstd::String plain(dstd::StringView(env.get_dir()));
+        plain += "/";
+        plain += name;
         std::ofstream(plain.c_str(), std::ios::binary) << text;
         if (!gz) return plain;
         const auto out = plain + ".gz";
-        REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, out));
+        REQUIRE(dftu_utils_test::compress_file_to_gzip(std::string(plain),
+                                                       std::string(out)));
         (void)dstd::fs::remove(plain);
         return out;
     }
 
-    static std::string chosen(const std::vector<std::string>& lines) {
-        std::vector<dstd::StringView> views(lines.begin(), lines.end());
+    static dstd::String chosen(const dstd::Vector<dstd::String>& lines) {
+        dstd::Vector<dstd::StringView> views(lines.begin(), lines.end());
         return ix::detect_schema(views).id;
     }
 
     TEST_CASE("a corpus of JSON shapes is classified") {
-        std::vector<std::string> dft = {"["};
+        dstd::Vector<dstd::String> dft = {"["};
         for (int i = 0; i < 20; ++i) dft.push_back(dft_event(i));
         CHECK(chosen(dft) == "dftracer");
 
-        std::vector<std::string> meta_head;
+        dstd::Vector<dstd::String> meta_head;
         for (int i = 0; i < 300; ++i)
             meta_head.push_back(hash_line(i % 2 ? "FH" : "SH", i));
         for (int i = 0; i < 10; ++i) meta_head.push_back(dft_event(i));
         CHECK(chosen(meta_head) == "dftracer");
 
-        std::vector<std::string> run_first = {RUN_LINE};
+        dstd::Vector<dstd::String> run_first = {RUN_LINE};
         for (int i = 0; i < 5; ++i) run_first.push_back(genesis_record(i));
         CHECK(chosen(run_first) == "genesis");
 
         // Chrome trace events in the JSON array format: the dftracer decoder
         // reads them.
-        std::vector<std::string> chrome = {"["};
+        dstd::Vector<dstd::String> chrome = {"["};
         for (int i = 0; i < 10; ++i)
             chrome.push_back(R"({"name":"MessageLoop","cat":"toplevel","ph":)"
                              R"("X","ts":)" +
-                             std::to_string(i * 10) +
+                             dstd::to_string(i * 10) +
                              R"(,"dur":4,"pid":7,"tid":9,"args":{}},)");
         chrome.push_back("]");
         CHECK(chosen(chrome) == "dftracer");
 
         // `ph` and `name` without a timestamp are not a trace.
-        std::vector<std::string> ph_log;
+        dstd::Vector<dstd::String> ph_log;
         for (int i = 0; i < 10; ++i)
-            ph_log.push_back(R"({"ph":"7.)" + std::to_string(i) +
-                             R"(","name":"tank)" + std::to_string(i) +
+            ph_log.push_back(R"({"ph":"7.)" + dstd::to_string(i) +
+                             R"(","name":"tank)" + dstd::to_string(i) +
                              R"(","site":"b"})");
         CHECK(chosen(ph_log) == "generic");
 
-        std::vector<std::string> web;
+        dstd::Vector<dstd::String> web;
         for (int i = 0; i < 10; ++i)
             web.push_back(R"({"remote_addr":"10.0.0.1","time_local":"t)" +
-                          std::to_string(i) +
+                          dstd::to_string(i) +
                           R"(","request":"GET /a HTTP/1.1","status":200,)"
                           R"("body_bytes_sent":)" +
-                          std::to_string(i * 100) + "}");
+                          dstd::to_string(i * 100) + "}");
         CHECK(chosen(web) == "generic");
 
-        std::vector<std::string> otel;
+        dstd::Vector<dstd::String> otel;
         for (int i = 0; i < 10; ++i)
             otel.push_back(
-                R"({"traceId":"a1","spanId":"s)" + std::to_string(i) +
+                R"({"traceId":"a1","spanId":"s)" + dstd::to_string(i) +
                 R"(","name":"GET /users","kind":2,"startTimeUnixNano":)" +
-                std::to_string(1000 + i) + R"(,"endTimeUnixNano":)" +
-                std::to_string(2000 + i) +
+                dstd::to_string(1000 + i) + R"(,"endTimeUnixNano":)" +
+                dstd::to_string(2000 + i) +
                 R"(,"attributes":[{"key":"http.method","value":)"
                 R"({"stringValue":"GET"}}],"status":{"code":0}})");
         CHECK(chosen(otel) == "generic");
 
-        std::vector<std::string> gh;
+        dstd::Vector<dstd::String> gh;
         for (int i = 0; i < 10; ++i)
-            gh.push_back(R"({"id":")" + std::to_string(i) +
+            gh.push_back(R"({"id":")" + dstd::to_string(i) +
                          R"(","type":"PushEvent","actor":{"login":"u"},)"
                          R"("repo":{"name":"o/r"},"payload":{"size":1},)"
                          R"("public":true,"created_at":"2024-01-01T00:00:0)" +
-                         std::to_string(i) + "Z\"}");
+                         dstd::to_string(i) + "Z\"}");
         CHECK(chosen(gh) == "generic");
 
         const auto none = ix::explain_schema({});
@@ -622,10 +626,10 @@ TEST_SUITE("SchemaDetection") {
             "  attr: {type: string, path: attributes.0.key}\n"
             "  method: {type: string, path: http.method}\n",
             "det_otel.yaml");
-        std::vector<std::string> otel;
+        dstd::Vector<dstd::String> otel;
         for (int i = 0; i < 10; ++i)
             otel.push_back(
-                R"({"traceId":"a","startTimeUnixNano":)" + std::to_string(i) +
+                R"({"traceId":"a","startTimeUnixNano":)" + dstd::to_string(i) +
                 R"(,"attributes":[{"key":"k"}],"http.method":"GET"})");
         CHECK(chosen(otel) == "det_otel");
         otel.push_back(R"({"traceId":"a","startTimeUnixNano":1})");
@@ -638,10 +642,10 @@ TEST_SUITE("SchemaDetection") {
             "fields: {ph: {type: string}, name: {type: string},\n"
             "  zz_tie: {type: int}}\n",
             "det_tie.yaml");
-        std::vector<std::string> tie;
+        dstd::Vector<dstd::String> tie;
         for (int i = 0; i < 5; ++i)
             tie.push_back(R"({"ph":"X","name":"n","ts":1,"zz_tie":)" +
-                          std::to_string(i) + "}");
+                          dstd::to_string(i) + "}");
         CHECK(chosen(tie) == "det_tie");
 
         // Only optional fields: chosen by any declared path, never over a
@@ -652,12 +656,12 @@ TEST_SUITE("SchemaDetection") {
             "  kind: {type: string, path: gh_type, optional: true}\n"
             "  login: {type: string, path: gh_actor.login, optional: true}\n",
             "det_gh.yaml");
-        std::vector<std::string> gh;
+        dstd::Vector<dstd::String> gh;
         for (int i = 0; i < 10; ++i)
             gh.push_back(i % 2 ? R"({"gh_type":"PushEvent","id":1})"
                                : R"({"gh_actor":{"login":"u"},"id":2})");
         CHECK(chosen(gh) == "det_gh");
-        std::vector<std::string> dft;
+        dstd::Vector<dstd::String> dft;
         for (int i = 0; i < 10; ++i)
             dft.push_back(dft_event(i).insert(1, R"("gh_type":"x",)"));
         CHECK(chosen(dft) == "dftracer");
@@ -684,8 +688,9 @@ TEST_SUITE("SchemaDetection") {
                   .id == "dftracer");
 
         // A first record past the 16 MiB text cap is read whole.
-        std::string big = R"({"id":0,"name":"read","cat":"POSIX","pid":1,)"
-                          R"("tid":2,"ts":1,"dur":5,"ph":"X","args":{"blob":")";
+        dstd::String big =
+            R"({"id":0,"name":"read","cat":"POSIX","pid":1,)"
+            R"("tid":2,"ts":1,"dur":5,"ph":"X","args":{"blob":")";
         big.append(17u * 1024 * 1024, 'x');
         big += "\"}}\n" + dft_event(2) + "\n";
         CHECK(
@@ -693,16 +698,16 @@ TEST_SUITE("SchemaDetection") {
             "dftracer");
 
         // Genesis behind 1500 run lines, past the sample count.
-        std::string gen;
+        dstd::String gen;
         for (int i = 0; i < 1500; ++i)
-            gen += R"({"gtype":"run","run":"r)" + std::to_string(i) + "\"}\n";
+            gen += R"({"gtype":"run","run":"r)" + dstd::to_string(i) + "\"}\n";
         for (int i = 0; i < 20; ++i) gen += genesis_record(i) + "\n";
         d = ix::explain_file_schema(write_file(env, "gen.pfw", gen, true));
         CHECK(d.chosen->id == "genesis");
         CHECK(d.records == 20);
 
         // Only metadata: dftracer, with no records to vote with.
-        std::string meta;
+        dstd::String meta;
         for (int i = 0; i < 10; ++i) meta += hash_line("HH", i) + "\n";
         d = ix::explain_file_schema(write_file(env, "meta.pfw", meta, true));
         CHECK(d.chosen->id == "dftracer");
@@ -720,19 +725,19 @@ TEST_SUITE("SchemaDetection") {
     }
 
     TEST_CASE("built-in sources equal their previous literals") {
-        const std::string dft_old =
+        const dstd::String dft_old =
             R"(data = where ph not in ["M", 4];
 files = where ph in ["M", 4] and name == "FH" | select fhash = args.value, path = args.name | distinct;
 hosts = where ph in ["M", 4] and name == "HH" | select hhash = args.value, name = args.name | distinct;
 strings = where ph in ["M", 4] and name == "SH" | select shash = args.value, value = args.name | distinct;
 ranks = where ph in ["M", 4] and name == "PR" and args.name == "rank" | select pid, rank = args.value | distinct;
 def args_fallback = true)";
-        const std::string genesis_old =
+        const dstd::String genesis_old =
             R"re(data = where gtype != "run";
 runs = where gtype == "run" | select run, app, system, unique_input, nodes, ppn, papi_set, method, sketch_accuracy, leaf | distinct)re";
         for (const auto& [id, old] :
-             {dstd::Pair<std::string, std::string>{"dftracer", dft_old},
-              dstd::Pair<std::string, std::string>{"genesis", genesis_old}}) {
+             {dstd::Pair<dstd::String, dstd::String>{"dftracer", dft_old},
+              dstd::Pair<dstd::String, dstd::String>{"genesis", genesis_old}}) {
             const auto& s = ix::get_schema(id);
             CHECK(s.source == ix::merge_source({}, old, id));
             ix::RecordSchema before = s;

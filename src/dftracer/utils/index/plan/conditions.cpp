@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/term.h>
@@ -18,12 +21,9 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
-#include <optional>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::index::plan {
 
@@ -33,18 +33,18 @@ using index::extensions::kinds::Zone;
 namespace {
 
 // A literal as the index keys it; a bool is 1 or 0, as the build records it.
-std::string literal_to_string(const duql_ns::LiteralNode& lit) {
+dstd::String literal_to_string(const duql_ns::LiteralNode& lit) {
     return std::visit(
-        [](auto&& v) -> std::string {
+        [](auto&& v) -> dstd::String {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, dstd::String>)
-                return std::string(v);
+                return dstd::String(v);
             else if constexpr (std::is_same_v<T, bool>)
                 return v ? "1" : "0";
             else if constexpr (std::is_same_v<T, int64_t>)
-                return std::to_string(v);
+                return dstd::to_string(v);
             else if constexpr (std::is_same_v<T, uint64_t>)
-                return std::to_string(v);
+                return dstd::to_string(v);
             else if constexpr (std::is_same_v<T, double>)
                 return index::extensions::canonical_number_text(v);
             else
@@ -53,12 +53,12 @@ std::string literal_to_string(const duql_ns::LiteralNode& lit) {
         lit.value);
 }
 
-bool is_numeric_type(const std::string& vtype) {
+bool is_numeric_type(const dstd::String& vtype) {
     return vtype == "uint" || vtype == "int" || vtype == "double";
 }
 
-int compare_values(const std::string& a, const std::string& b,
-                   const std::string& vtype) {
+int compare_values(const dstd::String& a, const dstd::String& b,
+                   const dstd::String& vtype) {
     // Exact across integer and double text, so `x < 1.5` against an int zone
     // is not read as `x < 1`.
     if (is_numeric_type(vtype)) {
@@ -84,17 +84,13 @@ bool trusted_bounds(const Zone& z, bool need_both) {
                   : (z.min.empty() && z.max.empty()))
         return false;
     if (is_numeric_type(z.value_type) && !z.min.empty() && !z.max.empty()) {
-        double lo = 0;
-        double hi = 0;
-        try {
-            lo = std::stod(z.min);
-            hi = std::stod(z.max);
-        } catch (const std::exception&) {
+        const auto lo = dstd::from_chars<double>(z.min);
+        const auto hi = dstd::from_chars<double>(z.max);
+        if (!lo || !hi)
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Indexer, "corrupt zone map: bounds [", z.min,
                 ", ", z.max, "] of a ", z.value_type, " zone are not numbers");
-        }
-        if (lo > hi) return false;
+        if (*lo > *hi) return false;
     }
     return true;
 }
@@ -102,11 +98,11 @@ bool trusted_bounds(const Zone& z, bool need_both) {
 // The histogram counts whole timestamps, so a bound that is not a
 // non-negative integer (a fraction, a negative number) leaves it out. A string
 // that is not an integer is a malformed query.
-dstd::Optional<std::uint64_t> timestamp_bound(const std::string& text,
+dstd::Optional<std::uint64_t> timestamp_bound(const dstd::String& text,
                                               const duql_ns::CompareNode& n) {
     std::uint64_t out = 0;
     const char* end = text.data() + text.size();
-    const auto parsed = std::from_chars(text.data(), end, out);
+    const auto parsed = dstd::from_chars(text.data(), end, out);
     if (parsed.ec == std::errc{} && parsed.ptr == end) return out;
     if (std::holds_alternative<dstd::String>(n.value.value))
         throw common::DFTUtilsException::cat(
@@ -116,7 +112,7 @@ dstd::Optional<std::uint64_t> timestamp_bound(const std::string& text,
 }
 
 bool zone_may_match(const Zone& z, duql_ns::CompareOp op,
-                    const std::string& val) {
+                    const dstd::String& val) {
     if (!trusted_bounds(z, false)) return true;
     switch (op) {
         case duql_ns::CompareOp::Gt:
@@ -134,7 +130,7 @@ bool zone_may_match(const Zone& z, duql_ns::CompareOp op,
 
 // The dual of zone_may_match: every value in the zone satisfies `op val`.
 bool zone_all_match(const Zone& z, duql_ns::CompareOp op,
-                    const std::string& val) {
+                    const dstd::String& val) {
     if (!trusted_bounds(z, true)) return false;
     switch (op) {
         case duql_ns::CompareOp::Gt:
@@ -226,7 +222,7 @@ void collect_equality_paths(const duql_ns::QueryNode& node,
         node.data);
 }
 
-dstd::StringView text_of(const std::string& s) { return s; }
+dstd::StringView text_of(const dstd::String& s) { return s; }
 dstd::StringView text_of(
     const dstd::Pair<dstd::String, index::store::PathStat>& entry) {
     return entry.first;
@@ -236,7 +232,7 @@ dstd::StringView text_of(
 // evaluator does: as written, under "args.", or as an object or dotted flat
 // key along the way.
 template <class Paths>
-bool path_may_exist(const Paths& paths, const std::string& path) {
+bool path_may_exist(const Paths& paths, const dstd::String& path) {
     auto near = [&](dstd::StringView p) {
         for (const auto& entry : paths) {
             const dstd::StringView s = text_of(entry);
@@ -253,7 +249,7 @@ bool path_may_exist(const Paths& paths, const std::string& path) {
 
 // Whether some record name satisfies `leaf`, a leaf on `name`; a pattern
 // leaf counts as satisfiable.
-bool name_may_match(const std::vector<std::string>& names,
+bool name_may_match(const dstd::Vector<dstd::String>& names,
                     const duql_ns::QueryNode& leaf) {
     auto text = [](const duql_ns::LiteralNode& lit) -> const dstd::String* {
         return std::get_if<dstd::String>(&lit.value);
@@ -343,7 +339,7 @@ class MetadataRecords final : public Condition {
         for (auto c : candidates) {
             const auto it = meta_.find(c);
             if (it == meta_.end() ||
-                may_hold(it->second, leaf, std::string(field->path)))
+                may_hold(it->second, leaf, dstd::String(field->path)))
                 out.insert(c);
         }
         return out;
@@ -352,7 +348,7 @@ class MetadataRecords final : public Condition {
    private:
     static bool may_hold(const index::store::ChunkMetadata& m,
                          const duql_ns::QueryNode& leaf,
-                         const std::string& path) {
+                         const dstd::String& path) {
         if (m.records == 0) return false;
         if (m.paths && !path_may_exist(*m.paths, path)) return false;
         // A record without a top-level name resolves `name` under args.
@@ -382,7 +378,7 @@ class FileBloom final : public Condition {
     }
 
    private:
-    bool may_contain(const std::string& path, const std::string& val) {
+    bool may_contain(const dstd::String& path, const dstd::String& val) {
         const auto* bf = d_.file_bloom(path);
         return !bf || bf->possibly_contains(val);
     }
@@ -393,12 +389,12 @@ class FileBloom final : public Condition {
                 using T = std::decay_t<decltype(n)>;
                 if constexpr (std::is_same_v<T, duql_ns::CompareNode>) {
                     if (n.op != duql_ns::CompareOp::Eq) return true;
-                    return may_contain(std::string(n.field.path),
+                    return may_contain(dstd::String(n.field.path),
                                        literal_to_string(n.value));
                 } else if constexpr (std::is_same_v<T, duql_ns::InNode>) {
                     if (n.values.elements.size() > SEMI_JOIN_CAP) return true;
                     for (const auto& elem : n.values.elements)
-                        if (may_contain(std::string(n.field.path),
+                        if (may_contain(dstd::String(n.field.path),
                                         literal_to_string(elem)))
                             return true;
                     return false;
@@ -418,14 +414,14 @@ class FileBloom final : public Condition {
 
 // The path of an `exists(path)` leaf in the catalog's form (`a.0`, not
 // `a[0]`), or nullopt for any other leaf.
-dstd::Optional<std::string> exists_path(const duql_ns::QueryNode& node) {
+dstd::Optional<dstd::String> exists_path(const duql_ns::QueryNode& node) {
     const auto* leaf = std::get_if<duql_ns::ExprLeaf>(&node.data);
     if (!leaf) return dstd::nullopt;
     const auto* call = std::get_if<duql_ns::TCall>(&leaf->term->node);
     if (!call || call->fn != duql_ns::Fn::Exists) return dstd::nullopt;
     const auto* field = std::get_if<duql_ns::TField>(&call->args[0]->node);
     if (!field) return dstd::nullopt;
-    std::string out;
+    dstd::String out;
     for (const char c : field->base) {
         if (c == '[')
             out += '.';
@@ -436,7 +432,7 @@ dstd::Optional<std::string> exists_path(const duql_ns::QueryNode& node) {
 }
 
 // Whether `p` lies below `base`.
-bool under(dstd::StringView p, const std::string& base) {
+bool under(dstd::StringView p, const dstd::String& base) {
     return p.size() > base.size() && p.starts_with(base) &&
            p[base.size()] == '.';
 }
@@ -467,7 +463,7 @@ class CatalogPresence final : public Condition {
         return !path || may_exist(*path);
     }
 
-    bool may_exist(const std::string& path) {
+    bool may_exist(const dstd::String& path) {
         if (!d_.by_path && unrecorded(path)) return true;
         const auto& catalog = d_.catalog();
         if (catalog.empty()) return true;
@@ -491,11 +487,11 @@ class Postings final : public Condition {
             if (n->op != duql_ns::CompareOp::Eq) return dstd::nullopt;
             const auto val = literal_to_string(n->value);
             const auto contains =
-                d_.posting_contains(std::string(n->field.path), val);
+                d_.posting_contains(dstd::String(n->field.path), val);
             if (!contains) return dstd::nullopt;
             if (!*contains) return ChunkSet{};
             const auto& chunks =
-                d_.posting_chunks(std::string(n->field.path), val);
+                d_.posting_chunks(dstd::String(n->field.path), val);
             if (chunks.empty()) return dstd::nullopt;
             return chunks;
         }
@@ -504,10 +500,10 @@ class Postings final : public Condition {
             for (const auto& elem : n->values.elements) {
                 const auto val = literal_to_string(elem);
                 const auto contains =
-                    d_.posting_contains(std::string(n->field.path), val);
+                    d_.posting_contains(dstd::String(n->field.path), val);
                 if (!contains || !*contains) continue;
                 const auto& chunks =
-                    d_.posting_chunks(std::string(n->field.path), val);
+                    d_.posting_chunks(dstd::String(n->field.path), val);
                 out.insert(chunks.begin(), chunks.end());
             }
             if (out.empty()) return dstd::nullopt;
@@ -532,7 +528,7 @@ class Counts final : public Condition {
             if (n->op != duql_ns::CompareOp::Eq &&
                 n->op != duql_ns::CompareOp::Ne)
                 return dstd::nullopt;
-            const auto& counts = d_.counts(std::string(n->field.path));
+            const auto& counts = d_.counts(dstd::String(n->field.path));
             const auto val = literal_to_string(n->value);
             ChunkSet out;
             for (auto ckpt : candidates) {
@@ -549,7 +545,7 @@ class Counts final : public Condition {
             return out;
         }
         if (const auto* n = std::get_if<duql_ns::InNode>(&leaf.data)) {
-            const auto& counts = d_.counts(std::string(n->field.path));
+            const auto& counts = d_.counts(dstd::String(n->field.path));
             ChunkSet out;
             for (auto ckpt : candidates) {
                 const auto* vc = values(counts, ckpt);
@@ -567,7 +563,7 @@ class Counts final : public Condition {
             return out;
         }
         if (const auto* n = std::get_if<duql_ns::NotInNode>(&leaf.data)) {
-            const auto& counts = d_.counts(std::string(n->field.path));
+            const auto& counts = d_.counts(dstd::String(n->field.path));
             ChunkSet out;
             for (auto ckpt : candidates) {
                 const auto* vc = values(counts, ckpt);
@@ -585,18 +581,18 @@ class Counts final : public Condition {
                 n->op != duql_ns::CompareOp::Ne)
                 return dstd::nullopt;
             const auto val = literal_to_string(n->value);
-            return proven(std::string(n->field.path), [&](const auto& vc) {
+            return proven(dstd::String(n->field.path), [&](const auto& vc) {
                 return n->op == duql_ns::CompareOp::Eq
                            ? vc.size() == 1 && vc.count(val) > 0
                            : vc.count(val) == 0;
             });
         }
         if (const auto* n = std::get_if<duql_ns::InNode>(&leaf.data))
-            return proven(std::string(n->field.path), [&](const auto& vc) {
+            return proven(dstd::String(n->field.path), [&](const auto& vc) {
                 return !vc.empty() && all_listed(vc, n->values);
             });
         if (const auto* n = std::get_if<duql_ns::NotInNode>(&leaf.data))
-            return proven(std::string(n->field.path), [&](const auto& vc) {
+            return proven(dstd::String(n->field.path), [&](const auto& vc) {
                 return !vc.empty() && none_listed(vc, n->values);
             });
         return dstd::nullopt;
@@ -612,7 +608,7 @@ class Counts final : public Condition {
     static bool all_listed(const dstd::StringViewMap<std::uint64_t>& vc,
                            const duql_ns::ArrayNode& list) {
         for (const auto& entry : vc) {
-            const auto& value = entry.first;
+            const dstd::StringView value = entry.first;
             bool listed = false;
             for (const auto& elem : list.elements)
                 if (literal_to_string(elem) == value) {
@@ -632,7 +628,7 @@ class Counts final : public Condition {
     }
 
     template <typename Pred>
-    ChunkSet proven(const std::string& path, Pred pred) {
+    ChunkSet proven(const dstd::String& path, Pred pred) {
         ChunkSet out;
         for (const auto& [ckpt, g] : d_.counts(path)) {
             const auto* vc = g.get();
@@ -668,7 +664,7 @@ class Zonemap final : public Condition {
         const bool bounds_equality =
             n->op == duql_ns::CompareOp::Eq && !d_.fixed_field(n->field.path);
         if (!is_range_op(n->op) && !bounds_equality) return dstd::nullopt;
-        const auto& zones = d_.zones(std::string(n->field.path));
+        const auto& zones = d_.zones(dstd::String(n->field.path));
         const auto val = literal_to_string(n->value);
         dstd::Optional<std::uint64_t> ts_val;
         if (!d_.by_path && n->field.path == "ts" && is_range_op(n->op))
@@ -700,7 +696,7 @@ class Zonemap final : public Condition {
         if (!n || !is_range_op(n->op)) return dstd::nullopt;
         const auto val = literal_to_string(n->value);
         ChunkSet out;
-        for (const auto& [ckpt, z] : d_.zones(std::string(n->field.path)))
+        for (const auto& [ckpt, z] : d_.zones(dstd::String(n->field.path)))
             if (covers_every_line(d_, ckpt, z.observed, z.present) &&
                 zone_all_match(z, n->op, val))
                 out.insert(ckpt);
@@ -713,11 +709,11 @@ class Zonemap final : public Condition {
     dstd::Optional<ChunkSet> in_list(const duql_ns::InNode& in,
                                      const ChunkSet& candidates) {
         if (d_.fixed_field(in.field.path)) return dstd::nullopt;
-        std::vector<std::string> vals;
+        dstd::Vector<dstd::String> vals;
         vals.reserve(in.values.elements.size());
         for (const auto& elem : in.values.elements)
             vals.push_back(literal_to_string(elem));
-        const auto& zones = d_.zones(std::string(in.field.path));
+        const auto& zones = d_.zones(dstd::String(in.field.path));
         ChunkSet out;
         for (auto ckpt : candidates) {
             auto it = zones.find(ckpt);
@@ -739,7 +735,7 @@ class Zonemap final : public Condition {
     // `exists(path)` is false on a chunk whose zone records no value only
     // when no record of the file holds the path as null, an object or an
     // array, which the zone does not see.
-    dstd::Optional<ChunkSet> exists_chunks(const std::string& path,
+    dstd::Optional<ChunkSet> exists_chunks(const dstd::String& path,
                                            const ChunkSet& candidates) {
         if (!absence_is_missing(path)) return dstd::nullopt;
         const auto& zones = d_.zones(path);
@@ -751,10 +747,10 @@ class Zonemap final : public Condition {
         return out;
     }
 
-    bool absence_is_missing(const std::string& path) {
+    bool absence_is_missing(const dstd::String& path) {
         const auto& name = d_.evidence_name(path);
         if (!name || d_.fixed_field(*name)) return false;
-        const std::string leaf = d_.by_path ? *name : "args." + *name;
+        const dstd::String leaf = d_.by_path ? *name : "args." + *name;
         constexpr auto NULL_BIT =
             1U << static_cast<unsigned>(index::store::PathType::NullValue);
         bool scalar = false;
@@ -778,8 +774,8 @@ class ChunkBloom final : public Condition {
     IndexExtension extension() const override { return IndexExtension::Bloom; }
     dstd::Optional<ChunkSet> may_match(const duql_ns::QueryNode& leaf,
                                        const ChunkSet& candidates) override {
-        std::vector<std::string> vals;
-        std::string path;
+        dstd::Vector<dstd::String> vals;
+        dstd::String path;
         if (const auto* n = std::get_if<duql_ns::CompareNode>(&leaf.data)) {
             if (n->op != duql_ns::CompareOp::Eq) return dstd::nullopt;
             path = n->field.path;
@@ -975,7 +971,7 @@ class PluginCondition final : public Condition {
     PluginCondition& operator=(const PluginCondition&) = delete;
 
     IndexExtension extension() const override { return IndexExtension::Plugin; }
-    std::string name() const override { return ext_->name; }
+    dstd::String name() const override { return ext_->name; }
 
     bool file_may_match(const duql_ns::QueryNode& root) override {
         if (!ext_->vt.file_may_match) return true;
@@ -1035,7 +1031,7 @@ class PluginCondition final : public Condition {
     void* compile_leaf(const duql_ns::QueryNode& leaf) {
         ::dftu_index_leaf l{};
         ::dftu_value value{};
-        std::vector<::dftu_value> items;
+        dstd::Vector<::dftu_value> items;
         const duql_ns::FieldNode* field = nullptr;
         auto array = [&](const duql_ns::ArrayNode& values) {
             items.resize(values.elements.size());
@@ -1090,12 +1086,12 @@ class PluginCondition final : public Condition {
 
 Conditions make_query_conditions(FileIndexData& data) {
     Conditions cs;
-    cs.push_back(std::make_unique<FileBloom>(data));
-    cs.push_back(std::make_unique<CatalogPresence>(data));
-    cs.push_back(std::make_unique<Postings>(data));
-    cs.push_back(std::make_unique<Counts>(data));
-    cs.push_back(std::make_unique<Zonemap>(data));
-    cs.push_back(std::make_unique<ChunkBloom>(data));
+    cs.push_back(dstd::make_unique<FileBloom>(data));
+    cs.push_back(dstd::make_unique<CatalogPresence>(data));
+    cs.push_back(dstd::make_unique<Postings>(data));
+    cs.push_back(dstd::make_unique<Counts>(data));
+    cs.push_back(dstd::make_unique<Zonemap>(data));
+    cs.push_back(dstd::make_unique<ChunkBloom>(data));
     auto registered = index::extensions::plugin_extensions();
     if (registered.empty()) return cs;
     const auto copies =
@@ -1107,7 +1103,7 @@ Conditions make_query_conditions(FileIndexData& data) {
                                               copy.ready};
             if (ext->current(state))
                 cs.push_back(
-                    std::make_unique<PluginCondition>(data, std::move(ext)));
+                    dstd::make_unique<PluginCondition>(data, std::move(ext)));
             break;
         }
     }
@@ -1129,7 +1125,7 @@ ChunkSet evaluate(const duql_ns::QueryNode& root, const Conditions& conditions,
 Conditions make_metadata_conditions(
     const dstd::HashMap<std::uint64_t, index::store::ChunkMetadata>& metadata) {
     Conditions out;
-    out.push_back(std::make_unique<MetadataRecords>(metadata));
+    out.push_back(dstd::make_unique<MetadataRecords>(metadata));
     return out;
 }
 

@@ -7,17 +7,12 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/file.h>
 #include <dftracer/utils/plugins/abi/index.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index {
 class FileBuild;
@@ -27,7 +22,7 @@ namespace dftracer::utils::index::extensions {
 
 /// An index extension a plugin registered (plugins/abi/index.h).
 struct PluginExtension {
-    std::string name;
+    dstd::String name;
     ::dftu_index_extension vt;
     void* self = nullptr;
 
@@ -48,13 +43,13 @@ bool register_plugin_extension(dstd::StringView name,
 void unregister_plugin_extension(dstd::StringView name);
 /// The registered extensions, sorted by name. The entries stay valid after
 /// unregistration, but their callbacks only while the plugin is loaded.
-std::vector<PluginExtensionPtr> plugin_extensions();
+dstd::Vector<PluginExtensionPtr> plugin_extensions();
 PluginExtensionPtr find_plugin_extension(dstd::StringView name);
 
 /// One file's builders, one per extension, fed chunk by chunk.
 class PluginBuilders {
    public:
-    explicit PluginBuilders(std::vector<PluginExtensionPtr> extensions);
+    explicit PluginBuilders(dstd::Vector<PluginExtensionPtr> extensions);
     ~PluginBuilders();
     PluginBuilders(const PluginBuilders&) = delete;
     PluginBuilders& operator=(const PluginBuilders&) = delete;
@@ -72,14 +67,14 @@ class PluginBuilders {
         PluginExtensionPtr ext;
         void* builder = nullptr;
         bool chunk_failed = false;
-        std::vector<dstd::Pair<std::uint64_t, std::string>> granules;
-        dstd::Optional<std::string> file;
+        dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>> granules;
+        dstd::Optional<dstd::String> file;
     };
     void end_granule();
 
-    std::vector<Built> built_;
+    dstd::Vector<Built> built_;
     dstd::Optional<std::uint64_t> granule_;
-    std::vector<::dftu_bytes> lines_;
+    dstd::Vector<::dftu_bytes> lines_;
 };
 
 }  // namespace dftracer::utils::index::extensions

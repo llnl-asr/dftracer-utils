@@ -25,7 +25,6 @@
 #include <string>
 #include <type_traits>
 #include <variant>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
@@ -203,12 +202,9 @@ int main(int argc, char** argv) {
                     dstd::String(cli.inputs.directory).c_str());
                 return 1;
             }
-            // keep std: unswept API
-            const std::string index_path =
+            const dstd::String index_path =
                 trace::internal::determine_index_path(
-                    dstd::String(scanned.front().path.str()),
-                    // keep std: unswept API
-                    std::string(cli.indexing.index_dir));
+                    scanned.front().path.c_str(), cli.indexing.index_dir);
 
             // --- Load aggregated traces
             // ---------------------------------------------

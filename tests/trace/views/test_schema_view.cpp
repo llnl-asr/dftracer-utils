@@ -12,7 +12,6 @@
 #include <map>
 #include <set>
 #include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -56,7 +55,8 @@ std::string write_log(TestEnvironment& env) {
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     (void)dstd::fs::remove(plain);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
+        .build();
     return gz;
 }
 
@@ -75,7 +75,7 @@ void register_log_schema() {
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, determine_index_path(gz, ""));
+    return View::from_file(gz, std::string(determine_index_path(gz, "")));
 }
 
 std::size_t rows(const View& v) { return v.collect().get().num_rows(); }

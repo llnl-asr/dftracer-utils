@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/span.h>
@@ -16,12 +17,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::dstd {
 class StringIntern;
@@ -57,20 +52,20 @@ inline constexpr std::array<dstd::StringView, 7> DEFAULT_BLOOM_DIMENSIONS = {
 };
 
 struct IndexBuildResult {
-    std::string file_path;
-    std::string index_path;
+    dstd::String file_path;
+    dstd::String index_path;
     bool success = false;
     bool was_skipped = false;
     bool index_created = false;
     std::size_t events_processed = 0;
     std::size_t chunks_processed = 0;
     std::size_t total_lines = 0;
-    std::string error_message;
+    dstd::String error_message;
 };
 
 struct IndexBuildBatchConfig {
-    std::vector<std::string> file_paths;
-    std::string index_dir;
+    dstd::Vector<dstd::String> file_paths;
+    dstd::String index_dir;
     std::size_t checkpoint_size =
         common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t parallelism = 1;
@@ -80,7 +75,7 @@ struct IndexBuildBatchConfig {
     /// an aggregation-only index (dfanalyzer) does not need it.
     bool build_bloom = true;
     index::build::ChunkIndexerConfig bloom_config;
-    std::vector<std::string> bloom_dimensions;
+    dstd::Vector<dstd::String> bloom_dimensions;
     /// Write only the tier extensions of bloom_config.extensions (none when
     /// build_bloom is off) and, when agg_fold_factory is set, the aggregation
     /// tier, for files whose members are current; members, the file record
@@ -91,33 +86,34 @@ struct IndexBuildBatchConfig {
     /// unbounded.
     std::uint64_t memory_budget = 0;
     /// RecordSchema id every file is decoded with; empty detects each file's.
-    std::string schema;
+    dstd::String schema;
 
     /// Factory for the aggregation-tier fold, created once per file with the
     /// fused-scan intern that produced its events. When set, the batch build
     /// steps an AggregationFold in the same single parse as bloom/dict and its
     /// per-file out-of-band outputs land in
     /// IndexBuildBatchResult::agg_outputs.
-    using AggFoldFactory = std::function<
-        std::unique_ptr<index::schemas::dft::agg::AggregationFold>(
+    using AggFoldFactory = dstd::Function<
+        dstd::UniquePtr<index::schemas::dft::agg::AggregationFold>(
             dftracer::utils::dstd::StringIntern& build_intern)>;
     AggFoldFactory agg_fold_factory;
 
     /// Optional callback with (files_done, total_files) as files finish
     /// parsing. Called from worker threads (throttled); must be thread-safe.
-    using ProgressFn = std::function<void(std::size_t done, std::size_t total)>;
+    using ProgressFn =
+        dstd::Function<void(std::size_t done, std::size_t total)>;
     ProgressFn progress;
 
     /// If non-empty, parallel to `file_paths`: an open read-only descriptor of
     /// each file, used instead of opening it. The build takes each one out of
     /// this vector and closes it once the file is parsed. A null entry opens
     /// the file as usual.
-    std::vector<dstd::SharedPtr<dstd::ScopedFd>> input_fds;
+    dstd::Vector<dstd::SharedPtr<dstd::ScopedFd>> input_fds;
 
     /// If non-empty, parallel to `file_paths`: the relative work of each file,
     /// such as its size in bytes. Runs of consecutive files are cut to equal
     /// work. Empty cuts them to equal file counts.
-    std::vector<std::uint64_t> file_costs;
+    dstd::Vector<std::uint64_t> file_costs;
 };
 
 struct IndexBuildBatchMetrics {
@@ -135,7 +131,7 @@ struct IndexBuildBatchMetrics {
 };
 
 struct IndexBuildBatchResult {
-    std::vector<IndexBuildResult> results;
+    dstd::Vector<IndexBuildResult> results;
     std::size_t indexed = 0;
     std::size_t skipped = 0;
     std::size_t failed = 0;
@@ -144,7 +140,7 @@ struct IndexBuildBatchResult {
 
     /// Per-file out-of-band outputs (time bounds) for agg_fold_factory. Drained
     /// via aggregators::merge_aggregation_folds.
-    std::vector<index::schemas::dft::agg::AggFoldOutput> agg_outputs;
+    dstd::Vector<index::schemas::dft::agg::AggFoldOutput> agg_outputs;
 };
 
 class BatchBuilder {

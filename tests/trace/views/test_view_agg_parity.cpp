@@ -15,7 +15,7 @@ TEST_SUITE("View") {
     TEST_CASE("View - agg engine path matches the GroupMap path") {
         REQUIRE(parity_env().is_valid());
         const std::string gz = write_agg_engine_trace(parity_sub("base"));
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         auto run_both = [&](const GroupKey& gk, const std::string& key_col,
                             std::uint64_t mem_budget) {
             run_both_file(gz, idx, gk, key_col, mem_budget);
@@ -55,7 +55,7 @@ TEST_SUITE("View") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
             const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = determine_index_path(rgz, "");
+            const std::string ridx = std::string(determine_index_path(rgz, ""));
             auto fine = [&] {
                 return scan::agg(
                     scan::group_by(scan::from_file(rgz, ridx),
@@ -82,7 +82,7 @@ TEST_SUITE("View") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
             const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = determine_index_path(rgz, "");
+            const std::string ridx = std::string(determine_index_path(rgz, ""));
             auto q = [&] {
                 return scan::agg(scan::group_by(scan::from_file(rgz, ridx),
                                                 {GroupKey::cat()}),
@@ -111,7 +111,7 @@ TEST_SUITE("View") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
             const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = determine_index_path(rgz, "");
+            const std::string ridx = std::string(determine_index_path(rgz, ""));
             auto specs = [] {
                 return std::vector<AggSpec>{
                     {AggOp::Count, "", "n"},
@@ -145,7 +145,7 @@ TEST_SUITE("View") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
             const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = determine_index_path(rgz, "");
+            const std::string ridx = std::string(determine_index_path(rgz, ""));
             auto occ = [&](std::vector<GroupKey> gb) {
                 return scan::agg(
                     scan::group_by(scan::from_file(rgz, ridx), std::move(gb)),
@@ -173,7 +173,7 @@ TEST_SUITE("View") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
             const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = determine_index_path(rgz, "");
+            const std::string ridx = std::string(determine_index_path(rgz, ""));
             auto check_hist = [&](const dataframe::DataFrame& expect,
                                   const dataframe::DataFrame& got) {
                 REQUIRE(expect.num_rows() == got.num_rows());

@@ -16,8 +16,8 @@ constexpr std::uint8_t HAS_PRESENT = 1;
 constexpr std::uint8_t HAS_HISTOGRAM = 2;
 }  // namespace
 
-std::string encode_zone(const Zone& zone) {
-    std::string out;
+dstd::String encode_zone(const Zone& zone) {
+    dstd::String out;
     codec::append_string(out, zone.value_type);
     codec::append_string(out, zone.min);
     codec::append_string(out, zone.max);
@@ -56,8 +56,8 @@ dstd::Optional<Zone> decode_zone(dstd::StringView bytes) {
     }
 }
 
-std::string encode_counts(const CountsGranule& counts) {
-    std::string out;
+dstd::String encode_counts(const CountsGranule& counts) {
+    dstd::String out;
     dstd::append_u64_be(out, counts.observed);
     codec::append_u8(out, counts.compressed ? 1 : 0);
     if (counts.compressed) codec::append_blob(out, *counts.compressed);
@@ -79,9 +79,9 @@ dstd::Optional<CountsGranule> decode_counts(dstd::StringView bytes) {
     }
 }
 
-std::string encode_bloom(dstd::Span<const unsigned char> bloom,
-                         std::uint64_t num_entries) {
-    std::string out;
+dstd::String encode_bloom(dstd::Span<const unsigned char> bloom,
+                          std::uint64_t num_entries) {
+    dstd::String out;
     dstd::append_u64_be(out, num_entries);
     out.append(reinterpret_cast<const char*>(bloom.data()), bloom.size());
     return out;

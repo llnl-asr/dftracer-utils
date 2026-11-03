@@ -68,7 +68,7 @@ Plugins load(const dstd::String& config = "") {
 Indexer open(const std::string& gz) {
     IndexerOptions o;
     o.extensions = {};
-    return Indexer::open({gz}, o);
+    return Indexer::open({dstd::String(dstd::StringView(gz))}, o);
 }
 
 dftracer::utils::dstd::Optional<dftracer::utils::index::ExtensionEntry> entry(
@@ -91,7 +91,8 @@ struct NullSink : ExportSink {
 
 View view_of(const std::string& gz) {
     return View::from_file(
-        gz, dftracer::utils::trace::internal::determine_index_path(gz, ""));
+        gz, std::string(dftracer::utils::trace::internal::determine_index_path(
+                gz, "")));
 }
 
 }  // namespace

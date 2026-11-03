@@ -73,7 +73,7 @@ std::int64_t rows_named(const dataframe::DataFrame& df,
 void check_metadata_variant(bool numeric_ph) {
     TestEnvironment env(200);
     const std::string gz = create_metadata_trace(env, numeric_ph);
-    const std::string idx = determine_index_path(gz, "");
+    const std::string idx = std::string(determine_index_path(gz, ""));
     prime_index(gz, idx);
 
     // phase("metadata") returns the CM record as a row, args flattened.
@@ -166,7 +166,8 @@ std::string create_threaded_trace(TestEnvironment& env) {
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 4 * 1024));
     (void)dstd::fs::remove(pfw);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
+        .build();
     return gz;
 }
 
@@ -176,8 +177,8 @@ TEST_SUITE("View - metadata under pruning") {
     TEST_CASE("the index counts metadata records per chunk") {
         TestEnvironment env(200);
         const std::string gz = create_threaded_trace(env);
-        const auto snapshot =
-            dftu_utils_test::index_snapshot(determine_index_path(gz, ""));
+        const auto snapshot = dftu_utils_test::index_snapshot(
+            std::string(determine_index_path(gz, "")));
         auto counts =
             dftu_utils_test::index_take(dftracer::utils::index::chunk_meta(
                 snapshot, dftu_utils_test::require_indexed_file(snapshot, gz)));
@@ -195,7 +196,7 @@ TEST_SUITE("View - metadata under pruning") {
     TEST_CASE("metadata records are rows only under all") {
         TestEnvironment env(200);
         const std::string gz = create_threaded_trace(env);
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         StringSink data;
         View::from_file(gz, idx).sink_json(data).get();
         CHECK(count_containing(data.lines(), "thread_name") == 0);
@@ -215,7 +216,7 @@ TEST_SUITE("View - metadata under pruning") {
     TEST_CASE("a metadata query finds records in any chunk") {
         TestEnvironment env(200);
         const std::string gz = create_threaded_trace(env);
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         ScanPlan q =
             scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),
                          duql::parse_or_throw(R"(args.name == "t37")"));
@@ -239,11 +240,14 @@ TEST_SUITE("View - metadata under pruning") {
         const std::string gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                                    4 * 1024));
-        dftracer::utils::index::Indexer::open({gz}).build();
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))})
+            .build();
         StringSink sink;
-        const auto stats = run(View::from_file(gz, determine_index_path(gz, ""))
-                                   .phase(Phase::Metadata)
-                                   .sink_json(sink));
+        const auto stats =
+            run(View::from_file(gz, std::string(determine_index_path(gz, "")))
+                    .phase(Phase::Metadata)
+                    .sink_json(sink));
         CHECK(stats.chunks_scanned == 0);
         CHECK(sink.lines().empty());
     }
@@ -251,9 +255,10 @@ TEST_SUITE("View - metadata under pruning") {
     TEST_CASE("an index without dft.metadata still returns every record") {
         TestEnvironment env(200);
         const std::string gz = create_threaded_trace(env);
-        const std::string idx = determine_index_path(gz, "");
-        dftracer::utils::index::Indexer::open({gz}).drop_extension(
-            "dft.metadata");
+        const std::string idx = std::string(determine_index_path(gz, ""));
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))})
+            .drop_extension("dft.metadata");
         {
             const auto snapshot = dftu_utils_test::index_snapshot(idx);
             CHECK_FALSE(dftu_utils_test::index_take(
@@ -312,7 +317,8 @@ TEST_SUITE("View - metadata under pruning") {
             const auto q = dftracer::utils::duql::parse_or_throw(text);
             auto out =
                 ip::prune_file({.index_path = determine_index_path(gz, ""),
-                                .file_path = gz,
+                                .file_path = dftracer::utils::dstd::String(
+                                    dftracer::utils::dstd::StringView(gz)),
                                 .query = &q,
                                 .metadata = use})
                     .get();

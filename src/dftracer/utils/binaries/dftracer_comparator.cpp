@@ -328,18 +328,20 @@ static int run_comparator(const ComparatorArgParse* cli) {
 
         ResolveAndBuildInput input;
         if (common::input_is_regular_file(path)) {
-            input.files.push_back(path);
+            input.files.emplace_back(dstd::StringView(path));
         } else {
-            input.directory = path;
+            input.directory.assign(path.data(), path.size());
         }
-        input.index_dir = index_dir;
+        input.index_dir.assign(index_dir.data(), index_dir.size());
         input.checkpoint_size = config.checkpoint_size;
         input.parallelism = parallelism;
         input.force_rebuild = config.force_rebuild;
         input.build_bloom = false;
 
         auto result = co_await resolve_and_build_index(std::move(input));
-        out_files = std::move(result.all_files);
+        out_files.clear();
+        for (const auto& f : result.all_files)
+            out_files.emplace_back(f.data(), f.size());
 
         if (out_files.empty()) {
             DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",

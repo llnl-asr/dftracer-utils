@@ -29,15 +29,15 @@ namespace {
 namespace scan = dftracer::utils::trace::views::detail::scan;
 
 std::string cache_of(const std::string& gz) {
-    return determine_index_path(gz, "");
+    return std::string(determine_index_path(gz, ""));
 }
 
 std::string rollups_of(const std::string& gz) {
-    return dftracer::utils::index::rollups_dir(cache_of(gz));
+    return std::string(dftracer::utils::index::rollups_dir(cache_of(gz)));
 }
 
 std::string views_of(const std::string& gz) {
-    return dftracer::utils::index::views_dir(cache_of(gz));
+    return std::string(dftracer::utils::index::views_dir(cache_of(gz)));
 }
 
 // Signatures in the rollup store, from its usage records.
@@ -60,7 +60,7 @@ std::uint64_t rollup_bytes(const std::string& gz) {
 }
 
 View by_cat(const std::string& gz, const std::string& query) {
-    return View::from_file(gz, determine_index_path(gz, ""))
+    return View::from_file(gz, std::string(determine_index_path(gz, "")))
         .duql(query)
         .group_by({GroupKey::cat()})
         .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
@@ -79,7 +79,9 @@ std::vector<std::string> canon(const dataframe::DataFrame& df) {
 std::string indexed_trace(TestEnvironment& env) {
     std::string gz = create_mixed_trace(env, 30, 20);
     StringSink warm;
-    View::from_file(gz, determine_index_path(gz, "")).sink_json(warm).get();
+    View::from_file(gz, std::string(determine_index_path(gz, "")))
+        .sink_json(warm)
+        .get();
     return gz;
 }
 
@@ -97,7 +99,8 @@ TEST_SUITE("QueryCache") {
                                      ".dftindex-cache")
                         .value());
         auto store = dftracer::utils::store::Store::open(
-            (dstd::Path(determine_index_path(gz, "")) / "store").str());
+            (dstd::Path(std::string(determine_index_path(gz, ""))) / "store")
+                .str());
         REQUIRE(store.has_value());
         auto snapshot = store->snapshot();
         REQUIRE(snapshot.has_value());
@@ -115,7 +118,7 @@ TEST_SUITE("QueryCache") {
     TEST_CASE("deleting the cache changes no result") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         const auto agg = canon(by_cat(gz, "dur >= 0").collect().get());
         StringSink rows;
         View::from_file(gz, idx)
@@ -144,7 +147,7 @@ TEST_SUITE("QueryCache") {
     TEST_CASE("a root holding only caches is not mistaken for an index") {
         TestEnvironment env(200);
         const auto gz = create_mixed_trace(env, 30, 20);
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         by_cat(gz, "dur >= 0").materialize().get();
         const dstd::Path store = dstd::Path(idx) / "store";
         REQUIRE(dstd::fs::exists(store).value());
@@ -177,7 +180,7 @@ TEST_SUITE("QueryCache") {
     TEST_CASE("the rollup store evicts the least recently used rollup") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         auto plan = [&](const std::string& q) {
             return scan::agg(
                 scan::group_by(scan::filter(scan::from_file(gz, idx),
@@ -212,7 +215,7 @@ TEST_SUITE("QueryCache") {
         "a rollup made under one record schema is not reused by another") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         auto view = [&](bool generic) {
             View v = View::from_file(gz, idx);
             if (generic) v = v.record_schema("generic");
@@ -228,7 +231,7 @@ TEST_SUITE("QueryCache") {
     TEST_CASE("a view larger than the whole budget is not kept") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES", "1", 1);
         View::from_file(gz, idx).duql(R"(name == "read")").materialize().get();
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");

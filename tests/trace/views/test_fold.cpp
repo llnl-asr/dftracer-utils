@@ -183,7 +183,7 @@ TEST_SUITE("Fold") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // 50 events
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
             View::from_file(gz, idx).sink_json(s).get();
@@ -227,7 +227,7 @@ TEST_SUITE("Fold") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         dstd::fs::remove(pfw).has_value();
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
             View::from_file(gz, idx).sink_json(s).get();

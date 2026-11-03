@@ -7,8 +7,11 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
@@ -18,9 +21,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
-#include <optional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::index {
 class FileBuild;
@@ -32,9 +32,9 @@ struct GzipBuildArtifacts {
     std::uint64_t checkpoint_size = 0;
     std::uint64_t total_lines = 0;
     std::uint64_t total_uc_size = 0;
-    std::vector<GzipMemberRecord> members;
+    dstd::Vector<GzipMemberRecord> members;
     /// The 32 KiB inflate window of each RESTART piece, keyed by member_idx.
-    std::vector<dstd::Pair<std::uint64_t, std::string>> restart_windows;
+    dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>> restart_windows;
     /// The last member was cut short; `recovered_bytes` of it were kept.
     bool truncated = false;
     std::uint64_t recovered_bytes = 0;
@@ -48,7 +48,7 @@ struct GzipBuildArtifacts {
 /// members are slice-local and member indices start at `member_begin`
 /// so multiple ranks writing the same file_id produce disjoint keys.
 struct GzipMemberSlice {
-    const std::vector<index::gzip::GzipMember> *members = nullptr;
+    const dstd::Vector<index::gzip::GzipMember> *members = nullptr;
     std::size_t member_begin = 0;
     std::size_t member_end = 0;  // exclusive
 };
@@ -67,7 +67,7 @@ struct GzipMemberSlice {
 /// outlives this coroutine.
 
 coro::CoroTask<dstd::Optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
-    const std::string &gz_path, std::uint64_t ckpt_size,
+    dstd::CStringView gz_path, std::uint64_t ckpt_size,
     const CheckpointIndexer::VisitorList &visitors,
     coro::Scope *scope = nullptr, const GzipMemberSlice *slice = nullptr,
     std::size_t ways = 0);
@@ -75,7 +75,7 @@ coro::CoroTask<dstd::Optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
 /// The same over an open file. `fd` stays open and owned by the caller.
 /// `gz_path` only names the file in messages.
 coro::CoroTask<dstd::Optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
-    int fd, const std::string &gz_path, std::uint64_t ckpt_size,
+    int fd, dstd::CStringView gz_path, std::uint64_t ckpt_size,
     const CheckpointIndexer::VisitorList &visitors,
     coro::Scope *scope = nullptr, const GzipMemberSlice *slice = nullptr,
     std::size_t ways = 0);
@@ -90,7 +90,7 @@ class GzipIndexer : public CheckpointIndexer {
     static constexpr std::uint64_t DEFAULT_CHECKPOINT_SIZE =
         common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
 
-    GzipIndexer(const std::string &gz_path, const std::string &index_path,
+    GzipIndexer(const dstd::String &gz_path, const dstd::String &index_path,
                 std::uint64_t checkpoint_size = DEFAULT_CHECKPOINT_SIZE,
                 bool force = false);
     ~GzipIndexer();
@@ -108,9 +108,9 @@ class GzipIndexer : public CheckpointIndexer {
     }
 
     // Metadata - BaseIndexer interface implementation
-    const std::string &get_index_path() const override;
-    const std::string &get_archive_path() const override;
-    const std::string &get_gz_path() const;
+    const dstd::String &get_index_path() const override;
+    const dstd::String &get_archive_path() const override;
+    const dstd::String &get_gz_path() const;
     std::uint64_t get_checkpoint_size() const override;
     std::uint64_t get_max_bytes() const override;
     std::uint64_t get_num_lines() const override;
@@ -118,9 +118,9 @@ class GzipIndexer : public CheckpointIndexer {
     // Lookup
     bool find_member(std::size_t target_offset,
                      GzipMemberRecord &member) const override;
-    std::vector<GzipMemberRecord> get_members() const override;
+    dstd::Vector<GzipMemberRecord> get_members() const override;
     dstd::Vector<std::uint64_t> piece_heads() const override;
-    std::string restart_window(std::uint64_t member_idx) const override;
+    dstd::String restart_window(std::uint64_t member_idx) const override;
 
     inline common::ArchiveFormat get_format_type() const override {
         return common::ArchiveFormat::Gzip;
@@ -130,9 +130,9 @@ class GzipIndexer : public CheckpointIndexer {
     }
 
    private:
-    std::string gz_path;
-    std::string gz_path_logical_path;
-    std::string index_path;
+    dstd::String gz_path;
+    dstd::String gz_path_logical_path;
+    dstd::String index_path;
     std::uint64_t ckpt_size;
     bool force_rebuild;
     VisitorList visitors_;
@@ -145,7 +145,7 @@ class GzipIndexer : public CheckpointIndexer {
     mutable std::atomic<bool> cached_num_lines_ready{false};
     mutable std::atomic<std::uint64_t> cached_checkpoint_size{0};
     mutable std::atomic<bool> cached_checkpoint_size_ready{false};
-    mutable std::vector<GzipMemberRecord> cached_members;
+    mutable dstd::Vector<GzipMemberRecord> cached_members;
     mutable dstd::Vector<std::uint64_t> cached_heads;
     // One snapshot per loaded indexer, so a restart read opens nothing.
     mutable dstd::Optional<index::Snapshot> snapshot_;

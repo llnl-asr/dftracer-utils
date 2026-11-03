@@ -24,8 +24,6 @@
 #include <exception>
 #include <fstream>
 #include <iterator>
-#include <map>
-#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -112,7 +110,7 @@ std::string write_corrupt_trace(const std::string& dir, int n) {
 
 std::string view_index_root(const std::string& file,
                             const std::string& index_dir) {
-    return trace::internal::determine_index_path(file, index_dir);
+    return std::string(trace::internal::determine_index_path(file, index_dir));
 }
 
 void cold_count(const std::vector<std::string>& files,

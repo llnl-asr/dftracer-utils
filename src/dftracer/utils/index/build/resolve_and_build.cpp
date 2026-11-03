@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/corrupt_index.h>
@@ -27,13 +28,8 @@
 
 #include <algorithm>
 #include <atomic>
-#include <map>
-#include <optional>
-#include <set>
 #include <stdexcept>
-#include <string_view>
 #include <system_error>
-#include <unordered_map>
 
 namespace dftracer::utils::index::build {
 
@@ -43,11 +39,11 @@ namespace {
 // members, hash tables and aggregation as they are. `tier` holds the union of
 // the files' stale extensions; rewriting a current one is correct, only
 // slower.
-coro::CoroTask<std::vector<ResolverResult::Failure>> build_tier(
-    std::vector<std::string> files, const ResolveAndBuildInput& input,
-    index::store::ExtensionMask tier, const std::string& schema,
+coro::CoroTask<dstd::Vector<ResolverResult::Failure>> build_tier(
+    dstd::Vector<dstd::String> files, const ResolveAndBuildInput& input,
+    index::store::ExtensionMask tier, const dstd::String& schema,
     std::size_t parallelism) {
-    auto config = std::make_shared<IndexBuildBatchConfig>();
+    auto config = dstd::make_shared<IndexBuildBatchConfig>();
     config->file_paths = std::move(files);
     config->index_dir = input.index_dir;
     config->checkpoint_size = input.checkpoint_size;
@@ -60,7 +56,7 @@ coro::CoroTask<std::vector<ResolverResult::Failure>> build_tier(
     DFTRACER_UTILS_LOG_INFO("Building the index tier for %zu files",
                             config->file_paths.size());
     auto batch = co_await BatchBuilder::process(std::move(config));
-    std::vector<ResolverResult::Failure> failures;
+    dstd::Vector<ResolverResult::Failure> failures;
     for (const auto& r : batch.results)
         if (!r.success && !r.was_skipped)
             failures.push_back({r.file_path, r.error_message});
@@ -70,12 +66,12 @@ coro::CoroTask<std::vector<ResolverResult::Failure>> build_tier(
 namespace agg = index::schemas::dft::agg;
 
 // Aggregates files whose members are current, leaving every other extension.
-coro::CoroTask<std::vector<ResolverResult::Failure>> build_aggregation(
-    std::vector<std::string> files, const ResolveAndBuildInput& input,
-    const std::string& index_path, const std::string& schema,
+coro::CoroTask<dstd::Vector<ResolverResult::Failure>> build_aggregation(
+    dstd::Vector<dstd::String> files, const ResolveAndBuildInput& input,
+    const dstd::String& index_path, const dstd::String& schema,
     std::size_t parallelism) {
     AggRun run = start_aggregation(index_path, input.aggregation_config);
-    auto config = std::make_shared<IndexBuildBatchConfig>();
+    auto config = dstd::make_shared<IndexBuildBatchConfig>();
     config->file_paths = std::move(files);
     config->index_dir = input.index_dir;
     config->checkpoint_size = input.checkpoint_size;
@@ -84,11 +80,11 @@ coro::CoroTask<std::vector<ResolverResult::Failure>> build_aggregation(
     config->build_bloom = false;
     config->memory_budget = input.memory_budget;
     config->schema = schema;
-    config->agg_fold_factory = run.factory;
+    config->agg_fold_factory = std::move(run.factory);
     DFTRACER_UTILS_LOG_INFO("Aggregating %zu files", config->file_paths.size());
     auto batch = co_await BatchBuilder::process(std::move(config));
     finish_aggregation(run, batch);
-    std::vector<ResolverResult::Failure> failures;
+    dstd::Vector<ResolverResult::Failure> failures;
     for (const auto& r : batch.results)
         if (!r.success && !r.was_skipped)
             failures.push_back({r.file_path, r.error_message});
@@ -111,7 +107,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
     resolve_input.checkpoint_size = input.checkpoint_size;
     resolve_input.aggregation_config = input.aggregation_config;
     resolve_input.schema = input.schema;
-    for (std::string& field : input.bloom_config.extra_dimensions)
+    for (dstd::String& field : input.bloom_config.extra_dimensions)
         field = extra_dimension_name(field);
     if (input.build_bloom) resolve_input.bloom_config = input.bloom_config;
 
@@ -121,8 +117,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
     }
 
     // A forced rebuild rebuilds every file whole, so every tier is stale.
-    std::set<std::string> stale_tiers(result.stale_aggregation_roots.begin(),
-                                      result.stale_aggregation_roots.end());
+    dstd::Set<dstd::String> stale_tiers(result.stale_aggregation_roots.begin(),
+                                        result.stale_aggregation_roots.end());
     if (input.force_rebuild)
         for (const auto& file : result.all_files) {
             auto root =
@@ -133,11 +129,11 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         }
     for (const auto& root : stale_tiers) clear_aggregation(root);
 
-    std::vector<std::string> files_needing_work;
+    dstd::Vector<dstd::String> files_needing_work;
     if (input.force_rebuild) {
         files_needing_work = result.all_files;
     } else {
-        std::set<std::string> files_needing_work_set;
+        dstd::Set<dstd::String> files_needing_work_set;
         for (const auto& item : result.needs_checkpoint) {
             files_needing_work_set.insert(item.file_path);
         }
@@ -145,8 +141,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
                                   files_needing_work_set.end());
 
         // One tier build per recorded schema, which decodes its files.
-        std::map<std::string, dstd::Pair<std::vector<std::string>,
-                                         index::store::ExtensionMask>>
+        dstd::Map<dstd::String, dstd::Pair<dstd::Vector<dstd::String>,
+                                           index::store::ExtensionMask>>
             tier_by_schema;
         for (const auto& item : result.needs_bloom) {
             auto& [files, tier] = tier_by_schema[item.schema];
@@ -167,7 +163,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             for (auto& f : failures) result.failures.push_back(std::move(f));
         }
 
-        std::map<std::string, std::vector<std::string>> agg_by_schema;
+        dstd::Map<dstd::String, dstd::Vector<dstd::String>> agg_by_schema;
         for (const auto& item : result.needs_aggregation)
             agg_by_schema[item.schema].push_back(item.file_path);
         for (auto& [schema, files] : agg_by_schema) {
@@ -187,9 +183,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         // Build a fresh single-root index on node-local scratch when the
         // destination is a slow filesystem, then publish it back. Incremental
         // and multi-root builds run in place.
-        std::string build_index_dir = input.index_dir;
-        std::string build_index_path = result.index_path;
-        std::string staged_final_path;
+        dstd::String build_index_dir = input.index_dir;
+        dstd::String build_index_path = result.index_path;
+        dstd::String staged_final_path;
         dstd::Optional<common::ScratchSession> scratch;
         // should_stage is cheap for the common local destination and short
         // circuits before any mount probing; only a network destination reaches
@@ -197,7 +193,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         if (!common::unwrap(dstd::fs::exists(
                 dstd::PathView(index::store_dir(result.index_path)))) &&
             common::should_stage(result.index_path)) {
-            std::set<std::string> roots;
+            dstd::Set<dstd::String> roots;
             for (const auto& f : files_needing_work)
                 roots.insert(
                     trace::internal::determine_index_path(f, input.index_dir));
@@ -205,7 +201,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
                 auto staged = common::staged_build_scratch(files_needing_work);
                 if (staged) {
                     staged_final_path = *roots.begin();
-                    build_index_dir = std::string(staged->dir().str());
+                    build_index_dir = dstd::String(staged->dir().str());
                     build_index_path = trace::internal::determine_index_path(
                         files_needing_work.front(), build_index_dir);
                     DFTRACER_UTILS_LOG_INFO("Staging index build at %s -> %s",
@@ -221,7 +217,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             start_aggregation(build_index_path, input.aggregation_config)};
 
         auto batch_config =
-            std::make_shared<index::build::IndexBuildBatchConfig>();
+            dstd::make_shared<index::build::IndexBuildBatchConfig>();
         batch_config->file_paths = files_needing_work;
         if (result.all_file_sizes.size() == result.all_files.size()) {
             dstd::HashMap<dstd::StringView, std::uint64_t> size_of;
@@ -248,7 +244,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             input.bloom_config.extra_dimensions.begin(),
             input.bloom_config.extra_dimensions.end());
 
-        batch_config->agg_fold_factory = agg_run->factory;
+        batch_config->agg_fold_factory = std::move(agg_run->factory);
 
         auto batch_result = co_await index::build::BatchBuilder::process(
             std::move(batch_config));
@@ -304,8 +300,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
 coro::CoroTask<IndexWork> files_needing_index(ResolverInput input) {
     Resolver resolver;
     auto result = co_await resolver(std::move(input));
-    std::vector<FileWorkItem> items;
-    std::set<std::size_t> seen;
+    dstd::Vector<FileWorkItem> items;
+    dstd::Set<std::size_t> seen;
     for (const auto* group : {&result.needs_checkpoint, &result.needs_bloom,
                               &result.needs_aggregation})
         for (const auto& item : *group)
@@ -316,9 +312,9 @@ coro::CoroTask<IndexWork> files_needing_index(ResolverInput input) {
     co_return work;
 }
 
-coro::CoroTask<void> ensure_indexes_fresh(std::string directory,
-                                          std::vector<std::string> files,
-                                          std::string index_dir,
+coro::CoroTask<void> ensure_indexes_fresh(dstd::String directory,
+                                          dstd::Vector<dstd::String> files,
+                                          dstd::String index_dir,
                                           bool force_rebuild) {
     ResolveAndBuildInput in;
     in.directory = std::move(directory);
@@ -329,10 +325,11 @@ coro::CoroTask<void> ensure_indexes_fresh(std::string directory,
     co_await resolve_and_build_index(std::move(in));
 }
 
-coro::CoroTask<void> ensure_index_fresh(std::string directory, std::string file,
-                                        std::string index_dir,
+coro::CoroTask<void> ensure_index_fresh(dstd::String directory,
+                                        dstd::String file,
+                                        dstd::String index_dir,
                                         bool force_rebuild) {
-    std::vector<std::string> files;
+    dstd::Vector<dstd::String> files;
     if (!file.empty()) files.push_back(std::move(file));
     co_await ensure_indexes_fresh(std::move(directory), std::move(files),
                                   std::move(index_dir), force_rebuild);
@@ -344,8 +341,8 @@ bool mentions_corruption(dstd::StringView text) {
     return text.find("is corrupt") != dstd::StringView::npos;
 }
 
-[[noreturn]] void throw_corrupt(const std::set<std::string>& roots,
-                                const std::string& cause, bool tier_cleared,
+[[noreturn]] void throw_corrupt(const dstd::Set<dstd::String>& roots,
+                                const dstd::String& cause, bool tier_cleared,
                                 common::ErrorCode code) {
     throw common::DFTUtilsException(
         code, corrupt_index_message(roots, cause, tier_cleared));
@@ -358,14 +355,14 @@ bool mentions_corruption(dstd::StringView text) {
 // the caller with the index directories named. Any other error is passed on.
 coro::CoroTask<ResolverResult> resolve_and_build_index(
     ResolveAndBuildInput input) {
-    std::set<std::string> roots;
+    dstd::Set<dstd::String> roots;
     for (const auto& file : input.files)
         roots.insert(
             trace::internal::determine_index_path(file, input.index_dir));
     for (const auto& entry : input.entries)
         roots.insert(
             trace::internal::determine_index_path(entry.path, input.index_dir));
-    std::string failure;
+    dstd::String failure;
     try {
         co_return co_await resolve_and_build_once(input);
     } catch (const std::exception& e) {
@@ -384,7 +381,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
                 index::store::internal::normalize_index_root(root)));
             agg::tier::clear(target);
         }
-    std::string retry_failure;
+    dstd::String retry_failure;
     try {
         co_return co_await resolve_and_build_once(std::move(input));
     } catch (const std::exception& e) {

@@ -81,7 +81,8 @@ bool build_index(const std::string& gz, const std::string& index_dir,
             -> dftracer::utils::coro::CoroTask<void> {
             auto config = std::make_shared<
                 dftracer::utils::index::build::IndexBuildBatchConfig>();
-            config->file_paths = {gz};
+            config->file_paths = {dftracer::utils::dstd::String(
+                dftracer::utils::dstd::StringView(gz))};
             config->index_dir = index_dir;
             if (checkpoint_size > 0) config->checkpoint_size = checkpoint_size;
             auto r =
@@ -275,7 +276,8 @@ std::string TestEnvironment::create_test_gzip_file_impl() {
 }
 
 std::string TestEnvironment::get_index_path(const std::string& gz_file) {
-    return dftracer::utils::trace::internal::determine_index_path(gz_file, "");
+    return std::string(
+        dftracer::utils::trace::internal::determine_index_path(gz_file, ""));
 }
 
 std::string TestEnvironment::create_dft_test_file(int num_events) {

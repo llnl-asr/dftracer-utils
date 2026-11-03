@@ -5,6 +5,8 @@
 #include <dftracer/utils/index/store/internal/index_encoding.h>
 #include <dftracer/utils/index/store/internal/payload_codec.h>
 
+#include <string>
+
 namespace dftracer::utils::index::store::internal::decoding {
 
 index::schemas::dft::ChunkStatistics decode_chunk_statistics_value(
@@ -29,8 +31,9 @@ index::schemas::dft::ChunkStatistics decode_chunk_statistics_value(
 
     auto duration_histogram = cursor.str();
     if (!duration_histogram.empty()) {
-        stats.duration_histogram =
-            dataframe::Log2Histogram::from_json(duration_histogram);
+        stats.duration_histogram = dataframe::Log2Histogram::from_json(
+            // keep std: Log2Histogram::from_json takes std::string
+            std::string(duration_histogram));
     }
 
     auto name_sketches = cursor.blob_view();

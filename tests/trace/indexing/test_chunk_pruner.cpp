@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -10,10 +12,6 @@
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <testing_utilities.h>
-
-#include <span>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::extensions;
@@ -26,10 +24,10 @@ using dftracer::utils::index::gzip::GzipMemberRecord;
 // `name_file_bloom` adds the file-level "name" bloom that the tier-0 file skip
 // probes. The base fixture writes none, which is itself a case worth keeping:
 // a file without blooms must stay unpruned.
-static void populate_test_idx(const std::string& index_path,
-                              const std::string& file_path,
-                              const std::vector<GzipMemberRecord>& members = {},
-                              bool name_file_bloom = false) {
+static void populate_test_idx(
+    const dstd::String& index_path, const dstd::String& file_path,
+    const dstd::Vector<GzipMemberRecord>& members = {},
+    bool name_file_bloom = false) {
     auto index = dftu_utils_test::open_test_index(index_path);
     auto writer = dftu_utils_test::register_test_file(
         index, dftu_utils_test::index_key(file_path), 12345);
@@ -108,7 +106,7 @@ static void populate_test_idx(const std::string& index_path,
     }
     // Two data events per chunk, one line each, so the statistics describe
     // every record and all-match proofs (NOT) are allowed.
-    std::vector<GzipMemberRecord> all;
+    dstd::Vector<GzipMemberRecord> all;
     for (std::uint64_t ckpt = 0; ckpt < 3; ++ckpt) {
         dftracer::utils::index::schemas::dft::ChunkStatistics stats;
         stats.total_events = 2;
@@ -148,8 +146,8 @@ static void populate_test_idx(const std::string& index_path,
     dftu_utils_test::commit_test_build(writer);
 }
 
-static ChunkPrunerOutput run_pruner(const std::string& index_path,
-                                    const std::string& file_path,
+static ChunkPrunerOutput run_pruner(const dstd::String& index_path,
+                                    const dstd::String& file_path,
                                     const char* query_str) {
     auto q = Query::from_string(query_str);
     REQUIRE(q.has_value());
@@ -162,11 +160,11 @@ static ChunkPrunerOutput run_pruner(const std::string& index_path,
 
 TEST_SUITE("ChunkPruner") {
     TEST_CASE("Pruner - equality match via dictionary") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_eq").str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         auto out = run_pruner(index_path, file_path, R"(cat == "POSIX")");
@@ -179,12 +177,12 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - equality no match") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_eq_none")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         auto out = run_pruner(index_path, file_path, R"(cat == "HDF5")");
@@ -194,11 +192,11 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - in operator") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_in").str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         auto out =
@@ -208,11 +206,11 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - not in operator") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_notin").str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         // Chunk 0: only POSIX -> excluded by not in ["POSIX"]
@@ -226,11 +224,11 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - AND intersection") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_and").str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         // cat == "POSIX" -> chunks 0, 2
@@ -243,11 +241,11 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - AND narrows results") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_and2").str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         // cat == "POSIX" -> chunks 0, 2
@@ -261,11 +259,11 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - OR union") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_or").str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         // cat == "STDIO" -> chunk 1
@@ -280,11 +278,11 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - NOT via dictionary") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_not").str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         // cat == "STDIO" -> chunk 1
@@ -297,12 +295,12 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - NOT keeps a chunk with records the stats missed") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_not_meta")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         // Chunk 1 holds a third line (a metadata record, say) that has no
         // cat, so `not cat == "STDIO"` may match it.
         populate_test_idx(index_path, file_path,
@@ -317,16 +315,17 @@ TEST_SUITE("ChunkPruner") {
                           }});
         auto out = run_pruner(index_path, file_path, R"(not cat == "STDIO")");
         CHECK(out.success);
-        CHECK(out.candidate_checkpoints == std::vector<std::uint64_t>{0, 1, 2});
+        CHECK(out.candidate_checkpoints ==
+              dstd::Vector<std::uint64_t>{0, 1, 2});
     }
 
     TEST_CASE("Pruner - a member without statistics stays a candidate") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_bare_member")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         // Member 3 holds only metadata records, so the index has no
         // statistics or bloom rows for it.
         populate_test_idx(index_path, file_path,
@@ -341,18 +340,19 @@ TEST_SUITE("ChunkPruner") {
                           }});
         auto neg = run_pruner(index_path, file_path, R"(not cat == "STDIO")");
         CHECK(neg.total_checkpoints == 4);
-        CHECK(neg.candidate_checkpoints == std::vector<std::uint64_t>{0, 2, 3});
+        CHECK(neg.candidate_checkpoints ==
+              dstd::Vector<std::uint64_t>{0, 2, 3});
         auto eq = run_pruner(index_path, file_path, R"(cat == "POSIX")");
-        CHECK(eq.candidate_checkpoints == std::vector<std::uint64_t>{0, 2, 3});
+        CHECK(eq.candidate_checkpoints == dstd::Vector<std::uint64_t>{0, 2, 3});
     }
 
     TEST_CASE("Pruner - NOT keeps a chunk holding both sides") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_not_mixed")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         // Chunk 2 holds cat POSIX AND MPI, so its MPI events match the
@@ -366,12 +366,12 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - NOT over a range keeps straddling chunks") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_not_range")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         // dur ranges: chunk 0 [100,200], chunk 1 [500,600], chunk 2 [50,1000].
@@ -385,11 +385,11 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - range via min/max") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_range").str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         // dur > "500": chunk 0 max=200 (skip), chunk 1 max=600 (keep),
@@ -402,11 +402,11 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - case-insensitive keywords") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_case").str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         auto out = run_pruner(index_path, file_path,
@@ -416,12 +416,12 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - file bloom skips the file before any chunk work") {
-        std::string test_dir = std::string(
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_pruner_file_bloom")
                 .str());
         REQUIRE(dstd::fs::create_directories(test_dir).has_value());
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path, {}, true);
 
         SUBCASE("absent value prunes the whole file") {

@@ -41,9 +41,9 @@ StaleCheck stale_check(const idx::Index &index,
     dftracer::utils::dstd::StringViewSet listed;
     listed.reserve(paths.size());
     for (const std::string &path : paths) {
-        const std::string logical =
+        const dftracer::utils::dstd::String logical =
             idx::store::internal::get_logical_path(path);
-        listed.insert(logical);
+        listed.insert(std::string(logical));
         dftracer::utils::common::InputFileStat st;
         if (!dftracer::utils::common::stat_input(path, st)) st = {};
         const idx::SourceStat now{static_cast<std::uint64_t>(st.mtime),

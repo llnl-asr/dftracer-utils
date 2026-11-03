@@ -4,17 +4,14 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/record_schema.h>
 
 #include <algorithm>
 #include <concepts>
 #include <cstddef>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index {
 
@@ -43,7 +40,7 @@ struct Json {
 };
 
 /// One field of a schema class: a value of `T` (bool, an integer, a floating
-/// point type, std::string, Json, or std::optional of one for an optional
+/// point type, dstd::String, Json, or dstd::Optional of one for an optional
 /// field) at the JSON path `PATH`, with `Options`.
 template <typename T, FixedString PATH, typename... Options>
 struct Field {
@@ -90,14 +87,15 @@ consteval FieldType field_type() {
         return FieldType::Int;
     else if constexpr (std::floating_point<T>)
         return FieldType::Float;
-    else if constexpr (std::same_as<T, std::string>)
+    else if constexpr (std::same_as<T, dstd::String>)
         return FieldType::String;
     else if constexpr (std::same_as<T, Json>)
         return FieldType::Json;
     else
-        static_assert(sizeof(T) == 0,
-                      "a schema field holds bool, an integer, a floating "
-                      "point type, std::string, Json or std::optional of one");
+        static_assert(
+            sizeof(T) == 0,
+            "a schema field holds bool, an integer, a floating "
+            "point type, dstd::String, Json or dstd::Optional of one");
 }
 
 template <FieldType TYPE>
@@ -142,7 +140,7 @@ struct FieldOf<Field<T, PATH, Options...>> {
     static index::FieldSpec make() {
         constexpr FieldType TYPE = field_type<typename Unwrap<T>::type>();
         index::FieldSpec f;
-        f.name = std::string(PATH.view());
+        f.name = dstd::String(PATH.view());
         f.path = f.name;
         f.type = TYPE;
         f.optional = Unwrap<T>::OPTIONAL;
@@ -167,7 +165,7 @@ consteval std::size_t member_count() {
 
 // Converts to the member it initializes, recording that member's field.
 struct MemberProbe {
-    std::vector<index::FieldSpec>* out;
+    dstd::Vector<index::FieldSpec>* out;
     template <typename U>
     operator U() const {
         static_assert(IsField<U>::value,
@@ -178,12 +176,12 @@ struct MemberProbe {
 };
 
 template <std::size_t>
-MemberProbe probe(std::vector<index::FieldSpec>& out) {
+MemberProbe probe(dstd::Vector<index::FieldSpec>& out) {
     return {&out};
 }
 
 template <typename T, std::size_t... I>
-void record_fields(std::vector<index::FieldSpec>& out,
+void record_fields(dstd::Vector<index::FieldSpec>& out,
                    std::index_sequence<I...>) {
     // Braced initializers run left to right, so fields keep member order.
     [[maybe_unused]] const T members{probe<I>(out)...};
@@ -200,10 +198,11 @@ template <typename T>
 SchemaSpec schema_spec() {
     static_assert(std::is_aggregate_v<T>, "a schema class is an aggregate");
     SchemaSpec spec;
-    spec.id = std::string(T::id);
+    spec.id = dstd::String(T::id);
     if constexpr (requires { typename T::extends; })
-        spec.extends = std::string(T::extends::id);
-    if constexpr (requires { T::SOURCE; }) spec.source = std::string(T::SOURCE);
+        spec.extends = dstd::String(T::extends::id);
+    if constexpr (requires { T::SOURCE; })
+        spec.source = dstd::String(T::SOURCE);
     detail::record_fields<T>(
         spec.fields, std::make_index_sequence<detail::member_count<T>()>{});
     return spec;

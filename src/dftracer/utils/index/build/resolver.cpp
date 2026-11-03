@@ -26,7 +26,6 @@
 #include <cstdint>
 #include <exception>
 #include <mutex>
-#include <string_view>
 
 namespace dftracer::utils::index::build {
 
@@ -38,35 +37,35 @@ using index::store::IndexExtension;
 
 struct PendingFile {
     std::size_t file_index;
-    std::string file_path;
-    std::string logical_path;
+    dstd::String file_path;
+    dstd::String logical_path;
     std::uint64_t mtime;
     std::uint64_t size;
 };
 
 struct ResolveGroupInput {
-    std::string index_path;
-    std::vector<PendingFile> files;
+    dstd::String index_path;
+    dstd::Vector<PendingFile> files;
     bool require_checkpoints;
     bool require_bloom;
     std::size_t checkpoint_size = 0;
     dstd::Optional<ChunkIndexerConfig> bloom_config;
-    std::string schema;
+    dstd::String schema;
     index::schemas::dft::agg::AggregationConfig aggregation_config =
         index::schemas::dft::agg::standard_aggregation_config();
 };
 
 struct ResolveGroupOutput {
-    std::vector<FileWorkItem> needs_checkpoint;
-    std::vector<FileWorkItem> needs_bloom;
-    std::vector<FileWorkItem> needs_aggregation;
-    std::vector<ResolvedFile> cached;
+    dstd::Vector<FileWorkItem> needs_checkpoint;
+    dstd::Vector<FileWorkItem> needs_bloom;
+    dstd::Vector<FileWorkItem> needs_aggregation;
+    dstd::Vector<ResolvedFile> cached;
 
     bool needs_augmentation = false;
     std::uint64_t stored_time_interval_us = 0;
     bool stale_detected = false;
     bool aggregation_stale = false;
-    std::string index_path;
+    dstd::String index_path;
 };
 
 // The file's copy of `ext` was built, and with `params_hash`.
@@ -83,18 +82,18 @@ bool agg_current(const Snapshot& snapshot, const FileRef& file,
 }
 
 // Paths the file's pruning tier indexed by value (bloom) or range (zonemap).
-std::vector<std::string> indexed_paths(const Snapshot& snapshot,
-                                       const FileRef& file) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> indexed_paths(const Snapshot& snapshot,
+                                         const FileRef& file) {
+    dstd::Vector<dstd::String> out;
     for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap})
         for (auto& p : common::unwrap(index::paths(snapshot, file, ext)))
             out.emplace_back(p.data(), p.size());
     return out;
 }
 
-bool covers(const std::vector<std::string>& indexed,
-            const std::vector<std::string>& fields) {
-    for (const std::string& f : fields)
+bool covers(const dstd::Vector<dstd::String>& indexed,
+            const dstd::Vector<dstd::String>& fields) {
+    for (const dstd::String& f : fields)
         if (std::find(indexed.begin(), indexed.end(), f) == indexed.end())
             return false;
     return true;
@@ -102,10 +101,10 @@ bool covers(const std::vector<std::string>& indexed,
 
 // The file's recorded schema is current and, when `wanted` is set, is it.
 bool schema_current(const Snapshot& snapshot, const FileRef& file,
-                    const std::string& wanted) {
+                    const dstd::String& wanted) {
     const auto recorded = common::unwrap(index::schema(snapshot, file));
     if (!recorded) return false;
-    const std::string id(recorded->data(), recorded->size());
+    const dstd::String id(recorded->data(), recorded->size());
     if (!wanted.empty() && id != wanted) return false;
     const RecordSchema* schema = find_schema(id);
     if (!schema) return false;
@@ -178,7 +177,7 @@ struct FileDecision {
         Aggregate,
         Cached
     };
-    std::string schema;
+    dstd::String schema;
     index::store::ExtensionMask tier;
     Kind kind = Kind::NotIndexed;
     bool agg_candidate = false;
@@ -289,7 +288,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                 }
             }
         }
-        std::vector<FileDecision> decisions(input.files.size());
+        dstd::Vector<FileDecision> decisions(input.files.size());
         std::exception_ptr failure;
         std::mutex failure_mutex;
         default_runtime().parallel_for(
@@ -308,7 +307,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
             });
         if (failure) std::rethrow_exception(failure);
 
-        std::vector<dstd::Pair<FileWorkItem, bool>> agg_candidates;
+        dstd::Vector<dstd::Pair<FileWorkItem, bool>> agg_candidates;
         for (std::size_t i = 0; i < input.files.size(); ++i) {
             PendingFile& f = input.files[i];
             FileDecision& d = decisions[i];
@@ -364,9 +363,9 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
 
 }  // namespace
 
-std::vector<utilities::filesystem::FileEntry> scanned_entries(
+dstd::Vector<utilities::filesystem::FileEntry> scanned_entries(
     const ResolverResult& result) {
-    std::vector<utilities::filesystem::FileEntry> out;
+    dstd::Vector<utilities::filesystem::FileEntry> out;
     out.reserve(result.all_files.size());
     for (std::size_t i = 0; i < result.all_files.size(); ++i) {
         utilities::filesystem::FileEntry entry;
@@ -379,9 +378,9 @@ std::vector<utilities::filesystem::FileEntry> scanned_entries(
     return out;
 }
 
-std::vector<utilities::filesystem::FileEntry> scanned_entries(
-    const ResolverResult& result, const std::vector<FileWorkItem>& items) {
-    std::vector<utilities::filesystem::FileEntry> out;
+dstd::Vector<utilities::filesystem::FileEntry> scanned_entries(
+    const ResolverResult& result, const dstd::Vector<FileWorkItem>& items) {
+    dstd::Vector<utilities::filesystem::FileEntry> out;
     out.reserve(items.size());
     for (const auto& item : items) {
         utilities::filesystem::FileEntry entry;
@@ -404,7 +403,7 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
         result.all_file_sizes.reserve(input.entries.size());
         result.all_file_mtimes.reserve(input.entries.size());
         for (const auto& entry : input.entries) {
-            result.all_files.push_back(std::string(entry.path.str()));
+            result.all_files.push_back(dstd::String(entry.path.str()));
             result.all_file_sizes.push_back(entry.size);
             result.all_file_mtimes.push_back(entry.mtime);
         }
@@ -418,7 +417,7 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
         result.all_file_sizes.reserve(matched.size());
         result.all_file_mtimes.reserve(matched.size());
         for (const auto& entry : matched) {
-            result.all_files.push_back(std::string(entry.path.str()));
+            result.all_files.push_back(dstd::String(entry.path.str()));
             result.all_file_sizes.push_back(entry.size);
             result.all_file_mtimes.push_back(entry.mtime);
         }
@@ -440,7 +439,7 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
     result.index_path = trace::internal::determine_index_path(
         result.all_files.front(), input.index_dir);
 
-    dstd::StringViewMap<std::vector<PendingFile>> groups;
+    dstd::StringViewMap<dstd::Vector<PendingFile>> groups;
     for (std::size_t i = 0; i < result.all_files.size(); ++i) {
         const auto& file_path = result.all_files[i];
         auto idx_path =
@@ -451,11 +450,11 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
                                                result.all_file_sizes[i]});
     }
 
-    std::vector<ResolveGroupOutput> outputs;
+    dstd::Vector<ResolveGroupOutput> outputs;
     outputs.reserve(groups.size());
 
     if (groups.size() > 1) {
-        std::vector<coro::SpawnFuture<ResolveGroupOutput>> futures;
+        dstd::Vector<coro::SpawnFuture<ResolveGroupOutput>> futures;
         futures.reserve(groups.size());
 
         for (auto& [idx_path, files] : groups) {

@@ -5,11 +5,10 @@
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/format_detector.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-
-#include <memory>
-#include <string>
 
 namespace dftracer::utils::index::gzip {
 
@@ -30,7 +29,7 @@ class CheckpointIndexerFactory {
      * not supported
      */
     static dstd::SharedPtr<CheckpointIndexer> create(
-        const std::string &archive_path, const std::string &index_path = "",
+        dstd::CStringView archive_path, dstd::CStringView index_path = "",
         std::uint64_t checkpoint_size =
             common::constants::indexer::DEFAULT_CHECKPOINT_SIZE,
         bool force = false);
@@ -41,7 +40,7 @@ class CheckpointIndexerFactory {
      * @param archive_path Path to the archive file
      * @return Detected archive format
      */
-    static common::ArchiveFormat detect_format(const std::string &archive_path);
+    static common::ArchiveFormat detect_format(dstd::CStringView archive_path);
 
     /**
      * Generate appropriate index file path for the given archive format
@@ -50,8 +49,8 @@ class CheckpointIndexerFactory {
      * @param format Archive format (auto-detected if UNKNOWN)
      * @return Appropriate index file path
      */
-    static std::string generate_index_path(
-        const std::string &archive_path,
+    static dstd::String generate_index_path(
+        dstd::CStringView archive_path,
         common::ArchiveFormat format = common::ArchiveFormat::Unknown);
 
    private:

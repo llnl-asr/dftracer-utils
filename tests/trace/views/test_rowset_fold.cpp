@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
@@ -82,7 +83,7 @@ std::string write_trace(TestEnvironment& env,
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dftracer::utils::dstd::fs::remove(pfw);
-    if (build) ix::Indexer::open({gz}).build();
+    if (build) ix::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
     return gz;
 }
 
@@ -127,12 +128,12 @@ TEST_SUITE("RowSetFold") {
     TEST_CASE("the built-in sources index their lookup row sets") {
         std::vector<std::string> names;
         for (const auto& r : ix::indexed_rowsets(ix::get_schema("dftracer")))
-            names.push_back(r.name);
+            names.emplace_back(r.name);
         CHECK(names ==
               std::vector<std::string>{"files", "hosts", "strings", "ranks"});
         names.clear();
         for (const auto& r : ix::indexed_rowsets(ix::get_schema("genesis")))
-            names.push_back(r.name);
+            names.emplace_back(r.name);
         CHECK(names.back() == "runs");
         CHECK(ix::indexed_rowsets(ix::get_schema("generic")).empty());
     }
@@ -145,15 +146,17 @@ TEST_SUITE("RowSetFold") {
             "  keyed = where y in (from big | select y)\n",
             "test");
         std::vector<std::string> names;
-        for (const auto& r : ix::indexed_rowsets(s)) names.push_back(r.name);
+        for (const auto& r : ix::indexed_rowsets(s)) names.emplace_back(r.name);
         CHECK(names == std::vector<std::string>{"big"});
     }
 
     TEST_CASE("each stored row set equals the pipeline over every record") {
         TestEnvironment env(10);
         const std::string gz = write_trace(env, trace_lines());
-        const auto ixr = ix::Indexer::open({gz});
-        const View v = View::from_file(gz, determine_index_path(gz, ""));
+        const auto ixr =
+            ix::Indexer::open({dstd::String(dstd::StringView(gz))});
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")));
         for (const char* name : {"files", "hosts", "strings", "ranks"}) {
             CAPTURE(name);
             const df::DataFrame stored = ixr.rowset(name);
@@ -178,8 +181,10 @@ TEST_SUITE("RowSetFold") {
             lines.push_back(
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"depth":1,"count":2})");
         const std::string gz = write_trace(env, lines);
-        const auto ixr = ix::Indexer::open({gz});
-        const View v = View::from_file(gz, determine_index_path(gz, ""));
+        const auto ixr =
+            ix::Indexer::open({dstd::String(dstd::StringView(gz))});
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")));
         const df::DataFrame stored = ixr.rowset("runs");
         CHECK(rows_of(stored) ==
               rows_of(run(v.duql("from runs | where true").collect())));
@@ -195,9 +200,10 @@ TEST_SUITE("RowSetFold") {
             lines.push_back(
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"depth":1,"count":2})");
         const std::string gz = write_trace(env, lines, /*build=*/false);
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .group_by({GroupKey::field("gtype")})
-                           .agg({{AggOp::Count, "", "n"}});
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .group_by({GroupKey::field("gtype")})
+                .agg({{AggOp::Count, "", "n"}});
         for (int touch = 0; touch < 2; ++touch) {
             CAPTURE(touch);
             const df::DataFrame f = v.collect().get();
@@ -290,8 +296,10 @@ TEST_SUITE("RowSetFold") {
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"dur":{"sketch":"SK)" +
                 std::to_string(i) + R"(","count":2}})");
         const std::string gz = write_trace(env, lines);
-        const auto ixr = ix::Indexer::open({gz});
-        const View v = View::from_file(gz, determine_index_path(gz, ""));
+        const auto ixr =
+            ix::Indexer::open({dstd::String(dstd::StringView(gz))});
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")));
         const df::DataFrame f =
             v.duql("where dur.sketch == \"SK7\" | select path, dur.count")
                 .collect()

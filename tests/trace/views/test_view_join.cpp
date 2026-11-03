@@ -48,7 +48,7 @@ TEST_SUITE("ViewJoin") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // 30 posix, 20 stdio
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto left = View::from_file(gz, idx)
                         .group_by({GroupKey::cat()})

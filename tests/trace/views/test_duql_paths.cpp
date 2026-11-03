@@ -97,7 +97,8 @@ std::string write_trace(TestEnvironment& env) {
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
     (void)dstd::fs::remove(plain);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
+        .build();
     return gz;
 }
 
@@ -119,7 +120,8 @@ Names names_of(const DataFrame& df) {
 }
 
 View view_of(const std::string& gz, const char* filter) {
-    return View::from_file(gz, determine_index_path(gz, "")).duql(filter);
+    return View::from_file(gz, std::string(determine_index_path(gz, "")))
+        .duql(filter);
 }
 
 coro::CoroTask<Names> reader_lines(
@@ -270,7 +272,9 @@ TEST_SUITE("duql paths") {
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
         (void)dstd::fs::remove(plain);
-        dftracer::utils::index::Indexer::open({gz}).build();
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))})
+            .build();
         reader::TraceReader tr({.file_path = dstd::String(gz),
                                 .index_dir = dstd::String(env.get_dir())});
         REQUIRE(tr.has_index());
@@ -321,7 +325,9 @@ TEST_SUITE("duql paths") {
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
         (void)dstd::fs::remove(plain);
-        dftracer::utils::index::Indexer::open({gz}).build();
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))})
+            .build();
         CHECK(names_of(run(view_of(gz, "exists(tags)").collect())) ==
               Names{"e"});
         CHECK(run(view_of(gz, "exists(nothing_here)").collect()).num_rows() ==

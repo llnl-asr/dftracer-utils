@@ -141,7 +141,7 @@ std::string write_and_index(const std::string& dir, const std::string& name,
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dstd::fs::remove(pfw);
-    std::string idx = determine_index_path(gz, "");
+    std::string idx = std::string(determine_index_path(gz, ""));
     StringSink sink;
     View::from_file(gz, idx).sink_json(sink).get();
     return gz;
@@ -363,7 +363,7 @@ TEST_SUITE("View C ABI") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         const char* p2[1] = {gz.c_str()};
         const char* i2[1] = {idx.c_str()};
         dftu_view* w = dftu_view_from_files(p2, i2, 1);
@@ -387,7 +387,7 @@ TEST_SUITE("View C ABI") {
     TEST_CASE("group_by + agg via the C ABI matches the C++ equivalent") {
         TestEnvironment env(50);
         std::string gz = write_group_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         StringSink sink;
         View::from_file(gz, idx).sink_json(sink).get();
 
@@ -497,7 +497,7 @@ TEST_SUITE("View C ABI") {
 
         SUBCASE("Kind::ArgMax with by") {
             std::string am_gz = write_argmax_trace(env);
-            std::string am_idx = determine_index_path(am_gz, "");
+            std::string am_idx = std::string(determine_index_path(am_gz, ""));
             StringSink am_sink;
             View::from_file(am_gz, am_idx).sink_json(am_sink).get();
             const char* am_paths[1] = {am_gz.c_str()};
@@ -542,7 +542,7 @@ TEST_SUITE("View C ABI") {
 
         SUBCASE("Kind::Pct with q") {
             std::string am_gz = write_argmax_trace(env);
-            std::string am_idx = determine_index_path(am_gz, "");
+            std::string am_idx = std::string(determine_index_path(am_gz, ""));
             StringSink am_sink;
             View::from_file(am_gz, am_idx).sink_json(am_sink).get();
             const char* am_paths[1] = {am_gz.c_str()};
@@ -581,7 +581,7 @@ TEST_SUITE("View C ABI") {
 
         SUBCASE("Kind::Busy occupancy") {
             std::string am_gz = write_argmax_trace(env);
-            std::string am_idx = determine_index_path(am_gz, "");
+            std::string am_idx = std::string(determine_index_path(am_gz, ""));
             StringSink am_sink;
             View::from_file(am_gz, am_idx).sink_json(am_sink).get();
             const char* am_paths[1] = {am_gz.c_str()};
@@ -636,7 +636,7 @@ TEST_SUITE("View C ABI") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         StringSink sink;
         View::from_file(gz, idx).sink_json(sink).get();
 

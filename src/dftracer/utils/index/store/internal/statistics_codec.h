@@ -6,12 +6,10 @@
 #include <dftracer/utils/index/store/types.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::index::store::internal {
 
-std::string encode_file_scalar_stats_value(
+dstd::String encode_file_scalar_stats_value(
     const index::schemas::dft::ChunkStatistics& stats,
     std::uint64_t num_chunks);
 

@@ -237,10 +237,8 @@ using dftracer::utils::index::build::ResolverInput;
 using dftracer::utils::index::build::ResolverResult;
 
 struct IndexPartition {
-    // keep std: unswept API
-    std::vector<FileWorkItem> files_needing_index;
-    // keep std: unswept API
-    std::vector<ResolvedFile> indexed_entries;
+    dstd::Vector<FileWorkItem> files_needing_index;
+    dstd::Vector<ResolvedFile> indexed_entries;
     ResolverResult resolver_result;
     // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, TraceStatistics>> precomputed_failures;
@@ -267,27 +265,23 @@ struct IndexedRootSnapshot {
 static void append_failed_stats_result(
     // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, TraceStatistics>>& results,
-    // keep std: unswept API
-    std::size_t file_index, const std::string& file_path,
-    // keep std: unswept API
-    const std::string& error_message) {
+    std::size_t file_index, dstd::StringView file_path,
+    dstd::StringView error_message) {
     TraceStatistics failed;
-    failed.file_path = file_path;
+    failed.file_path.assign(file_path.data(), file_path.size());
     failed.success = false;
-    failed.error_message = error_message;
+    failed.error_message.assign(error_message.data(), error_message.size());
     results.emplace_back(file_index, std::move(failed));
 }
 
 static void append_empty_indexed_stats_result(
     // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, TraceStatistics>>& results,
-    // keep std: unswept API
-    std::size_t file_index, const std::string& file_path,
-    // keep std: unswept API
-    const std::string& index_path) {
+    std::size_t file_index, dstd::StringView file_path,
+    dstd::StringView index_path) {
     TraceStatistics stats;
-    stats.file_path = file_path;
-    stats.index_path = index_path;
+    stats.file_path.assign(file_path.data(), file_path.size());
+    stats.index_path.assign(index_path.data(), index_path.size());
     stats.success = true;
     stats.num_chunks = 0;
     results.emplace_back(file_index, std::move(stats));
@@ -343,7 +337,8 @@ static DetailedStatistics to_detailed(const TraceStatistics& stats) {
         }
     }
 
-    d.group_key_category = m.name_category;
+    for (const auto& [name, category] : m.name_category)
+        d.group_key_category[name] = std::string(category);
     d.events_scanned = m.total_events;
     d.chunks_scanned = stats.num_chunks;
     d.chunks_skipped = 0;
@@ -715,9 +710,10 @@ static coro::CoroTask<void> process_file_detailed(
     std::mutex* output_mutex_ptr,
     // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, std::string>>* json_results_ptr) {
-    // keep std: unswept API
-    std::string index_path =
+    const dstd::String determined =
         trace::internal::determine_index_path(file_path, index_dir);
+    // keep std: DetailStatsView::from_file takes std::string
+    std::string index_path(determined.data(), determined.size());
 
     DetailNeeds detail_needs;
     detail_needs.group_by = group_by_ptr;
@@ -737,9 +733,9 @@ static coro::CoroTask<void> process_file_detailed(
             dstd::PathView(dftracer::utils::index::store_dir(index_path))))) {
         try {
             using dftracer::utils::index::plan::GroupResolver;
-            // keep std: unswept API
-            const std::vector<dftracer::utils::index::plan::RowSetFile> files{
-                {file_path, index_path}};
+            const dstd::Vector<dftracer::utils::index::plan::RowSetFile> files{
+                {dstd::String(dstd::StringView(file_path)),
+                 dstd::String(dstd::StringView(index_path))}};
             auto resolve_hashes = [&](const GroupResolver::Column& column) {
                 const GroupResolver r(files, {column});
                 const auto* values = r.column(column.name);
@@ -749,7 +745,8 @@ static coro::CoroTask<void> process_file_detailed(
                         if (hash_resolutions.count(key) == 0)
                             if (auto it = values->find(key);
                                 it != values->end())
-                                hash_resolutions[key] = it->second;
+                                hash_resolutions[key] = std::string(
+                                    it->second.data(), it->second.size());
                 };
                 add(file_detailed.grouped_duration);
                 add(file_detailed.grouped_io);
@@ -952,8 +949,7 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
 
 // keep std: unswept API
 static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
-    // keep std: unswept API
-    const std::string& index_path) {
+    const dstd::String& index_path) {
     // keep std: unswept API
     auto snapshot = std::make_unique<IndexedRootSnapshot>();
     const auto index_snapshot =
@@ -977,8 +973,8 @@ static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
                 "File registry entry exists but no file summary data was "
                 "found in the shared index");
         } else {
-            snapshot->partition.indexed_entries.push_back(
-                ResolvedFile{file_index, std::move(logical_path), {}});
+            snapshot->partition.indexed_entries.push_back(ResolvedFile{
+                file_index, dstd::String(dstd::StringView(logical_path)), {}});
         }
         ++file_index;
     }
@@ -988,8 +984,7 @@ static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
 
 // keep std: unswept API
 static coro::CoroTask<std::unique_ptr<IndexedRootSnapshot>>
-// keep std: unswept API
-load_index_root_snapshot(std::string index_path) {
+load_index_root_snapshot(dstd::String index_path) {
     co_return load_index_root_snapshot_impl(index_path);
 }
 
@@ -1010,8 +1005,7 @@ static IndexPartition build_partition(ResolverResult result) {
 }
 
 static coro::CoroTask<IndexPartition> resolve_index_state(
-    // keep std: unswept API
-    std::vector<std::string> files, std::string index_dir,
+    dstd::Vector<dstd::String> files, dstd::String index_dir,
     StatisticsQueryType report_type) {
     Resolver resolver;
     ResolverInput input;
@@ -1080,8 +1074,7 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
     }
 
     // Re-resolve newly indexed files
-    // keep std: unswept API
-    std::vector<std::string> newly_indexed;
+    dstd::Vector<dstd::String> newly_indexed;
     newly_indexed.reserve(partition.files_needing_index.size());
     for (const auto& item : partition.files_needing_index) {
         newly_indexed.push_back(item.file_path);
@@ -1254,11 +1247,17 @@ static dstd::Optional<ChunkStatistics> file_rows_to_statistics(
     return cs;
 }
 
+static views::ViewFile view_file(dstd::StringView file,
+                                 dstd::StringView index) {
+    views::ViewFile out;
+    out.file_path.assign(file.data(), file.size());
+    out.index_path.assign(index.data(), index.size());
+    return out;
+}
+
 static coro::CoroTask<void> process_index_group(
-    // keep std: unswept API
-    const std::string* index_path_ptr,
-    // keep std: unswept API
-    const std::vector<ResolvedFile>* group_ptr,
+    const dstd::String* index_path_ptr,
+    const dstd::Vector<ResolvedFile>* group_ptr,
     // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, TraceStatistics>>* indexed_stats_ptr,
     std::mutex* stats_mutex_ptr, bool needs_per_file_results,
@@ -1326,7 +1325,8 @@ static coro::CoroTask<void> process_index_group(
                 if (needs_per_file_results) {
                     TraceStatistics stats;
                     stats.file_path = rf.file_path;
-                    stats.index_path = *index_path_ptr;
+                    stats.index_path.assign(index_path_ptr->data(),
+                                            index_path_ptr->size());
                     stats.num_chunks = scalar->num_chunks;
                     stats.merged = std::move(*cs);
                     stats.success = true;
@@ -1360,8 +1360,7 @@ static coro::CoroTask<void> process_index_group(
             view_files.reserve(slow_files.size());
             std::uint64_t total_chunks = 0;
             for (const auto* rf : slow_files) {
-                view_files.push_back(
-                    views::ViewFile{rf->file_path, *index_path_ptr});
+                view_files.push_back(view_file(rf->file_path, *index_path_ptr));
                 total_chunks += num_chunks_of(rf->file_index);
             }
             auto sv = stats_ns::StatsView::from_files(std::move(view_files));
@@ -1370,7 +1369,8 @@ static coro::CoroTask<void> process_index_group(
             co_await sv.materialize(needs);
             stats_ns::ViewStats vs = co_await sv.collect(needs);
             TraceStatistics stats;
-            stats.index_path = *index_path_ptr;
+            stats.index_path.assign(index_path_ptr->data(),
+                                    index_path_ptr->size());
             stats.num_chunks = total_chunks;
             stats_ns::fill_chunk_statistics(stats.merged, vs);
             std::lock_guard<std::mutex> lock(*total_mutex_ptr);
@@ -1383,11 +1383,12 @@ static coro::CoroTask<void> process_index_group(
 
         for (const auto* rf : slow_files) {
             TraceStatistics stats;
-            stats.file_path = rf->file_path;
-            stats.index_path = *index_path_ptr;
+            stats.file_path.assign(rf->file_path.data(), rf->file_path.size());
+            stats.index_path.assign(index_path_ptr->data(),
+                                    index_path_ptr->size());
             stats.num_chunks = num_chunks_of(rf->file_index);
-            auto sv =
-                stats_ns::StatsView::from_file(rf->file_path, *index_path_ptr);
+            auto sv = stats_ns::StatsView::from_file(
+                std::string(rf->file_path), std::string(*index_path_ptr));
             co_await sv.materialize(needs);
             stats_ns::ViewStats vs = co_await sv.collect(needs);
             stats_ns::fill_chunk_statistics(stats.merged, vs);
@@ -1574,12 +1575,18 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
         common::ScopedTimer _t(stages, "collect_and_classify");
         if (!config.no_auto_index) {
             common::ScopedTimer _ef(stages, "ensure_index_fresh");
-            if (!config.directory.empty())
-                co_await ensure_index_fresh(config.directory, "",
-                                            config.index_dir);
-            else
-                co_await ensure_indexes_fresh("", config.files,
-                                              config.index_dir);
+            dstd::String index_dir_arg{dstd::StringView(config.index_dir)};
+            if (!config.directory.empty()) {
+                dstd::String directory_arg{dstd::StringView(config.directory)};
+                co_await ensure_index_fresh(std::move(directory_arg), "",
+                                            std::move(index_dir_arg));
+            } else {
+                dstd::Vector<dstd::String> to_check;
+                for (const auto& f : config.files)
+                    to_check.emplace_back(dstd::StringView(f));
+                co_await ensure_indexes_fresh("", std::move(to_check),
+                                              std::move(index_dir_arg));
+            }
         }
         if (!config.directory.empty() &&
             config.report_type != StatisticsQueryType::Detailed) {
@@ -1615,8 +1622,13 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
             }
             {
                 common::ScopedTimer _ri(stages, "resolve_index_state");
+                dstd::Vector<dstd::String> to_resolve;
+                for (const auto& f : files)
+                    to_resolve.emplace_back(dstd::StringView(f));
+                dstd::String index_dir_arg{dstd::StringView(config.index_dir)};
                 partition = co_await resolve_index_state(
-                    files, config.index_dir, config.report_type);
+                    std::move(to_resolve), std::move(index_dir_arg),
+                    config.report_type);
             }
         }
     }

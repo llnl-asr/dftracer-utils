@@ -28,7 +28,6 @@
 
 #include <array>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -128,7 +127,8 @@ TEST_SUITE("RawGzipFuse") {
 
         // Reference: build the index eagerly, aggregate through the normal
         // fused scan.
-        std::string ref_idx = determine_index_path(gz, env.get_dir() + "/refi");
+        std::string ref_idx =
+            std::string(determine_index_path(gz, env.get_dir() + "/refi"));
         {
             StringSink s;
             View::from_file(gz, ref_idx).sink_json(s).get();
@@ -148,7 +148,8 @@ TEST_SUITE("RawGzipFuse") {
 
         // Prototype: no index for this path. One pass builds it while
         // aggregating.
-        std::string idx = determine_index_path(gz, env.get_dir() + "/onei");
+        std::string idx =
+            std::string(determine_index_path(gz, env.get_dir() + "/onei"));
         ViewPlan pp = count_plan(gz, idx);
         ensure_schema(pp);
         StringIntern intern;
@@ -158,7 +159,11 @@ TEST_SUITE("RawGzipFuse") {
                         dftracer::utils::index::indexed_rowsets(
                             dftracer::utils::index::get_schema("dftracer")));
         std::array<Fold*, 3> folds{&agg, &bloom, &dict};
-        IndexFoldDriver driver(intern, folds, gz, idx);
+        IndexFoldDriver driver(intern, folds,
+                               dftracer::utils::dstd::String(
+                                   dftracer::utils::dstd::StringView(gz)),
+                               dftracer::utils::dstd::String(
+                                   dftracer::utils::dstd::StringView(idx)));
 
         gzi::GzipBuildArtifacts arts;
         run_coro(
@@ -233,7 +238,8 @@ TEST_SUITE("RawGzipFuse") {
         REQUIRE(env.is_valid());
         std::string gz = create_meta_trace(env);
 
-        std::string ref_idx = determine_index_path(gz, env.get_dir() + "/ri");
+        std::string ref_idx =
+            std::string(determine_index_path(gz, env.get_dir() + "/ri"));
         {
             StringSink s;
             View::from_file(gz, ref_idx).sink_json(s).get();
@@ -244,7 +250,8 @@ TEST_SUITE("RawGzipFuse") {
                        .collect()
                        .get();
 
-        std::string boot_idx = determine_index_path(gz, env.get_dir() + "/bi");
+        std::string boot_idx =
+            std::string(determine_index_path(gz, env.get_dir() + "/bi"));
         REQUIRE_FALSE(dstd::fs::exists(boot_idx).value());
         auto boot = View::from_file(gz, boot_idx)
                         .group_by({GroupKey::cat()})
@@ -271,7 +278,8 @@ TEST_SUITE("RawGzipFuse") {
         REQUIRE(env.is_valid());
         std::string gz = create_meta_trace(env);  // 2 metadata + 20 data events
 
-        std::string idx = determine_index_path(gz, env.get_dir() + "/ei");
+        std::string idx =
+            std::string(determine_index_path(gz, env.get_dir() + "/ei"));
         REQUIRE_FALSE(dstd::fs::exists(idx).value());
         StringSink boot;
         View::from_file(gz, idx).sink_json(boot).get();  // bootstrap path
@@ -302,7 +310,8 @@ TEST_SUITE("RawGzipFuse") {
         REQUIRE(env.is_valid());
         std::string gz = create_meta_trace(env);  // cats POSIX + STDIO
 
-        std::string ref_idx = determine_index_path(gz, env.get_dir() + "/fr");
+        std::string ref_idx =
+            std::string(determine_index_path(gz, env.get_dir() + "/fr"));
         {
             StringSink s;
             View::from_file(gz, ref_idx).sink_json(s).get();
@@ -315,7 +324,8 @@ TEST_SUITE("RawGzipFuse") {
                        .get();
         REQUIRE(ref.num_rows() == 1);  // only POSIX
 
-        std::string fresh = determine_index_path(gz, env.get_dir() + "/ff");
+        std::string fresh =
+            std::string(determine_index_path(gz, env.get_dir() + "/ff"));
         REQUIRE_FALSE(dstd::fs::exists(fresh).value());
         auto got = View::from_file(gz, fresh)
                        .duql(R"(cat == "POSIX")")
@@ -339,7 +349,8 @@ TEST_SUITE("RawGzipFuse") {
         REQUIRE(env.is_valid());
         std::string gz = create_meta_trace(env);  // data events carry fhash=fh1
 
-        std::string ref_idx = determine_index_path(gz, env.get_dir() + "/nr");
+        std::string ref_idx =
+            std::string(determine_index_path(gz, env.get_dir() + "/nr"));
         {
             StringSink s;
             View::from_file(gz, ref_idx).sink_json(s).get();
@@ -351,7 +362,8 @@ TEST_SUITE("RawGzipFuse") {
                        .collect()
                        .get();
 
-        std::string fresh = determine_index_path(gz, env.get_dir() + "/nf");
+        std::string fresh =
+            std::string(determine_index_path(gz, env.get_dir() + "/nf"));
         auto got = View::from_file(gz, fresh)
                        .duql(R"(fhash == "fh1")")
                        .group_by({GroupKey::cat()})
@@ -433,7 +445,10 @@ std::vector<std::string> record_index_pass(const std::string& gz,
     StringIntern intern;
     RecordingFold rec(intern);
     std::array<Fold*, 1> folds{&rec};
-    IndexFoldDriver driver(intern, folds, gz, idx);
+    IndexFoldDriver driver(
+        intern, folds,
+        dftracer::utils::dstd::String(dftracer::utils::dstd::StringView(gz)),
+        dftracer::utils::dstd::String(dftracer::utils::dstd::StringView(idx)));
     dftracer::utils::index::build::ParseGate gate(nullptr, workers);
     if (workers > 1) driver.set_parse_gate(gate);
     run_coro(
@@ -475,8 +490,8 @@ class ThrowingFold final : public Fold {
 };
 
 // Every live record of every family of an index, in order.
-static std::vector<dftu_utils_test::IndexRecord> index_contents(
-    const std::string& index_path) {
+static dftracer::utils::dstd::Vector<dftu_utils_test::IndexRecord>
+index_contents(const std::string& index_path) {
     return dftu_utils_test::dump_index(index_path);
 }
 
@@ -493,12 +508,14 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
             .get()
             .num_rows();
     };
-    const std::string held = determine_index_path(gz, env.get_dir() + "/held");
+    const std::string held =
+        std::string(determine_index_path(gz, env.get_dir() + "/held"));
     const std::string spilled =
-        determine_index_path(gz, env.get_dir() + "/spilled");
+        std::string(determine_index_path(gz, env.get_dir() + "/spilled"));
     // The default budget holds every chunk, and the tier is still written
     // as sorted runs.
-    const std::string runs = determine_index_path(gz, env.get_dir() + "/runs");
+    const std::string runs =
+        std::string(determine_index_path(gz, env.get_dir() + "/runs"));
     CHECK(count(held, dftracer::utils::memory::NO_SPILL_BUDGET) ==
           count(spilled, 4096));
     CHECK(count(runs, 0) ==
@@ -518,7 +535,11 @@ TEST_CASE("a fold that throws while parsing ahead ends the index pass") {
     dftracer::utils::index::extensions::BloomFold bloom(intern);
     ThrowingFold thrower;
     std::array<Fold*, 2> folds{&bloom, &thrower};
-    IndexFoldDriver driver(intern, folds, gz, env.get_dir() + "/idx");
+    IndexFoldDriver driver(
+        intern, folds,
+        dftracer::utils::dstd::String(dftracer::utils::dstd::StringView(gz)),
+        dftracer::utils::dstd::String(
+            dftracer::utils::dstd::StringView(env.get_dir() + "/idx")));
     dftracer::utils::index::build::ParseGate gate(nullptr, 8);
     driver.set_parse_gate(gate);
     bool threw = false;

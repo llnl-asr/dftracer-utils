@@ -3,12 +3,11 @@
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FILTER_H
 
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::index::extensions {
 
@@ -62,8 +61,8 @@ class BloomFilter {
     bool possibly_contains(const Hashes& hashes) const;
     void merge_from(const BloomFilter& other);
 
-    std::vector<unsigned char> serialize() const;
-    void serialize_into(std::vector<unsigned char>& result) const;
+    dstd::Vector<unsigned char> serialize() const;
+    void serialize_into(dstd::Vector<unsigned char>& result) const;
     std::size_t num_entries() const { return num_entries_; }
     std::size_t size_bytes() const { return bits_.size(); }
     std::size_t num_hash_functions() const { return num_hashes_; }
@@ -74,12 +73,12 @@ class BloomFilter {
     static std::size_t optimal_num_bits(std::size_t n, double p);
 
    private:
-    BloomFilter(std::vector<unsigned char> bits, std::size_t num_bits,
+    BloomFilter(dstd::Vector<unsigned char> bits, std::size_t num_bits,
                 std::size_t num_hashes, std::size_t num_entries);
 
     static std::size_t optimal_num_hashes(std::size_t m, std::size_t n);
 
-    std::vector<unsigned char> bits_;
+    dstd::Vector<unsigned char> bits_;
     std::size_t num_bits_;
     std::size_t num_hashes_;
     std::size_t num_entries_;

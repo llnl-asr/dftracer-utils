@@ -20,7 +20,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <map>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -93,9 +92,9 @@ build::IndexBuildBatchResult build_with(const std::vector<std::string>& files,
     auto counter = std::make_shared<std::atomic<std::size_t>>(0);
     Runtime rt(workers);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = std::make_shared<build::IndexBuildBatchConfig>();
-        config->file_paths = files;
-        config->index_dir = index_dir;
+        auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+        for (const auto& file : files) config->file_paths.emplace_back(file);
+        config->index_dir = dstd::String(index_dir);
         config->parallelism = workers;
         config->memory_budget = budget;
         result = co_await build::BatchBuilder::process(std::move(config));
@@ -134,12 +133,12 @@ Peak peak_of_build(const std::vector<std::string>& files,
     return {top > base ? top - base : 0, result.metrics.max_files_in_flight};
 }
 
-using Family = std::vector<dstd::Pair<std::string, std::string>>;
-using Dump = std::map<std::string, Family>;
+using Family = dstd::Vector<dstd::Pair<dstd::String, dstd::String>>;
+using Dump = dstd::Map<dstd::String, Family>;
 
 Dump dump_index(const std::string& first_file, const std::string& index_dir) {
-    const auto path =
-        trace::internal::determine_index_path(first_file, index_dir);
+    const auto path = std::string(
+        trace::internal::determine_index_path(first_file, index_dir));
     Dump out;
     for (auto& record : dftu_utils_test::dump_index(path))
         out[record.name].emplace_back(record.scope + record.key,

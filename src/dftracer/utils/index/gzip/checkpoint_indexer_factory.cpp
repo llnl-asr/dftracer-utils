@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/format_detector.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -9,17 +11,19 @@
 namespace dftracer::utils::index::gzip {
 
 dstd::SharedPtr<CheckpointIndexer> CheckpointIndexerFactory::create(
-    const std::string &archive_path, const std::string &index_path,
+    dstd::CStringView archive_path, dstd::CStringView index_path,
     std::uint64_t checkpoint_size, bool force) {
-    common::ArchiveFormat format = common::FormatDetector::detect(archive_path);
-    std::string final_idx_path = index_path.empty()
-                                     ? generate_index_path(archive_path, format)
-                                     : index_path;
+    common::ArchiveFormat format =
+        common::FormatDetector::detect(archive_path.view());
+    dstd::String final_idx_path =
+        index_path.empty() ? generate_index_path(archive_path, format)
+                           : dstd::String(index_path.view());
 
     switch (format) {
         case common::ArchiveFormat::Gzip:
-            return std::make_shared<index::gzip::GzipIndexer>(
-                archive_path, final_idx_path, checkpoint_size, force);
+            return dstd::make_shared<index::gzip::GzipIndexer>(
+                dstd::String(archive_path.view()), final_idx_path,
+                checkpoint_size, force);
 
         case common::ArchiveFormat::Unknown:
         default:
@@ -31,14 +35,14 @@ dstd::SharedPtr<CheckpointIndexer> CheckpointIndexerFactory::create(
 }
 
 common::ArchiveFormat CheckpointIndexerFactory::detect_format(
-    const std::string &archive_path) {
-    return common::FormatDetector::detect(archive_path);
+    dstd::CStringView archive_path) {
+    return common::FormatDetector::detect(archive_path.view());
 }
 
-std::string CheckpointIndexerFactory::generate_index_path(
-    const std::string &archive_path, common::ArchiveFormat format) {
+dstd::String CheckpointIndexerFactory::generate_index_path(
+    dstd::CStringView archive_path, common::ArchiveFormat format) {
     if (format == common::ArchiveFormat::Unknown) {
-        format = common::FormatDetector::detect(archive_path);
+        format = common::FormatDetector::detect(archive_path.view());
     }
 
     switch (format) {

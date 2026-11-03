@@ -84,7 +84,7 @@ TEST_SUITE("member_cache_integration") {
         {
             run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
                 auto config = std::make_shared<IndexBuildBatchConfig>();
-                config->file_paths = {gz};
+                config->file_paths = {dstd::String(dstd::StringView(gz))};
                 config->index_dir = index_dir;
                 auto r = co_await BatchBuilder::process(std::move(config));
                 REQUIRE(r.indexed + r.skipped == 1);

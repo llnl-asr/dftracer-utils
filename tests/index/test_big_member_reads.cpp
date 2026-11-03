@@ -235,7 +235,9 @@ struct Indexed {
     dstd::SharedPtr<GzipIndexer> indexer;
     Indexed(const std::string& path, const std::string& index_path,
             std::uint64_t ckpt = CKPT) {
-        indexer = std::make_shared<GzipIndexer>(path, index_path, ckpt, true);
+        indexer = dstd::make_shared<GzipIndexer>(
+            dstd::String(dstd::StringView(path)),
+            dstd::String(dstd::StringView(index_path)), ckpt, true);
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await indexer->build_async();
         });

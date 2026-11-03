@@ -24,8 +24,7 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
             "File does not exist: " + input.file_path);
     }
 
-    // keep std: the index root helpers return std::string
-    const std::string normalized_index_path =
+    const dstd::String normalized_index_path =
         input.index_path.empty()
             ? dftracer::utils::trace::internal::determine_index_path(
                   input.file_path, "")
@@ -45,8 +44,7 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
                 dftracer::utils::index::store_of(normalized_index_path))) {
             // Force rebuild drops the handle this process keeps before removing
             // the store. The other artifacts in the root stay.
-            // keep std: store_of returns std::string
-            const std::string store =
+            const dstd::String store =
                 dftracer::utils::index::store_of(normalized_index_path);
             dftracer::utils::index::release_root(normalized_index_path);
             common::unwrap(dstd::fs::remove_all(dstd::PathView(store)));
@@ -54,15 +52,9 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
         }
 
         // Build new index
-        // keep std: CheckpointIndexerFactory::create takes std::string
-        const std::string file_path_std(input.file_path.data(),
-                                        input.file_path.size());
-        // keep std: CheckpointIndexerFactory::create takes std::string
-        const std::string index_path_std(input.index_path.data(),
-                                         input.index_path.size());
         auto indexer =
             dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                file_path_std, index_path_std, input.checkpoint_size, true);
+                input.file_path, input.index_path, input.checkpoint_size, true);
         co_await indexer->build_async();
     }
 

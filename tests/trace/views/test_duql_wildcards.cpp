@@ -48,12 +48,15 @@ std::string write_counters(TestEnvironment& env, const std::string& dir = "",
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     (void)dstd::fs::remove(plain);
-    if (build) dftracer::utils::index::Indexer::open({gz}).build();
+    if (build)
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))})
+            .build();
     return gz;
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, determine_index_path(gz, ""));
+    return View::from_file(gz, std::string(determine_index_path(gz, "")));
 }
 
 dataframe::DataFrame frame(const View& v) { return v.collect().get(); }
@@ -198,7 +201,8 @@ TEST_SUITE("DuqlWildcards") {
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    2048));
-        const View v = View::from_file(gz, determine_index_path(gz, ""));
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")));
         CHECK(error_of(v, "select args.counters.*.p50").empty());
         same(v, "select name, args.counters.*.p50 | take 40",
              "select name, args.counters.a.p50, args.counters.b.p50 | "
@@ -265,7 +269,10 @@ TEST_SUITE("DuqlWildcards") {
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, gz, 2048));
             (void)dstd::fs::remove(plain);
-            if (build) dftracer::utils::index::Indexer::open({gz}).build();
+            if (build)
+                dftracer::utils::index::Indexer::open(
+                    {dstd::String(dstd::StringView(gz))})
+                    .build();
             return view_of(gz);
         };
         const auto full = mk("full", true);

@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <map>
-#include <set>
-#include <string>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace store = dftracer::utils::index::store;
@@ -20,7 +19,7 @@ using index::extensions::BloomFold;
 
 namespace {
 
-using Leaves = std::vector<dstd::Pair<std::uint32_t, std::uint8_t>>;
+using Leaves = dstd::Vector<dstd::Pair<std::uint32_t, std::uint8_t>>;
 
 constexpr auto INT = static_cast<std::uint8_t>(store::PathType::Int);
 constexpr auto STR = static_cast<std::uint8_t>(store::PathType::String);
@@ -28,8 +27,8 @@ constexpr auto NUL = static_cast<std::uint8_t>(store::PathType::NullValue);
 
 struct Fixture {
     dstd::StringIntern intern;
-    std::vector<Leaves> shapes;
-    std::vector<std::size_t> order;
+    dstd::Vector<Leaves> shapes;
+    dstd::Vector<std::size_t> order;
 
     Fixture() {
         auto id = [&](const char* p) { return intern.get_or_insert(p); };
@@ -45,9 +44,9 @@ struct Fixture {
             order.push_back((i % 7 == 0 ? i / 7 : i / 50) % shapes.size());
     }
 
-    std::vector<views::FoldEvent> events(std::size_t from,
-                                         std::size_t to) const {
-        std::vector<views::FoldEvent> out(to - from);
+    dstd::Vector<views::FoldEvent> events(std::size_t from,
+                                          std::size_t to) const {
+        dstd::Vector<views::FoldEvent> out(to - from);
         for (std::size_t i = from; i < to; ++i) {
             out[i - from].phase = trace::RecordPhase::Unknown;
             out[i - from].schema_leaves.assign(shapes[order[i]].begin(),
@@ -56,39 +55,39 @@ struct Fixture {
         return out;
     }
 
-    std::map<std::string, store::PathStat> expected() const {
-        std::map<std::uint32_t, store::PathStat> by_id;
+    dstd::Map<dstd::String, store::PathStat> expected() const {
+        dstd::Map<std::uint32_t, store::PathStat> by_id;
         for (std::size_t s : order)
             for (const auto& [id, tag] : shapes[s])
                 index::extensions::observe_catalog_path(by_id[id], tag);
-        std::map<std::string, store::PathStat> out;
+        dstd::Map<dstd::String, store::PathStat> out;
         for (const auto& [id, stat] : by_id)
-            out.emplace(std::string(intern.resolve(id)), stat);
+            out.emplace(dstd::String(intern.resolve(id)), stat);
         return out;
     }
 
-    std::set<dstd::Pair<std::uint32_t, std::uint8_t>> distinct_pairs() const {
-        std::set<dstd::Pair<std::uint32_t, std::uint8_t>> out;
+    dstd::Set<dstd::Pair<std::uint32_t, std::uint8_t>> distinct_pairs() const {
+        dstd::Set<dstd::Pair<std::uint32_t, std::uint8_t>> out;
         for (const auto& s : shapes) out.insert(s.begin(), s.end());
         return out;
     }
 };
 
-void feed(BloomFold& fold, const std::vector<views::FoldEvent>& events,
+void feed(BloomFold& fold, const dstd::Vector<views::FoldEvent>& events,
           const views::ScanUnit& unit) {
     fold.step(views::FoldBatch{events, unit});
 }
 
-std::map<std::string, store::PathStat> catalog_of(BloomFold& fold,
-                                                  const std::string& file) {
-    std::map<std::string, store::PathStat> out;
+dstd::Map<dstd::String, store::PathStat> catalog_of(BloomFold& fold,
+                                                    const dstd::String& file) {
+    dstd::Map<dstd::String, store::PathStat> out;
     for (const auto& [path, stat] : fold.file_catalog(file))
-        out.emplace(std::string(path), stat);
+        out.emplace(dstd::String(path), stat);
     return out;
 }
 
-void check_same(const std::map<std::string, store::PathStat>& got,
-                const std::map<std::string, store::PathStat>& want) {
+void check_same(const dstd::Map<dstd::String, store::PathStat>& got,
+                const dstd::Map<dstd::String, store::PathStat>& want) {
     REQUIRE(got.size() == want.size());
     for (const auto& [path, stat] : want) {
         CAPTURE(path);

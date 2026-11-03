@@ -153,7 +153,7 @@ struct Translator {
             for (const auto* v : values) {
                 const auto* text = std::get_if<dstd::String>(v);
                 if (text == nullptr) return fail();
-                std::string storage;
+                dstd::String storage;
                 const dstd::StringView s =
                     field.path == "cat"
                         ? trace::internal::to_lower_ascii(*text, storage)

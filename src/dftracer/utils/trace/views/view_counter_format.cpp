@@ -10,7 +10,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -172,9 +171,13 @@ void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
     const auto& roles = plan_record_schema(plan).roles;
     const bool by_path = plan_by_path(plan);
     const std::string entity =
-        by_path && !roles.entity.empty() ? roles.entity : "pid";
+        by_path && !roles.entity.empty()
+            ? std::string(roles.entity.data(), roles.entity.size())
+            : std::string("pid");
     const std::string lane =
-        by_path && !roles.lane.empty() ? roles.lane : "tid";
+        by_path && !roles.lane.empty()
+            ? std::string(roles.lane.data(), roles.lane.size())
+            : std::string("tid");
     const std::int64_t nrows = f.num_rows();
     for (std::int64_t r = 0; r < nrows; ++r) {
         std::vector<dstd::Optional<std::string>> keys(group_cols.size());

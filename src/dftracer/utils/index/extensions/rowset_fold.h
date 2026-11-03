@@ -2,22 +2,19 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <string>
-#include <variant>
-#include <vector>
 
 namespace dftracer::utils::index {
 class FileBuild;
@@ -36,7 +33,7 @@ class RowSetFold : public trace::views::detail::Fold {
                       double, dftracer::utils::dstd::String>;
 
     RowSetFold(dftracer::utils::dstd::StringIntern& intern,
-               std::vector<IndexedRowSet> rowsets,
+               dstd::Vector<IndexedRowSet> rowsets,
                std::uint64_t budget_bytes = 64ull << 20);
 
     bool accepts(const trace::views::detail::ScanShape&) const override {
@@ -45,6 +42,7 @@ class RowSetFold : public trace::views::detail::Fold {
     bool needs_args() const override { return true; }
     // The schema refuses a row set that reads a never_index path.
     bool reads_never_indexed() const override { return false; }
+    // keep std: trace::views::detail::Fold::slice returns std::unique_ptr
     std::unique_ptr<trace::views::detail::Fold> slice() const override;
     void step(const trace::views::detail::FoldBatch& batch) override;
     void seal_unit(const trace::views::detail::ScanUnit& unit) override;
@@ -79,7 +77,7 @@ class RowSetFold : public trace::views::detail::Fold {
         dstd::Optional<duql::Query> rest;
     };
     struct Rows {
-        std::vector<std::vector<Value>> columns;
+        dstd::Vector<dstd::Vector<Value>> columns;
     };
 
     // Appends `from`'s rows to row set `r`'s sealed rows, each distinct row
@@ -87,15 +85,15 @@ class RowSetFold : public trace::views::detail::Fold {
     void absorb(std::size_t r, Rows& from);
 
     dftracer::utils::dstd::StringIntern* intern_;
-    std::vector<IndexedRowSet> rowsets_;
-    std::vector<Guard> guards_;
+    dstd::Vector<IndexedRowSet> rowsets_;
+    dstd::Vector<Guard> guards_;
     std::uint64_t budget_;
     std::uint64_t bytes_ = 0;
     bool abandoned_ = false;
-    std::vector<Rows> pending_;
-    std::vector<Rows> sealed_;
+    dstd::Vector<Rows> pending_;
+    dstd::Vector<Rows> sealed_;
     // Per distinct row set, the keys of its sealed rows.
-    std::vector<dftracer::utils::dstd::StringViewSet> seen_;
+    dstd::Vector<dftracer::utils::dstd::StringViewSet> seen_;
     duql::ValueMap scratch_;
 };
 

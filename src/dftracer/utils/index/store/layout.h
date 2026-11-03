@@ -7,9 +7,6 @@
 #include <dftracer/utils/index/store/file.h>
 
 #include <cstdint>
-#include <optional>
-#include <string>
-#include <string_view>
 
 // The on-disk layout of an index database. A key is [kind u8][tail], its tail
 // big-endian, inside the namespace of its extension and the scope of its file.
@@ -93,13 +90,13 @@ std::uint32_t read_u32(dstd::StringView bytes);
 std::uint64_t read_u64(dstd::StringView bytes);
 
 /// The first key after every key starting with `prefix`.
-std::string prefix_end(dstd::StringView prefix);
+dstd::String prefix_end(dstd::StringView prefix);
 
-std::string encode_chunk_metadata(const ChunkMetadata& metadata);
+dstd::String encode_chunk_metadata(const ChunkMetadata& metadata);
 dstd::Optional<ChunkMetadata> decode_chunk_metadata(dstd::StringView body);
 
 /// A catalog record: {type u8, seen u8, count u64}.
-std::string encode_path_stat(const PathStat& stat);
+dstd::String encode_path_stat(const PathStat& stat);
 dstd::Optional<PathStat> decode_path_stat(dstd::StringView body);
 
 }  // namespace dftracer::utils::index::store::layout

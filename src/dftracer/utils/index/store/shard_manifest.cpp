@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
@@ -11,14 +12,12 @@
 #include <unistd.h>
 
 #include <cstdio>
-#include <fstream>
-#include <string>
 
 namespace dftracer::utils::index::store {
 
 namespace {
 
-void append_escaped(std::string& out, dstd::StringView s) {
+void append_escaped(dstd::String& out, dstd::StringView s) {
     out.push_back('"');
     for (char c : s) {
         switch (c) {
@@ -53,10 +52,10 @@ void append_escaped(std::string& out, dstd::StringView s) {
 
 }  // namespace
 
-std::string to_json(const IndexShardManifest& manifest) {
-    std::string out;
+dstd::String to_json(const IndexShardManifest& manifest) {
+    dstd::String out;
     out += "{\n  \"format_version\": ";
-    out += std::to_string(manifest.format_version.value());
+    out += dstd::to_string(manifest.format_version.value());
     out += ",\n  \"shards\": [";
     for (std::size_t i = 0; i < manifest.shards.size(); ++i) {
         const IndexShardEntry& e = manifest.shards[i];
@@ -64,9 +63,9 @@ std::string to_json(const IndexShardManifest& manifest) {
         out += "\n      \"path\": ";
         append_escaped(out, e.path);
         out += ",\n      \"num_files\": ";
-        out += std::to_string(e.num_files);
+        out += dstd::to_string(e.num_files);
         out += ",\n      \"num_events\": ";
-        out += std::to_string(e.num_events);
+        out += dstd::to_string(e.num_events);
         out += "\n    }";
     }
     out += manifest.shards.empty() ? "]\n}\n" : "\n  ]\n}\n";
@@ -80,7 +79,7 @@ IndexShardManifest parse_manifest(dstd::StringView json) {
     if (err) {
         throw common::DFTUtilsException(
             common::ErrorCode::Parse,
-            std::string("shard manifest parse failed: ") +
+            dstd::String("shard manifest parse failed: ") +
                 simdjson::error_message(err));
     }
 
@@ -109,7 +108,7 @@ IndexShardManifest parse_manifest(dstd::StringView json) {
     return manifest;
 }
 
-void write_shard_manifest(const std::string& root,
+void write_shard_manifest(dstd::StringView root,
                           const IndexShardManifest& manifest) {
     // A directory that cannot be made fails the write below.
     (void)dstd::fs::create_directories(dstd::PathView(root));
@@ -119,18 +118,13 @@ void write_shard_manifest(const std::string& root,
         dstd::PathView(root) /
         common::str_cat(SHARD_MANIFEST, ".tmp.", ::getpid());
 
-    const std::string body = to_json(manifest);
-    {
-        std::ofstream out(tmp_path.c_str(), std::ios::binary | std::ios::trunc);
-        out.write(body.data(), static_cast<std::streamsize>(body.size()));
-        out.flush();
-        if (!out) {
-            (void)dstd::fs::remove(tmp_path.view());
-            throw common::DFTUtilsException(
-                common::ErrorCode::Io,
-                common::str_cat("failed to write shard manifest: ",
-                                tmp_path.str()));
-        }
+    const dstd::String body = to_json(manifest);
+    if (!dstd::fs::write_file(tmp_path.view(), body)) {
+        (void)dstd::fs::remove(tmp_path.view());
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            common::str_cat("failed to write shard manifest: ",
+                            tmp_path.str()));
     }
 
     const auto renamed = dstd::fs::rename(tmp_path.view(), final_path.view());
@@ -143,8 +137,7 @@ void write_shard_manifest(const std::string& root,
     }
 }
 
-dstd::Optional<IndexShardManifest> read_shard_manifest(
-    const std::string& root) {
+dstd::Optional<IndexShardManifest> read_shard_manifest(dstd::StringView root) {
     const dstd::Path path{shard_manifest_path(root)};
     // An unreadable path reads as no manifest.
     const auto found = dstd::fs::exists(path.view());
@@ -161,15 +154,15 @@ dstd::Optional<IndexShardManifest> read_shard_manifest(
     return parse_manifest(dstd::StringView(contents.data(), contents.size()));
 }
 
-bool has_shard_manifest(const std::string& root) {
+bool has_shard_manifest(dstd::StringView root) {
     const auto found =
         dstd::fs::exists(dstd::PathView(shard_manifest_path(root)));
     return found && *found;
 }
 
-std::string resolve_shard_set_root(const std::string& target) {
+dstd::String resolve_shard_set_root(dstd::StringView target) {
     if (target.empty()) return "";
-    const std::string root = internal::normalize_index_root(target);
+    const dstd::String root = internal::normalize_index_root(target);
     if (has_shard_manifest(root)) return root;
     return "";
 }

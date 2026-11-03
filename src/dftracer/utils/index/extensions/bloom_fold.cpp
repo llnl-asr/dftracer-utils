@@ -5,9 +5,11 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
@@ -20,12 +22,9 @@
 #include <cmath>
 #include <exception>
 #include <limits>
-#include <map>
 #include <mutex>
-#include <string_view>
 #include <system_error>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::index::extensions {
 
@@ -51,7 +50,7 @@ std::uint64_t bloom_bytes(std::size_t values, double false_positive_rate) {
 
 namespace {
 
-std::string capture_path(const std::string& dim) { return "args." + dim; }
+dstd::String capture_path(const dstd::String& dim) { return "args." + dim; }
 
 }  // namespace
 
@@ -60,13 +59,13 @@ BloomFold::BloomFold(dftracer::utils::dstd::StringIntern& intern,
     : intern_(&intern), config_(std::move(config)) {
     config_.validate();
     extra_keys_.reserve(config_.extra_dimensions.size());
-    for (const std::string& dim : config_.extra_dimensions)
+    for (const dstd::String& dim : config_.extra_dimensions)
         extra_keys_.push_back(intern_->get_or_insert(
             captures_nested() && trace::views::detail::is_nested_path(dim)
                 ? capture_path(dim)
                 : dim));
     auto_skip_.insert(extra_keys_.begin(), extra_keys_.end());
-    for (const std::string& dim : config_.extra_dimensions)
+    for (const dstd::String& dim : config_.extra_dimensions)
         auto_skip_.insert(intern_->get_or_insert(dim));
     auto_skip_.insert(intern_->get_or_insert("cmd_hash"));
     auto_skip_.insert(intern_->get_or_insert("exec_hash"));
@@ -78,7 +77,7 @@ BloomFold::BloomFold(dftracer::utils::dstd::StringIntern& intern,
     dur_key_ = intern_->get_or_insert("dur");
 }
 
-BloomFold::Catalog BloomFold::file_catalog(const std::string& file) {
+BloomFold::Catalog BloomFold::file_catalog(const dstd::String& file) {
     auto it = files_.find(file);
     if (it == files_.end()) return {};
     flush_shapes(it->second);
@@ -189,8 +188,8 @@ void BloomFold::summarize(PathEvidence& ev, const AutoField& f) const {
 }
 
 BloomFold::AutoKeys BloomFold::select_auto_keys(
-    const std::string& file, const FileState& fs, std::uint64_t data_chunks,
-    const std::map<std::string, std::uint32_t>& keys) const {
+    dstd::CStringView file, const FileState& fs, std::uint64_t data_chunks,
+    const dstd::Map<dstd::String, std::uint32_t>& keys) const {
     std::uint64_t file_bytes = 0;
     if (file_bytes_) {
         file_bytes = *file_bytes_;
@@ -207,7 +206,7 @@ BloomFold::AutoKeys BloomFold::select_auto_keys(
     std::uint64_t used = data_chunks * config_.extra_dimensions.size() *
                          (2 * RECORD_BYTES + file_bloom_floor);
 
-    std::vector<dstd::Pair<std::uint64_t, const std::string*>> ranked;
+    dstd::Vector<dstd::Pair<std::uint64_t, const dstd::String*>> ranked;
     ranked.reserve(keys.size());
     for (const auto& [name, k] : keys) {
         auto it =
@@ -246,7 +245,7 @@ BloomFold::AutoKeys BloomFold::select_auto_keys(
 }
 
 BloomFold::ChunkState BloomFold::assemble_chunk(
-    FileState& fs, std::uint64_t cp, const std::vector<std::string>& dims,
+    FileState& fs, std::uint64_t cp, const dstd::Vector<dstd::String>& dims,
     const AutoKeys& keys) {
     ChunkState out;
     if (auto base = fs.chunks.find(cp); base != fs.chunks.end()) {
@@ -294,7 +293,7 @@ BloomFold::ChunkState BloomFold::assemble_chunk(
     return out;
 }
 
-BloomFold::AutoKeys BloomFold::auto_keys(const std::string& file,
+BloomFold::AutoKeys BloomFold::auto_keys(dstd::CStringView file,
                                          FileState& fs) {
     flush_shapes(fs);
     std::uint64_t data_chunks = 0;
@@ -302,19 +301,19 @@ BloomFold::AutoKeys BloomFold::auto_keys(const std::string& file,
         if (chunk.events > 0) ++data_chunks;
     for (const auto& [cp, chunk] : fs.chunks)
         if (chunk.statistics.total_events > 0) ++data_chunks;
-    std::map<std::string, std::uint32_t> keys;
+    dstd::Map<dstd::String, std::uint32_t> keys;
     for (const auto& [cp, ac] : fs.auto_chunks)
         for (const auto& [k, f] : ac) {
-            keys.emplace(std::string(intern_->resolve(k)), k);
+            keys.emplace(dstd::String(intern_->resolve(k)), k);
             summarize(fs.evidence[k], f);
         }
     for (std::uint32_t k : fs.spill.key_union)
-        keys.emplace(std::string(intern_->resolve(k)), k);
+        keys.emplace(dstd::String(intern_->resolve(k)), k);
     return select_auto_keys(file, fs, data_chunks, keys);
 }
 
-std::vector<std::string> BloomFold::dims_of(const AutoKeys& keys) const {
-    std::vector<std::string> dims = config_.extra_dimensions;
+dstd::Vector<dstd::String> BloomFold::dims_of(const AutoKeys& keys) const {
+    dstd::Vector<dstd::String> dims = config_.extra_dimensions;
     for (const AutoKey& key : keys) dims.push_back(key.name);
     return dims;
 }
@@ -328,7 +327,7 @@ void BloomFold::write_pending(index::FileBuild& build, FileState& fs) {
     sp.pending.clear();
 }
 
-void BloomFold::write_file(index::FileBuild& build, const std::string& file,
+void BloomFold::write_file(index::FileBuild& build, dstd::CStringView file,
                            FileState& fs) {
     auto& sp = fs.spill;
     write_pending(build, fs);
@@ -460,7 +459,7 @@ void BloomFold::spill(FileState& fs, std::uint64_t upto) {
         AutoKeys own;
         if (auto ac = fs.auto_chunks.find(cp); ac != fs.auto_chunks.end()) {
             for (const auto& [k, f] : ac->second) {
-                own.push_back({std::string(intern_->resolve(k)), k, false});
+                own.push_back({dstd::String(intern_->resolve(k)), k, false});
                 summarize(fs.evidence[k], f);
             }
             std::sort(own.begin(), own.end(),
@@ -470,7 +469,7 @@ void BloomFold::spill(FileState& fs, std::uint64_t upto) {
         }
         ChunkState chunk = assemble_chunk(fs, cp, dims_of(own), own);
         sp.events += chunk.statistics.total_events;
-        std::vector<std::uint32_t> ids;
+        dstd::Vector<std::uint32_t> ids;
         ids.reserve(own.size());
         for (const AutoKey& key : own) {
             ids.push_back(key.id);
@@ -484,11 +483,14 @@ void BloomFold::spill(FileState& fs, std::uint64_t upto) {
     if (sp.run_bytes > run_limit(spill_share_, sp.runs)) spill_pending_ = true;
 }
 
+// keep std: trace::views::detail::Fold::extra_captures returns std::vector
 std::vector<std::string> BloomFold::extra_captures() const {
-    std::vector<std::string> out;
-    for (const std::string& dim : config_.extra_dimensions)
-        if (captures_nested() && trace::views::detail::is_nested_path(dim))
-            out.push_back(capture_path(dim));
+    std::vector<std::string> out;  // keep std: the return type above
+    for (const dstd::String& dim : config_.extra_dimensions)
+        if (captures_nested() && trace::views::detail::is_nested_path(dim)) {
+            const dstd::String path = capture_path(dim);
+            out.emplace_back(path.data(), path.size());
+        }
     return out;
 }
 
@@ -497,12 +499,14 @@ void BloomFold::step(const trace::views::detail::FoldBatch& batch) {
 }
 
 BloomFold::Lane BloomFold::open(const trace::views::detail::FoldBatch& batch) {
-    if (!last_state_ || last_file_ != batch.unit.file_path) {
-        last_state_ = &files_[batch.unit.file_path];
-        last_file_ = batch.unit.file_path;
+    const dstd::StringView file = batch.unit.file_path;
+    if (!last_state_ || last_file_ != file) {
+        last_state_ = &files_[file];
+        last_file_.assign(file);
     }
     FileState& fs = *last_state_;
-    if (fs.index_path.empty()) fs.index_path = batch.unit.index_path;
+    if (fs.index_path.empty())
+        fs.index_path.assign(dstd::StringView(batch.unit.index_path));
 
     const std::uint64_t cp = batch.unit.checkpoint_idx;
     auto it = fs.chunks.find(cp);
@@ -541,7 +545,7 @@ void BloomFold::observe(const Lane& lane,
             if (e.hhash_id != NO_ID) BV::observe_metadata_path(chunk, "hhash");
             for (const auto& [k, v] : e.args)
                 BV::observe_metadata_path(
-                    chunk, "args." + std::string(intern_->resolve(k)));
+                    chunk, "args." + dstd::String(intern_->resolve(k)));
             continue;
         }
 
@@ -667,7 +671,7 @@ coro::CoroTask<bool> BloomFold::finalize(
         // entry that later reads as "no events".
         if (!covered.covers_file(file)) continue;
 
-        const std::string logical =
+        const dstd::String logical =
             index::store::internal::get_logical_path(file);
         try {
             auto at = snapshots.find(dstd::StringView(fs.index_path));
@@ -700,7 +704,7 @@ coro::CoroTask<bool> BloomFold::finalize(
                          ? index::rebuild(*opened, logical)
                          : dstd::Expected<index::FileBuild, dstd::Error>(
                                dstd::Unexpected<dstd::Error>(opened.error()));
-        std::string failure;
+        dstd::String failure;
         if (build) {
             try {
                 write_file(*build, file, fs);
@@ -708,11 +712,11 @@ coro::CoroTask<bool> BloomFold::finalize(
                 failure = e.what();
             }
         } else {
-            failure = std::string(build.error().message());
+            failure = dstd::String(build.error().message());
         }
         if (failure.empty()) {
             auto committed = co_await build->commit();
-            if (!committed) failure = std::string(committed.error().message());
+            if (!committed) failure = dstd::String(committed.error().message());
         }
         if (!failure.empty()) {
             DFTRACER_UTILS_LOG_WARN("bloom materialization skipped for %s: %s",

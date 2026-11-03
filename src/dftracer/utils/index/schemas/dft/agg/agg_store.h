@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
@@ -16,13 +17,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 // The index-wide aggregation records. The records of one file are read through
 // tables.h.
@@ -41,7 +36,7 @@ struct Config {
     /// trace touched no files.
     bool group_by_file = true;
     /// The partials hold their values, joined by 0x1F in this order.
-    std::vector<std::string> extra_group_keys;
+    dstd::Vector<dstd::String> extra_group_keys;
 };
 
 struct TimeBounds {

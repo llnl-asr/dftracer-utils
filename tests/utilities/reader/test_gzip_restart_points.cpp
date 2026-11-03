@@ -72,8 +72,9 @@ struct Fixture {
         REQUIRE(f != nullptr);
         REQUIRE(std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size());
         std::fclose(f);
-        indexer =
-            std::make_shared<GzipIndexer>(gz_path, index_path, CKPT, true);
+        indexer = dstd::make_shared<GzipIndexer>(
+            dstd::String(dstd::StringView(gz_path)),
+            dstd::String(dstd::StringView(index_path)), CKPT, true);
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await indexer->build_async();
         });
@@ -110,7 +111,7 @@ struct Fixture {
     }
 };
 
-void check_pieces_cover(const std::vector<GzipMemberRecord>& pieces,
+void check_pieces_cover(const dstd::Vector<GzipMemberRecord>& pieces,
                         std::size_t total) {
     std::uint64_t uc = 0;
     for (const auto& p : pieces) {

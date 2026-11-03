@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/internal/index_encoding.h>
 #include <dftracer/utils/index/store/internal/payload_codec.h>
 
 namespace dftracer::utils::index::store::internal::encoding {
 
-std::string encode_gzip_member_value(
+dstd::String encode_gzip_member_value(
     const index::gzip::GzipMemberRecord& member) {
-    std::string value;
+    dstd::String value;
     dstd::append_u64_be(value, member.c_offset);
     dstd::append_u64_be(value, member.c_size);
     dstd::append_u64_be(value, member.uc_offset);
@@ -21,11 +22,11 @@ std::string encode_gzip_member_value(
     return value;
 }
 
-std::string encode_metadata_record(std::uint64_t checkpoint_size,
-                                   std::uint64_t total_lines,
-                                   std::uint64_t total_uc_size,
-                                   std::uint64_t flags) {
-    std::string value;
+dstd::String encode_metadata_record(std::uint64_t checkpoint_size,
+                                    std::uint64_t total_lines,
+                                    std::uint64_t total_uc_size,
+                                    std::uint64_t flags) {
+    dstd::String value;
     dstd::append_u64_be(value, checkpoint_size);
     dstd::append_u64_be(value, total_lines);
     dstd::append_u64_be(value, total_uc_size);
@@ -33,9 +34,9 @@ std::string encode_metadata_record(std::uint64_t checkpoint_size,
     return value;
 }
 
-std::string encode_chunk_statistics_value(
+dstd::String encode_chunk_statistics_value(
     const index::schemas::dft::ChunkStatistics& stats) {
-    std::string value;
+    dstd::String value;
     dstd::append_u64_be(value, stats.total_events);
     dstd::append_u64_be(value, stats.min_timestamp_us);
     dstd::append_u64_be(value, stats.max_timestamp_us);

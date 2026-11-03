@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <chrono>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <string>
 #include <vector>
@@ -41,11 +42,18 @@ IndexerOptions with_runtime(Runtime& rt) {
     return o;
 }
 
-std::string index_of(const std::string& trace) {
-    return trace::internal::determine_index_path(trace, "");
+dstd::String index_of(dstd::StringView trace) {
+    return trace::internal::determine_index_path(dstd::String(trace), "");
 }
 
-std::vector<std::string> sorted(std::vector<std::string> v) {
+dstd::Vector<dstd::String> names_of(
+    std::initializer_list<dstd::StringView> names) {
+    dstd::Vector<dstd::String> out;
+    for (const auto& name : names) out.emplace_back(name);
+    return out;
+}
+
+dstd::Vector<dstd::String> sorted(dstd::Vector<dstd::String> v) {
     std::sort(v.begin(), v.end());
     return v;
 }
@@ -69,11 +77,11 @@ TEST_SUITE("Indexer") {
         std::ofstream((dir / "b.pfw").c_str()) << "x";
         std::ofstream((dir / "notes.txt").c_str()) << "x";
 
-        auto ix = Indexer::open({std::string(dir.str())}, with_runtime(rt));
-        std::vector<std::string> names;
+        auto ix = Indexer::open({dstd::String(dir.str())}, with_runtime(rt));
+        dstd::Vector<dstd::String> names;
         for (const auto& p : ix.paths())
-            names.push_back(std::string(dstd::PathView(p).filename()));
-        CHECK(sorted(names) == std::vector<std::string>{"a.pfw.gz", "b.pfw"});
+            names.emplace_back(dstd::PathView(p).filename());
+        CHECK(sorted(names) == names_of({"a.pfw.gz", "b.pfw"}));
         rt.shutdown();
     }
 
@@ -86,7 +94,7 @@ TEST_SUITE("Indexer") {
         }
         const std::string missing = "/no/such/dir/trace.pfw.gz";
         try {
-            Indexer::open({missing});
+            Indexer::open({dstd::String(dstd::StringView(missing))});
             FAIL("expected an error");
         } catch (const common::DFTUtilsException& e) {
             CHECK(e.error().is_code(common::ErrorCode::NotFound));
@@ -98,11 +106,12 @@ TEST_SUITE("Indexer") {
         Runtime rt(2);
         TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(20);
-        auto ix = Indexer::open({trace}, with_runtime(rt));
+        auto ix = Indexer::open({dstd::String(dstd::StringView(trace))},
+                                with_runtime(rt));
         auto st = ix.status();
         CHECK(st.total == 1);
         CHECK(st.ready.empty());
-        CHECK(st.needs_work == std::vector<std::string>{trace});
+        CHECK(st.needs_work == names_of({trace}));
         CHECK(st.indexed == 0);
         CHECK_FALSE(dstd::fs::exists(index_of(trace)).value());
         rt.shutdown();
@@ -112,7 +121,10 @@ TEST_SUITE("Indexer") {
         Runtime rt(2);
         TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(30);
-        CHECK(Indexer::open({trace}, with_runtime(rt)).build().indexed == 1);
+        CHECK(Indexer::open({dstd::String(dstd::StringView(trace))},
+                            with_runtime(rt))
+                  .build()
+                  .indexed == 1);
 
         // A cache survives where the store does not, so the root stays.
         const dstd::Path root(index_of(trace));
@@ -123,8 +135,9 @@ TEST_SUITE("Indexer") {
         REQUIRE(dstd::fs::exists(root).value());
         REQUIRE_FALSE(dstd::fs::exists(root / "store").value());
 
-        auto ix = Indexer::open({trace}, with_runtime(rt));
-        CHECK(ix.status().needs_work == std::vector<std::string>{trace});
+        auto ix = Indexer::open({dstd::String(dstd::StringView(trace))},
+                                with_runtime(rt));
+        CHECK(ix.status().needs_work == names_of({trace}));
         CHECK(ix.build().indexed == 1);
         CHECK(dstd::fs::exists(root / "store").value());
         CHECK(dstd::fs::exists(root / "rollups" / "marker").value());
@@ -136,17 +149,19 @@ TEST_SUITE("Indexer") {
         TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
         const auto b = env.create_dft_test_gzip_file(40);
-        auto ix = Indexer::open({a, b}, with_runtime(rt));
+        auto ix = Indexer::open({dstd::String(dstd::StringView(a)),
+                                 dstd::String(dstd::StringView(b))},
+                                with_runtime(rt));
 
         auto first = ix.build();
         CHECK(first.indexed == 2);
         CHECK(first.needs_work.empty());
-        CHECK(sorted(first.ready) == sorted({a, b}));
+        CHECK(sorted(first.ready) == sorted(names_of({a, b})));
         CHECK(dstd::fs::exists(first.index_path).value());
 
         auto second = ix.build();
         CHECK(second.indexed == 0);
-        CHECK(sorted(second.ready) == sorted({a, b}));
+        CHECK(sorted(second.ready) == sorted(names_of({a, b})));
 
         const auto replacement = env.create_dft_test_gzip_file(55);
         REQUIRE(
@@ -171,15 +186,19 @@ TEST_SUITE("Indexer") {
         Runtime rt(4);
         TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
-        CHECK(Indexer::open({a}, with_runtime(rt)).build().indexed == 1);
+        CHECK(
+            Indexer::open({dstd::String(dstd::StringView(a))}, with_runtime(rt))
+                .build()
+                .indexed == 1);
 
-        auto ix = Indexer::open({a}, with_runtime(rt));
+        auto ix = Indexer::open({dstd::String(dstd::StringView(a))},
+                                with_runtime(rt));
         const auto replacement = env.create_dft_test_gzip_file(55);
         REQUIRE(
             dstd::fs::copy_file(replacement, a, dstd::fs::CopyMode::Overwrite)
                 .has_value());
         touch_later(a);
-        CHECK(ix.status().needs_work == std::vector<std::string>{a});
+        CHECK(ix.status().needs_work == names_of({a}));
         CHECK(ix.build().indexed == 1);
         CHECK(ix.status().needs_work.empty());
         rt.shutdown();
@@ -191,10 +210,13 @@ TEST_SUITE("Indexer") {
         const auto a = env.create_dft_test_gzip_file(30);
         auto no_bloom = with_runtime(rt);
         no_bloom.bloom.reset();
-        CHECK(Indexer::open({a}, no_bloom).build().indexed == 1);
+        CHECK(Indexer::open({dstd::String(dstd::StringView(a))}, no_bloom)
+                  .build()
+                  .indexed == 1);
 
-        auto ix = Indexer::open({a}, with_runtime(rt));
-        CHECK(ix.status().needs_work == std::vector<std::string>{a});
+        auto ix = Indexer::open({dstd::String(dstd::StringView(a))},
+                                with_runtime(rt));
+        CHECK(ix.status().needs_work == names_of({a}));
         auto st = ix.build();
         CHECK(st.indexed == 1);
         CHECK(st.needs_work.empty());
@@ -207,16 +229,21 @@ TEST_SUITE("Indexer") {
         const auto a = env.create_dft_test_gzip_file(30);
         auto first = with_runtime(rt);
         first.bloom->fields = {"size"};
-        CHECK(Indexer::open({a}, first).build().indexed == 1);
+        CHECK(Indexer::open({dstd::String(dstd::StringView(a))}, first)
+                  .build()
+                  .indexed == 1);
 
         auto fewer = with_runtime(rt);
         fewer.bloom->fields = {};
-        CHECK(Indexer::open({a}, fewer).status().needs_work.empty());
+        CHECK(Indexer::open({dstd::String(dstd::StringView(a))}, fewer)
+                  .status()
+                  .needs_work.empty());
 
         auto other_rate = first;
         other_rate.bloom->false_positive_rate = 0.05;
-        auto ix = Indexer::open({a}, other_rate);
-        CHECK(ix.status().needs_work == std::vector<std::string>{a});
+        auto ix =
+            Indexer::open({dstd::String(dstd::StringView(a))}, other_rate);
+        CHECK(ix.status().needs_work == names_of({a}));
         CHECK(ix.build().indexed == 1);
         CHECK(ix.status().needs_work.empty());
         rt.shutdown();
@@ -227,11 +254,13 @@ TEST_SUITE("Indexer") {
         TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
         const auto b = env.create_dft_test_gzip_file(30);
-        auto ix = Indexer::open({a, b}, with_runtime(rt));
+        auto ix = Indexer::open({dstd::String(dstd::StringView(a)),
+                                 dstd::String(dstd::StringView(b))},
+                                with_runtime(rt));
         ix.build();
         auto st = ix.rebuild();
         CHECK(st.indexed == 2);
-        CHECK(sorted(st.ready) == sorted({a, b}));
+        CHECK(sorted(st.ready) == sorted(names_of({a, b})));
         rt.shutdown();
     }
 
@@ -247,13 +276,16 @@ TEST_SUITE("Indexer") {
         REQUIRE(dstd::fs::set_mtime_ns(b, dstd::fs::mtime_ns(a).value())
                     .has_value());
 
-        auto blocking = Indexer::open({a}, with_runtime(rt));
+        auto blocking = Indexer::open({dstd::String(dstd::StringView(a))},
+                                      with_runtime(rt));
         const IndexStatus by_block = blocking.build();
         const auto files_block = blocking.files();
 
-        auto async = Indexer::open({std::string(b.str())}, with_runtime(rt));
+        auto async = Indexer::open(
+            {dstd::String(dstd::StringView(std::string(b.str())))},
+            with_runtime(rt));
         IndexStatus by_async;
-        std::vector<IndexedFile> files_async;
+        dstd::Vector<IndexedFile> files_async;
         rt.block_on(coro::named(
             "indexer-test",
             coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
@@ -281,7 +313,9 @@ TEST_SUITE("Indexer") {
         const auto locked = env.create_dft_test_gzip_file(30);
         REQUIRE(dstd::fs::set_permissions(locked, 0).has_value());
 
-        auto ix = Indexer::open({good, locked}, with_runtime(rt));
+        auto ix = Indexer::open({dstd::String(dstd::StringView(good)),
+                                 dstd::String(dstd::StringView(locked))},
+                                with_runtime(rt));
         bool threw = false;
         try {
             ix.build();
@@ -291,8 +325,10 @@ TEST_SUITE("Indexer") {
         }
         REQUIRE(dstd::fs::set_permissions(locked, 0700).has_value());
         CHECK(threw);
-        auto st = Indexer::open({good}, with_runtime(rt)).status();
-        CHECK(st.ready == std::vector<std::string>{good});
+        auto st = Indexer::open({dstd::String(dstd::StringView(good))},
+                                with_runtime(rt))
+                      .status();
+        CHECK(st.ready == names_of({good}));
         rt.shutdown();
     }
 
@@ -304,7 +340,8 @@ TEST_SUITE("Indexer") {
         IndexerOptions options;
         options.bloom->fields = {"io.off"};
 
-        Indexer indexer = Indexer::open({trace}, options);
+        Indexer indexer =
+            Indexer::open({dstd::String(dstd::StringView(trace))}, options);
         IndexStatus status = indexer.build();
         CHECK(status.indexed == 1);
         CHECK(indexer.build().indexed == 0);
@@ -420,8 +457,10 @@ TEST_SUITE("Truncated") {
                       ".pfw.gz"))
                         .str()),
                 frac);
-            auto st = Indexer::open({cut}, with_runtime(rt)).build();
-            CHECK(st.ready == std::vector<std::string>{cut});
+            auto st = Indexer::open({dstd::String(dstd::StringView(cut))},
+                                    with_runtime(rt))
+                          .build();
+            CHECK(st.ready == names_of({cut}));
             const auto got = indexed(cut);
             const auto ref = zlib_prefix(cut);
             CHECK(got.lines == ref.lines);
@@ -444,7 +483,8 @@ TEST_SUITE("Truncated") {
             f.seekp(-4, std::ios::end);
             f.write("\xfe\xff\xff\xff", 4);
         }
-        Indexer::open({cut}, with_runtime(rt)).build();
+        Indexer::open({dstd::String(dstd::StringView(cut))}, with_runtime(rt))
+            .build();
         rusage ru{};
         getrusage(RUSAGE_SELF, &ru);
 #if defined(__APPLE__)
@@ -466,7 +506,8 @@ TEST_SUITE("Truncated") {
         const auto cut = write_prefix(
             full, std::string((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
             0.5);
-        Indexer::open({cut}, with_runtime(rt)).build();
+        Indexer::open({dstd::String(dstd::StringView(cut))}, with_runtime(rt))
+            .build();
         const auto got = indexed(cut);
         CHECK(got.lines == zlib_prefix(cut).lines);
         CHECK(got.lines > 0);
@@ -478,7 +519,8 @@ TEST_SUITE("Truncated") {
         Runtime rt(4);
         TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
-        Indexer::open({full}, with_runtime(rt)).build();
+        Indexer::open({dstd::String(dstd::StringView(full))}, with_runtime(rt))
+            .build();
         const auto got = indexed(full);
         const auto ref = zlib_prefix(full);
         CHECK(got.lines == ref.lines);
@@ -502,7 +544,8 @@ TEST_SUITE("Truncated") {
             std::string noise(n, static_cast<char>(0xFF));
             f.write(noise.data(), static_cast<std::streamsize>(n));
         }
-        Indexer::open({full}, with_runtime(rt)).build();
+        Indexer::open({dstd::String(dstd::StringView(full))}, with_runtime(rt))
+            .build();
         const auto got = indexed(full);
         CHECK(got.lines == zlib_prefix(full).lines);
         CHECK(got.members == ref.complete_members - 1);
@@ -517,7 +560,8 @@ TEST_SUITE("Truncated") {
         const std::string path(
             (dstd::Path(env.get_dir()) / "live.pfw.gz").str());
         write_prefix(full, path, 0.6);
-        auto ix = Indexer::open({path}, with_runtime(rt));
+        auto ix = Indexer::open({dstd::String(dstd::StringView(path))},
+                                with_runtime(rt));
         ix.build();
         REQUIRE(indexed(path).truncated);
         REQUIRE(dstd::fs::copy_file(full, path, dstd::fs::CopyMode::Overwrite)
@@ -552,7 +596,8 @@ TEST_SUITE("Truncated") {
         };
         CHECK(count_lines(cut).get() == ref.lines);  // sequential, no index
 
-        Indexer::open({cut}, with_runtime(rt)).build();
+        Indexer::open({dstd::String(dstd::StringView(cut))}, with_runtime(rt))
+            .build();
         CHECK(count_lines(cut).get() == ref.lines);  // indexed
 
         auto df =
@@ -568,12 +613,16 @@ TEST_SUITE("Truncated") {
         const auto cut = write_prefix(
             full, std::string((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
             0.7);
-        auto ix = Indexer::open({full, cut}, with_runtime(rt));
+        auto ix = Indexer::open({dstd::String(dstd::StringView(full)),
+                                 dstd::String(dstd::StringView(cut))},
+                                with_runtime(rt));
         ix.build();
         auto st = ix.status();
-        CHECK(sorted(st.ready) == sorted({full, cut}));
-        CHECK(st.truncated == std::vector<std::string>{cut});
-        for (const auto& f : ix.files()) CHECK(f.truncated == (f.path == cut));
+        CHECK(sorted(st.ready) == sorted(names_of({full, cut})));
+        CHECK(st.truncated == names_of({cut}));
+        for (const auto& f : ix.files())
+            CHECK(f.truncated ==
+                  (dstd::StringView(f.path) == dstd::StringView(cut)));
         rt.shutdown();
     }
 }

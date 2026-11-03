@@ -2,10 +2,14 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FOLD_H
 
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -14,13 +18,7 @@
 #include <dftracer/utils/trace/views/fold.h>
 
 #include <cstdint>
-#include <map>
-#include <memory>
-#include <optional>
-#include <span>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index {
 class FileBuild;
@@ -53,13 +51,16 @@ class BloomFold : public trace::views::detail::Fold {
     }
     bool needs_args() const override { return true; }
     /// The nested extra dimensions, under their args.-prefixed path.
+    // keep std: trace::views::detail::Fold::extra_captures returns std::vector
     std::vector<std::string> extra_captures() const override;
     /// Enumerate every scalar leaf (nested included) so the harvested column
     /// set is schemaless: a nested-object arg surfaces as dotted leaf columns.
     bool wants_schema() const override { return true; }
     bool reads_never_indexed() const override { return false; }
 
+    // keep std: trace::views::detail::Fold::slice returns std::unique_ptr
     std::unique_ptr<trace::views::detail::Fold> slice() const override {
+        // keep std: Fold::slice returns std::unique_ptr
         return std::make_unique<BloomFold>(*intern_, config_);
     }
 
@@ -122,14 +123,14 @@ class BloomFold : public trace::views::detail::Fold {
 
     /// Empty if the file is unseen.
     index::schemas::dft::BloomCore::Catalog file_catalog(
-        const std::string& file);
+        const dstd::String& file);
     /// One per distinct (leaf, tag) pair a flush met, not one per event.
     std::uint64_t catalog_observations() const { return catalog_observations_; }
 
     /// Harvested per-checkpoint chunks for a file (nullptr if unseen), for
     /// tests. Moved-from once finalize or write has run.
-    const std::map<std::uint64_t, index::schemas::dft::BloomCore::ChunkState>*
-    file_chunks(const std::string& file) const {
+    const dstd::Map<std::uint64_t, index::schemas::dft::BloomCore::ChunkState>*
+    file_chunks(const dstd::String& file) const {
         auto it = files_.find(file);
         return it == files_.end() ? nullptr : &it->second.chunks;
     }
@@ -159,18 +160,18 @@ class BloomFold : public trace::views::detail::Fold {
    private:
     // A kept auto key; an absence-only one keeps only its absence entries.
     struct AutoKey {
-        std::string name;
+        dstd::String name;
         std::uint32_t id = 0;
         bool absence_only = false;
     };
-    using AutoKeys = std::vector<AutoKey>;
+    using AutoKeys = dstd::Vector<AutoKey>;
 
     // One auto key's evidence over the file's finished chunks where it has a
     // value: what it costs and whether it can rule a chunk out.
     struct PathEvidence {
         // The bounds of the first chunk summarized.
-        std::string min;
-        std::string max;
+        dstd::String min;
+        dstd::String max;
         std::uint64_t present_chunks = 0;
         std::uint64_t zone_chunks = 0;
         std::uint64_t bloom_chunks = 0;
@@ -196,18 +197,18 @@ class BloomFold : public trace::views::detail::Fold {
         struct SpilledChunk {
             std::uint64_t checkpoint = 0;
             std::uint64_t events = 0;
-            std::vector<std::uint32_t> keys;
+            dstd::Vector<std::uint32_t> keys;
         };
         /// Each spilled chunk's data events and own auto keys.
-        std::vector<SpilledChunk> keys;
+        dstd::Vector<SpilledChunk> keys;
         /// A chunk finished since the last run, with the dimensions it was
         /// assembled for.
         struct PendingChunk {
             std::uint64_t checkpoint = 0;
-            std::vector<std::string> dims;
+            dstd::Vector<dstd::String> dims;
             index::schemas::dft::BloomCore::ChunkState chunk;
         };
-        std::vector<PendingChunk> pending;
+        dstd::Vector<PendingChunk> pending;
         ankerl::unordered_dense::set<std::uint32_t> key_union;
         std::size_t runs = 0;
         std::uint64_t run_bytes = 0;
@@ -220,13 +221,13 @@ class BloomFold : public trace::views::detail::Fold {
     };
 
     struct FileState {
-        std::string index_path;
+        dstd::String index_path;
         dstd::Vector<Shape> shapes;
         dstd::HashMap<std::uint64_t, std::uint32_t> shape_ids;
         std::uint32_t last_shape = 0;
         SpillState spill;
-        std::map<std::uint64_t, ChunkState> chunks;
-        std::map<std::uint64_t, AutoChunk> auto_chunks;
+        dstd::Map<std::uint64_t, ChunkState> chunks;
+        dstd::Map<std::uint64_t, AutoChunk> auto_chunks;
         /// The catalog: data-record leaves by interned exact path.
         ankerl::unordered_dense::map<std::uint32_t, index::store::PathStat>
             paths;
@@ -238,7 +239,7 @@ class BloomFold : public trace::views::detail::Fold {
     index::schemas::dft::BloomCore::ChunkIndexerConfig config_;
     // Interned args key (or captured path) of each extra dimension, in
     // config_.extra_dimensions order.
-    std::vector<std::uint32_t> extra_keys_;
+    dstd::Vector<std::uint32_t> extra_keys_;
     // Args keys the path budget leaves alone: the extra dimensions and the
     // command hash keys the fixed shash dimension already covers.
     ankerl::unordered_dense::set<std::uint32_t> auto_skip_;
@@ -247,7 +248,7 @@ class BloomFold : public trace::views::detail::Fold {
 
     /// Writes the tier of `file` into `build`, one chunk at a time. Consumes
     /// `fs`.
-    void write_file(index::FileBuild& build, const std::string& file,
+    void write_file(index::FileBuild& build, dstd::CStringView file,
                     FileState& fs);
     /// Writes the chunks spill() queued into `build` and frees them.
     void write_pending(index::FileBuild& build, FileState& fs);
@@ -261,24 +262,24 @@ class BloomFold : public trace::views::detail::Fold {
     /// whose evidence cannot rule out a chunk keep only absence entries, or
     /// nothing.
     AutoKeys select_auto_keys(
-        const std::string& file, const FileState& fs, std::uint64_t data_chunks,
-        const std::map<std::string, std::uint32_t>& keys) const;
+        dstd::CStringView file, const FileState& fs, std::uint64_t data_chunks,
+        const dstd::Map<dstd::String, std::uint32_t>& keys) const;
     Catalog catalog(const FileState& fs) const;
     void observe_shape(FileState& fs, dstd::Span<const SchemaLeaf> leaves);
     void flush_shapes(FileState& fs);
     void observe_auto(AutoChunk& chunk,
                       const trace::views::detail::FoldEvent& e);
     ChunkState assemble_chunk(FileState& fs, std::uint64_t cp,
-                              const std::vector<std::string>& dims,
+                              const dstd::Vector<dstd::String>& dims,
                               const AutoKeys& keys);
-    AutoKeys auto_keys(const std::string& file, FileState& fs);
-    std::vector<std::string> dims_of(const AutoKeys& keys) const;
+    AutoKeys auto_keys(dstd::CStringView file, FileState& fs);
+    dstd::Vector<dstd::String> dims_of(const AutoKeys& keys) const;
     std::uint64_t resident_bytes(const FileState& fs, std::uint64_t cp) const;
     void chunk_started(FileState& fs, std::uint64_t cp);
     void spill(FileState& fs, std::uint64_t upto);
 
     dstd::StringViewMap<FileState> files_;
-    std::string last_file_;
+    dstd::String last_file_;
     FileState* last_state_ = nullptr;
     std::uint64_t catalog_observations_ = 0;
     std::uint64_t spill_share_ = 0;

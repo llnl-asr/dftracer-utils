@@ -11,12 +11,12 @@
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <trace/views/test_view_common.h>
 
 #include <cmath>
 #include <fstream>
 #include <map>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -116,8 +116,8 @@ struct Fixture {
         o.index_dir = env.get_dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
         o.aggregation = aggregation;
-        ix::Indexer::open(gz, o).build();
-        index_path = determine_index_path(gz.front(), o.index_dir);
+        ix::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
+        index_path = std::string(determine_index_path(gz.front(), o.index_dir));
     }
 
     std::vector<ViewFile> files() const {

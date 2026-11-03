@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -16,7 +17,20 @@ struct Registry {
     dstd::StringViewMap<dstd::WeakPtr<AggInternTable>> tables;
 };
 
-Registry& registry() { return dstd::Singleton<Registry>::get(); }
+Registry& registry() {
+    // A weak reference keeps a table's whole block alive, which the memory
+    // exit check counts as a leak.
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+            Registry& r = dstd::Singleton<Registry>::get();
+            std::lock_guard lock(r.mutex);
+            decltype(r.tables) released;
+            r.tables.swap(released);
+        });
+        return true;
+    }();
+    return dstd::Singleton<Registry>::get();
+}
 
 std::atomic<bool>& deterministic_ids() {
     static std::atomic<bool> enabled{false};
@@ -24,7 +38,7 @@ std::atomic<bool>& deterministic_ids() {
 }
 
 AggInternPtr new_table() {
-    auto table = std::make_shared<AggInternTable>();
+    auto table = dstd::make_shared<AggInternTable>();
     if (deterministic_ids().load(std::memory_order_acquire)) {
         table->intern.enable_deterministic_ids();
     }
@@ -43,7 +57,7 @@ AggInternPtr intern_for_index(dstd::StringView index_path) {
         r.tables.erase(it);
     }
     auto table = new_table();
-    r.tables.emplace(std::string(index_path), table);
+    r.tables.emplace(dstd::String(index_path), table);
     return table;
 }
 

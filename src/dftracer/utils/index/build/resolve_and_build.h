@@ -6,23 +6,22 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/resolver.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index::build {
 
 struct ResolveAndBuildInput {
-    std::string directory;
-    std::vector<std::string> files;
-    std::vector<utilities::filesystem::FileEntry> entries;
-    std::string index_dir;
+    dstd::String directory;
+    dstd::Vector<dstd::String> files;
+    dstd::Vector<utilities::filesystem::FileEntry> entries;
+    dstd::String index_dir;
 
     std::size_t checkpoint_size =
         common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
@@ -49,7 +48,7 @@ struct ResolveAndBuildInput {
     /// See IndexBuildBatchConfig::memory_budget.
     std::uint64_t memory_budget = 0;
     /// See IndexBuildBatchConfig::schema.
-    std::string schema;
+    dstd::String schema;
 
     /// Also rebuild these tier extensions for every indexed file, whether or
     /// not they are current.
@@ -70,10 +69,10 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
 /// size and mtime of `input.entries` when it holds them. An index in another
 /// format is removed first.
 struct IndexWork {
-    std::vector<utilities::filesystem::FileEntry> files;
+    dstd::Vector<utilities::filesystem::FileEntry> files;
     /// Roots whose aggregation tier was built with other settings. The build
     /// clears each before it aggregates into it.
-    std::vector<std::string> stale_aggregation_roots;
+    dstd::Vector<dstd::String> stale_aggregation_roots;
 };
 coro::CoroTask<IndexWork> files_needing_index(ResolverInput input);
 
@@ -81,14 +80,15 @@ coro::CoroTask<IndexWork> files_needing_index(ResolverInput input);
 /// read-before-use entry points never see a changed source. Named coroutines
 /// with by-value params (CP.53) so callers, especially coroutine lambdas, hold
 /// no vector on their own frame (GCC 12/13 frame bug).
-coro::CoroTask<void> ensure_indexes_fresh(std::string directory,
-                                          std::vector<std::string> files,
-                                          std::string index_dir,
+coro::CoroTask<void> ensure_indexes_fresh(dstd::String directory,
+                                          dstd::Vector<dstd::String> files,
+                                          dstd::String index_dir,
                                           bool force_rebuild = false);
 
 /// Single directory-or-file convenience; builds the vector inside this frame.
-coro::CoroTask<void> ensure_index_fresh(std::string directory, std::string file,
-                                        std::string index_dir,
+coro::CoroTask<void> ensure_index_fresh(dstd::String directory,
+                                        dstd::String file,
+                                        dstd::String index_dir,
                                         bool force_rebuild = false);
 
 }  // namespace dftracer::utils::index::build

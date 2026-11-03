@@ -218,9 +218,12 @@ std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
 
     dftracer::utils::index::IndexerOptions options;
     options.index_dir = index_dir;
-    dftracer::utils::index::Indexer::open({gz}, options).build();
-    if (index_dir.empty()) return internal::determine_index_path(gz, "");
-    return internal::determine_index_path("x", index_dir);
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
+                                          options)
+        .build();
+    if (index_dir.empty())
+        return std::string(internal::determine_index_path(gz, ""));
+    return std::string(internal::determine_index_path("x", index_dir));
 }
 
 // Split into non-empty lines and sort, so two aggregations can be compared
@@ -470,9 +473,11 @@ TEST_SUITE("DFTracerView") {
         const std::string root =
             set + "/" + std::string(dftracer::utils::index::INDEX_ROOT_NAME);
         std::string sa = build_aggregated_shard(
-            env, "sa", 50, dftracer::utils::index::shard_root(root, 0));
+            env, "sa", 50,
+            std::string(dftracer::utils::index::shard_root(root, 0)));
         std::string sb = build_aggregated_shard(
-            env, "sb", 40, dftracer::utils::index::shard_root(root, 1));
+            env, "sb", 40,
+            std::string(dftracer::utils::index::shard_root(root, 1)));
         dftracer::utils::trace::views::write_shard_set(root, {sa, sb});
 
         // A flat directory with the same two traces for the baseline query.

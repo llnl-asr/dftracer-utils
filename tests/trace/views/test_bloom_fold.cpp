@@ -109,7 +109,8 @@ std::string padded(std::string s) {
     return s;
 }
 
-std::vector<dftracer::utils::index::IndexedRowSet> dftracer_rowsets() {
+dftracer::utils::dstd::Vector<dftracer::utils::index::IndexedRowSet>
+dftracer_rowsets() {
     return dftracer::utils::index::indexed_rowsets(
         dftracer::utils::index::get_schema("dftracer"));
 }
@@ -260,7 +261,7 @@ TEST_SUITE("BloomFold") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_bloom_trace(env, 60, /*member_bytes=*/900);
-        std::string index_path = determine_index_path(gz, "");
+        std::string index_path = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
             View::from_file(gz, index_path).sink_json(s).get();
@@ -301,7 +302,7 @@ TEST_SUITE("BloomFold") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_bloom_trace(env, 20, /*member_bytes=*/2000);
-        std::string index_path = determine_index_path(gz, "");
+        std::string index_path = std::string(determine_index_path(gz, ""));
         {
             // A filtered export builds the members but attaches no index fold,
             // so the index starts without a bloom for the fold to establish.
@@ -367,7 +368,7 @@ TEST_SUITE("BloomFold") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_bloom_trace(env, 20, /*member_bytes=*/2000);
-        std::string index_path = determine_index_path(gz, "");
+        std::string index_path = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
             View::from_file(gz, index_path)
@@ -421,7 +422,7 @@ TEST_SUITE("BloomFold") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_bloom_trace(env, 20, /*member_bytes=*/2000);
-        std::string index_path = determine_index_path(gz, "");
+        std::string index_path = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
             View::from_file(gz, index_path)
@@ -443,7 +444,11 @@ TEST_SUITE("BloomFold") {
         BloomFold bloom(intern);
         RowSetFold dict(intern, dftracer_rowsets());
         std::array<Fold*, 2> fp{&bloom, &dict};
-        IndexFoldDriver drv(intern, fp, gz, index_path);
+        IndexFoldDriver drv(intern, fp,
+                            dftracer::utils::dstd::String(
+                                dftracer::utils::dstd::StringView(gz)),
+                            dftracer::utils::dstd::String(
+                                dftracer::utils::dstd::StringView(index_path)));
         // Split mid-way (lands inside the "read" line) to force reassembly.
         std::size_t half = text.size() / 2;
         drv.on_chunk(text.data(), half, /*cp=*/0).get();
@@ -495,7 +500,7 @@ TEST_SUITE("BloomFold") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dftracer::utils::dstd::fs::remove(pfw);
-        std::string index_path = determine_index_path(gz, "");
+        std::string index_path = std::string(determine_index_path(gz, ""));
         {
             StringSink s;
             View::from_file(gz, index_path).sink_json(s).get();
@@ -634,7 +639,8 @@ TEST_SUITE("BloomFold - auto fields") {
         REQUIRE(env.is_valid());
         std::string gz = create_auto_trace(env);
         dftracer::utils::index::build::ResolveAndBuildInput input;
-        input.files = {gz};
+        input.files = {dftracer::utils::dstd::String(
+            dftracer::utils::dstd::StringView(gz))};
         input.require_bloom = true;
         input.bloom_config.extra_dimensions.clear();
         input.bloom_config.path_budget = 1024;

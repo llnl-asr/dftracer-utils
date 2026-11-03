@@ -65,13 +65,11 @@ static coro::CoroTask<int> run_verify(
     // keep std: unswept API
     const std::vector<QuerySpec>& queries, std::size_t ckpt_size) {
     // Extra dimensions: arbitrary dot-paths into args
-    // keep std: unswept API
-    std::vector<std::string> extra_dims = {"ret", "count", "offset", "epoch",
-                                           "step"};
+    dstd::Vector<dstd::String> extra_dims = {"ret", "count", "offset", "epoch",
+                                             "step"};
 
-    // keep std: unswept API
-    std::vector<std::string> all_dimensions = {"name",  "cat",   "pid", "tid",
-                                               "hhash", "fhash", "sref"};
+    dstd::Vector<dstd::String> all_dimensions = {"name",  "cat",   "pid", "tid",
+                                                 "hhash", "fhash", "sref"};
     for (const auto& dim : extra_dims) {
         all_dimensions.push_back(dim);
     }
@@ -87,8 +85,7 @@ static coro::CoroTask<int> run_verify(
 
     // Batch-build gzip indexes for all files
     {
-        // keep std: unswept API
-        std::vector<std::string> abs_paths;
+        dstd::Vector<dstd::String> abs_paths;
         abs_paths.reserve(file_paths.size());
         for (const auto& fp : file_paths) {
             abs_paths.emplace_back(binaries::absolute_path(fp).str());
@@ -97,8 +94,7 @@ static coro::CoroTask<int> run_verify(
         auto index_path = internal::determine_index_path(abs_paths.front(), "");
         dftracer::utils::index::release_root(index_path);
 
-        // keep std: unswept API
-        auto batch_config = std::make_shared<IndexBuildBatchConfig>();
+        auto batch_config = dstd::make_shared<IndexBuildBatchConfig>();
         batch_config->file_paths = std::move(abs_paths);
         batch_config->checkpoint_size = ckpt_size;
         batch_config->parallelism = file_paths.size();
@@ -107,16 +103,15 @@ static coro::CoroTask<int> run_verify(
     }
 
     for (const auto& file_path : file_paths) {
-        // keep std: unswept API
-        std::string abs_path(binaries::absolute_path(file_path).str());
-        // keep std: unswept API
-        std::string index_path = internal::determine_index_path(abs_path, "");
+        dstd::String abs_path(binaries::absolute_path(file_path).str());
+        dstd::String index_path = internal::determine_index_path(abs_path, "");
 
         // Collect metadata
-        auto meta_input = MetadataCollectorUtilityInput::from_file(abs_path)
-                              .with_checkpoint_size(ckpt_size)
-                              .with_force_rebuild(false)
-                              .with_index(index_path);
+        auto meta_input =
+            MetadataCollectorUtilityInput::from_file(std::string(abs_path))
+                .with_checkpoint_size(ckpt_size)
+                .with_force_rebuild(false)
+                .with_index(std::string(index_path));
         MetadataCollectorUtility collector;
         auto metadata = co_await collector(meta_input);
 
@@ -128,8 +123,7 @@ static coro::CoroTask<int> run_verify(
 
         // 3. Index chunks and write to .idx
         try {
-            // keep std: unswept API
-            std::string idx_path_bidx =
+            dstd::String idx_path_bidx =
                 internal::determine_index_path(abs_path, "");
             auto opened = index::Index::open(idx_path_bidx);
             if (!opened) {
@@ -257,10 +251,8 @@ static coro::CoroTask<int> run_verify(
         std::size_t chunks_matched = 0;
 
         for (const auto& file_path : file_paths) {
-            // keep std: unswept API
-            std::string abs_path(binaries::absolute_path(file_path).str());
-            // keep std: unswept API
-            std::string idx_path_q =
+            dstd::String abs_path(binaries::absolute_path(file_path).str());
+            dstd::String idx_path_q =
                 internal::determine_index_path(abs_path, "");
 
             try {

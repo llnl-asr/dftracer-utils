@@ -3,7 +3,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -15,10 +17,7 @@
 
 #include <algorithm>
 #include <fstream>
-#include <map>
 #include <sstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace istore = dftracer::utils::index::store;
@@ -64,7 +63,8 @@ std::size_t count_rows(const std::string& trace, const std::string& index_dir,
     return run().get();
 }
 
-index::IndexerOptions options(const std::string& dir, std::string schema = "") {
+index::IndexerOptions options(const std::string& dir,
+                              dstd::String schema = "") {
     index::IndexerOptions o;
     o.index_dir = dir;
     o.schema = std::move(schema);
@@ -85,12 +85,12 @@ TEST_SUITE("Schemas") {
 
     TEST_CASE("detection picks the most specific matching schema") {
         using index::detect_schema;
-        const std::vector<dstd::StringView> dft = {
+        const dstd::Vector<dstd::StringView> dft = {
             R"({"id":1,"name":"read","cat":"POSIX","ph":"X","ts":1})", "[",
             R"({"name":"FH","ph":"M","args":{"name":"/a","value":"1"}})"};
-        const std::vector<dstd::StringView> plain = {R"({"op":"read"})",
-                                                     R"({"op":"write"})"};
-        const std::vector<dstd::StringView> mixed = {
+        const dstd::Vector<dstd::StringView> plain = {R"({"op":"read"})",
+                                                      R"({"op":"write"})"};
+        const dstd::Vector<dstd::StringView> mixed = {
             R"({"name":"read","ph":"X"})", R"({"op":"read"})"};
         CHECK(detect_schema(dft).id == "dftracer");
         CHECK(detect_schema(plain).id == "generic");
@@ -114,7 +114,8 @@ TEST_SUITE("Schemas") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = write_ndjson(env.get_dir(), 4000);
         const auto dir = env.get_dir() + "/idx";
-        auto ix = index::Indexer::open({trace}, options(dir));
+        auto ix = index::Indexer::open({dstd::String(dstd::StringView(trace))},
+                                       options(dir));
         CHECK(ix.build().indexed == 1);
         const auto files = ix.files();
         REQUIRE(files.size() == 1);
@@ -126,10 +127,10 @@ TEST_SUITE("Schemas") {
             const auto file =
                 snapshot.file(istore::internal::get_logical_path(trace));
             REQUIRE(file.has_value());
-            std::map<std::string, istore::PathStat> cat;
+            dstd::Map<dstd::String, istore::PathStat> cat;
             for (auto& [p, st] :
                  common::unwrap(index::catalog(snapshot, *file)))
-                cat.emplace(std::string(p.data(), p.size()), st);
+                cat.emplace(dstd::String(p.data(), p.size()), st);
             for (const char* p :
                  {"op", "host", "lat", "io.off", "hosts.0", "hosts.1", "ok"})
                 CHECK_MESSAGE(cat.count(p), p);
@@ -169,18 +170,26 @@ TEST_SUITE("Schemas") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(200);
         const auto dir = env.get_dir() + "/idx";
-        index::Indexer::open({trace}, options(dir)).build();
-        CHECK(index::Indexer::open({trace}, options(dir)).files()[0].schema ==
-              "dftracer");
-        auto forced = index::Indexer::open({trace}, options(dir, "generic"));
+        index::Indexer::open({dstd::String(dstd::StringView(trace))},
+                             options(dir))
+            .build();
+        CHECK(index::Indexer::open({dstd::String(dstd::StringView(trace))},
+                                   options(dir))
+                  .files()[0]
+                  .schema == "dftracer");
+        auto forced = index::Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, options(dir, "generic"));
         CHECK(forced.status().needs_work.size() == 1);
         CHECK(forced.build().indexed == 1);
         CHECK(forced.files()[0].schema == "generic");
         // Detection accepts the recorded schema rather than rebuilding.
-        CHECK(index::Indexer::open({trace}, options(dir))
+        CHECK(index::Indexer::open({dstd::String(dstd::StringView(trace))},
+                                   options(dir))
                   .status()
                   .needs_work.empty());
-        CHECK_THROWS_AS(index::Indexer::open({trace}, options(dir, "nope")),
-                        common::DFTUtilsException);
+        CHECK_THROWS_AS(
+            index::Indexer::open({dstd::String(dstd::StringView(trace))},
+                                 options(dir, "nope")),
+            common::DFTUtilsException);
     }
 }

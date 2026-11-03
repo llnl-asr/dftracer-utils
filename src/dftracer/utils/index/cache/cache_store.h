@@ -2,21 +2,17 @@
 #ifndef DFTRACER_UTILS_INDEX_CACHE_CACHE_STORE_H
 #define DFTRACER_UTILS_INDEX_CACHE_CACHE_STORE_H
 
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/store.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index::cache {
 
@@ -41,30 +37,31 @@ class CacheStore {
     /// Kept open for the life of the process. ReadWrite creates the folder.
     /// Null when the store cannot be opened or, for ReadOnly, the folder holds
     /// none. Never throws.
-    static dstd::SharedPtr<CacheStore> open(const std::string& path, Mode mode);
+    static dstd::SharedPtr<CacheStore> open(dstd::StringView path, Mode mode);
 
-    static bool exists(const std::string& path);
+    static bool exists(dstd::StringView path);
 
     bool writable() const noexcept { return writable_; }
 
-    dstd::Optional<std::string> get(std::uint64_t sig,
-                                    dstd::StringView key) const;
+    dstd::Optional<dstd::String> get(std::uint64_t sig,
+                                     dstd::StringView key) const;
     /// In key order.
     void scan(std::uint64_t sig, dstd::StringView prefix,
-              const std::function<void(dstd::StringView, dstd::StringView)>& fn)
-        const;
+              const dstd::Function<void(dstd::StringView, dstd::StringView)>&
+                  fn) const;
     /// Entry by entry in signature order. `fn` returns false to stop.
     void scan_all(dstd::StringView begin, dstd::StringView end,
-                  const std::function<bool(std::uint64_t, dstd::StringView,
-                                           dstd::StringView)>& fn) const;
-    std::vector<Usage> usage() const;
+                  const dstd::Function<bool(std::uint64_t, dstd::StringView,
+                                            dstd::StringView)>& fn) const;
+    dstd::Vector<Usage> usage() const;
 
     /// Visible whole to the next read. Then evicts the least recently used
     /// entries until the usage total is at most cache_max_bytes(). `sig` goes
     /// only when it alone is over the budget. InvalidArgument when read-only.
-    void put(std::uint64_t sig,
-             const std::vector<dstd::Pair<std::string, std::string>>& entries,
-             std::uint64_t bytes);
+    void put(
+        std::uint64_t sig,
+        const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& entries,
+        std::uint64_t bytes);
     /// Marks `sig` used now. No-op when read-only or `sig` has no record.
     void touch(std::uint64_t sig);
 

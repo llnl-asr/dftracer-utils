@@ -4,12 +4,10 @@
 
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
@@ -24,20 +22,20 @@ struct AggregationConfig {
     /// files; distinct files are then counted with a sketch.
     bool group_by_file = true;
 
-    std::vector<std::string> extra_group_keys;
+    dstd::Vector<dstd::String> extra_group_keys;
 
     bool compute_statistics = true;
 
     bool compute_percentiles = false;
     double sketch_accuracy = 0.01;
-    std::vector<double> percentiles = {0.25, 0.5, 0.75, 0.90};
+    dstd::Vector<double> percentiles = {0.25, 0.5, 0.75, 0.90};
 
-    std::string output_format = FORMAT_JSON;
+    dstd::String output_format = FORMAT_JSON;
 
     static constexpr const char* FORMAT_JSON = "json";
     static constexpr const char* FORMAT_ARROW = "arrow";
 
-    static bool is_valid_format(const std::string& fmt) {
+    static bool is_valid_format(const dstd::String& fmt) {
         return fmt == FORMAT_JSON
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
                || fmt == FORMAT_ARROW
@@ -45,8 +43,8 @@ struct AggregationConfig {
             ;
     }
 
-    static std::string supported_formats_str() {
-        std::string s = "'json'";
+    static dstd::String supported_formats_str() {
+        dstd::String s = "'json'";
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
         s += " or 'arrow'";
 #endif

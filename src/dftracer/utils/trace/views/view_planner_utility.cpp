@@ -90,8 +90,8 @@ ViewPlannerUtility::operator()(const ViewPlannerInput& input) {
                 // Named, not built inside co_await: GCC 12 destroys such a
                 // temporary twice.
                 plan::PruneRequest request{
-                    input.index_path,
-                    input.file_path,
+                    dstd::String(dstd::StringView(input.index_path)),
+                    dstd::String(dstd::StringView(input.file_path)),
                     input.view.query ? &*input.view.query : nullptr,
                     &snapshot,
                     input.time_range,
@@ -114,7 +114,8 @@ ViewPlannerUtility::operator()(const ViewPlannerInput& input) {
                     for (std::uint64_t i = 0; i < total_checkpoints; ++i)
                         candidate_checkpoints.push_back(i);
                 } else {
-                    candidate_checkpoints = std::move(pruned->candidates);
+                    candidate_checkpoints.assign(pruned->candidates.begin(),
+                                                 pruned->candidates.end());
                 }
             }
             const auto file = snapshot.file(get_logical_path(input.file_path));

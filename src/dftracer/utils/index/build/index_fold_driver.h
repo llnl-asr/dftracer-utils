@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -32,12 +33,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <exception>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -84,13 +81,13 @@ class FoldBufferPool final : public memory::Reclaimer {
     FoldBufferPool(const FoldBufferPool&) = delete;
     FoldBufferPool& operator=(const FoldBufferPool&) = delete;
 
-    std::unique_ptr<EventBuffer> take() {
+    dstd::UniquePtr<EventBuffer> take() {
         std::lock_guard<std::mutex> lock(mu_);
         answer_request();
         if (free_.empty()) {
-            if (!pool_) return std::make_unique<EventBuffer>();
+            if (!pool_) return dstd::make_unique<EventBuffer>();
             memory::Scope scope{*pool_};
-            return std::make_unique<EventBuffer>();
+            return dstd::make_unique<EventBuffer>();
         }
         Idle idle = std::move(free_.back());
         free_.pop_back();
@@ -99,7 +96,7 @@ class FoldBufferPool final : public memory::Reclaimer {
         return std::move(idle.buffer);
     }
 
-    void give(std::unique_ptr<EventBuffer> b) {
+    void give(dstd::UniquePtr<EventBuffer> b) {
         if (!b) return;
         b->clear();
         const std::uint64_t bytes = b->bytes();
@@ -119,7 +116,7 @@ class FoldBufferPool final : public memory::Reclaimer {
 
    private:
     struct Idle {
-        std::unique_ptr<EventBuffer> buffer;
+        dstd::UniquePtr<EventBuffer> buffer;
         std::uint64_t bytes = 0;
     };
 
@@ -157,7 +154,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
    public:
     IndexFoldDriver(dftracer::utils::dstd::StringIntern& intern,
                     dstd::Span<trace::views::detail::Fold* const> folds,
-                    std::string file_path, std::string index_path,
+                    dstd::String file_path, dstd::String index_path,
+                    // keep std: capture_extra_field takes std::string
                     std::vector<std::string> extra_fields = {})
         : intern_(&intern),
           folds_(folds.begin(), folds.end()),
@@ -173,6 +171,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             needs_args_ |= f->needs_args();
             capture_schema_ |= f->wants_schema();
             skip_never_indexed_ &= !f->reads_never_indexed();
+            // keep std: Fold::extra_captures returns std::vector<std::string>
             for (std::string& name : f->extra_captures())
                 if (std::find(extra_fields_.begin(), extra_fields_.end(),
                               name) == extra_fields_.end())
@@ -240,12 +239,12 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             Admit admit;
             if (dynamic)
                 admit = co_await admit_piece(end - off + partial_.size());
-            auto piece = std::make_unique<Parsed>();
+            auto piece = dstd::make_unique<Parsed>();
             piece->checkpoint_idx = checkpoint_idx;
             piece->chunk_begin = chunk_begin;
             piece->chunk_end = plain_offset_;
             piece->batch = buffers_->take();
-            piece->buf = std::make_shared<std::string>();
+            piece->buf = dstd::make_shared<dstd::String>();
             piece->buf->reserve(partial_.size() + (end - off) +
                                 simdjson::SIMDJSON_PADDING);
             piece->buf->append(partial_);
@@ -270,7 +269,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                 continue;
             }
             piece->local =
-                std::make_unique<dftracer::utils::dstd::StringIntern>();
+                dstd::make_unique<dftracer::utils::dstd::StringIntern>();
             in_flight_.push_back(
                 scope_->spawn_future([cfg = config(), piece = std::move(piece),
                                       gate = gate_]() mutable {
@@ -315,6 +314,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         bool capture_schema;
         bool skip_never_indexed;
         bool keep_lines;
+        // keep std: capture_extra_field takes std::string
         std::vector<std::string> extra_fields;
 #if DFTRACER_UTILS_TEST_PROBES
         mutable std::atomic<std::uint64_t> parsing{0};
@@ -334,15 +334,15 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             if (alive) alive->fetch_sub(1, std::memory_order_release);
         }
 
-        dstd::SharedPtr<std::string> buf;
+        dstd::SharedPtr<dstd::String> buf;
         std::size_t checkpoint_idx = 0;
         std::size_t chunk_begin = 0;
         std::size_t chunk_end = 0;
-        std::unique_ptr<EventBuffer> batch;
-        std::vector<dstd::StringView> lines;
+        dstd::UniquePtr<EventBuffer> batch;
+        dstd::Vector<dstd::StringView> lines;
         // The strings of a piece parsed ahead, interned here with ids of their
         // own, and given the file's ids in piece order when the folds see it.
-        std::unique_ptr<dftracer::utils::dstd::StringIntern> local;
+        dstd::UniquePtr<dftracer::utils::dstd::StringIntern> local;
         memory::Reservation held;
         ParseGate* extra = nullptr;
         std::atomic<std::size_t>* alive = nullptr;
@@ -381,7 +381,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 
     dstd::SharedPtr<const ParseConfig> config() {
         if (!config_)
-            config_ = std::make_shared<const ParseConfig>(
+            config_ = dstd::make_shared<const ParseConfig>(
                 intern_, decoder_, record_schema_, needs_args_, capture_schema_,
                 skip_never_indexed_, builders_ != nullptr, extra_fields_);
         return config_;
@@ -529,8 +529,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 
     // A named coroutine with by-value parameters, not a capturing lambda
     // (CP.51): the task owns its configuration, parser and chunk.
-    static coro::CoroTask<std::unique_ptr<Parsed>> parse_task(
-        dstd::SharedPtr<const ParseConfig> cfg, std::unique_ptr<Parsed> chunk,
+    static coro::CoroTask<dstd::UniquePtr<Parsed>> parse_task(
+        dstd::SharedPtr<const ParseConfig> cfg, dstd::UniquePtr<Parsed> chunk,
         ParseGate* gate) {
         SlotGuard slot{gate};
         parse_into(*cfg, *chunk);
@@ -571,17 +571,18 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         FoldBufferPool* buffers;
         void operator()(Parsed* p) const {
             buffers->give(std::move(p->batch));
-            delete p;
+            dstd::UniquePtr<Parsed> owner(p);
+            owner.reset();
             permits->release(1);
         }
     };
 
     // Each fold steps on its own chain of tasks, so it sees every batch in
     // order while the folds and this thread run at once.
-    coro::CoroTask<void> step_ahead(std::unique_ptr<Parsed> done) {
+    coro::CoroTask<void> step_ahead(dstd::UniquePtr<Parsed> done) {
         if (builders_) builders_->step(done->checkpoint_idx, done->lines);
         if (!permits_) {
-            permits_ = std::make_unique<coro::CoroSemaphore>(MAX_PIECES_HELD);
+            permits_ = dstd::make_unique<coro::CoroSemaphore>(MAX_PIECES_HELD);
             tails_.resize(folds_.size());
         }
         co_await permits_->acquire(1);
@@ -788,7 +789,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     coro::CoroTask<void> step_oldest() {
         auto future = std::move(in_flight_.front());
         in_flight_.pop_front();
-        std::unique_ptr<Parsed> done;
+        dstd::UniquePtr<Parsed> done;
         std::exception_ptr error;
         try {
             done = co_await std::move(future);
@@ -823,32 +824,33 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // fold sees its pieces one at a time and in order.
     bool chained_ = false;
     std::atomic<std::size_t> alive_{0};
-    std::vector<std::uint32_t> remap_;
-    std::deque<coro::SpawnFuture<std::unique_ptr<Parsed>>> in_flight_;
+    dstd::Vector<std::uint32_t> remap_;
+    dstd::Deque<coro::SpawnFuture<dstd::UniquePtr<Parsed>>> in_flight_;
     struct BloomStep {
         std::size_t checkpoint_idx;
         coro::SpawnFuture<void> done;
     };
-    std::deque<BloomStep> bloom_steps_;
+    dstd::Deque<BloomStep> bloom_steps_;
     index::extensions::BloomFold* bloom_ = nullptr;
     index::schemas::dft::agg::AggregationFold* agg_ = nullptr;
-    std::unique_ptr<coro::CoroSemaphore> permits_;
-    std::vector<dstd::Optional<coro::SpawnFuture<void>>> tails_;
+    dstd::UniquePtr<coro::CoroSemaphore> permits_;
+    dstd::Vector<dstd::Optional<coro::SpawnFuture<void>>> tails_;
     // Shared by every file of a build, so a slot keeps its capacity from file
     // to file.
     dstd::Optional<FoldBufferPool> own_buffers_{std::in_place};
     FoldBufferPool* buffers_ = &*own_buffers_;
     dftracer::utils::dstd::StringIntern* intern_;
-    std::vector<trace::views::detail::Fold*> folds_;
+    dstd::Vector<trace::views::detail::Fold*> folds_;
     index::Decoder decoder_ = index::Decoder::Dftracer;
     const index::RecordSchema* record_schema_ = nullptr;
     bool needs_args_ = false;
     bool capture_schema_ = false;
     bool skip_never_indexed_ = true;
-    std::string partial_;
+    dstd::String partial_;
     std::size_t plain_offset_ = 0;
-    std::string file_path_;
-    std::string index_path_;
+    dstd::String file_path_;
+    dstd::String index_path_;
+    // keep std: capture_extra_field takes std::string
     std::vector<std::string> extra_fields_;
     index::extensions::PluginBuilders* builders_ = nullptr;
 };

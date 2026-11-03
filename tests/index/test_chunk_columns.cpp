@@ -396,7 +396,9 @@ IndexerOptions options(const std::string& index_dir) {
 
 void build(const std::vector<std::string>& files,
            const std::string& index_dir) {
-    Indexer::open(files, options(index_dir)).build();
+    dstd::Vector<dstd::String> paths;
+    for (const auto& file : files) paths.emplace_back(file);
+    Indexer::open(std::move(paths), options(index_dir)).build();
 }
 
 void check_row_core(const agg::ChunkColumns& block, std::size_t r,
@@ -784,7 +786,7 @@ TEST_SUITE("ChunkColumns") {
         build({gz}, index_dir);
 
         const auto index_path =
-            trace::internal::determine_index_path(gz, index_dir);
+            std::string(trace::internal::determine_index_path(gz, index_dir));
         const auto snapshot = open_index(index_path);
         const auto file = file_of(snapshot, gz);
         const auto decoded = read_and_check(snapshot, file, rows);
@@ -814,7 +816,7 @@ TEST_SUITE("ChunkColumns") {
         build({gz}, index_dir);
 
         const auto index_path =
-            trace::internal::determine_index_path(gz, index_dir);
+            std::string(trace::internal::determine_index_path(gz, index_dir));
         const auto snapshot = open_index(index_path);
         const auto file = file_of(snapshot, gz);
         const auto rows = parse_trace(body);
@@ -873,8 +875,10 @@ TEST_SUITE("ChunkColumns") {
         const std::string b = write_trace(env.get_dir(), "beta", text_b);
         const auto rows_a = parse_trace(text_a);
         const auto rows_b = parse_trace(text_b);
-        const std::string ia = trace::internal::determine_index_path(a, "");
-        const std::string ib = trace::internal::determine_index_path(b, "");
+        const std::string ia =
+            std::string(trace::internal::determine_index_path(a, ""));
+        const std::string ib =
+            std::string(trace::internal::determine_index_path(b, ""));
         build({a}, "");
         build({b}, "");
 
@@ -897,7 +901,7 @@ TEST_SUITE("ChunkColumns") {
         CHECK(views::merge_shard_set(root, out) == 2);
 
         const std::string merged =
-            trace::internal::determine_index_path("x", out);
+            std::string(trace::internal::determine_index_path("x", out));
         const auto snapshot = open_index(merged);
         const auto file_a = file_of(snapshot, a);
         const auto file_b = file_of(snapshot, b);
@@ -918,7 +922,7 @@ TEST_SUITE("ChunkColumns") {
         build({gz}, index_dir);
 
         const auto index_path =
-            trace::internal::determine_index_path(gz, index_dir);
+            std::string(trace::internal::determine_index_path(gz, index_dir));
         const auto snapshot = open_index(index_path);
         const auto file = file_of(snapshot, gz);
         std::size_t at = 0;
@@ -952,7 +956,7 @@ TEST_SUITE("ChunkColumns") {
         build({gz}, index_dir);
 
         const auto index_path =
-            trace::internal::determine_index_path(gz, index_dir);
+            std::string(trace::internal::determine_index_path(gz, index_dir));
         std::size_t blocks = 0;
         std::size_t partials = 0;
         for (const auto& record : dftu_utils_test::dump_index(index_path)) {

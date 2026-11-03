@@ -2,19 +2,20 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/event_cost.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <simdjson.h>
 
 #include <algorithm>
-#include <charconv>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
-#include <iomanip>
 #include <limits>
-#include <sstream>
 #include <stdexcept>
+#include <system_error>
 
 namespace dftracer::utils::index::schemas::dft {
 
@@ -26,7 +27,7 @@ using dataframe::Log2Histogram;
 template <class V>
 std::uint32_t slot_of(dstd::StringViewMap<V>& map, dstd::StringView key) {
     auto it = map.find(key);
-    if (it == map.end()) it = map.emplace(std::string(key), V{}).first;
+    if (it == map.end()) it = map.emplace(dstd::String(key), V{}).first;
     return static_cast<std::uint32_t>(it - map.begin());
 }
 
@@ -61,19 +62,19 @@ void ChunkStatistics::update_from_event(NameSlots& names, PidSlots& pids,
         names.category_count = slot_of(category_counts, cat);
         names.name_count = slot_of(name_counts, name);
         if (name_category.find(name) == name_category.end())
-            name_category.emplace(std::string(name), cat);
+            name_category.emplace(dstd::String(name), cat);
     }
     if (pids.pid_tid_count == NO_SLOT) {
         constexpr std::size_t pid_tid_buf_size =
             (2 * std::numeric_limits<std::uint64_t>::digits10) + 3;
         char pt_buf[pid_tid_buf_size];
-        auto [pp, ec1] = std::to_chars(pt_buf, pt_buf + sizeof(pt_buf), pid);
+        auto [pp, ec1] = dstd::to_chars(pt_buf, pt_buf + sizeof(pt_buf), pid);
         if (ec1 != std::errc{} || pp == pt_buf + sizeof(pt_buf)) {
             throw common::DFTUtilsException(common::ErrorCode::Internal,
                                             "failed to format pid");
         }
         *pp++ = ':';
-        auto [tp, ec2] = std::to_chars(pp, pt_buf + sizeof(pt_buf), tid);
+        auto [tp, ec2] = dstd::to_chars(pp, pt_buf + sizeof(pt_buf), tid);
         if (ec2 != std::errc{}) {
             throw common::DFTUtilsException(common::ErrorCode::Internal,
                                             "failed to format tid");
@@ -135,7 +136,8 @@ void ChunkStatistics::update_from_event(NameSlots& names, PidSlots& pids,
     // the viz group-by-pid value.
     if (pids.pid_sketch == NO_SLOT) {
         char pid_buf[std::numeric_limits<std::uint64_t>::digits10 + 2];
-        auto [pe, pec] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), pid);
+        auto [pe, pec] =
+            dstd::to_chars(pid_buf, pid_buf + sizeof(pid_buf), pid);
         if (pec != std::errc{}) return;
         const dstd::StringView pid_key(pid_buf,
                                        static_cast<std::size_t>(pe - pid_buf));
@@ -225,22 +227,25 @@ double ChunkStatistics::duration_variance() const {
     return duration_m2 / static_cast<double>(duration_count - 1);
 }
 
-std::string ChunkStatistics::name_category_json() const {
-    std::ostringstream ss;
-    ss << '{';
+dstd::String ChunkStatistics::name_category_json() const {
+    dstd::String out = "{";
     bool first = true;
     for (const auto& [key, value] : name_category) {
-        if (!first) ss << ',';
+        if (!first) out += ',';
         first = false;
-        ss << '"' << key << "\":\"" << value << '"';
+        out += '"';
+        out += key;
+        out += "\":\"";
+        out += value;
+        out += '"';
     }
-    ss << '}';
-    return ss.str();
+    out += '}';
+    return out;
 }
 
-dstd::StringViewMap<std::string> ChunkStatistics::parse_string_map_json(
-    const std::string& json) {
-    dstd::StringViewMap<std::string> result;
+dstd::StringViewMap<dstd::String> ChunkStatistics::parse_string_map_json(
+    const dstd::String& json) {
+    dstd::StringViewMap<dstd::String> result;
 
     dftracer::utils::json::RecordParser parser;
     auto parse_result = parser.parse(json.data(), json.size());
@@ -253,68 +258,75 @@ dstd::StringViewMap<std::string> ChunkStatistics::parse_string_map_json(
     for (auto field : obj) {
         auto val_result = field.value.get_string();
         if (!val_result.error()) {
-            result[std::string(field.key)] =
-                std::string(val_result.value_unsafe());
+            result[dstd::String(field.key)] =
+                dstd::String(val_result.value_unsafe());
         }
     }
     return result;
 }
 
-std::string ChunkStatistics::name_duration_histograms_json() const {
-    std::ostringstream ss;
-    ss << '{';
+dstd::String ChunkStatistics::name_duration_histograms_json() const {
+    dstd::String out = "{";
     bool first = true;
     for (const auto& [key, hist] : name_duration_histograms) {
-        if (!first) ss << ',';
+        if (!first) out += ',';
         first = false;
-        ss << '"' << key << "\":" << hist.to_json();
+        out += '"';
+        out += key;
+        out += "\":";
+        out += hist.to_json();
     }
-    ss << '}';
-    return ss.str();
+    out += '}';
+    return out;
 }
 
 namespace {
 template <typename Map>
-std::string double_map_to_json(const Map& map) {
-    std::ostringstream ss;
-    ss << std::setprecision(17) << '{';
+dstd::String double_map_to_json(const Map& map) {
+    dstd::String out = "{";
     bool first = true;
     for (const auto& [key, value] : map) {
-        if (!first) ss << ',';
+        if (!first) out += ',';
         first = false;
-        ss << '"' << key << "\":" << value;
+        // 17 significant digits, as the stored index text has always been.
+        char buf[32];
+        const int n = std::snprintf(buf, sizeof(buf), "%.17g", value);
+        out += '"';
+        out += key;
+        out += "\":";
+        out.append(buf, static_cast<std::size_t>(n));
     }
-    ss << '}';
-    return ss.str();
+    out += '}';
+    return out;
 }
 }  // namespace
 
-std::string ChunkStatistics::name_duration_sums_json() const {
+dstd::String ChunkStatistics::name_duration_sums_json() const {
     return double_map_to_json(name_duration_sums);
 }
 
-std::string ChunkStatistics::name_duration_sum_sqs_json() const {
+dstd::String ChunkStatistics::name_duration_sum_sqs_json() const {
     return double_map_to_json(name_duration_sum_sqs);
 }
 
-std::string ChunkStatistics::cat_duration_sums_json() const {
+dstd::String ChunkStatistics::cat_duration_sums_json() const {
     return double_map_to_json(cat_duration_sums);
 }
 
-std::string ChunkStatistics::pid_duration_sums_json() const {
+dstd::String ChunkStatistics::pid_duration_sums_json() const {
     return double_map_to_json(pid_duration_sums);
 }
 
-std::vector<std::uint8_t> ChunkStatistics::serialize_name_duration_sketches()
+dstd::Vector<std::uint8_t> ChunkStatistics::serialize_name_duration_sketches()
     const {
     return serialize_sketch_map(name_duration_sketches);
 }
 
 // Binary format: uint32_t num_entries, then per entry:
 //   uint32_t key_len, char[key_len], uint32_t blob_len, uint8_t[blob_len]
-std::vector<std::uint8_t> ChunkStatistics::serialize_sketch_map(
+dstd::Vector<std::uint8_t> ChunkStatistics::serialize_sketch_map(
     const dstd::StringViewMap<dataframe::DDSketch>& sketches) {
-    std::vector<std::uint8_t> buf;
+    dstd::Vector<std::uint8_t> buf;
     auto num = static_cast<std::uint32_t>(sketches.size());
 
     // NOTE(perf): pre-reserve header + estimated ~512 bytes per sketch entry
@@ -322,7 +334,7 @@ std::vector<std::uint8_t> ChunkStatistics::serialize_sketch_map(
 
     dstd::append_u32_le(buf, num);
 
-    std::vector<std::uint8_t> sketch_blob;
+    dstd::Vector<std::uint8_t> sketch_blob;
     for (const auto& [key, sketch] : sketches) {
         sketch.serialize_into(sketch_blob);
         auto key_len = static_cast<std::uint32_t>(key.size());
@@ -338,7 +350,7 @@ std::vector<std::uint8_t> ChunkStatistics::serialize_sketch_map(
 }
 
 dstd::StringViewMap<double> ChunkStatistics::parse_double_map_json(
-    const std::string& json) {
+    const dstd::String& json) {
     dstd::StringViewMap<double> result;
 
     dftracer::utils::json::RecordParser parser;
@@ -352,16 +364,16 @@ dstd::StringViewMap<double> ChunkStatistics::parse_double_map_json(
     for (auto field : obj) {
         auto double_result = field.value.get_double();
         if (!double_result.error()) {
-            result[std::string(field.key)] = double_result.value_unsafe();
+            result[dstd::String(field.key)] = double_result.value_unsafe();
         } else {
             auto int_result = field.value.get_int64();
             if (!int_result.error()) {
-                result[std::string(field.key)] =
+                result[dstd::String(field.key)] =
                     static_cast<double>(int_result.value_unsafe());
             } else {
                 auto uint_result = field.value.get_uint64();
                 if (!uint_result.error()) {
-                    result[std::string(field.key)] =
+                    result[dstd::String(field.key)] =
                         static_cast<double>(uint_result.value_unsafe());
                 }
             }
@@ -371,7 +383,7 @@ dstd::StringViewMap<double> ChunkStatistics::parse_double_map_json(
 }
 
 dstd::StringViewMap<dataframe::Log2Histogram>
-ChunkStatistics::parse_histogram_map_json(const std::string& json) {
+ChunkStatistics::parse_histogram_map_json(const dstd::String& json) {
     dstd::StringViewMap<dataframe::Log2Histogram> result;
 
     dftracer::utils::json::RecordParser parser;
@@ -403,7 +415,7 @@ ChunkStatistics::parse_histogram_map_json(const std::string& json) {
                 hist.add(dataframe::Log2Histogram::bin_lower(bin_idx), count);
             }
         }
-        result[std::string(field.key)] = std::move(hist);
+        result[dstd::String(field.key)] = std::move(hist);
     }
     return result;
 }
@@ -423,7 +435,7 @@ ChunkStatistics::deserialize_name_duration_sketches(const std::uint8_t* data,
         if (!r.u32(key_len)) break;
         const std::uint8_t* key_bytes = r.take(key_len);
         if (!key_bytes) break;
-        std::string key(reinterpret_cast<const char*>(key_bytes), key_len);
+        dstd::String key(reinterpret_cast<const char*>(key_bytes), key_len);
 
         std::uint32_t blob_len = 0;
         if (!r.u32(blob_len)) break;

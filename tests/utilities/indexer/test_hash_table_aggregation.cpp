@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -13,7 +15,6 @@
 #include <testing_utilities.h>
 
 #include <fstream>
-#include <string>
 
 using namespace dftracer::utils;
 using dftracer::utils::index::build::resolve_and_build_index;
@@ -22,7 +23,8 @@ using dftu_utils_test::run_coro;
 
 namespace {
 
-void write_single_member(const std::string& path, const std::string& content) {
+void write_single_member(const dstd::String& path,
+                         const dstd::String& content) {
     using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
     GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
@@ -34,8 +36,8 @@ void write_single_member(const std::string& path, const std::string& content) {
 
 // A trace with one FH metadata entry (hash "f00d" -> a file path) plus data
 // events referencing it, so the file dictionary has something to resolve.
-std::string make_trace_with_fh(int n) {
-    std::string s = "[\n";
+dstd::String make_trace_with_fh(int n) {
+    dstd::String s = "[\n";
     s +=
         R"({"id":1,"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"h1","name":"node0","value":"h1"}})";
     s += "\n";
@@ -44,9 +46,9 @@ std::string make_trace_with_fh(int n) {
     s += "\n";
     for (int i = 0; i < n; ++i) {
         s +=
-            R"({"id":)" + std::to_string(i + 3) +
+            R"({"id":)" + dstd::to_string(i + 3) +
             R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-            std::to_string(1000 + i) +
+            dstd::to_string(1000 + i) +
             R"(,"dur":100,"ph":"X","args":{"hhash":"h1","fhash":"f00d","ret":4096}})";
         s += "\n";
     }
@@ -61,8 +63,8 @@ TEST_SUITE("hash_table_aggregation") {
     TEST_CASE("aggregation build populates the file hash table") {
         auto dir = dftu_utils_test::make_unique_test_path("hashagg");
         REQUIRE(dstd::fs::create_directories(dir).has_value());
-        const std::string gz = std::string((dir / "trace.pfw.gz").str());
-        const std::string index_dir = std::string((dir / "idx").str());
+        const dstd::String gz = dstd::String((dir / "trace.pfw.gz").str());
+        const dstd::String index_dir = dstd::String((dir / "idx").str());
         write_single_member(gz, make_trace_with_fh(50));
 
         ResolveAndBuildInput input;
@@ -72,7 +74,7 @@ TEST_SUITE("hash_table_aggregation") {
         input.require_bloom = false;
         input.build_bloom = false;
 
-        std::string index_path;
+        dstd::String index_path;
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             auto res = co_await resolve_and_build_index(input);
             index_path = res.index_path;

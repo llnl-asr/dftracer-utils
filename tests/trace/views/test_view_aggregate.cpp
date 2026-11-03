@@ -135,7 +135,9 @@ dataframe::DataFrame scan_only(const scan::ScanPlan& v) {
 // answer without a scan.
 void build_tier_index(const std::string& gz) {
     dftracer::utils::index::IndexerOptions options;
-    dftracer::utils::index::Indexer::open({gz}, options).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
+                                          options)
+        .build();
 }
 
 // A trace with a numeric arg ("level") and overlapping durations, so one trace
@@ -202,7 +204,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         auto make = [&] {
             return View::from_file(gz, idx)
                 .group_by({GroupKey::cat()})
@@ -237,7 +239,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         View base = View::from_file(gz, idx);
 
         auto run = base.session();
@@ -267,7 +269,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // 50 events
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         View base = View::from_file(gz, idx);
 
         auto total = std::make_shared<std::atomic<std::uint64_t>>(0);
@@ -296,7 +298,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         View base = View::from_file(gz, idx);
         Query posix = Query::from_string(R"(cat == "POSIX")").value();
         auto by_cat = [] { return std::vector<GroupKey>{GroupKey::cat()}; };
@@ -353,7 +355,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         View base = View::from_file(gz, idx);
 
         auto foreign = std::make_shared<Deferred<dataframe::DataFrame>>();
@@ -380,7 +382,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // Named field aggregates lower to the matching AggSpec, so the F form
         // and the AggSpec form produce the same table (same default col names).
@@ -432,7 +434,7 @@ TEST_SUITE("View") {
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         auto out = View::from_file(gz, idx)
                        .group_by({GroupKey::name()})
                        .agg({{AggOp::Sum, "dur", "t"}})
@@ -474,7 +476,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto any = View::from_file(gz, idx)
                        .group_by({GroupKey::cat()})
@@ -536,7 +538,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string gz =
             create_mixed_trace(env, 30, 20);  // read/POSIX, fwrite/STDIO
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // Per-cat distinct names: each cat has exactly one name here.
         auto t = View::from_file(gz, idx)
@@ -599,7 +601,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_bulk_counters(env, 400);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto run = [&](std::uint64_t budget) {
             StringSink s;
@@ -642,7 +644,7 @@ TEST_SUITE("View") {
         // variance of 200 consecutive ints is n(n+1)/12 = 200*201/12 = 3350;
         // mean 109.5.
         std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto row = [&](std::uint64_t budget) {
             auto t = View::from_file(gz, idx)
@@ -677,7 +679,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // 200 POSIX events, dur = 10..209 (one cat group).
         std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto t = View::from_file(gz, idx)
                      .group_by({GroupKey::cat()})
@@ -704,7 +706,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto make = [&] {
             return View::from_file(gz, idx)
@@ -747,7 +749,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // 200 POSIX events, dur = 10..209.
         std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto p99 = [&](std::uint64_t budget) {
             auto t = View::from_file(gz, idx)
@@ -772,7 +774,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // 200 POSIX events, dur = 10..209.
         std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto hist = [&](std::uint64_t budget) {
             auto t = View::from_file(gz, idx)
@@ -809,7 +811,7 @@ TEST_SUITE("View") {
         // 200 POSIX events at ts 1000,1100,..; 100us buckets -> ~200 groups,
         // enough that a 1-byte budget spills after nearly every batch.
         std::string gz = create_mixed_trace(env, 200, 0);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto run = [&](std::uint64_t budget) {
             auto t = View::from_file(gz, idx)
@@ -843,7 +845,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         StringSink sink;
         View::from_file(gz, idx).sink_json(sink).get();
         scan::ScanPlan base = scan::rollup_root(scan::from_file(gz, idx),
@@ -880,7 +882,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 200, 60);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto canon = [](const dataframe::DataFrame& df) {
             std::vector<std::string> rows;
@@ -940,7 +942,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 200, 60);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto canon = [](const dataframe::DataFrame& df) {
             std::vector<std::string> rows;
@@ -993,7 +995,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 200, 60);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto canon = [](const dataframe::DataFrame& df) {
             std::vector<std::string> rows;
@@ -1048,7 +1050,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 200, 60);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto canon = [](const dataframe::DataFrame& df) {
             std::vector<std::string> rows;
@@ -1161,8 +1163,8 @@ TEST_SUITE("View") {
         // Two shards ("ranks"): user_pct {40,40} and {80,80} -> merged mean 60.
         std::string a = create_counter_file(env, "a", {40, 40});
         std::string b = create_counter_file(env, "b", {80, 80});
-        std::string ia = determine_index_path(a, "");
-        std::string ib = determine_index_path(b, "");
+        std::string ia = std::string(determine_index_path(a, ""));
+        std::string ib = std::string(determine_index_path(b, ""));
 
         auto view = [](std::vector<ViewFile> files) {
             return View::from_files(std::move(files))
@@ -1196,7 +1198,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = write_agg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         View base = View::from_file(gz, idx);
         scan::ScanPlan plan = scan::from_file(gz, idx);
 
@@ -1238,7 +1240,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = write_agg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         scan::ScanPlan base = scan::from_file(gz, idx);
         auto by = [&](GroupKey gk, std::vector<AggSpec> specs) {
             return scan::agg(scan::group_by(base, {std::move(gk)}),
@@ -1296,8 +1298,8 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string a = create_counter_file(env, "a", {40, 40});
         std::string b = create_counter_file(env, "b", {80, 80});
-        std::string ia = determine_index_path(a, "");
-        std::string ib = determine_index_path(b, "");
+        std::string ia = std::string(determine_index_path(a, ""));
+        std::string ib = std::string(determine_index_path(b, ""));
         auto view = [](std::vector<ViewFile> files) {
             return View::from_files(std::move(files))
                 .phase(Phase::Counters)
@@ -1324,7 +1326,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = write_agg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         View v = View::from_file(gz, idx)
                      .group_by({GroupKey::cat()})
                      .agg({{AggOp::Count, "", "n"}});
@@ -1346,7 +1348,7 @@ TEST_SUITE("View") {
         // POSIX ts = 1000,1100,..,3900 (span 2900us). 1000us buckets -> 4
         // buckets.
         std::string gz = create_mixed_trace(env, 30, 0);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto table = View::from_file(gz, idx)
                          .group_by({GroupKey::cat()})
@@ -1374,7 +1376,7 @@ TEST_SUITE("View") {
         // divide 1000, so absolute vs min alignment land the first bucket
         // differently.
         std::string gz = create_mixed_trace(env, 30, 0);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto first_bucket = [&](View v) {
             auto t = v.agg({{AggOp::Count, "", "n"}}).collect().get();
@@ -1403,7 +1405,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto table = View::from_file(gz, idx)
                          .agg({{AggOp::Count, "", "n"}})
@@ -1431,7 +1433,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto table = View::from_file(gz, idx)
                          .group_by({GroupKey::cat()})
@@ -1469,7 +1471,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto table = View::from_file(gz, idx)
                          .group_by({GroupKey::rank()})
@@ -1494,7 +1496,7 @@ TEST_SUITE("View") {
         // small (dur < 25) from big and keeps the big lines aside - the density
         // shape the built-in agg cannot express in one pass.
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         struct Acc {
             std::size_t small = 0;
@@ -1545,7 +1547,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         struct Cnt {
             std::size_t n = 0;
@@ -1573,7 +1575,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // POSIX dur 10..39 (30), STDIO dur 20..39 (20).
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         struct Small {
             std::size_t n = 0;
@@ -1641,7 +1643,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_trace_with_counters(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // Events: the 10 ph=X reads, no counters.
         StringSink ev;
@@ -1662,7 +1664,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // 30 POSIX reads, ts 1000..3900, dur 10..39.
         std::string gz = create_mixed_trace(env, 30, 0);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         StringSink sink;
         View::from_file(gz, idx)
@@ -1685,7 +1687,7 @@ TEST_SUITE("View") {
         // them.
         std::string out = env.get_dir() + "/agg.pfw.gz";
         dftu_utils_test::write_gz_trace(out, sink.buffer);
-        std::string out_idx = determine_index_path(out, "");
+        std::string out_idx = std::string(determine_index_path(out, ""));
         StringSink reread;
         View::from_file(out, out_idx)
             .phase(Phase::Counters)
@@ -1716,7 +1718,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         dataframe::DataFrame b =
             View::from_file(gz, idx)
                 .time_range(900, 2200)
@@ -1815,7 +1817,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         dataframe::DataFrame b = View::from_file(gz, idx)
                                      .time_range(0, 1000000)
                                      .group_by({GroupKey::name()})
@@ -1842,7 +1844,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         dataframe::DataFrame b =
             View::from_file(gz, idx)
                 .time_range(0, 1000000)
@@ -1868,7 +1870,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         dataframe::DataFrame b = View::from_file(gz, idx)
                                      .time_range(0, 1000000)
                                      .group_by({GroupKey::name()})
@@ -1896,7 +1898,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         {
             dataframe::DataFrame b0 = View::from_file(gz, idx)
@@ -1933,7 +1935,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = write_agg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         build_tier_index(gz);  // an EVENT tier answerable() would try
 
         auto make = [&] {
@@ -1960,7 +1962,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = write_agg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         build_tier_index(gz);
         const std::vector<AggSpec> occ{{AggOp::Busy, "", "busy"},
                                        {AggOp::Active, "", "active"},
@@ -1987,7 +1989,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = write_agg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         build_tier_index(gz);
 
         auto make = [&] {
@@ -2030,7 +2032,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         auto counts = [&](const std::string& col, const GroupKey& gk) {
             dataframe::DataFrame b = View::from_file(gz, idx)
                                          .group_by({gk})
@@ -2093,7 +2095,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         auto counts = [&](const std::string& col, const GroupKey& gk) {
             dataframe::DataFrame b = View::from_file(gz, idx)
                                          .group_by({gk})
@@ -2140,7 +2142,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         CHECK(View::from_file(gz, idx).time_metric() == trace::TimeMetric::Ns);
     }

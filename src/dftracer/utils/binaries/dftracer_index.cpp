@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
@@ -25,8 +26,6 @@
 #include <chrono>
 #include <memory>
 #include <numeric>
-#include <optional>
-#include <set>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
@@ -133,8 +132,7 @@ static coro::CoroTask<int> select_stale_task(ResolverInput input,
 static void print_summary(double seconds, std::size_t indexed,
                           std::size_t skipped, std::size_t failed,
                           std::size_t events,
-                          // keep std: unswept API
-                          const std::vector<std::string>& dimensions) {
+                          const dstd::Vector<dstd::String>& dimensions) {
     std::printf("\n");
     std::printf("==========================================\n");
     std::printf("Bloom Index Results\n");
@@ -161,12 +159,9 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     // Without --index-dir the index goes next to the input data, where
     // determine_index_path(file, "") puts each file's index. The top-level
     // scanner is non-recursive, so all input files share log_dir.
-    // keep std: unswept API
-    const std::string index_dir = cli->indexing.index_dir.empty()
-                                      // keep std: unswept API
-                                      ? std::string(log_dir.str())
-                                      // keep std: unswept API
-                                      : std::string(cli->indexing.index_dir);
+    const dstd::String index_dir = cli->indexing.index_dir.empty()
+                                       ? dstd::String(log_dir.str())
+                                       : dstd::String(cli->indexing.index_dir);
     const auto expected_entries = cli->expected_entries;
     const auto false_positive_rate = cli->false_positive_rate;
 
@@ -189,14 +184,10 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         loaded.emplace(std::move(*built));
     }
 
-    // keep std: unswept API
-    std::vector<std::string> extra_dimensions;
+    dstd::Vector<dstd::String> extra_dimensions;
     for (const auto field : user_dimensions) {
-        // keep std: unswept API
-        const std::string dim =
-            dftracer::utils::index::build::extra_dimension_name(
-                // keep std: unswept API
-                std::string(field));
+        const dstd::String dim =
+            dftracer::utils::index::build::extra_dimension_name(field);
         if (std::find(extra_dimensions.begin(), extra_dimensions.end(), dim) ==
             extra_dimensions.end()) {
             extra_dimensions.push_back(dim);
@@ -210,8 +201,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     indexer_config.expected_entries_per_chunk = expected_entries;
     indexer_config.false_positive_rate = false_positive_rate;
 
-    // keep std: unswept API
-    std::vector<std::string> all_dimensions(
+    dstd::Vector<dstd::String> all_dimensions(
         dftracer::utils::index::build::DEFAULT_BLOOM_DIMENSIONS.begin(),
         dftracer::utils::index::build::DEFAULT_BLOOM_DIMENSIONS.end());
     for (const auto& dim : extra_dimensions) {
@@ -262,8 +252,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     log_stage("scan");
 
     std::size_t skipped_fresh = 0;
-    // keep std: unswept API
-    std::set<std::string> stale_tiers;
+    dstd::Set<dstd::String> stale_tiers;
     if (!force_rebuild) {
         ResolverInput resolve_input;
         resolve_input.entries = matched_entries;
@@ -272,8 +261,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         resolve_input.require_bloom = true;
         resolve_input.checkpoint_size = checkpoint_size;
         resolve_input.bloom_config = indexer_config;
-        // keep std: unswept API
-        resolve_input.schema = std::string(cli->record_schema);
+        resolve_input.schema = dstd::String(cli->record_schema);
         IndexWork stale;
         binaries::run_single_task(
             "DFTracer Bloom Indexer", cli->pipeline, [&](coro::Scope&) {
@@ -295,8 +283,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         co_return 0;
     }
 
-    // keep std: unswept API
-    std::vector<std::string> input_files;
+    dstd::Vector<dstd::String> input_files;
     dstd::Vector<std::size_t> scanned_sizes;
     input_files.reserve(matched_entries.size());
     scanned_sizes.reserve(matched_entries.size());
@@ -307,8 +294,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     // File ids follow logical path order, so a run of ids is a run of paths.
     {
-        // keep std: unswept API
-        std::vector<std::string> logical(input_files.size());
+        dstd::Vector<dstd::String> logical(input_files.size());
         for (std::size_t i = 0; i < input_files.size(); ++i)
             logical[i] =
                 index::store::internal::get_logical_path(input_files[i]);
@@ -318,8 +304,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
                   [&](std::size_t a, std::size_t b) {
                       return logical[a] < logical[b];
                   });
-        // keep std: unswept API
-        std::vector<std::string> files(input_files.size());
+        dstd::Vector<dstd::String> files(input_files.size());
         dstd::Vector<std::size_t> sizes(input_files.size());
         for (std::size_t i = 0; i < order.size(); ++i) {
             files[i] = std::move(input_files[order[i]]);
@@ -341,8 +326,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     Pipeline pipeline(pipeline_config);
 
-    // keep std: unswept API
-    const std::string agg_index =
+    const dstd::String agg_index =
         trace::internal::determine_index_path(input_files.front(), index_dir);
     if (force_rebuild &&
         common::unwrap(dstd::fs::exists(dstd::PathView(agg_index))))
@@ -359,12 +343,11 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     batch_config->bloom_config = indexer_config;
     batch_config->bloom_dimensions = all_dimensions;
     batch_config->memory_budget = cli->memory_budget;
-    // keep std: unswept API
-    batch_config->schema = std::string(cli->record_schema);
+    batch_config->schema = dstd::String(cli->record_schema);
 
     AggRun agg_run = start_aggregation(
         agg_index, index::schemas::dft::agg::standard_aggregation_config());
-    batch_config->agg_fold_factory = agg_run.factory;
+    batch_config->agg_fold_factory = std::move(agg_run.factory);
 
     IndexBuildBatchResult batch_result;
     auto streaming_task = make_task(

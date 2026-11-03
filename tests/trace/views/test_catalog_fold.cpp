@@ -15,6 +15,7 @@
 #include <tuple>
 #include <vector>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
@@ -99,16 +100,16 @@ void register_log_schema() {
 }
 
 bool has_catalog(const std::string& gz) {
-    const auto snapshot =
-        dftu_utils_test::index_snapshot(determine_index_path(gz, ""));
+    const auto snapshot = dftu_utils_test::index_snapshot(
+        std::string(determine_index_path(gz, "")));
     const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
     return file &&
            ix::extension_current(snapshot, *file, st::IndexExtension::Catalog);
 }
 
 Catalog catalog_of(const std::string& gz) {
-    const auto snapshot =
-        dftu_utils_test::index_snapshot(determine_index_path(gz, ""));
+    const auto snapshot = dftu_utils_test::index_snapshot(
+        std::string(determine_index_path(gz, "")));
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
     Catalog out;
     for (const auto& [path, stat] :
@@ -119,7 +120,7 @@ Catalog catalog_of(const std::string& gz) {
 }
 
 View view_of(const std::string& gz, const std::string& schema = "") {
-    View v = View::from_file(gz, determine_index_path(gz, ""));
+    View v = View::from_file(gz, std::string(determine_index_path(gz, "")));
     return schema.empty() ? v : v.record_schema(schema);
 }
 
@@ -127,7 +128,7 @@ void build_full(const std::string& gz, const std::string& schema = "") {
     ix::IndexerOptions o;
     o.checkpoint_size = 2048;
     o.schema = schema;
-    ix::Indexer::open({gz}, o).build();
+    ix::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
 }
 
 void expect_scan_catalog_equals_build(const std::vector<std::string>& lines,
@@ -147,8 +148,8 @@ void expect_scan_catalog_equals_build(const std::vector<std::string>& lines,
 
 // Rewrites the file's catalog with one more path, as the build wrote it.
 void plant_sentinel(const std::string& gz) {
-    const auto index =
-        dftu_utils_test::open_test_index(determine_index_path(gz, ""));
+    const auto index = dftu_utils_test::open_test_index(
+        std::string(determine_index_path(gz, "")));
     const auto snapshot = dftu_utils_test::index_take(index.snapshot());
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
     const auto state =
@@ -230,8 +231,8 @@ TEST_SUITE("CatalogFold") {
         REQUIRE_FALSE(has_catalog(fresh));
 
         std::vector<ViewFile> files;
-        files.push_back({have, determine_index_path(have, "")});
-        files.push_back({fresh, determine_index_path(fresh, "")});
+        files.push_back({have, std::string(determine_index_path(have, ""))});
+        files.push_back({fresh, std::string(determine_index_path(fresh, ""))});
         (void)View::from_files(std::move(files)).columns();
         CHECK(has_catalog(fresh));
         CHECK(has_sentinel(have));

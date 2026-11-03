@@ -41,7 +41,7 @@ TEST_SUITE("Pipeline plan") {
     TEST_CASE("a row query lowered to the identity pipeline returns its rows") {
         TestEnvironment env(200);
         std::string gz = test_view_common::create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         ScanPlan base = scan::from_file(gz, idx);
         dataframe::DataFrame all = run(scan::collect_frame(base));

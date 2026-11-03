@@ -31,7 +31,7 @@ FieldRef classify(dftracer::utils::dstd::StringIntern& intern,
                   const dftracer::utils::index::Roles* roles) {
     // A role's slot name reads the role; an undeclared one reads the field.
     if (roles) {
-        auto role = [&](const std::string& path, const char* slot) {
+        auto role = [&](dstd::StringView path, const char* slot) {
             return !path.empty() && (f == path || f == slot);
         };
         if (role(roles->entity, "pid")) return {FieldRef::Kind::Pid};

@@ -9,6 +9,8 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -46,19 +48,19 @@ constexpr std::uint64_t SIG_BYTES = 8;
 
 // Everything that decides a group key's values: a transform coarsens them, so
 // dirname(file_path) and file_path are different keys.
-std::string key_identity(const trace::views::GroupKey& gk) {
-    std::string id = gk.arg;
+dstd::String key_identity(const trace::views::GroupKey& gk) {
+    dstd::String id{dstd::StringView(gk.arg)};
     if (gk.transform == trace::views::GroupKey::Transform::None) return id;
     id.push_back('\x1f');
-    id += std::to_string(static_cast<int>(gk.transform));
-    for (const std::string& a : gk.transform_args) {
+    id += dstd::to_string(static_cast<int>(gk.transform));
+    for (const auto& a : gk.transform_args) {
         id.push_back('\x1f');
-        id += a;
+        id.append(a);
     }
     return id;
 }
 
-void add_rest_fields(std::string& sig,
+void add_rest_fields(dstd::String& sig,
                      const trace::views::detail::ViewPlan& plan) {
     auto add = [&](dstd::StringView s) {
         sig.append(s);
@@ -72,8 +74,8 @@ void add_rest_fields(std::string& sig,
             common::ErrorCode::InvalidArgument,
             "rollup signature: the plan's record schema "
             "is not resolved");
-    add(std::to_string(plan.record_schema->params_hash()));
-    std::vector<const trace::views::ViewFile*> files;
+    add(dstd::to_string(plan.record_schema->params_hash()));
+    dstd::Vector<const trace::views::ViewFile*> files;
     files.reserve(plan.files.size());
     for (const auto& f : plan.files) files.push_back(&f);
     std::sort(files.begin(), files.end(),
@@ -82,26 +84,26 @@ void add_rest_fields(std::string& sig,
         add(f->file_path);
         dftracer::utils::common::InputFileStat st;
         const bool ok = dftracer::utils::common::stat_input(f->file_path, st);
-        add(std::to_string(ok ? st.size : 0));
-        add(std::to_string(static_cast<long long>(ok ? st.mtime : 0)));
+        add(dstd::to_string(ok ? st.size : 0));
+        add(dstd::to_string(static_cast<long long>(ok ? st.mtime : 0)));
     }
     add(plan.query ? plan.query->source() : "");
     for (const trace::views::detail::ComputedColumn& c : plan.computed) {
         add(c.name);
         add(dataframe::expr_canonical(c.expr));
-        for (const std::string& in : c.inputs) add(in);
+        for (const auto& in : c.inputs) add(in);
     }
-    add(std::to_string(static_cast<int>(plan.phase)));
+    add(dstd::to_string(static_cast<int>(plan.phase)));
     // time_bucket_us is intentionally NOT part of the rest basis: a coarser
     // query can be served by re-bucketing a finer rollup, so buckets must not
     // gate subsumption. It lands in plan_signature (row-key identity) only.
-    add(std::to_string(plan.time_scale));
+    add(dstd::to_string(plan.time_scale));
     if (plan.time_range) {
-        add(std::to_string(plan.time_range->first));
-        add(std::to_string(plan.time_range->second));
+        add(dstd::to_string(plan.time_range->first));
+        add(dstd::to_string(plan.time_range->second));
     }
     for (const auto& a : plan.agg) {
-        add(std::to_string(static_cast<int>(a.op)));
+        add(dstd::to_string(static_cast<int>(a.op)));
         add(a.field);
         add(a.out_name);
         add(a.by);
@@ -111,10 +113,10 @@ void add_rest_fields(std::string& sig,
     // rollup. Re-bucketing a coarser query from a finer rollup assumes
     // 0-aligned flooring, so for an aligned plan pin the exact width too (no
     // re-cut).
-    add(std::to_string(plan.bucket_origin_us));
+    add(dstd::to_string(plan.bucket_origin_us));
     add(plan.bucket_origin_min ? "1" : "0");
     if (plan.bucket_origin_us || plan.bucket_origin_min)
-        add("bw=" + std::to_string(plan.time_bucket_us));
+        add("bw=" + dstd::to_string(plan.time_bucket_us));
     add(plan.auto_numeric_metrics ? "1" : "0");
     // Whether a per-arg quantile sketch was collected: an MV built without it
     // cannot serve a dyn Pct query, so it must not be reused for one. The dyn
@@ -134,49 +136,49 @@ void add_rest_fields(std::string& sig,
 
 }  // namespace
 
-dstd::SharedPtr<CacheStore> open_rollup_db(const std::string& path,
+dstd::SharedPtr<CacheStore> open_rollup_db(dstd::StringView path,
                                            CacheStore::Mode mode) {
     return CacheStore::open(path, mode);
 }
 
 void persist_rollup(CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
                     std::uint64_t time_bucket_us,
-                    const std::vector<trace::views::GroupKey>& group_by,
+                    dstd::Span<const trace::views::GroupKey> group_by,
                     const dataframe::AggState& state) {
     const std::int64_t ng = dataframe::agg_num_groups(state);
     // agg_group_key renders a null key as "", so the finalized key columns
     // tell a null key apart from an empty one.
-    const dataframe::DataFrame finalized =
-        dataframe::agg_finalize(state, std::vector<std::string>{});
-    std::vector<dstd::Pair<std::string, std::string>> entries;
+    const dataframe::DataFrame finalized = dataframe::agg_finalize(
+        state, std::vector<std::string>{});  // keep std: agg_finalize signature
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> entries;
     entries.reserve(static_cast<std::size_t>(ng) + 1);
     std::uint64_t bytes = 0;
-    std::string row_key;
+    dstd::String row_key;
     for (std::int64_t g = 0; g < ng; ++g) {
         // Row key = the group's composite key, each part tagged null or
         // value, a stable identity so a re-persist of the same group
         // overwrites in place.
         row_key.assign(ROW_TAG);
-        const std::vector<std::string> parts =
-            dataframe::agg_group_key(state, g);
+        const auto parts = dataframe::agg_group_key(state, g);
         for (std::size_t k = 0; k < parts.size(); ++k) {
             if (finalized.columns[k].is_null(g)) {
                 row_key.push_back('\x00');
             } else {
                 row_key.push_back('\x01');
-                row_key += parts[k];
+                row_key.append(parts[k]);
             }
             row_key += trace::views::detail::GROUP_SEP;
         }
-        std::string blob =
+        const auto serialized =
             dataframe::agg_serialize(*dataframe::agg_extract_group(state, g));
+        dstd::String blob{dstd::StringView(serialized)};
         bytes += SIG_BYTES + row_key.size() + blob.size();
         entries.emplace_back(row_key, std::move(blob));
     }
     // Shape descriptor the planner matches against: rest hash + this rollup's
     // time bucket (for coarsening) + this view's grouping (kind + key identity
     // per key, in order).
-    std::string desc;
+    dstd::String desc;
     dstd::append_u64_be(desc, rest_sig);
     dstd::append_u64_be(desc, time_bucket_us);
     dstd::append_u32_be(desc, static_cast<std::uint32_t>(group_by.size()));
@@ -196,7 +198,8 @@ bool rollup_exists(const CacheStore& db, std::uint64_t sig) {
 dataframe::AggStatePtr read_rollup(const CacheStore& db, std::uint64_t sig) {
     dataframe::AggStatePtr merged;
     db.scan(sig, ROW_TAG, [&](dstd::StringView, dstd::StringView blob) {
-        auto one = dataframe::agg_deserialize(std::string(blob));
+        auto one = dataframe::agg_deserialize(
+            std::string(blob));  // keep std: agg_deserialize takes std::string
         if (!merged)
             merged = std::move(one);
         else
@@ -206,18 +209,18 @@ dataframe::AggStatePtr read_rollup(const CacheStore& db, std::uint64_t sig) {
 }
 
 std::uint64_t rest_signature(const trace::views::detail::ViewPlan& plan) {
-    std::string sig;
+    dstd::String sig;
     add_rest_fields(sig, plan);
     return dftracer::utils::dstd::hash::fnv1a_hash(sig);
 }
 
 std::uint64_t plan_signature(const trace::views::detail::ViewPlan& plan) {
-    std::string sig;
+    dstd::String sig;
     add_rest_fields(sig, plan);
-    sig.append(std::to_string(plan.time_bucket_us));
+    sig.append(dstd::to_string(plan.time_bucket_us));
     sig.push_back('\0');
     for (const auto& g : plan.group_by) {
-        sig.append(std::to_string(static_cast<int>(g.kind)));
+        sig.append(dstd::to_string(static_cast<int>(g.kind)));
         sig.push_back('\0');
         sig.append(key_identity(g));
         sig.push_back('\0');
@@ -233,7 +236,7 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
     // to re-aggregate, and an exact match (same dims as the query) is optimal.
     std::uint64_t best_sig = 0;
     std::uint64_t best_bucket = 0;
-    std::vector<trace::views::GroupKey> best_gb;
+    dstd::Vector<trace::views::GroupKey> best_gb;
     bool have_best = false;
 
     db.scan_all(
@@ -252,13 +255,13 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
                 (r_bucket == 0 || plan.time_bucket_us % r_bucket != 0))
                 return true;
 
-            std::vector<trace::views::GroupKey> r_gb;
+            dstd::Vector<trace::views::GroupKey> r_gb;
             const std::uint32_t n = br.be32();
             r_gb.reserve(n);
             for (std::uint32_t i = 0; i < n; ++i) {
                 trace::views::GroupKey gk;
                 gk.kind = static_cast<trace::views::GroupKey::Kind>(br.be32());
-                gk.arg = std::string(br.str());
+                gk.arg = dstd::String(br.str());
                 r_gb.push_back(std::move(gk));
             }
             if (have_best && r_gb.size() >= best_gb.size()) return true;
@@ -267,7 +270,8 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
             for (const auto& qg : plan.group_by) {
                 bool found = false;
                 for (const auto& rg : r_gb)
-                    if (rg.kind == qg.kind && rg.arg == key_identity(qg)) {
+                    if (rg.kind == qg.kind &&
+                        dstd::StringView(rg.arg) == key_identity(qg)) {
                         found = true;
                         break;
                     }
@@ -298,7 +302,7 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
     // order (dropping the bucket when the query has none, or re-flooring it to
     // the query's coarser grain otherwise).
     const std::size_t src_off = best_bucket > 0 ? 1 : 0;
-    std::vector<std::int32_t> keep;
+    std::vector<std::int32_t> keep;  // keep std: agg_regroup signature
     keep.reserve((plan.time_bucket_us > 0 ? 1 : 0) + plan.group_by.size());
     std::int64_t bucket_recut = 0;
     if (plan.time_bucket_us > 0) {
@@ -310,7 +314,7 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
         std::size_t at = best_gb.size();
         for (std::size_t i = 0; i < best_gb.size(); ++i)
             if (best_gb[i].kind == qg.kind &&
-                best_gb[i].arg == key_identity(qg)) {
+                dstd::StringView(best_gb[i].arg) == key_identity(qg)) {
                 at = i;
                 break;
             }
@@ -322,7 +326,7 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
     return trace::views::detail::finalize_engine_result(*coarse, plan);
 }
 
-std::string cache_dir(const trace::views::detail::ViewPlan& plan) {
+dstd::String cache_dir(const trace::views::detail::ViewPlan& plan) {
     // A Rank group key resolves pid -> rank from PR metadata harvested during
     // the scan; a rollup read-back never scans, so a rank plan cannot use a
     // rollup.
@@ -331,7 +335,7 @@ std::string cache_dir(const trace::views::detail::ViewPlan& plan) {
     // A lookup's rows are not part of the plan's identity.
     if (plan.build_step) return {};
     if (plan.files.empty()) return {};
-    const std::string& p = plan.files.front().index_path;
+    const dstd::StringView p = plan.files.front().index_path;
     if (p.empty()) return {};
     for (const auto& f : plan.files)
         if (f.index_path != p) return {};
@@ -339,14 +343,15 @@ std::string cache_dir(const trace::views::detail::ViewPlan& plan) {
     return store::internal::normalize_index_root(p);
 }
 
-std::string rollup_cache_path(const trace::views::detail::ViewPlan& plan) {
+dstd::String rollup_cache_path(const trace::views::detail::ViewPlan& plan) {
     for (const auto& gk : plan.group_by)
         if (gk.kind == trace::views::GroupKey::Kind::Rank) return {};
     // A caller-set root anchors a cross-file rollup (dask sets it for a
     // multi-file query, whose per-file index paths differ).
     if (plan.build_step) return {};
-    if (!plan.rollup_root.empty()) return plan.rollup_root;
-    const std::string dir = cache_dir(plan);
+    if (!plan.rollup_root.empty())
+        return dstd::String(dstd::StringView(plan.rollup_root));
+    const dstd::String dir = cache_dir(plan);
     return dir.empty() ? dir : index::rollups_dir(dir);
 }
 

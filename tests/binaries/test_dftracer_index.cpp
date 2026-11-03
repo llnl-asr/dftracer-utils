@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -87,7 +89,9 @@ TEST_SUITE("DFTracerIndex") {
         CHECK(rc == 0);
 
         CHECK(dftracer::utils::dstd::fs::exists(
-                  dftracer::utils::trace::internal::determine_index_path(f, ""))
+                  std::string(
+                      dftracer::utils::trace::internal::determine_index_path(
+                          f, "")))
                   .value());
     }
 
@@ -114,8 +118,9 @@ TEST_SUITE("DFTracerIndex") {
         CHECK(rc == 0);
 
         CHECK(dftracer::utils::dstd::fs::exists(
-                  dftracer::utils::trace::internal::determine_index_path(
-                      f, idx_dir))
+                  std::string(
+                      dftracer::utils::trace::internal::determine_index_path(
+                          f, idx_dir)))
                   .value());
     }
 
@@ -134,16 +139,19 @@ TEST_SUITE("DFTracerIndex") {
 
         int rc1 = run_index(binary, {env.get_dir(), "--force"});
         CHECK(rc1 == 0);
-        REQUIRE(
-            dftracer::utils::dstd::fs::exists(
-                dftracer::utils::trace::internal::determine_index_path(f, ""))
-                .value());
+        REQUIRE(dftracer::utils::dstd::fs::exists(
+                    std::string(
+                        dftracer::utils::trace::internal::determine_index_path(
+                            f, "")))
+                    .value());
 
         // Second run with --force must overwrite successfully.
         int rc2 = run_index(binary, {env.get_dir(), "--force"});
         CHECK(rc2 == 0);
         CHECK(dftracer::utils::dstd::fs::exists(
-                  dftracer::utils::trace::internal::determine_index_path(f, ""))
+                  std::string(
+                      dftracer::utils::trace::internal::determine_index_path(
+                          f, "")))
                   .value());
     }
     TEST_CASE("stats share and path budget flags") {
@@ -162,7 +170,9 @@ TEST_SUITE("DFTracerIndex") {
         CHECK(run_index(binary, {env.get_dir(), "--force", "--stats-share",
                                  "0.2", "--path-budget", "5"}) == 0);
         CHECK(dftracer::utils::dstd::fs::exists(
-                  dftracer::utils::trace::internal::determine_index_path(f, ""))
+                  std::string(
+                      dftracer::utils::trace::internal::determine_index_path(
+                          f, "")))
                   .value());
         CHECK(run_index(binary,
                         {env.get_dir(), "--force", "--stats-share", "0"}) != 0);
@@ -238,10 +248,10 @@ TEST_SUITE("DFTracerIndex") {
         namespace ix = dftracer::utils::index;
         ix::IndexerOptions o;
         o.aggregation.time_interval_us = 5'000'000;
-        ix::Indexer::open({f}, o).build();
+        ix::Indexer::open({dstd::String(dstd::StringView(f))}, o).build();
 
-        const auto index_path =
-            dftracer::utils::trace::internal::determine_index_path(f, "");
+        const auto index_path = std::string(
+            dftracer::utils::trace::internal::determine_index_path(f, ""));
         dftu_utils_test::set_test_library_path(binary);
         int rc = -1;
         const std::string out = dftu_utils_test::run_process_capture(
@@ -301,8 +311,9 @@ TEST_SUITE("DFTracerIndex") {
 
         CHECK(run_index(binary, {env.get_dir(), "--force"}) != 0);
         CHECK(dftracer::utils::dstd::fs::exists(
-                  dftracer::utils::trace::internal::determine_index_path(good,
-                                                                         ""))
+                  std::string(
+                      dftracer::utils::trace::internal::determine_index_path(
+                          good, "")))
                   .value());
     }
 }

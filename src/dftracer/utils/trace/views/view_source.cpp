@@ -512,8 +512,8 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
             }
             // GCC 12 destroys a temporary built inside co_await twice.
             ip::PruneRequest prune_req{
-                .index_path = f.index_path,
-                .file_path = f.file_path,
+                .index_path = dstd::String(dstd::StringView(f.index_path)),
+                .file_path = dstd::String(dstd::StringView(f.file_path)),
                 .query = &built.value(),
                 .snapshot = snapshot,
                 .metadata = metadata_rows_ ? ip::MetadataUse::Records

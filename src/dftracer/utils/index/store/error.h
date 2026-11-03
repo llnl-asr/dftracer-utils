@@ -3,9 +3,9 @@
 #define DFTRACER_UTILS_INDEX_STORE_ERROR_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <stdexcept>
-#include <string>
 
 namespace dftracer::utils::index::store {
 
@@ -20,7 +20,7 @@ class IndexerError : public common::DFTUtilsException {
         UnknownError
     };
 
-    IndexerError(Type type, const std::string &message)
+    IndexerError(Type type, const dstd::String &message)
         : common::DFTUtilsException(common::ErrorCode::Indexer,
                                     format_message(type, message)),
           type_(type) {}
@@ -29,7 +29,7 @@ class IndexerError : public common::DFTUtilsException {
 
    private:
     Type type_;
-    static std::string format_message(Type type, const std::string &message);
+    static dstd::String format_message(Type type, const dstd::String &message);
 };
 
 }  // namespace dftracer::utils::index::store

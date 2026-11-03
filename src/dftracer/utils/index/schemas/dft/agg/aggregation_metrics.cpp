@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
 
 #include <algorithm>
@@ -9,7 +10,7 @@ namespace dftracer::utils::index::schemas::dft::agg {
 void MetricStats::update(double value, bool compute_percentiles) {
     stat.add(value);
     if (compute_percentiles) {
-        if (!sketch) sketch = std::make_unique<DDSketch>(sketch_accuracy_);
+        if (!sketch) sketch = dstd::make_unique<DDSketch>(sketch_accuracy_);
         sketch->add(value);
     }
 }
@@ -17,7 +18,7 @@ void MetricStats::update(double value, bool compute_percentiles) {
 void MetricStats::update(std::uint64_t value, bool compute_percentiles) {
     stat.add(value);  // keeps the exact uint64 domain (durations/timestamps)
     if (compute_percentiles) {
-        if (!sketch) sketch = std::make_unique<DDSketch>(sketch_accuracy_);
+        if (!sketch) sketch = dstd::make_unique<DDSketch>(sketch_accuracy_);
         sketch->add(static_cast<double>(value));
     }
 }
@@ -25,7 +26,7 @@ void MetricStats::update(std::uint64_t value, bool compute_percentiles) {
 void MetricStats::merge_from(const MetricStats& other) {
     stat.merge(other.stat);
     if (other.sketch) {
-        if (!sketch) sketch = std::make_unique<DDSketch>(sketch_accuracy_);
+        if (!sketch) sketch = dstd::make_unique<DDSketch>(sketch_accuracy_);
         sketch->merge(*other.sketch);
     }
 }

@@ -20,7 +20,7 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
     REQUIRE(!gz_file.empty());
 
     std::string idx_file = env.get_index_path(gz_file);
-    std::string db_root = determine_index_path(gz_file, "");
+    std::string db_root = std::string(determine_index_path(gz_file, ""));
 
     SUBCASE("CheckpointIndexerFactory creates valid indexer") {
         auto indexer =

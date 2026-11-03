@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/file_index_data.h>
@@ -12,11 +14,6 @@
 #include <dftracer/utils/index/tables.h>
 
 #include <algorithm>
-#include <map>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::index::plan {
 
@@ -56,14 +53,14 @@ bool is_position(dstd::StringView digits) {
                        [](char c) { return c >= '0' && c <= '9'; });
 }
 
-using Positions = std::map<dstd::String, std::vector<dstd::String>>;
+using Positions = dstd::Map<dstd::String, dstd::Vector<dstd::String>>;
 
 // For each any() path, the catalog paths `<path>.<k>` in position order
 // (`args.<path>.<k>` for a dftracer arg written without the prefix).
 Positions any_positions(const Snapshot& snapshot, const FileRef& file,
                         const Query& query) {
     Positions out;
-    std::vector<dstd::Pair<std::uint64_t, dstd::String>> found;
+    dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>> found;
     const auto catalog = common::unwrap(index::catalog(snapshot, file));
     for (const dstd::String& path : query.any_paths()) {
         found.clear();
@@ -74,8 +71,9 @@ Positions any_positions(const Snapshot& snapshot, const FileRef& file,
                     continue;
                 const dstd::StringView k =
                     dstd::StringView(p).substr(base.size() + 1);
-                if (is_position(k))
-                    found.emplace_back(std::stoull(std::string(k)),
+                if (!is_position(k)) continue;
+                if (const auto position = dstd::from_chars<std::uint64_t>(k))
+                    found.emplace_back(*position,
                                        dstd::String(p.data(), p.size()));
             }
             if (!found.empty() || path.starts_with("args.")) break;
@@ -146,7 +144,7 @@ dstd::Optional<Query> expand_any(const Snapshot& snapshot, const FileRef& file,
 }
 
 ChunkPrunerOutput prune_file_chunks(const Snapshot& snapshot,
-                                    const std::string& file_path,
+                                    const dstd::String& file_path,
                                     const Query& query_in) {
     ChunkPrunerOutput out;
     const auto file = snapshot.file(get_logical_path(file_path));
@@ -184,7 +182,7 @@ namespace {
 
 // What `own`, one extension's Conditions, rules out on its own.
 ChunkExplanation::ByExtension explain_alone(const Query& query,
-                                            std::string name, Conditions own,
+                                            dstd::String name, Conditions own,
                                             const FileIndexData& ctx) {
     ChunkExplanation::ByExtension by{std::move(name), false, {}};
     by.file_ruled_out = !file_may_match(query.root(), own);
@@ -199,7 +197,7 @@ ChunkExplanation::ByExtension explain_alone(const Query& query,
 }  // namespace
 
 ChunkExplanation explain_file_chunks(const Snapshot& snapshot,
-                                     const std::string& file_path,
+                                     const dstd::String& file_path,
                                      const Query& query_in) {
     ChunkExplanation out;
     const auto file = snapshot.file(get_logical_path(file_path));
@@ -231,14 +229,14 @@ ChunkExplanation explain_file_chunks(const Snapshot& snapshot,
         Conditions own;
         for (auto& c : conds)
             if (c && c->extension() == ext) own.push_back(std::move(c));
-        out.by_extension.push_back(
-            explain_alone(query, std::string(index::store::extension_name(ext)),
-                          std::move(own), ctx));
+        out.by_extension.push_back(explain_alone(
+            query, dstd::String(index::store::extension_name(ext)),
+            std::move(own), ctx));
     }
     for (auto& c : conds) {
         if (!c || c->extension() != index::store::IndexExtension::Plugin)
             continue;
-        std::string name = c->name();
+        dstd::String name = c->name();
         Conditions own;
         own.push_back(std::move(c));
         out.by_extension.push_back(
@@ -276,7 +274,7 @@ common::Result<ChunkPrunerBatchOutput> ChunkPruner::process_batch(
     } catch (const std::exception& e) {
         return common::make_error(
             common::ErrorCode::Indexer,
-            std::string("ChunkPruner: batch failed: ") + e.what());
+            dstd::String("ChunkPruner: batch failed: ") + e.what());
     }
     return batch_out;
 }

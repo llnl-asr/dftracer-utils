@@ -56,14 +56,14 @@ std::string write_gz(TestEnvironment& env, const std::string& name,
 std::string write_indexed(TestEnvironment& env, const std::string& name,
                           const std::vector<std::string>& lines,
                           std::size_t member_bytes = 256,
-                          const std::string& schema = "",
+                          dftracer::utils::dstd::StringView schema = "",
                           std::uint64_t tier_interval_us = 0) {
     const std::string gz = write_gz(env, name, lines, member_bytes);
     ix::IndexerOptions o;
     o.checkpoint_size = member_bytes;
     o.schema = schema;
     if (tier_interval_us > 0) o.aggregation.time_interval_us = tier_interval_us;
-    ix::Indexer::open({gz}, o).build();
+    ix::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
     return gz;
 }
 
@@ -294,9 +294,12 @@ fields:
         });
         const std::string c =
             write_indexed(env, "secs", secs, 1024, "secs_roles");
-        const View va = View::from_file(a, determine_index_path(a, ""));
-        const View vb = View::from_file(b, determine_index_path(b, ""));
-        const View vc = View::from_file(c, determine_index_path(c, ""));
+        const View va =
+            View::from_file(a, std::string(determine_index_path(a, "")));
+        const View vb =
+            View::from_file(b, std::string(determine_index_path(b, "")));
+        const View vc =
+            View::from_file(c, std::string(determine_index_path(c, "")));
 
         const df::DataFrame ta = run(va.call_tree().collect());
         const df::DataFrame tb = run(vb.call_tree().collect());
@@ -368,8 +371,9 @@ fields:
              R"({"id":18446744073709551614,"k":2})",
              R"({"id":340282366920938463463374607431768211455,"k":3})",
              R"({"id":5,"k":4})"});
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("generic");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("generic");
         CHECK(count_of(v, "where k > 0") == 4);
         const df::DataFrame ids =
             run(v.duql("where k < 3 | select id | sort id").lazy().collect());
@@ -389,8 +393,9 @@ fields:
         const std::string gz = write_indexed(
             env, "nested",
             {R"({"id":"a","actor":{"login":"u1"},"x.y":7,"tags":["p","q"],"args":{"z":1}})"});
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("generic");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("generic");
         StringSink sink;
         v.select({"actor.login", "x.y", "tags.1", "z"}).sink_json(sink).get();
         REQUIRE(sink.lines().size() == 1);
@@ -419,7 +424,8 @@ source: |
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
         ix::IndexerOptions o;
         o.schema = "typed_rows";
-        auto indexer = ix::Indexer::open({gz}, o);
+        auto indexer =
+            ix::Indexer::open({dstd::String(dstd::StringView(gz))}, o);
         indexer.build();
         const df::DataFrame stored = indexer.rowset("items");
         REQUIRE(stored.num_rows() == 2);
@@ -443,8 +449,9 @@ fields:
             {R"({"at":"2024-01-01T00:00:00Z","n":"42","label":7})",
              R"({"at":"2024-01-01T00:30:00.5+00:00","n":2.0,"label":"x"})",
              R"({"at":"2024-01-01T02:00:00Z","n":2.5,"label":true})"});
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("coerce");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("coerce");
         const df::DataFrame f = run(v.duql("select n, label").lazy().collect());
         REQUIRE(f.num_rows() == 3);
         CHECK(bnum(f, 0, "n") == 42);
@@ -479,8 +486,9 @@ fields:
             env, "digits",
             {R"({"at":"2024-01-01T00:00:00Z","x":"1e3","label":"007"})",
              R"({"at":"2024-01-01T00:30:00Z","x":"-1.5","label":"1.50"})"});
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("digits");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("digits");
         const df::DataFrame f = run(v.duql("select x, label").lazy().collect());
         REQUIRE(f.num_rows() == 2);
         CHECK(f.columns[0].type() == df::TypeId::Float64);
@@ -502,8 +510,9 @@ fields:
                           {"[", R"({"n":1},)", R"({"n":"n/a"},)", "{not json",
                            deep, R"({"n":3})", "]"},
                           1 << 20);
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("counted");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("counted");
         const df::DataFrame f = run(v.duql("select n").lazy().collect());
         CHECK(f.num_rows() == 3);
         // A filter parses every line; the unfiltered export copies lines
@@ -533,8 +542,9 @@ fields:
             lines.push_back(R"({"t":)" + std::to_string(1000 + i) +
                             R"(.25,"d":0.5,"k":"a"})");
         const std::string gz = write_indexed(env, "secs", lines, 4096);
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("seconds_log");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("seconds_log");
         const df::DataFrame trace =
             run(v.duql("bucket 60s | agg { n = count() } | sort bucket")
                     .lazy()
@@ -572,8 +582,9 @@ fields:
         TestEnvironment env(10);
         const std::string gz =
             write_indexed(env, "sel", {R"({"a":1,"b":2})", R"({"a":3,"b":4})"});
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("generic");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("generic");
         std::string what;
         try {
             (void)run(
@@ -592,8 +603,9 @@ fields:
             lines.push_back(R"({"k":"a","x":)" +
                             std::to_string(i < 20 ? 1 : 5) + "}");
         const std::string gz = write_indexed(env, "zones", lines);
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("generic");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("generic");
         CHECK(count_of(v, "where x < 1.5") == 20);
         CHECK(count_of(v, "where x > 4.5") == 20);
         CHECK(count_of(v, "where x <= 0.5") == 0);
@@ -612,8 +624,9 @@ fields:
                             big + "]}");
         }
         const std::string gz = write_indexed(env, "huge", lines, 4096);
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("generic");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("generic");
         CHECK(v.schema_tree().size() < 300);
         CHECK(count_of(v, "where big[500] == 505") == 1);
         CHECK(count_of(v, "where big[999] >= 999") == 20);
@@ -634,15 +647,19 @@ fields:
             }
         // Chunks of more than 256 names carry no bloom, so zones prune.
         const std::string gz = write_indexed(env, "named", lines, 16384);
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("generic");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("generic");
         CHECK(count_of(v, "where name == \"b0150\"") == 1);
         CHECK(count_of(v, "where name in [\"a0001\", \"c0999\"]") == 2);
         const auto snapshot =
-            ix::plan::open_snapshot(determine_index_path(gz, ""));
+            ix::plan::open_snapshot(std::string(determine_index_path(gz, "")));
         REQUIRE(snapshot.has_value());
         const auto plan = ix::plan::explain_file_chunks(
-            *snapshot, gz, duql::parse_or_throw("name == \"b0150\""));
+            *snapshot,
+            dftracer::utils::dstd::String(
+                dftracer::utils::dstd::StringView(gz)),
+            duql::parse_or_throw("name == \"b0150\""));
         REQUIRE(plan.total_chunks > 3);
         CHECK(plan.read.size() < plan.total_chunks / 2);
     }
@@ -672,7 +689,8 @@ fields:
         auto plan = [](const std::string& gz, std::vector<GroupKey> keys,
                        std::vector<AggSpec> aggs,
                        const std::string& where = "") {
-            auto p = scan::from_file(gz, determine_index_path(gz, ""));
+            auto p =
+                scan::from_file(gz, std::string(determine_index_path(gz, "")));
             if (!where.empty())
                 p = scan::filter(p, duql::parse_or_throw(where));
             return scan::agg(scan::group_by(p, std::move(keys)),
@@ -792,7 +810,8 @@ fields:
         };
         const std::string gz =
             write_indexed(env, "ranked", lines, 256, "ranked_io");
-        const View v = View::from_file(gz, determine_index_path(gz, ""));
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")));
         CHECK(counts(v, GroupKey::file_path(), "file_path") ==
               Counts{{"/data/a.bin", 4}, {"/data/b.bin", 2}});
         CHECK(counts(v, GroupKey::file_name(), "file_name") ==
@@ -804,7 +823,8 @@ fields:
 
         const std::string plain =
             write_indexed(env, "unranked", lines, 256, "unranked_io");
-        const View u = View::from_file(plain, determine_index_path(plain, ""));
+        const View u = View::from_file(
+            plain, std::string(determine_index_path(plain, "")));
         CHECK_THROWS_WITH_AS(
             (void)counts(u, GroupKey::rank(), "rank"),
             doctest::Contains(
@@ -825,16 +845,18 @@ fields:
         TestEnvironment env(10);
         const std::string src =
             write_indexed(env, "src", path_role_lines(), 1024, schema.id);
-        const View vs = View::from_file(src, determine_index_path(src, ""));
+        const View vs =
+            View::from_file(src, std::string(determine_index_path(src, "")));
         TraceWriteOptions opts;
         opts.output_path = env.get_dir() + "/out.pfw.gz";
         opts.build_index = true;
         opts.member_size = 1024;
         (void)vs.sink_trace(opts).get();
 
-        const std::string idx = determine_index_path(opts.output_path, "");
+        const std::string idx =
+            std::string(determine_index_path(opts.output_path, ""));
         const auto [id, tier] = index_state(opts.output_path, idx);
-        CHECK(id == schema.id);
+        CHECK(id == std::string(schema.id));
         CHECK(tier);
 
         const View vo = View::from_file(opts.output_path, idx);
@@ -852,28 +874,29 @@ fields:
         const auto lines = path_role_lines();
         const std::string ref =
             write_indexed(env, "ref", lines, 1024, schema.id);
-        const View vr = View::from_file(ref, determine_index_path(ref, ""));
+        const View vr =
+            View::from_file(ref, std::string(determine_index_path(ref, "")));
 
         const std::string agg = write_gz(env, "agg", lines, 1024);
-        const std::string agg_idx =
-            determine_index_path(agg, env.get_dir() + "/agg_index");
+        const std::string agg_idx = std::string(
+            determine_index_path(agg, env.get_dir() + "/agg_index"));
         REQUIRE_FALSE(dstd::fs::exists(agg_idx).value());
         const View va = View::from_file(agg, agg_idx);
         CHECK(counts_by_op(va) == counts_by_op(vr));
         const auto [agg_id, agg_tier] = index_state(agg, agg_idx);
-        CHECK(agg_id == schema.id);
+        CHECK(agg_id == std::string(schema.id));
         CHECK(agg_tier);
         CHECK(count_of(va, "where size < 50") == 50);
 
         const std::string dump = write_gz(env, "dump", lines, 1024);
-        const std::string dump_idx =
-            determine_index_path(dump, env.get_dir() + "/dump_index");
+        const std::string dump_idx = std::string(
+            determine_index_path(dump, env.get_dir() + "/dump_index"));
         REQUIRE_FALSE(dstd::fs::exists(dump_idx).value());
         StringSink sink;
         (void)View::from_file(dump, dump_idx).sink_json(sink).get();
         CHECK(sink.lines().size() == lines.size());
         const auto [dump_id, dump_tier] = index_state(dump, dump_idx);
-        CHECK(dump_id == schema.id);
+        CHECK(dump_id == std::string(schema.id));
         CHECK(dump_tier);
         const View vd = View::from_file(dump, dump_idx);
         CHECK(counts_by_op(vd) == counts_by_op(vr));
@@ -885,8 +908,8 @@ fields:
         // A time window takes no bootstrap; the next whole read builds the
         // tier along the way.
         const std::string late = write_gz(env, "late", lines, 1024);
-        const std::string late_idx =
-            determine_index_path(late, env.get_dir() + "/late_index");
+        const std::string late_idx = std::string(
+            determine_index_path(late, env.get_dir() + "/late_index"));
         const View vl = View::from_file(late, late_idx);
         CHECK(count_of(vl, "time_range 1000 .. 2000") == 100);
         CHECK_FALSE(index_state(late, late_idx).second);
@@ -903,7 +926,7 @@ fields:
         const std::string gz =
             write_indexed(env, "ctr", path_role_lines(), 1024, schema.id);
         StringSink sink;
-        (void)View::from_file(gz, determine_index_path(gz, ""))
+        (void)View::from_file(gz, std::string(determine_index_path(gz, "")))
             .group_by({GroupKey::pid(), GroupKey::tid()})
             .agg({{AggOp::Count, "", "n"}})
             .sink_counters(sink)
@@ -929,8 +952,9 @@ fields:
                             std::string(i % 4 ? "1,2" : "3") +
                             R"(],"objs":[{"x":1},{"x":2}]})");
         const std::string gz = write_indexed(env, "exprs", lines, 1024);
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("generic");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("generic");
         const df::DataFrame f = run(
             v.duql("group k { s = sum(v + 1), n = sum(len(tags)) } | sort k")
                 .lazy()
@@ -955,8 +979,9 @@ fields:
             lines.push_back(R"({"k":)" + std::to_string(i) + R"(,"retry":)" +
                             retry[i % 5] + "}");
         const std::string gz = write_indexed(env, "mixed", lines, 256);
-        const View v = View::from_file(gz, determine_index_path(gz, ""))
-                           .record_schema("generic");
+        const View v =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .record_schema("generic");
         const df::DataFrame rows =
             run(v.duql("sort k | take 5 | select retry").lazy().collect());
         const df::Series& col = rows.columns[rows.column_index("retry")];
@@ -1021,8 +1046,10 @@ fields:
         const std::string a = write_indexed(env, "sdft", dft, 4096);
         const std::string b =
             write_indexed(env, "ssecs", secs, 4096, "secs_sessions");
-        const View va = View::from_file(a, determine_index_path(a, ""));
-        const View vb = View::from_file(b, determine_index_path(b, ""));
+        const View va =
+            View::from_file(a, std::string(determine_index_path(a, "")));
+        const View vb =
+            View::from_file(b, std::string(determine_index_path(b, "")));
         const df::DataFrame fa = run(
             va.duql("session pid, tid gap 105us max 300ms | group pid, tid, "
                     "session { n = count() } | sort pid, tid, session")

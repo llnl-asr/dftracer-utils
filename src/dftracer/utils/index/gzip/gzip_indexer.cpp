@@ -9,12 +9,14 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
@@ -37,13 +39,8 @@
 #include <cstring>
 #include <exception>
 #include <limits>
-#include <map>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index::gzip {
 
@@ -60,7 +57,7 @@ namespace {
 // numbers and appends them to the shared `members` vector in order.
 
 struct ParallelInflateMsg {
-    std::unique_ptr<dftracer::utils::dstd::RawBuffer<unsigned char>> data;
+    dstd::UniquePtr<dftracer::utils::dstd::RawBuffer<unsigned char>> data;
     // Per-worker monotonic sequence. Load-bearing: moodycamel (our channel
     // backend) does not guarantee strict FIFO without producer tokens, so
     // the dispatcher reorders by this before handing chunks to visitors.
@@ -82,7 +79,7 @@ struct ParallelInflateMsg {
     // the byte before it and the 32 KiB `window`.
     bool restart = false;
     std::uint8_t bits = 0;
-    std::string window;
+    dstd::String window;
 };
 
 using ParallelChan = dftracer::utils::coro::Channel<ParallelInflateMsg>;
@@ -196,7 +193,7 @@ constexpr std::uint64_t MAX_ZERO_GAP = 32;
 // Not every real member start is a candidate (the scanner rejects some
 // writers' headers), so only zeros are skipped.
 static dftracer::utils::coro::CoroTask<std::uint64_t> next_member_start(
-    int fd, const std::vector<GzipMember>& candidates, std::uint64_t end,
+    int fd, const dstd::Vector<GzipMember>& candidates, std::uint64_t end,
     std::uint64_t range_c_end) {
     if (end >= range_c_end) co_return end;
     const auto it = std::lower_bound(
@@ -216,7 +213,7 @@ static dftracer::utils::coro::CoroTask<std::uint64_t> next_member_start(
     co_return to;
 }
 
-using InflateBuffer = std::unique_ptr<Bytes>;
+using InflateBuffer = dstd::UniquePtr<Bytes>;
 
 // The inflate buffers of one file. A message moves its buffer to the
 // dispatcher, which hands it back once the visitors have read it: a fresh
@@ -234,7 +231,7 @@ class InflateBuffers {
                 return b;
             }
         }
-        return std::make_unique<Bytes>();
+        return dstd::make_unique<Bytes>();
     }
     void give(InflateBuffer b) {
         if (!b) return;
@@ -244,7 +241,7 @@ class InflateBuffers {
 
    private:
     std::mutex mu_;
-    std::vector<InflateBuffer> free_;
+    dstd::Vector<InflateBuffer> free_;
     std::size_t keep_;
 };
 
@@ -255,7 +252,7 @@ class InflateBuffers {
 // is gone or the member was cut with nothing to keep.
 static dftracer::utils::coro::CoroTask<bool> stream_member(
     int fd, std::uint64_t c_off, std::uint64_t file_size,
-    std::uint64_t ckpt_size, const std::vector<GzipMember>& candidates,
+    std::uint64_t ckpt_size, const dstd::Vector<GzipMember>& candidates,
     std::uint64_t range_c_end, bool strip_leading_partial, bool ship_bytes,
     InflateBuffers& buffers,
     dftracer::utils::coro::ChannelProducer<ParallelInflateMsg>& producer,
@@ -280,7 +277,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
     std::uint64_t since_restart = 0;
     // The last RESTART_WINDOW bytes of output already shipped, for the window
     // of a restart point whose piece holds less than that.
-    std::string shipped_tail;
+    dstd::String shipped_tail;
     stop = false;
 
     auto remember = [&](const Bytes& data) {
@@ -428,7 +425,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
 static dftracer::utils::coro::CoroTask<bool> parallel_worker(
     int fd, std::uint64_t file_size, std::uint64_t range_c_start,
     std::uint64_t range_c_end, std::uint64_t ckpt_size,
-    const std::vector<GzipMember>& candidates, bool strip_leading_partial,
+    const dstd::Vector<GzipMember>& candidates, bool strip_leading_partial,
     bool extend_to_newline_past_end, bool ship_bytes, InflateBuffers& buffers,
     dftracer::utils::coro::ChannelProducer<ParallelInflateMsg> producer) {
     auto guard = producer.guard();
@@ -572,7 +569,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         msg.lines = count_newlines(out.data(), take);
         msg.data_len = take;
         if (ship_bytes) {
-            msg.data = std::make_unique<Bytes>(take);
+            msg.data = dstd::make_unique<Bytes>(take);
             std::memcpy(msg.data->data(), out.data(), take);
         }
         msg.member_ended = false;
@@ -593,10 +590,10 @@ struct InflateRange {
 // Ranges of about `target` uncompressed bytes, by ISIZE. A member counts at
 // least its compressed size, so a garbage ISIZE or a member above 4 GiB still
 // ends its range.
-static std::vector<InflateRange> plan_ranges(
-    const std::vector<GzipMember>& members, std::uint64_t slice_c_end,
+static dstd::Vector<InflateRange> plan_ranges(
+    const dstd::Vector<GzipMember>& members, std::uint64_t slice_c_end,
     std::uint64_t target) {
-    std::vector<InflateRange> ranges;
+    dstd::Vector<InflateRange> ranges;
     std::uint64_t acc = 0;
     for (const GzipMember& m : members) {
         if (ranges.empty() || acc >= target) {
@@ -631,10 +628,10 @@ struct InflatePlan {
     bool ship_bytes = false;
     bool strip_first = false;
     bool extend_last = false;
-    std::vector<GzipMember> members;
-    std::vector<InflateRange> ranges;
+    dstd::Vector<GzipMember> members;
+    dstd::Vector<InflateRange> ranges;
     dftracer::utils::coro::CoroSemaphore permits;
-    std::vector<RangeSlot> ring;
+    dstd::Vector<RangeSlot> ring;
     InflateBuffers buffers;
     std::atomic<std::size_t> next{0};
 
@@ -684,8 +681,8 @@ static dftracer::utils::coro::CoroTask<void> range_worker(InflatePlan* plan) {
 static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
     coro::Scope* scope, InflatePlan* plan, std::uint64_t member_idx_base,
     std::uint64_t& total_lines, std::uint64_t& total_uc_size,
-    std::vector<GzipMemberRecord>& members,
-    std::vector<dstd::Pair<std::uint64_t, std::string>>& restart_windows,
+    dstd::Vector<GzipMemberRecord>& members,
+    dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>>& restart_windows,
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
     std::uint64_t& recovered_bytes) {
     const bool has_visitors = !visitors.empty();
@@ -697,7 +694,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
     std::uint64_t member_first_line = total_lines + 1;
     GzipRecordKind piece_kind = GzipRecordKind::Member;
     std::uint8_t piece_bits = 0;
-    std::string piece_window;
+    dstd::String piece_window;
 
     std::uint64_t total_chunks_received = 0;
 
@@ -795,7 +792,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
     auto consume =
         [&](ParallelChan& chan) -> dftracer::utils::coro::CoroTask<void> {
         std::uint64_t expected_seq = 0;
-        std::map<std::uint64_t, ParallelInflateMsg> pending;
+        dstd::Map<std::uint64_t, ParallelInflateMsg> pending;
         for (;;) {
             auto msg_opt = co_await chan.receive();
             if (!msg_opt) break;
@@ -889,17 +886,17 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
 static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
     int fd, std::uint64_t slice_c_end, std::uint64_t file_size,
     std::uint64_t ckpt_size, std::size_t ways,
-    std::vector<GzipMember> scanned_members, std::uint64_t member_idx_base,
+    dstd::Vector<GzipMember> scanned_members, std::uint64_t member_idx_base,
     bool strip_slice_leading_partial, std::uint64_t& total_lines,
-    std::uint64_t& total_uc_size, std::vector<GzipMemberRecord>& members,
-    std::vector<dstd::Pair<std::uint64_t, std::string>>& restart_windows,
+    std::uint64_t& total_uc_size, dstd::Vector<GzipMemberRecord>& members,
+    dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>>& restart_windows,
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
     std::uint64_t& recovered_bytes) {
     // Fanning out past the thread count only adds channel and scheduling
     // overhead; on a single-threaded drive (coro::RunLoop, the no-executor
     // .get() path) it collapses to one worker.
     constexpr std::size_t DEFAULT_MAX_WORKERS = 16;
-    std::vector<InflateRange> ranges =
+    dstd::Vector<InflateRange> ranges =
         plan_ranges(scanned_members, slice_c_end,
                     std::max<std::uint64_t>(ckpt_size / 4, 1));
     const std::size_t hw =
@@ -943,8 +940,8 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
 static dftracer::utils::coro::CoroTask<bool> process_chunks(
     int fd, const GzipMemberSlice* slice, std::uint64_t ckpt_size,
     std::size_t ways, std::uint64_t& total_lines, std::uint64_t& total_uc_size,
-    std::vector<GzipMemberRecord>& members,
-    std::vector<dstd::Pair<std::uint64_t, std::string>>& restart_windows,
+    dstd::Vector<GzipMemberRecord>& members,
+    dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>>& restart_windows,
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
     std::uint64_t& recovered_bytes) {
     struct stat st;
@@ -966,7 +963,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
         // not inflate past this boundary into another slice's bytes.
         const std::uint64_t slice_c_end =
             (me < all.size()) ? all[me].c_offset : file_size;
-        std::vector<GzipMember> sliced(all.begin() + mb, all.begin() + me);
+        dstd::Vector<GzipMember> sliced(all.begin() + mb, all.begin() + me);
         co_return co_await process_chunks_parallel(
             fd, slice_c_end, file_size, ckpt_size, ways, std::move(sliced),
             /*member_idx_base=*/mb, /*strip_slice_leading_partial=*/mb > 0,
@@ -978,7 +975,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
     // is zero-copy, sequential, and fast relative to inflate. A file whose
     // members cannot be enumerated is processed as one member spanning the
     // whole file, which the same path handles with a single worker.
-    std::vector<GzipMember> scanned;
+    dstd::Vector<GzipMember> scanned;
     if (file_size >= 18) {
         co_await enumerate_gzip_member_candidates(fd, file_size, scanned);
     }
@@ -994,7 +991,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
 }  // namespace
 
 dftracer::utils::coro::CoroTask<dstd::Optional<GzipBuildArtifacts>>
-build_gzip_index_artifacts(const std::string& gz_path, std::uint64_t ckpt_size,
+build_gzip_index_artifacts(dstd::CStringView gz_path, std::uint64_t ckpt_size,
                            const CheckpointIndexer::VisitorList& visitors,
                            coro::Scope* scope, const GzipMemberSlice* slice,
                            std::size_t ways) {
@@ -1008,7 +1005,7 @@ build_gzip_index_artifacts(const std::string& gz_path, std::uint64_t ckpt_size,
 }
 
 dftracer::utils::coro::CoroTask<dstd::Optional<GzipBuildArtifacts>>
-build_gzip_index_artifacts(int fd, const std::string& gz_path,
+build_gzip_index_artifacts(int fd, dstd::CStringView gz_path,
                            std::uint64_t ckpt_size,
                            const CheckpointIndexer::VisitorList& visitors,
                            coro::Scope* scope, const GzipMemberSlice* slice,
@@ -1027,8 +1024,8 @@ build_gzip_index_artifacts(int fd, const std::string& gz_path,
 
     std::uint64_t total_lines = 0;
     std::uint64_t total_uc_size = 0;
-    std::vector<GzipMemberRecord> members;
-    std::vector<dstd::Pair<std::uint64_t, std::string>> restart_windows;
+    dstd::Vector<GzipMemberRecord> members;
+    dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>> restart_windows;
 
     bool truncated = false;
     std::uint64_t recovered_bytes = 0;
@@ -1084,9 +1081,9 @@ void persist_gzip_index_artifacts(index::FileBuild& build,
     build.finish(index::store::IndexExtension::Members, 0);
 }
 
-GzipIndexer::GzipIndexer(const std::string& gz_path_,
-                         const std::string& idx_path_, std::uint64_t ckpt_size_,
-                         bool force_rebuild_)
+GzipIndexer::GzipIndexer(const dstd::String& gz_path_,
+                         const dstd::String& idx_path_,
+                         std::uint64_t ckpt_size_, bool force_rebuild_)
     : gz_path(gz_path_),
       gz_path_logical_path(index::store::internal::get_logical_path(gz_path_)),
       index_path(index::store::internal::normalize_index_root(idx_path_)),
@@ -1185,7 +1182,7 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
         index::store::internal::file_size_bytes(gz_path);
     const std::uint64_t final_ckpt_size =
         determine_checkpoint_size(ckpt_size, gz_path);
-    const std::string logical = gz_path_logical_path;
+    const dstd::String logical = gz_path_logical_path;
 
     dstd::Optional<GzipBuildArtifacts> artifacts;
     co_await coro::with_scope(
@@ -1220,7 +1217,7 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
             throw index::store::IndexerError(
                 index::store::IndexerError::Type::BuildError,
                 "Failed to write the index of " + gz_path + ": " +
-                    std::string(committed.error().message()));
+                    dstd::String(committed.error().message()));
         }
         snapshot.emplace(common::unwrap(opened->snapshot()));
     }
@@ -1304,11 +1301,11 @@ bool GzipIndexer::need_rebuild() const {
     }
 }
 
-const std::string& GzipIndexer::get_index_path() const { return index_path; }
+const dstd::String& GzipIndexer::get_index_path() const { return index_path; }
 
-const std::string& GzipIndexer::get_archive_path() const { return gz_path; }
+const dstd::String& GzipIndexer::get_archive_path() const { return gz_path; }
 
-const std::string& GzipIndexer::get_gz_path() const { return gz_path; }
+const dstd::String& GzipIndexer::get_gz_path() const { return gz_path; }
 
 void GzipIndexer::ensure_loaded() const {
     if (cached_loaded.load(std::memory_order_acquire)) {
@@ -1371,7 +1368,7 @@ bool GzipIndexer::find_member(std::size_t target_offset,
     return false;
 }
 
-std::vector<GzipMemberRecord> GzipIndexer::get_members() const {
+dstd::Vector<GzipMemberRecord> GzipIndexer::get_members() const {
     ensure_loaded();
     std::lock_guard<std::mutex> lock(cached_members_mutex);
     return cached_members;
@@ -1383,14 +1380,14 @@ dstd::Vector<std::uint64_t> GzipIndexer::piece_heads() const {
     return cached_heads;
 }
 
-std::string GzipIndexer::restart_window(std::uint64_t member_idx) const {
+dstd::String GzipIndexer::restart_window(std::uint64_t member_idx) const {
     ensure_loaded();
     std::lock_guard<std::mutex> lock(cached_members_mutex);
     if (!file_ref_) return {};
     auto window = common::unwrap(
         index::restart_window(*snapshot_, *file_ref_, member_idx));
     if (!window) return {};
-    return std::string(window->data(), window->size());
+    return dstd::String(window->data(), window->size());
 }
 
 }  // namespace dftracer::utils::index::gzip

@@ -152,11 +152,11 @@ TEST_SUITE("trace scan - streaming row query") {
         const std::set<std::string> only_b{"args.c"};
 
         const auto plan_a =
-            scan::from_file(gz_a, determine_index_path(gz_a, ""));
+            scan::from_file(gz_a, std::string(determine_index_path(gz_a, "")));
         CHECK(arg_columns(run(scan::collect(plan_a).collect())) == only_a);
 
         const auto plan_b =
-            scan::from_file(gz_b, determine_index_path(gz_b, ""));
+            scan::from_file(gz_b, std::string(determine_index_path(gz_b, "")));
         CHECK(arg_columns(run(scan::collect(plan_b).collect())) == only_b);
         CHECK(arg_columns(run(scan::collect_frame(plan_b))) == only_b);
 
@@ -182,12 +182,12 @@ TEST_SUITE("trace scan - streaming row query") {
         REQUIRE(dftu_utils_test::build_index(gz_a, idx_dir, 256));
         REQUIRE(dftu_utils_test::build_index(gz_b, idx_dir, 256));
 
-        const auto plan_a =
-            scan::from_file(gz_a, determine_index_path(gz_a, idx_dir));
+        const auto plan_a = scan::from_file(
+            gz_a, std::string(determine_index_path(gz_a, idx_dir)));
         CHECK(arg_columns(run(scan::collect(plan_a).collect())) ==
               std::set<std::string>{"args.a", "args.b"});
-        const auto plan_b =
-            scan::from_file(gz_b, determine_index_path(gz_b, idx_dir));
+        const auto plan_b = scan::from_file(
+            gz_b, std::string(determine_index_path(gz_b, idx_dir)));
         CHECK(arg_columns(run(scan::collect(plan_b).collect())) ==
               std::set<std::string>{"args.c"});
         CHECK(arg_columns(run(scan::collect_frame(plan_b))) ==
@@ -198,7 +198,7 @@ TEST_SUITE("trace scan - streaming row query") {
         "collect() streaming row query matches the buffered collect_frame()") {
         TestEnvironment env(200);
         std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         scan::ScanPlan v = scan::from_file(gz, idx);
 
         dataframe::DataFrame via_lazy = run(scan::collect(v).collect());
@@ -217,7 +217,7 @@ TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE("scan::stream() drained matches scan::collect()") {
         TestEnvironment env(200);
         std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         scan::ScanPlan v = scan::from_file(gz, idx);
 
         auto drain = [](const scan::ScanPlan& view) {
@@ -328,7 +328,7 @@ TEST_SUITE("trace scan - streaming row query") {
         "collect() or collect_frame()") {
         TestEnvironment env(200);
         std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         scan::ScanPlan v = scan::limit(
             scan::sort_by(scan::agg(scan::group_by(scan::from_file(gz, idx),
                                                    {GroupKey::name()}),
@@ -666,7 +666,7 @@ TEST_SUITE("trace scan - streaming row query") {
         namespace df = dftracer::utils::dataframe;
         TestEnvironment env(200);
         std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         scan::ScanPlan v =
             scan::select(scan::from_file(gz, idx), {"name", "args.x"});
         auto src = std::make_shared<ViewSource>(v);
@@ -693,7 +693,7 @@ TEST_SUITE("trace scan - streaming row query") {
         namespace df = dftracer::utils::dataframe;
         TestEnvironment env(200);
         std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         scan::ScanPlan v = scan::agg(
             scan::group_by(scan::from_file(gz, idx), {GroupKey::name()}),
             {{AggOp::Count, "", "n"}});
@@ -711,7 +711,7 @@ TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE("scan::stream() over a histogram aggregation yields one chunk") {
         TestEnvironment env(200);
         std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         scan::ScanPlan v = scan::agg(
             scan::group_by(scan::from_file(gz, idx), {GroupKey::cat()}),
             {{AggOp::Hist, "dur", "h"}});
@@ -735,7 +735,7 @@ TEST_SUITE("trace scan - streaming row query") {
         namespace df = dftracer::utils::dataframe;
         TestEnvironment env(200);
         std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // Build the index (and its harvested column types) before asking for
         // the schema, so the "x" arg's type is known from the index rather
@@ -764,7 +764,7 @@ TEST_SUITE("trace scan - streaming row query") {
         TestEnvironment env(200);
         const std::string idx_dir = env.get_dir() + "/distinct.dftindex";
         std::string gz = create_distinct_trace(env, idx_dir);
-        std::string idx = determine_index_path(gz, idx_dir);
+        std::string idx = std::string(determine_index_path(gz, idx_dir));
 
         scan::ScanPlan v =
             scan::select(scan::from_file(gz, idx), {"run", "metric"});
@@ -831,7 +831,7 @@ TEST_SUITE("trace scan - streaming row query") {
         TestEnvironment env(200);
         const std::string idx_dir = env.get_dir() + "/distinct.dftindex";
         std::string gz = create_distinct_trace(env, idx_dir);
-        std::string idx = determine_index_path(gz, idx_dir);
+        std::string idx = std::string(determine_index_path(gz, idx_dir));
         scan::ScanPlan v = scan::select(scan::from_file(gz, idx), {"io_cat"});
         namespace df = dftracer::utils::dataframe;
         df::LazyFrame lf = scan::collect(v);

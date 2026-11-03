@@ -5,43 +5,42 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::index::build {
 
 struct ResolvedFile {
     std::size_t file_index = 0;
-    std::string file_path;
+    dstd::String file_path;
     /// The schema the file was indexed with.
-    std::string schema;
+    dstd::String schema;
 };
 
 struct FileWorkItem {
     std::size_t file_index = 0;
-    std::string file_path;
+    dstd::String file_path;
     /// For needs_bloom: the tier extensions that are missing or stale.
     index::store::ExtensionMask extensions;
     /// For needs_bloom: the schema the file was indexed with, which a tier
     /// rebuild decodes it with.
-    std::string schema;
+    dstd::String schema;
 };
 
 struct ResolverInput {
-    std::string directory;
-    std::string index_dir;
-    std::vector<std::string> files;
+    dstd::String directory;
+    dstd::String index_dir;
+    dstd::Vector<dstd::String> files;
     /// Files already scanned, with the size and mtime that scan read. When not
     /// empty they replace `directory` and `files`: nothing is walked or
     /// stat'ed again.
-    std::vector<utilities::filesystem::FileEntry> entries;
+    dstd::Vector<utilities::filesystem::FileEntry> entries;
 
     bool require_checkpoints = true;
     bool require_bloom = false;
@@ -61,7 +60,7 @@ struct ResolverInput {
 
     /// The schema a build would use; empty accepts the recorded one. A file
     /// with no current schema record, or another schema, is rebuilt whole.
-    std::string schema;
+    dstd::String schema;
 
     /// A file whose rows were built with another config needs aggregation work.
     index::schemas::dft::agg::AggregationConfig aggregation_config =
@@ -69,16 +68,16 @@ struct ResolverInput {
 };
 
 struct ResolverResult {
-    std::vector<std::string> all_files;
-    std::vector<std::size_t> all_file_sizes;
-    std::vector<std::uint64_t> all_file_mtimes;
-    std::string index_path;
+    dstd::Vector<dstd::String> all_files;
+    dstd::Vector<std::size_t> all_file_sizes;
+    dstd::Vector<std::uint64_t> all_file_mtimes;
+    dstd::String index_path;
 
-    std::vector<FileWorkItem> needs_checkpoint;
-    std::vector<FileWorkItem> needs_bloom;
-    std::vector<FileWorkItem> needs_aggregation;
+    dstd::Vector<FileWorkItem> needs_checkpoint;
+    dstd::Vector<FileWorkItem> needs_bloom;
+    dstd::Vector<FileWorkItem> needs_aggregation;
 
-    std::vector<ResolvedFile> cached;
+    dstd::Vector<ResolvedFile> cached;
 
     /// The stored aggregation tier differs from the requested config only in
     /// its interval, which `stored_time_interval_us` holds.
@@ -90,23 +89,23 @@ struct ResolverResult {
     /// Index roots whose aggregation tier must be cleared before a build:
     /// rows built with other params, or of a file rebuilt whole. Their
     /// dftracer files are all in needs_aggregation when aggregating.
-    std::vector<std::string> stale_aggregation_roots;
+    dstd::Vector<dstd::String> stale_aggregation_roots;
 
     /// Files a build attempted and could not index, with the reason.
     struct Failure {
-        std::string file_path;
-        std::string message;
+        dstd::String file_path;
+        dstd::String message;
     };
-    std::vector<Failure> failures;
+    dstd::Vector<Failure> failures;
 
     std::size_t total_cached() const { return cached.size(); }
 };
 
 /// The files of `result` as scanned, to resolve them again without a scan.
-std::vector<utilities::filesystem::FileEntry> scanned_entries(
+dstd::Vector<utilities::filesystem::FileEntry> scanned_entries(
     const ResolverResult& result);
-std::vector<utilities::filesystem::FileEntry> scanned_entries(
-    const ResolverResult& result, const std::vector<FileWorkItem>& items);
+dstd::Vector<utilities::filesystem::FileEntry> scanned_entries(
+    const ResolverResult& result, const dstd::Vector<FileWorkItem>& items);
 
 class Resolver {
    public:

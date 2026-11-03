@@ -3,8 +3,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -21,9 +24,7 @@
 #include <cstdint>
 #include <ctime>
 #include <iterator>
-#include <map>
 #include <sstream>
-#include <string>
 #include <type_traits>
 #include <typeinfo>
 #include <utility>
@@ -126,8 +127,8 @@ build::IndexBuildBatchResult build_one(const std::string& file,
     Runtime rt(4);
     build::IndexBuildBatchResult result;
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = std::make_shared<build::IndexBuildBatchConfig>();
-        config->file_paths = {file};
+        auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+        config->file_paths = {dstd::String(dstd::StringView(file))};
         config->index_dir = index_dir;
         config->parallelism = 4;
         result = co_await build::BatchBuilder::process(std::move(config));
@@ -158,18 +159,18 @@ constexpr NamespaceDigest RECORDED[] = {
 
 // The test directory is cut out of each record, since its length varies. A
 // record is its namespace, scope paths, key and value.
-std::map<std::string, std::uint64_t> namespace_digests(
-    const std::string& index_path, const std::string& dir) {
+dstd::Map<dstd::String, std::uint64_t> namespace_digests(
+    dstd::StringView index_path, dstd::StringView dir) {
     namespace kv = dftracer::utils::store;
-    std::map<std::string, std::uint64_t> out;
+    dstd::Map<dstd::String, std::uint64_t> out;
     const auto without_dir = [&dir](dstd::StringView bytes) {
-        std::string text(bytes);
-        for (auto at = text.find(dir); at != std::string::npos;
+        dstd::String text(bytes);
+        for (auto at = text.find(dir); at != dstd::String::npos;
              at = text.find(dir, at))
             text.erase(at, dir.size());
         return text;
     };
-    auto opened = kv::Store::open(index_path + "/store");
+    auto opened = kv::Store::open(dstd::String(index_path) + "/store");
     REQUIRE(opened.has_value());
     auto snapshot = opened->snapshot();
     REQUIRE(snapshot.has_value());
@@ -180,7 +181,7 @@ std::map<std::string, std::uint64_t> namespace_digests(
         ns.spec.name = decl.name;
         ns.spec.format_version = decl.format_version;
         auto [it, fresh] =
-            out.emplace(std::string(decl.name.data(), decl.name.size()),
+            out.emplace(dstd::String(decl.name.data(), decl.name.size()),
                         dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY);
         std::uint64_t& h = it->second;
         const auto mix = [&h](dstd::StringView bytes) {
@@ -190,7 +191,7 @@ std::map<std::string, std::uint64_t> namespace_digests(
         };
         auto cursor = snapshot->scan_all(ns, {}, {});
         for (; !cursor.at_end(); cursor.next()) {
-            std::string scope;
+            dstd::String scope;
             for (const auto& path : cursor.scope().paths) {
                 scope.append(path.data(), path.size());
                 scope.push_back('\0');
@@ -214,8 +215,8 @@ using dftracer::utils::dstd::StringIntern;
 // Resolves interned ids, so events from different interns compare.
 std::string describe(const views::FoldEvent& ev, const StringIntern& in) {
     const auto text = [&](std::uint32_t id) {
-        return id == StringIntern::NO_ID ? std::string("<none>")
-                                         : std::string(in.resolve(id));
+        return id == StringIntern::NO_ID ? dstd::String("<none>")
+                                         : dstd::String(in.resolve(id));
     };
     std::ostringstream o;
     o << "cat=" << text(ev.cat_id) << " name=" << text(ev.name_id)
@@ -280,7 +281,7 @@ TEST_SUITE("IndexParseWalks") {
         dftu_utils_test::TestEnvironment env(10);
         const std::string file = write_trace(env.get_dir());
         build_one(file, env.get_dir() + "/idx");
-        const std::string path =
+        const dstd::String path =
             trace::internal::determine_index_path(file, env.get_dir() + "/idx");
         const auto digests = namespace_digests(
             istore::internal::normalize_index_root(path), env.get_dir());
@@ -288,7 +289,7 @@ TEST_SUITE("IndexParseWalks") {
             MESSAGE("namespace " << name << " " << digest);
         CHECK(digests.size() == std::size(RECORDED));
         for (const auto& want : RECORDED) {
-            const auto it = digests.find(std::string(want.name));
+            const auto it = digests.find(dstd::String(want.name));
             REQUIRE(it != digests.end());
             CHECK(it->second == want.digest);
         }
@@ -296,7 +297,7 @@ TEST_SUITE("IndexParseWalks") {
 
     TEST_CASE("a malformed record drops only itself") {
         constexpr int GOOD = 3000;
-        const std::string bad[] = {
+        const dstd::String bad[] = {
             R"({"id":1,"name":"cut","cat":"c","pid":1,"tid":1,"ph":"X","ts":5,"args":{"a":)",
             R"({"id":2,"name":"quote","cat":"c","pid":1,"tid":1,"ph":"X","ts":6,"args":{"s":"a"b"}})",
             "not json at all",
@@ -334,7 +335,7 @@ TEST_SUITE("IndexParseWalks") {
                 << R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)"
                 << R"("ts":)" << 1000 + i << R"(,"dur":2,"args":{"size":)" << i;
             if (i == 20)
-                out << R"(,"note":")" << std::string(LONG_BYTES, 'x') << '"';
+                out << R"(,"note":")" << dstd::String(LONG_BYTES, 'x') << '"';
             out << "}}\n";
         }
         out << "]\n";
@@ -351,7 +352,7 @@ TEST_SUITE("IndexParseWalks") {
     }
 
     TEST_CASE("the one-walk decode equals the old three-walk decode") {
-        const std::string records[] = {
+        const dstd::String records[] = {
             R"({"ph":"X","name":"n","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"a":1,"b":"x","fhash":"f","hhash":"h"}})",
             R"({"ph":"X","name":"n","args":{"a":1},"cat":"c"})",
             R"({"args":{"a":1},"ph":"X","name":"n","cat":"c","pid":5})",
@@ -383,14 +384,14 @@ TEST_SUITE("IndexParseWalks") {
                     simdjson::dom::parser parser;
                     parser.number_as_string(true);
                     simdjson::dom::element root;
-                    const std::string padded =
-                        text + std::string(simdjson::SIMDJSON_PADDING, ' ');
+                    const dstd::String padded =
+                        text + dstd::String(simdjson::SIMDJSON_PADDING, ' ');
                     if (parser.parse(padded.data(), text.size(), false)
                             .get(root))
                         continue;
-                    const std::string label =
-                        text + " needs_args=" + std::to_string(needs_args) +
-                        " capture=" + std::to_string(capture);
+                    const dstd::String label =
+                        text + " needs_args=" + (needs_args ? "1" : "0") +
+                        " capture=" + (capture ? "1" : "0");
 
                     StringIntern old_intern;
                     views::DecodeHints old_hints;

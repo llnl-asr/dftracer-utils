@@ -103,7 +103,7 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
     if (index_path) {
         self->index_path = PyUnicode_FromString(index_path);
     } else {
-        const std::string resolved_index_path =
+        const dftracer::utils::dstd::String resolved_index_path =
             dftracer::utils::trace::internal::determine_index_path(gz_path, "");
         self->index_path = PyUnicode_FromString(resolved_index_path.c_str());
     }
@@ -292,7 +292,7 @@ static PyObject *CheckpointIndexer_has_bloom(CheckpointIndexerObject *self,
         if (opened) {
             auto snapshot = opened->snapshot();
             if (snapshot) {
-                const std::string logical =
+                const dftracer::utils::dstd::String logical =
                     index::store::internal::get_logical_path(gz);
                 const auto file = snapshot->file(logical);
                 if (file && index::extension_current(

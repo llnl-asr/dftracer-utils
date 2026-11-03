@@ -12,10 +12,10 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
-#include <memory>
 #include <string>
 #include <thread>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
@@ -28,12 +28,13 @@ namespace scan = dftracer::utils::trace::views::detail::scan;
 
 std::string indexed_trace(TestEnvironment& env, int posix_n) {
     const std::string gz = create_mixed_trace(env, posix_n, 20);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
+        .build();
     return gz;
 }
 
 auto plan_of(const std::string& gz) {
-    auto p = scan::from_file(gz, determine_index_path(gz, ""));
+    auto p = scan::from_file(gz, std::string(determine_index_path(gz, "")));
     dftracer::utils::trace::views::detail::plan_record_schema(*p);
     return p;
 }
@@ -57,7 +58,8 @@ std::string lookup_trace(TestEnvironment& env) {
     const std::string gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
     (void)dftracer::utils::dstd::fs::remove(plain);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
+        .build();
     return gz;
 }
 
@@ -81,9 +83,9 @@ TEST_SUITE("LookupStore") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env, 30);
         const auto plan = plan_of(gz);
-        const std::string path = cache::lookup_cache_path(*plan);
+        const auto path = cache::lookup_cache_path(*plan);
         CHECK(path == dftracer::utils::index::lookups_dir(
-                          determine_index_path(gz, "")));
+                          std::string(determine_index_path(gz, ""))));
         const auto sig =
             cache::lookup_signature(*plan, "where type == \"run\"");
         REQUIRE(sig);
@@ -96,7 +98,8 @@ TEST_SUITE("LookupStore") {
         CHECK_FALSE(cache::read_lookup(*db, *sig));
         cache::persist_lookup(*db, *sig, std::string("ipc\0bytes", 9));
         CHECK(cache::lookup_exists(*db, *sig));
-        CHECK(cache::read_lookup(*db, *sig) == std::string("ipc\0bytes", 9));
+        CHECK(cache::read_lookup(*db, *sig) ==
+              dftracer::utils::dstd::String("ipc\0bytes", 9));
     }
 
     TEST_CASE("the store evicts the least recently used side") {
@@ -110,7 +113,9 @@ TEST_SUITE("LookupStore") {
         tick();
         cache::persist_lookup(*db, 2, value);
         tick();
-        CHECK(cache::read_lookup(*db, 1) == value);
+        CHECK(cache::read_lookup(*db, 1) ==
+              dftracer::utils::dstd::String(
+                  dftracer::utils::dstd::StringView(value)));
         tick();
         cache::persist_lookup(*db, 3, value);
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
@@ -167,7 +172,7 @@ TEST_SUITE("LookupStore") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env, 30);
         const auto plan = plan_of(gz);
-        const std::string path = cache::lookup_cache_path(*plan);
+        const auto path = cache::lookup_cache_path(*plan);
         const auto sig = cache::lookup_signature(*plan, "side");
         REQUIRE(sig);
         {
@@ -193,12 +198,14 @@ TEST_SUITE("LookupStore") {
         const std::string gz = lookup_trace(env);
         const std::string q = lookup_query();
         for (int query = 0; query < 20; ++query) {
-            const View v = View::from_file(gz, determine_index_path(gz, ""));
+            const View v =
+                View::from_file(gz, std::string(determine_index_path(gz, "")));
             const auto g = run(v.duql(q).lazy().collect());
             CHECK(g.num_rows() == 4);
         }
         const auto store = dftracer::utils::index::store_dir(
-            dftracer::utils::index::lookups_dir(determine_index_path(gz, "")));
+            dftracer::utils::index::lookups_dir(
+                std::string(determine_index_path(gz, ""))));
         REQUIRE(dftracer::utils::dstd::fs::exists(store).value());
         std::size_t files = 0;
         for (const auto& entry : dftu_utils_test::list_dir(store))

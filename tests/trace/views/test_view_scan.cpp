@@ -144,7 +144,7 @@ TEST_SUITE("View") {
         // bigger than that for a cancel to land inside one rather than
         // between two. 60k events is about 5 MB uncompressed.
         std::string gz = create_mixed_trace(env, 60000, 0);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         SUBCASE("cancelled before the first batch") {
             StringSink sink;
@@ -187,8 +187,10 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         const int n = 60;  // ~10 members at 512 bytes
         std::string gz = create_multimember_trace(env, n, 512);
-        std::string idx = determine_index_path(gz, "");
-        dftracer::utils::index::Indexer::open({gz}).build();
+        std::string idx = std::string(determine_index_path(gz, ""));
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))})
+            .build();
 
         StringSink sink;
         auto stats = View::from_file(gz, idx).sink_json(sink).get();
@@ -204,7 +206,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         const int n = 60;  // multi-member source; small members below
         std::string gz = create_multimember_trace(env, n, 512);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         std::string out = env.get_dir() + "/merged.pfw.gz";
         TraceWriteOptions opts;
@@ -215,7 +217,7 @@ TEST_SUITE("View") {
         auto stats = View::from_file(gz, idx).sink_trace(opts).get();
         CHECK(stats.events_matched == static_cast<std::uint64_t>(n));
 
-        std::string oidx = determine_index_path(out, "");
+        std::string oidx = std::string(determine_index_path(out, ""));
         StringSink sink;
         auto rstats = View::from_file(out, oidx).sink_json(sink).get();
         CHECK(rstats.events_matched == static_cast<std::uint64_t>(n));
@@ -228,7 +230,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_multimember_trace(env, 300, 512);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         TraceWriteOptions opts;
         opts.output_path = env.get_dir() + "/no_such_dir/out.pfw.gz";
         opts.member_size = 4096;
@@ -246,7 +248,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         // Mixed cats so a cat filter can prune whole members.
         std::string gz = create_mixed_trace(env, 20, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // A: write the output with the index fused into the write.
         std::string dirA = env.get_dir() + "/a";
@@ -260,7 +262,7 @@ TEST_SUITE("View") {
         opts.build_index = true;
         auto st = View::from_file(gz, idx).sink_trace(opts).get();
         REQUIRE(dstd::fs::exists(outAgz).value());
-        const std::string idxA = determine_index_path(outAgz, "");
+        const std::string idxA = std::string(determine_index_path(outAgz, ""));
         // The write built the index, not a separate pass.
         REQUIRE(dstd::fs::exists(idxA).value());
 
@@ -272,7 +274,7 @@ TEST_SUITE("View") {
         REQUIRE(dstd::fs::copy_file(outAgz, outBgz,
                                     dstd::fs::CopyMode::FailIfExists)
                     .has_value());
-        const std::string idxB = determine_index_path(outBgz, "");
+        const std::string idxB = std::string(determine_index_path(outBgz, ""));
 
         auto run = [](const std::string& f, const std::string& ix,
                       const char* q) {
@@ -306,7 +308,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 400, 400);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         std::string dirA = env.get_dir() + "/a";
         std::string dirB = env.get_dir() + "/b";
@@ -337,8 +339,10 @@ TEST_SUITE("View") {
         REQUIRE(partsA.size() > 2);
 
         namespace st = dftracer::utils::index::store;
-        const std::string idxA = determine_index_path(partsA[0], "");
-        const std::string idxB = determine_index_path(partsB[0], "");
+        const std::string idxA =
+            std::string(determine_index_path(partsA[0], ""));
+        const std::string idxB =
+            std::string(determine_index_path(partsB[0], ""));
         std::uint64_t scannedA = 0, scannedB = 0, matchedA = 0, matchedB = 0;
         std::vector<std::string> colsA, colsB;
         for (std::size_t i = 0; i < partsA.size(); ++i) {
@@ -451,7 +455,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // Empty select: every column, including both "name" and "args.name".
         dataframe::DataFrame all = View::from_file(gz, idx).collect().get();
@@ -501,7 +505,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         {
             StringSink index_build;
             View::from_file(gz, idx).sink_json(index_build).get();
@@ -574,7 +578,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_trace_with_counters(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // ph="C" cpu counters: (user_pct,idle_pct) = (40,60) and (80,20).
         auto table = View::from_file(gz, idx)
@@ -604,7 +608,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_trace_with_counters(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // ph="C" cpu counters: user_pct=(40,80), idle_pct=(60,20).
         auto table =
@@ -655,7 +659,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // Non-deterministic corruption: repeat so an uninitialized/garbage read
         // has several chances to surface.
@@ -732,7 +736,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_trace_with_counters(env);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         StringSink sink;
         View::from_file(gz, idx)
@@ -812,8 +816,9 @@ View dict_trace(TestEnvironment& env) {
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
     dstd::fs::remove(pfw).has_value();
-    dftracer::utils::index::Indexer::open({gz}).build();
-    return View::from_file(gz, determine_index_path(gz, ""));
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
+        .build();
+    return View::from_file(gz, std::string(determine_index_path(gz, "")));
 }
 
 std::string cell(const df::Series& s, std::int64_t r) {

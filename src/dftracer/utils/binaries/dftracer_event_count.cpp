@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
@@ -29,10 +30,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
-#include <map>
 #include <string>
 #include <string_view>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::build;
@@ -67,14 +66,11 @@ constexpr std::size_t INFLATE_STEP_BYTES = std::size_t{1} << 20;
 struct IndexedCounts {
     std::size_t total_events = 0;
     std::size_t files_counted = 0;
-    // keep std: unswept API
-    std::vector<std::string> to_stream;
+    dstd::Vector<dstd::String> to_stream;
 };
 
-// keep std: unswept API
-IndexedCounts count_from_index(const std::string& index_path,
-                               // keep std: unswept API
-                               const std::vector<ResolvedFile>& entries) {
+IndexedCounts count_from_index(dstd::StringView index_path,
+                               const dstd::Vector<ResolvedFile>& entries) {
     IndexedCounts counts;
     try {
         const auto snapshot = common::unwrap(
@@ -97,8 +93,8 @@ IndexedCounts count_from_index(const std::string& index_path,
         }
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_WARN(
-            "Cannot read index %s (%s); streaming its files",
-            index_path.c_str(), e.what());
+            "Cannot read index %.*s (%s); streaming its files",
+            static_cast<int>(index_path.size()), index_path.data(), e.what());
         counts = IndexedCounts{};
         for (const auto& entry : entries)
             counts.to_stream.push_back(entry.file_path);
@@ -145,8 +141,7 @@ class StreamCounter {
     bool path_decoder_;
 };
 
-// keep std: unswept API
-coro::CoroTask<std::size_t> stream_count(std::string path) {
+coro::CoroTask<std::size_t> stream_count(dstd::String path) {
     dstd::ScopedFd fd(::open(path.c_str(), O_RDONLY));
     if (fd.get() < 0)
         throw common::DFTUtilsException::cat(common::ErrorCode::Io,
@@ -230,10 +225,8 @@ static int run_event_count(const EventCountArgParse* cli) {
     std::atomic<std::size_t> files_processed{0};
     std::atomic<bool> failed{false};
 
-    // keep std: unswept API
-    std::vector<std::string> stream_items;
-    // keep std: unswept API
-    std::map<std::string, std::vector<ResolvedFile>> index_groups;
+    dstd::Vector<dstd::String> stream_items;
+    dstd::Map<dstd::String, dstd::Vector<ResolvedFile>> index_groups;
     for (auto& entry : resolve_result.cached) {
         if (force) {
             stream_items.push_back(std::move(entry.file_path));
@@ -271,8 +264,7 @@ static int run_event_count(const EventCountArgParse* cli) {
                     [total_events_ptr = &total_events,
                      files_processed_ptr = &files_processed,
                      failed_ptr = &failed](
-                        // keep std: unswept API
-                        const std::string& path) -> coro::CoroTask<void> {
+                        const dstd::String& path) -> coro::CoroTask<void> {
                         try {
                             const std::size_t n = co_await stream_count(path);
                             total_events_ptr->fetch_add(

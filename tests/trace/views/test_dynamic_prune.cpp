@@ -183,7 +183,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         const std::string idx_dir = env.get_dir() + "/grouped.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
-        const std::string idx = determine_index_path(gz, idx_dir);
+        const std::string idx = std::string(determine_index_path(gz, idx_dir));
 
         ScanPlan plan_ptr = scan::from_file(gz, idx);
         const ViewPlan& plan = *plan_ptr;
@@ -214,7 +214,11 @@ TEST_SUITE("Dynamic filter pushdown") {
         DynamicPrune dyn_prune;
         for (const ViewFile& f : plan.files) {
             dftracer::utils::index::plan::ChunkPrunerInput pin{
-                f.index_path, f.file_path, narrow_query};
+                dftracer::utils::dstd::String(
+                    dftracer::utils::dstd::StringView(f.index_path)),
+                dftracer::utils::dstd::String(
+                    dftracer::utils::dstd::StringView(f.file_path)),
+                narrow_query};
             dftracer::utils::index::plan::ChunkPruner pruner;
             auto out = run(pruner(pin));
             REQUIRE(out.success);
@@ -261,7 +265,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         const std::string idx_dir = env.get_dir() + "/grouped2.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
-        const std::string idx = determine_index_path(gz, idx_dir);
+        const std::string idx = std::string(determine_index_path(gz, idx_dir));
 
         ScanPlan plan_ptr = scan::from_file(gz, idx);
         ViewSource src(plan_ptr);
@@ -380,7 +384,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         const std::string idx_dir = env.get_dir() + "/grouped3.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
-        const std::string idx = determine_index_path(gz, idx_dir);
+        const std::string idx = std::string(determine_index_path(gz, idx_dir));
         ScanPlan plan_ptr = scan::from_file(gz, idx);
 
         // The build side: one key, pid 3, the last of the three groups, in
@@ -431,7 +435,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         const std::string idx_dir = env.get_dir() + "/stall.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
-        const std::string idx = determine_index_path(gz, idx_dir);
+        const std::string idx = std::string(determine_index_path(gz, idx_dir));
 
         // Each call plans over its own ViewPlan, so threads share the index
         // and nothing else.

@@ -38,7 +38,7 @@ TEST_SUITE("detail stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // 50 events
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         stats::DetailNeeds needs;                          // no group-by
         stats::DetailedStatistics d =
@@ -67,7 +67,7 @@ TEST_SUITE("detail stats via View") {
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dftracer::utils::dstd::fs::remove(pfw);
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
 
         std::vector<std::string> group_by{"name"};
         stats::DetailNeeds needs;
@@ -84,7 +84,7 @@ TEST_SUITE("detail stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         std::vector<std::string> group_by{"name"};
         stats::DetailNeeds needs;
@@ -104,7 +104,7 @@ TEST_SUITE("detail stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         std::vector<std::string> group_by{"cat"};
         std::vector<std::string> filter_names{"read"};

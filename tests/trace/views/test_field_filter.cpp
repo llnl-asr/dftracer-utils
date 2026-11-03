@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
@@ -62,8 +63,10 @@ TEST_SUITE("View unified F filter") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    16 * 1024));
         (void)dftracer::utils::dstd::fs::remove(plain);
-        dftracer::utils::index::Indexer::open({gz}).build();
-        const std::string idx = determine_index_path(gz, "");
+        dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))})
+            .build();
+        const std::string idx = std::string(determine_index_path(gz, ""));
         auto count = [&](Phase ph, const char* q) {
             return run(View::from_file(gz, idx).phase(ph).duql(q).collect())
                 .num_rows();

@@ -34,7 +34,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         namespace detail = dftracer::utils::trace::views::detail;
         auto collect_engine = [](const scan::ScanPlan& v) {
@@ -158,7 +158,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto build = [&](std::uint64_t mem) {
             scan::ScanPlan v = scan::from_file(gz, idx);
@@ -241,7 +241,7 @@ TEST_SUITE("View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
         View base = View::from_file(gz, idx);
         const std::vector<AggSpec> specs = {
             {AggOp::Count, "", "n"},
@@ -307,7 +307,7 @@ TEST_SUITE("View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto q = [&] {
             return scan::agg(

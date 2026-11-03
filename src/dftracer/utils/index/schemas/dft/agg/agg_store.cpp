@@ -83,7 +83,7 @@ dstd::Expected<dstd::Optional<Config>, dstd::Error> read_config(
 }
 
 void write_config(const Index& index, const Config& config) {
-    std::string value;
+    dstd::String value;
     dstd::append_u64_be(value, config.time_interval_us);
     dstd::append_u64_be(value, config.params_hash);
     value.push_back(
@@ -105,7 +105,7 @@ dstd::Expected<dstd::Optional<TimeBounds>, dstd::Error> read_time_bounds(
 }
 
 void write_time_bounds(const Index& index, TimeBounds bounds) {
-    std::string value;
+    dstd::String value;
     dstd::append_u64_be(value, bounds.min_bucket);
     dstd::append_u64_be(value, bounds.max_bucket);
     publish_meta(index, TIME_BOUNDS_NAME, value);

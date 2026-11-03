@@ -28,6 +28,8 @@ set(_dirs
     src/dftracer/utils/duql
     include/dftracer/utils/plugins
     src/dftracer/utils/plugins
+    include/dftracer/utils/index
+    src/dftracer/utils/index
     include/dftracer/utils/utilities
     src/dftracer/utils/utilities)
 

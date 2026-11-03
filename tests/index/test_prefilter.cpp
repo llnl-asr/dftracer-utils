@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <doctest/doctest.h>
 
 #include <initializer_list>
-#include <string>
-#include <string_view>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using dftracer::utils::index::plan::Prefilter;
-using Clauses = std::vector<std::vector<std::string>>;
+using Clauses = dstd::Vector<dstd::Vector<dstd::String>>;
 
 namespace {
 
@@ -157,12 +159,12 @@ TEST_SUITE("Prefilter") {
         CHECK_FALSE(
             several.may_match(R"({"name":"read","cat":"MPI","pid":1234})"));
 
-        std::string many = "pid in [";
-        std::string last;
+        dstd::String many = "pid in [";
+        dstd::String last;
         for (int i = 100; i < 200; ++i) {
             if (i > 100) many += ",";
-            many += std::to_string(i);
-            last = std::to_string(i);
+            many += dstd::to_string(i);
+            last = dstd::to_string(i);
         }
         const auto big = of((many + "]").c_str());
         REQUIRE(big.clauses().size() == 1);
@@ -177,13 +179,13 @@ TEST_SUITE("Prefilter") {
         constexpr std::size_t MIN = Prefilter::HS_MIN_ALTERNATIVES;
         for (const std::size_t k : {std::size_t{1}, MIN - 1, MIN, MIN + 1,
                                     2 * MIN, std::size_t{16}}) {
-            std::string q = "name in [";
+            dstd::String q = "name in [";
             for (std::size_t i = 0; i < k; ++i)
-                q += (i ? ", \"n" : "\"n") + std::to_string(i) + "\"";
+                q += (i ? ", \"n" : "\"n") + dstd::to_string(i) + "\"";
             const auto p = of((q + "]").c_str());
             REQUIRE(p.clauses().size() == 1);
             REQUIRE(p.clauses()[0].size() == k);
-            const std::string last = "\"n" + std::to_string(k - 1) + "\"";
+            const dstd::String last = "\"n" + dstd::to_string(k - 1) + "\"";
             CHECK(p.may_match("x " + last + " y"));
             CHECK_FALSE(p.may_match(R"({"name":"other"})"));
             agree(p, {"\"n0\"", last.c_str(), R"("n)", "", R"({"name":"zz"})"});

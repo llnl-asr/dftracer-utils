@@ -158,7 +158,7 @@ inline dstd::Optional<std::int64_t> derive_io_size(
 
 // Lowercase `s`; returns a view over `s` when already lowercase (no copy),
 // else lowercases into `storage` (which must outlive the returned view).
-dstd::StringView to_lower_ascii(dstd::StringView s, std::string& storage);
+dstd::StringView to_lower_ascii(dstd::StringView s, dstd::String& storage);
 
 bool ascii_iequals(dstd::StringView a, dstd::StringView b);
 
@@ -178,8 +178,8 @@ bool is_data_transfer_op(dstd::StringView cat, dstd::StringView name);
  * @param index_dir Optional custom directory for the index root.
  * @return Path to the owning `.dftindex` directory.
  */
-std::string determine_index_path(dstd::CStringView path,
-                                 dstd::StringView index_dir = {});
+dstd::String determine_index_path(dstd::CStringView path,
+                                  dstd::StringView index_dir = {});
 
 }  // namespace dftracer::utils::trace::internal
 

@@ -33,7 +33,6 @@
 #include <cstdint>
 #include <memory>
 #include <new>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -66,16 +65,12 @@ static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
         return NULL;
     }
 
-    // keep std: parse_string_seq fills a std::vector<std::string>
-    std::vector<std::string> parsed_patterns;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> patterns;
     if (patterns_obj && patterns_obj != Py_None) {
         if (!parse_string_seq(patterns_obj, "patterns must be a sequence",
-                              parsed_patterns))
+                              patterns))
             return NULL;
     }
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> patterns;
-    patterns.reserve(parsed_patterns.size());
-    for (const auto &p : parsed_patterns) patterns.emplace_back(p);
 
     Runtime *rt = nullptr;
     if (runtime_arg && runtime_arg != Py_None) {
@@ -137,8 +132,7 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
     if (!PyArg_ParseTuple(args, "On", &entries_obj, &num_workers)) return NULL;
     if (num_workers <= 0) num_workers = 1;
 
-    // keep std: plan_lpt_partition takes a std::vector
-    std::vector<FileEntry> entries;
+    dftracer::utils::dstd::Vector<FileEntry> entries;
     PyObject *seq = PySequence_Fast(entries_obj,
                                     "entries must be a sequence of "
                                     "(path, size) tuples");
@@ -216,7 +210,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     }
 
     // Unpack files.
-    std::vector<std::string> files;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> files;
     {
         if (!parse_string_seq(files_obj, "files must be a sequence", files))
             return NULL;
@@ -224,7 +218,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     if (files.empty()) Py_RETURN_NONE;
 
     // Optional bloom dimensions override.
-    std::vector<std::string> bloom_dims;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> bloom_dims;
     if (bloom_dims_obj && bloom_dims_obj != Py_None) {
         if (!parse_string_seq(bloom_dims_obj,
                               "bloom_dimensions must be a sequence",
@@ -258,36 +252,37 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
         dftracer::utils::index::schemas::dft::agg::AggregationConfig>
         agg_config_ptr;
     if (aggregation_config_obj && aggregation_config_obj != Py_None)
-        agg_config_ptr = std::make_shared<
+        agg_config_ptr = dftracer::utils::dstd::make_shared<
             dftracer::utils::index::schemas::dft::agg::AggregationConfig>(
             dftracer::utils::python::agg_config_from_py(
                 aggregation_config_obj));
     else
-        agg_config_ptr = std::make_shared<
+        agg_config_ptr = dftracer::utils::dstd::make_shared<
             dftracer::utils::index::schemas::dft::agg::AggregationConfig>(
             dftracer::utils::index::schemas::dft::agg::
                 standard_aggregation_config());
 
     // A fresh build of the whole root stages on node-local scratch when the
     // destination is a slow filesystem, then publishes the store across.
-    const std::string final_root =
+    const dftracer::utils::dstd::String final_root =
         dftracer::utils::index::store::internal::normalize_index_root(
             index_dir);
     dftracer::utils::dstd::Optional<dftracer::utils::common::ScratchSession>
         scratch;
-    std::string build_dir = index_dir;
+    dftracer::utils::dstd::String build_dir = index_dir;
     if (!dftracer::utils::common::unwrap(
             dftracer::utils::dstd::fs::exists(dftracer::utils::dstd::PathView(
                 dftracer::utils::index::store_dir(final_root)))) &&
         dftracer::utils::common::should_stage(final_root)) {
         auto staged = dftracer::utils::common::staged_build_scratch(files);
         if (staged) {
-            build_dir = std::string(staged->dir().str());
+            build_dir = dftracer::utils::dstd::String(staged->dir().str());
             scratch.emplace(std::move(*staged));
         }
     }
 
-    auto batch_config = std::make_shared<IndexBuildBatchConfig>();
+    auto batch_config =
+        dftracer::utils::dstd::make_shared<IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(files);
     batch_config->index_dir = build_dir;
     batch_config->build_bloom = build_bloom != 0;
@@ -330,9 +325,9 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
         batch_config->agg_fold_factory =
             [agg_config_ptr,
              agg_intern](dftracer::utils::dstd::StringIntern &build_intern)
-            -> std::unique_ptr<
+            -> dftracer::utils::dstd::UniquePtr<
                 dftracer::utils::index::schemas::dft::agg::AggregationFold> {
-            return std::make_unique<
+            return dftracer::utils::dstd::make_unique<
                 dftracer::utils::index::schemas::dft::agg::AggregationFold>(
                 build_intern, agg_intern, *agg_config_ptr);
         };
@@ -389,9 +384,10 @@ static PyObject *write_shard_set_fn(PyObject * /*self*/, PyObject *args) {
                           shard_dirs))
         return NULL;
     try {
+        const auto normalized_root =
+            dftracer::utils::index::store::internal::normalize_index_root(root);
         dftracer::utils::trace::views::write_shard_set(
-            dftracer::utils::index::store::internal::normalize_index_root(root),
-            shard_dirs);
+            std::string(normalized_root), shard_dirs);
     } catch (const std::exception &e) {
         dftracer::utils::python::set_typed_py_error(e);
         return NULL;
@@ -404,9 +400,10 @@ static PyObject *consolidate_shard_set_fn(PyObject * /*self*/, PyObject *args) {
     if (!PyArg_ParseTuple(args, "s", &root)) return NULL;
     std::size_t files = 0;
     try {
+        const auto normalized_root =
+            dftracer::utils::index::store::internal::normalize_index_root(root);
         files = dftracer::utils::trace::views::consolidate_shard_set(
-            dftracer::utils::index::store::internal::normalize_index_root(
-                root));
+            std::string(normalized_root));
     } catch (const std::exception &e) {
         dftracer::utils::python::set_typed_py_error(e);
         return NULL;

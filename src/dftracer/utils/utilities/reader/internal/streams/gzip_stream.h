@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
-#include <string>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -270,18 +269,15 @@ class GzipStream : public StreamBase {
         if (member_.kind !=
             dftracer::utils::index::gzip::GzipRecordKind::Restart)
             return false;
-        // keep std: member_window returns std::string
-        const std::string window = member_window();
+        const dstd::String window = member_window();
         return window.empty() || window.back() != '\n';
     }
 
-    // keep std: CheckpointIndexer::restart_window returns std::string
-    std::string member_window() const {
+    dstd::String member_window() const {
         using dftracer::utils::index::gzip::GzipRecordKind;
         return member_.kind == GzipRecordKind::Restart
                    ? indexer_->restart_window(member_.member_idx)
-                   : std::string();  // keep std: restart_window returns
-                                     // std::string
+                   : dstd::String();
     }
 
     // Decode-buffer size hint (uncompressed span); 0 for an unbounded end.

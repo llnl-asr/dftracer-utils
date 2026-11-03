@@ -7,7 +7,6 @@
 #include <dftracer/utils/dstd/string_intern.h>
 
 #include <cstdint>
-#include <memory>
 #include <string_view>
 
 namespace dftracer::utils::index::schemas::dft::agg {

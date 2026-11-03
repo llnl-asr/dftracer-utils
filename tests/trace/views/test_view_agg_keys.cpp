@@ -20,7 +20,7 @@ TEST_SUITE("View") {
         "Trace scan - agg engine composite keys match the GroupMap path") {
         REQUIRE(parity_env().is_valid());
         const std::string gz = write_agg_engine_trace(parity_sub("base"));
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
 
         SUBCASE("group_by (name, pid)") {
             run_both_multi({{gz, idx}}, {GroupKey::name(), GroupKey::pid()},
@@ -42,7 +42,7 @@ TEST_SUITE("View") {
 
         // Two files, so fhash genuinely varies across groups (not just pid).
         const std::string gz2 = parity_sub("two") + "/agg_engine2.pfw.gz";
-        const std::string idx2 = determine_index_path(gz2, "");
+        const std::string idx2 = std::string(determine_index_path(gz2, ""));
         const std::string gz2a = write_agg_engine_trace(parity_sub("two"));
         if (!dstd::fs::exists(gz2).value()) {
             std::string pfw2 = parity_sub("two") + "/agg_engine2.pfw";
@@ -76,7 +76,7 @@ TEST_SUITE("View") {
         // (str_format.h lower_ascii), so "POSIX"/"posix"/"Stdio"/"STDIO" must
         // merge into two groups ("posix", "stdio") in both paths.
         const std::string gz3 = parity_sub("cat") + "/agg_engine_cat.pfw.gz";
-        const std::string idx3 = determine_index_path(gz3, "");
+        const std::string idx3 = std::string(determine_index_path(gz3, ""));
         if (!dstd::fs::exists(gz3).value()) {
             std::string pfw3 = parity_sub("cat") + "/agg_engine_cat.pfw";
             std::ofstream ofs(pfw3.c_str());
@@ -116,9 +116,9 @@ TEST_SUITE("View") {
         // basenames, so FileName has no cross-file collision to merge).
         const std::string rdir = parity_sub("resolved");
         const std::string gz4 = rdir + "/agg_engine_resolved_a.pfw.gz";
-        const std::string idx4 = determine_index_path(gz4, "");
+        const std::string idx4 = std::string(determine_index_path(gz4, ""));
         const std::string gz5 = rdir + "/agg_engine_resolved_b.pfw.gz";
-        const std::string idx5 = determine_index_path(gz5, "");
+        const std::string idx5 = std::string(determine_index_path(gz5, ""));
         if (!dstd::fs::exists(gz4).value() || !dstd::fs::exists(gz5).value()) {
             std::string pfw4 = rdir + "/agg_engine_resolved_a.pfw";
             std::ofstream ofs(pfw4.c_str());
@@ -192,7 +192,7 @@ TEST_SUITE("View") {
         // declared once (pid -> rank), events group on pid, and both paths must
         // relabel the pid groups to the same rank strings.
         const std::string gz6 = parity_sub("rank") + "/agg_engine_rank.pfw.gz";
-        const std::string idx6 = determine_index_path(gz6, "");
+        const std::string idx6 = std::string(determine_index_path(gz6, ""));
         if (!dstd::fs::exists(gz6).value()) {
             std::string pfw6 = parity_sub("rank") + "/agg_engine_rank.pfw";
             std::ofstream ofs(pfw6.c_str());
@@ -229,7 +229,7 @@ TEST_SUITE("View") {
         // The read events carry arg x, the write events carry arg y, so
         // grouping by x exercises the present-and-missing split.
         const std::string gz7 = parity_sub("arg") + "/agg_engine_arg.pfw.gz";
-        const std::string idx7 = determine_index_path(gz7, "");
+        const std::string idx7 = std::string(determine_index_path(gz7, ""));
         if (!dstd::fs::exists(gz7).value()) {
             std::string pfw7 = parity_sub("arg") + "/agg_engine_arg.pfw";
             std::ofstream ofs(pfw7.c_str());
@@ -608,7 +608,7 @@ TEST_SUITE("View") {
         // a single group (a relabel-after-aggregate would leave two rows).
         const std::string ddir = parity_sub("samedir");
         const std::string gz8 = ddir + "/agg_engine_dir.pfw.gz";
-        const std::string idx8 = determine_index_path(gz8, "");
+        const std::string idx8 = std::string(determine_index_path(gz8, ""));
         if (!dstd::fs::exists(gz8).value()) {
             std::string pfw8 = ddir + "/agg_engine_dir.pfw";
             std::ofstream ofs(pfw8.c_str());
@@ -702,7 +702,7 @@ TEST_SUITE("View") {
         // Float64 and ArgMax reprs the arg's raw value.
         const std::string gz9 =
             parity_sub("argval") + "/agg_engine_argval.pfw.gz";
-        const std::string idx9 = determine_index_path(gz9, "");
+        const std::string idx9 = std::string(determine_index_path(gz9, ""));
         if (!dstd::fs::exists(gz9).value()) {
             std::string pfw9 = parity_sub("argval") + "/agg_engine_argval.pfw";
             std::ofstream ofs(pfw9.c_str());
@@ -749,7 +749,7 @@ TEST_SUITE("View") {
         // present in both groups (no all-absent group to widen).
         const std::string gz_sz =
             parity_sub("size") + "/agg_engine_size.pfw.gz";
-        const std::string idx_sz = determine_index_path(gz_sz, "");
+        const std::string idx_sz = std::string(determine_index_path(gz_sz, ""));
         if (!dstd::fs::exists(gz_sz).value()) {
             std::string pfw_sz = parity_sub("size") + "/agg_engine_size.pfw";
             std::ofstream ofs(pfw_sz.c_str());
@@ -800,7 +800,7 @@ TEST_SUITE("View") {
         // every event, so both paths keep the exact integer domain.
         const std::string gz_nv =
             parity_sub("nested") + "/agg_engine_nested.pfw.gz";
-        const std::string idx_nv = determine_index_path(gz_nv, "");
+        const std::string idx_nv = std::string(determine_index_path(gz_nv, ""));
         if (!dstd::fs::exists(gz_nv).value()) {
             std::string pfw_nv =
                 parity_sub("nested") + "/agg_engine_nested.pfw";
@@ -882,7 +882,7 @@ TEST_SUITE("View") {
         REQUIRE(parity_env().is_valid());
         const std::string dir = parity_sub("nullkey");
         const std::string gz = dir + "/agg_null_key.pfw.gz";
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         if (!dstd::fs::exists(gz).value()) {
             const std::string pfw = dir + "/agg_null_key.pfw";
             std::ofstream ofs(pfw.c_str());

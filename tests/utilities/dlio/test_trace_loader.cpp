@@ -86,10 +86,11 @@ TEST_SUITE("dlio trace loader") {
         o.aggregation = config;
         std::vector<std::string> paths;
         for (const auto& f : files) paths.emplace_back(f);
-        auto ix = index::Indexer::open(paths, o);
+        auto ix = index::Indexer::open(
+            dstd::Vector<dstd::String>(paths.begin(), paths.end()), o);
         ix.build();
-        const std::string index_path =
-            trace::internal::determine_index_path(paths[0], o.index_dir);
+        const std::string index_path = std::string(
+            trace::internal::determine_index_path(paths[0], o.index_dir));
 
         const dlio::AggregatedTraces a =
             dlio::load_aggregated_traces(index_path, files, config);

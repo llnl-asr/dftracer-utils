@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/index_internal.h>
@@ -12,9 +13,6 @@
 
 #include <algorithm>
 #include <exception>
-#include <map>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::index {
 
@@ -78,41 +76,41 @@ namespace pk = layout::path_kind;
 
 // A key is [kind][tail]. Its namespace names the extension and its scope
 // names the file.
-std::string kind_key(std::uint8_t kind) {
-    return std::string(1, static_cast<char>(kind));
+dstd::String kind_key(std::uint8_t kind) {
+    return dstd::String(1, static_cast<char>(kind));
 }
 
-std::string file_key(std::uint8_t kind) { return kind_key(kind); }
+dstd::String file_key(std::uint8_t kind) { return kind_key(kind); }
 
-std::string file_key(std::uint8_t kind, dstd::StringView tail) {
-    std::string key = kind_key(kind);
+dstd::String file_key(std::uint8_t kind, dstd::StringView tail) {
+    dstd::String key = kind_key(kind);
     key.append(tail);
     return key;
 }
 
-std::string granule_key(std::uint8_t kind, std::uint64_t granule) {
-    std::string key = kind_key(kind);
+dstd::String granule_key(std::uint8_t kind, std::uint64_t granule) {
+    dstd::String key = kind_key(kind);
     dstd::append_u32_be(key, static_cast<std::uint32_t>(granule));
     return key;
 }
 
-std::string path_prefix(std::uint8_t kind, dstd::StringView path) {
-    std::string key = kind_key(kind);
+dstd::String path_prefix(std::uint8_t kind, dstd::StringView path) {
+    dstd::String key = kind_key(kind);
     key.append(path);
     key.push_back('\0');
     return key;
 }
 
-std::string path_granule_key(dstd::StringView path, std::uint64_t granule) {
-    std::string key = path_prefix(pk::DATA, path);
+dstd::String path_granule_key(dstd::StringView path, std::uint64_t granule) {
+    dstd::String key = path_prefix(pk::DATA, path);
     dstd::append_u32_be(key, static_cast<std::uint32_t>(granule));
     return key;
 }
 
-std::string agg_partial_key(std::uint64_t chunk, std::uint32_t cat_id,
-                            std::uint32_t name_id, std::uint32_t host_id,
-                            std::uint32_t extra_id, std::uint8_t kind) {
-    std::string key = granule_key(layout::agg_kind::PARTIAL, chunk);
+dstd::String agg_partial_key(std::uint64_t chunk, std::uint32_t cat_id,
+                             std::uint32_t name_id, std::uint32_t host_id,
+                             std::uint32_t extra_id, std::uint8_t kind) {
+    dstd::String key = granule_key(layout::agg_kind::PARTIAL, chunk);
     dstd::append_u32_be(key, cat_id);
     dstd::append_u32_be(key, name_id);
     dstd::append_u32_be(key, host_id);
@@ -199,7 +197,7 @@ common::Result<void> scan_keys(const Snapshot& snapshot, const FileRef& file,
 /// fn(value) of the record at `key`. Empty when the key is absent.
 template <class Fn>
 auto get_decoded(const Snapshot& snapshot, const FileRef& file,
-                 const kv::Namespace& ns, const std::string& key, Fn&& fn)
+                 const kv::Namespace& ns, const dstd::String& key, Fn&& fn)
     -> common::Result<dstd::Optional<decltype(fn(dstd::StringView{}))>> {
     using Out = decltype(fn(dstd::StringView{}));
     const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
@@ -216,23 +214,23 @@ auto get_decoded(const Snapshot& snapshot, const FileRef& file,
 
 common::Result<dstd::Optional<dstd::String>> get_string(
     const Snapshot& snapshot, const FileRef& file, Ext ext,
-    const std::string& key) {
+    const dstd::String& key) {
     return get_decoded(snapshot, file, read_ns(ext), key,
                        [](dstd::StringView body) { return own(body); });
 }
 
 /// The highest format version of each plugin namespace the store declares.
-common::Result<std::map<std::string, std::uint32_t>> plugin_versions(
+common::Result<dstd::Map<dstd::String, std::uint32_t>> plugin_versions(
     const kv::Snapshot& snap) {
     const dstd::StringView prefix(store_layout::PLUGIN_NAMESPACE_PREFIX);
     auto declared = snap.namespaces();
     if (!declared) return dstd::Unexpected<dstd::Error>(declared.error());
-    std::map<std::string, std::uint32_t> versions;
+    dstd::Map<dstd::String, std::uint32_t> versions;
     for (const kv::NamespaceDecl& entry : *declared) {
         const dstd::StringView name(entry.name.data(), entry.name.size());
         if (!name.starts_with(prefix)) continue;
         std::uint32_t& known =
-            versions[std::string(name.substr(prefix.size()))];
+            versions[dstd::String(name.substr(prefix.size()))];
         known = std::max(known, entry.format_version);
     }
     return versions;
@@ -245,7 +243,7 @@ common::Result<dstd::Optional<kv::Namespace>> plugin_namespace(
     if (snap == nullptr) return dstd::Optional<kv::Namespace>{};
     auto versions = plugin_versions(*snap);
     if (!versions) return dstd::Unexpected<dstd::Error>(versions.error());
-    const auto known = versions->find(std::string(name));
+    const auto known = versions->find(dstd::String(name));
     if (known == versions->end()) return dstd::Optional<kv::Namespace>{};
     const kv::Namespace ns = read_ns(plugin_spec(name, known->second));
     const kv::CopyInfo info = snap->copy_info(ns, IndexAccess::scope(file));
@@ -255,12 +253,12 @@ common::Result<dstd::Optional<kv::Namespace>> plugin_namespace(
     return dstd::Optional<kv::Namespace>(ns);
 }
 
-void put_value(FileBuild& build, Ext ext, const std::string& key,
+void put_value(FileBuild& build, Ext ext, const dstd::String& key,
                dstd::StringView body) {
     IndexAccess::put(build, ext, dstd::ByteView(key), dstd::ByteView(body));
 }
 
-void put_bare(FileBuild& build, Ext ext, const std::string& key) {
+void put_bare(FileBuild& build, Ext ext, const dstd::String& key) {
     IndexAccess::put(build, ext, dstd::ByteView(key), dstd::ByteView());
 }
 
@@ -278,7 +276,7 @@ bool builtin_ext(Ext ext) { return ext != Ext::Plugin; }
 
 kv::NamespaceSpec agg_meta_spec(dstd::StringView name) {
     kv::NamespaceSpec spec;
-    const std::string full = store_layout::agg_meta_namespace_name(
+    const dstd::String full = store_layout::agg_meta_namespace_name(
         dstd::StringView(name.data(), name.size()));
     spec.name.assign(full.data(), full.size());
     spec.format_version = AGG_META_VERSION;
@@ -314,7 +312,7 @@ void fill_texts(const dstd::HashMap<std::uint32_t, dstd::String>& texts,
 
 dftracer::utils::store::NamespaceSpec ext_spec(store::IndexExtension ext) {
     kv::NamespaceSpec spec;
-    const std::string name = store_layout::namespace_name(ext);
+    const dstd::String name = store_layout::namespace_name(ext);
     spec.name.assign(name.data(), name.size());
     spec.format_version = layout::ext_version(ext);
     return spec;
@@ -323,7 +321,7 @@ dftracer::utils::store::NamespaceSpec ext_spec(store::IndexExtension ext) {
 dftracer::utils::store::NamespaceSpec plugin_spec(dstd::StringView name,
                                                   std::uint32_t version) {
     kv::NamespaceSpec spec;
-    const std::string full = store_layout::plugin_namespace_name(name);
+    const dstd::String full = store_layout::plugin_namespace_name(name);
     spec.name.assign(full.data(), full.size());
     spec.format_version = version;
     return spec;
@@ -474,7 +472,7 @@ common::Result<GranuleList> granules(const Snapshot& snapshot,
                                      dstd::StringView path) {
     GranuleList out;
     if (ext == Ext::Plugin) return out;
-    const std::string prefix = path_prefix(pk::DATA, path);
+    const dstd::String prefix = path_prefix(pk::DATA, path);
     auto scanned = scan_payloads(
         snapshot, file, read_ns(ext), prefix,
         [&](dstd::StringView key, dstd::StringView body) {
@@ -511,7 +509,7 @@ common::Result<bool> has_posting(const Snapshot& snapshot, const FileRef& file,
                                  std::uint64_t value_hash) {
     const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return false;
-    std::string key = path_prefix(pk::IN_FILE, path);
+    dstd::String key = path_prefix(pk::IN_FILE, path);
     dstd::append_u64_be(key, value_hash);
     auto found = snap->get(read_ns(Ext::Postings), IndexAccess::scope(file),
                            dstd::ByteView(key));
@@ -523,7 +521,7 @@ common::Result<dstd::Vector<std::uint64_t>> posting_granules(
     const Snapshot& snapshot, const FileRef& file, dstd::StringView path,
     std::uint64_t value_hash) {
     dstd::Vector<std::uint64_t> out;
-    std::string prefix = path_prefix(pk::IN_GRANULE, path);
+    dstd::String prefix = path_prefix(pk::IN_GRANULE, path);
     dstd::append_u64_be(prefix, value_hash);
     auto scanned =
         scan_keys(snapshot, file, read_ns(Ext::Postings), prefix,
@@ -573,7 +571,7 @@ common::Result<dstd::Optional<GranuleList>> plugin_granules(
     if (!ns) return dstd::Unexpected<dstd::Error>(ns.error());
     if (!*ns) return dstd::Optional<GranuleList>{};
     GranuleList out;
-    const std::string prefix = path_prefix(pk::DATA, name);
+    const dstd::String prefix = path_prefix(pk::DATA, name);
     auto scanned = scan_payloads(
         snapshot, file, **ns, prefix,
         [&](dstd::StringView key, dstd::StringView body) {
@@ -600,7 +598,7 @@ common::Result<void> for_each_agg_partial(const Snapshot& snapshot,
     constexpr std::size_t RECORD_BYTES =
         5 * sizeof(std::uint32_t) + sizeof(std::uint8_t);
     dstd::Optional<dstd::Error> failed;
-    const std::string prefix = kind_key(layout::agg_kind::PARTIAL);
+    const dstd::String prefix = kind_key(layout::agg_kind::PARTIAL);
     auto scanned = scan_payloads(
         snapshot, file, read_ns(Ext::Agg), prefix,
         [&](dstd::StringView key, dstd::StringView body) {
@@ -634,7 +632,7 @@ common::Result<void> for_each_agg_chunk_columns(const Snapshot& snapshot,
                                                 const AggChunkColumnsFn& fn) {
     constexpr std::size_t RECORD_BYTES = sizeof(std::uint32_t);
     dstd::Optional<dstd::Error> failed;
-    const std::string prefix = kind_key(layout::agg_kind::COLUMNS);
+    const dstd::String prefix = kind_key(layout::agg_kind::COLUMNS);
     dstd::HashMap<std::uint32_t, dstd::String> texts;
     bool texts_read = false;
     auto scanned = scan_payloads(
@@ -671,7 +669,7 @@ common::Result<dstd::Optional<agg::ChunkColumns>> agg_chunk_columns(
     const Snapshot& snapshot, const FileRef& file, std::uint64_t chunk) {
     const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return dstd::Optional<agg::ChunkColumns>{};
-    const std::string key = granule_key(layout::agg_kind::COLUMNS, chunk);
+    const dstd::String key = granule_key(layout::agg_kind::COLUMNS, chunk);
     auto found = snap->get(read_ns(Ext::Agg), IndexAccess::scope(file),
                            dstd::ByteView(key));
     if (!found) return dstd::Unexpected<dstd::Error>(found.error());
@@ -690,7 +688,7 @@ common::Result<void> agg_file_texts(
     const Snapshot& snapshot, const FileRef& file,
     dstd::HashMap<std::uint32_t, dstd::String>& texts) {
     dstd::Optional<dstd::Error> failed;
-    const std::string prefix = kind_key(layout::agg_kind::DICT);
+    const dstd::String prefix = kind_key(layout::agg_kind::DICT);
     auto scanned = scan_payloads(
         snapshot, file, read_ns(Ext::Agg), prefix,
         [&](dstd::StringView key, dstd::StringView text) {
@@ -711,8 +709,8 @@ common::Result<void> agg_dictionary(const Snapshot& snapshot,
                                     agg::AggInternTable& table) {
     const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return {};
-    const std::string begin = kind_key(layout::agg_kind::DICT);
-    const std::string end = layout::prefix_end(begin);
+    const dstd::String begin = kind_key(layout::agg_kind::DICT);
+    const dstd::String end = layout::prefix_end(begin);
     kv::Cursor cursor = snap->scan_all(read_ns(Ext::Agg), dstd::ByteView(begin),
                                        dstd::ByteView(end));
     dstd::Optional<dstd::Error> failed;
@@ -745,7 +743,7 @@ common::Result<dstd::Optional<dstd::String>> agg_meta(const Snapshot& snapshot,
                                                       dstd::StringView name) {
     const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return dstd::Optional<dstd::String>{};
-    const std::string key = file_key(
+    const dstd::String key = file_key(
         layout::agg_kind::META, dstd::StringView(name.data(), name.size()));
     auto found = snap->get(read_ns(agg_meta_spec(name)), kv::ScopeKey::root(),
                            dstd::ByteView(key));
@@ -881,16 +879,16 @@ void erase_path(FileBuild& build, store::IndexExtension ext,
     if (!builtin(build, ext)) return;
     const kv::NamespaceSpec& spec = ext_spec(ext);
     // A key is NUL free, so one NUL past it bounds exactly that key.
-    const auto erase_key = [&](std::string key) {
-        std::string end = key;
+    const auto erase_key = [&](dstd::String key) {
+        dstd::String end = key;
         end.push_back('\0');
         IndexAccess::erase(build, spec, dstd::ByteView(key),
                            dstd::ByteView(end));
     };
     erase_key(file_key(pk::PATHS, path));
     erase_key(file_key(pk::FILE, path));
-    const std::string data = path_prefix(pk::DATA, path);
-    const std::string end = layout::prefix_end(data);
+    const dstd::String data = path_prefix(pk::DATA, path);
+    const dstd::String end = layout::prefix_end(data);
     IndexAccess::erase(build, spec, dstd::ByteView(data), dstd::ByteView(end));
 }
 
@@ -902,14 +900,14 @@ void put_path_file(FileBuild& build, store::IndexExtension ext,
 
 void put_posting(FileBuild& build, dstd::StringView path,
                  std::uint64_t value_hash) {
-    std::string key = path_prefix(pk::IN_FILE, path);
+    dstd::String key = path_prefix(pk::IN_FILE, path);
     dstd::append_u64_be(key, value_hash);
     put_bare(build, Ext::Postings, key);
 }
 
 void put_posting_granule(FileBuild& build, dstd::StringView path,
                          std::uint64_t value_hash, std::uint64_t granule) {
-    std::string key = path_prefix(pk::IN_GRANULE, path);
+    dstd::String key = path_prefix(pk::IN_GRANULE, path);
     dstd::append_u64_be(key, value_hash);
     dstd::append_u32_be(key, static_cast<std::uint32_t>(granule));
     put_bare(build, Ext::Postings, key);
@@ -928,7 +926,7 @@ void put_agg_partial_value(FileBuild& build, std::uint64_t chunk,
                            std::uint32_t cat_id, std::uint32_t name_id,
                            std::uint32_t host_id, std::uint32_t extra_id,
                            std::uint8_t kind, dstd::StringView value) {
-    const std::string key =
+    const dstd::String key =
         agg_partial_key(chunk, cat_id, name_id, host_id, extra_id, kind);
     IndexAccess::put(build, Ext::Agg, dstd::ByteView(key),
                      dstd::ByteView(value.data(), value.size()));
@@ -936,7 +934,7 @@ void put_agg_partial_value(FileBuild& build, std::uint64_t chunk,
 
 void put_agg_chunk_columns_value(FileBuild& build, std::uint64_t chunk,
                                  dstd::StringView value) {
-    const std::string key = granule_key(layout::agg_kind::COLUMNS, chunk);
+    const dstd::String key = granule_key(layout::agg_kind::COLUMNS, chunk);
     IndexAccess::put(build, Ext::Agg, dstd::ByteView(key),
                      dstd::ByteView(value.data(), value.size()));
 }
@@ -949,7 +947,7 @@ void put_agg_chunk_columns(FileBuild& build, std::uint64_t chunk,
 
 void put_agg_dictionary_entry(FileBuild& build, std::uint32_t id,
                               dstd::StringView text) {
-    std::string key = file_key(layout::agg_kind::DICT);
+    dstd::String key = file_key(layout::agg_kind::DICT);
     dstd::append_u32_be(key, id);
     put_value(build, Ext::Agg, key, text);
 }
@@ -961,15 +959,15 @@ void write_plugin(FileBuild& build, dstd::StringView name,
                   std::uint32_t version, std::uint64_t params_hash,
                   const Granules& granules, const File& file) {
     const kv::NamespaceSpec spec = plugin_spec(name, version);
-    const std::string listed = file_key(pk::PATHS, name);
+    const dstd::String listed = file_key(pk::PATHS, name);
     IndexAccess::put(build, spec, dstd::ByteView(listed), dstd::ByteView());
     for (const auto& [granule, payload] : granules) {
-        const std::string key = path_granule_key(name, granule);
+        const dstd::String key = path_granule_key(name, granule);
         IndexAccess::put(build, spec, dstd::ByteView(key),
                          dstd::ByteView(payload.data(), payload.size()));
     }
     if (file) {
-        const std::string key = file_key(pk::FILE, name);
+        const dstd::String key = file_key(pk::FILE, name);
         IndexAccess::put(build, spec, dstd::ByteView(key),
                          dstd::ByteView(file->data(), file->size()));
     }
@@ -1032,7 +1030,7 @@ coro::CoroTask<common::Result<void>> put_agg_meta(const Index& index,
         co_return dstd::Unexpected<dstd::Error>(registered.error());
     const kv::Namespace ns = *registered;
     const kv::ScopeKey scope = kv::ScopeKey::root();
-    const std::string key = file_key(
+    const dstd::String key = file_key(
         layout::agg_kind::META, dstd::StringView(name.data(), name.size()));
     kv::Batch batch = store.building_batch(ns, scope);
     batch.put(dstd::ByteView(key),
@@ -1116,7 +1114,7 @@ coro::CoroTask<common::Result<void>> remove_plugin(
     if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
     auto versions = plugin_versions(*taken);
     if (!versions) co_return dstd::Unexpected<dstd::Error>(versions.error());
-    const auto known = versions->find(std::string(name.data(), name.size()));
+    const auto known = versions->find(dstd::String(name.data(), name.size()));
     if (known == versions->end()) co_return common::Result<void>{};
     auto registered = store.ns(plugin_spec(name, known->second));
     if (!registered)

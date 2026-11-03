@@ -114,7 +114,9 @@ TEST_SUITE("trace-config") {
         body += end_event(1, true) + "\n";
         std::string gz = make_gz(env, body);
 
-        auto cfgs = View::from_file(gz, determine_index_path(gz, "")).config();
+        auto cfgs =
+            View::from_file(gz, std::string(determine_index_path(gz, "")))
+                .config();
         REQUIRE(cfgs.size() == 1);
         CHECK(cfgs[0]
                   .args["app.model"]
@@ -131,7 +133,7 @@ TEST_SUITE("trace-config") {
         body += end_event(5, true) + "\n";
         for (int i = 20; i < 60; ++i) body += complete(i) + "\n";  // end buried
         std::string gz = make_gz(env, body);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         REQUIRE(read_trace_config(gz).empty());  // tail probe alone misses it
         auto cfgs = View::from_file(gz, idx).config();

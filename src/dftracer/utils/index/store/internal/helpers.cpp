@@ -19,21 +19,19 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include <string_view>
-
 namespace dftracer::utils::index::store::internal {
 
 // Registry key: the canonical absolute path, so same-named files in different
 // directories are distinct and the key locates the trace. Applied on both the
 // write and read side so lookups stay consistent; relative inputs resolve
 // against the cwd, so the index is not portable across an absolute-layout move.
-std::string get_logical_path(dstd::StringView path) {
+dstd::String get_logical_path(dstd::StringView path) {
     const auto abs = dstd::fs::absolute(dstd::PathView(path));
-    if (!abs) return std::string(dstd::normalize(dstd::PathView(path)).str());
-    return std::string(dstd::normalize(abs->view()).str());
+    if (!abs) return dstd::String(dstd::normalize(dstd::PathView(path)).str());
+    return dstd::String(dstd::normalize(abs->view()).str());
 }
 
-std::string normalize_index_root(dstd::StringView path) {
+dstd::String normalize_index_root(dstd::StringView path) {
     if (auto nested = nested_root_of(path)) return *nested;
     // A trailing separator leaves the last component empty, so it is neither
     // the index directory nor a file with an extension.
@@ -43,30 +41,30 @@ std::string normalize_index_root(dstd::StringView path) {
             stripped.remove_suffix(1);
         }
         if (dstd::PathView(stripped).filename() == ".dftindex") {
-            return std::string(stripped);
+            return dstd::String(stripped);
         }
-        return std::string((dstd::PathView(stripped) / ".dftindex").str());
+        return dstd::String((dstd::PathView(stripped) / ".dftindex").str());
     }
     const dstd::PathView input(path);
     if (input.filename() == ".dftindex") {
-        return std::string(path);
+        return dstd::String(path);
     }
     if (input.parent().filename() == ".dftindex") {
-        return std::string(input.parent().str());
+        return dstd::String(input.parent().str());
     }
     if (!input.extension().empty()) {
-        return std::string((input.parent() / ".dftindex").str());
+        return dstd::String((input.parent() / ".dftindex").str());
     }
-    return std::string((input / ".dftindex").str());
+    return dstd::String((input / ".dftindex").str());
 }
 
-time_t get_file_modification_time(const std::string &file_path) {
+time_t get_file_modification_time(dstd::CStringView file_path) {
     dftracer::utils::common::InputFileStat st;
     if (!dftracer::utils::common::stat_input(file_path, st)) return 0;
     return static_cast<time_t>(st.mtime);
 }
 
-std::uint64_t calculate_file_hash(const std::string &file_path) {
+std::uint64_t calculate_file_hash(dstd::CStringView file_path) {
     int fd = ::open(file_path.c_str(), O_RDONLY);
     if (fd < 0) {
         DFTRACER_UTILS_LOG_ERROR("Cannot open file for hash calculation: %s",
@@ -123,7 +121,7 @@ std::uint64_t calculate_file_hash(int fd, std::uint64_t file_size_u64) {
     return static_cast<std::uint64_t>(hasher.get_hash().value);
 }
 
-std::uint64_t file_size_bytes(const std::string &path) {
+std::uint64_t file_size_bytes(dstd::CStringView path) {
     dftracer::utils::common::InputFileStat st;
     if (dftracer::utils::common::stat_input(path, st) && st.is_regular_file)
         return st.size;

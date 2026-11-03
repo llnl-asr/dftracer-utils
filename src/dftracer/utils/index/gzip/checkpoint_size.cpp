@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <fcntl.h>
@@ -11,6 +13,8 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+
+using namespace dftracer::utils;
 
 // GZIP header parsing utilities
 static bool read_gzip_magic(int fd) {
@@ -46,7 +50,7 @@ static bool likely_multiple_members(int fd) {
     return false;
 }
 // Extract filename from GZIP header (if present)
-static std::string read_gzip_fname(int fd) {
+static dstd::String read_gzip_fname(int fd) {
     unsigned char fixed[10];
     if (::pread(fd, fixed, 10, 0) != 10) return {};
     if (!(fixed[0] == 0x1F && fixed[1] == 0x8B && fixed[2] == 0x08)) return {};
@@ -58,7 +62,7 @@ static std::string read_gzip_fname(int fd) {
         auto xlen = dftracer::utils::dstd::read_u16_le(x);
         pos += 2 + xlen;
     }
-    std::string name;
+    dstd::String name;
     if (flg & 0x08) {
         unsigned char c;
         while (::pread(fd, &c, 1, pos) == 1 && c != 0) {
@@ -82,16 +86,16 @@ static std::string read_gzip_fname(int fd) {
 }
 
 // Estimate compression ratio based on file extension
-static double guess_text_ratio_from_ext(const std::string& fname) {
+static double guess_text_ratio_from_ext(const dstd::String& fname) {
     auto lower = [](char c) {
         return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c;
     };
-    std::string s;
+    dstd::String s;
     s.reserve(fname.size());
     for (char c : fname) s.push_back(lower(c));
     auto has = [&](const char* ext) {
         auto p = s.rfind(ext);
-        return p != std::string::npos && p + std::strlen(ext) == s.size();
+        return p != dstd::String::npos && p + std::strlen(ext) == s.size();
     };
     if (has(".pfw") || has(".json") || has(".jsonl") || has(".ndjson") ||
         has(".txt") || has(".csv"))
@@ -155,7 +159,7 @@ static std::size_t choose_divisible_checkpoint(
 namespace dftracer::utils::index::gzip {
 
 std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
-                                      const std::string& path,
+                                      dstd::CStringView path,
                                       std::size_t max_parts,
                                       std::size_t max_chk, std::size_t window) {
     const auto comp_bytes = index::store::internal::file_size_bytes(path);
@@ -186,7 +190,7 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
             }
             if (U == 0) {
                 // The size only picks a checkpoint size, never the results.
-                std::string fname = read_gzip_fname(fd);
+                dstd::String fname = read_gzip_fname(fd);
                 double ratio = guess_text_ratio_from_ext(fname);
                 DFTRACER_UTILS_LOG_DEBUG(
                     "checkpoint size: %s has no usable uncompressed size, "

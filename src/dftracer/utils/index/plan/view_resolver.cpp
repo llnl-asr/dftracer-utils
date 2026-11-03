@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 
 namespace dftracer::utils::index::plan {
@@ -8,16 +10,16 @@ namespace {
 
 namespace df = dftracer::utils::dataframe;
 
-std::string cell_text(const df::Series& s, std::int64_t r) {
+dstd::String cell_text(const df::Series& s, std::int64_t r) {
     switch (s.type()) {
         case df::TypeId::String:
-            return std::string(s.string_at(r));
+            return dstd::String(s.string_at(r));
         case df::TypeId::Int64:
-            return std::to_string(s.data<std::int64_t>()[r]);
+            return dstd::to_string(s.data<std::int64_t>()[r]);
         case df::TypeId::Uint64:
-            return std::to_string(s.data<std::uint64_t>()[r]);
+            return dstd::to_string(s.data<std::uint64_t>()[r]);
         case df::TypeId::Float64:
-            return std::to_string(s.data<double>()[r]);
+            return dstd::to_string(s.data<double>()[r]);
         default:
             return {};
     }
@@ -25,13 +27,13 @@ std::string cell_text(const df::Series& s, std::int64_t r) {
 
 }  // namespace
 
-const std::string GroupResolver::EMPTY;
+const dstd::String GroupResolver::EMPTY;
 
-GroupResolver::GroupResolver(const std::vector<RowSetFile>& files,
-                             const std::vector<Column>& columns) {
+GroupResolver::GroupResolver(const dstd::Vector<RowSetFile>& files,
+                             const dstd::Vector<Column>& columns) {
     for (const auto& c : columns) {
         if (column(c.name)) continue;
-        dstd::StringViewMap<std::string> values;
+        dstd::StringViewMap<dstd::String> values;
         if (auto f = stored_rowset(files, c.rowset)) {
             const auto k = f->column_index(c.key);
             const auto v = f->column_index(c.value);
@@ -49,15 +51,15 @@ GroupResolver::GroupResolver(const std::vector<RowSetFile>& files,
     }
 }
 
-const dstd::StringViewMap<std::string>* GroupResolver::column(
+const dstd::StringViewMap<dstd::String>* GroupResolver::column(
     dstd::StringView name) const {
     for (const auto& [n, values] : columns_)
         if (n == name) return &values;
     return nullptr;
 }
 
-const std::string& GroupResolver::value(dstd::StringView name,
-                                        dstd::StringView key) const {
+const dstd::String& GroupResolver::value(dstd::StringView name,
+                                         dstd::StringView key) const {
     const auto* c = column(name);
     if (!c) return EMPTY;
     auto it = c->find(key);

@@ -2,12 +2,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
-#include <string>
+using namespace dftracer::utils;
 
 using dftracer::utils::index::shard_manifest_path;
 using dftracer::utils::index::store::IndexShardManifest;
@@ -34,8 +35,8 @@ using dftu_utils_test::ScopedTestDir;
 TEST_SUITE("shard_manifest") {
     TEST_CASE("round-trips through JSON") {
         IndexShardManifest in = sample();
-        const std::string json = to_json(in);
-        CHECK(json.find("file_id") == std::string::npos);
+        const dstd::String json = to_json(in);
+        CHECK(json.find("file_id") == dstd::String::npos);
         IndexShardManifest out = parse_manifest(json);
 
         CHECK(out.format_version == in.format_version);
@@ -57,8 +58,8 @@ TEST_SUITE("shard_manifest") {
 
     TEST_CASE("write then read from a directory") {
         ScopedTestDir dir("dftu_shard_manifest_test");
-        write_shard_manifest(std::string(dir.path().str()), sample());
-        auto loaded = read_shard_manifest(std::string(dir.path().str()));
+        write_shard_manifest(dstd::String(dir.path().str()), sample());
+        auto loaded = read_shard_manifest(dstd::String(dir.path().str()));
         REQUIRE(loaded.has_value());
         REQUIRE(loaded->shards.size() == 2);
         CHECK(loaded->shards[1].num_files == 73);
@@ -68,21 +69,21 @@ TEST_SUITE("shard_manifest") {
     TEST_CASE("reading a directory with no manifest returns nullopt") {
         ScopedTestDir dir("dftu_shard_manifest_test");
         CHECK_FALSE(
-            read_shard_manifest(std::string(dir.path().str())).has_value());
+            read_shard_manifest(dstd::String(dir.path().str())).has_value());
     }
 
     // The publish is a rename over any prior manifest; a reader that opens the
     // file at any instant sees a complete manifest, never a partial one.
     TEST_CASE("write replaces a prior manifest atomically") {
         ScopedTestDir dir("dftu_shard_manifest_test");
-        write_shard_manifest(std::string(dir.path().str()), sample());
+        write_shard_manifest(dstd::String(dir.path().str()), sample());
 
         IndexShardManifest second;
         second.format_version = 8;
         second.shards.push_back({"only.dftindex", 1, 1});
-        write_shard_manifest(std::string(dir.path().str()), second);
+        write_shard_manifest(dstd::String(dir.path().str()), second);
 
-        auto loaded = read_shard_manifest(std::string(dir.path().str()));
+        auto loaded = read_shard_manifest(dstd::String(dir.path().str()));
         REQUIRE(loaded.has_value());
         REQUIRE(loaded->shards.size() == 1);
         CHECK(loaded->shards[0].path == "only.dftindex");
@@ -99,18 +100,18 @@ TEST_SUITE("shard_manifest") {
 
     TEST_CASE("resolve_shard_set_root names the root holding the manifest") {
         ScopedTestDir dir("dftu_shard_manifest_test");
-        CHECK(resolve_shard_set_root(std::string(dir.path().str())).empty());
+        CHECK(resolve_shard_set_root(dstd::String(dir.path().str())).empty());
 
-        const std::string root = std::string(
-            (dir.path() / std::string(dftracer::utils::index::INDEX_ROOT_NAME))
+        const dstd::String root = dstd::String(
+            (dir.path() / dstd::String(dftracer::utils::index::INDEX_ROOT_NAME))
                 .str());
         write_shard_manifest(root, sample());
-        CHECK(resolve_shard_set_root(std::string(dir.path().str())) == root);
+        CHECK(resolve_shard_set_root(dstd::String(dir.path().str())) == root);
         CHECK(resolve_shard_set_root(root) == root);
         CHECK(dftracer::utils::dstd::fs::exists(shard_manifest_path(root))
                   .value());
         CHECK_FALSE(dftracer::utils::dstd::fs::exists(
-                        dir.path() / std::string(".dftindex-shards"))
+                        dir.path() / dstd::String(".dftindex-shards"))
                         .value());
     }
 

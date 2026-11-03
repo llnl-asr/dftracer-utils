@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -11,8 +15,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <sstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
@@ -30,7 +32,7 @@ std::string write_small_trace(const std::string& dir, int n) {
     }
     out << "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/t" + std::to_string(n) + ".pfw.gz", out.str());
+        dir + "/t" + std::string(dstd::to_string(n)) + ".pfw.gz", out.str());
 }
 
 std::string write_long_line_trace(const std::string& dir, std::size_t bytes) {
@@ -40,7 +42,7 @@ std::string write_long_line_trace(const std::string& dir, std::size_t bytes) {
         out << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":1,)"
             << R"("tid":1,"ph":"X","ts":)" << 1000 + i * 10
             << R"(,"dur":3,"args":{"fname":"/data/long")";
-        if (i == 20) out << R"(,"note":")" << std::string(bytes, 'x') << '"';
+        if (i == 20) out << R"(,"note":")" << dstd::String(bytes, 'x') << '"';
         out << "}}\n";
     }
     out << "]\n";
@@ -54,20 +56,20 @@ TEST_SUITE("IndexParserReuse") {
         constexpr int FILES = 240;
         constexpr int WORKERS = 2;
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i)
-            files.push_back(write_small_trace(env.get_dir(), i));
+            files.emplace_back(write_small_trace(env.get_dir(), i));
         constexpr std::size_t RETAIN =
             build::IndexFoldDriver::PARSER_RETAIN_BYTES;
         constexpr std::size_t LONG_LINE = 2 * RETAIN;
-        files.insert(files.begin() + FILES / 2,
-                     write_long_line_trace(env.get_dir(), LONG_LINE));
+        files.emplace(files.begin() + FILES / 2,
+                      write_long_line_trace(env.get_dir(), LONG_LINE));
 
         const auto created_before = build::g_parsers_created.load();
         build::IndexBuildBatchResult result;
         Runtime rt(WORKERS);
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto config = std::make_shared<build::IndexBuildBatchConfig>();
+            auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
             config->file_paths = files;
             config->index_dir = env.get_dir() + "/idx";
             config->parallelism = WORKERS;

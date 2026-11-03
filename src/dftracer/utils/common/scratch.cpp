@@ -233,8 +233,7 @@ ScratchSession::~ScratchSession() {
 }
 
 dstd::Optional<ScratchSession> staged_build_scratch(
-    // keep std: the index build and the python bindings fill this list
-    const std::vector<std::string>& files) {
+    const dstd::Vector<dstd::String>& files) {
     std::uint64_t input_bytes = 0;
     for (const auto& file : files) {
         InputFileStat st;

@@ -8,7 +8,6 @@
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
-#include <string>
 #include <string_view>
 
 namespace dftracer::utils::trace {
@@ -39,7 +38,7 @@ AggEventRules::AggEventRules(const AggQuery& query,
       window_cfg(query.config),
       read_cfg(query.config) {
     for (const auto& c : q.categories) {
-        std::string storage;
+        dstd::String storage;
         categories.emplace(
             dstd::String(trace::internal::to_lower_ascii(c, storage)));
     }
@@ -56,7 +55,7 @@ std::uint32_t AggEventFolder::read_cat(std::uint32_t id) {
         const dstd::StringView raw = i == dstd::StringIntern::NO_ID
                                          ? dstd::StringView{}
                                          : r_.read.resolve(i);
-        std::string storage;
+        dstd::String storage;
         const dstd::StringView lower =
             trace::internal::to_lower_ascii(raw, storage);
         if (!r_.categories.empty() &&

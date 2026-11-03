@@ -12,6 +12,7 @@
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <trace/views/test_view_common.h>
 
 #include <algorithm>
@@ -172,8 +173,8 @@ struct Fixture {
         ix::IndexerOptions o;
         o.index_dir = env.get_dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
-        ix::Indexer::open(gz, o).build();
-        index_path = determine_index_path(gz.front(), o.index_dir);
+        ix::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
+        index_path = std::string(determine_index_path(gz.front(), o.index_dir));
     }
 
     std::vector<ViewFile> files() const {
@@ -534,8 +535,9 @@ TEST_SUITE("ViewIndexParity") {
         (void)dstd::fs::remove(plain);
         ix::IndexerOptions o;
         o.index_dir = env.get_dir() + "/idx";
-        ix::Indexer::open({gz}, o).build();
-        const std::string index = determine_index_path(gz, o.index_dir);
+        ix::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
+        const std::string index =
+            std::string(determine_index_path(gz, o.index_dir));
 
         const std::vector<AggSpec> count{{AggOp::Count, "", "n"}};
         const df::DataFrame trace =
@@ -588,9 +590,9 @@ TEST_SUITE("ViewIndexParity") {
         opts.index_dir = env.get_dir() + "/idx";
         opts.aggregation.time_interval_us = INTERVAL_US;
         opts.aggregation.extra_group_keys = {"epoch"};
-        ix::Indexer::open(gz, opts).build();
+        ix::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
         const std::string index =
-            determine_index_path(gz.front(), opts.index_dir);
+            std::string(determine_index_path(gz.front(), opts.index_dir));
 
         const std::vector<ViewFile> mixed{{gz[0], ""}, {gz[1], index}};
         const std::vector<ViewFile> indexed{{gz[0], index}, {gz[1], index}};
@@ -635,7 +637,8 @@ TEST_SUITE("ViewIndexParity") {
         REQUIRE(compress_file_to_gzip(plain, gz));
         (void)dstd::fs::remove(plain);
         const std::string index_dir = env.get_dir() + "/idx";
-        const std::string index = determine_index_path(gz, index_dir);
+        const std::string index =
+            std::string(determine_index_path(gz, index_dir));
         REQUIRE_FALSE(dstd::fs::exists(index).value());
 
         const std::vector<ViewFile> files{{gz, index}};
@@ -698,8 +701,9 @@ TEST_SUITE("ViewIndexParity") {
         ix::IndexerOptions opts;
         opts.index_dir = env.get_dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
-        ix::Indexer::open({gz}, opts).build();
-        const std::string index = determine_index_path(gz, opts.index_dir);
+        ix::Indexer::open({dstd::String(dstd::StringView(gz))}, opts).build();
+        const std::string index =
+            std::string(determine_index_path(gz, opts.index_dir));
 
         const std::vector<GroupKey> keys{GroupKey::cat(), GroupKey::name()};
         const std::vector<std::string> columns{"cat", "name"};
@@ -739,10 +743,10 @@ TEST_SUITE("ViewIndexParity") {
         ix::IndexerOptions opts;
         opts.index_dir = env.get_dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
-        ix::Indexer::open(gz, opts).build();
+        ix::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
         const std::vector<ViewFile> files{
-            {gz[0], determine_index_path(gz[0], opts.index_dir)},
-            {gz[1], determine_index_path(gz[1], opts.index_dir)}};
+            {gz[0], std::string(determine_index_path(gz[0], opts.index_dir))},
+            {gz[1], std::string(determine_index_path(gz[1], opts.index_dir))}};
         const Query stdio = Query::from_string(R"(cat == "STDIO")").value();
         const Query posix = Query::from_string(R"(cat == "POSIX")").value();
         const std::vector<GroupKey> by_name{GroupKey::name()};

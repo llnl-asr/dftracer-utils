@@ -86,7 +86,6 @@
 #include <numeric>
 #include <optional>
 #include <span>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -121,7 +120,7 @@ bool export_bootstrap_eligible(const ViewPlan& plan) {
         plan.files.empty() || plan.cancelled)
         return false;
     // The pass writes every line, or every line but the metadata records.
-    const std::string& data = plan_record_schema(plan).data;
+    const dstd::String& data = plan_record_schema(plan).data;
     if (!plan.all_records && !data.empty() &&
         data != dftracer::utils::index::NO_METADATA)
         return false;
@@ -165,7 +164,7 @@ bool collect_bootstrap_eligible(const ViewPlan& plan) {
     if (plan.query && !query_evaluable_by_fold(*plan.query)) return false;
     // The pass applies plan.query, not the schema's data rowset filter that
     // effective_query adds.
-    const std::string& data = plan_record_schema(plan).data;
+    const dstd::String& data = plan_record_schema(plan).data;
     if (!plan.all_records && !data.empty() &&
         data != dftracer::utils::index::NO_METADATA)
         return false;
@@ -434,7 +433,8 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
             intern, dftracer::utils::index::indexed_rowsets(schema));
         std::array<Fold*, 2> folds{&bloom, &rowsets};
         dftracer::utils::index::build::IndexFoldDriver driver(
-            intern, folds, f.file_path, f.index_path);
+            intern, folds, dstd::String(dstd::StringView(f.file_path)),
+            dstd::String(dstd::StringView(f.index_path)));
         driver.set_record_schema(schema);
         // Path-decoded records have no phase: every one is data.
         SinkWriterVisitor writer(sink, !plan.all_records &&
@@ -463,7 +463,7 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
             continue;
         }
         fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets);
-        const std::string staging = co_await pending[slot].add(
+        const dstd::String staging = co_await pending[slot].add(
             std::move(*started.build), 0,
             dftracer::utils::index::store::internal::get_logical_path(
                 f.file_path));
@@ -780,7 +780,9 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
         bloom.enable_spill(ticket.elastic_bytes(), *started.build);
     std::array<Fold*, 3> folds{agg, &bloom, &rowsets};
     dftracer::utils::index::build::IndexFoldDriver driver(
-        intern, folds, f.file_path, f.index_path, extra_capture_fields(*plan));
+        intern, folds, dstd::String(dstd::StringView(f.file_path)),
+        dstd::String(dstd::StringView(f.index_path)),
+        extra_capture_fields(*plan));
     driver.set_record_schema(schema);
     driver.share_buffers(run->buffers);
     driver.set_parse_gate(run->admission->gate());
@@ -801,7 +803,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     counted(*plan, read);
     driver.seal();
     fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets);
-    const std::string failure = co_await group->add(
+    const dstd::String failure = co_await group->add(
         std::move(*started.build), 0,
         dftracer::utils::index::store::internal::get_logical_path(f.file_path));
     if (!failure.empty()) {
@@ -1008,7 +1010,7 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         !plan.auto_numeric_metrics) {
         if (dftracer::utils::index::cache::view_is_fresh(plan))
             co_return ExportStats{};  // already built
-        const std::string dir =
+        const dstd::String dir =
             dftracer::utils::index::cache::materialize_view_dir(plan);
         if (dir.empty()) co_return ExportStats{};
         // Single-flight: one builder per view root. A loser skips - the winner
@@ -1039,7 +1041,7 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         co_return stats;
     }
 
-    const std::string rdir =
+    const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (!rdir.empty()) plan_record_schema(plan);
     // Idempotent prewarm: skip if this view is already materialized.
@@ -1083,7 +1085,7 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
 // engine collect path and the session so the two agree on what a rollup
 // answers.
 dstd::Optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
-    const std::string rdir =
+    const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (!rdir.empty()) plan_record_schema(plan);
     if (rdir.empty() ||
@@ -1664,7 +1666,7 @@ dataframe::AggStatePtr empty_engine_state(const ViewPlan& plan) {
 coro::CoroTask<void> run_materialize_partials(
     const ViewPlan& plan, const std::vector<dstd::StringView>& partials) {
     ensure_schema(plan);
-    const std::string rdir =
+    const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (!rdir.empty()) plan_record_schema(plan);
     if (rdir.empty()) co_return;
@@ -1816,7 +1818,7 @@ void add_materialize_branch(ViewSessionState& state,
         return [](const json::JsonValue&, dstd::StringView) {};
     };
     h.finalize = [plan]() {
-        const std::string rdir =
+        const dstd::String rdir =
             dftracer::utils::index::cache::rollup_cache_path(*plan);
         if (!rdir.empty()) plan_record_schema(*plan);
         if (rdir.empty()) return;

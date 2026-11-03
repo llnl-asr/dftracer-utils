@@ -9,7 +9,6 @@
 #include <dftracer/utils/index/gzip/member.h>
 
 #include <cstdint>
-#include <optional>
 #include <string_view>
 #include <utility>
 

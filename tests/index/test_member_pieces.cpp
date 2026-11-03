@@ -11,7 +11,6 @@
 #include <testing_utilities.h>
 
 #include <string>
-#include <vector>
 
 using dftracer::utils::index::gzip::GzipBuildArtifacts;
 using dftracer::utils::index::gzip::GzipMemberRecord;
@@ -67,7 +66,9 @@ TEST_SUITE("member pieces") {
         std::string window(32768, '\0');
         for (std::size_t i = 0; i < window.size(); ++i)
             window[i] = static_cast<char>(i * 31);
-        arts.restart_windows = {{2, window}, {3, std::string(32768, 'x')}};
+        arts.restart_windows = {
+            {2, dftracer::utils::dstd::String(window.data(), window.size())},
+            {3, dftracer::utils::dstd::String(32768, 'x')}};
 
         persist(std::string((root / ".dftindex").str()), arts);
         const auto snapshot = dftu_utils_test::index_snapshot(
@@ -114,7 +115,8 @@ TEST_SUITE("member pieces") {
         GzipBuildArtifacts split;
         split.members = {record(0, 0, 0, GzipRecordKind::Head, 0),
                          record(1, 100, 1000, GzipRecordKind::Restart, 3)};
-        split.restart_windows = {{1, std::string(32768, 'w')}};
+        split.restart_windows = {
+            {1, dftracer::utils::dstd::String(32768, 'w')}};
         GzipBuildArtifacts whole;
         whole.members = {record(0, 0, 0, GzipRecordKind::Member, 0)};
 

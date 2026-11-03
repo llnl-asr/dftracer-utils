@@ -6,13 +6,12 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 
 #include <cstdint>
-#include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index {
 class Snapshot;
@@ -35,8 +34,8 @@ enum class MetadataUse : std::uint8_t {
 };
 
 struct PruneRequest {
-    std::string index_path;
-    std::string file_path;
+    dstd::String index_path;
+    dstd::String file_path;
     /// Borrowed; nullptr skips query pruning.
     const duql::Query* query = nullptr;
     /// Borrowed snapshot of the index at `index_path`, held by the caller
@@ -60,13 +59,13 @@ struct PruneResult {
     /// Every chunk is a candidate; `candidates` is then empty.
     bool all_chunks = true;
     /// Chunk (gzip member) indices to read, ascending, when !all_chunks.
-    std::vector<std::uint64_t> candidates;
+    dstd::Vector<std::uint64_t> candidates;
     /// Chunk count reported by the index, 0 when unknown.
     std::uint64_t total_chunks = 0;
 };
 
 /// Opens the index at `index_path` and takes one snapshot of it.
-common::Result<index::Snapshot> open_snapshot(const std::string& index_path);
+common::Result<index::Snapshot> open_snapshot(dstd::StringView index_path);
 
 /// Decides which chunks of one file a query must read: the query's
 /// Conditions first, then the time range against per-chunk time bounds, then

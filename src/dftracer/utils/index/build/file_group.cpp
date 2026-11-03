@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/file_group.h>
 #include <dftracer/utils/index/tables.h>
 
@@ -6,8 +7,8 @@
 
 namespace dftracer::utils::index::build {
 
-coro::CoroTask<std::string> FileGroup::add(FileBuild build, std::size_t tag,
-                                           std::string path) {
+coro::CoroTask<dstd::String> FileGroup::add(FileBuild build, std::size_t tag,
+                                            dstd::String path) {
     bool repeated = false;
     for (const Entry& entry : entries_)
         repeated = repeated || entry.path == path;
@@ -15,10 +16,10 @@ coro::CoroTask<std::string> FileGroup::add(FileBuild build, std::size_t tag,
     auto held = co_await claim(build);
     auto staged = co_await held->stage();
     held.reset();
-    if (!staged) co_return std::string(staged.error().message());
+    if (!staged) co_return dstd::String(staged.error().message());
     builds_.push_back(std::move(build));
     entries_.push_back(Entry{tag, std::move(path)});
-    co_return std::string();
+    co_return dstd::String();
 }
 
 coro::CoroTask<void> FileGroup::publish() {
@@ -36,7 +37,7 @@ coro::CoroTask<void> FileGroup::publish() {
         }
         result_.failures.push_back(
             GroupFailure{entries_[i].tag, std::move(entries_[i].path),
-                         std::string(errors[i]->message())});
+                         dstd::String(errors[i]->message())});
     }
     builds_.clear();
     entries_.clear();

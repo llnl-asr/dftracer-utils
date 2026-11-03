@@ -43,7 +43,7 @@ BuildOutcome build_one(const std::string& gz, bool force = false) {
     BuildOutcome out;
     run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto cfg = std::make_shared<IndexBuildBatchConfig>();
-        cfg->file_paths = {gz};
+        cfg->file_paths = {dstd::String(dstd::StringView(gz))};
         cfg->force_rebuild = force;
         auto r = co_await BatchBuilder::process(std::move(cfg));
         out.success = r.indexed >= 1 && r.failed == 0;
@@ -118,7 +118,7 @@ TEST_SUITE("IndexBuilder") {
         auto [gz_file, offs] = write_multi_member_gz(texts);
         const std::uint64_t fsize = dstd::fs::file_size(gz_file).value();
 
-        std::vector<GzipMember> members(texts.size());
+        dstd::Vector<GzipMember> members(texts.size());
         for (std::size_t i = 0; i < texts.size(); ++i) {
             members[i].c_offset = offs[i];
             members[i].c_size =
@@ -184,7 +184,7 @@ TEST_SUITE("IndexBuilder") {
         IndexBuildBatchResult r;
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             auto cfg = std::make_shared<IndexBuildBatchConfig>();
-            cfg->file_paths = files;
+            for (const auto& file : files) cfg->file_paths.emplace_back(file);
             r = co_await BatchBuilder::process(std::move(cfg));
             co_return;
         });
@@ -192,10 +192,11 @@ TEST_SUITE("IndexBuilder") {
         REQUIRE(r.results.size() == 2);
         for (std::size_t i = 0; i < files.size(); ++i) {
             CAPTURE(files[i]);
-            const std::string idx =
+            const std::string idx = std::string(
                 dftracer::utils::trace::internal::determine_index_path(files[i],
-                                                                       "");
-            CHECK(r.results[i].index_path == idx);
+                                                                       ""));
+            CHECK(dstd::StringView(r.results[i].index_path) ==
+                  dstd::StringView(idx));
             const auto snapshot = index_snapshot(idx);
             CHECK(find_indexed_file(snapshot, files[i]).has_value());
         }
@@ -273,7 +274,7 @@ TEST_SUITE("IndexBuilder") {
         REQUIRE(file_size >
                 2 * dftracer::utils::index::gzip::MEMBER_SCAN_WINDOW);
 
-        std::vector<dftracer::utils::index::gzip::GzipMember> found;
+        dstd::Vector<dftracer::utils::index::gzip::GzipMember> found;
         bool ok = false;
         const int fd = ::open(gz_file.c_str(), O_RDONLY);
         REQUIRE(fd >= 0);

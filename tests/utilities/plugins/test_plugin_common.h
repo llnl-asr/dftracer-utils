@@ -26,7 +26,7 @@ inline dftracer::utils::trace::views::ViewFile index_trace(
     using ViewFile = dftracer::utils::trace::views::ViewFile;
     using ExportSink = dftracer::utils::trace::views::ExportSink;
 
-    const std::string idx = determine_index_path(gz, "");
+    const std::string idx = std::string(determine_index_path(gz, ""));
     struct Sink : ExportSink {
         void write(dftracer::utils::dstd::StringView) override {}
     } sink;

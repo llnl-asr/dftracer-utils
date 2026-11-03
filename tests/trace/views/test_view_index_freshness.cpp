@@ -61,7 +61,8 @@ void rewrite_events(const std::string& gz, const char* cat, int n,
 
 coro::CoroTask<void> build_tier(std::string gz, std::string index_dir = "") {
     dftracer::utils::index::build::ResolveAndBuildInput in;
-    in.files.push_back(std::move(gz));
+    in.files.push_back(
+        dftracer::utils::dstd::String(dftracer::utils::dstd::StringView(gz)));
     in.index_dir = std::move(index_dir);
     in.require_checkpoints = true;
     co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -72,7 +73,7 @@ coro::CoroTask<void> build_tier(std::string gz, std::string index_dir = "") {
 
 coro::CoroTask<void> build_files(std::vector<std::string> files) {
     dftracer::utils::index::build::ResolveAndBuildInput in;
-    in.files = std::move(files);
+    for (const auto& file : files) in.files.emplace_back(file);
     in.require_checkpoints = true;
     co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
         co_await dftracer::utils::index::build::resolve_and_build_index(
@@ -83,7 +84,7 @@ coro::CoroTask<void> build_files(std::vector<std::string> files) {
 coro::CoroTask<dftracer::utils::index::build::ResolverResult> resolve_files(
     std::vector<std::string> files) {
     dftracer::utils::index::build::ResolverInput in;
-    in.files = std::move(files);
+    for (const auto& file : files) in.files.emplace_back(file);
     in.require_checkpoints = true;
     dftracer::utils::index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
@@ -168,8 +169,8 @@ TEST_SUITE("ViewIndexFreshness") {
             st::internal::get_file_modification_time(gz));
 
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == MEMBER_EVENTS);
-        const auto snapshot =
-            dftu_utils_test::index_snapshot(determine_index_path(gz, ""));
+        const auto snapshot = dftu_utils_test::index_snapshot(
+            std::string(determine_index_path(gz, "")));
         const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
         CHECK(file.stat().mtime == want);
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "B")") == 0);
@@ -192,7 +193,7 @@ TEST_SUITE("ViewIndexFreshness") {
         CHECK(rows(dir_view(d1, root), R"(cat == "A")") == OLD_EVENTS);
         CHECK(rows(dir_view(d2, root), R"(cat == "C")") == MEMBER_EVENTS);
 
-        const auto idx = determine_index_path(f1, root);
+        const auto idx = std::string(determine_index_path(f1, root));
 
         rewrite_events(f1, "B", NEW_EVENTS);
         CHECK(rows(dir_view(d1, root), R"(cat == "B")") == NEW_EVENTS);
@@ -239,7 +240,8 @@ TEST_SUITE("ViewIndexFreshness") {
         for (std::size_t i = 0; i < result.cached.size(); ++i) {
             const auto& cached = result.cached[i];
             CHECK(expected.count(cached.file_index) == 0);
-            CHECK(cached.file_path == files[cached.file_index]);
+            CHECK(dftracer::utils::dstd::StringView(cached.file_path) ==
+                  dftracer::utils::dstd::StringView(files[cached.file_index]));
             if (i > 0) CHECK(cached.file_index > last);
             last = cached.file_index;
         }

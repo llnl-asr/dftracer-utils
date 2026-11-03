@@ -5,14 +5,11 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <vector>
 
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
 struct hs_database;
@@ -42,7 +39,7 @@ class Prefilter {
     bool may_match(dstd::StringView line) const;
     /// The per-needle reference path of `may_match`; same result.
     bool may_match_per_needle(dstd::StringView line) const;
-    const std::vector<std::vector<std::string>>& clauses() const {
+    const dstd::Vector<dstd::Vector<dstd::String>>& clauses() const {
         return clauses_;
     }
 
@@ -76,9 +73,9 @@ class Prefilter {
     /// A field's bounds: its one resolved value, written after a key ending
     /// in `segment`, satisfies them all.
     struct Range {
-        std::string path;
-        std::string segment;
-        std::vector<Bound> bounds;
+        dstd::String path;
+        dstd::String segment;
+        dstd::Vector<Bound> bounds;
         /// Offset in `segment` of the byte memchr looks for.
         std::size_t pivot = 0;
     };
@@ -86,18 +83,18 @@ class Prefilter {
    private:
     static bool range_may_hold(dstd::StringView line, const Range& r);
 
-    std::vector<std::vector<std::string>> clauses_;
-    std::vector<Range> ranges_;
+    dstd::Vector<dstd::Vector<dstd::String>> clauses_;
+    dstd::Vector<Range> ranges_;
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
     /// One literal database over the distinct needles; null with none, or
     /// when no clause has HS_MIN_ALTERNATIVES needles.
     dstd::SharedPtr<hs_database> db_;
     /// Per clause needle, its id in `db_`.
-    std::vector<std::vector<unsigned>> ids_;
+    dstd::Vector<dstd::Vector<unsigned>> ids_;
     std::size_t distinct_ = 0;
 #endif
     /// Per needle, the offset of its rarest byte, which memchr looks for.
-    std::vector<std::vector<std::size_t>> pivots_;
+    dstd::Vector<dstd::Vector<std::size_t>> pivots_;
 };
 
 }  // namespace dftracer::utils::index::plan

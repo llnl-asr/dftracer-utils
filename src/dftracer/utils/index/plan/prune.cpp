@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -12,7 +14,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <optional>
 
 namespace dftracer::utils::index::plan {
 
@@ -21,12 +22,12 @@ namespace {
 // Keeps a chunk unless its recorded time bounds lie wholly outside the window,
 // [begin, end) when `half_open`; chunks without bounds, or with corrupt ones,
 // are kept.
-std::vector<std::uint64_t> filter_by_time(
-    const std::vector<std::uint64_t>& chunks,
+dstd::Vector<std::uint64_t> filter_by_time(
+    const dstd::Vector<std::uint64_t>& chunks,
     const ankerl::unordered_dense::map<
         std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>& bounds,
     double begin, double end, bool half_open) {
-    std::vector<std::uint64_t> kept;
+    dstd::Vector<std::uint64_t> kept;
     kept.reserve(chunks.size());
     for (auto ckpt : chunks) {
         auto it = bounds.find(ckpt);
@@ -137,7 +138,7 @@ coro::CoroTask<common::Result<PruneResult>> prune_data(
 
 }  // namespace
 
-common::Result<index::Snapshot> open_snapshot(const std::string& index_path) {
+common::Result<index::Snapshot> open_snapshot(dstd::StringView index_path) {
     auto opened =
         Index::open(store::internal::normalize_index_root(index_path));
     if (!opened) return dstd::Unexpected(std::move(opened).error());

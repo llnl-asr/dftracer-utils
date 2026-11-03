@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/list.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
@@ -16,10 +18,7 @@
 #include <dftracer/utils/memory/manager.h>
 
 #include <algorithm>
-#include <list>
-#include <map>
 #include <mutex>
-#include <string>
 #include <utility>
 
 namespace dftracer::utils::index {
@@ -64,11 +63,11 @@ dstd::Expected<dstd::Vector<kv::Namespace>, dstd::Error> held_copies(
     if (!declared) return dstd::Unexpected<dstd::Error>(declared.error());
     const dstd::StringView prefix(store_layout::NAMESPACE_PREFIX);
     const dstd::StringView meta(store_layout::AGG_META_NAMESPACE_PREFIX);
-    std::map<std::string, kv::NamespaceSpec> latest;
+    dstd::Map<dstd::String, kv::NamespaceSpec> latest;
     for (const kv::NamespaceDecl& decl : *declared) {
         const dstd::StringView name(decl.name.data(), decl.name.size());
         if (!name.starts_with(prefix) || name.starts_with(meta)) continue;
-        kv::NamespaceSpec& known = latest[std::string(name)];
+        kv::NamespaceSpec& known = latest[dstd::String(name)];
         if (known.name.empty() || decl.format_version > known.format_version) {
             known.name = decl.name;
             known.format_version = decl.format_version;
@@ -139,13 +138,13 @@ Snapshot IndexAccess::make_snapshot(dstd::Optional<kv::Snapshot> snap) {
     return Snapshot(std::move(state));
 }
 
-FileBuild IndexAccess::make_build(std::string root, kv::Store store,
+FileBuild IndexAccess::make_build(dstd::String root, kv::Store store,
                                   kv::ScopeKey scope, const SourceStat& stat) {
     return FileBuild(dstd::make_shared<FileBuild::Impl>(
         std::move(root), std::move(store), std::move(scope), stat));
 }
 
-const std::string& IndexAccess::root(const Index& index) {
+const dstd::String& IndexAccess::root(const Index& index) {
     return index.impl_->root;
 }
 
@@ -259,7 +258,7 @@ void IndexAccess::clear(FileBuild& build, const kv::NamespaceSpec& spec) {
     impl.cleared.push_back(*registered);
 }
 
-FileBuild::Impl::Impl(std::string index_root, kv::Store s, kv::ScopeKey key,
+FileBuild::Impl::Impl(dstd::String index_root, kv::Store s, kv::ScopeKey key,
                       const SourceStat& stat)
     : root(std::move(index_root)), store(std::move(s)), scope(std::move(key)) {
     ext_copy.fill(-1);
@@ -546,7 +545,7 @@ constexpr std::size_t INDEX_ROOTS_RETAINED = 64;
 
 class RetainedRoots {
    public:
-    Index find_or_add(const std::string& root, Index made) {
+    Index find_or_add(const dstd::String& root, Index made) {
         memory::Scope general(memory::Manager::get().general());
         std::lock_guard<std::mutex> lock(mutex_);
         const auto known =
@@ -567,7 +566,7 @@ class RetainedRoots {
         dropped.swap(roots_);
     }
 
-    void forget(const std::string& root) {
+    void forget(const dstd::String& root) {
         Held dropped;
         std::lock_guard<std::mutex> lock(mutex_);
         const auto known =
@@ -578,7 +577,7 @@ class RetainedRoots {
     }
 
    private:
-    using Held = std::list<dstd::Pair<std::string, Index>>;
+    using Held = dstd::List<dstd::Pair<dstd::String, Index>>;
     std::mutex mutex_;
     Held roots_;
 };
@@ -598,7 +597,7 @@ RetainedRoots& retained_roots() {
 }  // namespace
 
 void release_root(dstd::StringView root) {
-    retained_roots().forget(std::string(root));
+    retained_roots().forget(dstd::String(root));
 }
 
 void release_all_roots() {
@@ -613,9 +612,9 @@ void release_all_roots() {
 dstd::Expected<Index, dstd::Error> Index::open(dstd::StringView root) {
     if (root.empty()) return invalid("index: the root is empty");
     auto impl = dstd::make_shared<Impl>();
-    impl->root = std::string(root);
+    impl->root = dstd::String(root);
     impl->store_dir = index::store_dir(impl->root);
-    const std::string key = impl->root;
+    const dstd::String key = impl->root;
     return retained_roots().find_or_add(key, Index(std::move(impl)));
 }
 

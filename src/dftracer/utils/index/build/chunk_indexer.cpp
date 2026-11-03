@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/parser.h>
@@ -12,8 +13,6 @@
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 
 #include <cstring>
-#include <map>
-#include <string_view>
 
 using dftracer::utils::json::JsonParser;
 using dftracer::utils::json::ondemand_value_to_string;
@@ -22,18 +21,18 @@ namespace dftracer::utils::index::build {
 
 namespace {
 
-static const std::string DIM_HHASH = "hhash";
-static const std::string DIM_FHASH = "fhash";
-static const std::string DIM_SHASH = "shash";
+static const dstd::String DIM_HHASH = "hhash";
+static const dstd::String DIM_FHASH = "fhash";
+static const dstd::String DIM_SHASH = "shash";
 
-static const std::string DIM_NAME = "name";
-static const std::string DIM_CAT = "cat";
-static const std::string DIM_PID = "pid";
-static const std::string DIM_TID = "tid";
+static const dstd::String DIM_NAME = "name";
+static const dstd::String DIM_CAT = "cat";
+static const dstd::String DIM_PID = "pid";
+static const dstd::String DIM_TID = "tid";
 
-std::vector<std::string> get_target_dimensions(
+dstd::Vector<dstd::String> get_target_dimensions(
     const ChunkIndexerConfig& config) {
-    std::vector<std::string> dims;
+    dstd::Vector<dstd::String> dims;
 
     if (config.index_name) dims.push_back(DIM_NAME);
     if (config.index_cat) dims.push_back(DIM_CAT);
@@ -65,8 +64,9 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
         existing = input.existing_state.get();
     }
 
-    std::vector<std::string> target_dims = get_target_dimensions(input.config);
-    std::vector<std::string> missing_dims;
+    dstd::Vector<dstd::String> target_dims =
+        get_target_dimensions(input.config);
+    dstd::Vector<dstd::String> missing_dims;
 
     if (existing) {
         missing_dims = existing->indexed_dims.missing_dimensions(input.config);
@@ -265,7 +265,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                                 }
                                 // Nested dimension, e.g. "io.size".
                                 auto dot_pos = dim.find('.');
-                                if (dot_pos != std::string::npos) {
+                                if (dot_pos != dstd::String::npos) {
                                     dstd::StringView prefix(dim.data(),
                                                             dot_pos);
                                     if (key == prefix) {

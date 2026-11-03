@@ -520,7 +520,7 @@ struct FnameTrace {
         gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        idx = determine_index_path(gz, "");
+        idx = std::string(determine_index_path(gz, ""));
         StringSink sink;
         run(View::from_file(gz, idx).sink_json(sink));
     }
@@ -1290,7 +1290,7 @@ TEST_SUITE("View - unindexed reads") {
         "event once") {
         TestEnvironment env(10);
         const std::string gz = create_multimember_trace(env, 5000, 20000);
-        const std::string idx = determine_index_path(gz, "");
+        const std::string idx = std::string(determine_index_path(gz, ""));
         CHECK(run(View::from_file(gz, idx).collect()).num_rows() == 5000);
         CHECK(run(View::from_file(gz, idx).collect()).num_rows() == 5000);
     }
@@ -1332,7 +1332,7 @@ TEST_SUITE("View - computed columns over a trace scan") {
         namespace df = dftracer::utils::dataframe;
         TestEnvironment env(10);
         const std::string gz = write_args_trace(env);
-        View v = View::from_file(gz, determine_index_path(gz, ""));
+        View v = View::from_file(gz, std::string(determine_index_path(gz, "")));
         View a = v.with_column("z", df::expr_lit(std::int64_t{1}))
                      .with_column("t", df::expr_lit_null(df::TypeId::Int64))
                      .select({"t", "z"});
@@ -1347,7 +1347,8 @@ TEST_SUITE("View - computed columns over a trace scan") {
         namespace df = dftracer::utils::dataframe;
         TestEnvironment env(10);
         const std::string gz = create_multimember_trace(env, 20000, 1 << 16);
-        View big = View::from_file(gz, determine_index_path(gz, ""));
+        View big =
+            View::from_file(gz, std::string(determine_index_path(gz, "")));
         LazyFrame lf = big.lazy().with_row_index("r");
         const std::int32_t r = 0;
         REQUIRE(lf.schema()[0] == "r");
@@ -1364,8 +1365,8 @@ TEST_SUITE("View - computed columns over a trace scan") {
         for (std::size_t member : {std::size_t{2048}, std::size_t{20000}}) {
             CAPTURE(member);
             const std::string gz = create_multimember_trace(env, 3000, member);
-            LazyFrame lf = scan::collect(scan::ordered(
-                scan::from_file(gz, determine_index_path(gz, ""))));
+            LazyFrame lf = scan::collect(scan::ordered(scan::from_file(
+                gz, std::string(determine_index_path(gz, "")))));
             const std::vector<std::string> names = lf.schema();
             const auto at = [&](const char* n) {
                 return static_cast<std::int32_t>(
@@ -1407,7 +1408,7 @@ TEST_SUITE("View - aggregations over a nullable arg") {
         TestEnvironment env(10);
         const std::string gz = write_args_trace(env);
         LazyFrame lf = scan::collect(scan::ordered(scan::select(
-            scan::from_file(gz, determine_index_path(gz, "")),
+            scan::from_file(gz, std::string(determine_index_path(gz, ""))),
             {"name", "cat", "pid", "tid", "ts", "dur", "ph", "x"})));
         const std::int32_t x =
             static_cast<std::int32_t>(lf.schema().size()) - 1;
@@ -1468,7 +1469,7 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
 
         for (const std::string& gz : {write_args_trace(env), absent}) {
             CAPTURE(gz);
-            const std::string idx = determine_index_path(gz, "");
+            const std::string idx = std::string(determine_index_path(gz, ""));
             View v = View::from_file(gz, idx);
             const LazyFrame ordered = scan::collect(
                 scan::ordered(scan::select(scan::from_file(gz, idx), cols)));

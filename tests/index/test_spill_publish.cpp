@@ -2,8 +2,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/index.h>
@@ -21,9 +23,7 @@
 #include <atomic>
 #include <fstream>
 #include <sstream>
-#include <string>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace idx = dftracer::utils::index;
@@ -67,8 +67,8 @@ build::IndexBuildBatchResult run_build(
     build::IndexBuildBatchResult out;
     Runtime rt(4);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = std::make_shared<build::IndexBuildBatchConfig>();
-        config->file_paths = {file};
+        auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+        config->file_paths = {dstd::String(dstd::StringView(file))};
         config->index_dir = index_dir;
         config->parallelism = 2;
         config->memory_budget = memory_budget;
@@ -83,8 +83,8 @@ build::IndexBuildBatchResult run_build(
 }
 
 std::string index_root(const std::string& file, const std::string& dir) {
-    return idx::store::internal::normalize_index_root(
-        trace::internal::determine_index_path(file, dir));
+    return std::string(idx::store::internal::normalize_index_root(
+        trace::internal::determine_index_path(file, dir)));
 }
 
 }  // namespace
@@ -138,7 +138,8 @@ TEST_SUITE("SpillPublish") {
         const auto file = write_trace(env.get_dir(), "through", 12000);
         const auto dir = env.get_dir() + "/idx";
         const auto logical = idx::store::internal::get_logical_path(file);
-        const auto path = trace::internal::determine_index_path(file, dir);
+        const auto path =
+            std::string(trace::internal::determine_index_path(file, dir));
         auto index = idx::Index::open(index_root(file, dir));
         REQUIRE(index);
 
@@ -173,7 +174,8 @@ TEST_SUITE("SpillPublish") {
                 std::this_thread::yield();
             }
         });
-        const auto built = run_build(file, dir, 1 * MIB, run.factory);
+        const auto built =
+            run_build(file, dir, 1 * MIB, std::move(run.factory));
         stop.store(true);
         poller.join();
         agg::g_agg_run_bytes.store(run_bytes);

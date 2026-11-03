@@ -277,7 +277,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
 // The args fields the bloom tier covers, as the index names them. False with
 // a Python error set when bloom_fields holds a non-str.
 static bool requested_bloom_fields(IndexerObject* self,
-                                   std::vector<std::string>& out) {
+                                   dstd::Vector<dstd::String>& out) {
     if (!self->bloom_fields) {
         out.clear();
         return true;
@@ -286,7 +286,7 @@ static bool requested_bloom_fields(IndexerObject* self,
     if (!dftracer::utils::python::parse_string_seq(
             self->bloom_fields, "bloom_fields must be a sequence of str", out))
         return false;
-    for (std::string& f : out) f = extra_dimension_name(f);
+    for (dstd::String& f : out) f = extra_dimension_name(f);
     return true;
 }
 
@@ -351,10 +351,10 @@ static dstd::Optional<dftracer::utils::index::IndexerOptions> indexer_options(
     return o;
 }
 
-static std::vector<std::string> indexer_paths(IndexerObject* self) {
+static dstd::Vector<dstd::String> indexer_paths(IndexerObject* self) {
     const char* directory = as_utf8(self->directory);
     if (directory && directory[0] != '\0') return {directory};
-    std::vector<std::string> paths;
+    dstd::Vector<dstd::String> paths;
     if (self->files && PyList_Check(self->files)) {
         Py_ssize_t n = PyList_Size(self->files);
         for (Py_ssize_t i = 0; i < n; i++) {
@@ -414,7 +414,7 @@ static bool run_indexer(IndexerObject* self, IndexerCall call,
     });
 }
 
-static PyObject* string_list(const std::vector<std::string>& items) {
+static PyObject* string_list(const dstd::Vector<dstd::String>& items) {
     PyObject* list = PyList_New(static_cast<Py_ssize_t>(items.size()));
     if (!list) return nullptr;
     for (std::size_t i = 0; i < items.size(); ++i) {
@@ -536,7 +536,7 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
 
     // Determine index path using BatchIndexer's index_dir setting
     const char* index_dir = as_utf8(self->index_dir);
-    std::string index_path =
+    dstd::String index_path =
         dftracer::utils::trace::internal::determine_index_path(
             file_path, index_dir ? index_dir : "");
 
@@ -868,7 +868,7 @@ namespace {
 template <class Fn>
 PyObject* schema_str(Fn fn) {
     try {
-        const std::string s = fn();
+        const auto s = fn();
         return PyUnicode_FromStringAndSize(s.data(),
                                            static_cast<Py_ssize_t>(s.size()));
     } catch (const std::exception& e) {

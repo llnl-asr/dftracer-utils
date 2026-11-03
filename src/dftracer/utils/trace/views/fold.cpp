@@ -836,7 +836,11 @@ void decode_leaves(std::string& path, simdjson::dom::element v, LeafDecode& d) {
     }
     if (d.skip_never && d.schema && d.record_schema &&
         std::binary_search(d.record_schema->never_index.begin(),
-                           d.record_schema->never_index.end(), path))
+                           d.record_schema->never_index.end(),
+                           dstd::StringView(path),
+                           [](const auto& a, const auto& b) {
+                               return dstd::StringView(a) < dstd::StringView(b);
+                           }))
         return;
     if (d.record_schema)
         if (const auto* f = d.field(path, pos, id)) {

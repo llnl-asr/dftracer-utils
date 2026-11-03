@@ -9,7 +9,6 @@
 #include <testing_utilities.h>
 #include <unistd.h>
 
-#include <fstream>
 #include <memory>
 
 using namespace dftracer::utils;
@@ -38,7 +37,7 @@ static BuildResult run_builder(const std::string& gz,
         coro::with_scope([gz, index_dir, force, checkpoint_size,
                           out_ptr](coro::Scope&) -> coro::CoroTask<void> {
             auto cfg = std::make_shared<IndexBuildBatchConfig>();
-            cfg->file_paths = {gz};
+            cfg->file_paths = {dstd::String(dstd::StringView(gz))};
             cfg->index_dir = index_dir;
             cfg->force_rebuild = force;
             if (checkpoint_size > 0) cfg->checkpoint_size = checkpoint_size;
@@ -65,7 +64,8 @@ TEST_SUITE("IndexBuilder") {
 
         SUBCASE("Build index for gzip file") {
             std::string gz_file = env.create_dft_test_gzip_file(50);
-            std::string db_root = determine_index_path(gz_file, "");
+            std::string db_root =
+                std::string(determine_index_path(gz_file, ""));
 
             auto output = run_builder(gz_file, /*index_dir=*/"",
                                       /*force=*/false, /*checkpoint_size=*/10);

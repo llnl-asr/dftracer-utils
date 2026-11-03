@@ -6,7 +6,9 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
@@ -16,9 +18,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::index::build {
 
@@ -39,7 +38,7 @@ struct ChunkIndexerConfig {
 
     /// Optional user-specified dimensions (arbitrary dot-paths into args)
     /// e.g. "args.level", "args.mode", "args.io.size"
-    std::vector<std::string> extra_dimensions;
+    dstd::Vector<dstd::String> extra_dimensions;
 
     /// Also index the other args paths of each file, most frequent first,
     /// while their estimated evidence fits max(STATS_FLOOR_BYTES,
@@ -62,7 +61,7 @@ struct ChunkIndexerConfig {
     bool fixed_dimensions = true;
     /// The prefix under which the path catalog names an automatic key: args
     /// keys of dftracer events, or nothing when every path is a key.
-    std::string auto_prefix = "args.";
+    dstd::String auto_prefix = "args.";
 
     /// The pruning extensions to build; dft.stats is built with any of them.
     store::ExtensionMask extensions = store::PRUNING_EXTENSIONS;
@@ -114,15 +113,15 @@ struct ChunkIndexerConfig {
             throw common::DFTUtilsException(
                 common::ErrorCode::InvalidArgument,
                 "stats_share must be in (0, 1], got " +
-                    std::to_string(stats_share));
+                    dstd::to_string(stats_share));
     }
 };
 
 /// A field as the index names its dimension: an args key or a dotted path
 /// below args, without the "args." prefix a query column carries.
-inline std::string extra_dimension_name(dstd::StringView field) {
+inline dstd::String extra_dimension_name(dstd::StringView field) {
     if (field.rfind("args.", 0) == 0) field.remove_prefix(5);
-    return std::string(field);
+    return dstd::String(field);
 }
 
 /// The settings files of `schema` are indexed with: path-decoded records get
@@ -143,7 +142,7 @@ inline ChunkIndexerConfig for_schema(ChunkIndexerConfig config,
         config.extensions = kept;
     }
     for (const auto& path : schema.always_index) {
-        std::string dim = by_path ? path : extra_dimension_name(path);
+        dstd::String dim = by_path ? path : extra_dimension_name(path);
         if (std::find(config.extra_dimensions.begin(),
                       config.extra_dimensions.end(),
                       dim) == config.extra_dimensions.end())
@@ -158,31 +157,31 @@ inline ChunkIndexerConfig for_schema(ChunkIndexerConfig config,
 
 /// Tracks which dimensions have been indexed per chunk for incremental updates
 struct IndexedDimensions {
-    std::vector<std::string> dimensions;
+    dstd::Vector<dstd::String> dimensions;
 
-    bool has_dimension(const std::string& dim) const {
+    bool has_dimension(const dstd::String& dim) const {
         return std::find(dimensions.begin(), dimensions.end(), dim) !=
                dimensions.end();
     }
 
-    std::vector<std::string> missing_dimensions(
+    dstd::Vector<dstd::String> missing_dimensions(
         const ChunkIndexerConfig& config) const {
-        std::vector<std::string> missing;
+        dstd::Vector<dstd::String> missing;
 
-        auto check_dim = [this, &missing](const std::string& name,
+        auto check_dim = [this, &missing](const dstd::String& name,
                                           bool enabled) {
             if (enabled && !has_dimension(name)) {
                 missing.emplace_back(name);
             }
         };
 
-        check_dim(std::string("name"), config.index_name);
-        check_dim(std::string("cat"), config.index_cat);
-        check_dim(std::string("pid"), config.index_pid);
-        check_dim(std::string("tid"), config.index_tid);
-        check_dim(std::string("hhash"), config.index_hhash);
-        check_dim(std::string("fhash"), config.index_fhash);
-        check_dim(std::string("shash"), config.index_shash);
+        check_dim(dstd::String("name"), config.index_name);
+        check_dim(dstd::String("cat"), config.index_cat);
+        check_dim(dstd::String("pid"), config.index_pid);
+        check_dim(dstd::String("tid"), config.index_tid);
+        check_dim(dstd::String("hhash"), config.index_hhash);
+        check_dim(dstd::String("fhash"), config.index_fhash);
+        check_dim(dstd::String("shash"), config.index_shash);
 
         for (const auto& dim : config.extra_dimensions) {
             check_dim(dim, true);
@@ -202,8 +201,8 @@ struct ChunkIndexState {
 };
 
 struct ChunkIndexerInput {
-    std::string file_path;
-    std::string index_path;
+    dstd::String file_path;
+    dstd::String index_path;
     std::size_t checkpoint_size = 0;
     std::uint64_t checkpoint_idx = 0;
     std::size_t start_byte = 0;
@@ -211,12 +210,12 @@ struct ChunkIndexerInput {
     ChunkIndexerConfig config;
     std::size_t batch_size = 4 * 1024 * 1024;
 
-    ChunkIndexerInput& with_file_path(const std::string& path) {
+    ChunkIndexerInput& with_file_path(const dstd::String& path) {
         file_path = path;
         return *this;
     }
 
-    ChunkIndexerInput& with_index_path(const std::string& path) {
+    ChunkIndexerInput& with_index_path(const dstd::String& path) {
         index_path = path;
         return *this;
     }

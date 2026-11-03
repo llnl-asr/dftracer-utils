@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
@@ -40,12 +41,14 @@ std::string write_tagged(TestEnvironment& env, std::size_t path_budget) {
     (void)dftracer::utils::dstd::fs::remove(plain);
     dftracer::utils::index::IndexerOptions o;
     o.bloom->path_budget = path_budget;
-    dftracer::utils::index::Indexer::open({gz}, o).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
+                                          o)
+        .build();
     return gz;
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, determine_index_path(gz, ""));
+    return View::from_file(gz, std::string(determine_index_path(gz, "")));
 }
 
 std::size_t rows(const View& v) { return v.collect().get().num_rows(); }
@@ -70,7 +73,8 @@ TEST_SUITE("AnyView") {
         CHECK(stats.events_matched == 300);
         CHECK(stats.chunks_skipped > 0);
 
-        auto ix = dftracer::utils::index::Indexer::open({gz});
+        auto ix = dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))});
         const auto e = ix.explain(q);
         REQUIRE(e.size() == 1);
         CHECK(e[0].read.size() < e[0].chunks);
@@ -118,7 +122,8 @@ TEST_SUITE("AnyView") {
             CHECK(view_of(gz).duql(cond).sink_json(sink).get().events_matched ==
                   want);
         }
-        auto ix = dftracer::utils::index::Indexer::open({gz});
+        auto ix = dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))});
         const auto e = ix.explain(R"(any(tags, . == "absent"))");
         REQUIRE(e.size() == 1);
         CHECK(e[0].read.size() == e[0].chunks);

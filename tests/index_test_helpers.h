@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/index.h>
@@ -15,11 +16,8 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <optional>
-#include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -29,6 +27,14 @@ namespace dftu_utils_test {
 
 using dftracer::utils::index::store::IndexExtension;
 
+inline dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> dstd_paths(
+    const std::vector<std::string>& paths) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
+    out.reserve(paths.size());
+    for (const auto& path : paths) out.emplace_back(path);
+    return out;
+}
+
 template <class T>
 T index_take(
     dftracer::utils::dstd::Expected<T, dftracer::utils::dstd::Error> result) {
@@ -37,18 +43,19 @@ T index_take(
 }
 
 inline dftracer::utils::index::Index open_test_index(
-    const std::string& index_path) {
+    dftracer::utils::dstd::StringView index_path) {
     return index_take(dftracer::utils::index::Index::open(
         dftracer::utils::index::store::internal::normalize_index_root(
             index_path)));
 }
 
 inline dftracer::utils::index::Snapshot index_snapshot(
-    const std::string& index_path) {
+    dftracer::utils::dstd::StringView index_path) {
     return index_take(open_test_index(index_path).snapshot());
 }
 
-inline std::string index_key(const std::string& trace_path) {
+inline dftracer::utils::dstd::String index_key(
+    dftracer::utils::dstd::StringView trace_path) {
     return dftracer::utils::index::store::internal::get_logical_path(
         trace_path);
 }
@@ -56,8 +63,8 @@ inline std::string index_key(const std::string& trace_path) {
 /// The file of `trace_path`, found under the key the indexer files it by.
 inline dftracer::utils::dstd::Optional<dftracer::utils::index::FileRef>
 find_indexed_file(const dftracer::utils::index::Snapshot& snapshot,
-                  const std::string& trace_path) {
-    const std::string key = index_key(trace_path);
+                  dftracer::utils::dstd::StringView trace_path) {
+    const dftracer::utils::dstd::String key = index_key(trace_path);
     auto found = snapshot.file(dftracer::utils::dstd::StringView(key));
     if (!found) return dftracer::utils::dstd::nullopt;
     return std::move(*found);
@@ -65,7 +72,7 @@ find_indexed_file(const dftracer::utils::index::Snapshot& snapshot,
 
 inline dftracer::utils::index::FileRef require_indexed_file(
     const dftracer::utils::index::Snapshot& snapshot,
-    const std::string& trace_path) {
+    dftracer::utils::dstd::StringView trace_path) {
     auto found = find_indexed_file(snapshot, trace_path);
     if (!found) throw std::runtime_error("index test: the file is not indexed");
     return std::move(*found);
@@ -73,17 +80,18 @@ inline dftracer::utils::index::FileRef require_indexed_file(
 
 /// One record of the store under an index root.
 struct IndexRecord {
-    std::string name;
-    std::string scope;
-    std::string key;
-    std::string value;
+    dftracer::utils::dstd::String name;
+    dftracer::utils::dstd::String scope;
+    dftracer::utils::dstd::String key;
+    dftracer::utils::dstd::String value;
     bool operator==(const IndexRecord&) const = default;
     auto operator<=>(const IndexRecord&) const = default;
 };
 
 /// Every live record of every namespace of the index at `index_path`, in
 /// namespace, scope and key order. `scope` joins the scope paths with NUL.
-inline std::vector<IndexRecord> dump_index(const std::string& index_path) {
+inline dftracer::utils::dstd::Vector<IndexRecord> dump_index(
+    dftracer::utils::dstd::StringView index_path) {
     namespace kv = dftracer::utils::store;
     auto store = index_take(kv::Store::open(
         dftracer::utils::index::store::internal::normalize_index_root(
@@ -91,7 +99,7 @@ inline std::vector<IndexRecord> dump_index(const std::string& index_path) {
         "/store"));
     auto snapshot = index_take(store.snapshot());
     auto declared = index_take(snapshot.namespaces());
-    std::vector<IndexRecord> out;
+    dftracer::utils::dstd::Vector<IndexRecord> out;
     for (const auto& decl : declared) {
         kv::Namespace ns;
         ns.spec.name = decl.name;
@@ -120,7 +128,8 @@ inline std::vector<IndexRecord> dump_index(const std::string& index_path) {
 /// The members the index at `index_path` holds for `trace_path`.
 inline dftracer::utils::dstd::Vector<
     dftracer::utils::index::gzip::GzipMemberRecord>
-indexed_members(const std::string& index_path, const std::string& trace_path) {
+indexed_members(dftracer::utils::dstd::StringView index_path,
+                dftracer::utils::dstd::StringView trace_path) {
     const auto snapshot = index_snapshot(index_path);
     return index_take(dftracer::utils::index::members(
         snapshot, require_indexed_file(snapshot, trace_path)));
@@ -152,8 +161,9 @@ inline dftracer::utils::index::FileBuild register_test_file(
 
 /// Starts a rebuild of an indexed file, with the stat it was indexed with.
 inline dftracer::utils::index::FileBuild rebuild_test_file(
-    const dftracer::utils::index::Index& index, const std::string& trace_path) {
-    const std::string key = index_key(trace_path);
+    const dftracer::utils::index::Index& index,
+    dftracer::utils::dstd::StringView trace_path) {
+    const dftracer::utils::dstd::String key = index_key(trace_path);
     return index_take(dftracer::utils::index::rebuild(
         index, dftracer::utils::dstd::StringView(key)));
 }
@@ -190,12 +200,13 @@ inline void put_dimension_stats(
     zone.max = ds.max_value;
     zone.observed = observed;
     zone.present = present;
-    const std::string dimension(ds.dimension.data(), ds.dimension.size());
-    const std::string zone_payload = kinds::encode_zone(zone);
+    const dftracer::utils::dstd::String dimension(ds.dimension.data(),
+                                                  ds.dimension.size());
+    const dftracer::utils::dstd::String zone_payload = kinds::encode_zone(zone);
     idx::put_path_granule(build, IndexExtension::Zonemap, dimension, chunk,
                           zone_payload);
     if (compressed) {
-        const std::string counts_payload =
+        const dftracer::utils::dstd::String counts_payload =
             kinds::encode_counts({observed, *compressed});
         idx::put_path_granule(build, IndexExtension::Counts, dimension, chunk,
                               counts_payload);
@@ -208,7 +219,7 @@ inline void put_chunk_bloom(
     dftracer::utils::dstd::StringView path,
     dftracer::utils::dstd::Span<const unsigned char> bloom,
     std::uint64_t num_entries) {
-    const std::string payload =
+    const dftracer::utils::dstd::String payload =
         dftracer::utils::index::extensions::kinds::encode_bloom(bloom,
                                                                 num_entries);
     dftracer::utils::index::put_path_granule(
@@ -222,7 +233,7 @@ inline void put_file_bloom(
     dftracer::utils::dstd::StringView path,
     dftracer::utils::dstd::Span<const unsigned char> bloom,
     std::uint64_t num_entries) {
-    const std::string payload =
+    const dftracer::utils::dstd::String payload =
         dftracer::utils::index::extensions::kinds::encode_bloom(bloom,
                                                                 num_entries);
     dftracer::utils::index::put_path_file(

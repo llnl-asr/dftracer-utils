@@ -146,7 +146,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Create input with index
             std::string index_path =
-                internal::determine_index_path(gz_file, "");
+                std::string(internal::determine_index_path(gz_file, ""));
             auto input = MetadataCollectorUtilityInput::from_file(gz_file)
                              .with_index(index_path)
                              .with_checkpoint_size(1024 * 1024)  // 1MB
@@ -183,7 +183,7 @@ TEST_SUITE("MetadataCollector") {
             std::string gz_file = create_test_trace_file(test_dir, 25);
 
             std::string index_path =
-                internal::determine_index_path(gz_file, "");
+                std::string(internal::determine_index_path(gz_file, ""));
 
             // First run - build index
             {
@@ -230,7 +230,8 @@ TEST_SUITE("MetadataCollector") {
                 .str());
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         const std::string gz_file = create_test_trace_file(dir, 25);
-        const std::string root = internal::determine_index_path(gz_file, "");
+        const std::string root =
+            std::string(internal::determine_index_path(gz_file, ""));
 
         auto first = MetadataCollectorUtilityInput::from_file(gz_file)
                          .with_index(root)
@@ -331,8 +332,8 @@ TEST_SUITE("MetadataCollectorRoot") {
         for (const auto& file : files) REQUIRE(collect(file).success);
 
         // The collector keys the root by its normalized path.
-        auto root = internal::index_root(
-            index::store::internal::normalize_index_root(index_path));
+        auto root = internal::index_root(std::string(
+            index::store::internal::normalize_index_root(index_path)));
         // Forget what this process saw, so each check reads the index.
         {
             std::lock_guard<std::mutex> lock(root->current_mutex);

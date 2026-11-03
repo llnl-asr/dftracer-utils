@@ -38,7 +38,6 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include <optional>
 #include <span>
 #include <unordered_map>
 #include <utility>
@@ -55,10 +54,12 @@ const dftracer::utils::index::RecordSchema& plan_record_schema(
     const ViewPlan& plan) {
     namespace ix = dftracer::utils::index;
     if (auto p = plan.record_schema) return *p;
-    std::vector<ix::plan::RowSetFile> files;
+    dstd::Vector<ix::plan::RowSetFile> files;
     files.reserve(plan.files.size());
     for (const auto& f : plan.files)
-        files.push_back({f.file_path, f.index_path, f.fd ? f.fd->get() : -1});
+        files.push_back({dstd::String(dstd::StringView(f.file_path)),
+                         dstd::String(dstd::StringView(f.index_path)),
+                         f.fd ? f.fd->get() : -1});
     const ix::RecordSchema* found = &ix::plan::files_schema(files);
     // Registered record_schemas live until the process exits, so the pointer
     // never dangles.
@@ -69,7 +70,7 @@ const dftracer::utils::index::RecordSchema& plan_record_schema(
 
 void require_role(const ViewPlan& plan, dstd::StringView op, TraceRole role) {
     const auto& record_schema = plan_record_schema(plan);
-    auto need = [&](const std::string& path, dstd::StringView name) {
+    auto need = [&](const dstd::String& path, dstd::StringView name) {
         if (path.empty())
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::InvalidArgument, op, " needs a ", name,
@@ -124,7 +125,7 @@ dstd::Optional<duql::Query> phase_query(const ViewPlan& plan) {
 dstd::Optional<duql::Query> effective_query(const ViewPlan& plan) {
     dstd::Optional<duql::Query> q = phase_query(plan);
     if (!plan.all_records) {
-        const std::string& data = plan_record_schema(plan).data;
+        const dstd::String& data = plan_record_schema(plan).data;
         if (!data.empty() && data != dftracer::utils::index::NO_METADATA) {
             duql::Query d = duql::parse_or_throw(data);
             q = q ? duql::conjoin(*q, d) : std::move(d);
@@ -246,7 +247,7 @@ ViewDefinition make_vdef(const ViewPlan& plan, bool for_aggregation) {
         if (!vdef.paths.empty() && plan.timed) {
             for (const auto* p : {&roles.time, &roles.duration, &roles.entity,
                                   &roles.lane, &roles.name})
-                if (!p->empty()) vdef.paths.push_back(*p);
+                if (!p->empty()) vdef.paths.emplace_back(p->data(), p->size());
             std::sort(vdef.paths.begin(), vdef.paths.end());
             vdef.paths.erase(std::unique(vdef.paths.begin(), vdef.paths.end()),
                              vdef.paths.end());

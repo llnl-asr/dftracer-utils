@@ -6,11 +6,14 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
@@ -41,7 +44,6 @@
 #include <fstream>
 #include <limits>
 #include <memory>
-#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -91,12 +93,12 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
 
 // True when the index at `root` no longer matches `paths`: a path is not
 // indexed, its stat changed, or the index holds a path that is not listed.
-bool index_is_stale(const std::string& root,
-                    const std::vector<std::string>& paths) {
+bool index_is_stale(dstd::StringView root,
+                    const dstd::Vector<dstd::String>& paths) {
     namespace ix = dftracer::utils::index;
     const auto snapshot = common::unwrap(ix::plan::open_snapshot(root));
-    dstd::StringViewSet listed;
-    std::vector<std::string> logical_paths;
+    ankerl::unordered_dense::set<dstd::StringView> listed;
+    dstd::Vector<dstd::String> logical_paths;
     logical_paths.reserve(paths.size());
     for (const auto& path : paths) {
         logical_paths.push_back(ix::store::internal::get_logical_path(path));
@@ -545,13 +547,13 @@ coro::CoroTask<void> TraceIndex::initialize() {
     // served from a stale index. Drop any (shared) index root whose sources
     // changed since indexing; the loop then rebuilds it as if absent.
     {
-        std::unordered_map<std::string, std::vector<std::string>> by_root;
+        dstd::Map<dstd::String, dstd::Vector<dstd::String>> by_root;
         for (const auto& entry : entries)
-            by_root[internal::determine_index_path(
-                        std::string(entry.path.str()), index_dir_)]
+            by_root[internal::determine_index_path(entry.path.c_str(),
+                                                   index_dir_)]
                 .emplace_back(entry.path.str());
         for (auto& [root, paths] : by_root) {
-            const std::string store = index::store_of(root);
+            const dstd::String store = index::store_of(root);
             if (!common::unwrap(dstd::fs::exists(dstd::PathView(store)))) {
                 continue;
             }
@@ -640,10 +642,11 @@ coro::CoroTask<void> TraceIndex::initialize() {
                         by_index[(*files_ptr)[idx].index_path].push_back(idx);
 
                     for (auto& [ipath, idxs] : by_index) {
-                        std::vector<std::string> paths;
+                        dstd::Vector<dstd::String> paths;
                         paths.reserve(idxs.size());
                         for (auto idx : idxs)
-                            paths.push_back((*files_ptr)[idx].path);
+                            paths.emplace_back(
+                                dstd::StringView((*files_ptr)[idx].path));
                         dftracer::utils::index::IndexerOptions opts;
                         opts.index_dir = index_dir;
                         opts.checkpoint_size = checkpoint_size;
@@ -835,10 +838,12 @@ coro::CoroTask<void> TraceIndex::initialize() {
     // fails with the View's error.
     if (!files_.empty()) {
         try {
-            std::vector<dftracer::utils::index::plan::RowSetFile> sources;
+            dstd::Vector<dftracer::utils::index::plan::RowSetFile> sources;
             sources.reserve(files_.size());
             for (const FileInfo& f : files_)
-                sources.push_back({f.path, f.index_path});
+                sources.push_back(
+                    {dstd::String(dstd::StringView(f.path)),
+                     dstd::String(dstd::StringView(f.index_path))});
             record_schema_ =
                 &dftracer::utils::index::plan::files_schema(sources);
             for (std::size_t i = 0; i < files_.size(); ++i) {
@@ -879,14 +884,17 @@ std::string TraceIndex::resolve(dstd::StringView rowset, dstd::StringView key,
     std::lock_guard<std::mutex> lk(rowset_mutex_);
     auto it = rowset_columns_.find(column);
     if (it == rowset_columns_.end()) {
-        std::vector<dftracer::utils::index::plan::RowSetFile> files;
-        for (const auto& f : files_) files.push_back({f.path, f.index_path});
+        dstd::Vector<dftracer::utils::index::plan::RowSetFile> files;
+        for (const auto& f : files_)
+            files.push_back({dstd::String(dstd::StringView(f.path)),
+                             dstd::String(dstd::StringView(f.index_path))});
         dftracer::utils::index::plan::GroupResolver r(
-            files,
-            {{"v", std::string(rowset), std::string(key), std::string(value)}});
+            files, {{"v", dstd::String(rowset), dstd::String(key),
+                     dstd::String(value)}});
         std::unordered_map<std::string, std::string> values;
         if (const auto* c = r.column("v"))
-            for (const auto& [kk, vv] : *c) values.emplace(kk, vv);
+            for (const auto& [kk, vv] : *c)
+                values.emplace(kk, std::string(vv.data(), vv.size()));
         it =
             rowset_columns_.emplace(std::move(column), std::move(values)).first;
     }

@@ -10,7 +10,9 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/file_group.h>
@@ -33,9 +35,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <functional>
-#include <memory>
-#include <optional>
 
 namespace dftracer::utils::index::build {
 
@@ -45,9 +44,9 @@ namespace {
 
 struct PreparedFile {
     std::size_t index;
-    std::string file_path;
-    std::string logical_path;
-    std::string index_path;
+    dstd::String file_path;
+    dstd::String logical_path;
+    dstd::String index_path;
     std::uint64_t file_hash = 0;
     std::uint64_t file_mtime = 0;
     std::int64_t file_mtime_ns = 0;
@@ -62,17 +61,17 @@ struct ParsedBloomJob {
     index::gzip::GzipBuildArtifacts artifacts;
     // The intern feeds the folds during the parse only; write reads the
     // already-resolved chunk/dictionary state, so the folds outlive it.
-    std::unique_ptr<dftracer::utils::dstd::StringIntern> intern;
-    std::unique_ptr<index::extensions::BloomFold> bloom_fold;
-    std::unique_ptr<index::extensions::RowSetFold> rowset_fold;
-    std::unique_ptr<index::schemas::dft::agg::AggregationFold> agg_fold;
-    std::unique_ptr<index::extensions::PluginBuilders> plugin_builders;
+    dstd::UniquePtr<dftracer::utils::dstd::StringIntern> intern;
+    dstd::UniquePtr<index::extensions::BloomFold> bloom_fold;
+    dstd::UniquePtr<index::extensions::RowSetFold> rowset_fold;
+    dstd::UniquePtr<index::schemas::dft::agg::AggregationFold> agg_fold;
+    dstd::UniquePtr<index::extensions::PluginBuilders> plugin_builders;
     dstd::Optional<index::schemas::dft::agg::AggFoldOutput> agg_output;
     const index::RecordSchema* schema = nullptr;
 };
 
-PreparedFile prepare_file(std::size_t i, const std::string& file_path,
-                          const std::string& index_path) {
+PreparedFile prepare_file(std::size_t i, const dstd::String& file_path,
+                          const dstd::String& index_path) {
     PreparedFile pf;
     pf.index = i;
     pf.file_path = file_path;
@@ -92,35 +91,35 @@ struct Admission {
     FileAdmission files;
     bool spill = false;
     /// RecordSchema id for every file; empty detects each file's.
-    std::string schema;
+    dstd::String schema;
     std::atomic<std::size_t> spilled{0};
     std::atomic<std::size_t> max_spill_runs{0};
     FoldBufferPool buffers;
 };
 
 struct BatchWriteState {
-    dstd::SharedPtr<std::vector<IndexBuildResult>> results;
-    dstd::SharedPtr<std::vector<dstd::Optional<ParsedBloomJob>>> parsed_jobs;
-    dstd::SharedPtr<std::vector<PreparedFile>> prepared;
-    dstd::SharedPtr<std::vector<std::string>> bloom_dims;
-    std::string index_path;
+    dstd::SharedPtr<dstd::Vector<IndexBuildResult>> results;
+    dstd::SharedPtr<dstd::Vector<dstd::Optional<ParsedBloomJob>>> parsed_jobs;
+    dstd::SharedPtr<dstd::Vector<PreparedFile>> prepared;
+    dstd::SharedPtr<dstd::Vector<dstd::String>> bloom_dims;
+    dstd::String index_path;
     IndexBuildBatchMetrics metrics;
     index::build::ChunkIndexerConfig bloom_config;
     std::size_t num_files = 0;
-    std::vector<std::uint64_t> file_costs;
+    dstd::Vector<std::uint64_t> file_costs;
     std::size_t parallelism = 0;
     std::size_t checkpoint_size = 0;
     bool build_bloom = true;
     bool tier_only = false;
     std::uint64_t memory_budget = 0;
-    std::string schema;
+    dstd::String schema;
     IndexBuildBatchConfig::AggFoldFactory agg_fold_factory;
     IndexBuildBatchConfig::ProgressFn progress;
 };
 
-static std::string basename_of(const std::string& path) {
+static dstd::String basename_of(const dstd::String& path) {
     auto pos = path.find_last_of('/');
-    return pos == std::string::npos ? path : path.substr(pos + 1);
+    return pos == dstd::String::npos ? path : path.substr(pos + 1);
 }
 
 struct BlockWriter {
@@ -131,9 +130,9 @@ struct BlockWriter {
     index::build::BatchWriterMetrics* metrics = nullptr;
 };
 
-static coro::CoroTask<void> commit_group(BlockWriter* writer,
-                                         std::vector<IndexBuildResult>* results,
-                                         index::build::FileGroup& group) {
+static coro::CoroTask<void> commit_group(
+    BlockWriter* writer, dstd::Vector<IndexBuildResult>* results,
+    index::build::FileGroup& group) {
     if (group.size() == 0) co_return;
     const auto w0 = std::chrono::steady_clock::now();
     auto result = co_await group.commit();
@@ -160,14 +159,14 @@ static coro::CoroTask<void> parse_and_write_worker(
     coro::Scope* scope, std::atomic<std::size_t>* next_block_ptr,
     const dstd::Vector<std::size_t>* block_starts,
     std::atomic<std::size_t>* done_ptr,
-    std::vector<IndexBuildResult>* results_ptr,
-    std::vector<dstd::Optional<ParsedBloomJob>>* parsed_jobs_ptr,
-    std::vector<PreparedFile>* prepared_ptr, std::size_t checkpoint_size,
+    dstd::Vector<IndexBuildResult>* results_ptr,
+    dstd::Vector<dstd::Optional<ParsedBloomJob>>* parsed_jobs_ptr,
+    dstd::Vector<PreparedFile>* prepared_ptr, std::size_t checkpoint_size,
     index::build::ChunkIndexerConfig bloom_config,
     std::atomic<std::uint64_t>* parse_ns_ptr,
     const IndexBuildBatchConfig::AggFoldFactory* agg_fold_factory_ptr,
     bool build_bloom, bool tier_only,
-    const std::vector<std::uint64_t>* costs_ptr,
+    const dstd::Vector<std::uint64_t>* costs_ptr,
     const IndexBuildBatchConfig::ProgressFn* progress_ptr, Admission* admission,
     BlockWriter* writer) {
     namespace gzip_indexer = index::gzip;
@@ -228,7 +227,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                                       pf.file_hash});
                 if (!started) {
                     result.error_message =
-                        std::string(started.error().message());
+                        dstd::String(started.error().message());
                 } else {
                     build.emplace(std::move(*started));
                     namespace views = trace::views::detail;
@@ -251,14 +250,14 @@ static coro::CoroTask<void> parse_and_write_worker(
                     const auto file_config =
                         index::build::for_schema(bloom_config, schema);
 
-                    std::vector<views::Fold*> fold_ptrs;
+                    dstd::Vector<views::Fold*> fold_ptrs;
                     dstd::Optional<index::build::IndexFoldDriver> driver;
                     {
-                        job.intern = std::make_unique<
+                        job.intern = dstd::make_unique<
                             dftracer::utils::dstd::StringIntern>();
                         if (build_bloom) {
                             job.bloom_fold =
-                                std::make_unique<index::extensions::BloomFold>(
+                                dstd::make_unique<index::extensions::BloomFold>(
                                     *job.intern, file_config);
                             job.bloom_fold->set_file_bytes(pf.file_size);
                             if (admission->spill)
@@ -267,10 +266,9 @@ static coro::CoroTask<void> parse_and_write_worker(
                             fold_ptrs.push_back(job.bloom_fold.get());
                         }
                         if (!tier_only) {
-                            job.rowset_fold =
-                                std::make_unique<index::extensions::RowSetFold>(
-                                    *job.intern,
-                                    index::indexed_rowsets(schema));
+                            job.rowset_fold = dstd::make_unique<
+                                index::extensions::RowSetFold>(
+                                *job.intern, index::indexed_rowsets(schema));
                             fold_ptrs.push_back(job.rowset_fold.get());
                         }
                         if (agg_fold_factory_ptr && *agg_fold_factory_ptr) {
@@ -286,7 +284,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                         if (build_bloom) {
                             auto exts = index::extensions::plugin_extensions();
                             if (!exts.empty()) {
-                                job.plugin_builders = std::make_unique<
+                                job.plugin_builders = dstd::make_unique<
                                     index::extensions::PluginBuilders>(
                                     std::move(exts));
                                 driver->set_plugin_builders(
@@ -466,7 +464,7 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
         "blocks=%zu)",
         state->num_files, parse_workers, block_starts->size() - 1);
 
-    auto writer_metrics = std::make_shared<index::build::BatchWriterMetrics>();
+    auto writer_metrics = dstd::make_shared<index::build::BatchWriterMetrics>();
 
     // A lookup per file stalled a build on Lustre for minutes.
     index::load_index_schemas(state->index_path);
@@ -475,7 +473,7 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
     if (!writer_index) {
         for (auto& result : *state->results) {
             result.success = false;
-            result.error_message = std::string(writer_index.error().message());
+            result.error_message = dstd::String(writer_index.error().message());
         }
         co_return;
     }
@@ -483,7 +481,7 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
     if (!taken) {
         for (auto& result : *state->results) {
             result.success = false;
-            result.error_message = std::string(taken.error().message());
+            result.error_message = dstd::String(taken.error().message());
         }
         co_return;
     }
@@ -498,17 +496,18 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
         budget, parse_workers,
         g_max_sink_bytes.load(std::memory_order_relaxed));
     parse_workers = plan.workers;
-    auto admission = std::make_shared<Admission>(
+    auto admission = dstd::make_shared<Admission>(
         budget, parse_workers, plan.sink_bytes,
         std::min(state->num_files, parse_workers), state->num_files);
     admission->spill = budget != NO_BUDGET;
     admission->schema = state->schema;
     auto* admission_ptr = admission.get();
-    auto next_block = std::make_shared<std::atomic<std::size_t>>(0);
-    auto files_done = std::make_shared<std::atomic<std::size_t>>(0);
-    auto parse_ns = std::make_shared<std::atomic<std::uint64_t>>(0);
+    auto next_block = dstd::make_shared<std::atomic<std::size_t>>(0);
+    auto files_done = dstd::make_shared<std::atomic<std::size_t>>(0);
+    auto parse_ns = dstd::make_shared<std::atomic<std::uint64_t>>(0);
     auto bloom_config_holder =
-        std::make_shared<index::build::ChunkIndexerConfig>(state->bloom_config);
+        dstd::make_shared<index::build::ChunkIndexerConfig>(
+            state->bloom_config);
 
     BlockWriter block_writer;
     block_writer.metrics = writer_metrics.get();
@@ -578,9 +577,9 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
     co_return;
 }
 
-static std::unique_ptr<BatchWriteState> init_batch_write_state(
+static dstd::UniquePtr<BatchWriteState> init_batch_write_state(
     IndexBuildBatchConfig& config) {
-    auto state = std::make_unique<BatchWriteState>();
+    auto state = dstd::make_unique<BatchWriteState>();
     state->num_files = config.file_paths.size();
     state->file_costs = config.file_costs;
     state->parallelism = config.parallelism;
@@ -590,17 +589,17 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
     state->tier_only = config.tier_only;
     state->memory_budget = config.memory_budget;
     state->schema = config.schema;
-    state->progress = config.progress;
-    state->bloom_dims = std::make_shared<std::vector<std::string>>(
+    state->progress = std::move(config.progress);
+    state->bloom_dims = dstd::make_shared<dstd::Vector<dstd::String>>(
         config.bloom_dimensions.empty()
-            ? std::vector<std::string>(DEFAULT_BLOOM_DIMENSIONS.begin(),
-                                       DEFAULT_BLOOM_DIMENSIONS.end())
+            ? dstd::Vector<dstd::String>(DEFAULT_BLOOM_DIMENSIONS.begin(),
+                                         DEFAULT_BLOOM_DIMENSIONS.end())
             : std::move(config.bloom_dimensions));
     state->results =
-        std::make_shared<std::vector<IndexBuildResult>>(state->num_files);
+        dstd::make_shared<dstd::Vector<IndexBuildResult>>(state->num_files);
     state->index_path =
         determine_index_path(config.file_paths.front(), config.index_dir);
-    std::vector<PreparedFile> prepared;
+    dstd::Vector<PreparedFile> prepared;
     prepared.reserve(config.file_paths.size());
     for (std::size_t i = 0; i < config.file_paths.size(); ++i) {
         auto pf = prepare_file(i, config.file_paths[i], state->index_path);
@@ -609,9 +608,9 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
         prepared.push_back(std::move(pf));
     }
     state->prepared =
-        std::make_shared<std::vector<PreparedFile>>(std::move(prepared));
+        dstd::make_shared<dstd::Vector<PreparedFile>>(std::move(prepared));
     state->parsed_jobs =
-        std::make_shared<std::vector<dstd::Optional<ParsedBloomJob>>>(
+        dstd::make_shared<dstd::Vector<dstd::Optional<ParsedBloomJob>>>(
             state->num_files);
     if (config.agg_fold_factory) {
         state->agg_fold_factory = std::move(config.agg_fold_factory);
@@ -670,10 +669,10 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
     // The pipeline writes one index; files whose indexes live in different
     // roots build one root at a time, each into its own.
     const IndexBuildBatchConfig& config = *config_ptr;
-    std::vector<std::string> roots;
-    std::vector<std::size_t> root_of(config.file_paths.size());
+    dstd::Vector<dstd::String> roots;
+    dstd::Vector<std::size_t> root_of(config.file_paths.size());
     for (std::size_t i = 0; i < config.file_paths.size(); ++i) {
-        const std::string root =
+        const dstd::String root =
             determine_index_path(config.file_paths[i], config.index_dir);
         auto it = std::find(roots.begin(), roots.end(), root);
         root_of[i] = static_cast<std::size_t>(it - roots.begin());
@@ -685,11 +684,29 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
     IndexBuildBatchResult out;
     out.results.resize(config.file_paths.size());
     for (std::size_t r = 0; r < roots.size(); ++r) {
-        auto part = std::make_shared<IndexBuildBatchConfig>(config);
-        part->file_paths.clear();
-        part->input_fds.clear();
-        part->file_costs.clear();
-        std::vector<std::size_t> at;
+        auto part = dstd::make_shared<IndexBuildBatchConfig>();
+        part->index_dir = config.index_dir;
+        part->checkpoint_size = config.checkpoint_size;
+        part->parallelism = config.parallelism;
+        part->force_rebuild = config.force_rebuild;
+        part->build_bloom = config.build_bloom;
+        part->bloom_config = config.bloom_config;
+        part->bloom_dimensions = config.bloom_dimensions;
+        part->tier_only = config.tier_only;
+        part->memory_budget = config.memory_budget;
+        part->schema = config.schema;
+        if (config.agg_fold_factory)
+            part->agg_fold_factory =
+                [factory = &config.agg_fold_factory](
+                    dftracer::utils::dstd::StringIntern& build_intern) {
+                    return (*factory)(build_intern);
+                };
+        if (config.progress)
+            part->progress = [progress = &config.progress](std::size_t done,
+                                                           std::size_t total) {
+                (*progress)(done, total);
+            };
+        dstd::Vector<std::size_t> at;
         for (std::size_t i = 0; i < config.file_paths.size(); ++i) {
             if (root_of[i] != r) continue;
             at.push_back(i);

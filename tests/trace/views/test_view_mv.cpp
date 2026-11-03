@@ -18,7 +18,8 @@ using namespace test_view_common;
 namespace {
 
 std::string views_root_of(const std::string& gz) {
-    return dftracer::utils::index::views_dir(determine_index_path(gz, ""));
+    return std::string(dftracer::utils::index::views_dir(
+        std::string(determine_index_path(gz, ""))));
 }
 
 // Every part file of the single MV, including the rank subdirs below parts/.
@@ -41,9 +42,9 @@ std::vector<std::string> mv_parts(const std::string& gz) {
     const std::string root = views_root_of(gz);
     for (const auto& e : dftu_utils_test::list_dir(root)) {
         if (e.kind != dftracer::utils::dstd::fs::FileKind::Directory) continue;
-        collect_parts(
-            dftracer::utils::index::view_parts_dir(std::string(e.path.str())),
-            parts);
+        collect_parts(std::string(dftracer::utils::index::view_parts_dir(
+                          std::string(e.path.str()))),
+                      parts);
     }
     std::sort(parts.begin(), parts.end());
     return parts;
@@ -100,7 +101,7 @@ TEST_SUITE("ViewMV") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // 30 read, 20 fwrite
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto reads = [&]() {
             return View::from_file(gz, idx).duql(R"(name == "read")");
@@ -125,7 +126,7 @@ TEST_SUITE("ViewMV") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // Baseline for the narrow query, before any MV exists.
         StringSink base;
@@ -152,7 +153,7 @@ TEST_SUITE("ViewMV") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         View::from_file(gz, idx).duql(R"(name == "read")").materialize().get();
 
@@ -171,7 +172,7 @@ TEST_SUITE("ViewMV") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 300, 0);  // ~300 read events
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // Tiny checkpoint + part size so the write rolls to many parts.
         View::from_file(gz, idx)
@@ -190,7 +191,7 @@ TEST_SUITE("ViewMV") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         View::from_file(gz, idx).duql(R"(name == "read")").materialize().get();
         REQUIRE(mv_dir_count(gz) == 1);
@@ -232,8 +233,9 @@ TEST_SUITE("ViewMV") {
         };
         std::string a = write_mixed("da", 1000);
         std::string b = write_mixed("db", 900000);
-        const std::vector<ViewFile> both{{a, determine_index_path(a, "")},
-                                         {b, determine_index_path(b, "")}};
+        const std::vector<ViewFile> both{
+            {a, std::string(determine_index_path(a, ""))},
+            {b, std::string(determine_index_path(b, ""))}};
         const std::string vroot = env.get_dir() + "/mv";
 
         auto full = [&]() {
@@ -254,8 +256,8 @@ TEST_SUITE("ViewMV") {
         int r = 0;
         for (const auto& f : both) {
             const std::string sub =
-                dftracer::utils::index::view_parts_dir(dir) + "/shard-" +
-                std::to_string(r++);
+                std::string(dftracer::utils::index::view_parts_dir(dir)) +
+                "/shard-" + std::to_string(r++);
             REQUIRE(
                 dftracer::utils::dstd::fs::create_directories(sub).has_value());
             TraceWriteOptions opts;
@@ -271,7 +273,8 @@ TEST_SUITE("ViewMV") {
         full().register_materialized(dir);
         // The parts of both ranks sit under the one view root.
         std::vector<std::string> parts;
-        collect_parts(dftracer::utils::index::view_parts_dir(dir), parts);
+        collect_parts(std::string(dftracer::utils::index::view_parts_dir(dir)),
+                      parts);
         CHECK(parts.size() == 2);
 
         // The full query now reads the two shard parts, not the base.
@@ -281,10 +284,12 @@ TEST_SUITE("ViewMV") {
         CHECK(astats.events_scanned == 60);  // only the shards' read events
         for (int k = 0; k < r; ++k)
             CHECK(dftracer::utils::dstd::fs::exists(
-                      dftracer::utils::index::store_dir(determine_index_path(
-                          dftracer::utils::index::view_parts_dir(dir) +
-                              "/shard-" + std::to_string(k),
-                          "")))
+                      dftracer::utils::index::store_dir(
+                          std::string(determine_index_path(
+                              std::string(
+                                  dftracer::utils::index::view_parts_dir(dir)) +
+                                  "/shard-" + std::to_string(k),
+                              ""))))
                       .value());
     }
 
@@ -292,7 +297,7 @@ TEST_SUITE("ViewMV") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         auto reads = [&]() {
             return View::from_file(gz, idx).duql(R"(name == "read")");
@@ -314,7 +319,7 @@ TEST_SUITE("ViewMV") {
         CHECK(dftracer::utils::dstd::fs::exists(
                   dftracer::utils::dstd::Path(root) / "store")
                   .value());
-        CHECK(determine_index_path(root, "") == root);
+        CHECK(std::string(determine_index_path(root, "")) == root);
         const auto parts = mv_parts(gz);
         REQUIRE(parts.size() == 1);
         CHECK(dftracer::utils::dstd::PathView(parts.front()).parent().str() ==

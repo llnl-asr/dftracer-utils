@@ -470,10 +470,11 @@ std::unique_ptr<Fixture> build(std::uint64_t interval_us,
     o.checkpoint_size = CHECKPOINT_SIZE;
     o.parallelism = 4;
     o.aggregation = make_config(interval_us);
-    auto ix = index::Indexer::open(fx->files, o);
+    auto ix = index::Indexer::open(
+        dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o);
     ix.build();
-    fx->index_path =
-        trace::internal::determine_index_path(fx->files[0], fx->index_dir);
+    fx->index_path = std::string(
+        trace::internal::determine_index_path(fx->files[0], fx->index_dir));
     return fx;
 }
 
@@ -735,7 +736,8 @@ TEST_SUITE("AggQuery") {
         o.index_dir = index_dir;
         o.checkpoint_size = CHECKPOINT_SIZE;
         o.parallelism = 2;
-        auto ix = index::Indexer::open(files, o);
+        auto ix = index::Indexer::open(
+            dstd::Vector<dstd::String>(files.begin(), files.end()), o);
         ix.build();
 
         dstd::Vector<trace::comparator::ComparisonFilter> filters;
@@ -945,9 +947,11 @@ TEST_SUITE("AggQuery") {
         o.index_dir = fx->index_dir;
         o.checkpoint_size = CHECKPOINT_SIZE;
         o.aggregation = make_config(FIVE_SECONDS_US);
-        index::Indexer::open(fx->files, o).build();
-        fx->index_path =
-            trace::internal::determine_index_path(gz, fx->index_dir);
+        index::Indexer::open(
+            dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o)
+            .build();
+        fx->index_path = std::string(
+            trace::internal::determine_index_path(gz, fx->index_dir));
 
         // Every key finer than category and name, with quantiles: the stored
         // partials answer none of it whole, so every chunk is re-read.
@@ -1093,9 +1097,11 @@ TEST_SUITE("AggQuery") {
         o.index_dir = fx->index_dir;
         o.checkpoint_size = ONE_CHUNK;
         o.aggregation = make_config(FIVE_SECONDS_US);
-        index::Indexer::open(fx->files, o).build();
-        fx->index_path =
-            trace::internal::determine_index_path(fx->files[0], fx->index_dir);
+        index::Indexer::open(
+            dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o)
+            .build();
+        fx->index_path = std::string(
+            trace::internal::determine_index_path(fx->files[0], fx->index_dir));
 
         AggQuery q = make_query(*fx, Ask{}, FIVE_SECONDS_US);
         q.config.compute_percentiles = false;

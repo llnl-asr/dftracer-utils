@@ -19,6 +19,8 @@
 #include <fstream>
 #include <string>
 
+using namespace dftracer::utils;
+
 using dftracer::utils::plugins::ConfigTree;
 using dftracer::utils::plugins::PluginRun;
 using dftracer::utils::plugins::Plugins;
@@ -130,9 +132,11 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
     const std::string gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
     (void)dftracer::utils::dstd::fs::remove(plain);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
+        .build();
     using dftracer::utils::trace::internal::determine_index_path;
-    View view = View::from_files({ViewFile{gz, determine_index_path(gz, "")}});
+    View view = View::from_files(
+        {ViewFile{gz, std::string(determine_index_path(gz, ""))}});
     PluginRun run = run_set(*set, view, "reads-projection");
 
     CHECK(result_text(run, "reads_probe.columns") == "k,x");
@@ -147,7 +151,8 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
     REQUIRE(narrowed.has_value());
     PluginRun projected =
         run_set(*narrowed,
-                View::from_files({ViewFile{gz, determine_index_path(gz, "")}})
+                View::from_files(
+                    {ViewFile{gz, std::string(determine_index_path(gz, ""))}})
                     .select({"k"}),
                 "reads-projection");
     CHECK(result_text(projected, "reads_probe.args_x_sum") == "190.000000");

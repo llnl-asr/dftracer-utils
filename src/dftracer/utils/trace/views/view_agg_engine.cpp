@@ -37,7 +37,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 namespace dftracer::utils::trace::views::detail {
@@ -1213,7 +1212,7 @@ namespace {
 
 // A paginated result is never cached.
 void persist_rollup(const ViewPlan& plan, const dataframe::AggState& state) {
-    const std::string rdir =
+    const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (rdir.empty()) return;
     plan_record_schema(plan);

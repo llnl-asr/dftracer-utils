@@ -18,8 +18,8 @@ bool is_directory_input(dstd::CStringView path) {
 
 }  // namespace
 
-std::string determine_index_path(dstd::CStringView cpath,
-                                 dstd::StringView index_dir) {
+dstd::String determine_index_path(dstd::CStringView cpath,
+                                  dstd::StringView index_dir) {
     const dstd::StringView path = cpath.view();
     // A trace file name needs no stat to tell it from a directory.
     dstd::StringView root = index_dir;
@@ -40,7 +40,7 @@ std::string determine_index_path(dstd::CStringView cpath,
     return dftracer::utils::index::store::internal::normalize_index_root(root);
 }
 
-dstd::StringView to_lower_ascii(dstd::StringView s, std::string& storage) {
+dstd::StringView to_lower_ascii(dstd::StringView s, dstd::String& storage) {
     bool has_upper = false;
     for (char c : s) {
         if (c >= 'A' && c <= 'Z') {

@@ -3,9 +3,11 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/duql/query.h>
@@ -31,11 +33,11 @@
 namespace dftracer::utils::index {
 
 struct Indexer::Impl {
-    std::vector<std::string> paths;
+    dstd::Vector<dstd::String> paths;
     /// The scan from open_scanned(), used by the first call that needs sizes
     /// and mtimes. Empty for open(), whose calls stat the files.
     mutable std::mutex opened_mutex;
-    mutable std::vector<utilities::filesystem::FileEntry> opened;
+    mutable dstd::Vector<utilities::filesystem::FileEntry> opened;
     IndexerOptions options;
     store::ExtensionMask extensions;
 
@@ -58,30 +60,28 @@ struct Indexer::Impl {
     }
 
     // The traces grouped by index root, in open order within a root.
-    ankerl::unordered_dense::map<std::string, std::vector<const std::string*>>
-    by_index() const {
-        ankerl::unordered_dense::map<std::string,
-                                     std::vector<const std::string*>>
-            out;
+    dstd::HashMap<dstd::String, dstd::Vector<const dstd::String*>> by_index()
+        const {
+        dstd::HashMap<dstd::String, dstd::Vector<const dstd::String*>> out;
         for (const auto& p : paths)
             out[trace::internal::determine_index_path(p, options.index_dir)]
                 .push_back(&p);
         return out;
     }
 
-    std::vector<utilities::filesystem::FileEntry> take_entries() const {
+    dstd::Vector<utilities::filesystem::FileEntry> take_entries() const {
         {
             std::lock_guard<std::mutex> lock(opened_mutex);
             if (!opened.empty()) return std::move(opened);
         }
-        std::vector<utilities::filesystem::FileEntry> out;
+        dstd::Vector<utilities::filesystem::FileEntry> out;
         out.reserve(paths.size());
         for (const auto& p : paths) out.emplace_back(dstd::StringView(p));
         return out;
     }
 
     build::ResolverInput resolver_input(
-        std::vector<utilities::filesystem::FileEntry> entries) const {
+        dstd::Vector<utilities::filesystem::FileEntry> entries) const {
         build::ResolverInput in;
         in.files = paths;
         in.entries = std::move(entries);
@@ -97,7 +97,7 @@ struct Indexer::Impl {
 
     build::ResolveAndBuildInput build_input(
         bool force,
-        std::vector<utilities::filesystem::FileEntry> entries) const {
+        dstd::Vector<utilities::filesystem::FileEntry> entries) const {
         build::ResolveAndBuildInput in;
         in.files = paths;
         in.entries = std::move(entries);
@@ -152,16 +152,16 @@ void throw_on_error(const dstd::Error& error, dstd::StringView what) {
 
 /// Clears plugin extension `name` of every file in `traces`.
 coro::CoroTask<void> drop_plugin_extension(
-    const std::string& index_path, const std::string& name,
-    const std::vector<const std::string*>& traces) {
+    const dstd::String& index_path, const dstd::String& name,
+    const dstd::Vector<const dstd::String*>& traces) {
     auto opened =
         Index::open(store::internal::normalize_index_root(index_path));
     if (!opened) throw_on_error(opened.error(), "drop extension " + name);
-    std::vector<std::string> logical;
+    dstd::Vector<dstd::String> logical;
     logical.reserve(traces.size());
     for (const auto* p : traces)
         logical.push_back(store::internal::get_logical_path(*p));
-    std::vector<dstd::StringView> views;
+    dstd::Vector<dstd::StringView> views;
     views.reserve(logical.size());
     for (const auto& path : logical) views.emplace_back(path);
     auto dropped = co_await remove_plugin(
@@ -170,7 +170,7 @@ coro::CoroTask<void> drop_plugin_extension(
     if (!dropped) throw_on_error(dropped.error(), "drop extension " + name);
 }
 
-store::IndexExtension tier_extension(const std::string& name) {
+store::IndexExtension tier_extension(const dstd::String& name) {
     if (extensions::find_plugin_extension(name))
         return store::IndexExtension::Plugin;
     auto ext = store::parse_extension(name);
@@ -218,11 +218,12 @@ Indexer Indexer::finish_open(dstd::SharedPtr<Impl> impl) {
     return Indexer(std::move(impl));
 }
 
-Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
+Indexer Indexer::open(dstd::Vector<dstd::String> paths,
+                      IndexerOptions options) {
     if (paths.empty())
         throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
                                         "Indexer::open: no trace paths given");
-    auto impl = std::make_shared<Impl>();
+    auto impl = dstd::make_shared<Impl>();
     impl->options = std::move(options);
     validate_options(*impl);
     for (auto& p : paths) {
@@ -249,19 +250,19 @@ Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
                         /*with_size=*/false});
             })));
         for (auto& e : matched)
-            impl->paths.push_back(std::string(e.path.str()));
+            impl->paths.push_back(dstd::String(e.path.str()));
     }
     return finish_open(std::move(impl));
 }
 
 Indexer Indexer::open_scanned(
-    std::vector<utilities::filesystem::FileEntry> files,
+    dstd::Vector<utilities::filesystem::FileEntry> files,
     IndexerOptions options) {
     if (files.empty())
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
             "Indexer::open_scanned: no trace files given");
-    auto impl = std::make_shared<Impl>();
+    auto impl = dstd::make_shared<Impl>();
     impl->options = std::move(options);
     validate_options(*impl);
     for (auto& e : files) {
@@ -277,13 +278,12 @@ coro::CoroTask<IndexStatus> Indexer::status(coro::Scope& scope) const {
 
 coro::CoroTask<IndexStatus> Indexer::status_of(
     coro::Scope& scope,
-    std::vector<utilities::filesystem::FileEntry> entries) const {
+    dstd::Vector<utilities::filesystem::FileEntry> entries) const {
     build::Resolver resolver;
     auto result =
         co_await resolver(scope, impl_->resolver_input(std::move(entries)));
     auto status = to_status(result);
-    ankerl::unordered_dense::map<std::string,
-                                 std::vector<const build::ResolvedFile*>>
+    dstd::HashMap<dstd::String, dstd::Vector<const build::ResolvedFile*>>
         by_index;
     for (const auto& f : result.cached)
         by_index[trace::internal::determine_index_path(
@@ -327,8 +327,8 @@ coro::CoroTask<IndexStatus> Indexer::rebuild(coro::Scope& scope) {
     co_return after;
 }
 
-coro::CoroTask<std::vector<IndexedFile>> Indexer::files(coro::Scope&) const {
-    std::vector<IndexedFile> out;
+coro::CoroTask<dstd::Vector<IndexedFile>> Indexer::files(coro::Scope&) const {
+    dstd::Vector<IndexedFile> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!common::unwrap(
                 dstd::fs::exists(dstd::PathView(store_of(index_path)))))
@@ -353,10 +353,10 @@ coro::CoroTask<std::vector<IndexedFile>> Indexer::files(coro::Scope&) const {
     co_return out;
 }
 
-coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(
+coro::CoroTask<dstd::Vector<FileManifest>> Indexer::manifest(
     coro::Scope&) const {
     const auto config = impl_->bloom_config();
-    std::vector<FileManifest> out;
+    dstd::Vector<FileManifest> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!common::unwrap(
                 dstd::fs::exists(dstd::PathView(store_of(index_path)))))
@@ -370,9 +370,9 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(
             if (!file) continue;
             FileManifest m{*p, index_path, {}};
             const auto recorded = common::unwrap(schema(snapshot, *file));
-            const std::string id =
-                recorded ? std::string(recorded->data(), recorded->size())
-                         : std::string{};
+            const dstd::String id =
+                recorded ? dstd::String(recorded->data(), recorded->size())
+                         : dstd::String{};
             const RecordSchema* rec_schema =
                 recorded ? &get_schema(id) : nullptr;
             const auto file_config =
@@ -386,13 +386,13 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(
                 else if (ext == store::IndexExtension::Agg)
                     want = agg_params;
                 m.extensions.push_back(
-                    {std::string(store::extension_name(ext)), state->version,
+                    {dstd::String(store::extension_name(ext)), state->version,
                      state->params_hash, state->ready,
                      extension_current(snapshot, *file, ext) &&
                          state->params_hash == want});
             }
             for (const auto& copy : common::unwrap(plugins(snapshot, *file))) {
-                const std::string name(copy.name.data(), copy.name.size());
+                const dstd::String name(copy.name.data(), copy.name.size());
                 const auto ext = extensions::find_plugin_extension(name);
                 const bool current =
                     ext && ext->current(store::ExtensionState{
@@ -406,14 +406,14 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(
     co_return out;
 }
 
-coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
-    coro::Scope&, std::string query) const {
+coro::CoroTask<dstd::Vector<FileExplain>> Indexer::explain(
+    coro::Scope&, dstd::String query) const {
     auto parsed = duql::Query::from_string(query);
     if (!parsed)
         throw common::DFTUtilsException::cat(
             common::ErrorCode::InvalidArgument,
             "Indexer::explain: ", parsed.error().format());
-    std::vector<FileExplain> out;
+    dstd::Vector<FileExplain> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!common::unwrap(
                 dstd::fs::exists(dstd::PathView(store_of(index_path))))) {
@@ -444,7 +444,7 @@ coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
 }
 
 coro::CoroTask<IndexStatus> Indexer::rebuild_extension(coro::Scope& scope,
-                                                       std::string extension) {
+                                                       dstd::String extension) {
     const auto ext = tier_extension(extension);
     auto entries = impl_->take_entries();
     auto in = impl_->build_input(false, entries);
@@ -460,7 +460,7 @@ coro::CoroTask<IndexStatus> Indexer::rebuild_extension(coro::Scope& scope,
 }
 
 coro::CoroTask<IndexStatus> Indexer::drop_extension(coro::Scope& scope,
-                                                    std::string extension) {
+                                                    dstd::String extension) {
     const auto ext = tier_extension(extension);
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!common::unwrap(
@@ -473,11 +473,11 @@ coro::CoroTask<IndexStatus> Indexer::drop_extension(coro::Scope& scope,
         auto opened = Index::open(index_path);
         if (!opened)
             throw_on_error(opened.error(), "drop extension " + extension);
-        std::vector<std::string> logical;
+        dstd::Vector<dstd::String> logical;
         logical.reserve(traces.size());
         for (const auto* p : traces)
             logical.push_back(store::internal::get_logical_path(*p));
-        std::vector<dstd::StringView> views;
+        dstd::Vector<dstd::StringView> views;
         views.reserve(logical.size());
         for (const auto& path : logical) views.emplace_back(path);
         auto dropped = co_await remove_extension(
@@ -504,33 +504,34 @@ IndexStatus Indexer::rebuild() {
                                  [this](coro::Scope& s) { return rebuild(s); });
 }
 
-std::vector<IndexedFile> Indexer::files() const {
-    return block_on<std::vector<IndexedFile>>(
+dstd::Vector<IndexedFile> Indexer::files() const {
+    return block_on<dstd::Vector<IndexedFile>>(
         impl_->runtime(), "indexer-files",
         [this](coro::Scope& s) { return files(s); });
 }
 
-std::vector<FileManifest> Indexer::manifest() const {
-    return block_on<std::vector<FileManifest>>(
+dstd::Vector<FileManifest> Indexer::manifest() const {
+    return block_on<dstd::Vector<FileManifest>>(
         impl_->runtime(), "indexer-manifest",
         [this](coro::Scope& s) { return manifest(s); });
 }
 
-std::vector<FileExplain> Indexer::explain(std::string query) const {
-    return block_on<std::vector<FileExplain>>(
+dstd::Vector<FileExplain> Indexer::explain(dstd::StringView query) const {
+    const dstd::String text(query);
+    return block_on<dstd::Vector<FileExplain>>(
         impl_->runtime(), "indexer-explain",
-        [this, &query](coro::Scope& s) { return explain(s, query); });
+        [this, &text](coro::Scope& s) { return explain(s, text); });
 }
 
-IndexStatus Indexer::rebuild_extension(std::string extension) {
-    return block_on<IndexStatus>(impl_->runtime(), "indexer-rebuild-extension",
-                                 [this, &extension](coro::Scope& s) {
-                                     return rebuild_extension(s, extension);
-                                 });
+IndexStatus Indexer::rebuild_extension(dstd::StringView extension) {
+    const dstd::String name(extension);
+    return block_on<IndexStatus>(
+        impl_->runtime(), "indexer-rebuild-extension",
+        [this, &name](coro::Scope& s) { return rebuild_extension(s, name); });
 }
 
-dataframe::DataFrame Indexer::rowset(std::string name) const {
-    std::vector<plan::RowSetFile> files;
+dataframe::DataFrame Indexer::rowset(dstd::String name) const {
+    dstd::Vector<plan::RowSetFile> files;
     for (const auto& f : this->files()) files.push_back({f.path, f.index_path});
     auto frame = plan::stored_rowset(files, name);
     if (!frame)
@@ -542,11 +543,11 @@ dataframe::DataFrame Indexer::rowset(std::string name) const {
     return std::move(*frame);
 }
 
-IndexStatus Indexer::drop_extension(std::string extension) {
-    return block_on<IndexStatus>(impl_->runtime(), "indexer-drop-extension",
-                                 [this, &extension](coro::Scope& s) {
-                                     return drop_extension(s, extension);
-                                 });
+IndexStatus Indexer::drop_extension(dstd::StringView extension) {
+    const dstd::String name(extension);
+    return block_on<IndexStatus>(
+        impl_->runtime(), "indexer-drop-extension",
+        [this, &name](coro::Scope& s) { return drop_extension(s, name); });
 }
 
 namespace {
@@ -557,11 +558,11 @@ void append_string(dstd::String& out, dstd::StringView s) {
     out.push_back('"');
 }
 
-void append_chunks(dstd::String& out, const std::vector<std::uint64_t>& v) {
+void append_chunks(dstd::String& out, const dstd::Vector<std::uint64_t>& v) {
     out.push_back('[');
     for (std::size_t i = 0; i < v.size(); ++i) {
         if (i) out.push_back(',');
-        out.append(std::to_string(v[i]));
+        out.append(dstd::to_string(v[i]));
     }
     out.push_back(']');
 }
@@ -570,7 +571,7 @@ const char* json_bool(bool b) { return b ? "true" : "false"; }
 
 }  // namespace
 
-std::string to_json(const std::vector<FileManifest>& manifest) {
+dstd::String to_json(const dstd::Vector<FileManifest>& manifest) {
     dstd::String out = "[";
     for (std::size_t i = 0; i < manifest.size(); ++i) {
         const auto& m = manifest[i];
@@ -585,7 +586,7 @@ std::string to_json(const std::vector<FileManifest>& manifest) {
             if (j) out.push_back(',');
             out.append("{\"name\":");
             append_string(out, e.name);
-            out.append(",\"version\":" + std::to_string(e.version));
+            out.append(",\"version\":" + dstd::to_string(e.version));
             char hash[17];
             std::snprintf(hash, sizeof(hash), "%016llx",
                           static_cast<unsigned long long>(e.params_hash));
@@ -597,10 +598,10 @@ std::string to_json(const std::vector<FileManifest>& manifest) {
         out.append("]}");
     }
     out.push_back(']');
-    return std::string(out);
+    return dstd::String(out);
 }
 
-std::string to_json(const std::vector<FileExplain>& explain) {
+dstd::String to_json(const dstd::Vector<FileExplain>& explain) {
     dstd::String out = "[";
     for (std::size_t i = 0; i < explain.size(); ++i) {
         const auto& f = explain[i];
@@ -609,7 +610,7 @@ std::string to_json(const std::vector<FileExplain>& explain) {
         append_string(out, f.path);
         out.append(",\"indexed\":").append(json_bool(f.indexed));
         out.append(",\"may_match\":").append(json_bool(f.may_match));
-        out.append(",\"chunks\":" + std::to_string(f.chunks));
+        out.append(",\"chunks\":" + dstd::to_string(f.chunks));
         out.append(",\"read\":");
         append_chunks(out, f.read);
         out.append(",\"extensions\":[");
@@ -627,10 +628,12 @@ std::string to_json(const std::vector<FileExplain>& explain) {
         out.append("]}");
     }
     out.push_back(']');
-    return std::string(out);
+    return dstd::String(out);
 }
 
-const std::vector<std::string>& Indexer::paths() const { return impl_->paths; }
+const dstd::Vector<dstd::String>& Indexer::paths() const {
+    return impl_->paths;
+}
 
 const IndexerOptions& Indexer::options() const { return impl_->options; }
 

@@ -3,13 +3,13 @@
 #define DFTRACER_UTILS_INDEX_BUILD_FILE_PARTITION_H
 
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/queue.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
 
 #include <algorithm>
 #include <cstddef>
-#include <queue>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::index::build {
 
@@ -21,12 +21,12 @@ namespace dftracer::utils::index::build {
 ///
 /// Complexity: O(N log N) for the initial sort + O(N log K) for the
 /// min-heap over K = num_workers. `files` is consumed.
-inline std::vector<std::vector<utilities::filesystem::FileEntry>>
-plan_lpt_partition(std::vector<utilities::filesystem::FileEntry> files,
+inline dstd::Vector<dstd::Vector<utilities::filesystem::FileEntry>>
+plan_lpt_partition(dstd::Vector<utilities::filesystem::FileEntry> files,
                    std::size_t num_workers) {
     if (num_workers == 0) num_workers = 1;
 
-    std::vector<std::vector<utilities::filesystem::FileEntry>> buckets(
+    dstd::Vector<dstd::Vector<utilities::filesystem::FileEntry>> buckets(
         num_workers);
     if (files.empty()) return buckets;
 
@@ -36,7 +36,7 @@ plan_lpt_partition(std::vector<utilities::filesystem::FileEntry> files,
     // Min-heap of (total_size, bucket_idx): next file goes to the currently
     // lightest bucket.
     using HeapEntry = dstd::Pair<std::size_t, std::size_t>;
-    std::priority_queue<HeapEntry, std::vector<HeapEntry>, std::greater<>> heap;
+    dstd::PriorityQueue<HeapEntry, std::greater<>> heap;
     for (std::size_t i = 0; i < num_workers; ++i) {
         heap.emplace(0, i);
     }

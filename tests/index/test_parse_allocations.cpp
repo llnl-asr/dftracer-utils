@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -8,8 +12,6 @@
 #include <testing_utilities.h>
 
 #include <sstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
@@ -32,7 +34,7 @@ std::string write_trace(const std::string& dir, int n, int events = EVENTS) {
             << R"(,"hhash":"a1b2c3d4e5f60718","level":)" << i % 3 << "}}\n";
     out << "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/t" + std::to_string(n) + ".pfw.gz", out.str());
+        dir + "/t" + std::string(dstd::to_string(n)) + ".pfw.gz", out.str());
 }
 
 }  // namespace
@@ -40,15 +42,15 @@ std::string write_trace(const std::string& dir, int n, int events = EVENTS) {
 TEST_SUITE("IndexParseAllocations") {
     TEST_CASE("the index parse makes few global allocations per event") {
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i)
-            files.push_back(write_trace(env.get_dir(), i));
+            files.emplace_back(write_trace(env.get_dir(), i));
 
         Runtime rt(4);
         build::IndexBuildBatchResult result;
         const auto pool_before = memory::debug_allocation_count();
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto config = std::make_shared<build::IndexBuildBatchConfig>();
+            auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
             config->file_paths = files;
             config->index_dir = env.get_dir() + "/idx";
             config->parallelism = 4;
@@ -73,15 +75,15 @@ TEST_SUITE("IndexParseAllocations") {
         constexpr int SMALL_FILES = 64;
         constexpr int SMALL_EVENTS = 500;
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < SMALL_FILES; ++i)
-            files.push_back(write_trace(env.get_dir(), i, SMALL_EVENTS));
+            files.emplace_back(write_trace(env.get_dir(), i, SMALL_EVENTS));
 
         Runtime rt(4);
         build::IndexBuildBatchResult result;
         const auto pool_before = memory::debug_allocation_count();
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto config = std::make_shared<build::IndexBuildBatchConfig>();
+            auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
             config->file_paths = files;
             config->index_dir = env.get_dir() + "/idx";
             config->parallelism = 4;

@@ -3,20 +3,21 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/tables.h>
 
 #include <algorithm>
-#include <charconv>
 #include <cstdlib>
+#include <system_error>
 
 namespace dftracer::utils::index::extensions::kinds {
 
 namespace {
-bool parse(const std::string& text, std::uint64_t& out) {
+bool parse(const dstd::String& text, std::uint64_t& out) {
     const auto* end = text.data() + text.size();
-    auto [ptr, ec] = std::from_chars(text.data(), end, out);
+    auto [ptr, ec] = dstd::from_chars(text.data(), end, out);
     return ec == std::errc() && ptr == end;
 }
 
@@ -37,7 +38,8 @@ chunk_bounds(const index::Snapshot& snapshot, const index::FileRef& file,
         std::uint64_t lo = 0;
         std::uint64_t hi = 0;
         if (zone && parse(zone->min, lo) && parse(zone->max, hi))
-            out.emplace(granule, std::make_pair(lo, hi));
+            out.emplace(granule,
+                        dstd::Pair<std::uint64_t, std::uint64_t>{lo, hi});
     }
     return out;
 }
@@ -95,7 +97,7 @@ dstd::Optional<dstd::Pair<double, double>> file_value_range(
     if (!index::extension_current(snapshot, file,
                                   index::store::IndexExtension::Zonemap))
         return out;
-    auto number = [](const std::string& text, double& v) {
+    auto number = [](const dstd::String& text, double& v) {
         char* end = nullptr;
         v = std::strtod(text.c_str(), &end);
         return !text.empty() && end == text.c_str() + text.size();
@@ -108,9 +110,9 @@ dstd::Optional<dstd::Pair<double, double>> file_value_range(
         if (!zone || zone->value_type == "string" || !number(zone->min, lo) ||
             !number(zone->max, hi) || lo > hi)
             continue;
-        out = out ? std::make_pair(std::min(out->first, lo),
-                                   std::max(out->second, hi))
-                  : std::make_pair(lo, hi);
+        out = out ? dstd::Pair<double, double>{std::min(out->first, lo),
+                                               std::max(out->second, hi)}
+                  : dstd::Pair<double, double>{lo, hi};
     }
     return out;
 }

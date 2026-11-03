@@ -2,8 +2,8 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_CORRUPT_INDEX_H
 #define DFTRACER_UTILS_INDEX_BUILD_CORRUPT_INDEX_H
 
-#include <set>
-#include <string>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/string.h>
 
 namespace dftracer::utils::index::build {
 
@@ -11,10 +11,10 @@ namespace dftracer::utils::index::build {
 /// index directory and says to delete it and build again. `tier_cleared` says
 /// the build already cleared the aggregation tier once and still failed.
 /// Nothing is deleted here; the caller may still use the directory.
-inline std::string corrupt_index_message(const std::set<std::string>& roots,
-                                         const std::string& cause,
-                                         bool tier_cleared) {
-    std::string dirs;
+inline dstd::String corrupt_index_message(const dstd::Set<dstd::String>& roots,
+                                          const dstd::String& cause,
+                                          bool tier_cleared) {
+    dstd::String dirs;
     for (const auto& root : roots) {
         if (!dirs.empty()) dirs += ", ";
         dirs += root;

@@ -60,13 +60,19 @@ std::string write_records(TestEnvironment& env, const std::string& name,
     (void)dstd::fs::remove(plain);
     dftracer::utils::index::IndexerOptions o;
     if (checkpoint_size) o.checkpoint_size = checkpoint_size;
-    if (!extensions.empty()) o.extensions = std::move(extensions);
-    dftracer::utils::index::Indexer::open({gz}, o).build();
+    if (!extensions.empty()) {
+        o.extensions.clear();
+        for (const auto& extension : extensions)
+            o.extensions.emplace_back(extension);
+    }
+    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
+                                          o)
+        .build();
     return gz;
 }
 
 View view_of(const std::string& gz) {
-    return View::from_file(gz, determine_index_path(gz, ""));
+    return View::from_file(gz, std::string(determine_index_path(gz, "")));
 }
 
 df::DataFrame frame(const View& v) {
@@ -193,7 +199,8 @@ TEST_SUITE("View duql joins") {
             dftu_utils_test::compress_file_to_gzip(pfw, gz);
             (void)dstd::fs::remove(pfw);
             REQUIRE_FALSE(
-                dstd::fs::exists(determine_index_path(gz, "")).value());
+                dstd::fs::exists(std::string(determine_index_path(gz, "")))
+                    .value());
             std::vector<std::string> want;
             for (int i = 0; i < 60; ++i) {
                 const auto k = static_cast<std::size_t>(name_of[i]);
@@ -1063,8 +1070,8 @@ TEST_SUITE("View duql joins") {
         CHECK(column(frame(view_of(gz).duql(q)), "i") ==
               std::vector<std::string>{"0", "2", "3", "5", "6", "8"});
 
-        const std::string cache =
-            dftracer::utils::index::lookups_dir(determine_index_path(gz, ""));
+        const std::string cache(dftracer::utils::index::lookups_dir(
+            std::string(determine_index_path(gz, ""))));
         REQUIRE(dstd::fs::exists(cache).value());
         dstd::fs::remove_all(cache).has_value();
         CHECK(column(frame(view_of(gz).duql(q)), "i") ==
@@ -1102,8 +1109,8 @@ TEST_SUITE("View duql joins") {
             CAPTURE(checkpoint);
             const std::string gz = write_records(
                 env, "d" + std::to_string(checkpoint), lines, 4096, checkpoint);
-            const std::string cache = dftracer::utils::index::lookups_dir(
-                determine_index_path(gz, ""));
+            const std::string cache(dftracer::utils::index::lookups_dir(
+                std::string(determine_index_path(gz, ""))));
             for (int pass = 0; pass < 3; ++pass) {
                 CAPTURE(pass);
                 if (pass == 2) dstd::fs::remove_all(cache).has_value();

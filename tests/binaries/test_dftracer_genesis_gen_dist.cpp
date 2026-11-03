@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
+
 using dftu_utils_test::ScopedTestDir;
 
 namespace {
@@ -254,7 +256,7 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
 
     ix::IndexerOptions o;
     o.index_dir = d.str();
-    auto indexer = ix::Indexer::open({out}, o);
+    auto indexer = ix::Indexer::open({dstd::String(dstd::StringView(out))}, o);
     indexer.build();
     REQUIRE(indexer.files().size() == 1);
     CHECK(indexer.files()[0].schema == "genesis");
@@ -318,7 +320,8 @@ TEST_CASE("a dftracer trace is still detected as dftracer") {
                "\n");
     ix::IndexerOptions o;
     o.index_dir = d.str();
-    auto indexer = ix::Indexer::open({trace}, o);
+    auto indexer =
+        ix::Indexer::open({dstd::String(dstd::StringView(trace))}, o);
     indexer.build();
     REQUIRE(indexer.files().size() == 1);
     CHECK(indexer.files()[0].schema == "dftracer");

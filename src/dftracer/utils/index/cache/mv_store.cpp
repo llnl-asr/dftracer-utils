@@ -6,6 +6,8 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/subsumption.h>
 #include <dftracer/utils/index/cache/mv_store.h>
@@ -24,8 +26,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <fstream>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,21 +41,21 @@ constexpr int MANIFEST_VERSION = 0;
 constexpr std::size_t SLUG_MAX = 80;
 
 struct BaseId {
-    std::string path;
+    dstd::String path;
     std::uint64_t size = 0;
     std::int64_t mtime = 0;
 };
 
-dstd::Optional<BaseId> stat_base(const std::string& path) {
+dstd::Optional<BaseId> stat_base(dstd::CStringView path) {
     dftracer::utils::common::InputFileStat st;
     if (!dftracer::utils::common::stat_input(path, st)) return dstd::nullopt;
-    return BaseId{path, st.size, st.mtime};
+    return BaseId{dstd::String(path.view()), st.size, st.mtime};
 }
 
 // Base-file identities of the plan, sorted by path so the identity hash and
 // the freshness comparison are order-independent.
-std::vector<BaseId> plan_bases(const trace::views::detail::ViewPlan& plan) {
-    std::vector<BaseId> out;
+dstd::Vector<BaseId> plan_bases(const trace::views::detail::ViewPlan& plan) {
+    dstd::Vector<BaseId> out;
     for (const auto& f : plan.files)
         if (auto b = stat_base(f.file_path)) out.push_back(*b);
     std::sort(out.begin(), out.end(),
@@ -68,10 +68,10 @@ bool allowed(char c) {
            (c >= '0' && c <= '9') || c == '_' || c == '-';
 }
 
-void replace_all(std::string& s, const std::string& from,
-                 const std::string& to) {
+void replace_all(dstd::String& s, const dstd::String& from,
+                 const dstd::String& to) {
     std::size_t pos = 0;
-    while ((pos = s.find(from, pos)) != std::string::npos) {
+    while ((pos = s.find(from, pos)) != dstd::String::npos) {
         s.replace(pos, from.size(), to);
         pos += to.size();
     }
@@ -80,8 +80,8 @@ void replace_all(std::string& s, const std::string& from,
 // Render a predicate's canonical form to a filesystem-safe, readable token.
 // Lossy by design (truncated, operators reduced to words); the identity suffix
 // and manifest carry the exact query.
-std::string sanitize_predicate(dstd::StringView canonical) {
-    std::string s(canonical);
+dstd::String sanitize_predicate(dstd::StringView canonical) {
+    dstd::String s(canonical);
     replace_all(s, " not in ", "-nin-");
     replace_all(s, " not like ", "-notlike-");
     replace_all(s, " not ilike ", "-notilike-");
@@ -98,7 +98,7 @@ std::string sanitize_predicate(dstd::StringView canonical) {
     replace_all(s, " or ", "--or--");
     replace_all(s, "not (", "not-");
 
-    std::string out;
+    dstd::String out;
     out.reserve(s.size());
     for (char c : s) {
         if (allowed(c)) {
@@ -115,13 +115,13 @@ std::string sanitize_predicate(dstd::StringView canonical) {
     return out.empty() ? "all" : out;
 }
 
-std::string window_tag(const trace::views::detail::ViewPlan& plan) {
+dstd::String window_tag(const trace::views::detail::ViewPlan& plan) {
     if (!plan.time_range) return {};
-    return "__ts-" + std::to_string(plan.time_range->first) + "-" +
-           std::to_string(plan.time_range->second);
+    return "__ts-" + dstd::to_string(plan.time_range->first) + "-" +
+           dstd::to_string(plan.time_range->second);
 }
 
-std::string phase_tag(const trace::views::detail::ViewPlan& plan) {
+dstd::String phase_tag(const trace::views::detail::ViewPlan& plan) {
     switch (plan.phase) {
         case trace::views::Phase::Events:
             return "__ph-E";
@@ -140,18 +140,18 @@ std::string phase_tag(const trace::views::detail::ViewPlan& plan) {
 // Stable identity of an MV: base files (path+size+mtime), predicate, phase, and
 // window. Two materializations collide only if genuinely identical.
 std::uint64_t identity_hash(const trace::views::detail::ViewPlan& plan) {
-    std::string k;
+    dstd::String k;
     for (const auto& b : plan_bases(plan)) {
         k += b.path;
         k.push_back('|');
-        k += std::to_string(b.size);
+        k += dstd::to_string(b.size);
         k.push_back('|');
-        k += std::to_string(b.mtime);
+        k += dstd::to_string(b.mtime);
         k.push_back('\n');
     }
     k += "s=";
-    k += std::to_string(plan.record_schema ? plan.record_schema->params_hash()
-                                           : 0);
+    k += dstd::to_string(plan.record_schema ? plan.record_schema->params_hash()
+                                            : 0);
     k += "q=";
     k += plan.query ? plan.query->source() : "";
     k += phase_tag(plan);
@@ -159,11 +159,11 @@ std::uint64_t identity_hash(const trace::views::detail::ViewPlan& plan) {
     return dftracer::utils::dstd::hash::fnv1a_hash(k);
 }
 
-std::string hex8(std::uint64_t h) {
+dstd::String hex8(std::uint64_t h) {
     char buf[9];
     std::snprintf(buf, sizeof(buf), "%08x",
                   static_cast<unsigned>(h & 0xFFFFFFFFu));
-    return std::string(buf);
+    return dstd::String(buf);
 }
 
 dstd::Path manifest_path(dstd::StringView dir) {
@@ -204,13 +204,31 @@ struct Manifest {
     /// written before it was recorded have none and never match.
     dstd::Optional<std::uint64_t> schema;
     std::uint64_t bytes = 0;
-    std::string query;
+    dstd::String query;
     int phase = static_cast<int>(trace::views::Phase::Any);
     bool has_window = false;
     double win_begin = 0.0;
     double win_end = 0.0;
-    std::vector<BaseId> bases;
+    dstd::Vector<BaseId> bases;
 };
+
+dstd::Optional<std::uint64_t> parse_hex(dstd::StringView text) {
+    if (text.empty() || text.size() > 16) return dstd::nullopt;
+    std::uint64_t out = 0;
+    for (const char c : text) {
+        unsigned digit = 0;
+        if (c >= '0' && c <= '9')
+            digit = static_cast<unsigned>(c - '0');
+        else if (c >= 'a' && c <= 'f')
+            digit = static_cast<unsigned>(c - 'a') + 10;
+        else if (c >= 'A' && c <= 'F')
+            digit = static_cast<unsigned>(c - 'A') + 10;
+        else
+            return dstd::nullopt;
+        out = (out << 4) | digit;
+    }
+    return out;
+}
 
 dstd::Optional<Manifest> read_manifest(dstd::StringView dir) {
     const dstd::Path path = manifest_path(dir);
@@ -225,11 +243,14 @@ dstd::Optional<Manifest> read_manifest(dstd::StringView dir) {
             return dstd::nullopt;
         Manifest m;
         dstd::StringView schema;
-        if (root["schema"].get(schema) == simdjson::SUCCESS)
-            m.schema = std::stoull(std::string(schema), nullptr, 16);
+        if (root["schema"].get(schema) == simdjson::SUCCESS) {
+            const auto hash = parse_hex(schema);
+            if (!hash) return dstd::nullopt;
+            m.schema = *hash;
+        }
         std::uint64_t bytes = 0;
         if (root["bytes"].get(bytes) == simdjson::SUCCESS) m.bytes = bytes;
-        m.query = std::string(dstd::StringView(root["query"]));
+        m.query = dstd::String(dstd::StringView(root["query"]));
         m.phase = static_cast<int>(std::int64_t(root["phase"]));
         simdjson::dom::element w = root["window"];
         if (!w.is_null()) {
@@ -239,7 +260,7 @@ dstd::Optional<Manifest> read_manifest(dstd::StringView dir) {
         }
         for (simdjson::dom::element b : simdjson::dom::array(root["bases"])) {
             BaseId id;
-            id.path = std::string(dstd::StringView(b["path"]));
+            id.path = dstd::String(dstd::StringView(b["path"]));
             id.size = std::uint64_t(std::int64_t(b["size"]));
             id.mtime = std::int64_t(b["mtime"]);
             m.bases.push_back(std::move(id));
@@ -293,17 +314,17 @@ void touch_last_used(dstd::StringView dir) {
 // Removes the least recently used views under `root` until they hold at most
 // cache_max_bytes(); `keep` goes only when it alone is over the budget. Another
 // view whose lock is held (it is being built) stays.
-void evict_views(const std::string& root, const std::string& keep) {
+void evict_views(dstd::StringView root, dstd::StringView keep) {
     struct Entry {
-        std::string dir;
+        dstd::String dir;
         std::uint64_t bytes;
         std::int64_t last_used;
     };
-    std::vector<Entry> entries;
+    dstd::Vector<Entry> entries;
     std::uint64_t total = 0;
     for (const dstd::Path& path :
          list_kind(root, dstd::fs::FileKind::Directory)) {
-        const std::string dir(path.str());
+        const dstd::String dir(path.str());
         auto m = read_manifest(dir);
         if (!m) continue;
         const std::uint64_t bytes = m->bytes ? m->bytes : dir_size(dir);
@@ -335,8 +356,8 @@ void evict_views(const std::string& root, const std::string& keep) {
 }
 
 // Trace files inside an MV directory (its own index is a subdir, skipped).
-std::vector<std::string> view_trace_files(const std::string& dir) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> view_trace_files(const dstd::String& dir) {
+    dstd::Vector<dstd::String> out;
     for (const dstd::Path& path : list_kind(dir, dstd::fs::FileKind::File)) {
         const dstd::StringView name = path.view().filename();
         if (name.size() >= 4 && name.compare(name.size() - 4, 4, ".pfw") == 0)
@@ -349,27 +370,38 @@ std::vector<std::string> view_trace_files(const std::string& dir) {
     return out;
 }
 
+trace::views::ViewFile view_file(const dstd::String& file,
+                                 const dstd::String& index) {
+    trace::views::ViewFile out;
+    out.file_path.assign(file.data(), file.size());
+    out.index_path.assign(index.data(), index.size());
+    return out;
+}
+
 // All part files of an MV as ViewFiles, each paired with the index its writer
 // used. Parts directly under parts/ use the view root. A distributed
 // materialize puts each rank's parts in a subdir of parts/, which resolves to
 // the same view root inside the index root and to its own root elsewhere.
-std::vector<trace::views::ViewFile> gather_view_files(const std::string& dir) {
+// keep std: ViewPlan::files is a std::vector
+std::vector<trace::views::ViewFile> gather_view_files(const dstd::String& dir) {
     namespace dfti = trace::internal;
+    // keep std: ViewPlan::files is a std::vector
     std::vector<trace::views::ViewFile> out;
-    const std::string view_idx = dfti::determine_index_path(dir, "");
-    const std::string parts = index::view_parts_dir(dir);
+    const dstd::String view_idx = dfti::determine_index_path(dir, "");
+    const dstd::String parts = index::view_parts_dir(dir);
     for (const auto& t : view_trace_files(parts))
-        out.push_back(trace::views::ViewFile{t, view_idx});
+        out.push_back(view_file(t, view_idx));
     for (const dstd::Path& sub_path :
          list_kind(parts, dstd::fs::FileKind::Directory)) {
-        const std::string sub(sub_path.str());
-        const std::string sidx = dfti::determine_index_path(sub, "");
+        const dstd::String sub(sub_path.str());
+        const dstd::String sidx = dfti::determine_index_path(sub, "");
         for (const auto& t : view_trace_files(sub))
-            out.push_back(trace::views::ViewFile{t, sidx});
+            out.push_back(view_file(t, sidx));
     }
     return out;
 }
 
+// keep std: ViewPlan::files is a std::vector
 std::uint64_t total_size(const std::vector<trace::views::ViewFile>& files) {
     std::uint64_t sum = 0;
     for (const auto& f : files) {
@@ -385,7 +417,7 @@ std::uint64_t total_size(const std::vector<trace::views::ViewFile>& files) {
 // its predicate subsumes the query's.
 bool manifest_matches(const Manifest& m,
                       const trace::views::detail::ViewPlan& plan,
-                      const std::vector<BaseId>& q_bases) {
+                      const dstd::Vector<BaseId>& q_bases) {
     if (!m.schema || *m.schema != plan.record_schema->params_hash())
         return false;
     if (m.bases.size() != q_bases.size()) return false;
@@ -425,16 +457,17 @@ bool manifest_is_stale(const Manifest& m) {
 
 }  // namespace
 
-std::string views_root(const trace::views::detail::ViewPlan& plan) {
+dstd::String views_root(const trace::views::detail::ViewPlan& plan) {
     // A view's identity needs the record schema; without it there is no cache.
     if (!plan.record_schema || plan.build_step) return {};
-    if (!plan.views_root.empty()) return plan.views_root;
-    const std::string dir = cache_dir(plan);
+    if (!plan.views_root.empty())
+        return dstd::String(dstd::StringView(plan.views_root));
+    const dstd::String dir = cache_dir(plan);
     if (dir.empty()) return {};
     return index::views_dir(dir);
 }
 
-std::string view_slug(const trace::views::detail::ViewPlan& plan) {
+dstd::String view_slug(const trace::views::detail::ViewPlan& plan) {
     const dstd::String canonical =
         plan.query ? duql::to_string(plan.query->root()) : "all";
     return sanitize_predicate(canonical) + phase_tag(plan) + window_tag(plan) +
@@ -442,15 +475,15 @@ std::string view_slug(const trace::views::detail::ViewPlan& plan) {
 }
 
 bool view_is_fresh(const trace::views::detail::ViewPlan& plan) {
-    const std::string root = views_root(plan);
+    const dstd::String root = views_root(plan);
     if (root.empty()) return false;
     const dstd::Path dir = dstd::PathView(root) / view_slug(plan);
     const auto present = dstd::fs::exists(manifest_path(dir.str()).view());
     return present && *present &&
-           !gather_view_files(std::string(dir.str())).empty();
+           !gather_view_files(dstd::String(dir.str())).empty();
 }
 
-int lock_view_dir(const std::string& dir) {
+int lock_view_dir(dstd::StringView dir) {
     const dstd::Path path = dstd::PathView(dir) / ".lock";
     const int fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0644);
     if (fd < 0) return -1;
@@ -467,11 +500,11 @@ void unlock_view_dir(int fd) {
     ::close(fd);
 }
 
-std::string materialize_view_dir(const trace::views::detail::ViewPlan& plan) {
-    const std::string root = views_root(plan);
+dstd::String materialize_view_dir(const trace::views::detail::ViewPlan& plan) {
+    const dstd::String root = views_root(plan);
     if (root.empty()) return {};
     const dstd::Path dir = dstd::PathView(root) / view_slug(plan);
-    std::string dir_text(dir.str());
+    dstd::String dir_text(dir.str());
     if (!dstd::fs::create_directories(
             dstd::PathView(index::view_parts_dir(dir_text)))) {
         return {};
@@ -479,7 +512,7 @@ std::string materialize_view_dir(const trace::views::detail::ViewPlan& plan) {
     return dir_text;
 }
 
-void register_view(const std::string& dir,
+void register_view(dstd::StringView dir,
                    const trace::views::detail::ViewPlan& plan) {
     char schema[17];
     std::snprintf(
@@ -512,19 +545,16 @@ void register_view(const std::string& dir,
     }
     j += bases.empty() ? "]\n}\n" : "\n  ]\n}\n";
 
-    {
-        std::ofstream out(manifest_path(dir).c_str(),
-                          std::ios::binary | std::ios::trunc);
-        out << j;
-    }
+    (void)dstd::fs::write_file(manifest_path(dir).view(), j);
     if (!plan.record_schema) return;
-    const std::string root = views_root(plan);
+    const dstd::String root = views_root(plan);
     if (!root.empty()) evict_views(root, dir);
 }
 
+// keep std: ViewPlan::files is a std::vector
 dstd::Optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
     const trace::views::detail::ViewPlan& plan) {
-    const std::string root = views_root(plan);
+    const dstd::String root = views_root(plan);
     if (root.empty()) return dstd::nullopt;
     const auto root_is_dir = dstd::fs::is_directory(dstd::PathView(root));
     if (!root_is_dir || !*root_is_dir) return dstd::nullopt;
@@ -538,12 +568,13 @@ dstd::Optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
         return s;
     }();
 
+    // keep std: ViewPlan::files is a std::vector
     std::vector<trace::views::ViewFile> best;
-    std::string best_dir;
+    dstd::String best_dir;
     std::uint64_t best_bytes = base_bytes;  // must beat the base to be worth it
     for (const dstd::Path& path :
          list_kind(root, dstd::fs::FileKind::Directory)) {
-        const std::string dir(path.str());
+        const dstd::String dir(path.str());
         auto m = read_manifest(dir);
         if (!m) continue;
         // Evict a view built from a base that has since changed or vanished: it

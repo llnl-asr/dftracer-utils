@@ -4,12 +4,9 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::index::store {
 
@@ -17,7 +14,7 @@ namespace dftracer::utils::index::store {
 /// index root, relative to the root holding the manifest. `num_files` counts
 /// the trace files the shard indexes and `num_events` its event count.
 struct IndexShardEntry {
-    std::string path;
+    dstd::String path;
     std::uint64_t num_files = 0;
     std::uint64_t num_events = 0;
 
@@ -31,11 +28,11 @@ struct IndexShardEntry {
 /// with; a reader rejects a manifest whose version it cannot read.
 struct IndexShardManifest {
     dstd::Optional<std::uint32_t> format_version;
-    std::vector<IndexShardEntry> shards;
+    dstd::Vector<IndexShardEntry> shards;
 };
 
 /// Serialize to the on-disk JSON representation.
-std::string to_json(const IndexShardManifest& manifest);
+dstd::String to_json(const IndexShardManifest& manifest);
 
 /// Parse the on-disk JSON representation. Throws DFTUtilsException on malformed
 /// input.
@@ -45,22 +42,22 @@ IndexShardManifest parse_manifest(dstd::StringView json);
 /// Writes a temporary file beside it and renames it into place so a concurrent
 /// reader never observes a partial manifest. Throws DFTUtilsException on I/O
 /// failure.
-void write_shard_manifest(const std::string& root,
+void write_shard_manifest(dstd::StringView root,
                           const IndexShardManifest& manifest);
 
 /// Read the root's `shards.json`. Returns dstd::nullopt when the file is
 /// absent; throws DFTUtilsException when it exists but cannot be read or
 /// parsed.
-dstd::Optional<IndexShardManifest> read_shard_manifest(const std::string& root);
+dstd::Optional<IndexShardManifest> read_shard_manifest(dstd::StringView root);
 
 /// True when the root holds a `shards.json`: the shards of a build are waiting
 /// to be merged.
-bool has_shard_manifest(const std::string& root);
+bool has_shard_manifest(dstd::StringView root);
 
 /// Resolve the index root under `target` that holds a manifest, else empty.
 /// Accepts the root itself or the directory its `.dftindex` sits in, so a tool
 /// autodetects a shard set by pointing at the trace directory.
-std::string resolve_shard_set_root(const std::string& target);
+dstd::String resolve_shard_set_root(dstd::StringView target);
 
 }  // namespace dftracer::utils::index::store
 

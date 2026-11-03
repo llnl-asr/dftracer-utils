@@ -2,24 +2,22 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/store_layout.h>
 
-#include <string>
-
 namespace dftracer::utils::index::store::store_layout {
 
-std::string namespace_name(layout::Ext ext) {
-    std::string name(NAMESPACE_PREFIX);
+dstd::String namespace_name(layout::Ext ext) {
+    dstd::String name(NAMESPACE_PREFIX);
     name.append(layout::ext_name(ext));
     return name;
 }
 
-std::string plugin_namespace_name(dstd::StringView plugin) {
-    std::string name(PLUGIN_NAMESPACE_PREFIX);
+dstd::String plugin_namespace_name(dstd::StringView plugin) {
+    dstd::String name(PLUGIN_NAMESPACE_PREFIX);
     name.append(plugin);
     return name;
 }
 
-std::string agg_meta_namespace_name(dstd::StringView record) {
-    std::string name(AGG_META_NAMESPACE_PREFIX);
+dstd::String agg_meta_namespace_name(dstd::StringView record) {
+    dstd::String name(AGG_META_NAMESPACE_PREFIX);
     name.append(record);
     return name;
 }

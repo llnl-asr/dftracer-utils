@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <stdexcept>
-#include <string>
 #include <utility>
 
 namespace dftracer::utils::index::schemas::dft::agg {
@@ -31,7 +30,7 @@ std::uint32_t AggregationFold::root_id(dstd::Vector<std::uint32_t>& cache,
     dstd::StringView text = build_id == NO_ID
                                 ? dstd::StringView{}
                                 : build_intern_->resolve(build_id);
-    std::string storage;
+    dstd::String storage;
     if (lower) text = trace::internal::to_lower_ascii(text, storage);
     const std::uint32_t id = agg_intern_->intern.get_or_insert(text);
     if (cacheable) cache[build_id] = id;

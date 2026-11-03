@@ -3,22 +3,21 @@
 #define DFTRACER_UTILS_INDEX_PLAN_CONDITION_H
 
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/index/store/file.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <set>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::index::plan {
 
-using ChunkSet = std::set<std::uint64_t>;
+using ChunkSet = dstd::Set<std::uint64_t>;
 
 /// `in` and `not in` lists longer than this prune nothing: probing each value
 /// costs more than the scan it could save.
@@ -36,8 +35,8 @@ class Condition {
     /// The extension whose data this source reads.
     virtual index::store::IndexExtension extension() const = 0;
     /// The extension's name; a plugin extension's registered name.
-    virtual std::string name() const {
-        return std::string(index::store::extension_name(extension()));
+    virtual dstd::String name() const {
+        return dstd::String(index::store::extension_name(extension()));
     }
     /// False only when no event of the file can match `root`.
     virtual bool file_may_match(const duql::QueryNode&) { return true; }
@@ -57,7 +56,7 @@ class Condition {
     }
 };
 
-using Conditions = std::vector<std::unique_ptr<Condition>>;
+using Conditions = dstd::Vector<dstd::UniquePtr<Condition>>;
 
 struct FileIndexData;
 

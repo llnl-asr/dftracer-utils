@@ -2,14 +2,15 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_INDEX_WRITE_LOCK_H
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_WRITE_LOCK_H
 
+#include <dftracer/utils/dstd/string.h>
+
 #include <mutex>
-#include <string>
 
 namespace dftracer::utils::index::build {
 
 /// Serializes index writers per index path. Every lazy writer that rides along
 /// a scan takes this first.
-std::mutex& index_write_mutex(const std::string& index_path);
+std::mutex& index_write_mutex(const dstd::String& index_path);
 
 }  // namespace dftracer::utils::index::build
 

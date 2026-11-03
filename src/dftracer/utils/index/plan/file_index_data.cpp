@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
@@ -50,11 +51,11 @@ bool FileIndexData::fixed_field(dstd::StringView path) const {
            path == "shash" || path == "ts" || path == "dur" || path == "te";
 }
 
-const dstd::Optional<std::string>& FileIndexData::evidence_name(
-    const std::string& path) {
+const dstd::Optional<dstd::String>& FileIndexData::evidence_name(
+    const dstd::String& path) {
     auto it = evidence_names_.find(path);
     if (it != evidence_names_.end()) return it->second;
-    dstd::Optional<std::string> name;
+    dstd::Optional<dstd::String> name;
     if (by_path || fixed_field(path)) {
         name = path;
     } else if (path.starts_with("args.")) {
@@ -73,7 +74,7 @@ const dstd::Optional<std::string>& FileIndexData::evidence_name(
     return evidence_names_.emplace(path, std::move(name)).first->second;
 }
 
-const FileIndexData::Zones& FileIndexData::zones(const std::string& path) {
+const FileIndexData::Zones& FileIndexData::zones(const dstd::String& path) {
     auto it = zones_.find(path);
     if (it != zones_.end()) return it->second;
     auto& out = zones_[path];
@@ -86,7 +87,7 @@ const FileIndexData::Zones& FileIndexData::zones(const std::string& path) {
     return out;
 }
 
-const FileIndexData::Counts& FileIndexData::counts(const std::string& path) {
+const FileIndexData::Counts& FileIndexData::counts(const dstd::String& path) {
     auto it = counts_.find(path);
     if (it != counts_.end()) return it->second;
     auto& out = counts_[path];
@@ -103,7 +104,7 @@ const FileIndexData::Counts& FileIndexData::counts(const std::string& path) {
     return out;
 }
 
-const FileIndexData::Blooms& FileIndexData::blooms(const std::string& path) {
+const FileIndexData::Blooms& FileIndexData::blooms(const dstd::String& path) {
     auto it = blooms_.find(path);
     if (it != blooms_.end()) return it->second;
     auto& out = blooms_[path];
@@ -117,7 +118,7 @@ const FileIndexData::Blooms& FileIndexData::blooms(const std::string& path) {
 }
 
 const index::extensions::ScalableBloomFilter* FileIndexData::file_bloom(
-    const std::string& path) {
+    const dstd::String& path) {
     auto it = file_blooms_.find(path);
     if (it == file_blooms_.end()) {
         dstd::Optional<index::extensions::ScalableBloomFilter> bloom;
@@ -131,8 +132,8 @@ const index::extensions::ScalableBloomFilter* FileIndexData::file_bloom(
     return it->second ? &*it->second : nullptr;
 }
 
-const std::set<std::uint64_t>& FileIndexData::posting_chunks(
-    const std::string& path, const std::string& val) {
+const dstd::Set<std::uint64_t>& FileIndexData::posting_chunks(
+    const dstd::String& path, const dstd::String& val) {
     auto key = path + '\0' + val;
     auto it = posting_chunks_.find(key);
     if (it != posting_chunks_.end()) return it->second;
@@ -145,8 +146,8 @@ const std::set<std::uint64_t>& FileIndexData::posting_chunks(
     return out;
 }
 
-dstd::Optional<bool> FileIndexData::posting_contains(const std::string& path,
-                                                     const std::string& val) {
+dstd::Optional<bool> FileIndexData::posting_contains(const dstd::String& path,
+                                                     const dstd::String& val) {
     const auto& name = evidence_name(path);
     if (!name || !current(IndexExtension::Postings)) return dstd::nullopt;
     auto has = has_postings_.find(path);

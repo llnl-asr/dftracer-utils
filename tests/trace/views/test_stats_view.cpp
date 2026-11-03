@@ -62,7 +62,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         dataframe::DataFrame cats = View::from_file(gz, idx)
                                         .group_by({GroupKey::cat()})
@@ -79,7 +79,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         dataframe::DataFrame names = View::from_file(gz, idx)
                                          .group_by({GroupKey::name()})
@@ -103,7 +103,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         stats::ViewStats s = run_stats(stats::StatsView::from_file(gz, idx));
 
@@ -129,7 +129,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         stats::ViewStats s = run_stats(stats::StatsView::from_file(gz, idx));
         dftracer::utils::index::schemas::dft::ChunkStatistics cs;
@@ -151,7 +151,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         stats::ViewStats cold = run_stats(stats::StatsView::from_file(gz, idx));
 
@@ -178,7 +178,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         dftracer::utils::Runtime rt;
         rt.block_on(coro::named(
@@ -216,7 +216,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         dftracer::utils::Runtime rt;
         rt.block_on(coro::named(
@@ -266,7 +266,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         // A 1-byte budget forces the AggFold to spill every group to a sorted
         // run and k-way merge them back; the result must still be exact.
@@ -312,7 +312,7 @@ TEST_SUITE("stats via View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         stats::ViewStats s = run_stats(stats::StatsView::from_file(gz, idx));
         std::map<std::string, std::uint64_t> m;
@@ -327,7 +327,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        std::string idx = std::string(determine_index_path(gz, ""));
 
         dataframe::DataFrame d = View::from_file(gz, idx)
                                      .group_by({GroupKey::cat()})

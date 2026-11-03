@@ -5,8 +5,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
@@ -27,11 +29,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
-#include <map>
-#include <set>
-#include <string>
 #include <tuple>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace agg = dftracer::utils::index::schemas::dft::agg;
@@ -59,7 +57,7 @@ std::string write_trace(const std::string& dir) {
     {
         std::ofstream out(pfw.c_str());
         for (int i = 0; i < 24; ++i) {
-            const std::string host = (i % 2 == 0) ? "h1" : "h2";
+            const dstd::String host = (i % 2 == 0) ? "h1" : "h2";
             const std::uint64_t ts =
                 BASE_TS + static_cast<std::uint64_t>(i) * 130'000;
             out << R"({"ph":"C","name":"cpu","cat":"sys","pid":1,"tid":1,)"
@@ -106,18 +104,18 @@ struct Group {
     std::uint64_t count = 0;
     std::uint64_t ts = UINT64_MAX;
     std::uint64_t te = 0;
-    std::map<std::string, double> sum;
+    dstd::Map<dstd::String, double> sum;
 };
 
 using Expected =
-    std::map<dstd::Tuple<std::string, std::string, std::uint64_t>, Group>;
+    dstd::Map<dstd::Tuple<dstd::String, dstd::String, std::uint64_t>, Group>;
 
 // The counters the trace above must give: one row per (host, name, second),
 // with the pre-aggregated counter of every third event left out.
 Expected expected_groups() {
     Expected out;
     for (int i = 0; i < 24; ++i) {
-        const std::string host = (i % 2 == 0) ? "h1" : "h2";
+        const dstd::String host = (i % 2 == 0) ? "h1" : "h2";
         const std::uint64_t ts =
             BASE_TS + static_cast<std::uint64_t>(i) * 130'000;
         const std::uint64_t bucket = (ts / 1'000'000) * 1'000'000;
@@ -138,11 +136,11 @@ Expected expected_groups() {
     return out;
 }
 
-std::vector<std::string> string_column(const dataframe::DataFrame& df,
-                                       const std::string& name) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> string_column(const dataframe::DataFrame& df,
+                                         const dstd::String& name) {
+    dstd::Vector<dstd::String> out;
     for (std::size_t i = 0; i < df.names.size(); ++i)
-        if (df.names[i] == name) {
+        if (dstd::StringView(df.names[i]) == dstd::StringView(name)) {
             const auto s = df.columns[i].materialize();
             for (std::int64_t r = 0; r < df.num_rows(); ++r)
                 out.emplace_back(s.string_at(r));
@@ -150,11 +148,11 @@ std::vector<std::string> string_column(const dataframe::DataFrame& df,
     return out;
 }
 
-std::vector<double> f64_column(const dataframe::DataFrame& df,
-                               const std::string& name) {
-    std::vector<double> out;
+dstd::Vector<double> f64_column(const dataframe::DataFrame& df,
+                                const dstd::String& name) {
+    dstd::Vector<double> out;
     for (std::size_t i = 0; i < df.names.size(); ++i)
-        if (df.names[i] == name) {
+        if (dstd::StringView(df.names[i]) == dstd::StringView(name)) {
             const auto s = df.columns[i].materialize();
             for (std::int64_t r = 0; r < df.num_rows(); ++r)
                 out.push_back(s.data<double>()[r]);
@@ -163,12 +161,12 @@ std::vector<double> f64_column(const dataframe::DataFrame& df,
 }
 
 // The row keys of a counters frame, (host, name, time_bucket).
-std::vector<dstd::Tuple<std::string, std::string, std::uint64_t>> row_keys(
+dstd::Vector<dstd::Tuple<dstd::String, dstd::String, std::uint64_t>> row_keys(
     const dataframe::DataFrame& df) {
     const auto hosts = string_column(df, "host_hash");
     const auto names = string_column(df, "name");
     const auto buckets = f64_column(df, "time_bucket");
-    std::vector<dstd::Tuple<std::string, std::string, std::uint64_t>> out;
+    dstd::Vector<dstd::Tuple<dstd::String, dstd::String, std::uint64_t>> out;
     for (std::size_t r = 0; r < hosts.size(); ++r)
         out.emplace_back(hosts[r], names[r],
                          static_cast<std::uint64_t>(buckets[r]));
@@ -198,7 +196,7 @@ void check_against(const dataframe::DataFrame& df, const Expected& want) {
         CHECK(ts[at] == static_cast<double>(group.ts));
         CHECK(te[at] == static_cast<double>(group.te));
         for (const char* metric_text : {"num", "used", "util"}) {
-            const std::string metric(metric_text);
+            const dstd::String metric(metric_text);
             const auto it = group.sum.find(metric);
             const auto column = f64_column(df, metric);
             if (it == group.sum.end()) {
@@ -216,7 +214,7 @@ void check_against(const dataframe::DataFrame& df, const Expected& want) {
 }
 
 std::uint16_t shard_of(
-    const dstd::Tuple<std::string, std::string, std::uint64_t>& key) {
+    const dstd::Tuple<dstd::String, dstd::String, std::uint64_t>& key) {
     return agg::system_shard(std::get<0>(key), std::get<1>(key));
 }
 
@@ -229,7 +227,8 @@ struct Blocks {
 
 Blocks blocks_of(const std::string& gz, const std::string& idx) {
     Blocks out;
-    const auto index_path = trace::internal::determine_index_path(gz, idx);
+    const auto index_path =
+        std::string(trace::internal::determine_index_path(gz, idx));
     const auto snapshot =
         common::unwrap(index::plan::open_snapshot(index_path));
     const auto file =
@@ -257,7 +256,9 @@ TEST_SUITE("CountersColumns") {
         TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir());
         const std::string idx = env.get_dir() + "/idx";
-        Indexer::open({gz}, with_aggregation(idx)).build();
+        Indexer::open({dstd::String(dstd::StringView(gz))},
+                      with_aggregation(idx))
+            .build();
         const auto typed = View::from_files({{gz, idx}}).collect_typed().get();
         check_against(typed.counters, expected_groups());
 
@@ -272,13 +273,15 @@ TEST_SUITE("CountersColumns") {
         TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir());
         const std::string idx = env.get_dir() + "/idx";
-        Indexer::open({gz}, with_aggregation(idx)).build();
+        Indexer::open({dstd::String(dstd::StringView(gz))},
+                      with_aggregation(idx))
+            .build();
         const auto whole = View::from_files({{gz, idx}}).collect_typed().get();
         check_against(whole.counters, expected_groups());
 
         // The split falls on the second shard the groups name, so both halves
         // hold rows.
-        std::set<std::uint16_t> shards;
+        dstd::Set<std::uint16_t> shards;
         for (const auto& [key, group] : expected_groups())
             shards.insert(shard_of(key));
         REQUIRE(shards.size() > 1);
@@ -300,8 +303,8 @@ TEST_SUITE("CountersColumns") {
         // The union of the splits is the whole frame, no row twice.
         CHECK(first.counters.num_rows() + second.counters.num_rows() ==
               whole.counters.num_rows());
-        std::vector<dstd::Tuple<std::string, std::string, std::uint64_t>> keys =
-            row_keys(first.counters);
+        dstd::Vector<dstd::Tuple<dstd::String, dstd::String, std::uint64_t>>
+            keys = row_keys(first.counters);
         for (const auto& k : row_keys(second.counters)) keys.push_back(k);
         std::sort(keys.begin(), keys.end());
         CHECK(std::adjacent_find(keys.begin(), keys.end()) == keys.end());

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -12,8 +15,6 @@
 #include <cstddef>
 #include <cstdio>
 #include <sstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
@@ -39,14 +40,14 @@ std::string write_small_trace(const std::string& dir, int n) {
     return dftu_utils_test::write_gz_trace(dir + name, out.str());
 }
 
-build::IndexBuildBatchResult build_with(const std::vector<std::string>& files,
+build::IndexBuildBatchResult build_with(const dstd::Vector<dstd::String>& files,
                                         const std::string& index_dir,
                                         std::size_t workers) {
     build::IndexBuildBatchResult result;
     Runtime rt(workers);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = std::make_shared<build::IndexBuildBatchConfig>();
-        config->file_paths = files;
+        auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+        config->file_paths.assign(files.begin(), files.end());
         config->index_dir = index_dir;
         config->parallelism = workers;
         result = co_await build::BatchBuilder::process(std::move(config));
@@ -61,9 +62,9 @@ build::IndexBuildBatchResult build_with(const std::vector<std::string>& files,
 TEST_SUITE("IndexBuildParallelism") {
     TEST_CASE("an index build of many files keeps every worker busy") {
         dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (int i = 0; i < FILES; ++i)
-            files.push_back(write_small_trace(env.get_dir(), i));
+            files.emplace_back(write_small_trace(env.get_dir(), i));
 
         const auto many =
             build_with(files, env.get_dir() + "/idx_many", WORKERS);
@@ -75,7 +76,7 @@ TEST_SUITE("IndexBuildParallelism") {
         CHECK(one.metrics.max_files_in_flight == 1);
         CHECK(many.total_events == one.total_events);
 
-        auto sorted = [](std::vector<build::IndexBuildResult> r) {
+        auto sorted = [](dstd::Vector<build::IndexBuildResult> r) {
             std::sort(r.begin(), r.end(), [](const auto& a, const auto& b) {
                 return a.file_path < b.file_path;
             });

@@ -581,7 +581,8 @@ Vector<ViewQuery> view_queries() {
 
 std::vector<ViewFile> view_files(const std::vector<std::string>& gz) {
     std::vector<ViewFile> files;
-    for (const auto& f : gz) files.push_back({f, determine_index_path(f, "")});
+    for (const auto& f : gz)
+        files.push_back({f, std::string(determine_index_path(f, ""))});
     return files;
 }
 

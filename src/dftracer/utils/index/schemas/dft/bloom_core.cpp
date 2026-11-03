@@ -2,7 +2,9 @@
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
@@ -12,9 +14,6 @@
 #include <array>
 #include <charconv>
 #include <cstring>
-#include <span>
-#include <string>
-#include <vector>
 
 using dftracer::utils::index::extensions::ScalableBloomFilter;
 namespace dftracer::utils::index::schemas::dft {
@@ -95,7 +94,7 @@ class Tier {
 
 void put_bloom(Tier& t, std::uint64_t checkpoint_idx, dstd::StringView path,
                const ScalableBloomFilter& bf,
-               std::vector<unsigned char>& blob) {
+               dstd::Vector<unsigned char>& blob) {
     bf.serialize_into(blob);
     t.path_granule(IndexExtension::Bloom, path, checkpoint_idx,
                    kinds::encode_bloom(
@@ -104,7 +103,7 @@ void put_bloom(Tier& t, std::uint64_t checkpoint_idx, dstd::StringView path,
 
 void put_file_bloom(Tier& t, dstd::StringView path,
                     const ScalableBloomFilter& bf,
-                    std::vector<unsigned char>& blob) {
+                    dstd::Vector<unsigned char>& blob) {
     bf.serialize_into(blob);
     t.path_file(IndexExtension::Bloom, path,
                 kinds::encode_bloom(
@@ -148,7 +147,7 @@ void put_dimension(Tier& t, std::uint64_t checkpoint_idx,
 
 void write_chunk_to(Tier& t, std::uint64_t checkpoint_idx,
                     const BloomCore::ChunkState& chunk,
-                    const std::vector<std::string>& extra_dims,
+                    const dstd::Vector<dstd::String>& extra_dims,
                     const BloomCore::ChunkIndexerConfig& config,
                     BloomCore::FileAccumulator& acc) {
     const auto& m = config.extensions;
@@ -207,8 +206,8 @@ void write_chunk_to(Tier& t, std::uint64_t checkpoint_idx,
             chunk.statistics.max_timestamp_us) {
         kinds::Zone te;
         te.value_type = "uint";
-        te.min = std::to_string(chunk.statistics.min_timestamp_us);
-        te.max = std::to_string(chunk.statistics.max_timestamp_us);
+        te.min = dstd::to_string(chunk.statistics.min_timestamp_us);
+        te.max = dstd::to_string(chunk.statistics.max_timestamp_us);
         te.observed = observed;
         te.present = observed;
         t.path_granule(IndexExtension::Zonemap, DIM_TE, checkpoint_idx,
@@ -227,7 +226,7 @@ void write_absent_extra_to(Tier& t, std::uint64_t checkpoint_idx,
                            dstd::StringView dim, std::uint64_t observed,
                            const BloomCore::ChunkIndexerConfig& config) {
     BloomCore::ChunkDimensionStats ds;
-    ds.dimension = std::string(dim);
+    ds.dimension = dstd::String(dim);
     ds.value_type.clear();
     put_dimension(t, checkpoint_idx, ds, observed, config, {}, true);
 }
@@ -235,7 +234,7 @@ void write_absent_extra_to(Tier& t, std::uint64_t checkpoint_idx,
 BloomCore::ChunkStatistics finish_file_to(
     Tier& t, BloomCore::FileAccumulator& acc,
     const BloomCore::ChunkIndexerConfig& config,
-    const std::vector<std::string>& extra_dims,
+    const dstd::Vector<dstd::String>& extra_dims,
     const BloomCore::Catalog& catalog) {
     const auto& m = config.extensions;
     const bool blooms = m.has(IndexExtension::Bloom);
@@ -291,7 +290,7 @@ BloomCore::FileAccumulator::ExtraBloom& BloomCore::FileAccumulator::extra(
     auto it = extras.find(dim);
     if (it == extras.end())
         it = extras
-                 .emplace(std::string(dim),
+                 .emplace(dstd::String(dim),
                           ExtraBloom{ScalableBloomFilter(
                                          config_->expected_entries_per_chunk,
                                          config_->false_positive_rate),
@@ -303,7 +302,7 @@ BloomCore::FileAccumulator::ExtraBloom& BloomCore::FileAccumulator::extra(
 void BloomCore::write_chunk(index::FileBuild& build,
                             std::uint64_t checkpoint_idx,
                             const ChunkState& chunk,
-                            const std::vector<std::string>& extra_dims,
+                            const dstd::Vector<dstd::String>& extra_dims,
                             const ChunkIndexerConfig& config,
                             FileAccumulator& acc) {
     Tier tier(build);
@@ -321,7 +320,7 @@ void BloomCore::write_absent_extra(index::FileBuild& build,
 BloomCore::ChunkStatistics BloomCore::finish_file(
     index::FileBuild& build, FileAccumulator& acc,
     const ChunkIndexerConfig& config,
-    const std::vector<std::string>& extra_dims, const Catalog& catalog) {
+    const dstd::Vector<dstd::String>& extra_dims, const Catalog& catalog) {
     Tier tier(build);
     return finish_file_to(tier, acc, config, extra_dims, catalog);
 }
@@ -331,7 +330,7 @@ BloomCore::ChunkState::ChunkState() = default;
 namespace {
 
 // The type of a dimension holding values of both types; "" is no value yet.
-std::string join_value_types(const std::string& a, const std::string& b) {
+dstd::String join_value_types(const dstd::String& a, const dstd::String& b) {
     if (a.empty() || a == b) return b;
     if (b.empty()) return a;
     if (a == "mixed" || b == "mixed") return "mixed";
@@ -351,7 +350,7 @@ bool observe_type(index::extensions::ChunkDimensionStats& ds,
         if (ds.value_type[0] == 'm') return false;
         if (ds.value_type[0] == type[0]) return true;
     }
-    const std::string joined = join_value_types(ds.value_type, type);
+    const dstd::String joined = join_value_types(ds.value_type, type);
     if (joined != ds.value_type) ds.value_type = joined;
     if (joined == "mixed") {
         ds.min_value.clear();
@@ -376,9 +375,9 @@ void observe_stats(index::extensions::ChunkDimensionStats& ds,
     if (observe_type(ds, type)) observe_bounds(ds, text);
 }
 
-std::string number_text(std::int64_t v) { return std::to_string(v); }
-std::string number_text(std::uint64_t v) { return std::to_string(v); }
-std::string number_text(double v) {
+dstd::String number_text(std::int64_t v) { return dstd::to_string(v); }
+dstd::String number_text(std::uint64_t v) { return dstd::to_string(v); }
+dstd::String number_text(double v) {
     return index::extensions::canonical_number_text(v);
 }
 
@@ -409,7 +408,7 @@ void observe_number(index::extensions::ChunkDimensionStats& ds,
     };
     const duql::Number n{v};
     if (b.min && !less(n, *b.min) && b.max && !less(*b.max, n)) return;
-    const std::string text = number_text(v);
+    const dstd::String text = number_text(v);
     const auto parsed = duql::parse_number(text);
     if (!parsed) {
         b.valid = false;
@@ -450,11 +449,11 @@ void BloomCore::observe_value(ChunkDimensionStats& stats, NumericBounds& bounds,
 }
 
 void BloomCore::observe_value(ChunkDimensionStats& stats, std::int64_t value) {
-    observe_stats(stats, std::to_string(value), "int");
+    observe_stats(stats, dstd::to_string(value), "int");
 }
 
 void BloomCore::observe_value(ChunkDimensionStats& stats, std::uint64_t value) {
-    observe_stats(stats, std::to_string(value), "uint");
+    observe_stats(stats, dstd::to_string(value), "uint");
 }
 
 void BloomCore::observe_value(ChunkDimensionStats& stats, double value) {
@@ -469,20 +468,20 @@ void BloomCore::observe_value(ChunkDimensionStats& stats,
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
                               std::int64_t value) {
-    const std::string text = std::to_string(value);
+    const dstd::String text = dstd::to_string(value);
     chunk.extra_blooms[e].add(text);
     observe_stats(chunk.extra_dim_stats[e], text, "int");
 }
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
                               std::uint64_t value) {
-    const std::string text = std::to_string(value);
+    const dstd::String text = dstd::to_string(value);
     chunk.extra_blooms[e].add(text);
     observe_stats(chunk.extra_dim_stats[e], text, "uint");
 }
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e, double value) {
-    const std::string text = index::extensions::canonical_number_text(value);
+    const dstd::String text = index::extensions::canonical_number_text(value);
     chunk.extra_blooms[e].add(text);
     observe_stats(chunk.extra_dim_stats[e], text, "double");
 }
@@ -495,14 +494,14 @@ void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
 
 void BloomCore::init_chunk_state(ChunkState& chunk,
                                  const ChunkIndexerConfig& config,
-                                 const std::vector<std::string>& extra_dims) {
+                                 const dstd::Vector<dstd::String>& extra_dims) {
     for (std::size_t b = 0; b < BfCount; ++b) {
         chunk.fixed_blooms[b] = ScalableBloomFilter(
             config.expected_entries_per_chunk, config.false_positive_rate);
     }
     for (std::size_t d = 0; d < FdCount; ++d) {
         auto& ds = chunk.fixed_dim_stats[d];
-        ds.dimension = std::string(FIXED_DIM_NAMES[d]);
+        ds.dimension = dstd::String(FIXED_DIM_NAMES[d]);
         ds.value_type = (d == FdPid || d == FdTid || d == FdTs || d == FdDur)
                             ? "uint"
                             : "string";
@@ -557,13 +556,13 @@ BloomCore::EventCache::PidSlot& BloomCore::EventCache::pid_slot(
         slot.tid = tid;
         slot.epoch = epoch_;
         slot.pid_len = static_cast<std::uint8_t>(
-            std::to_chars(slot.pid_buf, slot.pid_buf + sizeof(slot.pid_buf),
-                          pid)
+            dstd::to_chars(slot.pid_buf, slot.pid_buf + sizeof(slot.pid_buf),
+                           pid)
                 .ptr -
             slot.pid_buf);
         slot.tid_len = static_cast<std::uint8_t>(
-            std::to_chars(slot.tid_buf, slot.tid_buf + sizeof(slot.tid_buf),
-                          tid)
+            dstd::to_chars(slot.tid_buf, slot.tid_buf + sizeof(slot.tid_buf),
+                           tid)
                 .ptr -
             slot.tid_buf);
     }
@@ -638,7 +637,7 @@ void BloomCore::merge_dimension_stats(ChunkDimensionStats& dst,
         dst.distinct_count = dst.value_counts->size();
     }
     if (!src.value_type.empty() && dst.value_type != src.value_type) {
-        const std::string joined =
+        const dstd::String joined =
             join_value_types(dst.value_type, src.value_type);
         if (joined != dst.value_type) dst.value_type = joined;
         if (joined == "mixed") {
@@ -699,9 +698,9 @@ void BloomCore::merge_chunk_state(ChunkState& dst, ChunkState& src) {
     dst.events_processed += src.events_processed;
 }
 
-std::vector<index::store::IndexExtension> BloomCore::tier_extensions(
+dstd::Vector<index::store::IndexExtension> BloomCore::tier_extensions(
     const ChunkIndexerConfig& config) {
-    std::vector<IndexExtension> exts;
+    dstd::Vector<IndexExtension> exts;
     for (auto ext : index::store::ALL_EXTENSIONS)
         if ((index::store::PRUNING_EXTENSIONS.has(ext) &&
              config.extensions.has(ext)) ||

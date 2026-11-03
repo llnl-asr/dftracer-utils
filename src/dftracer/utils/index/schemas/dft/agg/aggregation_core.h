@@ -14,10 +14,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <string>
 #include <string_view>
 #include <utility>
-#include <vector>
 
 // The aggregation-tier accumulation, templated on an Accessor so callers only
 // differ in how they read fields/args. AggregationFold drives it with a

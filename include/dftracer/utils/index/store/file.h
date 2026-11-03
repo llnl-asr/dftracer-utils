@@ -4,13 +4,10 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <initializer_list>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::index::store {
 
@@ -102,15 +99,17 @@ struct ChunkMetadata {
     std::uint64_t records = 0;
     /// The records' distinct names and field paths ("pid", "args.name"),
     /// sorted; nullopt when there were more than METADATA_VALUES_CAP.
-    dstd::Optional<std::vector<std::string>> names = std::vector<std::string>{};
-    dstd::Optional<std::vector<std::string>> paths = std::vector<std::string>{};
+    dstd::Optional<dstd::Vector<dstd::String>> names =
+        dstd::Vector<dstd::String>{};
+    dstd::Optional<dstd::Vector<dstd::String>> paths =
+        dstd::Vector<dstd::String>{};
 };
 
 inline constexpr std::size_t METADATA_VALUES_CAP = 64;
 
 /// Adds `value` to a sorted @ref ChunkMetadata list, which becomes nullopt past
 /// METADATA_VALUES_CAP.
-void add_metadata_value(dstd::Optional<std::vector<std::string>>& list,
+void add_metadata_value(dstd::Optional<dstd::Vector<dstd::String>>& list,
                         dstd::StringView value);
 
 /// A set of extensions.

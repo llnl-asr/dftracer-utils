@@ -5,16 +5,13 @@
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/error.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <span>
 #include <stdexcept>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::index::store::internal {
 
@@ -42,16 +39,16 @@ struct DecodeContextGuard {
     char previous_[DECODE_CONTEXT_BUF_SIZE];
 };
 
-inline void append_u8(std::string& out, std::uint8_t value) {
+inline void append_u8(dstd::String& out, std::uint8_t value) {
     out.push_back(static_cast<char>(value));
 }
 
-inline void append_string(std::string& out, dstd::StringView value) {
+inline void append_string(dstd::String& out, dstd::StringView value) {
     dstd::append_u32_be(out, static_cast<std::uint32_t>(value.size()));
     out.append(value.data(), value.size());
 }
 
-inline void append_blob(std::string& out,
+inline void append_blob(dstd::String& out,
                         dstd::Span<const unsigned char> blob) {
     dstd::append_u32_be(out, static_cast<std::uint32_t>(blob.size()));
     out.append(reinterpret_cast<const char*>(blob.data()), blob.size());
@@ -82,15 +79,15 @@ class Cursor {
         return take(len);
     }
 
-    std::string str() {
+    dstd::String str() {
         auto bytes = str_view();
-        return std::string(bytes.data(), bytes.size());
+        return dstd::String(bytes.data(), bytes.size());
     }
 
-    std::vector<unsigned char> blob() {
+    dstd::Vector<unsigned char> blob() {
         auto len = static_cast<std::size_t>(u32());
         auto bytes = take(len);
-        return std::vector<unsigned char>(bytes.begin(), bytes.end());
+        return dstd::Vector<unsigned char>(bytes.begin(), bytes.end());
     }
 
     // Length-prefixed blob as a non-owning view into the cursor's backing

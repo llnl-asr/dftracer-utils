@@ -2,13 +2,12 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGG_PARTIAL_UPDATE_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGG_PARTIAL_UPDATE_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
@@ -97,7 +96,7 @@ PartialKind partial_kind(const Acc& acc) {
 /// the event has none of them.
 template <class Acc>
 void extra_values(const Acc& acc, const AggregationConfig& cfg,
-                  std::string& out) {
+                  dstd::String& out) {
     out.clear();
     bool any = false;
     bool first = true;

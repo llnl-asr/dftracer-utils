@@ -8,10 +8,6 @@
 #include <dftracer/utils/index/cache/cache_store.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::trace::views::detail {
 struct ViewPlan;
@@ -21,7 +17,7 @@ namespace dftracer::utils::index::cache {
 
 /// Where `plan`'s lookup sides live: `cache_dir(plan)/lookups`. Empty when
 /// there is none.
-std::string lookup_cache_path(const trace::views::detail::ViewPlan& plan);
+dstd::String lookup_cache_path(const trace::views::detail::ViewPlan& plan);
 
 /// A lookup side's identity: a hash of `side_text` (the side's canonical
 /// text), the duql version, the record schema params hash, and each file's
@@ -35,12 +31,12 @@ dstd::Optional<std::uint64_t> lookup_signature(
 /// Open (or reuse) the lookup store at `path`. A ReadWrite open creates the
 /// folder. Null when the store cannot be opened, or for a ReadOnly open of a
 /// folder with no store. Never throws.
-dstd::SharedPtr<CacheStore> open_lookup_db(const std::string& path,
+dstd::SharedPtr<CacheStore> open_lookup_db(dstd::StringView path,
                                            CacheStore::Mode mode);
 
 /// The value stored for `sig`, or nullopt. Marks it used when `db` is
 /// writable. Throws IO on a failed read or usage write.
-dstd::Optional<std::string> read_lookup(CacheStore& db, std::uint64_t sig);
+dstd::Optional<dstd::String> read_lookup(CacheStore& db, std::uint64_t sig);
 
 /// True if a value for `sig` is stored. No side effect.
 bool lookup_exists(const CacheStore& db, std::uint64_t sig);

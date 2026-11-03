@@ -3,15 +3,16 @@
 #define DFTRACER_UTILS_INDEX_GZIP_CHECKPOINT_SIZE_H
 
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <string>
 
 namespace dftracer::utils::index::gzip {
 
 std::size_t determine_checkpoint_size(
-    std::size_t user_checkpoint_size, const std::string& path,
+    std::size_t user_checkpoint_size, dstd::CStringView path,
     // Tunables:
     std::size_t max_parts = 100000000, std::size_t max_chk = (512u << 20),
     // default:

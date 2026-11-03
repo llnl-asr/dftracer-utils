@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
@@ -8,7 +9,7 @@
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
-void merge_aggregation_folds(std::vector<AggFoldOutput>& outputs,
+void merge_aggregation_folds(dstd::Vector<AggFoldOutput>& outputs,
                              const index::Index& index) {
     std::uint64_t min_bucket = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t max_bucket = 0;

@@ -2045,6 +2045,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/heap_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/coro_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/string_intern_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/hash_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/quantile_store_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp

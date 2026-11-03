@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/intern_table.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <new>
 
 namespace dftracer::utils::common {
 
 InternRef InternTable::create() {
-    auto handle = memory::detail::Manager::get().root().child(
-        "intern", memory::detail::PoolKind::Results);
+    auto handle =
+        memory::root_pool().child("intern", memory::PoolKind::Results);
     if (!handle) {
         throw DFTUtilsException(ErrorCode::MemoryBudgetExceeded,
                                 "intern table: the pool table is full");
@@ -27,7 +28,7 @@ void InternTable::release() noexcept {
     if (refs_.fetch_sub(1, std::memory_order_acq_rel) != 1) return;
     // The table lives in its own pool, so the handle leaves it before the
     // table is freed and closes the pool last.
-    memory::detail::PoolHandle handle = std::move(handle_);
+    memory::PoolHandle handle = std::move(handle_);
     this->~InternTable();
     memory::detail::deallocate(this, sizeof(InternTable));
     handle.close();

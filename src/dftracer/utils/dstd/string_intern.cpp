@@ -26,7 +26,7 @@ String id_text(std::uint32_t id) {
 }
 }  // namespace
 
-StringIntern::Chunk::Chunk(std::size_t size, memory::detail::Pool& pool)
+StringIntern::Chunk::Chunk(std::size_t size, memory::Pool& pool)
     : data_(static_cast<char*>(
           memory::detail::allocate(size, CHUNK_ALIGN, pool))),
       size_(size) {}
@@ -37,7 +37,7 @@ void StringIntern::release_bytes(void* p, std::size_t bytes) noexcept {
     memory::detail::deallocate(p, bytes);
 }
 
-StringIntern::StringIntern(memory::detail::Pool* pool)
+StringIntern::StringIntern(memory::Pool* pool)
     : pool_(pool ? pool : &memory::detail::Manager::get().general()),
       shards_(make_owned<Shard>(SHARDS)) {}
 

@@ -21,6 +21,7 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <unistd.h>
@@ -210,19 +211,20 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         config.budget = 64 * MIB;
         memory::configure(config);
         {
-            memory::detail::PoolHandle holds =
+            memory::PoolHandle holds =
                 memory::detail::Manager::get().root().child("holds");
-            memory::detail::PoolHandle pool =
+            memory::PoolHandle pool =
                 memory::detail::Manager::get().root().child("task");
-            memory::detail::Reservation held = holds->reserve(64 * MIB);
+            memory::Reservation held =
+                memory::detail::PoolAccess::reserve(*holds, 64 * MIB);
             REQUIRE(held);
             auto frame = [&]() -> coro::CoroTask<void> {
                 probe.entered.store(true);
                 auto r = co_await coro::reserve_async(
                     *pool, 32 * MIB,
                     coro::ReserveAsync::Clock::time_point::max());
-                probe.cancelled.store(
-                    !r && r.error() == memory::detail::Status::Cancelled);
+                probe.cancelled.store(!r &&
+                                      r.error() == memory::Status::Cancelled);
                 probe.finished.store(true);
                 co_return;
             };

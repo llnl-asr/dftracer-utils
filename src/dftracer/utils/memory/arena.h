@@ -30,7 +30,7 @@ class Arena {
    public:
     /// Open the child pool @p name below @p parent. Throws std::bad_alloc when
     /// the pool table is full.
-    Arena(detail::Pool& parent, std::string_view name);
+    Arena(Pool& parent, std::string_view name);
     /// Open the child pool below current_pool(), read once here.
     explicit Arena(std::string_view name);
     Arena(const Arena&) = delete;
@@ -105,9 +105,9 @@ class Arena {
      * Returns the Pool::reserve status. On failure the reservation keeps what
      * it had.
      */
-    detail::Status reserve(std::size_t bytes) noexcept;
+    Status reserve(std::size_t bytes) noexcept;
 
-    detail::Pool& pool() const noexcept { return *pool_; }
+    Pool& pool() const noexcept { return *pool_; }
     /// Bytes of every chunk the arena holds. The pool can show more because the
     /// page heap rounds a chunk above 1 MiB to a power of two.
     std::size_t chunk_bytes() const noexcept { return chunk_bytes_; }
@@ -150,8 +150,8 @@ class Arena {
     Destructor* destructors_ = nullptr;
     std::size_t chunk_bytes_ = 0;
     std::size_t grown_ = 0;
-    detail::PoolHandle pool_;
-    detail::Reservation reservation_;
+    PoolHandle pool_;
+    Reservation reservation_;
 };
 
 /**

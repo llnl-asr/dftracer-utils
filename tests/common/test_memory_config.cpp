@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/detail/constants.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <doctest/doctest.h>
 
 #include <cstdlib>
@@ -147,21 +148,21 @@ TEST_CASE("a bad value is refused and names its variable") {
 }
 
 TEST_CASE("memory statuses map to error codes") {
-    static_assert(common::error_code_of(memory::detail::Status::OverBudget) ==
+    static_assert(common::error_code_of(memory::Status::OverBudget) ==
                   dftracer::utils::common::ErrorCode::MemoryBudgetExceeded);
-    CHECK(common::error_code_of(memory::detail::Status::OverBudget) ==
+    CHECK(common::error_code_of(memory::Status::OverBudget) ==
           dftracer::utils::common::ErrorCode::MemoryBudgetExceeded);
-    CHECK(common::error_code_of(memory::detail::Status::OverCap) ==
+    CHECK(common::error_code_of(memory::Status::OverCap) ==
           dftracer::utils::common::ErrorCode::MemoryBudgetExceeded);
-    CHECK(common::error_code_of(memory::detail::Status::Pending) ==
+    CHECK(common::error_code_of(memory::Status::Pending) ==
           dftracer::utils::common::ErrorCode::MemoryBudgetExceeded);
-    CHECK(common::error_code_of(memory::detail::Status::PoolTableFull) ==
+    CHECK(common::error_code_of(memory::Status::PoolTableFull) ==
           dftracer::utils::common::ErrorCode::Internal);
-    CHECK(common::error_code_of(memory::detail::Status::SlotTableFull) ==
+    CHECK(common::error_code_of(memory::Status::SlotTableFull) ==
           dftracer::utils::common::ErrorCode::Internal);
-    CHECK(common::error_code_of(memory::detail::Status::Ok) ==
+    CHECK(common::error_code_of(memory::Status::Ok) ==
           dftracer::utils::common::ErrorCode::Unknown);
-    CHECK(common::error_code_of(memory::detail::Status::Cancelled) ==
+    CHECK(common::error_code_of(memory::Status::Cancelled) ==
           dftracer::utils::common::ErrorCode::Unknown);
 
     CHECK(dstd::String(common::error_code_name(
@@ -176,9 +177,10 @@ TEST_CASE("a failed reservation maps to the budget error") {
     memory::Config c;
     c.budget = 64 * MIB;
     memory::configure(c);
-    memory::detail::PoolHandle pool =
+    memory::PoolHandle pool =
         memory::detail::Manager::get().root().child("config");
-    memory::detail::Reservation over = pool->reserve(65 * MIB);
+    memory::Reservation over =
+        memory::detail::PoolAccess::reserve(*pool, 65 * MIB);
     REQUIRE_FALSE(over);
     CHECK(common::error_code_of(over.status()) ==
           common::ErrorCode::MemoryBudgetExceeded);

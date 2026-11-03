@@ -3,6 +3,7 @@
 #include <dftracer/utils/memory/detail/constants.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <sys/wait.h>
@@ -129,7 +130,7 @@ TEST_CASE("under_pressure turns on past the budget and off after release") {
     PoolHandle pool = root().child("pressure");
     CHECK(!m.under_pressure());
     {
-        Reservation r = pool->reserve(200 * MIB);
+        Reservation r = PoolAccess::reserve(*pool, 200 * MIB);
         REQUIRE(r);
         CHECK(!m.under_pressure());
         ExternalSlot external = attach_external("test");
@@ -166,13 +167,13 @@ TEST_CASE("external bytes count toward the budget") {
     PoolHandle pool = root().child("external");
     ExternalSlot external = attach_external("test");
     external.set(40 * MIB);
-    Reservation over = pool->reserve(30 * MIB);
+    Reservation over = PoolAccess::reserve(*pool, 30 * MIB);
     CHECK(!over);
     CHECK(over.status() == Status::OverBudget);
-    Reservation fits = pool->reserve(20 * MIB);
+    Reservation fits = PoolAccess::reserve(*pool, 20 * MIB);
     CHECK(fits);
     external.set(0);
-    Reservation more = pool->reserve(30 * MIB);
+    Reservation more = PoolAccess::reserve(*pool, 30 * MIB);
     CHECK(more);
 }
 
@@ -185,11 +186,11 @@ TEST_CASE("reported external bytes show in stats but not in the budget") {
                  ExternalSlot::Kind::Reported);
     CHECK(external.bytes() == 100 * MIB);
     CHECK(Manager::get().stats().external == before + 100 * MIB);
-    Reservation fits = pool->reserve(30 * MIB);
+    Reservation fits = PoolAccess::reserve(*pool, 30 * MIB);
     CHECK(fits);
     external.add(static_cast<std::ptrdiff_t>(30 * MIB),
                  ExternalSlot::Kind::Counted);
-    Reservation over = pool->reserve(10 * MIB);
+    Reservation over = PoolAccess::reserve(*pool, 10 * MIB);
     CHECK(over.status() == Status::OverBudget);
     external.add(-static_cast<std::ptrdiff_t>(30 * MIB),
                  ExternalSlot::Kind::Counted);

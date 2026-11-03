@@ -4,6 +4,7 @@
 #include <dftracer/utils/memory/detail/constants.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <dftracer/utils/memory/heap_system.h>
 #include <dftracer/utils/memory/settings.h>
@@ -235,11 +236,11 @@ void* allocate(std::size_t size, std::size_t align) {
 void* allocate_at(std::size_t size, std::size_t align, Pool& pool, void* site) {
     switch (static_cast<Dispatch>(g_dispatch.load(std::memory_order_acquire))) {
         case Dispatch::PageHeap:
-            return page_allocate_to(size, align, pool.id());
+            return page_allocate_to(size, align, detail::PoolAccess::id(pool));
         default:
             break;
     }
-    ScopeOverride scope{attrib_local(), pool.id()};
+    ScopeOverride scope{attrib_local(), detail::PoolAccess::id(pool)};
     if (debug_enabled()) return debug_allocate(size, align, site);
     return allocate(size, align);
 }

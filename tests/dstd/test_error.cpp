@@ -36,7 +36,7 @@ constexpr const dstd::ErrorCodeInfo& error_info(TestError code) noexcept {
     return TEST_ERROR_INFOS[0];
 }
 
-memory::detail::Pool& root() { return memory::detail::Manager::get().root(); }
+memory::Pool& root() { return memory::detail::Manager::get().root(); }
 
 }  // namespace
 
@@ -62,7 +62,7 @@ TEST_CASE("Error carries domain code condition and name") {
 }
 
 TEST_CASE("a message is the only allocation and copies share it") {
-    memory::detail::PoolHandle pool = root().child("error_message");
+    memory::PoolHandle pool = root().child("error_message");
     REQUIRE(pool);
     memory::detail::Scope scope{*pool};
     const std::size_t base = root().live();
@@ -86,7 +86,7 @@ TEST_CASE("a message is the only allocation and copies share it") {
 }
 
 TEST_CASE("copy assignment drops the old message and shares the new one") {
-    memory::detail::PoolHandle pool = root().child("error_assign");
+    memory::PoolHandle pool = root().child("error_assign");
     REQUIRE(pool);
     memory::detail::Scope scope{*pool};
     const std::size_t base = root().live();

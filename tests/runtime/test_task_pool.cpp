@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -34,7 +35,7 @@ constexpr int ROUNDS = 16;
 // I/O completion or a timer does: the pool must come from the task, not from
 // the thread that enqueues it.
 struct Hops {
-    memory::detail::Pool* enqueuer_pool = nullptr;
+    memory::Pool* enqueuer_pool = nullptr;
     std::mutex mutex;
     // keep std: a dstd container or thread would charge the pool under test
     std::vector<std::thread> threads;
@@ -122,15 +123,14 @@ CoroTask<void> parent_with_children(Blocks* direct, Blocks* spawned, Hops* hops,
         }));
 }
 
-memory::detail::PoolHandle open_pool(const char* name) {
-    memory::detail::PoolHandle pool =
-        memory::detail::Manager::get().root().child(name);
+memory::PoolHandle open_pool(const char* name) {
+    memory::PoolHandle pool = memory::detail::Manager::get().root().child(name);
     REQUIRE(pool);
     return pool;
 }
 
 template <typename Make>
-auto under(memory::detail::Pool& pool, Make make) {
+auto under(memory::Pool& pool, Make make) {
     memory::detail::Scope scope{pool};
     return make();
 }
@@ -138,7 +138,7 @@ auto under(memory::detail::Pool& pool, Make make) {
 // A worker destroys a finished frame shortly after get() returns, so a pool
 // that held it reaches `want` blocks a little later. A leaked block never goes
 // away, so the wait still fails then.
-bool settles_at(const memory::detail::Pool& pool, std::size_t want) {
+bool settles_at(const memory::Pool& pool, std::size_t want) {
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (pool.blocks() != want) {
@@ -153,8 +153,8 @@ bool settles_at(const memory::detail::Pool& pool, std::size_t want) {
 TEST_CASE(
     "a task that moves to another worker charges both blocks to its pool") {
     Runtime rt(4);
-    memory::detail::PoolHandle pool = open_pool("task");
-    memory::detail::PoolHandle enqueuer = open_pool("enqueuer");
+    memory::PoolHandle pool = open_pool("task");
+    memory::PoolHandle enqueuer = open_pool("enqueuer");
     Hops hops;
     hops.enqueuer_pool = enqueuer.get();
     Blocks blocks;
@@ -174,8 +174,8 @@ TEST_CASE(
 
 TEST_CASE("two tasks with different pools on one worker do not mix") {
     Runtime rt(1);
-    memory::detail::PoolHandle pool_a = open_pool("a");
-    memory::detail::PoolHandle pool_b = open_pool("b");
+    memory::PoolHandle pool_a = open_pool("a");
+    memory::PoolHandle pool_b = open_pool("b");
     Blocks blocks_a;
     Blocks blocks_b;
     // keep std: a dstd container would charge the pool under test
@@ -204,9 +204,9 @@ TEST_CASE("two tasks with different pools on one worker do not mix") {
 
 TEST_CASE("a task made without a scope charges the general pool") {
     Runtime rt(2);
-    memory::detail::Pool& general = memory::detail::Manager::get().general();
-    memory::detail::PoolHandle submitter = open_pool("submitter");
-    memory::detail::PoolHandle enqueuer = open_pool("enqueuer");
+    memory::Pool& general = memory::detail::Manager::get().general();
+    memory::PoolHandle submitter = open_pool("submitter");
+    memory::PoolHandle enqueuer = open_pool("enqueuer");
     Hops hops;
     hops.enqueuer_pool = enqueuer.get();
     Blocks blocks;
@@ -231,8 +231,8 @@ TEST_CASE("a task made without a scope charges the general pool") {
 
 TEST_CASE("children awaited or spawned inside a task take its pool") {
     Runtime rt(4);
-    memory::detail::PoolHandle pool = open_pool("parent");
-    memory::detail::PoolHandle enqueuer = open_pool("enqueuer");
+    memory::PoolHandle pool = open_pool("parent");
+    memory::PoolHandle enqueuer = open_pool("enqueuer");
     Hops hops;
     hops.enqueuer_pool = enqueuer.get();
     Blocks direct;
@@ -254,8 +254,8 @@ TEST_CASE("children awaited or spawned inside a task take its pool") {
 }
 
 TEST_CASE("get() charges the task's pool and keeps the caller's scope") {
-    memory::detail::PoolHandle pool = open_pool("task");
-    memory::detail::PoolHandle caller = open_pool("caller");
+    memory::PoolHandle pool = open_pool("task");
+    memory::PoolHandle caller = open_pool("caller");
     Blocks blocks;
 
     {
@@ -263,7 +263,8 @@ TEST_CASE("get() charges the task's pool and keeps the caller's scope") {
             under(*pool, [&] { return allocate_and_yield_once(&blocks); });
         memory::detail::Scope scope{*caller};
         task.get();
-        CHECK(memory::detail::current_pool().id() == caller->id());
+        CHECK(memory::detail::PoolAccess::id(memory::detail::current_pool()) ==
+              memory::detail::PoolAccess::id(*caller));
     }
 
     CHECK(pool->blocks() == 2);
@@ -272,11 +273,10 @@ TEST_CASE("get() charges the task's pool and keeps the caller's scope") {
 }
 
 TEST_CASE("a task whose pool closed before it ran charges the general pool") {
-    memory::detail::Pool& general = memory::detail::Manager::get().general();
+    memory::Pool& general = memory::detail::Manager::get().general();
     // A Results pool may close with the task's frame still live.
-    memory::detail::PoolHandle pool =
-        memory::detail::Manager::get().root().child(
-            "closed", memory::detail::PoolKind::Results);
+    memory::PoolHandle pool = memory::detail::Manager::get().root().child(
+        "closed", memory::PoolKind::Results);
     REQUIRE(pool);
     Blocks blocks;
     blocks.size = BIG_BLOCK;

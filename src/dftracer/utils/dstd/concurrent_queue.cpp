@@ -10,13 +10,13 @@ namespace {
 
 // Never closed, so the handle is built in place and never destroyed. The exit
 // check still counts the pool, so a queue alive at exit is reported.
-memory::detail::Pool& queue_pool() {
-    alignas(memory::detail::PoolHandle) static unsigned char
-        storage[sizeof(memory::detail::PoolHandle)];
-    static memory::detail::Pool* pool = [] {
-        auto* handle = new (storage) memory::detail::PoolHandle(
-            memory::detail::Manager::get().root().child(
-                "concurrent_queue", memory::detail::PoolKind::Results));
+memory::Pool& queue_pool() {
+    alignas(memory::PoolHandle) static unsigned char
+        storage[sizeof(memory::PoolHandle)];
+    static memory::Pool* pool = [] {
+        auto* handle = new (storage)
+            memory::PoolHandle(memory::detail::Manager::get().root().child(
+                "concurrent_queue", memory::PoolKind::Results));
         return handle->get();
     }();
     return *pool;

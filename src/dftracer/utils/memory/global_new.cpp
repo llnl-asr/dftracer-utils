@@ -12,8 +12,8 @@ using namespace dftracer::utils;
 
 namespace {
 
-using memory::detail::Pool;
-using memory::detail::PoolHandle;
+using memory::Pool;
+using memory::PoolHandle;
 
 constexpr std::size_t DEFAULT_ALIGN = alignof(std::max_align_t);
 
@@ -24,7 +24,7 @@ Pool& new_pool() {
     static Pool* pool = [] {
         auto* handle = new (storage)
             PoolHandle(memory::detail::Manager::get().root().child(
-                "global_new", memory::detail::PoolKind::Results));
+                "global_new", memory::PoolKind::Results));
         memory::detail::exempt_from_exit_check(**handle);
         return handle->get();
     }();

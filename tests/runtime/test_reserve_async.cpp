@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -42,22 +43,22 @@ struct Budget {
     ~Budget() { memory::configure(memory::Config{}); }
 };
 
-memory::detail::Pool& root() { return memory::detail::Manager::get().root(); }
+memory::Pool& root() { return memory::detail::Manager::get().root(); }
 
-memory::detail::PoolHandle open_pool(const char* name) {
-    memory::detail::PoolHandle pool = root().child(name);
+memory::PoolHandle open_pool(const char* name) {
+    memory::PoolHandle pool = root().child(name);
     REQUIRE(pool);
     return pool;
 }
 
 template <typename Make>
-auto under(memory::detail::Pool& pool, Make make) {
+auto under(memory::Pool& pool, Make make) {
     memory::detail::Scope scope{pool};
     return make();
 }
 
 struct Outcome {
-    memory::detail::Status status = memory::detail::Status::Pending;
+    memory::Status status = memory::Status::Pending;
     std::size_t bytes = 0;
     coro::Executor* resumed_on = nullptr;
     dstd::Thread::Id thread;
@@ -65,7 +66,7 @@ struct Outcome {
     void* block = nullptr;
 };
 
-CoroTask<void> wait_for(memory::detail::Pool* pool, std::size_t bytes,
+CoroTask<void> wait_for(memory::Pool* pool, std::size_t bytes,
                         Clock::time_point deadline, Outcome* out,
                         std::atomic<bool>* about_to_wait) {
     if (about_to_wait != nullptr) {
@@ -77,7 +78,7 @@ CoroTask<void> wait_for(memory::detail::Pool* pool, std::size_t bytes,
     out->resumed_on = coro::Executor::current();
     out->thread = dstd::Thread::current_id();
     if (r) {
-        out->status = memory::detail::Status::Ok;
+        out->status = memory::Status::Ok;
         out->bytes = r->bytes();
         out->block = memory::detail::allocate(BIG_BLOCK, ALIGN);
     } else {
@@ -85,7 +86,7 @@ CoroTask<void> wait_for(memory::detail::Pool* pool, std::size_t bytes,
     }
 }
 
-CoroTask<void> release_later(memory::detail::Reservation* held,
+CoroTask<void> release_later(memory::Reservation* held,
                              std::atomic<bool>* about_to_wait) {
     while (!about_to_wait->load(std::memory_order_acquire)) {
         std::this_thread::yield();
@@ -115,7 +116,7 @@ struct Alive {
     ~Alive() { count->fetch_sub(1); }
 };
 
-Bare wait_in_bare(memory::detail::Pool* pool, std::size_t bytes,
+Bare wait_in_bare(memory::Pool* pool, std::size_t bytes,
                   Clock::time_point deadline, std::atomic<int>* alive,
                   std::atomic<bool>* resumed) {
     Alive guard{alive};
@@ -124,7 +125,7 @@ Bare wait_in_bare(memory::detail::Pool* pool, std::size_t bytes,
     (void)r;
 }
 
-CoroTask<void> start_and_destroy(memory::detail::Pool* pool, std::size_t bytes,
+CoroTask<void> start_and_destroy(memory::Pool* pool, std::size_t bytes,
                                  Clock::time_point deadline,
                                  std::atomic<int>* alive,
                                  std::atomic<bool>* resumed, bool* suspended) {
@@ -139,11 +140,11 @@ CoroTask<void> start_and_destroy(memory::detail::Pool* pool, std::size_t bytes,
 TEST_CASE("a waiter with room gets its bytes without waiting") {
     Runtime rt(2);
     Budget budget(64 * MIB);
-    memory::detail::PoolHandle pool = open_pool("task");
+    memory::PoolHandle pool = open_pool("task");
     Outcome out;
     rt.submit(wait_for(pool.get(), 8 * MIB, Clock::now() + 10s, &out, nullptr))
         .get();
-    CHECK(out.status == memory::detail::Status::Ok);
+    CHECK(out.status == memory::Status::Ok);
     CHECK(out.bytes == 8 * MIB);
     CHECK(root().reserved() == 0);
     memory::detail::deallocate(out.block, BIG_BLOCK);
@@ -152,22 +153,23 @@ TEST_CASE("a waiter with room gets its bytes without waiting") {
 TEST_CASE("a request that can never fit fails at once") {
     Runtime rt(2);
     Budget budget(64 * MIB);
-    memory::detail::PoolHandle pool = open_pool("task");
+    memory::PoolHandle pool = open_pool("task");
     Outcome out;
     auto start = Clock::now();
     rt.submit(
           wait_for(pool.get(), 128 * MIB, Clock::now() + 10s, &out, nullptr))
         .get();
-    CHECK(out.status == memory::detail::Status::OverBudget);
+    CHECK(out.status == memory::Status::OverBudget);
     CHECK(Clock::now() - start < 5s);
 }
 
 TEST_CASE("a waiter resumes on its executor when another task releases") {
     Runtime rt(2);
     Budget budget(64 * MIB);
-    memory::detail::PoolHandle holds = open_pool("holds");
-    memory::detail::PoolHandle pool = open_pool("task");
-    memory::detail::Reservation held = holds->reserve(64 * MIB);
+    memory::PoolHandle holds = open_pool("holds");
+    memory::PoolHandle pool = open_pool("task");
+    memory::Reservation held =
+        memory::detail::PoolAccess::reserve(*holds, 64 * MIB);
     REQUIRE(held);
 
     Outcome out;
@@ -182,7 +184,7 @@ TEST_CASE("a waiter resumes on its executor when another task releases") {
     rt.submit(std::move(releaser)).get();
     w.get();
 
-    CHECK(out.status == memory::detail::Status::Ok);
+    CHECK(out.status == memory::Status::Ok);
     CHECK(out.bytes == 32 * MIB);
     CHECK(out.waited >= 10ms);
     CHECK(out.resumed_on == rt.executor());
@@ -195,9 +197,10 @@ TEST_CASE("a waiter resumes on its executor when another task releases") {
 TEST_CASE("a release from a plain thread does not resume the waiter inline") {
     Runtime rt(2);
     Budget budget(64 * MIB);
-    memory::detail::PoolHandle holds = open_pool("holds");
-    memory::detail::PoolHandle pool = open_pool("task");
-    memory::detail::Reservation held = holds->reserve(64 * MIB);
+    memory::PoolHandle holds = open_pool("holds");
+    memory::PoolHandle pool = open_pool("task");
+    memory::Reservation held =
+        memory::detail::PoolAccess::reserve(*holds, 64 * MIB);
     REQUIRE(held);
 
     Outcome out;
@@ -216,7 +219,7 @@ TEST_CASE("a release from a plain thread does not resume the waiter inline") {
     t.join();
     w.get();
 
-    CHECK(out.status == memory::detail::Status::Ok);
+    CHECK(out.status == memory::Status::Ok);
     CHECK(out.waited >= 10ms);
     CHECK(out.resumed_on == rt.executor());
     CHECK(out.thread != releaser);
@@ -226,9 +229,10 @@ TEST_CASE("a release from a plain thread does not resume the waiter inline") {
 TEST_CASE("a waiter times out and the later release skips it") {
     Runtime rt(2);
     Budget budget(64 * MIB);
-    memory::detail::PoolHandle holds = open_pool("holds");
-    memory::detail::PoolHandle pool = open_pool("task");
-    memory::detail::Reservation held = holds->reserve(64 * MIB);
+    memory::PoolHandle holds = open_pool("holds");
+    memory::PoolHandle pool = open_pool("task");
+    memory::Reservation held =
+        memory::detail::PoolAccess::reserve(*holds, 64 * MIB);
     REQUIRE(held);
 
     Outcome out;
@@ -236,7 +240,7 @@ TEST_CASE("a waiter times out and the later release skips it") {
     rt.submit(
           wait_for(pool.get(), 32 * MIB, Clock::now() + 50ms, &out, nullptr))
         .get();
-    CHECK(out.status == memory::detail::Status::OverBudget);
+    CHECK(out.status == memory::Status::OverBudget);
     CHECK(Clock::now() - start >= 50ms);
     CHECK(out.resumed_on == rt.executor());
 
@@ -247,16 +251,17 @@ TEST_CASE("a waiter times out and the later release skips it") {
 
 TEST_CASE("a blocking get() on its own run loop does not wait") {
     Budget budget(64 * MIB);
-    memory::detail::PoolHandle holds = open_pool("holds");
-    memory::detail::PoolHandle pool = open_pool("task");
-    memory::detail::Reservation held = holds->reserve(64 * MIB);
+    memory::PoolHandle holds = open_pool("holds");
+    memory::PoolHandle pool = open_pool("task");
+    memory::Reservation held =
+        memory::detail::PoolAccess::reserve(*holds, 64 * MIB);
     REQUIRE(held);
 
     Outcome out;
     CoroTask<void> task =
         wait_for(pool.get(), 32 * MIB, Clock::now() + 10s, &out, nullptr);
     CHECK_NOTHROW(task.get());
-    CHECK(out.status != memory::detail::Status::Ok);
+    CHECK(out.status != memory::Status::Ok);
     CHECK(out.waited < 5s);
     CHECK(root().reserved() == 64 * MIB);
 }
@@ -264,15 +269,16 @@ TEST_CASE("a blocking get() on its own run loop does not wait") {
 TEST_CASE("a frame destroyed while it waits leaks nothing") {
     Runtime rt(ExecutorConfig{.num_threads = 2, .task_history = 0}, false);
     Budget budget(64 * MIB);
-    memory::detail::PoolHandle holds = open_pool("holds");
-    memory::detail::PoolHandle pool = open_pool("task");
-    memory::detail::Reservation held = holds->reserve(64 * MIB);
+    memory::PoolHandle holds = open_pool("holds");
+    memory::PoolHandle pool = open_pool("task");
+    memory::Reservation held =
+        memory::detail::PoolAccess::reserve(*holds, 64 * MIB);
     REQUIRE(held);
 
     std::atomic<int> alive{0};
     std::atomic<bool> resumed{false};
     bool suspended = false;
-    memory::detail::Pool& general = memory::detail::Manager::get().general();
+    memory::Pool& general = memory::detail::Manager::get().general();
     std::atomic<bool> warm{false};
     rt.submit(start_and_destroy(pool.get(), 0, Clock::now() + 50ms, &alive,
                                 &warm, &suspended))
@@ -304,14 +310,13 @@ TEST_CASE("many waiters on several workers end exact") {
     constexpr std::size_t SIZES[] = {8 * MIB, 16 * MIB, 32 * MIB, 48 * MIB};
     Runtime rt(4);
     Budget budget(64 * MIB);
-    dstd::Vector<memory::detail::PoolHandle> pools;
+    dstd::Vector<memory::PoolHandle> pools;
     for (int i = 0; i < TASKS; ++i) pools.push_back(open_pool("t"));
 
     std::atomic<int> granted{0};
     std::atomic<int> timed_out{0};
     std::atomic<int> bad{0};
-    auto worker = [&](memory::detail::Pool* pool,
-                      unsigned seed) -> CoroTask<void> {
+    auto worker = [&](memory::Pool* pool, unsigned seed) -> CoroTask<void> {
         std::mt19937_64 rng(seed);
         for (int i = 0; i < ROUNDS; ++i) {
             std::size_t size = SIZES[rng() % 4];
@@ -331,7 +336,7 @@ TEST_CASE("many waiters on several workers end exact") {
                 granted.fetch_add(1, std::memory_order_relaxed);
                 std::this_thread::sleep_for(200us);
                 co_await yield();
-            } else if (r.error() == memory::detail::Status::OverBudget) {
+            } else if (r.error() == memory::Status::OverBudget) {
                 timed_out.fetch_add(1, std::memory_order_relaxed);
             } else {
                 bad.fetch_add(1, std::memory_order_relaxed);

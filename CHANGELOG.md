@@ -271,6 +271,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `memory::Pool`, `memory::PoolHandle` and `memory::Reservation` in `dftracer/utils/memory/pool.h`: open a child pool of `memory::root_pool()` with a limit, `try_reserve` the bytes a job needs, back a `dstd::PoolVector` with the pool through `memory::PoolAllocator` and read its `live()` and `peak()`.
 - Export `write_shard_set` and `consolidate_shard_set` from `dftracer.utils`.
 - Add `dstd::File`, a file handle that reads and writes at explicit offsets only, with `read_exact_at`, `write_all_at`, `size`, `resize`, `sync` and a `close` that reports its error.
 - Add `coro::sync_wait(executor, task)`, which runs a task on an executor and blocks the calling thread until it ends.

@@ -15,7 +15,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-memory::detail::Pool& root() { return memory::detail::Manager::get().root(); }
+memory::Pool& root() { return memory::detail::Manager::get().root(); }
 
 int g_alive = 0;
 
@@ -49,7 +49,7 @@ static_assert(!std::is_copy_constructible_v<dstd::Function<void()>>);
 static_assert(std::is_nothrow_move_constructible_v<dstd::Function<void()>>);
 
 TEST_CASE("a small callable stays in the buffer") {
-    memory::detail::PoolHandle pool = root().child("small");
+    memory::PoolHandle pool = root().child("small");
     memory::detail::Scope s{*pool};
     {
         int base = 40;
@@ -66,7 +66,7 @@ TEST_CASE("a small callable stays in the buffer") {
 }
 
 TEST_CASE("a large callable goes to the heap and is freed") {
-    memory::detail::PoolHandle pool = root().child("large");
+    memory::PoolHandle pool = root().child("large");
     memory::detail::Scope s{*pool};
     {
         dstd::Function<int(int)> f = Large{};
@@ -113,7 +113,7 @@ TEST_CASE("move leaves the source empty and destroys each target once") {
 }
 
 TEST_CASE("a move-only capture works") {
-    memory::detail::PoolHandle pool = root().child("move-only");
+    memory::PoolHandle pool = root().child("move-only");
     memory::detail::Scope s{*pool};
     {
         auto owned = dstd::make_unique<int>(7);
@@ -176,7 +176,7 @@ struct alignas(32) OverAligned {
 }  // namespace
 
 TEST_CASE("a throwing copy into the heap frees the block") {
-    memory::detail::PoolHandle pool = root().child("throwing");
+    memory::PoolHandle pool = root().child("throwing");
     memory::detail::Scope s{*pool};
     ThrowingCopy source;
     CHECK_THROWS_AS(dstd::Function<int(int)>{source}, std::runtime_error);
@@ -184,7 +184,7 @@ TEST_CASE("a throwing copy into the heap frees the block") {
 }
 
 TEST_CASE("an over-aligned callable goes to the heap with its alignment") {
-    memory::detail::PoolHandle pool = root().child("aligned");
+    memory::PoolHandle pool = root().child("aligned");
     memory::detail::Scope s{*pool};
     {
         dstd::Function<int(int)> f = OverAligned{};

@@ -48,7 +48,7 @@ void report_fault(int, siginfo_t*, void*) { ::_exit(70); }
 }  // namespace
 
 TEST_CASE("frames are charged to the task's pool") {
-    memory::detail::PoolHandle pool =
+    memory::PoolHandle pool =
         memory::detail::Manager::get().root().child("frames");
     REQUIRE(pool);
     {

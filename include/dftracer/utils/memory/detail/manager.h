@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_MEMORY_DETAIL_MANAGER_H
 
 #include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/pool.h>
 
 #include <atomic>
 #include <cstddef>
@@ -14,8 +15,7 @@
 namespace dftracer::utils::memory::detail {
 
 class Manager;
-class Pool;
-struct PoolAccess;
+struct PoolInternals;
 struct ManagerAccess;
 struct ReclaimEntry;
 struct ExternalEntry;
@@ -23,90 +23,6 @@ struct AttribCache;
 
 inline constexpr std::size_t RECLAIMER_SLOTS = 4096;
 inline constexpr std::size_t EXTERNAL_SLOTS = 256;
-
-enum class PoolKind : std::uint8_t {
-    /// Query state, arenas, hash tables. Closing it with live bytes or open
-    /// children is a leak.
-    Scratch,
-    /// Results that outlive the query. Closing it leaves its live bytes in
-    /// place and reports them as adopted by the parent.
-    Results,
-};
-
-enum class Status : std::uint8_t {
-    Ok,
-    /// Holders were asked for bytes that are not free yet.
-    Pending,
-    OverBudget,
-    OverCap,
-    PoolTableFull,
-    /// Every reclaimer or external slot is taken.
-    SlotTableFull,
-    /// The wait ended because the executor is shutting down. A retry cannot
-    /// succeed.
-    Cancelled,
-};
-
-struct Limits {
-    /// Largest reserved total of the pool and the pools below it, as
-    /// Pool::reserve rounds it. Zero is no limit.
-    std::size_t bytes = 0;
-};
-
-/**
- * @brief A reservation of bytes in one pool, released on destruction.
- *
- * Empty when Pool::reserve failed. Then status() says why. Moving transfers the
- * bytes. A reservation counts against the pool limit and the budget but
- * allocates nothing.
- */
-class Reservation {
-   public:
-    Reservation() noexcept = default;
-    Reservation(Reservation&& other) noexcept;
-    Reservation& operator=(Reservation&& other) noexcept;
-    Reservation(const Reservation&) = delete;
-    Reservation& operator=(const Reservation&) = delete;
-    ~Reservation();
-
-    explicit operator bool() const noexcept {
-        return pool_ != nullptr && status_ == Status::Ok;
-    }
-    Status status() const noexcept { return status_; }
-    std::size_t bytes() const noexcept { return bytes_; }
-    /**
-     * @brief Reserve @p bytes more in the same pool, as Pool::reserve does.
-     *
-     * On failure the reservation keeps its bytes and the status says why. An
-     * empty reservation has no pool to grow in: it returns its own failure,
-     * or Status::OverBudget when it was default constructed.
-     */
-    Status grow(std::size_t bytes) noexcept;
-    /**
-     * @brief Grow as grow() does, through Pool::try_reserve: a refusal asks
-     * no holder for bytes and trims nothing.
-     */
-    Status try_grow(std::size_t bytes) noexcept;
-    /**
-     * @brief Move up to @p bytes of @p other into this reservation without
-     * touching the pool and return the bytes moved.
-     *
-     * Both must hold bytes of the same pool. An empty reservation takes the
-     * pool of @p other.
-     */
-    std::size_t take_from(Reservation& other, std::size_t bytes) noexcept;
-    void release() noexcept;
-
-   private:
-    friend class Pool;
-    friend class ReserveWait;
-    Reservation(Pool* pool, std::size_t bytes, Status status) noexcept
-        : pool_(pool), bytes_(bytes), status_(status) {}
-
-    Pool* pool_ = nullptr;
-    std::size_t bytes_ = 0;
-    Status status_ = Status::Ok;
-};
 
 enum class WaitState : std::uint8_t {
     Waiting,
@@ -175,38 +91,6 @@ class ReserveWait {
     std::atomic<std::uint32_t> refs_{1};
     std::atomic<WaitState> state_{WaitState::Waiting};
     bool taken_ = false;
-};
-
-/**
- * @brief Owns an open pool and closes it on destruction.
- *
- * Empty when Pool::child failed. Then status() says why. Close each child
- * before its parent.
- */
-class PoolHandle {
-   public:
-    PoolHandle() noexcept = default;
-    PoolHandle(PoolHandle&& other) noexcept;
-    PoolHandle& operator=(PoolHandle&& other) noexcept;
-    PoolHandle(const PoolHandle&) = delete;
-    PoolHandle& operator=(const PoolHandle&) = delete;
-    ~PoolHandle();
-
-    explicit operator bool() const noexcept { return pool_ != nullptr; }
-    Status status() const noexcept { return status_; }
-    Pool* get() const noexcept { return pool_; }
-    Pool& operator*() const noexcept { return *pool_; }
-    Pool* operator->() const noexcept { return pool_; }
-    void close() noexcept;
-
-   private:
-    friend class Pool;
-    PoolHandle(Pool* pool, std::uint32_t generation, Status status) noexcept
-        : pool_(pool), generation_(generation), status_(status) {}
-
-    Pool* pool_ = nullptr;
-    std::uint32_t generation_ = 0;
-    Status status_ = Status::Ok;
 };
 
 /**
@@ -281,7 +165,7 @@ class ReclaimSlot {
     void detach() noexcept;
 
    private:
-    friend class Pool;
+    friend class memory::Pool;
     ReclaimSlot(ReclaimEntry* entry, Pool* pool, std::uint32_t generation,
                 Status status) noexcept
         : entry_(entry),
@@ -341,121 +225,6 @@ class ExternalSlot {
  * taken.
  */
 ExternalSlot attach_external(std::string_view name);
-
-/**
- * @brief A node of the pool tree: the process, a query, a task, an operator.
- *
- * A Pool reference stays readable after the pool closes. Blocks are charged to
- * the pool that was the scope when they were allocated. The counters are exact
- * while no thread allocates or frees and a snapshot otherwise.
- */
-class Pool {
-   public:
-    Pool(const Pool&) = delete;
-    Pool& operator=(const Pool&) = delete;
-
-    /**
-     * @brief Open a pool below this one.
-     *
-     * The name is cut at 47 bytes. The handle is empty with
-     * Status::PoolTableFull when all 65,535 slots are taken.
-     */
-    PoolHandle child(std::string_view name, PoolKind kind = PoolKind::Scratch,
-                     Limits limits = {});
-
-    /**
-     * @brief Reserve @p bytes in this pool.
-     *
-     * The pool total must stay within every limit above it. A request over the
-     * budget or a limit fails with OverBudget. Else a refusal posts to holders,
-     * trims, retries once and returns Pending or OverBudget. Never waits.
-     */
-    Reservation reserve(std::size_t bytes) noexcept;
-
-    /**
-     * @brief Reserve as reserve() does, but on a refusal ask no holder for
-     * bytes and trim nothing.
-     *
-     * For a holder that answers a refusal itself, such as by spilling to disk.
-     */
-    Reservation try_reserve(std::size_t bytes) noexcept;
-
-    /**
-     * @brief Raise the limit of this pool by @p bytes. A pool with no limit
-     * keeps none.
-     *
-     * Thread safe. A reservation checked against the old limit at the same
-     * time may still be refused.
-     */
-    void raise_limit(std::size_t bytes) noexcept;
-
-    /**
-     * @brief Register a holder of this pool that can give bytes back.
-     *
-     * Reads Reclaimer::reclaimable() once, on the calling thread. The manager
-     * keeps no pointer to @p reclaimer. The slot is empty with
-     * Status::SlotTableFull when all RECLAIMER_SLOTS are taken.
-     */
-    ReclaimSlot attach(Reclaimer& reclaimer);
-
-    std::uint16_t id() const noexcept { return id_; }
-    /// Changes each time the slot opens a new pool.
-    std::uint32_t generation() const noexcept {
-        return generation_.load(std::memory_order_relaxed);
-    }
-    std::uint16_t parent() const noexcept { return parent_; }
-    PoolKind kind() const noexcept { return kind_; }
-    std::string_view name() const noexcept { return {name_, name_size_}; }
-    /// Names from the root joined by '/', for example "root/query/scan".
-    std::string path() const;
-    std::size_t limit() const noexcept {
-        return limit_.load(std::memory_order_relaxed);
-    }
-
-    /// Bytes and blocks held by this pool and every pool below it.
-    std::size_t live() const;
-    std::size_t blocks() const;
-    /// Largest live() seen by a counter read. The heap does not sample it.
-    std::size_t peak() const;
-    /// Reserved bytes, with every pool below counted by its rounded amount.
-    std::size_t reserved() const noexcept;
-    /// Live bytes of closed Results pools directly below this one.
-    std::size_t adopted() const;
-    std::size_t exported() const noexcept;
-    /// Mark bytes of this pool as handed to a host buffer. They stay live.
-    void add_exported(std::size_t bytes) noexcept;
-    void sub_exported(std::size_t bytes) noexcept;
-
-   private:
-    friend struct PoolAccess;
-    friend struct ManagerAccess;
-    friend class PoolHandle;
-    friend class Reservation;
-    friend class ReclaimGuard;
-    friend class ReclaimSlot;
-    Pool() = default;
-
-    static constexpr std::size_t NAME_CAPACITY = 48;
-
-    std::atomic<std::ptrdiff_t> live_{0};
-    std::atomic<std::ptrdiff_t> blocks_{0};
-    std::atomic<std::ptrdiff_t> reserved_{0};
-    std::atomic<std::ptrdiff_t> charged_{0};
-    std::atomic<std::ptrdiff_t> peak_{0};
-    std::atomic<std::ptrdiff_t> exported_{0};
-    std::atomic<std::size_t> limit_{0};
-    std::atomic<std::uint32_t> generation_{0};
-    std::atomic<std::uint32_t> state_{0};
-    std::atomic<std::uint32_t> children_{0};
-    std::atomic<std::uint32_t> open_children_{0};
-    std::atomic<std::uint32_t> reclaiming_{0};
-    std::atomic<std::uint16_t> next_free_{0};
-    std::uint16_t id_ = 0;
-    std::atomic<std::uint16_t> parent_{0};
-    PoolKind kind_ = PoolKind::Scratch;
-    std::uint8_t name_size_ = 0;
-    char name_[NAME_CAPACITY] = {};
-};
 
 struct PoolStats {
     std::uint16_t id;
@@ -553,7 +322,7 @@ class Manager {
 
    private:
     friend struct ManagerAccess;
-    friend struct PoolAccess;
+    friend struct PoolInternals;
     Manager() = default;
 
     Pool* table_ = nullptr;

@@ -98,10 +98,9 @@ std::int64_t read_i64(dstd::ByteView bytes) {
         dstd::read_u64_le(reinterpret_cast<const std::uint8_t*>(bytes.data())));
 }
 
-memory::detail::PoolHandle child_pool(const dstd::String& name,
-                                      std::size_t limit) {
-    return memory::detail::current_pool().child(
-        name, memory::detail::PoolKind::Scratch, memory::detail::Limits{limit});
+memory::PoolHandle child_pool(const dstd::String& name, std::size_t limit) {
+    return memory::detail::current_pool().child(name, memory::PoolKind::Scratch,
+                                                memory::Limits{limit});
 }
 
 /// `head` padded with 'x' to exactly `length` bytes, so every value of a raw
@@ -647,8 +646,7 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
     constexpr std::uint64_t QUOTA = 8 * EXTENT_BYTES;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_budget");
-    memory::detail::PoolHandle budget_pool =
-        child_pool("backpressure budget", 0);
+    memory::PoolHandle budget_pool = child_pool("backpressure budget", 0);
     REQUIRE(static_cast<bool>(budget_pool));
 
     dstd::UniquePtr<engine::Writer> writer;
@@ -755,8 +753,7 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
     constexpr std::size_t LIMIT_BYTES = 3 * EXTENT_BYTES;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_refused");
-    memory::detail::PoolHandle budget_pool =
-        child_pool("refused budget", LIMIT_BYTES);
+    memory::PoolHandle budget_pool = child_pool("refused budget", LIMIT_BYTES);
     REQUIRE(static_cast<bool>(budget_pool));
 
     dstd::UniquePtr<engine::Writer> writer;
@@ -917,8 +914,7 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     constexpr int SEGMENTS_PER_NAMESPACE = 2;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_limit");
-    memory::detail::PoolHandle budget_pool =
-        child_pool("limit budget", LIMIT_BYTES);
+    memory::PoolHandle budget_pool = child_pool("limit budget", LIMIT_BYTES);
     REQUIRE(static_cast<bool>(budget_pool));
 
     dstd::UniquePtr<engine::Writer> writer;

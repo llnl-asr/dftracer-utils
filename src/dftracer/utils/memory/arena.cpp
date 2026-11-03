@@ -2,6 +2,7 @@
 #include <dftracer/utils/memory/arena.h>
 #include <dftracer/utils/memory/asan.h>
 #include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/memory/heap_system.h>
 
 #include <limits>
@@ -11,16 +12,17 @@ namespace dftracer::utils::memory {
 
 namespace {
 
-detail::PoolHandle open_pool(detail::Pool& parent, std::string_view name) {
-    detail::PoolHandle pool = parent.child(name, detail::PoolKind::Scratch);
+PoolHandle open_pool(Pool& parent, std::string_view name) {
+    PoolHandle pool = parent.child(name, PoolKind::Scratch);
     if (!pool) throw std::bad_alloc();
     return pool;
 }
 
 }  // namespace
 
-Arena::Arena(detail::Pool& parent, std::string_view name)
-    : pool_(open_pool(parent, name)), reservation_(pool_->reserve(0)) {}
+Arena::Arena(Pool& parent, std::string_view name)
+    : pool_(open_pool(parent, name)),
+      reservation_(detail::PoolAccess::reserve(*pool_, 0)) {}
 
 Arena::Arena(std::string_view name) : Arena(detail::current_pool(), name) {}
 
@@ -117,18 +119,18 @@ void Arena::release() noexcept {
     reservation_.release();
 }
 
-detail::Status Arena::reserve(std::size_t bytes) noexcept {
+Status Arena::reserve(std::size_t bytes) noexcept {
     if (bytes > std::numeric_limits<std::size_t>::max() - chunk_bytes_) {
-        return detail::Status::OverBudget;
+        return Status::OverBudget;
     }
     std::size_t target = chunk_bytes_ + bytes;
     std::size_t have = reservation_.bytes();
-    if (target <= have) return detail::Status::Ok;
+    if (target <= have) return Status::Ok;
     if (!reservation_) {
-        reservation_ = pool_->reserve(target);
+        reservation_ = detail::PoolAccess::reserve(*pool_, target);
         return reservation_.status();
     }
-    return reservation_.grow(target - have);
+    return memory::detail::PoolAccess::grow(reservation_, target - have);
 }
 
 }  // namespace dftracer::utils::memory

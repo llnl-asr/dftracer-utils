@@ -245,8 +245,7 @@ dstd::Expected<dstd::UniquePtr<Writer>, dstd::Error> Writer::create(
     // Charged to the current pool, so a caller that builds a writer inside its
     // own pool bounds the extent memory with that pool's limit.
     auto extent_pool = memory::detail::current_pool().child(
-        "index store writer", memory::detail::PoolKind::Scratch,
-        memory::detail::Limits{});
+        "index store writer", memory::PoolKind::Scratch, memory::Limits{});
     if (!extent_pool) {
         return dstd::Unexpected<dstd::Error>(
             dstd::Error(dstd::Condition::Internal,
@@ -288,9 +287,8 @@ dstd::Expected<dstd::UniquePtr<Writer>, dstd::Error> Writer::create(
 
 Writer::Writer(dstd::String name, dstd::String path, std::uint32_t extent_size,
                dstd::Vector<ScopeGeneration> generations, DataFileWriter file,
-               memory::detail::PoolHandle extent_pool,
-               std::uint64_t extent_quota, TaskExecutor& executor,
-               const WriterOptions& options)
+               memory::PoolHandle extent_pool, std::uint64_t extent_quota,
+               TaskExecutor& executor, const WriterOptions& options)
     : file_(std::move(file)),
       committer_(file_, executor, options.commit_bytes,
                  options.commit_interval),

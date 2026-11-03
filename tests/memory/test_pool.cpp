@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
+#include <dftracer/utils/memory/pool.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 
@@ -185,13 +188,13 @@ TEST_CASE("closing a results pool hands its live bytes to the parent") {
     }
     std::size_t held = results->live();
     REQUIRE(held >= 5000);
-    CHECK(parent->adopted() == 0);
+    CHECK(PoolAccess::adopted(*parent) == 0);
 
     results.close();
     CHECK(g_report_count == 0);
-    CHECK(parent->adopted() == held);
+    CHECK(PoolAccess::adopted(*parent) == held);
     CHECK(parent->live() == held);
-    CHECK(root().adopted() == 0);
+    CHECK(PoolAccess::adopted(root()) == 0);
     bool found_closed = false;
     for (const PoolStats& s : pool_stats()) {
         if (s.path == "root/parent/results") found_closed = true;
@@ -199,7 +202,7 @@ TEST_CASE("closing a results pool hands its live bytes to the parent") {
     CHECK_FALSE(found_closed);
 
     deallocate(p);
-    CHECK(parent->adopted() == 0);
+    CHECK(PoolAccess::adopted(*parent) == 0);
     CHECK(parent->live() == 0);
 }
 
@@ -251,7 +254,7 @@ TEST_CASE("closing a clean scratch pool reports nothing") {
 TEST_CASE("a slot is not reused while a block still names it") {
     CaptureReports capture_reports;
     PoolHandle results = root().child("kept-alive", PoolKind::Results);
-    std::uint16_t id = results->id();
+    std::uint16_t id = PoolAccess::id(*results);
     void* p;
     {
         Scope s{*results};
@@ -262,21 +265,21 @@ TEST_CASE("a slot is not reused while a block still names it") {
     for (int i = 0; i < 200; ++i) {
         PoolHandle fresh = root().child("short");
         REQUIRE(fresh);
-        CHECK(fresh->id() != id);
+        CHECK(PoolAccess::id(*fresh) != id);
     }
     deallocate(p);
 }
 
 TEST_CASE("a clean closed slot is reused with a new generation") {
     PoolHandle first = root().child("first");
-    std::uint16_t id = first->id();
+    std::uint16_t id = PoolAccess::id(*first);
     first.close();
     PoolHandle second = root().child("second");
-    CHECK(second->id() == id);
+    CHECK(PoolAccess::id(*second) == id);
     CHECK(second->name() == "second");
     CHECK(second->live() == 0);
     PoolHandle third = root().child("third");
-    CHECK(third->id() != id);
+    CHECK(PoolAccess::id(*third) != id);
 }
 
 TEST_CASE("a name over 47 bytes is cut") {
@@ -290,14 +293,14 @@ TEST_CASE("reservations reach the root in quanta") {
     PoolHandle pool = root().child("quanta");
     std::size_t base = root().reserved();
 
-    Reservation a = pool->reserve(100);
+    Reservation a = PoolAccess::reserve(*pool, 100);
     REQUIRE(a);
     CHECK(pool->reserved() == 100);
     CHECK(root().reserved() == base + MIB);
-    Reservation b = pool->reserve(100);
+    Reservation b = PoolAccess::reserve(*pool, 100);
     CHECK(pool->reserved() == 200);
     CHECK(root().reserved() == base + MIB);
-    Reservation c = pool->reserve(MIB);
+    Reservation c = PoolAccess::reserve(*pool, MIB);
     CHECK(root().reserved() == base + 2 * MIB);
 
     c.release();
@@ -307,9 +310,9 @@ TEST_CASE("reservations reach the root in quanta") {
     CHECK(pool->reserved() == 0);
     CHECK(root().reserved() == base);
 
-    Reservation big = pool->reserve(17 * MIB);
+    Reservation big = PoolAccess::reserve(*pool, 17 * MIB);
     CHECK(root().reserved() == base + 20 * MIB);
-    Reservation huge = pool->reserve(60 * MIB);
+    Reservation huge = PoolAccess::reserve(*pool, 60 * MIB);
     CHECK(root().reserved() == base + 80 * MIB);
     big.release();
     huge.release();
@@ -319,7 +322,7 @@ TEST_CASE("reservations reach the root in quanta") {
 TEST_CASE("a moved reservation releases once") {
     BudgetGuard budget{std::size_t{1} << 30};
     PoolHandle pool = root().child("moved");
-    Reservation a = pool->reserve(10);
+    Reservation a = PoolAccess::reserve(*pool, 10);
     Reservation b = std::move(a);
     CHECK_FALSE(a);
     CHECK(b);
@@ -332,17 +335,17 @@ TEST_CASE("a reservation grows in its pool and keeps its bytes on failure") {
     BudgetGuard budget{std::size_t{1} << 30};
     PoolHandle pool = root().child("grow", PoolKind::Scratch, {2 * MIB});
     {
-        Reservation r = pool->reserve(MIB);
-        CHECK(r.grow(MIB / 2) == Status::Ok);
+        Reservation r = PoolAccess::reserve(*pool, MIB);
+        CHECK(PoolAccess::grow(r, MIB / 2) == Status::Ok);
         CHECK(r.bytes() == MIB + MIB / 2);
         CHECK(pool->reserved() == MIB + MIB / 2);
-        CHECK(r.grow(MIB) == Status::OverBudget);
+        CHECK(PoolAccess::grow(r, MIB) == Status::OverBudget);
         CHECK(r.bytes() == MIB + MIB / 2);
         CHECK(pool->reserved() == MIB + MIB / 2);
     }
     CHECK(pool->reserved() == 0);
     Reservation empty;
-    CHECK(empty.grow(10) == Status::OverBudget);
+    CHECK(PoolAccess::grow(empty, 10) == Status::OverBudget);
     CHECK(empty.bytes() == 0);
 }
 
@@ -351,31 +354,31 @@ TEST_CASE("a pool limit refuses a reservation and leaves the totals alone") {
     PoolHandle limited =
         root().child("limited", PoolKind::Scratch, Limits{4 * MIB});
     std::size_t base = root().reserved();
-    Reservation fits = limited->reserve(3 * MIB);
+    Reservation fits = PoolAccess::reserve(*limited, 3 * MIB);
     REQUIRE(fits);
-    Reservation over = limited->reserve(2 * MIB);
+    Reservation over = PoolAccess::reserve(*limited, 2 * MIB);
     CHECK_FALSE(over);
     CHECK(over.status() == Status::OverBudget);
     CHECK(limited->reserved() == 3 * MIB);
     CHECK(root().reserved() == base + 3 * MIB);
-    Reservation exact = limited->reserve(MIB);
+    Reservation exact = PoolAccess::reserve(*limited, MIB);
     CHECK(exact);
 }
 
 TEST_CASE("a raised limit admits what the old one refused") {
     PoolHandle p = Manager::get().root().child("raise", PoolKind::Scratch,
                                                Limits{2 * MIB});
-    Reservation a = p->reserve(2 * MIB);
+    Reservation a = PoolAccess::reserve(*p, 2 * MIB);
     REQUIRE(a);
-    CHECK(a.try_grow(MIB) == Status::OverBudget);
-    p->raise_limit(MIB);
+    CHECK(PoolAccess::try_grow(a, MIB) == Status::OverBudget);
+    PoolAccess::raise_limit(*p, MIB);
     CHECK(p->limit() == 3 * MIB);
-    CHECK(a.try_grow(MIB) == Status::Ok);
+    CHECK(PoolAccess::try_grow(a, MIB) == Status::Ok);
     CHECK(a.bytes() == 3 * MIB);
-    CHECK(a.try_grow(1) == Status::OverBudget);
+    CHECK(PoolAccess::try_grow(a, 1) == Status::OverBudget);
 
     PoolHandle open = Manager::get().root().child("no limit");
-    open->raise_limit(MIB);
+    PoolAccess::raise_limit(*open, MIB);
     CHECK(open->limit() == 0);
 }
 
@@ -386,8 +389,8 @@ TEST_CASE("try_reserve refuses without asking holders for bytes") {
     } holder;
     BudgetGuard budget(64 * MIB);
     PoolHandle holds = Manager::get().root().child("holds");
-    ReclaimSlot slot = holds->attach(holder);
-    Reservation held = holds->reserve(32 * MIB);
+    ReclaimSlot slot = PoolAccess::attach(*holds, holder);
+    Reservation held = PoolAccess::reserve(*holds, 32 * MIB);
     REQUIRE(held);
     PoolHandle other = Manager::get().root().child("other");
 
@@ -396,19 +399,19 @@ TEST_CASE("try_reserve refuses without asking holders for bytes") {
     CHECK(quiet.status() == Status::OverBudget);
     CHECK(slot.take_request() == 0);
 
-    Reservation loud = other->reserve(48 * MIB);
+    Reservation loud = PoolAccess::reserve(*other, 48 * MIB);
     CHECK(loud.status() == Status::Pending);
     CHECK(slot.take_request() > 0);
 }
 
 TEST_CASE("take_from moves bytes between reservations of one pool") {
     PoolHandle p = Manager::get().root().child("take");
-    Reservation a = p->reserve(3 * MIB);
+    Reservation a = PoolAccess::reserve(*p, 3 * MIB);
     Reservation b;
-    CHECK(b.take_from(a, 2 * MIB) == 2 * MIB);
+    CHECK(PoolAccess::take_from(b, a, 2 * MIB) == 2 * MIB);
     CHECK(a.bytes() == MIB);
     CHECK(b.bytes() == 2 * MIB);
-    CHECK(b.take_from(a, 5 * MIB) == MIB);
+    CHECK(PoolAccess::take_from(b, a, 5 * MIB) == MIB);
     CHECK(a.bytes() == 0);
     CHECK(p->reserved() == 3 * MIB);
     b.release();
@@ -421,12 +424,12 @@ TEST_CASE("a limit on an ancestor refuses a reservation below it") {
         root().child("capped", PoolKind::Scratch, Limits{2 * MIB});
     PoolHandle leaf = parent->child("leaf");
     std::size_t base = root().reserved();
-    Reservation over = leaf->reserve(3 * MIB);
+    Reservation over = PoolAccess::reserve(*leaf, 3 * MIB);
     CHECK(over.status() == Status::OverBudget);
     CHECK(leaf->reserved() == 0);
     CHECK(parent->reserved() == 0);
     CHECK(root().reserved() == base);
-    Reservation fits = leaf->reserve(MIB);
+    Reservation fits = PoolAccess::reserve(*leaf, MIB);
     CHECK(fits);
     CHECK(parent->reserved() == MIB);
 }
@@ -437,16 +440,16 @@ TEST_CASE("the budget refuses a reservation and a request larger than it") {
     PoolHandle one = root().child("one");
     PoolHandle two = root().child("two");
     std::size_t base = root().reserved();
-    Reservation first = one->reserve(6 * MIB);
+    Reservation first = PoolAccess::reserve(*one, 6 * MIB);
     REQUIRE(first);
-    Reservation second = two->reserve(3 * MIB);
+    Reservation second = PoolAccess::reserve(*two, 3 * MIB);
     CHECK(second.status() == Status::OverBudget);
     CHECK(two->reserved() == 0);
     CHECK(root().reserved() == base + 6 * MIB);
-    Reservation huge = two->reserve(9 * MIB);
+    Reservation huge = PoolAccess::reserve(*two, 9 * MIB);
     CHECK(huge.status() == Status::OverBudget);
     first.release();
-    Reservation retry = two->reserve(3 * MIB);
+    Reservation retry = PoolAccess::reserve(*two, 3 * MIB);
     CHECK(retry);
 }
 
@@ -459,7 +462,7 @@ TEST_CASE("stats report the root totals") {
         Scope s{*pool};
         p = allocate(1000, 16);
     }
-    Reservation r = pool->reserve(5);
+    Reservation r = PoolAccess::reserve(*pool, 5);
     Stats during = Manager::get().stats();
     CHECK(during.live >= before.live + 1000);
     CHECK(during.blocks == before.blocks + 1);
@@ -472,11 +475,11 @@ TEST_CASE("stats report the root totals") {
 
 TEST_CASE("exported bytes are counted on their pool") {
     PoolHandle pool = root().child("exports");
-    pool->add_exported(300);
-    CHECK(pool->exported() == 300);
-    CHECK(find(pool->id()).exported == 300);
-    pool->sub_exported(300);
-    CHECK(pool->exported() == 0);
+    PoolAccess::add_exported(*pool, 300);
+    CHECK(PoolAccess::exported(*pool) == 300);
+    CHECK(find(PoolAccess::id(*pool)).exported == 300);
+    PoolAccess::sub_exported(*pool, 300);
+    CHECK(PoolAccess::exported(*pool) == 0);
 }
 
 TEST_CASE("the table is full after 65,535 slots") {
@@ -499,11 +502,11 @@ TEST_CASE("pool table full scenario" * doctest::skip()) {
     }
     CHECK(pools.size() == POOL_SLOTS - 2);
 
-    std::uint16_t last = pools.back()->id();
+    std::uint16_t last = PoolAccess::id(*(pools.back()));
     pools.back().close();
     PoolHandle again = root().child("again");
     REQUIRE(again);
-    CHECK(again->id() == last);
+    CHECK(PoolAccess::id(*again) == last);
     PoolHandle none = root().child("none");
     CHECK_FALSE(none);
     CHECK(none.status() == Status::PoolTableFull);
@@ -515,7 +518,7 @@ TEST_CASE("a tag follows the scope and goes stale when its slot is reused") {
     {
         PoolHandle a = root().child("tag a");
         REQUIRE(a);
-        id = a->id();
+        id = PoolAccess::id(*a);
         Scope scope{*a};
         first = current_pool_tag();
         CHECK(first.id == id);
@@ -526,13 +529,50 @@ TEST_CASE("a tag follows the scope and goes stale when its slot is reused") {
     {
         Scope scope{*b};
         second = current_pool_tag();
-        CHECK(second.id == b->id());
+        CHECK(second.id == PoolAccess::id(*b));
     }
-    if (b->id() != id) return;
+    if (PoolAccess::id(*b) != id) return;
     CHECK(second.generation != first.generation);
     Scope outer{Manager::get().general()};
     enter_pool(first);
-    CHECK(current_pool().id() == Manager::get().general().id());
+    CHECK(PoolAccess::id(current_pool()) ==
+          PoolAccess::id(Manager::get().general()));
     enter_pool(second);
-    CHECK(current_pool().id() == b->id());
+    CHECK(PoolAccess::id(current_pool()) == PoolAccess::id(*b));
+}
+
+TEST_CASE("root_pool is the manager root") {
+    CHECK(&root_pool() == &Manager::get().root());
+}
+
+TEST_CASE("a child of root_pool reserves, counts a container and closes") {
+    BudgetGuard budget{std::size_t{1} << 30};
+    PoolHandle handle = root_pool().child("public example", PoolKind::Scratch,
+                                          Limits{64 * MIB});
+    REQUIRE(handle);
+    constexpr std::size_t N = 1'000'000;
+    Reservation room = handle->try_reserve(N * sizeof(int));
+    REQUIRE(room);
+    CHECK(room.bytes() >= N * sizeof(int));
+    Reservation too_much = handle->try_reserve(64 * MIB);
+    CHECK_FALSE(too_much);
+    CHECK(too_much.status() == Status::OverBudget);
+    CHECK(handle->live() == 0);
+    {
+        // keep std: memory tests link only memory
+        std::vector<int, PoolAllocator<int>> values{
+            PoolAllocator<int>(*handle)};
+        values.resize(N);
+        CHECK(handle->live() >= N * sizeof(int));
+        CHECK(handle->blocks() > 0);
+    }
+    CHECK(handle->live() == 0);
+    CHECK(handle->peak() >= N * sizeof(int));
+    room.release();
+    CHECK_FALSE(room);
+    Reservation again = handle->try_reserve(64 * MIB);
+    CHECK(again);
+    again.release();
+    handle.close();
+    CHECK_FALSE(handle);
 }

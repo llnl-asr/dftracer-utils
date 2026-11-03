@@ -14,7 +14,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-memory::detail::Pool& root() { return memory::detail::Manager::get().root(); }
+memory::Pool& root() { return memory::detail::Manager::get().root(); }
 
 bool aligned(const void* p) {
     return reinterpret_cast<std::uintptr_t>(p) % 64 == 0;
@@ -82,7 +82,7 @@ TEST_CASE("resize leaves new elements unwritten") {
 }
 
 TEST_CASE("allocations are charged to the scope pool and freed") {
-    memory::detail::PoolHandle pool = root().child("raw");
+    memory::PoolHandle pool = root().child("raw");
     memory::detail::Scope s{*pool};
     {
         dstd::RawBuffer<char> buf;
@@ -105,7 +105,7 @@ TEST_CASE("allocations are charged to the scope pool and freed") {
 }
 
 TEST_CASE("move leaves the source empty and frees once") {
-    memory::detail::PoolHandle pool = root().child("moved");
+    memory::PoolHandle pool = root().child("moved");
     memory::detail::Scope s{*pool};
     {
         dstd::RawBuffer<int> a(100);

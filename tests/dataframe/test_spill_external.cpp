@@ -18,6 +18,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <stdlib.h>
@@ -157,7 +158,7 @@ TEST_CASE("spill bytes show as external") {
     std::size_t seen = 0;
     std::size_t stats_external = 0;
     std::size_t free_budget = 0;
-    memory::detail::Status reserved = memory::detail::Status::SlotTableFull;
+    memory::Status reserved = memory::Status::SlotTableFull;
     auto source = dstd::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
         if (i != LOOK_AT) return;
         seen = spill_slot_bytes();
@@ -165,7 +166,7 @@ TEST_CASE("spill bytes show as external") {
         memory::detail::Manager& m = memory::detail::Manager::get();
         const std::size_t held = m.root().reserved();
         free_budget = m.budget() > held ? m.budget() - held : 0;
-        memory::detail::PoolHandle pool = m.root().child("probe");
+        memory::PoolHandle pool = m.root().child("probe");
         REQUIRE(pool);
         reserved = pool->try_reserve(free_budget / 2).status();
     });
@@ -184,7 +185,7 @@ TEST_CASE("spill bytes show as external") {
         // The spilled bytes exceed what the budget had left, so a reserve
         // that fits only succeeds when they are not counted.
         REQUIRE(seen > free_budget);
-        CHECK(reserved == memory::detail::Status::Ok);
+        CHECK(reserved == memory::Status::Ok);
     } else {
         MESSAGE("the working directory is tmpfs; spill bytes count there");
     }

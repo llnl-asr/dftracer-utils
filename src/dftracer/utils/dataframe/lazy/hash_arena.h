@@ -25,7 +25,7 @@ class HashArena {
     /// it. From it on, it grows four times at a time.
     static constexpr std::size_t GROWTH_FROM = std::size_t{1} << 18;
 
-    explicit HashArena(memory::detail::Pool& pool)
+    explicit HashArena(memory::Pool& pool)
         : keys_(pool, "hash arena keys"), head_(Head::allocator_type(pool)) {}
     HashArena() : HashArena(memory::detail::current_pool()) {}
 

@@ -284,7 +284,7 @@ struct Store::State {
     /// Holds what the store keeps across queries, never the pool of the query
     /// that made the call. First, so it closes after every other member is
     /// gone.
-    memory::detail::PoolHandle pool;
+    memory::PoolHandle pool;
     dstd::Path dir;
     mutable std::mutex mutex;
     dstd::SharedPtr<Runtime> runtime;
@@ -362,7 +362,7 @@ struct Store::State {
 
 Store::State::State(dstd::Path directory)
     : pool(memory::detail::Manager::get().root().child(
-          "store", memory::detail::PoolKind::Results)),
+          "store", memory::PoolKind::Results)),
       dir(std::move(directory)) {}
 
 Store::State::~State() {

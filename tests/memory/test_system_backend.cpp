@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/memory/heap_system.h>
 #include <doctest/doctest.h>
 
@@ -85,7 +86,8 @@ TEST_CASE("the header holds the size, the scope pool id and the offset") {
                 Scope scope{*pool};
                 scoped = allocate(size, align);
             }
-            CHECK(detail::system_header(scoped)->pool_id == pool->id());
+            CHECK(detail::system_header(scoped)->pool_id ==
+                  PoolAccess::id(*pool));
             deallocate(scoped, size);
         }
     }

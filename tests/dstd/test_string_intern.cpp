@@ -24,7 +24,7 @@ TEST_SUITE("StringIntern") {
     TEST_CASE("StringIntern - a table of a few strings costs a few KB") {
         // A build makes one table per file, so a fixed cost per table grows
         // with the file count.
-        memory::detail::PoolHandle pool =
+        memory::PoolHandle pool =
             memory::detail::Manager::get().general().child("intern size");
         {
             dstd::StringIntern intern(pool.get());

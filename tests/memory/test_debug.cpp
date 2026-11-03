@@ -4,6 +4,7 @@
 #include <dftracer/utils/memory/debug.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/memory/settings.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
@@ -304,7 +305,7 @@ TEST_CASE("reallocate moves the block and keeps its pool and contents") {
     CHECK(intact);
     std::size_t blocks = 0;
     debug_for_each_site(
-        owner->id(),
+        PoolAccess::id(*owner),
         [](void* context, const DebugSite& group) noexcept {
             *static_cast<std::size_t*>(context) += group.blocks;
         },
@@ -382,7 +383,7 @@ TEST_CASE("exported bytes at exit" * doctest::skip()) {
     fresh_process::announce();
     void* p = plant_a(123);
     Pool& root = Manager::get().root();
-    root.add_exported(root.live());
+    PoolAccess::add_exported(root, root.live());
     (void)p;
 }
 

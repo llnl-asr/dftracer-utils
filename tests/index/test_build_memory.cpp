@@ -18,6 +18,7 @@
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
@@ -117,11 +118,13 @@ struct Budget {
 };
 
 // Fails when anything else is reserved and posts the shortfall to the holders.
-memory::detail::Status ask_for_budget() {
-    memory::detail::PoolHandle pool =
+memory::Status ask_for_budget() {
+    memory::PoolHandle pool =
         memory::detail::Manager::get().root().child("ask");
     REQUIRE(pool);
-    return pool->reserve(memory::detail::Manager::get().budget()).status();
+    return memory::detail::PoolAccess::reserve(
+               *pool, memory::detail::Manager::get().budget())
+        .status();
 }
 
 }  // namespace
@@ -280,12 +283,13 @@ TEST_SUITE("IndexBuildMemory") {
         for (auto& b : out) buffers.give(std::move(b));
         REQUIRE(buffers.idle() == 4);
 
-        memory::detail::PoolHandle hold =
+        memory::PoolHandle hold =
             memory::detail::Manager::get().root().child("hold");
-        memory::detail::Reservation held = hold->reserve(32 * MIB);
+        memory::Reservation held =
+            memory::detail::PoolAccess::reserve(*hold, 32 * MIB);
         REQUIRE(held);
         const std::uint64_t freed = index::build::g_fold_buffers_freed.load();
-        CHECK(ask_for_budget() == memory::detail::Status::Pending);
+        CHECK(ask_for_budget() == memory::Status::Pending);
         auto again = buffers.take();
         CHECK(buffers.idle() == 0);
         CHECK(index::build::g_fold_buffers_freed.load() == freed + 4);
@@ -304,9 +308,10 @@ TEST_SUITE("IndexBuildMemory") {
         REQUIRE(plain.indexed == 1);
 
         Budget budget(64 * MIB);
-        memory::detail::PoolHandle hold =
+        memory::PoolHandle hold =
             memory::detail::Manager::get().root().child("hold");
-        memory::detail::Reservation held = hold->reserve(MIB);
+        memory::Reservation held =
+            memory::detail::PoolAccess::reserve(*hold, MIB);
         REQUIRE(held);
         const std::uint64_t freed = index::build::g_fold_buffers_freed.load();
         std::atomic<bool> done{false};

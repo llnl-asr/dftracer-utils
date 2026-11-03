@@ -1211,10 +1211,9 @@ TEST_SUITE("index store file") {
         const std::uint64_t record_offset = store::engine::FILE_HEADER_BYTES;
         const auto decode_with_tracked_peak =
             [](const dstd::Vector<std::uint8_t>& record) {
-                memory::detail::PoolHandle pool =
+                memory::PoolHandle pool =
                     memory::detail::Manager::get().general().child(
-                        "record_count_bound",
-                        memory::detail::PoolKind::Scratch);
+                        "record_count_bound", memory::PoolKind::Scratch);
                 REQUIRE(pool);
                 const memory::Config saved = memory::config();
                 memory::Config capped = saved;

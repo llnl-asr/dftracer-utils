@@ -41,7 +41,7 @@ ZSTD_customMem general_pool_mem() noexcept {
                 try {
                     return memory::detail::allocate(
                         size, alignof(std::max_align_t),
-                        *static_cast<memory::detail::Pool*>(pool));
+                        *static_cast<memory::Pool*>(pool));
                 } catch (...) {
                     return nullptr;
                 }

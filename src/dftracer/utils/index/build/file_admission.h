@@ -62,7 +62,7 @@ class FileAdmission {
         }
 
         FileAdmission* owner_ = nullptr;
-        memory::detail::Reservation res_;
+        memory::Reservation res_;
         std::uint64_t elastic_ = memory::NO_SPILL_BUDGET;
     };
 
@@ -145,7 +145,7 @@ class FileAdmission {
         auto got = co_await coro::reserve_async(
             *pool_, want, std::chrono::steady_clock::time_point::max());
         if (!got) {
-            if (got.error() == memory::detail::Status::Cancelled)
+            if (got.error() == memory::Status::Cancelled)
                 coro::throw_cancelled("file admission cancelled");
             throw common::DFTUtilsException(
                 common::ErrorCode::MemoryBudgetExceeded,
@@ -185,7 +185,7 @@ class FileAdmission {
    private:
     static constexpr std::size_t MAX_INFLATE_WAYS = 16;
 
-    memory::detail::Pool* open(std::uint64_t budget, std::uint64_t sink_bytes) {
+    memory::Pool* open(std::uint64_t budget, std::uint64_t sink_bytes) {
         if (budget == memory::NO_SPILL_BUDGET) return nullptr;
         const std::uint64_t kept =
             sink_bytes +
@@ -200,8 +200,8 @@ class FileAdmission {
                     common::constants::file_admission::PIECE_ROOM_DIVISOR,
             1);
         handle_ = memory::detail::current_pool().child(
-            "index files", memory::detail::PoolKind::Scratch,
-            memory::detail::Limits{static_cast<std::size_t>(pool_bytes)});
+            "index files", memory::PoolKind::Scratch,
+            memory::Limits{static_cast<std::size_t>(pool_bytes)});
         if (!handle_)
             throw common::DFTUtilsException(
                 common::ErrorCode::MemoryBudgetExceeded,
@@ -225,8 +225,8 @@ class FileAdmission {
         in_flight_.fetch_sub(1, std::memory_order_relaxed);
     }
 
-    memory::detail::PoolHandle handle_;
-    memory::detail::Pool* pool_ = nullptr;
+    memory::PoolHandle handle_;
+    memory::Pool* pool_ = nullptr;
     std::uint64_t pool_cap_ = 0;
     std::uint64_t hold_cap_ = 0;
     std::size_t workers_;

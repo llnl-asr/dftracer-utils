@@ -526,7 +526,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     // Grows while idle so the pool is not polling, resets on work found.
     std::chrono::milliseconds idle_park = IDLE_PARK_MIN;
 
-    memory::detail::Pool& general = memory::detail::Manager::get().general();
+    memory::Pool& general = memory::detail::Manager::get().general();
 
     // Fixed for the process lifetime; read once to keep the resume loop cheap.
     const bool monitor = coro::detail::monitoring_enabled();
@@ -667,7 +667,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
 
 bool ThreadPoolExecutor::drive_until(
     dftracer::utils::dstd::FunctionRef<bool()> done) {
-    memory::detail::Pool& general = memory::detail::Manager::get().general();
+    memory::Pool& general = memory::detail::Manager::get().general();
     // The timeout re-checks the queue for the enqueue that worker_thread's
     // park comment describes.
     std::chrono::milliseconds park = IDLE_PARK_MIN;

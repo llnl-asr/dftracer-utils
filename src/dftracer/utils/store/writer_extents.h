@@ -52,8 +52,7 @@ class WriterExtents {
 
     /// @p quota_bytes is the most take() charges while anything is held. It
     /// must not be zero.
-    WriterExtents(std::uint64_t quota_bytes,
-                  memory::detail::Pool& pool) noexcept;
+    WriterExtents(std::uint64_t quota_bytes, memory::Pool& pool) noexcept;
     ~WriterExtents();
     WriterExtents(const WriterExtents&) = delete;
     WriterExtents& operator=(const WriterExtents&) = delete;
@@ -147,9 +146,9 @@ class WriterExtents {
     void wake(dstd::Vector<Waiter>& waiters) noexcept;
 
     mutable std::mutex mutex_;
-    memory::detail::Reservation reservation_;
+    memory::Reservation reservation_;
     dstd::Vector<Waiter> waiters_;
-    memory::detail::Pool* pool_ = nullptr;
+    memory::Pool* pool_ = nullptr;
     std::uint64_t quota_ = 0;
     std::uint64_t held_ = 0;
     std::uint64_t epoch_ = 0;

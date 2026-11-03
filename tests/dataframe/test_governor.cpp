@@ -20,6 +20,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -172,11 +173,11 @@ std::size_t reserved_of(std::uint16_t id) {
 
 // Reserves more than the budget leaves from a pool of its own, so the
 // manager posts the shortfall to the holders. Returns the status.
-memory::detail::Status hog(std::size_t bytes) {
-    memory::detail::PoolHandle pool =
+memory::Status hog(std::size_t bytes) {
+    memory::PoolHandle pool =
         memory::detail::Manager::get().root().child("hog");
     REQUIRE(pool);
-    return pool->reserve(bytes).status();
+    return memory::detail::PoolAccess::reserve(*pool, bytes).status();
 }
 
 // Every row of `f` as one line of its cells, in order or sorted.
@@ -204,7 +205,7 @@ using Plan = dstd::Function<LazyFrame(LazyFrame)>;
 struct Asked {
     DataFrame plain;
     DataFrame asked;
-    memory::detail::Status status = memory::detail::Status::Ok;
+    memory::Status status = memory::Status::Ok;
     std::size_t before = 0;
     std::size_t after = SIZE_MAX;
 };
@@ -269,7 +270,7 @@ TEST_CASE("a request posted to a sort makes it spill at the next morsel") {
     std::uint16_t sort_pool = 0;
     std::size_t before = 0;
     std::size_t after = SIZE_MAX;
-    memory::detail::Status asked = memory::detail::Status::Ok;
+    memory::Status asked = memory::Status::Ok;
     auto source = dstd::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
         if (i == ASK_AT) {
             const dstd::Vector<memory::detail::PoolStats> sorts =
@@ -287,7 +288,7 @@ TEST_CASE("a request posted to a sort makes it spill at the next morsel") {
                               .collect()
                               .get();
     CHECK(before > 0);
-    CHECK(asked == memory::detail::Status::Pending);
+    CHECK(asked == memory::Status::Pending);
     CHECK(after == 0);
     const DataFrame want = source->whole().sort_by("k", false);
     CHECK(ints(got, "k") == ints(want, "k"));
@@ -299,7 +300,7 @@ TEST_CASE("a request posted to a group by makes it spill at the next morsel") {
     std::uint16_t group_pool = 0;
     std::size_t before = 0;
     std::size_t after = SIZE_MAX;
-    memory::detail::Status asked = memory::detail::Status::Ok;
+    memory::Status asked = memory::Status::Ok;
     auto source = dstd::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
         if (i == ASK_AT) {
             const dstd::Vector<memory::detail::PoolStats> groups =
@@ -319,7 +320,7 @@ TEST_CASE("a request posted to a group by makes it spill at the next morsel") {
                               .get()
                               .sort_by("k", false);
     CHECK(before > 0);
-    CHECK(asked == memory::detail::Status::Pending);
+    CHECK(asked == memory::Status::Pending);
     CHECK(after == 0);
     const DataFrame want =
         source->whole().group_by("k", aggs).sort_by("k", false);
@@ -374,8 +375,9 @@ TEST_CASE(
 }
 
 TEST_CASE("a run's pools close and its live bytes return to zero") {
-    memory::detail::Pool& root = memory::detail::Manager::get().root();
-    const std::size_t adopted_before = root.adopted();
+    memory::Pool& root = memory::detail::Manager::get().root();
+    const std::size_t adopted_before =
+        memory::detail::PoolAccess::adopted(root);
     std::size_t run_live = 0;
     std::size_t scratch = 0;
     auto source = dstd::make_shared<Hooked>(16, 4096, [&](std::int64_t i) {
@@ -397,7 +399,7 @@ TEST_CASE("a run's pools close and its live bytes return to zero") {
     }
     CHECK(run_live > 0);
     CHECK(scratch == 1);
-    CHECK(root.adopted() == adopted_before);
+    CHECK(memory::detail::PoolAccess::adopted(root) == adopted_before);
     CHECK_FALSE(memory::detail::Manager::get().leaked());
 }
 
@@ -409,7 +411,7 @@ TEST_CASE(
         const Asked r = run_asked(
             [](LazyFrame lf) { return lf.topk("k", KEYS / 2); }, "query/topk");
         CHECK(r.before > 0);
-        CHECK(r.status == memory::detail::Status::Pending);
+        CHECK(r.status == memory::Status::Pending);
         CHECK(r.after == 0);
         CHECK(rows_of(r.asked, true) == rows_of(r.plain, true));
     }
@@ -418,7 +420,7 @@ TEST_CASE(
             [](LazyFrame lf) { return lf.select({"k"}).is_duplicated(); },
             "query/is_duplicated");
         CHECK(r.before > 0);
-        CHECK(r.status == memory::detail::Status::Pending);
+        CHECK(r.status == memory::Status::Pending);
         CHECK(r.after == 0);
         CHECK(rows_of(r.asked, false) == rows_of(r.plain, false));
     }
@@ -427,7 +429,7 @@ TEST_CASE(
             [](LazyFrame lf) { return lf.pivot("k", "p", "v", "sum"); },
             "query/pivot");
         CHECK(r.before > 0);
-        CHECK(r.status == memory::detail::Status::Pending);
+        CHECK(r.status == memory::Status::Pending);
         CHECK(r.after == 0);
         CHECK(r.asked.names == r.plain.names);
         CHECK(rows_of(r.asked, false) == rows_of(r.plain, false));
@@ -443,13 +445,13 @@ TEST_CASE(
             },
             "query/compare_agg", false);
         CHECK(r.before > 0);
-        CHECK(r.status == memory::detail::Status::Pending);
+        CHECK(r.status == memory::Status::Pending);
         CHECK(r.after == 0);
         CHECK(rows_of(r.asked, true) == rows_of(r.plain, true));
     }
     SUBCASE("window keeps its result; its chunk cannot leave memory") {
         const Asked r = run_asked(window_lag, "query/window");
-        CHECK(r.status == memory::detail::Status::Pending);
+        CHECK(r.status == memory::Status::Pending);
         CHECK(rows_of(r.asked, false) == rows_of(r.plain, false));
     }
 }
@@ -470,7 +472,7 @@ TEST_CASE("a request posted to a join's build side turns it to grace") {
         [&](LazyFrame right) { return left.lazy().join(right, {"k"}); },
         "query/join");
     CHECK(r.before > 0);
-    CHECK(r.status == memory::detail::Status::Pending);
+    CHECK(r.status == memory::Status::Pending);
     CHECK(r.after == 0);
     CHECK(r.plain.num_rows() > 0);
     CHECK(rows_of(r.asked, true) == rows_of(r.plain, true));
@@ -623,7 +625,7 @@ TEST_CASE("is_duplicated reserves its counts on its pool while it emits") {
 
 TEST_CASE("a request goes to state that can spill, not to state that cannot") {
     Budget budget(64 * MIB);
-    memory::detail::PoolHandle query =
+    memory::PoolHandle query =
         memory::detail::Manager::get().root().child("query");
     REQUIRE(query);
     memory::detail::Scope scope{*query};
@@ -637,7 +639,7 @@ TEST_CASE("a request goes to state that can spill, not to state that cannot") {
     const std::size_t held = memory::detail::Manager::get().root().reserved();
     REQUIRE(held < memory::detail::Manager::get().budget());
     CHECK(hog(memory::detail::Manager::get().budget() - held + 2 * MIB) ==
-          memory::detail::Status::Pending);
+          memory::Status::Pending);
     CHECK(spool.check(4 * MIB) > 0);
     CHECK(keys.check(16 * MIB, 0) == 0);
 }

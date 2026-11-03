@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/completion_latch.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/store/writer_extents.h>
 
 #include <algorithm>
@@ -8,24 +9,25 @@
 namespace dftracer::utils::store::engine {
 
 WriterExtents::WriterExtents(std::uint64_t quota_bytes,
-                             memory::detail::Pool& pool) noexcept
+                             memory::Pool& pool) noexcept
     : pool_(&pool), quota_(quota_bytes) {}
 
 WriterExtents::~WriterExtents() { reservation_.release(); }
 
 bool WriterExtents::grow(std::uint64_t bytes) noexcept {
     if (reservation_)
-        return reservation_.try_grow(bytes) == memory::detail::Status::Ok;
+        return memory::detail::PoolAccess::try_grow(reservation_, bytes) ==
+               memory::Status::Ok;
     reservation_ = pool_->try_reserve(bytes);
     return static_cast<bool>(reservation_);
 }
 
 void WriterExtents::grow_forced(std::uint64_t bytes) noexcept {
     if (reservation_) {
-        reservation_.grow(bytes);
+        memory::detail::PoolAccess::grow(reservation_, bytes);
         return;
     }
-    reservation_ = pool_->reserve(bytes);
+    reservation_ = memory::detail::PoolAccess::reserve(*pool_, bytes);
 }
 
 void WriterExtents::charge(std::uint64_t bytes) noexcept {
@@ -53,7 +55,7 @@ WriterExtents::Take WriterExtents::take(std::uint64_t bytes) {
 
 void WriterExtents::release(std::uint64_t bytes) noexcept {
     dstd::Vector<Waiter> waiters;
-    memory::detail::Reservation freed;
+    memory::Reservation freed;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (bytes > held_) {
@@ -65,7 +67,9 @@ void WriterExtents::release(std::uint64_t bytes) noexcept {
             ++epoch_;
             const std::uint64_t charged = std::min(
                 bytes, static_cast<std::uint64_t>(reservation_.bytes()));
-            if (charged != 0) freed.take_from(reservation_, charged);
+            if (charged != 0)
+                memory::detail::PoolAccess::take_from(freed, reservation_,
+                                                      charged);
             waiters.swap(waiters_);
         }
     }

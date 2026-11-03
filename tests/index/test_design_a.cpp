@@ -197,7 +197,7 @@ TEST_SUITE("DesignA") {
         gate.file_in();
         REQUIRE(gate.spare_workers());
         std::size_t pieces = 0;
-        memory::detail::Reservation unused;
+        memory::Reservation unused;
         gate.take_slot();
         ++pieces;
         while (gate.try_slot() && gate.try_piece(0, unused)) ++pieces;

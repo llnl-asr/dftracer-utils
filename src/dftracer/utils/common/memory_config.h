@@ -30,17 +30,17 @@ dstd::Result<void> configure_memory_from_env();
  * caller cannot wait out. Cancelled and Ok map to Unknown, since no code names
  * a cancellation.
  */
-constexpr ErrorCode error_code_of(memory::detail::Status status) noexcept {
+constexpr ErrorCode error_code_of(memory::Status status) noexcept {
     switch (status) {
-        case memory::detail::Status::OverBudget:
-        case memory::detail::Status::OverCap:
-        case memory::detail::Status::Pending:
+        case memory::Status::OverBudget:
+        case memory::Status::OverCap:
+        case memory::Status::Pending:
             return ErrorCode::MemoryBudgetExceeded;
-        case memory::detail::Status::PoolTableFull:
-        case memory::detail::Status::SlotTableFull:
+        case memory::Status::PoolTableFull:
+        case memory::Status::SlotTableFull:
             return ErrorCode::Internal;
-        case memory::detail::Status::Cancelled:
-        case memory::detail::Status::Ok:
+        case memory::Status::Cancelled:
+        case memory::Status::Ok:
             return ErrorCode::Unknown;
     }
     return ErrorCode::Unknown;

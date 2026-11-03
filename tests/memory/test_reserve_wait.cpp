@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
@@ -85,7 +86,7 @@ TEST_CASE("a request larger than the budget or a limit fails at once") {
     Waiter over_limit(*a, 32 * MIB);
     CHECK(over_limit.node->push() == Status::OverBudget);
 
-    Reservation full = root().reserve(64 * MIB);
+    Reservation full = PoolAccess::reserve(root(), 64 * MIB);
     REQUIRE(full);
     full.release();
     CHECK(over_budget.wake.calls.load() == 0);
@@ -97,9 +98,9 @@ TEST_CASE("waiters are granted first in, first out") {
     Budget budget(64 * MIB);
     PoolHandle holds = root().child("holds");
     PoolHandle wait = root().child("wait");
-    Reservation r1 = holds->reserve(32 * MIB);
+    Reservation r1 = PoolAccess::reserve(*holds, 32 * MIB);
     PoolHandle holds2 = root().child("holds2");
-    Reservation r2 = holds2->reserve(32 * MIB);
+    Reservation r2 = PoolAccess::reserve(*holds2, 32 * MIB);
     REQUIRE(r1);
     REQUIRE(r2);
 
@@ -153,7 +154,7 @@ TEST_CASE("pushes that land while a grant runs are granted by arrival") {
     Budget budget(64 * MIB);
     PoolHandle h = root().child("h");
     PoolHandle a = root().child("a");
-    Reservation held = h->reserve(64 * MIB);
+    Reservation held = PoolAccess::reserve(*h, 64 * MIB);
     REQUIRE(held);
 
     // keep std: memory tests link only memory
@@ -186,8 +187,8 @@ TEST_CASE("the grant stops at the first waiter that does not fit") {
     PoolHandle h2 = root().child("h2");
     PoolHandle big = root().child("big");
     PoolHandle small = root().child("small");
-    Reservation r1 = h1->reserve(32 * MIB);
-    Reservation r2 = h2->reserve(32 * MIB);
+    Reservation r1 = PoolAccess::reserve(*h1, 32 * MIB);
+    Reservation r2 = PoolAccess::reserve(*h2, 32 * MIB);
     REQUIRE(r1);
     REQUIRE(r2);
 
@@ -213,13 +214,13 @@ TEST_CASE("the grant stops at the first waiter that does not fit") {
 TEST_CASE("a limit on the waiter's pool is checked at grant") {
     Budget budget(64 * MIB);
     PoolHandle a = root().child("a", PoolKind::Scratch, Limits{16 * MIB});
-    Reservation held = a->reserve(16 * MIB);
+    Reservation held = PoolAccess::reserve(*a, 16 * MIB);
     REQUIRE(held);
     Waiter w(*a, 8 * MIB);
     CHECK(w.node->push() == Status::Pending);
 
     PoolHandle other = root().child("other");
-    Reservation unrelated = other->reserve(8 * MIB);
+    Reservation unrelated = PoolAccess::reserve(*other, 8 * MIB);
     REQUIRE(unrelated);
     unrelated.release();
     CHECK(w.node->state() == WaitState::Waiting);
@@ -234,7 +235,7 @@ TEST_CASE("a cancel before the grant leaves no bytes and no resume") {
     Budget budget(64 * MIB);
     PoolHandle h = root().child("h");
     PoolHandle a = root().child("a");
-    Reservation held = h->reserve(64 * MIB);
+    Reservation held = PoolAccess::reserve(*h, 64 * MIB);
     REQUIRE(held);
     Waiter w(*a, 16 * MIB);
     CHECK(w.node->push() == Status::Pending);
@@ -252,7 +253,7 @@ TEST_CASE("a cancel at the head lets the waiters behind it through") {
     Budget budget(64 * MIB);
     PoolHandle h = root().child("h");
     PoolHandle a = root().child("a");
-    Reservation held = h->reserve(32 * MIB);
+    Reservation held = PoolAccess::reserve(*h, 32 * MIB);
     REQUIRE(held);
     Waiter head(*a, 48 * MIB);
     Waiter next(*a, 16 * MIB);
@@ -268,7 +269,7 @@ TEST_CASE("a cancel after the grant fails and the waiter keeps its bytes") {
     Budget budget(64 * MIB);
     PoolHandle h = root().child("h");
     PoolHandle a = root().child("a");
-    Reservation held = h->reserve(64 * MIB);
+    Reservation held = PoolAccess::reserve(*h, 64 * MIB);
     REQUIRE(held);
     Waiter w(*a, 16 * MIB);
     CHECK(w.node->push() == Status::Pending);
@@ -285,7 +286,7 @@ TEST_CASE("a granted waiter dropped without take gives its bytes back") {
     Budget budget(64 * MIB);
     PoolHandle h = root().child("h");
     PoolHandle a = root().child("a");
-    Reservation held = h->reserve(64 * MIB);
+    Reservation held = PoolAccess::reserve(*h, 64 * MIB);
     REQUIRE(held);
     {
         Waiter w(*a, 16 * MIB);
@@ -336,7 +337,7 @@ TEST_CASE("no lost wakeup when a release races a push") {
     int lost = 0;
     int double_resume = 0;
     for (int round = 0; round < ROUNDS; ++round) {
-        Reservation held = h->reserve(64 * MIB);
+        Reservation held = PoolAccess::reserve(*h, 64 * MIB);
         REQUIRE(held);
         Waiter w(*a, 64 * MIB);
         std::atomic<bool> ready{false};
@@ -386,7 +387,7 @@ TEST_CASE("many threads reserve, wait, cancel and release") {
             for (int i = 0; i < ROUNDS; ++i) {
                 std::size_t size = SIZES[rng() % 4];
                 if (rng() % 4 == 0) {
-                    Reservation plain = pool.reserve(size);
+                    Reservation plain = PoolAccess::reserve(pool, size);
                     std::this_thread::yield();
                     continue;
                 }

@@ -359,7 +359,7 @@ TEST_CASE("a gzip header with FHCRC and optional fields is accepted") {
 }
 
 TEST_CASE("compression state is charged to the calling pool") {
-    memory::detail::PoolHandle pool =
+    memory::PoolHandle pool =
         memory::detail::Manager::get().root().child("codecs");
     REQUIRE(pool);
     {

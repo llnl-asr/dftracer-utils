@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_MEMORY_ALLOCATOR_H
 
 #include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/pool.h>
 
 #include <cstddef>
 #include <limits>
@@ -65,12 +66,12 @@ class PoolAllocator {
     using propagate_on_container_swap = std::true_type;
     using is_always_equal = std::false_type;
 
-    explicit PoolAllocator(detail::Pool& pool) noexcept : pool_(&pool) {}
+    explicit PoolAllocator(Pool& pool) noexcept : pool_(&pool) {}
     template <class U>
     constexpr PoolAllocator(const PoolAllocator<U>& other) noexcept
         : pool_(&other.pool()) {}
 
-    detail::Pool& pool() const noexcept { return *pool_; }
+    Pool& pool() const noexcept { return *pool_; }
 
     [[nodiscard]] T* allocate(std::size_t n) {
         if (n > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
@@ -85,7 +86,7 @@ class PoolAllocator {
     }
 
    private:
-    detail::Pool* pool_;
+    Pool* pool_;
 };
 
 template <class T, class U>

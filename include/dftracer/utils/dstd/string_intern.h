@@ -42,7 +42,7 @@ class StringIntern {
     /// inside records that `locate` returned.
     class Chunk {
        public:
-        Chunk(std::size_t size, memory::detail::Pool& pool);
+        Chunk(std::size_t size, memory::Pool& pool);
         ~Chunk();
         Chunk(const Chunk&) = delete;
         Chunk& operator=(const Chunk&) = delete;
@@ -75,7 +75,7 @@ class StringIntern {
     /// Memory is charged to @p pool, or to the general pool when it is null,
     /// whatever thread allocates. The pool must stay open until the table and
     /// every chunk it handed out are gone.
-    explicit StringIntern(memory::detail::Pool* pool = nullptr);
+    explicit StringIntern(memory::Pool* pool = nullptr);
     ~StringIntern();
 
     StringIntern(const StringIntern&) = delete;
@@ -228,7 +228,7 @@ class StringIntern {
                         std::size_t block_size) noexcept;
     SharedPtr<Chunk> make_chunk(std::size_t bytes);
 
-    memory::detail::Pool* pool_;
+    memory::Pool* pool_;
     Directory<Slot, DIRECTORY_SIZE> directory_;
     Directory<LogSlot, DIRECTORY_SIZE> log_;
     Directory<ChunkRef, CHUNK_DIRECTORY_SIZE> chunk_dir_;

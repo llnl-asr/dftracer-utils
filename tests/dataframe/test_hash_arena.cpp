@@ -91,7 +91,7 @@ TEST_SUITE("hash arena") {
     }
 
     TEST_CASE("an arena charges its pool and frees all of it") {
-        dftracer::utils::memory::detail::PoolHandle pool =
+        dftracer::utils::memory::PoolHandle pool =
             dftracer::utils::memory::detail::Manager::get().root().child(
                 "arena");
         REQUIRE(pool);
@@ -108,7 +108,7 @@ TEST_SUITE("hash arena") {
     }
 
     TEST_CASE("keys stay in place while the arena grows") {
-        dftracer::utils::memory::detail::PoolHandle pool =
+        dftracer::utils::memory::PoolHandle pool =
             dftracer::utils::memory::detail::Manager::get().root().child(
                 "grow");
         REQUIRE(pool);
@@ -178,7 +178,7 @@ TEST_SUITE("hash arena") {
     TEST_CASE("a small key set reserves no table four times its size") {
         // The keys unique() takes from one morsel before a 4 MiB budget
         // spills. A table grown four times at once held 7.1 MiB here.
-        dftracer::utils::memory::detail::PoolHandle pool =
+        dftracer::utils::memory::PoolHandle pool =
             dftracer::utils::memory::detail::Manager::get().root().child(
                 "small");
         REQUIRE(pool);

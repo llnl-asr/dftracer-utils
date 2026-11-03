@@ -60,7 +60,7 @@ coro::CoroTask<void> sees_no_table(std::atomic<int>* bad) {
 
 TEST_CASE("the last holder frees the table") {
     common::InternRef first = common::InternTable::create();
-    memory::detail::Pool& pool = first->pool();
+    memory::Pool& pool = first->pool();
     const common::InternId alpha = first->intern("alpha");
     const common::InternId beta = first->intern("beta");
     CHECK(pool.live() > 0);
@@ -80,7 +80,7 @@ TEST_CASE("the last holder frees the table") {
 
 TEST_CASE("a big string and many strings are freed with the table") {
     common::InternRef table = common::InternTable::create();
-    memory::detail::Pool& pool = table->pool();
+    memory::Pool& pool = table->pool();
     for (int i = 0; i < 20000; ++i) table->intern(name_of(i));
     const dstd::String big(dstd::StringIntern::CHUNK_BYTES + 1000, 'x');
     const common::InternId id = table->intern(big);
@@ -122,7 +122,7 @@ TEST_CASE(
     common::InternRef table = common::InternTable::create();
     common::InternRef other = common::InternTable::create();
     common::InternScope scope{table};
-    memory::detail::Pool& general = memory::detail::Manager::get().general();
+    memory::Pool& general = memory::detail::Manager::get().general();
     {
         memory::detail::Scope plain{general};
         CHECK(common::current_intern() == table.get());
@@ -142,7 +142,7 @@ TEST_CASE(
 
 TEST_CASE("ids from the scope survive a co_await on another thread") {
     common::InternRef table = common::InternTable::create();
-    memory::detail::Pool& pool = table->pool();
+    memory::Pool& pool = table->pool();
     std::atomic<int> bad{0};
     {
         Runtime rt(4);
@@ -162,7 +162,7 @@ TEST_CASE("ids from the scope survive a co_await on another thread") {
 
 TEST_CASE("tasks on many threads intern and read one table") {
     common::InternRef table = common::InternTable::create();
-    memory::detail::Pool& pool = table->pool();
+    memory::Pool& pool = table->pool();
     std::atomic<int> bad{0};
     {
         Runtime rt(8);
@@ -188,7 +188,7 @@ TEST_CASE("tasks on many threads intern and read one table") {
 
 TEST_CASE("threads share and drop references to one table") {
     common::InternRef table = common::InternTable::create();
-    memory::detail::Pool& pool = table->pool();
+    memory::Pool& pool = table->pool();
     std::atomic<int> bad{0};
     dstd::Vector<dstd::Thread> threads;
     for (int t = 0; t < 8; ++t) {

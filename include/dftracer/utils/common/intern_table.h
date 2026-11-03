@@ -4,7 +4,7 @@
 
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/pool.h>
 
 #include <atomic>
 #include <cstdint>
@@ -61,7 +61,7 @@ class InternTable {
     }
 
     /// The reference stays readable after the table is gone.
-    memory::detail::Pool& pool() const noexcept { return *handle_; }
+    memory::Pool& pool() const noexcept { return *handle_; }
 
     std::uint32_t use_count() const noexcept {
         return refs_.load(std::memory_order_relaxed);
@@ -71,11 +71,11 @@ class InternTable {
     void release() noexcept;
 
    private:
-    explicit InternTable(memory::detail::PoolHandle&& handle)
+    explicit InternTable(memory::PoolHandle&& handle)
         : strings_(handle.get()), handle_(std::move(handle)) {}
 
     dstd::StringIntern strings_;
-    memory::detail::PoolHandle handle_;
+    memory::PoolHandle handle_;
     std::atomic<std::uint32_t> refs_{1};
 };
 

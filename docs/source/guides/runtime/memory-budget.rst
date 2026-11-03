@@ -152,6 +152,49 @@ The returned advice carries ``fits`` (peak within available), ``required_bytes``
 function returns these fields as a dict plus a ``warning`` string (empty when it
 fits).
 
+Count your own allocations
+--------------------------
+
+``memory::Pool`` (in ``dftracer/utils/memory/pool.h``) is one node of the pool
+tree that the budget counts. Open a child of ``memory::root_pool()`` with
+``child(name, kind, limits)``. ``limits.bytes`` caps the **reservations** of the
+pool and of the pools below it. It does not cap single allocations: blocks
+that a ``PoolAllocator`` hands out are counted in ``live()`` and ``peak()``
+but never refused.
+
+So reserve first. ``try_reserve(bytes)`` returns a ``memory::Reservation``. It
+is empty when this pool or a pool above it has no room, and then you skip the
+work or wait. The reservation gives its bytes back when it is destroyed or when
+you call ``release()``. It must not outlive its pool. Close each child handle
+before its parent. When the pool table is full the handle is empty and
+``status()`` says why.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/dstd/vector.h>
+   #include <dftracer/utils/memory/allocator.h>
+   #include <dftracer/utils/memory/pool.h>
+
+   #include <cstdio>
+
+   using namespace dftracer::utils;
+
+   memory::PoolHandle handle = memory::root_pool().child(
+       "my scan", memory::PoolKind::Scratch, {64ull * 1024 * 1024});
+   if (!handle) return;  // handle.status() is the reason
+
+   constexpr std::size_t N = 1'000'000;
+   memory::Reservation room = handle->try_reserve(N * sizeof(int));
+   if (!room) return;  // no room: skip the work or wait
+
+   {
+       dstd::PoolVector<int> values{memory::PoolAllocator<int>(*handle)};
+       values.resize(N);
+       std::printf("live=%zu\n", handle->live());  // at least 4 MB; peak() records it
+   }
+   room.release();
+   // handle->live() is 0 again. handle->peak() is the largest live() a read saw.
+
 What the budget counts
 ----------------------
 

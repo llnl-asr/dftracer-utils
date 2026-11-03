@@ -24,6 +24,7 @@
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/trace/parse_inflated.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -77,7 +78,7 @@ class FoldBufferPool final : public memory::detail::Reclaimer {
         : pool_(memory::detail::current_pool().child("fold buffers")),
           free_(memory::PoolAllocator<Idle>(
               pool_ ? *pool_ : memory::detail::current_pool())) {
-        if (pool_) slot_ = pool_->attach(*this);
+        if (pool_) slot_ = memory::detail::PoolAccess::attach(*pool_, *this);
     }
     FoldBufferPool(const FoldBufferPool&) = delete;
     FoldBufferPool& operator=(const FoldBufferPool&) = delete;
@@ -137,7 +138,7 @@ class FoldBufferPool final : public memory::detail::Reclaimer {
 
     // Declared first, so the pool closes after the slot detaches and the idle
     // buffers free.
-    memory::detail::PoolHandle pool_;
+    memory::PoolHandle pool_;
     dstd::PoolVector<Idle> free_;
     memory::detail::ReclaimSlot slot_;
     mutable std::mutex mu_;
@@ -341,7 +342,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         // The strings of a piece parsed ahead, interned here with ids of their
         // own, and given the file's ids in piece order when the folds see it.
         dstd::UniquePtr<dftracer::utils::dstd::StringIntern> local;
-        memory::detail::Reservation held;
+        memory::Reservation held;
         ParseGate* extra = nullptr;
         std::atomic<std::size_t>* alive = nullptr;
     };
@@ -349,7 +350,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // `inline_` parses on the thread that cut the piece, since no worker is
     // free.
     struct Admit {
-        memory::detail::Reservation mem;
+        memory::Reservation mem;
         bool extra = false;
         bool inline_ = true;
     };

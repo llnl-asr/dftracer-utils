@@ -244,7 +244,7 @@ class Writer {
 
     Writer(dstd::String name, dstd::String path, std::uint32_t extent_size,
            dstd::Vector<ScopeGeneration> generations, DataFileWriter file,
-           memory::detail::PoolHandle extent_pool, std::uint64_t extent_quota,
+           memory::PoolHandle extent_pool, std::uint64_t extent_quota,
            TaskExecutor& executor, const WriterOptions& options);
 
     template <class T, class... Args>
@@ -305,7 +305,7 @@ class Writer {
     Committer committer_;
     /// The pool the extent bytes are charged to. Declared before the pieces
     /// that reserve from it and the completions that release them.
-    memory::detail::PoolHandle extent_pool_;
+    memory::PoolHandle extent_pool_;
     WriterExtents extent_bytes_;
     // Declared after the committer, so an extent completion can never outlive
     // it.

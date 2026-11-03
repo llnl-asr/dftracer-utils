@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -23,8 +24,8 @@ class Governor final : public memory::detail::Reclaimer {
     explicit Governor(dstd::StringView name) {
         pool_ = memory::detail::current_pool().child(name);
         if (!pool_) return;
-        reservation_ = pool_->reserve(0);
-        slot_ = pool_->attach(*this);
+        reservation_ = memory::detail::PoolAccess::reserve(*pool_, 0);
+        slot_ = memory::detail::PoolAccess::attach(*pool_, *this);
     }
     Governor(const Governor&) = delete;
     Governor& operator=(const Governor&) = delete;
@@ -52,9 +53,10 @@ class Governor final : public memory::detail::Reclaimer {
             // Grow a quarter ahead, so a reservation that tracks a growing
             // state reserves once per quarter, not once per morsel.
             const std::uint64_t ahead = resident + resident / 4 - held;
-            if (reservation_.grow(ahead) != memory::detail::Status::Ok &&
-                reservation_.grow(resident - held) !=
-                    memory::detail::Status::Ok) {
+            if (memory::detail::PoolAccess::grow(reservation_, ahead) !=
+                    memory::Status::Ok &&
+                memory::detail::PoolAccess::grow(
+                    reservation_, resident - held) != memory::Status::Ok) {
                 denied_at_ = resident;
                 // The failed grows posted part of their shortfall to this
                 // slot. The spill the caller makes now answers it.
@@ -72,14 +74,15 @@ class Governor final : public memory::detail::Reclaimer {
         slot_.set_reclaimable(resident);
         if (reservation_.bytes() <= resident) return;
         reservation_.release();
-        reservation_ = pool_->reserve(resident);
-        if (!reservation_) reservation_ = pool_->reserve(0);
+        reservation_ = memory::detail::PoolAccess::reserve(*pool_, resident);
+        if (!reservation_)
+            reservation_ = memory::detail::PoolAccess::reserve(*pool_, 0);
     }
 
     std::uint64_t reserved() const noexcept { return reservation_.bytes(); }
     /// The Scratch pool, for state that never leaves the cursor. Null when
     /// the pool table was full.
-    memory::detail::Pool* pool() const noexcept { return pool_.get(); }
+    memory::Pool* pool() const noexcept { return pool_.get(); }
 
     // Nothing calls reclaim(), as the cursor spills from check() on its own
     // thread.
@@ -87,8 +90,8 @@ class Governor final : public memory::detail::Reclaimer {
     std::size_t reclaim(std::size_t) override { return 0; }
 
    private:
-    memory::detail::PoolHandle pool_;
-    memory::detail::Reservation reservation_;
+    memory::PoolHandle pool_;
+    memory::Reservation reservation_;
     memory::detail::ReclaimSlot slot_;
     // The resident size whose grow was refused, zero when none was.
     std::uint64_t denied_at_ = 0;

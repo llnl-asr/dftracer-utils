@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
@@ -45,13 +46,13 @@ TEST_CASE("over budget posts to the largest reclaimable slot first") {
     PoolHandle b = root().child("b");
     PoolHandle c = root().child("c");
     Holder small(10 * MIB), medium(30 * MIB), large(50 * MIB);
-    ReclaimSlot s_small = a->attach(small);
-    ReclaimSlot s_medium = a->attach(medium);
-    ReclaimSlot s_large = b->attach(large);
+    ReclaimSlot s_small = PoolAccess::attach(*a, small);
+    ReclaimSlot s_medium = PoolAccess::attach(*a, medium);
+    ReclaimSlot s_large = PoolAccess::attach(*b, large);
 
-    Reservation held = b->reserve(40 * MIB);
+    Reservation held = PoolAccess::reserve(*b, 40 * MIB);
     REQUIRE(held);
-    Reservation over = c->reserve(40 * MIB);
+    Reservation over = PoolAccess::reserve(*c, 40 * MIB);
     CHECK(!over);
     CHECK(over.status() == Status::Pending);
     CHECK(s_large.take_request() == 16 * MIB);
@@ -65,12 +66,12 @@ TEST_CASE("slots under the same child of the root come first") {
     PoolHandle inner = a->child("inner");
     PoolHandle b = root().child("b");
     Holder near(30 * MIB), far(50 * MIB);
-    ReclaimSlot s_near = a->attach(near);
-    ReclaimSlot s_far = b->attach(far);
+    ReclaimSlot s_near = PoolAccess::attach(*a, near);
+    ReclaimSlot s_far = PoolAccess::attach(*b, far);
 
-    Reservation held = b->reserve(40 * MIB);
+    Reservation held = PoolAccess::reserve(*b, 40 * MIB);
     REQUIRE(held);
-    Reservation over = inner->reserve(40 * MIB);
+    Reservation over = PoolAccess::reserve(*inner, 40 * MIB);
     CHECK(over.status() == Status::Pending);
     CHECK(s_near.take_request() == 16 * MIB);
     CHECK(s_far.take_request() == 0);
@@ -81,12 +82,12 @@ TEST_CASE("a shortfall larger than one slot spills over to the next") {
     PoolHandle a = root().child("a");
     PoolHandle b = root().child("b");
     Holder first(10 * MIB), second(30 * MIB);
-    ReclaimSlot s_first = a->attach(first);
-    ReclaimSlot s_second = b->attach(second);
+    ReclaimSlot s_first = PoolAccess::attach(*a, first);
+    ReclaimSlot s_second = PoolAccess::attach(*b, second);
 
-    Reservation held = b->reserve(60 * MIB);
+    Reservation held = PoolAccess::reserve(*b, 60 * MIB);
     REQUIRE(held);
-    Reservation over = a->reserve(20 * MIB);
+    Reservation over = PoolAccess::reserve(*a, 20 * MIB);
     CHECK(over.status() == Status::Pending);
     CHECK(s_first.take_request() == 10 * MIB);
     CHECK(s_second.take_request() == 6 * MIB);
@@ -96,10 +97,10 @@ TEST_CASE("a request is taken once") {
     Budget budget(64 * MIB);
     PoolHandle a = root().child("a");
     Holder holder(30 * MIB);
-    ReclaimSlot slot = a->attach(holder);
-    Reservation held = a->reserve(40 * MIB);
+    ReclaimSlot slot = PoolAccess::attach(*a, holder);
+    Reservation held = PoolAccess::reserve(*a, 40 * MIB);
     REQUIRE(held);
-    Reservation over = a->reserve(40 * MIB);
+    Reservation over = PoolAccess::reserve(*a, 40 * MIB);
     CHECK(over.status() == Status::Pending);
     CHECK(slot.take_request() == 16 * MIB);
     CHECK(slot.take_request() == 0);
@@ -109,14 +110,14 @@ TEST_CASE("the first reclaimable value is read at attach") {
     Budget budget(64 * MIB);
     PoolHandle a = root().child("a");
     Holder holder(30 * MIB);
-    ReclaimSlot slot = a->attach(holder);
-    Reservation held = a->reserve(40 * MIB);
-    Reservation over = a->reserve(40 * MIB);
+    ReclaimSlot slot = PoolAccess::attach(*a, holder);
+    Reservation held = PoolAccess::reserve(*a, 40 * MIB);
+    Reservation over = PoolAccess::reserve(*a, 40 * MIB);
     CHECK(over.status() == Status::Pending);
     CHECK(slot.take_request() == 16 * MIB);
 
     slot.set_reclaimable(0);
-    Reservation again = a->reserve(40 * MIB);
+    Reservation again = PoolAccess::reserve(*a, 40 * MIB);
     CHECK(again.status() == Status::OverBudget);
     CHECK(slot.take_request() == 0);
 }
@@ -125,11 +126,11 @@ TEST_CASE("a pending request is not asked for twice") {
     Budget budget(64 * MIB);
     PoolHandle a = root().child("a");
     Holder holder(16 * MIB);
-    ReclaimSlot slot = a->attach(holder);
-    Reservation held = a->reserve(40 * MIB);
-    Reservation first = a->reserve(40 * MIB);
+    ReclaimSlot slot = PoolAccess::attach(*a, holder);
+    Reservation held = PoolAccess::reserve(*a, 40 * MIB);
+    Reservation first = PoolAccess::reserve(*a, 40 * MIB);
     CHECK(first.status() == Status::Pending);
-    Reservation second = a->reserve(40 * MIB);
+    Reservation second = PoolAccess::reserve(*a, 40 * MIB);
     CHECK(second.status() == Status::OverBudget);
     CHECK(slot.take_request() == 16 * MIB);
 }
@@ -139,19 +140,19 @@ TEST_CASE("a reclaiming pool reserves within the headroom") {
     PoolHandle busy = root().child("busy");
     PoolHandle spill = root().child("spill");
     Holder other(50 * MIB), own(50 * MIB);
-    ReclaimSlot s_other = busy->attach(other);
-    ReclaimSlot s_own = spill->attach(own);
+    ReclaimSlot s_other = PoolAccess::attach(*busy, other);
+    ReclaimSlot s_own = PoolAccess::attach(*spill, own);
 
-    Reservation held = busy->reserve(64 * MIB);
+    Reservation held = PoolAccess::reserve(*busy, 64 * MIB);
     REQUIRE(held);
-    CHECK(spill->reserve(MIB).status() == Status::Pending);
+    CHECK(PoolAccess::reserve(*spill, MIB).status() == Status::Pending);
     s_other.take_request();
     s_own.take_request();
 
     ReclaimGuard guard = s_own.begin_reclaim();
-    Reservation within = spill->reserve(20 * MIB);
+    Reservation within = PoolAccess::reserve(*spill, 20 * MIB);
     CHECK(within);
-    Reservation past = spill->reserve(20 * MIB);
+    Reservation past = PoolAccess::reserve(*spill, 20 * MIB);
     CHECK(!past);
     CHECK(past.status() == Status::OverBudget);
     CHECK(s_other.take_request() == 0);
@@ -163,15 +164,15 @@ TEST_CASE("the headroom ends with the guard") {
     PoolHandle busy = root().child("busy");
     PoolHandle spill = root().child("spill");
     Holder own(50 * MIB);
-    ReclaimSlot slot = spill->attach(own);
-    Reservation held = busy->reserve(64 * MIB);
+    ReclaimSlot slot = PoolAccess::attach(*spill, own);
+    Reservation held = PoolAccess::reserve(*busy, 64 * MIB);
     REQUIRE(held);
     {
         ReclaimGuard guard = slot.begin_reclaim();
-        Reservation within = spill->reserve(8 * MIB);
+        Reservation within = PoolAccess::reserve(*spill, 8 * MIB);
         CHECK(within);
     }
-    Reservation after = spill->reserve(8 * MIB);
+    Reservation after = PoolAccess::reserve(*spill, 8 * MIB);
     CHECK(after.status() == Status::Pending);
 }
 
@@ -179,13 +180,13 @@ TEST_CASE("nothing reclaimable gives over budget") {
     Budget budget(64 * MIB);
     PoolHandle a = root().child("a");
     PoolHandle b = root().child("b");
-    Reservation held = a->reserve(40 * MIB);
+    Reservation held = PoolAccess::reserve(*a, 40 * MIB);
     REQUIRE(held);
-    CHECK(b->reserve(40 * MIB).status() == Status::OverBudget);
+    CHECK(PoolAccess::reserve(*b, 40 * MIB).status() == Status::OverBudget);
 
     Holder empty(0);
-    ReclaimSlot slot = b->attach(empty);
-    CHECK(b->reserve(40 * MIB).status() == Status::OverBudget);
+    ReclaimSlot slot = PoolAccess::attach(*b, empty);
+    CHECK(PoolAccess::reserve(*b, 40 * MIB).status() == Status::OverBudget);
     CHECK(slot.take_request() == 0);
 }
 
@@ -195,15 +196,15 @@ TEST_CASE("a detached slot is never posted to") {
     PoolHandle b = root().child("b");
     Holder gone(50 * MIB);
     {
-        ReclaimSlot slot = a->attach(gone);
+        ReclaimSlot slot = PoolAccess::attach(*a, gone);
         REQUIRE(slot);
     }
-    Reservation held = a->reserve(40 * MIB);
+    Reservation held = PoolAccess::reserve(*a, 40 * MIB);
     REQUIRE(held);
-    CHECK(b->reserve(40 * MIB).status() == Status::OverBudget);
+    CHECK(PoolAccess::reserve(*b, 40 * MIB).status() == Status::OverBudget);
 
     Holder next(0);
-    ReclaimSlot reused = b->attach(next);
+    ReclaimSlot reused = PoolAccess::attach(*b, next);
     CHECK(reused.take_request() == 0);
 }
 
@@ -211,8 +212,8 @@ TEST_CASE("a request larger than the budget posts nothing") {
     Budget budget(64 * MIB);
     PoolHandle a = root().child("a");
     Holder holder(50 * MIB);
-    ReclaimSlot slot = a->attach(holder);
-    Reservation r = a->reserve(65 * MIB);
+    ReclaimSlot slot = PoolAccess::attach(*a, holder);
+    Reservation r = PoolAccess::reserve(*a, 65 * MIB);
     CHECK(!r);
     CHECK(r.status() == Status::OverBudget);
     CHECK(slot.take_request() == 0);
@@ -223,8 +224,8 @@ TEST_CASE("a request larger than a pool limit posts nothing") {
     PoolHandle limited =
         root().child("limited", PoolKind::Scratch, Limits{8 * MIB});
     Holder holder(50 * MIB);
-    ReclaimSlot slot = limited->attach(holder);
-    Reservation r = limited->reserve(9 * MIB);
+    ReclaimSlot slot = PoolAccess::attach(*limited, holder);
+    Reservation r = PoolAccess::reserve(*limited, 9 * MIB);
     CHECK(r.status() == Status::OverBudget);
     CHECK(slot.take_request() == 0);
 }
@@ -234,10 +235,10 @@ TEST_CASE("a pool at its limit asks the holders") {
     PoolHandle limited =
         root().child("limited", PoolKind::Scratch, Limits{8 * MIB});
     Holder holder(6 * MIB);
-    ReclaimSlot slot = limited->attach(holder);
-    Reservation held = limited->reserve(6 * MIB);
+    ReclaimSlot slot = PoolAccess::attach(*limited, holder);
+    Reservation held = PoolAccess::reserve(*limited, 6 * MIB);
     REQUIRE(held);
-    Reservation over = limited->reserve(4 * MIB);
+    Reservation over = PoolAccess::reserve(*limited, 4 * MIB);
     CHECK(over.status() == Status::Pending);
     CHECK(slot.take_request() == 2 * MIB);
 }
@@ -248,14 +249,14 @@ TEST_CASE("the reclaimer table fills and frees") {
     // keep std: memory tests link only memory
     std::vector<ReclaimSlot> slots;
     for (std::size_t i = 0; i < RECLAIMER_SLOTS; ++i) {
-        slots.push_back(a->attach(holder));
+        slots.push_back(PoolAccess::attach(*a, holder));
         REQUIRE(slots.back());
     }
-    ReclaimSlot none = a->attach(holder);
+    ReclaimSlot none = PoolAccess::attach(*a, holder);
     CHECK(!none);
     CHECK(none.status() == Status::SlotTableFull);
     CHECK(none.take_request() == 0);
     slots.pop_back();
-    ReclaimSlot again = a->attach(holder);
+    ReclaimSlot again = PoolAccess::attach(*a, holder);
     CHECK(again);
 }

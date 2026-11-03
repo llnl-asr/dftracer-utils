@@ -3,6 +3,7 @@
 #include <dftracer/utils/memory/arena.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
@@ -52,7 +53,7 @@ struct Tracked {
 TEST_CASE("allocations bump through a chunk and keep their alignment") {
     PoolHandle parent = root().child("parent");
     Arena arena{*parent, "bump"};
-    CHECK(arena.pool().parent() == parent->id());
+    CHECK(PoolAccess::parent(arena.pool()) == PoolAccess::id(*parent));
     CHECK(arena.pool().path() == "root/parent/bump");
     CHECK(arena.chunk_bytes() == 0);
 
@@ -291,7 +292,7 @@ TEST_CASE("an arena without a parent opens its pool below the scope pool") {
     PoolHandle parent = root().child("scope");
     Scope s{*parent};
     Arena arena{"inner"};
-    CHECK(arena.pool().parent() == parent->id());
+    CHECK(PoolAccess::parent(arena.pool()) == PoolAccess::id(*parent));
     arena.allocate(100);
     CHECK(parent->live() == ARENA_FIRST_CHUNK);
 }

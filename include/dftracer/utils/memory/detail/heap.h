@@ -7,9 +7,11 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::memory::detail {
-
+namespace dftracer::utils::memory {
 class Pool;
+}
+
+namespace dftracer::utils::memory::detail {
 
 enum class Mode : std::uint8_t {
     /// Purge only memory idle for longer than the decay time.

@@ -2,8 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/debug.h>
-#include <dftracer/utils/memory/heap.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/settings.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
@@ -23,6 +23,7 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::memory;
+using namespace dftracer::utils::memory::detail;
 
 namespace {
 
@@ -36,7 +37,7 @@ void capture(dstd::StringView text) noexcept {
 struct CaptureReports {
     CaptureReports() {
         g_reports.clear();
-        previous = set_reporter(capture);
+        previous = detail::set_reporter(capture);
     }
     ~CaptureReports() { set_reporter(previous); }
     Reporter previous;
@@ -109,16 +110,18 @@ void expect_abort(const char* test_case, const char* text) {
 
 }  // namespace
 
-TEST_CASE("the test runs with the debug wrapper") { CHECK(debug_enabled()); }
+TEST_CASE("the test runs with the debug wrapper") {
+    CHECK(detail::debug_enabled());
+}
 
 TEST_CASE("the allocation count rises by one per allocation") {
     constexpr std::uint64_t N = 25;
     void* blocks[N];
-    const auto before = debug_allocation_count();
+    const auto before = detail::debug_allocation_count();
     for (auto& b : blocks) b = allocate(48, 16);
-    CHECK(debug_allocation_count() - before == N);
+    CHECK(detail::debug_allocation_count() - before == N);
     for (auto* b : blocks) deallocate(b);
-    CHECK(debug_allocation_count() - before == N);
+    CHECK(detail::debug_allocation_count() - before == N);
 }
 
 TEST_CASE("a planted leak in a scratch pool reports its path and sites") {

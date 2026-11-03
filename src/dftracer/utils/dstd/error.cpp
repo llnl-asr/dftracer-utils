@@ -2,7 +2,7 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 
 #include <atomic>
 #include <charconv>
@@ -95,7 +95,7 @@ Error::Context* Error::make_context(StringView message) noexcept {
         std::numeric_limits<std::size_t>::max() - sizeof(Context) - 1)
         return nullptr;
     const std::size_t size = sizeof(Context) + message.size() + 1;
-    void* block = memory::try_allocate(size, alignof(Context));
+    void* block = memory::detail::try_allocate(size, alignof(Context));
     if (block == nullptr) return nullptr;
     auto* context = ::new (block) Context;
     context->refs.store(1, std::memory_order_relaxed);
@@ -113,7 +113,8 @@ void Error::retain_context(Context* context) noexcept {
 void Error::release_context(Context* context) noexcept {
     if (context == nullptr) return;
     if (context->refs.fetch_sub(1, std::memory_order_acq_rel) == 1)
-        memory::deallocate(context, sizeof(Context) + context->length + 1);
+        memory::detail::deallocate(context,
+                                   sizeof(Context) + context->length + 1);
 }
 
 }  // namespace dftracer::utils::dstd

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/memory/attrib.h>
-#include <dftracer/utils/memory/constants.h>
 #include <dftracer/utils/memory/debug.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/constants.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <dftracer/utils/memory/heap_system.h>
-#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/memory/settings.h>
 
 #include <atomic>
@@ -17,7 +17,7 @@
 #include <limits>
 #include <new>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 namespace {
 
@@ -211,17 +211,6 @@ void set_map_budget(std::size_t bytes) noexcept {
     g_map_budget.store(bytes, std::memory_order_relaxed);
 }
 
-Config config() noexcept {
-    Config out;
-    out.backend = backend();
-    out.decay_ms = g_decay_ms.load(std::memory_order_relaxed);
-    out.budget = Manager::get().budget();
-    out.hard_cap = hard_cap();
-    out.limit_headroom = Manager::get().limit_headroom();
-    out.spill_headroom = Manager::get().spill_headroom();
-    return out;
-}
-
 AttribCache& attrib_local() {
     switch (backend()) {
         case Backend::PageHeap:
@@ -363,6 +352,21 @@ void trim_thread() noexcept {
         case Backend::System:
             return;
     }
+}
+
+}  // namespace dftracer::utils::memory::detail
+
+namespace dftracer::utils::memory {
+
+Config config() noexcept {
+    Config out;
+    out.backend = detail::backend();
+    out.decay_ms = detail::decay_ms();
+    out.budget = detail::Manager::get().budget();
+    out.hard_cap = detail::hard_cap();
+    out.limit_headroom = detail::Manager::get().limit_headroom();
+    out.spill_headroom = detail::Manager::get().spill_headroom();
+    return out;
 }
 
 }  // namespace dftracer::utils::memory

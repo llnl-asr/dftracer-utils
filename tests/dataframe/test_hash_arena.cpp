@@ -13,7 +13,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -91,8 +91,9 @@ TEST_SUITE("hash arena") {
     }
 
     TEST_CASE("an arena charges its pool and frees all of it") {
-        dftracer::utils::memory::PoolHandle pool =
-            dftracer::utils::memory::Manager::get().root().child("arena");
+        dftracer::utils::memory::detail::PoolHandle pool =
+            dftracer::utils::memory::detail::Manager::get().root().child(
+                "arena");
         REQUIRE(pool);
         {
             lazy_internal::HashArena a(*pool);
@@ -107,8 +108,9 @@ TEST_SUITE("hash arena") {
     }
 
     TEST_CASE("keys stay in place while the arena grows") {
-        dftracer::utils::memory::PoolHandle pool =
-            dftracer::utils::memory::Manager::get().root().child("grow");
+        dftracer::utils::memory::detail::PoolHandle pool =
+            dftracer::utils::memory::detail::Manager::get().root().child(
+                "grow");
         REQUIRE(pool);
         lazy_internal::HashArena a(*pool);
         // About 80 bytes a record, with enough keys to fill the 64 KiB to 1 MiB
@@ -176,8 +178,9 @@ TEST_SUITE("hash arena") {
     TEST_CASE("a small key set reserves no table four times its size") {
         // The keys unique() takes from one morsel before a 4 MiB budget
         // spills. A table grown four times at once held 7.1 MiB here.
-        dftracer::utils::memory::PoolHandle pool =
-            dftracer::utils::memory::Manager::get().root().child("small");
+        dftracer::utils::memory::detail::PoolHandle pool =
+            dftracer::utils::memory::detail::Manager::get().root().child(
+                "small");
         REQUIRE(pool);
         lazy_internal::HashArena a(*pool);
         for (std::uint64_t i = 0; i < 57000; ++i) {

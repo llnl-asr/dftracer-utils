@@ -3,10 +3,10 @@
 #define DFTRACER_UTILS_CORO_ASYNC_GENERATOR_H
 
 #include <dftracer/utils/common/exception_helpers.h>
-#include <dftracer/utils/coro/frame.h>
-#include <dftracer/utils/coro/pool_resume.h>
+#include <dftracer/utils/coro/detail/frame.h>
+#include <dftracer/utils/coro/detail/pool_resume.h>
 #include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <coroutine>
@@ -169,7 +169,7 @@ class AsyncGenerator {
    public:
     using value_type = T;
 
-    struct promise_type : FrameAllocation {
+    struct promise_type : detail::FrameAllocation {
         alignas(T) std::byte value_storage_[sizeof(T)];
         bool has_value_ = false;
         std::exception_ptr exception_;

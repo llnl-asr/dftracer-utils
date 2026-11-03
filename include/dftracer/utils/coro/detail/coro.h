@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_CORO_CORO_H
-#define DFTRACER_UTILS_CORO_CORO_H
+#ifndef DFTRACER_UTILS_CORO_DETAIL_CORO_H
+#define DFTRACER_UTILS_CORO_DETAIL_CORO_H
 
 #include <dftracer/utils/common/typedefs.h>
-#include <dftracer/utils/coro/frame.h>
-#include <dftracer/utils/coro/pool_resume.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/coro/detail/frame.h>
+#include <dftracer/utils/coro/detail/pool_resume.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <coroutine>
@@ -13,8 +13,10 @@
 #include <utility>
 
 namespace dftracer::utils::coro {
-
 class Executor;
+}
+
+namespace dftracer::utils::coro::detail {
 
 struct CoroPromise;
 
@@ -134,6 +136,6 @@ inline std::coroutine_handle<CoroPromise> Coro::release() {
     return h;
 }
 
-}  // namespace dftracer::utils::coro
+}  // namespace dftracer::utils::coro::detail
 
-#endif  // DFTRACER_UTILS_CORO_CORO_H
+#endif  // DFTRACER_UTILS_CORO_DETAIL_CORO_H

@@ -7,7 +7,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/channel.h>
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/generator.h>
 #include <dftracer/utils/coro/join_handle.h>
@@ -104,7 +104,7 @@ class CoroScope {
 
     /// Internal: create a Coro wrapper, track it, and post it.
     /// Returns the Coro's coroutine_handle for callers that need it.
-    void enqueue_coro(coro::Coro& c) {
+    void enqueue_coro(coro::detail::Coro& c) {
         if (detail::executor_stopping(executor_)) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Pipeline,
@@ -198,10 +198,10 @@ class CoroScope {
         state->cancel_token =
             dstd::SharedPtr<std::atomic<bool>>(chain, &chain->flag);
 
-        auto make_coro =
-            [](auto f, coro::Executor* exec,
-               dstd::SharedPtr<CancelChain> own_chain,
-               dstd::SharedPtr<coro::SharedState<void>> st) -> coro::Coro {
+        auto make_coro = [](auto f, coro::Executor* exec,
+                            dstd::SharedPtr<CancelChain> own_chain,
+                            dstd::SharedPtr<coro::SharedState<void>> st)
+            -> coro::detail::Coro {
             // Own cancel flag, so cancelling one child leaves its siblings.
             CoroScope child_scope(exec, std::move(own_chain));
             // Publish an exception only after the handler ends: the awaiter
@@ -258,7 +258,7 @@ class CoroScope {
         auto make_coro =
             [](auto f, coro::Executor* exec,
                dstd::SharedPtr<CancelChain> own_chain,
-               dstd::SharedPtr<coro::SharedState<R>> st) -> coro::Coro {
+               dstd::SharedPtr<coro::SharedState<R>> st) -> coro::detail::Coro {
             CoroScope child_scope(exec, std::move(own_chain));
             std::exception_ptr error;
             try {
@@ -616,7 +616,7 @@ inline bool spawn_detached(coro::Executor* executor,
                            coro::CoroTask<void> task) {
     if (detail::executor_stopping(executor)) return false;
     auto make_coro = [](coro::CoroTask<void> t,
-                        coro::Executor* exec) -> coro::Coro {
+                        coro::Executor* exec) -> coro::detail::Coro {
         try {
             t.handle().promise().set_executor(exec);
             co_await std::move(t);

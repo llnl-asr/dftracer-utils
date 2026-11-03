@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/coro/detail/monitor.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/coro/monitor.h>
 #include <dftracer/utils/runtime/io/awaitable.h>
 
 namespace dftracer::utils::io {
@@ -11,8 +11,8 @@ void IoAwaitable::await_suspend(std::coroutine_handle<> h) noexcept {
     // Coroutines reached by symmetric transfer never pass through the executor
     // queue until they suspend here; register now (parent = the resuming
     // ancestor) so the I/O completion's re-enqueue does not orphan them.
-    if (coro::monitoring_enabled()) {
-        coro::monitor_enqueue(h.address(), coro::CoroKind::Io);
+    if (coro::detail::monitoring_enabled()) {
+        coro::detail::monitor_enqueue(h.address(), coro::detail::CoroKind::Io);
     }
     if (submit_ctx_ && submit_ctx_->submit) {
         submit_ctx_->submit(submit_ctx_, this);

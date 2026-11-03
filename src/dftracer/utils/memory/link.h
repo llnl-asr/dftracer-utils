@@ -7,7 +7,7 @@
 
 #include <cstddef>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 // The free-list link sits in the first bytes of a free block, which ASan and
 // Valgrind mark unaddressable. Only these two functions step around the
@@ -40,6 +40,6 @@ DFTRACER_UTILS_MEMORY_LINK_ATTRS inline void store_link(void* block,
     *static_cast<void**>(block) = next;
 }
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail
 
 #endif  // DFTRACER_UTILS_MEMORY_LINK_H

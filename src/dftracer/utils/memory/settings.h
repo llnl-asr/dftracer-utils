@@ -2,12 +2,12 @@
 #ifndef DFTRACER_UTILS_MEMORY_SETTINGS_H
 #define DFTRACER_UTILS_MEMORY_SETTINGS_H
 
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 /// The settings the allocator itself reads. config() resolves the manager as
 /// well and must not run on an allocation path.
@@ -28,6 +28,6 @@ void set_hard_cap(std::size_t bytes) noexcept;
 std::size_t map_budget() noexcept;
 void set_map_budget(std::size_t bytes) noexcept;
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail
 
 #endif  // DFTRACER_UTILS_MEMORY_SETTINGS_H

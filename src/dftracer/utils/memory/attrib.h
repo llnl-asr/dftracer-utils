@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 inline constexpr std::uint16_t ROOT_POOL_ID = 0;
 inline constexpr std::uint16_t GENERAL_POOL_ID = 1;
@@ -187,6 +187,6 @@ inline void attrib_credit_any(AttribCache& cache, std::uint16_t id,
     }
 }
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail
 
 #endif  // DFTRACER_UTILS_MEMORY_ATTRIB_H

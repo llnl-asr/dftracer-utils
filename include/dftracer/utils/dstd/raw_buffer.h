@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DSTD_RAW_BUFFER_H
 #define DFTRACER_UTILS_DSTD_RAW_BUFFER_H
 
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -98,7 +98,7 @@ class RawBuffer {
 
     /// Free the storage. Size and capacity become zero.
     void release() noexcept {
-        memory::deallocate(data_, capacity_ * sizeof(T));
+        memory::detail::deallocate(data_, capacity_ * sizeof(T));
         data_ = nullptr;
         size_ = 0;
         capacity_ = 0;
@@ -120,8 +120,8 @@ class RawBuffer {
 
     void set_capacity(std::size_t n) {
         if (n > max_size()) throw std::bad_alloc();
-        data_ = static_cast<T*>(memory::reallocate(data_, capacity_ * sizeof(T),
-                                                   n * sizeof(T), ALIGN));
+        data_ = static_cast<T*>(memory::detail::reallocate(
+            data_, capacity_ * sizeof(T), n * sizeof(T), ALIGN));
         capacity_ = n;
     }
 

@@ -2,10 +2,10 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/timer.h>
-#include <dftracer/utils/coro/monitor.h>
+#include <dftracer/utils/coro/detail/monitor.h>
 #include <dftracer/utils/coro/yield.h>
-#include <dftracer/utils/memory/heap.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/io/io_backend_factory.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -526,12 +526,12 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     // Grows while idle so the pool is not polling, resets on work found.
     std::chrono::milliseconds idle_park = IDLE_PARK_MIN;
 
-    memory::Pool& general = memory::Manager::get().general();
+    memory::detail::Pool& general = memory::detail::Manager::get().general();
 
     // Fixed for the process lifetime; read once to keep the resume loop cheap.
-    const bool monitor = coro::monitoring_enabled();
+    const bool monitor = coro::detail::monitoring_enabled();
     if (monitor) {
-        coro::monitor_set_worker(static_cast<int>(context->worker_id));
+        coro::detail::monitor_set_worker(static_cast<int>(context->worker_id));
     }
 
     while (running_ && !context->retire.load(std::memory_order_acquire)) {
@@ -581,17 +581,18 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                 }
                 DFTRACER_UTILS_TSAN_ACQUIRE(pending_resume.address());
                 if (monitor) {
-                    coro::monitor_resume_begin(pending_entry.monitor_id);
+                    coro::detail::monitor_resume_begin(
+                        pending_entry.monitor_id);
                 }
                 {
                     // Our coroutines enter their own pool. Anything else
                     // charges the general pool.
-                    memory::Scope scope{general, nullptr};
+                    memory::detail::Scope scope{general, nullptr};
                     coro::resume_on(*this, pending_resume);
                 }
                 if (monitor) {
-                    coro::monitor_resume_end(pending_resume.address(),
-                                             pending_resume.done());
+                    coro::detail::monitor_resume_end(pending_resume.address(),
+                                                     pending_resume.done());
                 }
             }
             // A batch held until this worker idles would wait behind a later
@@ -646,7 +647,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
             }
             // Only this thread may purge its heap, so an idle worker gives its
             // freed pages back itself.
-            if (idle_long) memory::trim_thread();
+            if (idle_long) memory::detail::trim_thread();
             if (poller) idle_poller_.store(false, std::memory_order_release);
             idle_workers_.fetch_sub(1, std::memory_order_acq_rel);
         }
@@ -666,7 +667,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
 
 bool ThreadPoolExecutor::drive_until(
     dftracer::utils::dstd::FunctionRef<bool()> done) {
-    memory::Pool& general = memory::Manager::get().general();
+    memory::detail::Pool& general = memory::detail::Manager::get().general();
     // The timeout re-checks the queue for the enqueue that worker_thread's
     // park comment describes.
     std::chrono::milliseconds park = IDLE_PARK_MIN;
@@ -680,7 +681,7 @@ bool ThreadPoolExecutor::drive_until(
             coro::reset_timeslice();
             if (entry.handle && !entry.handle.done()) {
                 DFTRACER_UTILS_TSAN_ACQUIRE(entry.handle.address());
-                memory::Scope scope{general, nullptr};
+                memory::detail::Scope scope{general, nullptr};
                 coro::resume_on(*this, entry.handle);
             }
             coro::drain_thread_local_destroys();
@@ -762,12 +763,12 @@ void ThreadPoolExecutor::enqueue(std::coroutine_handle<> handle,
     }
 
     long long monitor_id = -1;
-    if (coro::monitoring_enabled()) {
+    if (coro::detail::monitoring_enabled()) {
         // task_id >= 0 marks a tracked submitted task; otherwise it is spawn
         // fan-out (or a re-enqueue of an already-seen coroutine).
-        monitor_id = coro::monitor_enqueue(
-            handle.address(),
-            task_id >= 0 ? coro::CoroKind::Task : coro::CoroKind::Spawn);
+        monitor_id = coro::detail::monitor_enqueue(
+            handle.address(), task_id >= 0 ? coro::detail::CoroKind::Task
+                                           : coro::detail::CoroKind::Spawn);
     }
     const bool foreign = coro::Executor::current() != this;
     if (foreign) foreign_enqueues_.fetch_add(1, std::memory_order_acq_rel);
@@ -971,7 +972,7 @@ TaskProgress ThreadPoolExecutor::build_task_progress_tree(
 // Phase 3: Coro-based task execution
 // ============================================================================
 
-coro::Coro ThreadPoolExecutor::run_task(
+coro::detail::Coro ThreadPoolExecutor::run_task(
     dstd::SharedPtr<Task> task,
     dstd::SharedPtr<std::any> input,  // keep std: as the Task API wants
     TaskOwner* owner) {
@@ -1195,7 +1196,7 @@ void ThreadPoolExecutor::submit_task(
 }
 
 common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
-    coro::Coro coro, dstd::StringView name,
+    coro::detail::Coro coro, dstd::StringView name,
     dstd::SharedPtr<std::atomic<common::TaskIndex>> tid_out) {
     common::TaskIndex id =
         next_coro_task_id_.fetch_sub(1, std::memory_order_relaxed);
@@ -1203,7 +1204,8 @@ common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
 
     // The registry and tracking nodes outlive the submitting thread's pool
     // scope, so they charge the general pool.
-    memory::Scope bookkeeping_scope{memory::Manager::get().general(), nullptr};
+    memory::detail::Scope bookkeeping_scope{
+        memory::detail::Manager::get().general(), nullptr};
     {
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);
         auto [it, inserted] = task_registry_.emplace(std::piecewise_construct,
@@ -1222,7 +1224,7 @@ common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
         coro.handle().promise().tracking =
             &trackings_
                  .emplace(id,
-                          coro::TaskTracking{
+                          coro::detail::TaskTracking{
                               &ThreadPoolExecutor::on_tracked_task_complete,
                               this, id})
                  .first->second;
@@ -1292,7 +1294,8 @@ void ThreadPoolExecutor::mark_coro_failed(common::TaskIndex id,
 void ThreadPoolExecutor::retire_locked(common::TaskIndex id) {
     // The history outlives the task's pool scope, so it charges the general
     // pool.
-    memory::Scope history_scope{memory::Manager::get().general()};
+    memory::detail::Scope history_scope{
+        memory::detail::Manager::get().general()};
     finished_.push_back(id);
     while (finished_.size() > task_history_) {
         task_registry_.erase(finished_.front());

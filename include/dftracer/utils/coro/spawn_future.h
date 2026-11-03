@@ -4,9 +4,9 @@
 
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/cancelled.h>
+#include <dftracer/utils/coro/detail/parked.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/coro/parked.h>
-#include <dftracer/utils/coro/resumption_helper.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/variant.h>
@@ -90,7 +90,7 @@ struct SharedState {
             // prev is a waiting coroutine handle address.
             auto waiter = std::coroutine_handle<>::from_address(
                 reinterpret_cast<void*>(prev));
-            post_resumption(executor, waiter);
+            detail::post_resumption(executor, waiter);
         }
     }
 };
@@ -140,7 +140,7 @@ class SpawnFuture {
     /// stopped by that, and its scope still joins it.
     bool await_suspend(std::coroutine_handle<> awaiting) noexcept {
         handle_ = awaiting;
-        executor_ = resume_executor_for(state_->executor);
+        executor_ = detail::resume_executor_for(state_->executor);
         // Registered before the flag publishes the waiter: once it does, the
         // spawn may resume the frame on another thread at any moment.
         if (executor_) {
@@ -169,7 +169,7 @@ class SpawnFuture {
                 expected, SharedState<T>::CANCELLED, std::memory_order_acq_rel,
                 std::memory_order_acquire)) {
             cancelled_ = true;
-            post_resumption(executor_, handle_);
+            detail::post_resumption(executor_, handle_);
         }
     }
 
@@ -205,7 +205,7 @@ class SpawnFuture {
     dstd::SharedPtr<SharedState<T>> state_;
     std::coroutine_handle<> handle_{};
     Executor* executor_ = nullptr;
-    ParkNode* park_ = nullptr;
+    detail::ParkNode* park_ = nullptr;
     bool cancelled_ = false;
 };
 

@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_STORE_COMMITTER_H
 #define DFTRACER_UTILS_STORE_COMMITTER_H
 
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
@@ -146,7 +146,7 @@ class Committer {
     struct StopWait;
     struct EntryList;
 
-    coro::Coro run();
+    coro::detail::Coro run();
     void wake();
     void finish_loop();
     dstd::Expected<void, dstd::Error> sync_file();

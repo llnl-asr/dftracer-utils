@@ -4,9 +4,9 @@
 
 #include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/completion_latch.h>
+#include <dftracer/utils/coro/detail/parked.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/coro/parked.h>
-#include <dftracer/utils/coro/resumption_helper.h>
 #include <dftracer/utils/coro/task.h>
 
 #include <atomic>
@@ -89,7 +89,7 @@ class AsyncOnce {
 
         bool await_suspend(std::coroutine_handle<> h) noexcept {
             handle_ = h;
-            executor_ = resume_executor_for(nullptr);
+            executor_ = detail::resume_executor_for(nullptr);
             std::lock_guard<std::mutex> lock(self_->mutex_);
             if (self_->state_.load(std::memory_order_relaxed) == READY)
                 return false;
@@ -136,7 +136,7 @@ class AsyncOnce {
         std::coroutine_handle<> handle_{};
         Executor* executor_ = nullptr;
         Awaiter* next_ = nullptr;
-        ParkNode* park_ = nullptr;
+        detail::ParkNode* park_ = nullptr;
         bool cancelled_ = false;
     };
 

@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_MEMORY_ARENA_H
 
 #include <dftracer/utils/memory/asan.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -30,7 +30,7 @@ class Arena {
    public:
     /// Open the child pool @p name below @p parent. Throws std::bad_alloc when
     /// the pool table is full.
-    Arena(Pool& parent, std::string_view name);
+    Arena(detail::Pool& parent, std::string_view name);
     /// Open the child pool below current_pool(), read once here.
     explicit Arena(std::string_view name);
     Arena(const Arena&) = delete;
@@ -50,7 +50,7 @@ class Arena {
         std::uintptr_t p = (cur_ + align - 1) & ~(align - 1);
         if (p <= end_ && n <= end_ - p) [[likely]] {
             cur_ = p + n;
-            asan_unpoison(reinterpret_cast<void*>(p), n);
+            detail::asan_unpoison(reinterpret_cast<void*>(p), n);
             return reinterpret_cast<void*>(p);
         }
         return allocate_chunk(n, align);
@@ -105,9 +105,9 @@ class Arena {
      * Returns the Pool::reserve status. On failure the reservation keeps what
      * it had.
      */
-    Status reserve(std::size_t bytes) noexcept;
+    detail::Status reserve(std::size_t bytes) noexcept;
 
-    Pool& pool() const noexcept { return *pool_; }
+    detail::Pool& pool() const noexcept { return *pool_; }
     /// Bytes of every chunk the arena holds. The pool can show more because the
     /// page heap rounds a chunk above 1 MiB to a power of two.
     std::size_t chunk_bytes() const noexcept { return chunk_bytes_; }
@@ -150,8 +150,8 @@ class Arena {
     Destructor* destructors_ = nullptr;
     std::size_t chunk_bytes_ = 0;
     std::size_t grown_ = 0;
-    PoolHandle pool_;
-    Reservation reservation_;
+    detail::PoolHandle pool_;
+    detail::Reservation reservation_;
 };
 
 /**

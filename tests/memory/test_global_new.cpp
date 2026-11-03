@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/memory/debug.h>
-#include <dftracer/utils/memory/heap.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
@@ -13,6 +13,7 @@
 #include <vector>
 
 using namespace dftracer::utils::memory;
+using namespace dftracer::utils::memory::detail;
 
 namespace {
 
@@ -38,12 +39,12 @@ std::size_t live() {
 template <class Make>
 void check_served(std::size_t bytes, Make make) {
     const std::size_t base = live();
-    const std::uint64_t count = debug_allocation_count();
+    const std::uint64_t count = detail::debug_allocation_count();
     std::size_t held = 0;
     {
         auto owner = make();
         held = live();
-        CHECK(debug_allocation_count() > count);
+        CHECK(detail::debug_allocation_count() > count);
         CHECK(held >= base + bytes);
     }
     CHECK(live() + bytes <= held);
@@ -71,7 +72,7 @@ struct Found {
     std::size_t peak = 0;
 };
 
-void find_planted(void* context, const DebugSiteTotal& total) noexcept {
+void find_planted(void* context, const detail::DebugSiteTotal& total) noexcept {
     if (total.peak == PLANTED_BYTES)
         *static_cast<Found*>(context) = {total.site, total.live, total.peak};
 }
@@ -105,7 +106,7 @@ bool inside(std::uintptr_t site, char* (*fn)()) {
     return site > start && site < start + PLANTED_SPAN && !other_between;
 }
 
-void find_at_peak(void* context, const DebugSiteTotal& total) noexcept {
+void find_at_peak(void* context, const detail::DebugSiteTotal& total) noexcept {
     auto& found = *static_cast<AtPeak*>(context);
     if (inside(total.site, plant_early)) found.early = total.live;
     if (inside(total.site, plant_late)) found.late = total.live;
@@ -131,22 +132,22 @@ TEST_SUITE("GlobalNew") {
 
     TEST_CASE("a block above the page heap size classes is served") {
         const std::size_t base = live();
-        const std::uint64_t count = debug_allocation_count();
+        const std::uint64_t count = detail::debug_allocation_count();
         char* big = escape(new char[BIG_BYTES]);
         for (std::size_t i = 0; i < BIG_BYTES; i += 4096) big[i] = 1;
         big[BIG_BYTES - 1] = 1;
         const std::size_t held = live();
-        CHECK(debug_allocation_count() > count);
+        CHECK(detail::debug_allocation_count() > count);
         CHECK(held >= base + BIG_BYTES);
         delete[] big;
         CHECK(live() + BIG_BYTES <= held);
     }
 
     TEST_CASE("an over-aligned new keeps its alignment and is counted") {
-        const std::uint64_t count = debug_allocation_count();
+        const std::uint64_t count = detail::debug_allocation_count();
         Wide* w = escape(new Wide);
         CHECK(reinterpret_cast<std::uintptr_t>(w) % OVER_ALIGN == 0);
-        CHECK(debug_allocation_count() > count);
+        CHECK(detail::debug_allocation_count() > count);
         delete w;
         Wide* many = escape(new Wide[4]);
         CHECK(reinterpret_cast<std::uintptr_t>(many) % OVER_ALIGN == 0);
@@ -155,10 +156,10 @@ TEST_SUITE("GlobalNew") {
 
     TEST_CASE("a nothrow new is served and counted") {
         const std::size_t base = live();
-        const std::uint64_t count = debug_allocation_count();
+        const std::uint64_t count = detail::debug_allocation_count();
         char* p = escape(new (std::nothrow) char[5000]);
         REQUIRE(p != nullptr);
-        CHECK(debug_allocation_count() > count);
+        CHECK(detail::debug_allocation_count() > count);
         CHECK(live() >= base + 5000);
         const std::size_t held = live();
         delete[] p;

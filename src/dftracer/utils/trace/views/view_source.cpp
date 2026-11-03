@@ -4,7 +4,7 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/channel.h>
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_fingerprint
@@ -354,8 +354,8 @@ dstd::Optional<Pushable> translate_pred(
     return Pushable{std::move(*leaf), true};
 }
 
-coro::Coro run_detached(coro::CoroTask<void> task,
-                        dstd::SharedPtr<dstd::Promise<void>> done) {
+coro::detail::Coro run_detached(coro::CoroTask<void> task,
+                                dstd::SharedPtr<dstd::Promise<void>> done) {
     try {
         co_await std::move(task);
         done->set_value();
@@ -375,7 +375,7 @@ dstd::SharedFuture<void> spawn_on_current_executor(coro::CoroTask<void> task) {
     if (task.handle()) task.handle().promise().set_executor(exec);
     auto done = dstd::make_shared<dstd::Promise<void>>();
     dstd::SharedFuture<void> fut = done->get_future().share();
-    coro::Coro c = run_detached(std::move(task), std::move(done));
+    coro::detail::Coro c = run_detached(std::move(task), std::move(done));
     exec->post(c.release());
     return fut;
 }

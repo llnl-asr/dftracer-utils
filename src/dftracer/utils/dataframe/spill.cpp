@@ -23,7 +23,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -660,9 +660,10 @@ namespace {
 
 const ZSTD_customMem TRACKED_MEM = {
     [](void*, std::size_t size) -> void* {
-        return dftracer::utils::memory::c_malloc(size);
+        return dftracer::utils::memory::detail::c_malloc(size);
     },
-    [](void*, void* p) { dftracer::utils::memory::c_free(p); }, nullptr};
+    [](void*, void* p) { dftracer::utils::memory::detail::c_free(p); },
+    nullptr};
 
 bool spill_compression_on(const dstd::String& path) {
     const auto v = common::Env::get(common::constants::SPILL_COMPRESS_ENV);

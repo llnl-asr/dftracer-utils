@@ -3,7 +3,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/open_count.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -132,6 +132,6 @@ TEST_SUITE("BootstrapParallelism") {
         CHECK(bootstrap_test::counts(
                   bootstrap_test::count_by_name(files, index_dir))
                   .size() == 7);
-        CHECK_FALSE(memory::Manager::get().leaked());
+        CHECK_FALSE(memory::detail::Manager::get().leaked());
     }
 }

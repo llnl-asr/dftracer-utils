@@ -6,7 +6,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/memory/allocator.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <algorithm>
 #include <cstring>
@@ -26,18 +26,19 @@ String id_text(std::uint32_t id) {
 }
 }  // namespace
 
-StringIntern::Chunk::Chunk(std::size_t size, memory::Pool& pool)
-    : data_(static_cast<char*>(memory::allocate(size, CHUNK_ALIGN, pool))),
+StringIntern::Chunk::Chunk(std::size_t size, memory::detail::Pool& pool)
+    : data_(static_cast<char*>(
+          memory::detail::allocate(size, CHUNK_ALIGN, pool))),
       size_(size) {}
 
-StringIntern::Chunk::~Chunk() { memory::deallocate(data_, size_); }
+StringIntern::Chunk::~Chunk() { memory::detail::deallocate(data_, size_); }
 
 void StringIntern::release_bytes(void* p, std::size_t bytes) noexcept {
-    memory::deallocate(p, bytes);
+    memory::detail::deallocate(p, bytes);
 }
 
-StringIntern::StringIntern(memory::Pool* pool)
-    : pool_(pool ? pool : &memory::Manager::get().general()),
+StringIntern::StringIntern(memory::detail::Pool* pool)
+    : pool_(pool ? pool : &memory::detail::Manager::get().general()),
       shards_(make_owned<Shard>(SHARDS)) {}
 
 StringIntern::~StringIntern() {
@@ -389,12 +390,12 @@ std::size_t StringIntern::hash(StringView sv) const {
 
 template <class T>
 T* StringIntern::make_array(std::size_t n) const {
-    void* p = memory::allocate(n * sizeof(T), alignof(T), *pool_);
+    void* p = memory::detail::allocate(n * sizeof(T), alignof(T), *pool_);
     auto* a = static_cast<T*>(p);
     try {
         std::uninitialized_value_construct_n(a, n);
     } catch (...) {
-        memory::deallocate(p, n * sizeof(T));
+        memory::detail::deallocate(p, n * sizeof(T));
         throw;
     }
     return a;
@@ -404,7 +405,7 @@ template <class T>
 void StringIntern::free_array(T* a, std::size_t n) noexcept {
     if (!a) return;
     std::destroy_n(a, n);
-    memory::deallocate(a, n * sizeof(T));
+    memory::detail::deallocate(a, n * sizeof(T));
 }
 
 template <class T>

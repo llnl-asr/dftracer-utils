@@ -15,7 +15,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/fold.h>
@@ -244,7 +244,7 @@ class Writer {
 
     Writer(dstd::String name, dstd::String path, std::uint32_t extent_size,
            dstd::Vector<ScopeGeneration> generations, DataFileWriter file,
-           memory::PoolHandle extent_pool, std::uint64_t extent_quota,
+           memory::detail::PoolHandle extent_pool, std::uint64_t extent_quota,
            TaskExecutor& executor, const WriterOptions& options);
 
     template <class T, class... Args>
@@ -305,7 +305,7 @@ class Writer {
     Committer committer_;
     /// The pool the extent bytes are charged to. Declared before the pieces
     /// that reserve from it and the completions that release them.
-    memory::PoolHandle extent_pool_;
+    memory::detail::PoolHandle extent_pool_;
     WriterExtents extent_bytes_;
     // Declared after the committer, so an extent completion can never outlive
     // it.

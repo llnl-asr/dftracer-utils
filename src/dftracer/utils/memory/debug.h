@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 inline constexpr std::size_t DEBUG_REDZONE_BYTES = 16;
 /// Freed blocks held back with their fill pattern, so a write to a freed block
@@ -105,6 +105,6 @@ void debug_drain() noexcept;
 void debug_for_each_site(std::uint16_t pool, DebugVisit visit,
                          void* context) noexcept;
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail
 
 #endif  // DFTRACER_UTILS_MEMORY_DEBUG_H

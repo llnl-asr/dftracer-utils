@@ -3,7 +3,7 @@
 #include <dftracer/utils/dstd/any.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 
 #include <any>
@@ -18,7 +18,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-memory::Pool& root() { return memory::Manager::get().root(); }
+memory::detail::Pool& root() { return memory::detail::Manager::get().root(); }
 
 int g_alive = 0;
 
@@ -45,8 +45,8 @@ static_assert(sizeof(dstd::Any) == 32);
 static_assert(dstd::Any::BUFFER_SIZE == 24);
 
 TEST_CASE("a small value stays in the buffer") {
-    memory::PoolHandle pool = root().child("small");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("small");
+    memory::detail::Scope s{*pool};
     {
         dstd::Any a = 42;
         dstd::Any b = Small{'s'};
@@ -59,8 +59,8 @@ TEST_CASE("a small value stays in the buffer") {
 }
 
 TEST_CASE("a large value goes to the heap and is freed") {
-    memory::PoolHandle pool = root().child("large");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("large");
+    memory::detail::Scope s{*pool};
     {
         dstd::Any a = Large{'l'};
         CHECK(pool->blocks() == 1);
@@ -154,8 +154,8 @@ struct alignas(32) OverAligned {
 }  // namespace
 
 TEST_CASE("a throwing copy leaves no block and keeps the target") {
-    memory::PoolHandle pool = root().child("throwing");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("throwing");
+    memory::detail::Scope s{*pool};
     {
         dstd::Any a;
         a.emplace<FailingCopy>();
@@ -182,8 +182,8 @@ TEST_CASE("a throwing copy leaves no block and keeps the target") {
 }
 
 TEST_CASE("an over-aligned value goes to the heap with its alignment") {
-    memory::PoolHandle pool = root().child("aligned");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("aligned");
+    memory::detail::Scope s{*pool};
     {
         dstd::Any a = OverAligned{};
         CHECK(pool->blocks() == 1);

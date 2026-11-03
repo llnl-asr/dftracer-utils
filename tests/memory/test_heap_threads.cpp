@@ -19,6 +19,7 @@
 #include <vector>
 
 using namespace dftracer::utils::memory;
+using namespace dftracer::utils::memory::detail;
 
 namespace {
 
@@ -66,7 +67,8 @@ std::size_t random_size(std::mt19937_64& rng) {
 
 Block make_block(std::mt19937_64& rng) {
     std::size_t size = random_size(rng);
-    Block b{page_allocate(size, 16), size, static_cast<unsigned char>(rng())};
+    Block b{detail::page_allocate(size, 16), size,
+            static_cast<unsigned char>(rng())};
     fill(b);
     return b;
 }
@@ -125,21 +127,21 @@ TEST_CASE("the owner takes remote frees back on its slow path") {
     // keep std: memory tests link only memory
     std::thread owner([&] {
         for (int i = 0; i < COUNT; ++i)
-            first.push_back(page_allocate(SIZE, 16));
+            first.push_back(detail::page_allocate(SIZE, 16));
         allocated.open();
         freed.wait();
         // keep std: memory tests link only memory
         std::vector<void*> again;
         for (int i = 0; i < COUNT; ++i) {
-            again.push_back(page_allocate(SIZE, 16));
+            again.push_back(detail::page_allocate(SIZE, 16));
         }
         second.insert(again.begin(), again.end());
-        for (void* p : again) page_deallocate(p, SIZE);
+        for (void* p : again) detail::page_deallocate(p, SIZE);
     });
     allocated.wait();
     std::size_t base = live();
-    for (void* p : first) page_deallocate(p, SIZE);
-    page_flush_remote();
+    for (void* p : first) detail::page_deallocate(p, SIZE);
+    detail::page_flush_remote();
     CHECK(base - live() == COUNT * SIZE);
     freed.open();
     owner.join();
@@ -155,16 +157,17 @@ TEST_CASE("a returned heap is adopted and its pending frees are drained") {
     void* medium = nullptr;
     // keep std: memory tests link only memory
     std::thread first([&] {
-        for (int i = 0; i < COUNT; ++i) small.push_back(page_allocate(64, 16));
-        medium = page_allocate(200 * KIB, 16);
+        for (int i = 0; i < COUNT; ++i)
+            small.push_back(detail::page_allocate(64, 16));
+        medium = detail::page_allocate(200 * KIB, 16);
     });
     first.join();
-    std::size_t heaps = page_heap_count();
+    std::size_t heaps = detail::page_heap_count();
     std::size_t base = live();
 
-    for (void* p : small) page_deallocate(p, 64);
-    page_deallocate(medium, 200 * KIB);
-    page_flush_remote();
+    for (void* p : small) detail::page_deallocate(p, 64);
+    detail::page_deallocate(medium, 200 * KIB);
+    detail::page_flush_remote();
     CHECK(live() < base);
 
     // keep std: memory tests link only memory

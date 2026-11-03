@@ -2,8 +2,8 @@
 #ifndef DFTRACER_UTILS_CORO_YIELD_H
 #define DFTRACER_UTILS_CORO_YIELD_H
 
-#include <dftracer/utils/coro/pool_resume.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/coro/detail/pool_resume.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <chrono>

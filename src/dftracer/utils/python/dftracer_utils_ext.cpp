@@ -7,7 +7,7 @@
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/plugins/abi_version.h>
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/columnar_eval.h>
@@ -137,7 +137,7 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     PyObject* m;
     // numpy and pandas may still hold blocks of ours when the interpreter
     // exits.
-    dftracer::utils::memory::set_exit_check(false);
+    dftracer::utils::memory::detail::set_exit_check(false);
     m = PyModule_Create(&dftracer_utils_module);
     if (m == NULL) return NULL;
     // The aggregation CF shard count, so distributed callers split the shard

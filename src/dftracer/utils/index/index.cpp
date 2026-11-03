@@ -15,7 +15,7 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/store_layout.h>
 #include <dftracer/utils/index/tables.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <algorithm>
 #include <mutex>
@@ -576,7 +576,7 @@ constexpr std::size_t INDEX_ROOTS_RETAINED = 64;
 class RetainedRoots {
    public:
     Index find_or_add(const dstd::String& root, Index made) {
-        memory::Scope general(memory::Manager::get().general());
+        memory::detail::Scope general(memory::detail::Manager::get().general());
         std::lock_guard<std::mutex> lock(mutex_);
         const auto known =
             std::find_if(roots_.begin(), roots_.end(),

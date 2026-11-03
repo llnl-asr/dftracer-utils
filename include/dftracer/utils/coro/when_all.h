@@ -3,17 +3,17 @@
 #define DFTRACER_UTILS_CORO_WHEN_ALL_H
 
 #include <dftracer/utils/common/exception_helpers.h>
-#include <dftracer/utils/coro/completion_state.h>
-#include <dftracer/utils/coro/frame.h>
-#include <dftracer/utils/coro/pool_resume.h>
-#include <dftracer/utils/coro/resumption_helper.h>
+#include <dftracer/utils/coro/detail/completion_state.h>
+#include <dftracer/utils/coro/detail/frame.h>
+#include <dftracer/utils/coro/detail/pool_resume.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <coroutine>
@@ -32,7 +32,7 @@ namespace dftracer::utils::coro {
 
 /// Coroutine that destroys its own frame on completion.
 struct FireAndForget {
-    struct promise_type : FrameAllocation {
+    struct promise_type : detail::FrameAllocation {
         detail::RunContext context;
 
         template <typename U>
@@ -58,7 +58,7 @@ struct FireAndForget {
  * Heap-allocated to ensure lifetime extends beyond await_suspend
  */
 template <typename Awaitable>
-struct WhenAllVectorState : WhenAllCompletionState {
+struct WhenAllVectorState : detail::WhenAllCompletionState {
     dstd::Vector<Awaitable> awaitables_;
     /// dstd::Vector<bool> packs neighbours into one byte, so two wrappers
     /// writing them would race. Bool results take one byte each.
@@ -66,7 +66,7 @@ struct WhenAllVectorState : WhenAllCompletionState {
         std::is_same_v<typename Awaitable::result_type, bool>, unsigned char,
         typename Awaitable::result_type>;
     dstd::Vector<Stored> results_;
-    ChildClaims claims_;
+    detail::ChildClaims claims_;
 
     explicit WhenAllVectorState(dstd::Vector<Awaitable> awaitables)
         : awaitables_(std::move(awaitables)), results_(awaitables_.size()) {
@@ -221,9 +221,9 @@ auto when_all(std::initializer_list<Awaitable> awaitables) {
 
 template <typename Awaitable>
     requires(std::is_void_v<typename Awaitable::result_type>)
-struct WhenAllVectorState<Awaitable> : WhenAllCompletionState {
+struct WhenAllVectorState<Awaitable> : detail::WhenAllCompletionState {
     dstd::Vector<Awaitable> awaitables_;
-    ChildClaims claims_;
+    detail::ChildClaims claims_;
 
     explicit WhenAllVectorState(dstd::Vector<Awaitable> awaitables)
         : awaitables_(std::move(awaitables)) {
@@ -329,7 +329,7 @@ using when_all_result_t =
  * Heap-allocated so lifetime extends beyond await_suspend.
  */
 template <typename... Awaitables>
-struct WhenAllTupleState : WhenAllCompletionState {
+struct WhenAllTupleState : detail::WhenAllCompletionState {
     dstd::Tuple<Awaitables...> awaitables_;
     dstd::Tuple<
         dstd::Optional<when_all_result_t<typename Awaitables::result_type>>...>

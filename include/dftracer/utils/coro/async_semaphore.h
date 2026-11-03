@@ -3,9 +3,9 @@
 #define DFTRACER_UTILS_CORO_ASYNC_SEMAPHORE_H
 
 #include <dftracer/utils/coro/cancelled.h>
+#include <dftracer/utils/coro/detail/parked.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/coro/parked.h>
-#include <dftracer/utils/coro/resumption_helper.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/list.h>
 
@@ -61,7 +61,7 @@ class CoroSemaphore {
             // releaser's current thread, which may be off-executor (an
             // io-completion thread) where yield_to_executor would silently drop
             // the resume.
-            executor_ = resume_executor_for(nullptr);
+            executor_ = detail::resume_executor_for(nullptr);
             handle_ = h;
             sem_.waiters_.push_back(Waiter{need_, h, executor_, this});
             if (executor_) {
@@ -94,7 +94,7 @@ class CoroSemaphore {
                 sem_.waiters_.erase(it);
                 park_->cancelled = true;
             }
-            post_resumption(executor_, handle_);
+            detail::post_resumption(executor_, handle_);
         }
 
        private:
@@ -102,7 +102,7 @@ class CoroSemaphore {
         std::uint64_t need_;
         Executor* executor_ = nullptr;
         std::coroutine_handle<> handle_{};
-        ParkNode* park_ = nullptr;
+        detail::ParkNode* park_ = nullptr;
     };
 
     /// Acquire `n` permits (co_await). `n` above capacity is clamped.
@@ -139,9 +139,10 @@ class CoroSemaphore {
             }
         }
         for (std::size_t i = 0; i < wake_n; ++i)
-            post_resumption(wake_local[i].executor, wake_local[i].handle);
+            detail::post_resumption(wake_local[i].executor,
+                                    wake_local[i].handle);
         for (const Waiter& w : wake_overflow)
-            post_resumption(w.executor, w.handle);
+            detail::post_resumption(w.executor, w.handle);
     }
 
    private:

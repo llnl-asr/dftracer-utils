@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/async_mutex.h>
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_any.h>
@@ -98,8 +98,8 @@ coro::CoroTask<void> wait_beyond(std::atomic<bool>& timed_out) {
 
 /// The frame the driver owns: awaiting the task is the only thing that keeps
 /// it alive, so the driver releases this handle once the coroutine is set up.
-coro::Coro drive(coro::CoroTask<void> task, std::atomic<bool>& done,
-                 std::exception_ptr& error) {
+coro::detail::Coro drive(coro::CoroTask<void> task, std::atomic<bool>& done,
+                         std::exception_ptr& error) {
     try {
         co_await std::move(task);
     } catch (...) {
@@ -187,7 +187,8 @@ TEST_SUITE("UserExecutor") {
         std::atomic<int> calls{0};
         std::atomic<common::TaskIndex> last_id{-1};
         CompletionSpy spy{&calls, &last_id};
-        coro::TaskTracking tracking{&CompletionSpy::on_complete, &spy, 4242};
+        coro::detail::TaskTracking tracking{&CompletionSpy::on_complete, &spy,
+                                            4242};
 
         std::atomic<bool> done{false};
         std::exception_ptr error;

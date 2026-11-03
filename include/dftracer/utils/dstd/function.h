@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DSTD_FUNCTION_H
 #define DFTRACER_UTILS_DSTD_FUNCTION_H
 
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 
 #include <cstddef>
 #include <functional>
@@ -19,8 +19,9 @@ class Function;
  * @brief A move-only std::function of 32 bytes with a 24-byte inline buffer.
  *
  * A nothrow move constructible callable that fits stays inline, else it is
- * placed by memory::allocate. A moved-from Function is empty and calling it
- * throws std::bad_function_call. operator() calls the target as non-const.
+ * placed by memory::detail::allocate. A moved-from Function is empty and
+ * calling it throws std::bad_function_call. operator() calls the target as
+ * non-const.
  */
 template <class R, class... Args>
 class Function<R(Args...)> {
@@ -44,11 +45,11 @@ class Function<R(Args...)> {
             ::new (static_cast<void*>(buffer_)) T(std::forward<F>(f));
             ops_ = &INLINE_OPS<T>;
         } else {
-            void* raw = memory::allocate(sizeof(T), alignof(T));
+            void* raw = memory::detail::allocate(sizeof(T), alignof(T));
             try {
                 ::new (raw) T(std::forward<F>(f));
             } catch (...) {
-                memory::deallocate(raw, sizeof(T));
+                memory::detail::deallocate(raw, sizeof(T));
                 throw;
             }
             ::new (static_cast<void*>(buffer_)) void*(raw);
@@ -160,19 +161,19 @@ class Function<R(Args...)> {
         [](void* s) noexcept { inline_target<T>(s).~T(); }, false};
 
     template <class T>
-    static constexpr Ops HEAP_OPS{[](void* s, Args&&... args) -> R {
-                                      return call(heap_target<T>(s),
-                                                  std::forward<Args>(args)...);
-                                  },
-                                  [](void* dst, void* src) noexcept {
-                                      ::new (dst) void*(heap_slot(src));
-                                  },
-                                  [](void* s) noexcept {
-                                      T& target = heap_target<T>(s);
-                                      target.~T();
-                                      memory::deallocate(&target, sizeof(T));
-                                  },
-                                  false};
+    static constexpr Ops HEAP_OPS{
+        [](void* s, Args&&... args) -> R {
+            return call(heap_target<T>(s), std::forward<Args>(args)...);
+        },
+        [](void* dst, void* src) noexcept {
+            ::new (dst) void*(heap_slot(src));
+        },
+        [](void* s) noexcept {
+            T& target = heap_target<T>(s);
+            target.~T();
+            memory::detail::deallocate(&target, sizeof(T));
+        },
+        false};
 
     void take(Function& other) noexcept {
         ops_ = other.ops_;

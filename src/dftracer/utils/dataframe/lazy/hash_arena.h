@@ -5,7 +5,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/arena.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -25,9 +25,9 @@ class HashArena {
     /// it. From it on, it grows four times at a time.
     static constexpr std::size_t GROWTH_FROM = std::size_t{1} << 18;
 
-    explicit HashArena(memory::Pool& pool)
+    explicit HashArena(memory::detail::Pool& pool)
         : keys_(pool, "hash arena keys"), head_(Head::allocator_type(pool)) {}
-    HashArena() : HashArena(memory::current_pool()) {}
+    HashArena() : HashArena(memory::detail::current_pool()) {}
 
     /// True when `key` was not present (and is now); false on a duplicate.
     bool insert(std::uint64_t hash, const char* key, std::uint32_t len) {

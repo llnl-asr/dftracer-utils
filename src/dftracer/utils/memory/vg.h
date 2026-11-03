@@ -11,7 +11,7 @@
 #endif
 #endif
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 #ifdef DFTRACER_UTILS_MEMORY_VALGRIND
 
@@ -78,6 +78,6 @@ inline void vg_define(void*, std::size_t) noexcept {}
 
 #endif
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail
 
 #endif  // DFTRACER_UTILS_MEMORY_VG_H

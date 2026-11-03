@@ -15,7 +15,7 @@
 #include <limits>
 #include <new>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 namespace {
 
@@ -517,4 +517,4 @@ void debug_for_each_site(std::uint16_t pool, DebugVisit visit,
     os_munmap(raw, bytes);
 }
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail

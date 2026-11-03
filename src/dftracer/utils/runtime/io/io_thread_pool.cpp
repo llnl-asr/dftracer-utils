@@ -3,7 +3,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/runtime/io/io_thread_pool.h>
 
 #include <algorithm>
@@ -161,7 +161,7 @@ void IoThreadPool::worker_loop() {
             if (!ready() && !cv_.wait_for(lock, trim_after, ready)) {
                 // Only this thread may purge its heap.
                 lock.unlock();
-                memory::trim_thread();
+                memory::detail::trim_thread();
                 lock.lock();
             }
             const auto above_floor = [this] {

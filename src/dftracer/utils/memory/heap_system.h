@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 /// Sits right before the user pointer of a system block.
 struct SystemHeader {
@@ -33,6 +33,6 @@ void* system_reallocate(void* p, std::size_t old_size, std::size_t new_size,
 
 [[noreturn]] void abort_with(const char* message) noexcept;
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail
 
 #endif  // DFTRACER_UTILS_MEMORY_HEAP_SYSTEM_H

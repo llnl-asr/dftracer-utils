@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/memory/heap.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
 #include <vector>
 
 using namespace dftracer::utils::memory;
+using namespace dftracer::utils::memory::detail;
 
 namespace {
 

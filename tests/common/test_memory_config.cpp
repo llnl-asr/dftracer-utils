@@ -4,7 +4,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/memory/constants.h>
+#include <dftracer/utils/memory/detail/constants.h>
 #include <doctest/doctest.h>
 
 #include <cstdlib>
@@ -41,55 +41,57 @@ void clear_memory_env() {
 TEST_CASE("the common and memory constant sets agree") {
     CHECK(std::strcmp(dftracer::utils::common::constants::memory_settings::
                           MEMORY_BACKEND_ENV,
-                      memory::constants::MEMORY_BACKEND_ENV) == 0);
+                      memory::detail::constants::MEMORY_BACKEND_ENV) == 0);
     CHECK(std::strcmp(
               dftracer::utils::common::constants::memory_settings::DECAY_MS_ENV,
-              memory::constants::DECAY_MS_ENV) == 0);
+              memory::detail::constants::DECAY_MS_ENV) == 0);
     CHECK(std::strcmp(
               dftracer::utils::common::constants::memory_settings::BUDGET_ENV,
-              memory::constants::BUDGET_ENV) == 0);
+              memory::detail::constants::BUDGET_ENV) == 0);
     CHECK(
         std::strcmp(
             dftracer::utils::common::constants::memory_settings::HARD_LIMIT_ENV,
-            memory::constants::HARD_LIMIT_ENV) == 0);
+            memory::detail::constants::HARD_LIMIT_ENV) == 0);
     CHECK(std::strcmp(dftracer::utils::common::constants::memory_settings::
                           LIMIT_HEADROOM_ENV,
-                      memory::constants::LIMIT_HEADROOM_ENV) == 0);
+                      memory::detail::constants::LIMIT_HEADROOM_ENV) == 0);
     CHECK(std::strcmp(dftracer::utils::common::constants::memory_settings::
                           SPILL_HEADROOM_ENV,
-                      memory::constants::SPILL_HEADROOM_ENV) == 0);
+                      memory::detail::constants::SPILL_HEADROOM_ENV) == 0);
     CHECK(std::strcmp(
               dftracer::utils::common::constants::memory_settings::DEBUG_ENV,
-              memory::constants::DEBUG_ENV) == 0);
+              memory::detail::constants::DEBUG_ENV) == 0);
     CHECK(
         std::strcmp(
             dftracer::utils::common::constants::memory_settings::EXIT_CHECK_ENV,
-            memory::constants::EXIT_CHECK_ENV) == 0);
+            memory::detail::constants::EXIT_CHECK_ENV) == 0);
 
     CHECK(
         dftracer::utils::common::constants::memory_settings::DEFAULT_DECAY_MS ==
-        memory::constants::DEFAULT_DECAY_MS);
+        memory::detail::constants::DEFAULT_DECAY_MS);
     CHECK(dftracer::utils::common::constants::memory_settings::
-              DEFAULT_BUDGET_BYTES == memory::constants::DEFAULT_BUDGET_BYTES);
+              DEFAULT_BUDGET_BYTES ==
+          memory::detail::constants::DEFAULT_BUDGET_BYTES);
     CHECK(dftracer::utils::common::constants::memory_settings::
               DEFAULT_HARD_LIMIT_BYTES ==
-          memory::constants::DEFAULT_HARD_LIMIT_BYTES);
+          memory::detail::constants::DEFAULT_HARD_LIMIT_BYTES);
     CHECK(dftracer::utils::common::constants::memory_settings::
               LIMIT_HEADROOM_PERCENT ==
-          memory::constants::LIMIT_HEADROOM_PERCENT);
+          memory::detail::constants::LIMIT_HEADROOM_PERCENT);
     CHECK(dftracer::utils::common::constants::memory_settings::
               LIMIT_HEADROOM_MIN_BYTES ==
-          memory::constants::LIMIT_HEADROOM_MIN_BYTES);
+          memory::detail::constants::LIMIT_HEADROOM_MIN_BYTES);
     CHECK(dftracer::utils::common::constants::memory_settings::
               SPILL_HEADROOM_PERCENT ==
-          memory::constants::SPILL_HEADROOM_PERCENT);
+          memory::detail::constants::SPILL_HEADROOM_PERCENT);
     CHECK(dftracer::utils::common::constants::memory_settings::
               SPILL_HEADROOM_MIN_BYTES ==
-          memory::constants::SPILL_HEADROOM_MIN_BYTES);
+          memory::detail::constants::SPILL_HEADROOM_MIN_BYTES);
     CHECK(dftracer::utils::common::constants::memory_settings::DEFAULT_DEBUG ==
-          memory::constants::DEFAULT_DEBUG);
+          memory::detail::constants::DEFAULT_DEBUG);
     CHECK(dftracer::utils::common::constants::memory_settings::
-              DEFAULT_EXIT_CHECK == memory::constants::DEFAULT_EXIT_CHECK);
+              DEFAULT_EXIT_CHECK ==
+          memory::detail::constants::DEFAULT_EXIT_CHECK);
 }
 
 TEST_CASE("unset variables leave every field at its default") {
@@ -145,21 +147,21 @@ TEST_CASE("a bad value is refused and names its variable") {
 }
 
 TEST_CASE("memory statuses map to error codes") {
-    static_assert(common::error_code_of(memory::Status::OverBudget) ==
+    static_assert(common::error_code_of(memory::detail::Status::OverBudget) ==
                   dftracer::utils::common::ErrorCode::MemoryBudgetExceeded);
-    CHECK(common::error_code_of(memory::Status::OverBudget) ==
+    CHECK(common::error_code_of(memory::detail::Status::OverBudget) ==
           dftracer::utils::common::ErrorCode::MemoryBudgetExceeded);
-    CHECK(common::error_code_of(memory::Status::OverCap) ==
+    CHECK(common::error_code_of(memory::detail::Status::OverCap) ==
           dftracer::utils::common::ErrorCode::MemoryBudgetExceeded);
-    CHECK(common::error_code_of(memory::Status::Pending) ==
+    CHECK(common::error_code_of(memory::detail::Status::Pending) ==
           dftracer::utils::common::ErrorCode::MemoryBudgetExceeded);
-    CHECK(common::error_code_of(memory::Status::PoolTableFull) ==
+    CHECK(common::error_code_of(memory::detail::Status::PoolTableFull) ==
           dftracer::utils::common::ErrorCode::Internal);
-    CHECK(common::error_code_of(memory::Status::SlotTableFull) ==
+    CHECK(common::error_code_of(memory::detail::Status::SlotTableFull) ==
           dftracer::utils::common::ErrorCode::Internal);
-    CHECK(common::error_code_of(memory::Status::Ok) ==
+    CHECK(common::error_code_of(memory::detail::Status::Ok) ==
           dftracer::utils::common::ErrorCode::Unknown);
-    CHECK(common::error_code_of(memory::Status::Cancelled) ==
+    CHECK(common::error_code_of(memory::detail::Status::Cancelled) ==
           dftracer::utils::common::ErrorCode::Unknown);
 
     CHECK(dstd::String(common::error_code_name(
@@ -174,8 +176,9 @@ TEST_CASE("a failed reservation maps to the budget error") {
     memory::Config c;
     c.budget = 64 * MIB;
     memory::configure(c);
-    memory::PoolHandle pool = memory::Manager::get().root().child("config");
-    memory::Reservation over = pool->reserve(65 * MIB);
+    memory::detail::PoolHandle pool =
+        memory::detail::Manager::get().root().child("config");
+    memory::detail::Reservation over = pool->reserve(65 * MIB);
     REQUIRE_FALSE(over);
     CHECK(common::error_code_of(over.status()) ==
           common::ErrorCode::MemoryBudgetExceeded);

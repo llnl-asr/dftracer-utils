@@ -3,8 +3,8 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/run_on.h>
 #include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/memory/heap.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -34,7 +34,7 @@ constexpr int ROUNDS = 16;
 // I/O completion or a timer does: the pool must come from the task, not from
 // the thread that enqueues it.
 struct Hops {
-    memory::Pool* enqueuer_pool = nullptr;
+    memory::detail::Pool* enqueuer_pool = nullptr;
     std::mutex mutex;
     // keep std: a dstd container or thread would charge the pool under test
     std::vector<std::thread> threads;
@@ -56,7 +56,7 @@ struct ResumeFromThread {
         std::lock_guard<std::mutex> lock(hops.mutex);
         hops.threads.emplace_back([exec, h, pool = hops.enqueuer_pool] {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            memory::Scope scope{*pool};
+            memory::detail::Scope scope{*pool};
             exec->post(h);
         });
     }
@@ -70,26 +70,26 @@ struct Blocks {
     bool moved = false;
 
     void free_all() {
-        for (void* p : held) memory::deallocate(p, size);
+        for (void* p : held) memory::detail::deallocate(p, size);
         held.clear();
     }
 };
 
 CoroTask<void> allocate_across_workers(Blocks* out, Hops* hops) {
-    out->held.push_back(memory::allocate(out->size, ALIGN));
+    out->held.push_back(memory::detail::allocate(out->size, ALIGN));
     // keep std: ids are compared with the std::set in the pool test
     const std::thread::id first = std::this_thread::get_id();
     for (int i = 0; i < MAX_HOPS && std::this_thread::get_id() == first; ++i)
         co_await ResumeFromThread{*hops};
     out->moved = std::this_thread::get_id() != first;
-    out->held.push_back(memory::allocate(out->size, ALIGN));
+    out->held.push_back(memory::detail::allocate(out->size, ALIGN));
 }
 
 // keep std: a dstd container would charge the pool under test
 CoroTask<void> allocate_and_yield(Blocks* out, std::set<std::thread::id>* seen,
                                   std::mutex* seen_mutex) {
     for (int i = 0; i < ROUNDS; ++i) {
-        out->held.push_back(memory::allocate(out->size, ALIGN));
+        out->held.push_back(memory::detail::allocate(out->size, ALIGN));
         {
             std::lock_guard<std::mutex> lock(*seen_mutex);
             seen->insert(std::this_thread::get_id());
@@ -99,14 +99,14 @@ CoroTask<void> allocate_and_yield(Blocks* out, std::set<std::thread::id>* seen,
 }
 
 CoroTask<void> allocate_and_yield_once(Blocks* out) {
-    out->held.push_back(memory::allocate(out->size, ALIGN));
+    out->held.push_back(memory::detail::allocate(out->size, ALIGN));
     co_await yield();
-    out->held.push_back(memory::allocate(out->size, ALIGN));
+    out->held.push_back(memory::detail::allocate(out->size, ALIGN));
 }
 
 CoroTask<void> hop_then_allocate(Blocks* out, Hops* hops) {
     co_await ResumeFromThread{*hops};
-    out->held.push_back(memory::allocate(out->size, ALIGN));
+    out->held.push_back(memory::detail::allocate(out->size, ALIGN));
 }
 
 CoroTask<void> parent_with_children(Blocks* direct, Blocks* spawned, Hops* hops,
@@ -122,22 +122,23 @@ CoroTask<void> parent_with_children(Blocks* direct, Blocks* spawned, Hops* hops,
         }));
 }
 
-memory::PoolHandle open_pool(const char* name) {
-    memory::PoolHandle pool = memory::Manager::get().root().child(name);
+memory::detail::PoolHandle open_pool(const char* name) {
+    memory::detail::PoolHandle pool =
+        memory::detail::Manager::get().root().child(name);
     REQUIRE(pool);
     return pool;
 }
 
 template <typename Make>
-auto under(memory::Pool& pool, Make make) {
-    memory::Scope scope{pool};
+auto under(memory::detail::Pool& pool, Make make) {
+    memory::detail::Scope scope{pool};
     return make();
 }
 
 // A worker destroys a finished frame shortly after get() returns, so a pool
 // that held it reaches `want` blocks a little later. A leaked block never goes
 // away, so the wait still fails then.
-bool settles_at(const memory::Pool& pool, std::size_t want) {
+bool settles_at(const memory::detail::Pool& pool, std::size_t want) {
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (pool.blocks() != want) {
@@ -152,8 +153,8 @@ bool settles_at(const memory::Pool& pool, std::size_t want) {
 TEST_CASE(
     "a task that moves to another worker charges both blocks to its pool") {
     Runtime rt(4);
-    memory::PoolHandle pool = open_pool("task");
-    memory::PoolHandle enqueuer = open_pool("enqueuer");
+    memory::detail::PoolHandle pool = open_pool("task");
+    memory::detail::PoolHandle enqueuer = open_pool("enqueuer");
     Hops hops;
     hops.enqueuer_pool = enqueuer.get();
     Blocks blocks;
@@ -173,8 +174,8 @@ TEST_CASE(
 
 TEST_CASE("two tasks with different pools on one worker do not mix") {
     Runtime rt(1);
-    memory::PoolHandle pool_a = open_pool("a");
-    memory::PoolHandle pool_b = open_pool("b");
+    memory::detail::PoolHandle pool_a = open_pool("a");
+    memory::detail::PoolHandle pool_b = open_pool("b");
     Blocks blocks_a;
     Blocks blocks_b;
     // keep std: a dstd container would charge the pool under test
@@ -203,9 +204,9 @@ TEST_CASE("two tasks with different pools on one worker do not mix") {
 
 TEST_CASE("a task made without a scope charges the general pool") {
     Runtime rt(2);
-    memory::Pool& general = memory::Manager::get().general();
-    memory::PoolHandle submitter = open_pool("submitter");
-    memory::PoolHandle enqueuer = open_pool("enqueuer");
+    memory::detail::Pool& general = memory::detail::Manager::get().general();
+    memory::detail::PoolHandle submitter = open_pool("submitter");
+    memory::detail::PoolHandle enqueuer = open_pool("enqueuer");
     Hops hops;
     hops.enqueuer_pool = enqueuer.get();
     Blocks blocks;
@@ -214,7 +215,7 @@ TEST_CASE("a task made without a scope charges the general pool") {
     const std::size_t before = general.live();
     CoroTask<void> task = hop_then_allocate(&blocks, &hops);
     {
-        memory::Scope scope{*submitter};
+        memory::detail::Scope scope{*submitter};
         rt.submit(std::move(task)).get();
     }
     hops.join();
@@ -230,8 +231,8 @@ TEST_CASE("a task made without a scope charges the general pool") {
 
 TEST_CASE("children awaited or spawned inside a task take its pool") {
     Runtime rt(4);
-    memory::PoolHandle pool = open_pool("parent");
-    memory::PoolHandle enqueuer = open_pool("enqueuer");
+    memory::detail::PoolHandle pool = open_pool("parent");
+    memory::detail::PoolHandle enqueuer = open_pool("enqueuer");
     Hops hops;
     hops.enqueuer_pool = enqueuer.get();
     Blocks direct;
@@ -253,16 +254,16 @@ TEST_CASE("children awaited or spawned inside a task take its pool") {
 }
 
 TEST_CASE("get() charges the task's pool and keeps the caller's scope") {
-    memory::PoolHandle pool = open_pool("task");
-    memory::PoolHandle caller = open_pool("caller");
+    memory::detail::PoolHandle pool = open_pool("task");
+    memory::detail::PoolHandle caller = open_pool("caller");
     Blocks blocks;
 
     {
         CoroTask<void> task =
             under(*pool, [&] { return allocate_and_yield_once(&blocks); });
-        memory::Scope scope{*caller};
+        memory::detail::Scope scope{*caller};
         task.get();
-        CHECK(memory::current_pool().id() == caller->id());
+        CHECK(memory::detail::current_pool().id() == caller->id());
     }
 
     CHECK(pool->blocks() == 2);
@@ -271,10 +272,11 @@ TEST_CASE("get() charges the task's pool and keeps the caller's scope") {
 }
 
 TEST_CASE("a task whose pool closed before it ran charges the general pool") {
-    memory::Pool& general = memory::Manager::get().general();
+    memory::detail::Pool& general = memory::detail::Manager::get().general();
     // A Results pool may close with the task's frame still live.
-    memory::PoolHandle pool = memory::Manager::get().root().child(
-        "closed", memory::PoolKind::Results);
+    memory::detail::PoolHandle pool =
+        memory::detail::Manager::get().root().child(
+            "closed", memory::detail::PoolKind::Results);
     REQUIRE(pool);
     Blocks blocks;
     blocks.size = BIG_BLOCK;

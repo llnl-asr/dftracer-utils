@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_STORE_WRITER_EXTENTS_H
 
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <coroutine>
@@ -13,7 +13,10 @@
 namespace dftracer::utils::coro {
 
 class Executor;
+
+namespace detail {
 struct ParkNode;
+}  // namespace detail
 
 }  // namespace dftracer::utils::coro
 
@@ -49,7 +52,8 @@ class WriterExtents {
 
     /// @p quota_bytes is the most take() charges while anything is held. It
     /// must not be zero.
-    WriterExtents(std::uint64_t quota_bytes, memory::Pool& pool) noexcept;
+    WriterExtents(std::uint64_t quota_bytes,
+                  memory::detail::Pool& pool) noexcept;
     ~WriterExtents();
     WriterExtents(const WriterExtents&) = delete;
     WriterExtents& operator=(const WriterExtents&) = delete;
@@ -99,7 +103,7 @@ class WriterExtents {
         std::uint64_t epoch_;
         std::coroutine_handle<> parked_;
         coro::Executor* executor_ = nullptr;
-        coro::ParkNode* park_ = nullptr;
+        coro::detail::ParkNode* park_ = nullptr;
     };
 
     SpaceWait wait_release(std::uint64_t epoch) noexcept {
@@ -143,9 +147,9 @@ class WriterExtents {
     void wake(dstd::Vector<Waiter>& waiters) noexcept;
 
     mutable std::mutex mutex_;
-    memory::Reservation reservation_;
+    memory::detail::Reservation reservation_;
     dstd::Vector<Waiter> waiters_;
-    memory::Pool* pool_ = nullptr;
+    memory::detail::Pool* pool_ = nullptr;
     std::uint64_t quota_ = 0;
     std::uint64_t held_ = 0;
     std::uint64_t epoch_ = 0;

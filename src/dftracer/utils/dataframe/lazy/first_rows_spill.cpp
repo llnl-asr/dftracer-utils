@@ -646,8 +646,8 @@ class UniqueCursor : public Cursor {
     }
 
     // The arenas never leave the cursor, so they live in its Scratch pool.
-    memory::Pool& arena_pool() const {
-        return gov_.pool() ? *gov_.pool() : memory::current_pool();
+    memory::detail::Pool& arena_pool() const {
+        return gov_.pool() ? *gov_.pool() : memory::detail::current_pool();
     }
 
     std::uint64_t arena_bytes() const {

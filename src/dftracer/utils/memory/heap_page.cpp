@@ -20,7 +20,7 @@
 #include <limits>
 #include <new>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 thread_local AttribCache* t_page_attrib = nullptr;
 
@@ -1630,4 +1630,4 @@ std::size_t page_class_for(std::size_t size, std::size_t align) noexcept {
     return class_for(size, align);
 }
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail

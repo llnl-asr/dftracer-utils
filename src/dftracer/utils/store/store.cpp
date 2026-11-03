@@ -13,7 +13,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/fold.h>
 #include <dftracer/utils/store/open_count.h>
@@ -284,7 +284,7 @@ struct Store::State {
     /// Holds what the store keeps across queries, never the pool of the query
     /// that made the call. First, so it closes after every other member is
     /// gone.
-    memory::PoolHandle pool;
+    memory::detail::PoolHandle pool;
     dstd::Path dir;
     mutable std::mutex mutex;
     dstd::SharedPtr<Runtime> runtime;
@@ -361,14 +361,14 @@ struct Store::State {
 };
 
 Store::State::State(dstd::Path directory)
-    : pool(memory::Manager::get().root().child("store",
-                                               memory::PoolKind::Results)),
+    : pool(memory::detail::Manager::get().root().child(
+          "store", memory::detail::PoolKind::Results)),
       dir(std::move(directory)) {}
 
 Store::State::~State() {
     if (!pool) return;
     {
-        memory::Scope in_pool(*pool);
+        memory::detail::Scope in_pool(*pool);
         drop_published();
         (void)close_blocking();
     }
@@ -397,7 +397,7 @@ Store::State::get_or_open(dstd::StringView dir) {
     }
     // A state outlives the call that opened it, so it is not charged to that
     // call's pool.
-    memory::Scope general(memory::Manager::get().general());
+    memory::detail::Scope general(memory::detail::Manager::get().general());
     auto created = dstd::make_shared<State>(key);
     if (!created->pool) {
         return dstd::Unexpected<dstd::Error>(dstd::Error(
@@ -421,7 +421,7 @@ dstd::Expected<void, dstd::Error> Store::State::ensure_dir_locked() {
 
 dstd::Expected<dstd::SharedPtr<engine::Writer>, dstd::Error>
 Store::State::writer_for_use() {
-    memory::Scope in_pool(*pool);
+    memory::detail::Scope in_pool(*pool);
     std::lock_guard<std::mutex> lock(mutex);
     if (writer) return writer;
     auto made = ensure_dir_locked();
@@ -525,7 +525,7 @@ Store::State::snapshot() {
             return published;
         }
     }
-    memory::Scope in_pool(*pool);
+    memory::detail::Scope in_pool(*pool);
     std::lock_guard<std::mutex> lock(mutex);
     refresh_if_changed_locked();
     auto opened = snapshot_locked();
@@ -635,7 +635,7 @@ dstd::Expected<Store, dstd::Error> Store::open(dstd::StringView dir) {
 
 dstd::Expected<Namespace, dstd::Error> Store::ns(const NamespaceSpec& spec) {
     if (spec.name.empty()) return invalid_error();
-    memory::Scope in_pool(*state_->pool);
+    memory::detail::Scope in_pool(*state_->pool);
     std::lock_guard<std::mutex> lock(state_->mutex);
     for (const Namespace& known : state_->namespaces) {
         if (known.spec.name != spec.name) continue;
@@ -780,7 +780,7 @@ dstd::Expected<void, dstd::Error> Store::close_all() {
     }
     dstd::Expected<void, dstd::Error> first;
     for (const auto& state : live) {
-        memory::Scope in_pool(*state->pool);
+        memory::detail::Scope in_pool(*state->pool);
         state->drop_published();
         auto closed = state->close_blocking();
         if (!closed && first) first = std::move(closed);

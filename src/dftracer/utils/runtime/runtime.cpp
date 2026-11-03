@@ -10,7 +10,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
@@ -116,7 +116,8 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
     dstd::SharedFuture<void> future;
     dstd::SharedPtr<std::atomic<common::TaskIndex>> tid;
     {
-        memory::Scope bookkeeping_scope{memory::Manager::get().general()};
+        memory::detail::Scope bookkeeping_scope{
+            memory::detail::Manager::get().general()};
         if (name.empty()) {
             task_name = "task-" + dstd::to_string(task_name_counter_++);
         } else {
@@ -131,7 +132,7 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
                       dstd::SharedPtr<dstd::Promise<void>> p,
                       TaskExecutor* exec,
                       dstd::SharedPtr<std::atomic<common::TaskIndex>> task_id)
-        -> coro::Coro {
+        -> coro::detail::Coro {
         try {
             co_await std::move(t);
             t = coro::CoroTask<void>{
@@ -151,7 +152,7 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
     // Set the executor on the task's promise so awaitables (e.g. channels)
     // that capture `get_root_promise()->get_executor()` can schedule
     // resumption. Without this, awaiters end up with executor=nullptr because
-    // the wrapping `coro::Coro` doesn't extend PromiseBase and the
+    // the wrapping `coro::detail::Coro` doesn't extend PromiseBase and the
     // root-promise chain stops at the user's CoroTask.
     if (task.handle()) {
         task.handle().promise().set_executor(executor_.get());
@@ -161,7 +162,8 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
         executor_->enqueue_tracked(std::move(coro), task_name, tid);
 
     {
-        memory::Scope bookkeeping_scope{memory::Manager::get().general()};
+        memory::detail::Scope bookkeeping_scope{
+            memory::detail::Manager::get().general()};
         std::lock_guard<std::mutex> lock(futures_mutex_);
         cleanup_completed_futures();
         outstanding_futures_.push_back(future);

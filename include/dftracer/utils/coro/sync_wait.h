@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_CORO_SYNC_WAIT_H
 
 #include <dftracer/utils/common/exception_helpers.h>
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/run_on.h>
 #include <dftracer/utils/coro/task.h>
@@ -28,8 +28,9 @@ struct SyncWaitSlot<void> {};
 // The frame owns the promise. The waiter may free its stack as soon as the
 // future is ready, while set_value may still be running.
 template <class T>
-Coro sync_wait_child(CoroTask<T> task, SyncWaitSlot<T>& slot,
-                     std::exception_ptr& error, dstd::Promise<void> done) {
+detail::Coro sync_wait_child(CoroTask<T> task, SyncWaitSlot<T>& slot,
+                             std::exception_ptr& error,
+                             dstd::Promise<void> done) {
     try {
         if constexpr (std::is_void_v<T>) {
             co_await std::move(task);
@@ -64,7 +65,7 @@ T sync_wait(Executor& ex, CoroTask<T> task) {
     std::exception_ptr error;
     dstd::Promise<void> done;
     dstd::Future<void> finished = done.get_future();
-    Coro child =
+    detail::Coro child =
         detail::sync_wait_child(std::move(task), slot, error, std::move(done));
     child.handle().promise().executor = &ex;
     ex.post(child.release());

@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
@@ -847,9 +847,9 @@ TEST_CASE("a share that keeps nothing in memory gives the same output") {
 namespace {
 
 // The open pools of genesis groups and their parts.
-dstd::Vector<memory::PoolStats> genesis_pools() {
-    dstd::Vector<memory::PoolStats> out;
-    for (memory::PoolStats& p : memory::pool_stats())
+dstd::Vector<memory::detail::PoolStats> genesis_pools() {
+    dstd::Vector<memory::detail::PoolStats> out;
+    for (memory::detail::PoolStats& p : memory::detail::pool_stats())
         if (p.path.find("/genesis/") != dstd::String::npos)
             out.push_back(std::move(p));
     return out;
@@ -877,16 +877,16 @@ TEST_CASE("a tiny share spills on its group pools and closes them clean") {
         CHECK(tiny.spilled_bytes > 0);
         // The runs hold the group until they are written: its pool, the
         // calls and the state stay open, with nothing allocated in them.
-        const dstd::Vector<memory::PoolStats> open = genesis_pools();
+        const dstd::Vector<memory::detail::PoolStats> open = genesis_pools();
         CHECK(open.size() == 3);
-        for (const memory::PoolStats& p : open) {
+        for (const memory::detail::PoolStats& p : open) {
             CAPTURE(p.path);
             CHECK(p.live == 0);
         }
         CHECK(tiny.runs[0].lines() == big_lines);
     }
     CHECK(genesis_pools().empty());
-    CHECK_FALSE(memory::Manager::get().leaked());
+    CHECK_FALSE(memory::detail::Manager::get().leaked());
 }
 
 TEST_CASE("a group that must spill names the spill directory when it fails") {

@@ -20,7 +20,7 @@ Scope::~Scope() {
 void Scope::spawn(CoroTask<void> task) {
     if (!admit()) return;
     bind(task.handle().promise());
-    Coro child = run_child(std::move(task), this);
+    detail::Coro child = run_child(std::move(task), this);
     start(child);
 }
 
@@ -67,7 +67,7 @@ void Scope::fail(std::exception_ptr error) noexcept {
     request_stop();
 }
 
-void Scope::start(Coro& child) {
+void Scope::start(detail::Coro& child) {
     join_.track(child);
     spawned_.store(true, std::memory_order_release);
     child.handle().promise().executor = executor_;
@@ -85,7 +85,7 @@ void Scope::finish_join(bool self_join) {
     if (error_) common::rethrow_and_clear(error_);
 }
 
-Coro Scope::run_child(CoroTask<void> task, Scope* scope) {
+detail::Coro Scope::run_child(CoroTask<void> task, Scope* scope) {
     std::exception_ptr error;
     try {
         co_await std::move(task);

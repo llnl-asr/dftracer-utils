@@ -2,7 +2,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/sharded_mutex.h>
 #include <dftracer/utils/common/symbolize.h>
-#include <dftracer/utils/coro/monitor.h>
+#include <dftracer/utils/coro/detail/monitor.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -21,11 +21,9 @@
 #include <cstdlib>
 #include <cstring>
 
-namespace dftracer::utils::coro {
+namespace dftracer::utils::coro::detail {
 
-namespace detail {
 bool g_monitor_deep = false;
-}
 
 namespace {
 
@@ -354,4 +352,4 @@ void monitor_sync_complete(const void* handle) {
     t_current = parent;  // restore the awaiting coroutine as current
 }
 
-}  // namespace dftracer::utils::coro
+}  // namespace dftracer::utils::coro::detail

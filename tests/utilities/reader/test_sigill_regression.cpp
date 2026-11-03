@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/coro/frame.h>
+#include <dftracer/utils/coro/detail/frame.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
@@ -30,11 +30,11 @@ void dirty_frame_pool() {
     for (std::size_t size = 8; size <= 2048; size += 8) {
         dstd::Vector<void*> blocks;
         for (int i = 0; i < 16; ++i) {
-            void* p = memory::allocate(size, coro::FRAME_ALIGN);
+            void* p = memory::detail::allocate(size, coro::detail::FRAME_ALIGN);
             std::memset(p, 0xFF, size);
             blocks.push_back(p);
         }
-        for (void* p : blocks) memory::deallocate(p, size);
+        for (void* p : blocks) memory::detail::deallocate(p, size);
     }
 }
 

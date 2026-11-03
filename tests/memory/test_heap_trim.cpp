@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/memory/constants.h>
+#include <dftracer/utils/memory/detail/constants.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
@@ -32,6 +32,7 @@
 #include <memory/fresh_process.h>
 
 using namespace dftracer::utils::memory;
+using namespace dftracer::utils::memory::detail;
 
 namespace {
 
@@ -92,7 +93,7 @@ bool pages_intact(const void* p, std::size_t size, unsigned char tag) {
 }
 
 // Below LARGE_PURGE_SIZE, so a freed block stays cached until trim or decay.
-constexpr std::size_t LARGE_BLOCK = LARGE_PURGE_SIZE / 2;
+constexpr std::size_t LARGE_BLOCK = detail::LARGE_PURGE_SIZE / 2;
 constexpr std::size_t LARGE_COUNT = 64 * MIB / LARGE_BLOCK;
 constexpr std::size_t MEDIUM_BLOCK = MEDIUM_MAX;
 constexpr std::size_t SMALL_BLOCK = 1000;
@@ -162,7 +163,7 @@ TEST_CASE("reserved counts cached memory until it is purged") {
 
 TEST_CASE("cached run scenario" * doctest::skip()) {
     fresh_process::announce();
-    constexpr std::size_t RUN = LARGE_PURGE_SIZE / 2;
+    constexpr std::size_t RUN = detail::LARGE_PURGE_SIZE / 2;
     page_deallocate(page_allocate(1, 16), 1);
     page_trim(Mode::All);
     std::size_t base = reserved();

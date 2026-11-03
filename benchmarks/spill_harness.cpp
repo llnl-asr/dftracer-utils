@@ -58,7 +58,7 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -545,7 +545,7 @@ int run_one(dftracer::utils::dstd::StringView name, std::uint64_t budget) {
             " peak=%" PRIu64 " spilled=%" PRIu64 " ns=%.0f headroom=%zu\n",
             in.rows, out, base, peak, spilled,
             std::chrono::duration<double, std::nano>(end - start).count(),
-            dftracer::utils::memory::Manager::get().spill_headroom());
+            dftracer::utils::memory::detail::Manager::get().spill_headroom());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: %s\n", c->name.c_str(), e.what());
         return 1;
@@ -623,7 +623,7 @@ dftracer::utils::dstd::String budget_label(std::uint64_t budget) {
 int drive(const dftracer::utils::dstd::String& self) {
     dftracer::utils::dstd::Vector<Case> cases = make_cases();
     const std::size_t headroom =
-        dftracer::utils::memory::Manager::get().spill_headroom();
+        dftracer::utils::memory::detail::Manager::get().spill_headroom();
     std::printf(
         "spill_harness hw=%u budget=LazyFrame::memory_budget "
         "spilled=%s spill_headroom=%.1f MiB\n",

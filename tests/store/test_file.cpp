@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -1211,19 +1211,21 @@ TEST_SUITE("index store file") {
         const std::uint64_t record_offset = store::engine::FILE_HEADER_BYTES;
         const auto decode_with_tracked_peak =
             [](const dstd::Vector<std::uint8_t>& record) {
-                memory::PoolHandle pool =
-                    memory::Manager::get().general().child(
-                        "record_count_bound", memory::PoolKind::Scratch);
+                memory::detail::PoolHandle pool =
+                    memory::detail::Manager::get().general().child(
+                        "record_count_bound",
+                        memory::detail::PoolKind::Scratch);
                 REQUIRE(pool);
                 const memory::Config saved = memory::config();
                 memory::Config capped = saved;
-                const std::size_t live = memory::Manager::get().stats().live;
+                const std::size_t live =
+                    memory::detail::Manager::get().stats().live;
                 capped.hard_cap = live + (1U << 20U);
                 if (capped.hard_cap < live) capped.hard_cap = 0;
                 memory::configure(capped);
                 bool over_cap = false;
                 {
-                    memory::Scope scope(*pool);
+                    memory::detail::Scope scope(*pool);
                     try {
                         auto decoded =
                             store::engine::decode_record(view_of(record));

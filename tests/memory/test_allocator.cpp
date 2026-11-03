@@ -2,9 +2,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/asan.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/heap_page.h>
-#include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <no_core_dump.h>
@@ -22,6 +22,7 @@
 #include <vector>
 
 using namespace dftracer::utils::memory;
+using namespace dftracer::utils::memory::detail;
 
 namespace {
 

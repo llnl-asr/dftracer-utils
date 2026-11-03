@@ -4,8 +4,8 @@
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/pair.h>
-#include <dftracer/utils/memory/heap.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/extent_codec.h>
 #include <zdict.h>
@@ -39,14 +39,15 @@ dstd::Unexpected<dstd::Error> invalid_error() {
 ZSTD_customMem general_pool_mem() noexcept {
     return {[](void* pool, std::size_t size) -> void* {
                 try {
-                    return memory::allocate(size, alignof(std::max_align_t),
-                                            *static_cast<memory::Pool*>(pool));
+                    return memory::detail::allocate(
+                        size, alignof(std::max_align_t),
+                        *static_cast<memory::detail::Pool*>(pool));
                 } catch (...) {
                     return nullptr;
                 }
             },
-            [](void*, void* p) { memory::c_free(p); },
-            &memory::Manager::get().general()};
+            [](void*, void* p) { memory::detail::c_free(p); },
+            &memory::detail::Manager::get().general()};
 }
 
 struct CompressContext {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_CORO_PARKED_H
-#define DFTRACER_UTILS_CORO_PARKED_H
+#ifndef DFTRACER_UTILS_CORO_DETAIL_PARKED_H
+#define DFTRACER_UTILS_CORO_DETAIL_PARKED_H
 
 #include <atomic>
 #include <cstddef>
@@ -8,7 +8,7 @@
 #include <mutex>
 #include <new>
 
-namespace dftracer::utils::coro {
+namespace dftracer::utils::coro::detail {
 
 /// Wakes one parked waiter with a cancelled status. Called with a registry
 /// shard lock held, possibly concurrently with the awaitable's own wake path,
@@ -118,6 +118,6 @@ class ParkRegistry {
     Shard shards_[SHARDS];
 };
 
-}  // namespace dftracer::utils::coro
+}  // namespace dftracer::utils::coro::detail
 
-#endif  // DFTRACER_UTILS_CORO_PARKED_H
+#endif  // DFTRACER_UTILS_CORO_DETAIL_PARKED_H

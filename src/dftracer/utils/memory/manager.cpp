@@ -3,9 +3,9 @@
 #include <dftracer/utils/memory/attrib.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/memory/debug.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <dftracer/utils/memory/heap_system.h>
-#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/memory/os_map.h>
 #include <dftracer/utils/memory/pressure.h>
 #include <dftracer/utils/memory/settings.h>
@@ -30,7 +30,7 @@
 #endif
 #endif
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 namespace {
 
@@ -868,11 +868,7 @@ void ManagerAccess::apply(Manager& m, const Config& config) noexcept {
     mark_dirty(m);
 }
 
-void configure(const Config& config) noexcept {
-    ManagerAccess::apply(Manager::get(), config);
-}
-
-void Manager::trim(Mode mode) noexcept { dftracer::utils::memory::trim(mode); }
+void Manager::trim(Mode mode) noexcept { detail::trim(mode); }
 
 Reporter set_reporter(Reporter reporter) noexcept {
     return g_reporter.exchange(reporter, std::memory_order_acq_rel);
@@ -1814,6 +1810,14 @@ std::vector<ExternalStats> external_stats() {
                            e.reported.load(std::memory_order_relaxed)});
     }
     return out;
+}
+
+}  // namespace dftracer::utils::memory::detail
+
+namespace dftracer::utils::memory {
+
+void configure(const Config& config) noexcept {
+    detail::ManagerAccess::apply(detail::Manager::get(), config);
 }
 
 }  // namespace dftracer::utils::memory

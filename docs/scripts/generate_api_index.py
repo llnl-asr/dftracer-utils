@@ -37,7 +37,7 @@ ROOT_NS = "dftracer::utils"
 SKIP_SEGMENTS = {"detail", "internal", "impl"}
 
 # Skip items from these file paths
-SKIP_PATHS = ["/cpmsource/", "/third_party/", "/test/", "/tests/"]
+SKIP_PATHS = ["/cpmsource/", "/third_party/", "/test/", "/tests/", "/detail/"]
 
 # Only include items from files matching this
 INCLUDE_ROOT = "dftracer/utils"

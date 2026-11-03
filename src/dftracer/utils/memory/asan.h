@@ -17,7 +17,7 @@
 #include <sanitizer/lsan_interface.h>
 #endif
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 #ifdef DFTRACER_UTILS_MEMORY_ASAN
 
@@ -47,6 +47,6 @@ inline void asan_register_root(const void*, std::size_t) noexcept {}
 
 #endif
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail
 
 #endif  // DFTRACER_UTILS_MEMORY_ASAN_H

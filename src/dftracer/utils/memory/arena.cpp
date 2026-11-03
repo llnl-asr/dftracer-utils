@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/memory/arena.h>
 #include <dftracer/utils/memory/asan.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/heap_system.h>
 
 #include <limits>
@@ -11,18 +11,18 @@ namespace dftracer::utils::memory {
 
 namespace {
 
-PoolHandle open_pool(Pool& parent, std::string_view name) {
-    PoolHandle pool = parent.child(name, PoolKind::Scratch);
+detail::PoolHandle open_pool(detail::Pool& parent, std::string_view name) {
+    detail::PoolHandle pool = parent.child(name, detail::PoolKind::Scratch);
     if (!pool) throw std::bad_alloc();
     return pool;
 }
 
 }  // namespace
 
-Arena::Arena(Pool& parent, std::string_view name)
+Arena::Arena(detail::Pool& parent, std::string_view name)
     : pool_(open_pool(parent, name)), reservation_(pool_->reserve(0)) {}
 
-Arena::Arena(std::string_view name) : Arena(current_pool(), name) {}
+Arena::Arena(std::string_view name) : Arena(detail::current_pool(), name) {}
 
 Arena::~Arena() { release(); }
 
@@ -35,11 +35,11 @@ void* Arena::try_allocate(std::size_t n, std::size_t align) noexcept {
 }
 
 Arena::Chunk* Arena::new_chunk(std::size_t size) {
-    void* raw = memory::allocate(size, alignof(Chunk), *pool_);
+    void* raw = memory::detail::allocate(size, alignof(Chunk), *pool_);
     auto* chunk = ::new (raw) Chunk{chunks_, size};
     chunks_ = chunk;
     chunk_bytes_ += size;
-    asan_poison(chunk + 1, size - sizeof(Chunk));
+    detail::asan_poison(chunk + 1, size - sizeof(Chunk));
     return chunk;
 }
 
@@ -48,7 +48,8 @@ Arena::Chunk* Arena::new_chunk(std::size_t size) {
 // requests just above the chunk size would never reach a bigger chunk.
 void* Arena::allocate_chunk(std::size_t n, std::size_t align) {
     if (align == 0 || (align & (align - 1)) != 0) {
-        abort_with("dftracer-utils memory: alignment is not a power of two\n");
+        detail::abort_with(
+            "dftracer-utils memory: alignment is not a power of two\n");
     }
     std::size_t pad = align > alignof(Chunk) ? align - alignof(Chunk) : 0;
     if (n > std::numeric_limits<std::size_t>::max() - sizeof(Chunk) - pad) {
@@ -61,7 +62,7 @@ void* Arena::allocate_chunk(std::size_t n, std::size_t align) {
         ++grown_;
         auto start = reinterpret_cast<std::uintptr_t>(chunk + 1);
         std::uintptr_t p = (start + align - 1) & ~(align - 1);
-        asan_unpoison(reinterpret_cast<void*>(p), n);
+        detail::asan_unpoison(reinterpret_cast<void*>(p), n);
         return reinterpret_cast<void*>(p);
     }
     Chunk* chunk = new_chunk(next);
@@ -89,9 +90,9 @@ void Arena::reset() noexcept {
     while (c != nullptr) {
         Chunk* next = c->next;
         if (c != first_) {
-            asan_unpoison(c + 1, c->size - sizeof(Chunk));
+            detail::asan_unpoison(c + 1, c->size - sizeof(Chunk));
             chunk_bytes_ -= c->size;
-            memory::deallocate(c, c->size);
+            memory::detail::deallocate(c, c->size);
         }
         c = next;
     }
@@ -104,7 +105,7 @@ void Arena::reset() noexcept {
     }
     first_->next = nullptr;
     grown_ = 1;
-    asan_poison(first_ + 1, first_->size - sizeof(Chunk));
+    detail::asan_poison(first_ + 1, first_->size - sizeof(Chunk));
     cur_ = reinterpret_cast<std::uintptr_t>(first_ + 1);
     end_ = reinterpret_cast<std::uintptr_t>(first_) + first_->size;
 }
@@ -116,13 +117,13 @@ void Arena::release() noexcept {
     reservation_.release();
 }
 
-Status Arena::reserve(std::size_t bytes) noexcept {
+detail::Status Arena::reserve(std::size_t bytes) noexcept {
     if (bytes > std::numeric_limits<std::size_t>::max() - chunk_bytes_) {
-        return Status::OverBudget;
+        return detail::Status::OverBudget;
     }
     std::size_t target = chunk_bytes_ + bytes;
     std::size_t have = reservation_.bytes();
-    if (target <= have) return Status::Ok;
+    if (target <= have) return detail::Status::Ok;
     if (!reservation_) {
         reservation_ = pool_->reserve(target);
         return reservation_.status();

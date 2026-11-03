@@ -7,7 +7,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -58,6 +58,6 @@ TEST_SUITE("IndexFoldDriver") {
         rt.shutdown();
 
         REQUIRE(result.indexed == files.size());
-        CHECK_FALSE(memory::Manager::get().leaked());
+        CHECK_FALSE(memory::detail::Manager::get().leaked());
     }
 }

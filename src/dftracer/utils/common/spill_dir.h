@@ -29,9 +29,9 @@ dstd::Result<dstd::Path> spill_dir();
 bool spill_dir_in_memory(dstd::CStringView dir);
 
 /// Live bytes of spill files, added to the process-wide @ref
-/// memory::ExternalSlot named "spill" and taken back on destruction. They count
-/// toward the memory budget only when `in_memory` (see spill_dir_in_memory()).
-/// add() is thread safe and takes no lock.
+/// memory::detail::ExternalSlot named "spill" and taken back on destruction.
+/// They count toward the memory budget only when `in_memory` (see
+/// spill_dir_in_memory()). add() is thread safe and takes no lock.
 class SpillCharge {
    public:
     explicit SpillCharge(bool in_memory) noexcept : in_memory_(in_memory) {}

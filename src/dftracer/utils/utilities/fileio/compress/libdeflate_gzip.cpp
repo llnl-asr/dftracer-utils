@@ -3,7 +3,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <libdeflate.h>
@@ -23,8 +23,8 @@ namespace {
 libdeflate_options tracked_options() {
     libdeflate_options options{};
     options.sizeof_options = sizeof(options);
-    options.malloc_func = dftracer::utils::memory::c_malloc;
-    options.free_func = dftracer::utils::memory::c_free;
+    options.malloc_func = dftracer::utils::memory::detail::c_malloc;
+    options.free_func = dftracer::utils::memory::detail::c_free;
     return options;
 }
 

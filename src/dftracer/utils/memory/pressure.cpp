@@ -10,7 +10,7 @@
 #include <mach/mach.h>
 #endif
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 #ifdef __linux__
 
@@ -208,4 +208,4 @@ std::size_t read_process_limit() noexcept { return 0; }
 
 #endif
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail

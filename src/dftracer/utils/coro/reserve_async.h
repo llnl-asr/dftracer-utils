@@ -2,13 +2,13 @@
 #ifndef DFTRACER_UTILS_CORO_RESERVE_ASYNC_H
 #define DFTRACER_UTILS_CORO_RESERVE_ASYNC_H
 
+#include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/coro/parked.h>
 #include <dftracer/utils/coro/timer_service.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/memory/allocator.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <chrono>
@@ -29,7 +29,7 @@ struct ReserveWaitState {
     std::coroutine_handle<> handle;
     Executor* executor = nullptr;
     TimerService* timers = nullptr;
-    memory::ReserveWait* node = nullptr;
+    memory::detail::ReserveWait* node = nullptr;
     std::atomic<TimerService::TimerId> timer{0};
     // Set once the node is listed. Before that, a shutdown cancel is skipped
     // and the next round finds the waiter.
@@ -84,9 +84,10 @@ struct ReserveWaitState {
 class ReserveAsync {
    public:
     using Clock = std::chrono::steady_clock;
-    using Result = dstd::Expected<memory::Reservation, memory::Status>;
+    using Result =
+        dstd::Expected<memory::detail::Reservation, memory::detail::Status>;
 
-    ReserveAsync(memory::Pool& pool, std::size_t bytes,
+    ReserveAsync(memory::detail::Pool& pool, std::size_t bytes,
                  Clock::time_point deadline) noexcept
         : pool_(&pool), bytes_(bytes), deadline_(deadline) {}
     ReserveAsync(ReserveAsync&&) noexcept = default;
@@ -118,9 +119,9 @@ class ReserveAsync {
         // On the general pool: the timer can keep it past the task's pool.
         auto state = std::allocate_shared<detail::ReserveWaitState>(
             memory::PoolAllocator<detail::ReserveWaitState>(
-                memory::Manager::get().general()),
+                memory::detail::Manager::get().general()),
             h, exec);
-        state->node = memory::ReserveWait::create(
+        state->node = memory::detail::ReserveWait::create(
             *pool_, bytes_, &detail::ReserveWaitState::on_grant, state.get());
         if (state->node == nullptr) return false;
         state_ = state;
@@ -129,8 +130,8 @@ class ReserveAsync {
         if (exec) park_ = exec->park(this, &ReserveAsync::cancel_thunk);
         // From the push on, a grant may resume the frame on another thread,
         // so only the local `state` is touched below.
-        memory::Status pushed = state->node->push();
-        if (pushed != memory::Status::Pending) {
+        memory::detail::Status pushed = state->node->push();
+        if (pushed != memory::detail::Status::Pending) {
             state->self.reset();
             if (park_) exec->unpark(park_);
             park_ = nullptr;
@@ -156,7 +157,7 @@ class ReserveAsync {
             park_ = nullptr;
             throw;
         }
-        if (state->node->state() != memory::WaitState::Waiting) {
+        if (state->node->state() != memory::detail::WaitState::Waiting) {
             state->cancel_timer();
         }
         return true;
@@ -180,22 +181,22 @@ class ReserveAsync {
         if (reserved_) return std::move(reserved_);
         if (!state_) return dstd::Unexpected(reserved_.status());
         state_->cancel_timer();
-        memory::Reservation granted = state_->node->take();
+        memory::detail::Reservation granted = state_->node->take();
         if (granted) return granted;
         return dstd::Unexpected(
             state_->cancelled.load(std::memory_order_acquire)
-                ? memory::Status::Cancelled
-                : memory::Status::OverBudget);
+                ? memory::detail::Status::Cancelled
+                : memory::detail::Status::OverBudget);
     }
 
    private:
     dstd::SharedPtr<detail::ReserveWaitState> state_;
     Executor* park_executor_ = nullptr;
-    ParkNode* park_ = nullptr;
-    memory::Pool* pool_;
+    detail::ParkNode* park_ = nullptr;
+    memory::detail::Pool* pool_;
     std::size_t bytes_;
     Clock::time_point deadline_;
-    memory::Reservation reserved_;
+    memory::detail::Reservation reserved_;
 };
 
 /**
@@ -204,7 +205,7 @@ class ReserveAsync {
  * on the releasing thread. Does not wait off an executor or past the deadline.
  * The pool must stay open until the reservation is released.
  */
-inline ReserveAsync reserve_async(memory::Pool& pool, std::size_t bytes,
+inline ReserveAsync reserve_async(memory::detail::Pool& pool, std::size_t bytes,
                                   ReserveAsync::Clock::time_point deadline) {
     return ReserveAsync(pool, bytes, deadline);
 }

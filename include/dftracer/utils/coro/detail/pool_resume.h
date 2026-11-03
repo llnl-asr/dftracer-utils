@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_CORO_POOL_RESUME_H
-#define DFTRACER_UTILS_CORO_POOL_RESUME_H
+#ifndef DFTRACER_UTILS_CORO_DETAIL_POOL_RESUME_H
+#define DFTRACER_UTILS_CORO_DETAIL_POOL_RESUME_H
 
 #include <dftracer/utils/common/intern_table.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <coroutine>
 #include <type_traits>
@@ -14,7 +14,7 @@ namespace dftracer::utils::coro::detail {
 /// when it was created. The frame holds a reference to the table, taken only
 /// when there is one, so the common case costs no atomic.
 struct RunContext {
-    memory::TaskTag tag{memory::current_task()};
+    memory::detail::TaskTag tag{memory::detail::current_task()};
 
     RunContext() noexcept {
         if (auto* table = intern()) table->add_ref();
@@ -29,7 +29,7 @@ struct RunContext {
         return static_cast<common::InternTable*>(tag.user);
     }
 
-    void enter() const noexcept { memory::enter_task(tag); }
+    void enter() const noexcept { memory::detail::enter_task(tag); }
 };
 
 struct EnterPoolOnStart {
@@ -97,4 +97,4 @@ InPool<U&&> in_pool(U&& awaitable, const RunContext& context) noexcept {
 
 }  // namespace dftracer::utils::coro::detail
 
-#endif  // DFTRACER_UTILS_CORO_POOL_RESUME_H
+#endif  // DFTRACER_UTILS_CORO_DETAIL_POOL_RESUME_H

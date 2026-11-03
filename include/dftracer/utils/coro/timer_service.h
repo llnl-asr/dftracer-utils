@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/queue.h>
 #include <dftracer/utils/dstd/thread.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <chrono>
@@ -123,7 +123,7 @@ class TimerService {
         TimerId id = next_id_.fetch_add(1, std::memory_order_relaxed);
 
         // On the general pool: the timer keeps these past the caller's pool.
-        memory::Scope scope{memory::Manager::get().general()};
+        memory::detail::Scope scope{memory::detail::Manager::get().general()};
         auto cancel_token = dstd::make_shared<std::atomic<bool>>(false);
         {
             std::lock_guard<std::mutex> lock(tokens_mutex_);

@@ -3,7 +3,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/settings.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
@@ -39,11 +39,11 @@ TEST_CASE("child: hold a block and exit" * doctest::skip()) {
     fresh_process::announce();
     REQUIRE(common::configure_memory_from_env());
     constexpr std::size_t BYTES = 64 * MIB;
-    auto* block = static_cast<char*>(memory::allocate(BYTES, 64));
+    auto* block = static_cast<char*>(memory::detail::allocate(BYTES, 64));
     REQUIRE(block != nullptr);
     for (std::size_t i = 0; i < BYTES; i += 4096) block[i] = 1;
-    CHECK(memory::Manager::get().stats().live >= BYTES);
-    memory::deallocate(block, BYTES);
+    CHECK(memory::detail::Manager::get().stats().live >= BYTES);
+    memory::detail::deallocate(block, BYTES);
 }
 
 TEST_CASE("the report shows a peak at least as large as a block held") {
@@ -62,7 +62,7 @@ TEST_CASE("the report shows a peak at least as large as a block held") {
     unsigned long long heap_peak = 0;
     REQUIRE(std::sscanf(result.output.c_str() + at, " heap_peak=%llu",
                         &heap_peak) == 1);
-    if (memory::active_backend() == memory::Backend::PageHeap) {
+    if (memory::detail::active_backend() == memory::Backend::PageHeap) {
         CHECK(heap_peak >= 64 * MIB);
     }
 }

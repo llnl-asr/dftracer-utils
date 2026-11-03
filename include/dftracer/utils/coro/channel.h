@@ -3,9 +3,9 @@
 #define DFTRACER_UTILS_CORO_CHANNEL_H
 
 #include <dftracer/utils/coro/cancelled.h>
+#include <dftracer/utils/coro/detail/parked.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/coro/parked.h>
-#include <dftracer/utils/coro/resumption_helper.h>
 #include <dftracer/utils/dstd/concurrent_queue.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -135,7 +135,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         ReceiveWaiterNode waiter_{};
         bool suspended_{false};
         bool cancelled_{false};
-        ParkNode* park_{nullptr};
+        detail::ParkNode* park_{nullptr};
 
        public:
         explicit ReceiveAwaitable(Channel* channel) : channel_(channel) {}
@@ -196,10 +196,10 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                           }) {
                 auto* root = h.promise().get_root_promise();
                 if (root) root->awaiting_async_ = true;
-                waiter_.executor =
-                    resume_executor_for(root ? root->get_executor() : nullptr);
+                waiter_.executor = detail::resume_executor_for(
+                    root ? root->get_executor() : nullptr);
             } else {
-                waiter_.executor = resume_executor_for(nullptr);
+                waiter_.executor = detail::resume_executor_for(nullptr);
             }
 
             T item;
@@ -262,7 +262,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             }
 
             if (sender_handle) {
-                post_resumption(sender_executor, sender_handle);
+                detail::post_resumption(sender_executor, sender_handle);
                 if (!consumed) {
                     result_ = dstd::nullopt;
                 }
@@ -321,7 +321,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                     return;
                 cancelled_ = true;
             }
-            post_resumption(waiter_.executor, waiter_.handle);
+            detail::post_resumption(waiter_.executor, waiter_.handle);
         }
 
         ~ReceiveAwaitable() {
@@ -345,7 +345,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         SendWaiterNode waiter_{};
         bool suspended_{false};
         bool cancelled_{false};
-        ParkNode* park_{nullptr};
+        detail::ParkNode* park_{nullptr};
 
        public:
         SendAwaitable(Channel* channel, const T& item)
@@ -386,10 +386,10 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                           }) {
                 auto* root = h.promise().get_root_promise();
                 if (root) root->awaiting_async_ = true;
-                waiter_.executor =
-                    resume_executor_for(root ? root->get_executor() : nullptr);
+                waiter_.executor = detail::resume_executor_for(
+                    root ? root->get_executor() : nullptr);
             } else {
-                waiter_.executor = resume_executor_for(nullptr);
+                waiter_.executor = detail::resume_executor_for(nullptr);
             }
 
             std::coroutine_handle<> receive_handle;
@@ -473,7 +473,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             }
 
             if (receive_handle) {
-                post_resumption(receive_executor, receive_handle);
+                detail::post_resumption(receive_executor, receive_handle);
             } else if (notify_readable) {
                 channel_->cv_readable_.notify_one();
             }
@@ -503,7 +503,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                     return;
                 cancelled_ = true;
             }
-            post_resumption(waiter_.executor, waiter_.handle);
+            detail::post_resumption(waiter_.executor, waiter_.handle);
         }
 
         ~SendAwaitable() {
@@ -677,7 +677,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             }
 
             if (handle) {
-                post_resumption(executor, handle);
+                detail::post_resumption(executor, handle);
             }
         }
     }
@@ -701,7 +701,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             }
 
             if (handle) {
-                post_resumption(executor, handle);
+                detail::post_resumption(executor, handle);
             }
         }
     }
@@ -766,13 +766,13 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
 
         if (receiver_handle) {
-            post_resumption(receiver_executor, receiver_handle);
+            detail::post_resumption(receiver_executor, receiver_handle);
         } else if (notify_readable) {
             cv_readable_.notify_one();
         }
 
         if (sender_handle) {
-            post_resumption(sender_executor, sender_handle);
+            detail::post_resumption(sender_executor, sender_handle);
         }
 
         return true;
@@ -988,7 +988,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         active_sends_.fetch_sub(1, std::memory_order_acq_rel);
 
         if (resume_handle) {
-            post_resumption(resume_executor, resume_handle);
+            detail::post_resumption(resume_executor, resume_handle);
         } else if (enqueued) {
             cv_readable_.notify_one();
         }

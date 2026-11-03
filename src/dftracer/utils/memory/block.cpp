@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/memory/attrib.h>
 #include <dftracer/utils/memory/block.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 
 #include <cassert>
 #include <cstdlib>
@@ -35,7 +35,7 @@ BlockRef Block::allocate(std::size_t bytes, std::size_t align) {
     std::size_t total = system_bytes(head, bytes);
     auto* base = static_cast<std::uint8_t*>(std::aligned_alloc(head, total));
     if (base == nullptr) throw std::bad_alloc();
-    AttribCache& cache = attrib_local();
+    detail::AttribCache& cache = detail::attrib_local();
     attrib_charge_any(cache, total);
     auto* b =
         ::new (base) Block(base + head, bytes, nullptr, nullptr, Kind::Owned);
@@ -46,7 +46,7 @@ BlockRef Block::allocate(std::size_t bytes, std::size_t align) {
 BlockRef Block::borrow(void* data, std::size_t bytes, Release release,
                        void* context) {
     assert(release != nullptr);
-    void* p = memory::allocate(sizeof(Block), alignof(Block));
+    void* p = memory::detail::allocate(sizeof(Block), alignof(Block));
     return BlockRef(::new (p) Block(static_cast<std::uint8_t*>(data), bytes,
                                     release, context, Kind::Borrowed));
 }
@@ -59,13 +59,13 @@ void Block::destroy() noexcept {
         std::size_t total = system_bytes(head, size_);
         this->~Block();
         std::free(base);
-        attrib_credit_any(attrib_local(), pool, total);
+        attrib_credit_any(detail::attrib_local(), pool, total);
         return;
     }
     Release release_fn = release_;
     void* context = context_;
     this->~Block();
-    memory::deallocate(this, sizeof(Block));
+    memory::detail::deallocate(this, sizeof(Block));
     release_fn(context);
 }
 

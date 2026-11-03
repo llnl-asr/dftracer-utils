@@ -5,7 +5,7 @@
 #include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/io_fault.h>
 #include <unistd.h>
@@ -94,7 +94,7 @@ struct Committer::WaitForWork {
     // A timer can hold the state after the writer's pool closed, so it is
     // charged to the general pool.
     dstd::SharedPtr<WakeState> state = [] {
-        memory::Scope general(memory::Manager::get().general());
+        memory::detail::Scope general(memory::detail::Manager::get().general());
         return dstd::make_shared<WakeState>();
     }();
 
@@ -140,7 +140,7 @@ struct Committer::WaitForWork {
 struct Committer::StopWait {
     Committer& committer;
     coro::Executor* executor = nullptr;
-    coro::ParkNode* park = nullptr;
+    coro::detail::ParkNode* park = nullptr;
 
     bool await_ready() const {
         std::lock_guard<std::mutex> lock(committer.queue_mutex_);
@@ -205,13 +205,13 @@ void Committer::start() {
         if (started_) return;
         started_ = true;
     }
-    coro::Coro loop = run();
+    coro::detail::Coro loop = run();
     auto handle = loop.release();
     handle.promise().executor = &executor_;
     handle.resume();
 }
 
-coro::Coro Committer::run() {
+coro::detail::Coro Committer::run() {
     for (;;) {
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);

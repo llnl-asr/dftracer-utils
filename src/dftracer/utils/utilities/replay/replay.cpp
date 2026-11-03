@@ -2,8 +2,8 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/coro/resumption_helper.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
@@ -54,7 +54,7 @@ dstd::StringView intern_sv(dstd::StringView sv) {
 constexpr std::chrono::microseconds TIMER_WAIT_MIN{1000};
 
 coro::CoroTask<void> wait_for(std::chrono::microseconds wait) {
-    coro::Executor* executor = coro::resume_executor_for(nullptr);
+    coro::Executor* executor = coro::detail::resume_executor_for(nullptr);
     if (wait < TIMER_WAIT_MIN || executor == nullptr) {
         std::this_thread::sleep_for(wait);
         co_return;
@@ -159,7 +159,7 @@ coro::CoroTask<void> ReplayEngine::run_pipelined(
     ReplayResult& result, std::size_t channel_capacity) {
     admitted_.store(0, std::memory_order_relaxed);
     dstd::Vector<Lane> lanes(files.size());
-    coro::Executor* executor = coro::resume_executor_for(nullptr);
+    coro::Executor* executor = coro::detail::resume_executor_for(nullptr);
     const std::size_t threads =
         executor != nullptr ? executor->concurrency() : 1;
     const std::size_t workers =

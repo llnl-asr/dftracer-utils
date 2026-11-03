@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_MEMORY_CONSTANTS_H
-#define DFTRACER_UTILS_MEMORY_CONSTANTS_H
+#ifndef DFTRACER_UTILS_MEMORY_DETAIL_CONSTANTS_H
+#define DFTRACER_UTILS_MEMORY_DETAIL_CONSTANTS_H
 
 #include <cstdint>
 
-namespace dftracer::utils::memory::constants {
+namespace dftracer::utils::memory::detail::constants {
 /// "page_heap" or "system", read once before the first allocation. When unset
 /// or empty, the CMake option DFTRACER_UTILS_MEMORY_BACKEND decides, and the
 /// sanitizer presets set system. Any other value aborts at the first
@@ -61,6 +61,6 @@ inline constexpr int EXIT_CHECK_STATUS = 70;
 
 /// Milliseconds between two reads of the process memory counters.
 inline constexpr std::uint64_t PRESSURE_SAMPLE_MS = 200;
-}  // namespace dftracer::utils::memory::constants
+}  // namespace dftracer::utils::memory::detail::constants
 
-#endif  // DFTRACER_UTILS_MEMORY_CONSTANTS_H
+#endif  // DFTRACER_UTILS_MEMORY_DETAIL_CONSTANTS_H

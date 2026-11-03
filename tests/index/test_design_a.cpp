@@ -14,7 +14,7 @@
 #include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/build/parse_gate.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
@@ -117,7 +117,7 @@ Peak peak_of_build(const dstd::Vector<dstd::String>& files,
     std::atomic<std::size_t> peak{0};
     dstd::Thread sampler([&] {
         while (!done.load(std::memory_order_relaxed)) {
-            const auto live = memory::Manager::get().stats().live;
+            const auto live = memory::detail::Manager::get().stats().live;
             auto seen = peak.load(std::memory_order_relaxed);
             while (live > seen && !peak.compare_exchange_weak(
                                       seen, live, std::memory_order_relaxed)) {
@@ -125,7 +125,7 @@ Peak peak_of_build(const dstd::Vector<dstd::String>& files,
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     });
-    const auto base = memory::Manager::get().stats().live;
+    const auto base = memory::detail::Manager::get().stats().live;
     const auto result = build_with(files, index_dir, workers, budget);
     done.store(true);
     sampler.join();
@@ -197,7 +197,7 @@ TEST_SUITE("DesignA") {
         gate.file_in();
         REQUIRE(gate.spare_workers());
         std::size_t pieces = 0;
-        memory::Reservation unused;
+        memory::detail::Reservation unused;
         gate.take_slot();
         ++pieces;
         while (gate.try_slot() && gate.try_piece(0, unused)) ++pieces;

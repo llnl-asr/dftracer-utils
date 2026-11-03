@@ -3,10 +3,10 @@
 #define DFTRACER_UTILS_CORO_ASYNC_MUTEX_H
 
 #include <dftracer/utils/coro/cancelled.h>
+#include <dftracer/utils/coro/detail/parked.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/coro/parked.h>
-#include <dftracer/utils/coro/resumption_helper.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <cassert>
@@ -137,7 +137,7 @@ class AsyncMutexLockOperation {
     [[gnu::noinline]] bool queue(std::coroutine_handle<> awaiter) noexcept {
         std::uint32_t s;
         awaiter_ = awaiter;
-        executor_ = resume_executor_for(nullptr);
+        executor_ = detail::resume_executor_for(nullptr);
         bool acquired = false;
         {
             std::lock_guard<std::mutex> lock(mutex_.queue_mutex_);
@@ -191,7 +191,7 @@ class AsyncMutexLockOperation {
             mutex_.remove_locked(this);
             park_->cancelled = true;
         }
-        post_resumption(executor_, awaiter_);
+        detail::post_resumption(executor_, awaiter_);
     }
 
    private:
@@ -202,7 +202,7 @@ class AsyncMutexLockOperation {
     AsyncMutexLockOperation* next_ = nullptr;
     Executor* executor_ = nullptr;
     std::coroutine_handle<> awaiter_;
-    ParkNode* park_ = nullptr;
+    detail::ParkNode* park_ = nullptr;
     bool queued_ = false;
 };
 
@@ -271,7 +271,7 @@ void AsyncMutex::unlock_contended() {
     // The waiter may belong to a RunLoop on another thread, which only that
     // thread can drive.
     if (next->executor_ != nullptr && next->executor_ != Executor::current()) {
-        post_resumption(next->executor_, next->awaiter_);
+        detail::post_resumption(next->executor_, next->awaiter_);
         return;
     }
     // `next` is off the queue, so its links are free to chain the hand-offs.
@@ -286,7 +286,7 @@ void AsyncMutex::unlock_contended() {
         return;
     }
     handing_off_ = true;
-    memory::Scope scope{memory::Manager::get().general()};
+    memory::detail::Scope scope{memory::detail::Manager::get().general()};
     for (;;) {
         // Read the handle first: resuming may end the waiter's frame, which
         // holds `next`.

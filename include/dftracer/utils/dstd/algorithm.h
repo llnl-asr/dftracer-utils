@@ -13,8 +13,8 @@
 namespace dftracer::utils::dstd {
 
 /// Sorts [first, last) and keeps the order of equal elements, as
-/// std::stable_sort does. Its merge buffer comes from memory::allocate, where
-/// std::stable_sort takes one from operator new.
+/// std::stable_sort does. Its merge buffer comes from memory::detail::allocate,
+/// where std::stable_sort takes one from operator new.
 template <class It, class Compare = std::less<>>
 void stable_sort(It first, It last, Compare comp = {}) {
     using T = typename std::iterator_traits<It>::value_type;

@@ -8,13 +8,14 @@
 namespace dftracer::utils::store::engine {
 
 WriterExtents::WriterExtents(std::uint64_t quota_bytes,
-                             memory::Pool& pool) noexcept
+                             memory::detail::Pool& pool) noexcept
     : pool_(&pool), quota_(quota_bytes) {}
 
 WriterExtents::~WriterExtents() { reservation_.release(); }
 
 bool WriterExtents::grow(std::uint64_t bytes) noexcept {
-    if (reservation_) return reservation_.try_grow(bytes) == memory::Status::Ok;
+    if (reservation_)
+        return reservation_.try_grow(bytes) == memory::detail::Status::Ok;
     reservation_ = pool_->try_reserve(bytes);
     return static_cast<bool>(reservation_);
 }
@@ -52,7 +53,7 @@ WriterExtents::Take WriterExtents::take(std::uint64_t bytes) {
 
 void WriterExtents::release(std::uint64_t bytes) noexcept {
     dstd::Vector<Waiter> waiters;
-    memory::Reservation freed;
+    memory::detail::Reservation freed;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (bytes > held_) {

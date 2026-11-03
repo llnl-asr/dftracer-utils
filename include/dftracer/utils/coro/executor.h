@@ -12,8 +12,10 @@
 
 namespace dftracer::utils::coro {
 
+namespace detail {
 struct ParkNode;
 using ParkCancelFn = void (*)(void*) noexcept;
+}  // namespace detail
 
 /// Executor - where coroutines get resumed.
 ///
@@ -47,14 +49,15 @@ class Executor {
     virtual bool runs_remote_wakeups() const noexcept { return true; }
 
     /// Registers a waiter suspended on an awaitable that only another party can
-    /// finish, so shutdown can cancel it (see ParkCancelFn). Register once the
+    /// finish, so shutdown can cancel it. Register once the
     /// waiter is queued and before its lock is released, and unpark() the
     /// returned entry from await_resume. The default returns null and the
     /// waiter is never cancelled.
-    virtual ParkNode* park(void* /*waiter*/, ParkCancelFn) noexcept {
+    virtual detail::ParkNode* park(void* /*waiter*/,
+                                   detail::ParkCancelFn) noexcept {
         return nullptr;
     }
-    virtual void unpark(ParkNode*) noexcept {}
+    virtual void unpark(detail::ParkNode*) noexcept {}
 
     /// Timers this executor runs, or null to use @ref process_timers, the
     /// process-wide one.

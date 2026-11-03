@@ -22,7 +22,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/trace/schema.h>
@@ -198,7 +198,7 @@ dstd::Unexpected<GroupError> fail_from(const dstd::Error& e) {
 struct GroupMem {
     GroupMem(std::uint64_t share_bytes, dstd::StringView name)
         : share(share_bytes),
-          pool(memory::current_pool().child(name)),
+          pool(memory::detail::current_pool().child(name)),
           calls(part(pool, "calls", share_bytes / 4)),
           state(part(pool, "state", share_bytes / 4)),
           sort_budget(share_bytes / 4) {}
@@ -208,9 +208,9 @@ struct GroupMem {
 
     std::uint64_t share;
     // Declared first, so it closes after its children.
-    memory::PoolHandle pool;
-    memory::PoolHandle calls;
-    memory::PoolHandle state;
+    memory::detail::PoolHandle pool;
+    memory::detail::PoolHandle calls;
+    memory::detail::PoolHandle state;
     std::uint64_t sort_budget;
     const BorrowFn* borrow = nullptr;
 
@@ -254,11 +254,13 @@ struct GroupMem {
 
    private:
     // A limit of zero means none, so a zero part still gets one byte.
-    static memory::PoolHandle part(const memory::PoolHandle& group,
-                                   dstd::StringView name, std::uint64_t bytes) {
+    static memory::detail::PoolHandle part(
+        const memory::detail::PoolHandle& group, dstd::StringView name,
+        std::uint64_t bytes) {
         if (!group) return {};
-        return group->child(name, memory::PoolKind::Scratch,
-                            memory::Limits{std::max<std::uint64_t>(bytes, 1)});
+        return group->child(
+            name, memory::detail::PoolKind::Scratch,
+            memory::detail::Limits{std::max<std::uint64_t>(bytes, 1)});
     }
 
     std::mutex mu_;
@@ -278,12 +280,13 @@ class Charge {
         used_ += n;
         if (used_ <= res_.bytes()) return {};
         const std::uint64_t need = used_ - res_.bytes();
-        if (res_.try_grow(std::max(need, CHARGE_STEP)) == memory::Status::Ok ||
-            res_.try_grow(need) == memory::Status::Ok)
+        if (res_.try_grow(std::max(need, CHARGE_STEP)) ==
+                memory::detail::Status::Ok ||
+            res_.try_grow(need) == memory::detail::Status::Ok)
             return {};
         // Another task may take the borrowed bytes first; then ask again.
         for (int tries = 0; tries < 4 && mem_->borrow_state(need); ++tries)
-            if (res_.try_grow(need) == memory::Status::Ok) return {};
+            if (res_.try_grow(need) == memory::detail::Status::Ok) return {};
         return mem_->over_budget(what);
     }
 
@@ -297,7 +300,7 @@ class Charge {
 
    private:
     GroupMem* mem_;
-    memory::Reservation res_;
+    memory::detail::Reservation res_;
     std::uint64_t used_ = 0;
 };
 
@@ -518,7 +521,7 @@ class GroupReader {
    public:
     struct Chunk {
         dstd::Vector<Call> mem;
-        memory::Reservation res;
+        memory::detail::Reservation res;
         std::uint64_t offset = 0;
         std::uint64_t count = 0;
         bool spilled = false;

@@ -3,7 +3,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 
@@ -16,7 +16,7 @@ using namespace dftracer::utils::utilities;
 namespace {
 
 std::size_t root_live() {
-    for (const memory::PoolStats& p : memory::pool_stats())
+    for (const memory::detail::PoolStats& p : memory::detail::pool_stats())
         if (p.path == "root") return p.live;
     return 0;
 }

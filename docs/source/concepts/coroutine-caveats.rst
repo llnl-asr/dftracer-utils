@@ -211,9 +211,8 @@ that span suspend points, bookkeeping). The Heap Allocation eLision Optimization
 wrapper code. Treat a coroutine call as an allocation in hot paths, which is
 another reason the code prefers a few larger coroutines over many tiny ones.
 
-Frames of ``CoroTask``, ``Coro``, ``AsyncGenerator`` and the ``when_all``
-wrapper come from the page heap, through ``memory::allocate`` and
-``memory::deallocate_retained``. A frame is counted in the memory pool that is
+Frames of ``CoroTask``, ``AsyncGenerator`` and the ``when_all`` wrapper come
+from the page heap. A frame is counted in the memory pool that is
 current at the call that creates the coroutine, the task's pool, and goes
 back to that pool when the frame is destroyed. A frame is freed, not recycled,
 so AddressSanitizer and Valgrind see a use of a destroyed frame.

@@ -21,9 +21,9 @@ inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";
 inline constexpr const char* SPILL_COMPRESS_ENV =
     "DFTRACER_UTILS_SPILL_COMPRESS";
 
-/// Repeated in memory/constants.h. A test keeps the two equal. The backend,
-/// decay, debug and exit check are read by the memory library before its first
-/// allocation. Byte values take a number or a unit such as "512MB".
+/// Repeated in memory/detail/constants.h. A test keeps the two equal. The
+/// backend, decay, debug and exit check are read by the memory library before
+/// its first allocation. Byte values take a number or a unit such as "512MB".
 namespace memory_settings {
 inline constexpr const char* MEMORY_BACKEND_ENV =
     "DFTRACER_UTILS_MEMORY_BACKEND";

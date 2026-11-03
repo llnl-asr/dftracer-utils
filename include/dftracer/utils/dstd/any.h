@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DSTD_ANY_H
 #define DFTRACER_UTILS_DSTD_ANY_H
 
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 
 #include <any>
 #include <cstddef>
@@ -17,8 +17,9 @@ namespace dftracer::utils::dstd {
  * @brief A std::any of 32 bytes with a 24-byte inline buffer.
  *
  * A nothrow move constructible value that fits the buffer stays inline. Any
- * other is placed by memory::allocate. The value must be copy constructible. A
- * moved-from Any is empty. A failed any_cast throws std::bad_any_cast.
+ * other is placed by memory::detail::allocate. The value must be copy
+ * constructible. A moved-from Any is empty. A failed any_cast throws
+ * std::bad_any_cast.
  */
 class Any {
    public:
@@ -75,12 +76,12 @@ class Any {
             ops_ = &INLINE_OPS<U>;
             return *p;
         } else {
-            void* raw = memory::allocate(sizeof(U), alignof(U));
+            void* raw = memory::detail::allocate(sizeof(U), alignof(U));
             U* p;
             try {
                 p = ::new (raw) U(std::forward<Args>(args)...);
             } catch (...) {
-                memory::deallocate(raw, sizeof(U));
+                memory::detail::deallocate(raw, sizeof(U));
                 throw;
             }
             ::new (static_cast<void*>(buffer_)) void*(raw);
@@ -159,11 +160,11 @@ class Any {
     static constexpr Ops HEAP_OPS{
         [](void* dst, const void* src) {
             const T& from = *static_cast<const T*>(heap_slot(src));
-            void* raw = memory::allocate(sizeof(T), alignof(T));
+            void* raw = memory::detail::allocate(sizeof(T), alignof(T));
             try {
                 ::new (raw) T(from);
             } catch (...) {
-                memory::deallocate(raw, sizeof(T));
+                memory::detail::deallocate(raw, sizeof(T));
                 throw;
             }
             ::new (dst) void*(raw);
@@ -174,7 +175,7 @@ class Any {
         [](void* s) noexcept {
             T* target = static_cast<T*>(heap_slot(s));
             target->~T();
-            memory::deallocate(target, sizeof(T));
+            memory::detail::deallocate(target, sizeof(T));
         },
         &type_of<T>};
 

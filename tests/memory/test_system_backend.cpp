@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/heap_system.h>
-#include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
@@ -12,6 +12,7 @@
 #include <vector>
 
 using namespace dftracer::utils::memory;
+using namespace dftracer::utils::memory::detail;
 
 namespace {
 
@@ -66,16 +67,17 @@ TEST_CASE("the header holds the size, the scope pool id and the offset") {
             CAPTURE(align);
             CAPTURE(size);
             void* p = allocate(size, align);
-            const SystemHeader* h = system_header(p);
+            const detail::SystemHeader* h = detail::system_header(p);
             CHECK(h->size == size);
             CHECK(h->pool_id == GENERAL);
-            std::size_t offset =
-                align > SYSTEM_HEADER_SIZE ? align : SYSTEM_HEADER_SIZE;
+            std::size_t offset = align > detail::SYSTEM_HEADER_SIZE
+                                     ? align
+                                     : detail::SYSTEM_HEADER_SIZE;
             CHECK(h->offset == offset);
             auto base = reinterpret_cast<std::uintptr_t>(p) - h->offset;
             CHECK(base % offset == 0);
             if (size > 0) std::memset(p, 0, size);
-            CHECK(system_header(p)->size == size);
+            CHECK(detail::system_header(p)->size == size);
             deallocate(p, size);
 
             void* scoped;
@@ -83,7 +85,7 @@ TEST_CASE("the header holds the size, the scope pool id and the offset") {
                 Scope scope{*pool};
                 scoped = allocate(size, align);
             }
-            CHECK(system_header(scoped)->pool_id == pool->id());
+            CHECK(detail::system_header(scoped)->pool_id == pool->id());
             deallocate(scoped, size);
         }
     }

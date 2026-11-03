@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/tasks/task_result.h>
 
 #include <cassert>
@@ -46,7 +46,8 @@ void TaskResult::publish(State s) {
     }
     cv_.notify_all();
     // Resume coroutine continuations OUTSIDE the lock.
-    memory::Scope scope{memory::Manager::get().general(), nullptr};
+    memory::detail::Scope scope{memory::detail::Manager::get().general(),
+                                nullptr};
     for (auto h : to_resume) {
         if (h && !h.done()) {
             h.resume();

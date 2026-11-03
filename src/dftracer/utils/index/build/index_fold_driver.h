@@ -23,7 +23,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/memory/allocator.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/trace/parse_inflated.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -69,14 +69,14 @@ inline std::atomic<std::uint64_t> g_intern_order_digest{0};
 /// thread ends its chunk and keeps its capacity. Idle buffers are reclaimable
 /// and are freed at the next take() or give() to cover a posted request. Growth
 /// while a chunk decodes is charged to the decoding thread's scope.
-class FoldBufferPool final : public memory::Reclaimer {
+class FoldBufferPool final : public memory::detail::Reclaimer {
    public:
     using EventBuffer = trace::views::detail::FoldEventBuffer;
 
     FoldBufferPool()
-        : pool_(memory::current_pool().child("fold buffers")),
-          free_(memory::PoolAllocator<Idle>(pool_ ? *pool_
-                                                  : memory::current_pool())) {
+        : pool_(memory::detail::current_pool().child("fold buffers")),
+          free_(memory::PoolAllocator<Idle>(
+              pool_ ? *pool_ : memory::detail::current_pool())) {
         if (pool_) slot_ = pool_->attach(*this);
     }
     FoldBufferPool(const FoldBufferPool&) = delete;
@@ -87,7 +87,7 @@ class FoldBufferPool final : public memory::Reclaimer {
         answer_request();
         if (free_.empty()) {
             if (!pool_) return dstd::make_unique<EventBuffer>();
-            memory::Scope scope{*pool_};
+            memory::detail::Scope scope{*pool_};
             return dstd::make_unique<EventBuffer>();
         }
         Idle idle = std::move(free_.back());
@@ -137,9 +137,9 @@ class FoldBufferPool final : public memory::Reclaimer {
 
     // Declared first, so the pool closes after the slot detaches and the idle
     // buffers free.
-    memory::PoolHandle pool_;
+    memory::detail::PoolHandle pool_;
     dstd::PoolVector<Idle> free_;
-    memory::ReclaimSlot slot_;
+    memory::detail::ReclaimSlot slot_;
     mutable std::mutex mu_;
     std::uint64_t idle_bytes_ = 0;
 };
@@ -341,7 +341,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         // The strings of a piece parsed ahead, interned here with ids of their
         // own, and given the file's ids in piece order when the folds see it.
         dstd::UniquePtr<dftracer::utils::dstd::StringIntern> local;
-        memory::Reservation held;
+        memory::detail::Reservation held;
         ParseGate* extra = nullptr;
         std::atomic<std::size_t>* alive = nullptr;
     };
@@ -349,7 +349,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // `inline_` parses on the thread that cut the piece, since no worker is
     // free.
     struct Admit {
-        memory::Reservation mem;
+        memory::detail::Reservation mem;
         bool extra = false;
         bool inline_ = true;
     };
@@ -480,7 +480,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     }
 
     static void probe_live() {
-        const std::uint64_t live = memory::Manager::get().stats().live;
+        const std::uint64_t live = memory::detail::Manager::get().stats().live;
         std::uint64_t peak = g_parse_peak_live.load();
         while (live > peak &&
                !g_parse_peak_live.compare_exchange_weak(peak, live)) {

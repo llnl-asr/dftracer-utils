@@ -5,7 +5,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -18,10 +18,10 @@ namespace dftracer::utils::dataframe {
 // query run's pool, a Reservation following the resident state and a
 // ReclaimSlot for requests. The cursor spills on its own thread when check()
 // returns true. Inactive (every call a no-op) when the pool table is full.
-class Governor final : public memory::Reclaimer {
+class Governor final : public memory::detail::Reclaimer {
    public:
     explicit Governor(dstd::StringView name) {
-        pool_ = memory::current_pool().child(name);
+        pool_ = memory::detail::current_pool().child(name);
         if (!pool_) return;
         reservation_ = pool_->reserve(0);
         slot_ = pool_->attach(*this);
@@ -52,8 +52,9 @@ class Governor final : public memory::Reclaimer {
             // Grow a quarter ahead, so a reservation that tracks a growing
             // state reserves once per quarter, not once per morsel.
             const std::uint64_t ahead = resident + resident / 4 - held;
-            if (reservation_.grow(ahead) != memory::Status::Ok &&
-                reservation_.grow(resident - held) != memory::Status::Ok) {
+            if (reservation_.grow(ahead) != memory::detail::Status::Ok &&
+                reservation_.grow(resident - held) !=
+                    memory::detail::Status::Ok) {
                 denied_at_ = resident;
                 // The failed grows posted part of their shortfall to this
                 // slot. The spill the caller makes now answers it.
@@ -78,7 +79,7 @@ class Governor final : public memory::Reclaimer {
     std::uint64_t reserved() const noexcept { return reservation_.bytes(); }
     /// The Scratch pool, for state that never leaves the cursor. Null when
     /// the pool table was full.
-    memory::Pool* pool() const noexcept { return pool_.get(); }
+    memory::detail::Pool* pool() const noexcept { return pool_.get(); }
 
     // Nothing calls reclaim(), as the cursor spills from check() on its own
     // thread.
@@ -86,9 +87,9 @@ class Governor final : public memory::Reclaimer {
     std::size_t reclaim(std::size_t) override { return 0; }
 
    private:
-    memory::PoolHandle pool_;
-    memory::Reservation reservation_;
-    memory::ReclaimSlot slot_;
+    memory::detail::PoolHandle pool_;
+    memory::detail::Reservation reservation_;
+    memory::detail::ReclaimSlot slot_;
     // The resident size whose grow was refused, zero when none was.
     std::uint64_t denied_at_ = 0;
 };

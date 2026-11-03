@@ -12,7 +12,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <doctest/doctest.h>
 #include <mmix_lcg.h>
 #include <trace/aggregators/aggregation_oracle.h>
@@ -861,15 +861,16 @@ TEST_SUITE("AggPartial") {
             AggPartial warm;
             update_partial(warm, Acc(small[0]), cfg);
         }
-        REQUIRE(dftracer::utils::memory::debug_allocation_count() > 0);
+        REQUIRE(dftracer::utils::memory::detail::debug_allocation_count() > 0);
 
         auto count_for = [&](const dstd::Vector<Ev>& evs) {
             const auto before =
-                dftracer::utils::memory::debug_allocation_count();
+                dftracer::utils::memory::detail::debug_allocation_count();
             AggPartial p;
             for (const Ev& e : evs) update_partial(p, Acc(e), cfg);
             REQUIRE(p.count == evs.size());
-            return dftracer::utils::memory::debug_allocation_count() - before;
+            return dftracer::utils::memory::detail::debug_allocation_count() -
+                   before;
         };
         const auto n_small = count_for(small);
         const auto n_large = count_for(large);

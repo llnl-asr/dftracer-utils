@@ -2,8 +2,8 @@
 #ifndef DFTRACER_UTILS_CORO_RUN_LOOP_H
 #define DFTRACER_UTILS_CORO_RUN_LOOP_H
 
+#include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/coro/parked.h>
 #include <dftracer/utils/coro/timer_service.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/function_ref.h>
@@ -62,10 +62,11 @@ class RunLoop final : public Executor {
         return &timer_service_;
     }
 
-    ParkNode* park(void* waiter, ParkCancelFn cancel) noexcept override {
+    detail::ParkNode* park(void* waiter,
+                           detail::ParkCancelFn cancel) noexcept override {
         return parked_.park(waiter, cancel);
     }
-    void unpark(ParkNode* n) noexcept override { parked_.unpark(n); }
+    void unpark(detail::ParkNode* n) noexcept override { parked_.unpark(n); }
 
    private:
     bool run_one();
@@ -73,7 +74,7 @@ class RunLoop final : public Executor {
 
     std::mutex mutex_;
     std::condition_variable ready_cv_;
-    ParkRegistry parked_;
+    detail::ParkRegistry parked_;
     dstd::Deque<std::coroutine_handle<>> ready_;
     TimerService timer_service_;
 };

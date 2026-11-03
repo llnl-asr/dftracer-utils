@@ -2,7 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -36,7 +36,7 @@ constexpr const dstd::ErrorCodeInfo& error_info(TestError code) noexcept {
     return TEST_ERROR_INFOS[0];
 }
 
-memory::Pool& root() { return memory::Manager::get().root(); }
+memory::detail::Pool& root() { return memory::detail::Manager::get().root(); }
 
 }  // namespace
 
@@ -62,9 +62,9 @@ TEST_CASE("Error carries domain code condition and name") {
 }
 
 TEST_CASE("a message is the only allocation and copies share it") {
-    memory::PoolHandle pool = root().child("error_message");
+    memory::detail::PoolHandle pool = root().child("error_message");
     REQUIRE(pool);
-    memory::Scope scope{*pool};
+    memory::detail::Scope scope{*pool};
     const std::size_t base = root().live();
     {
         const dstd::Error plain{TestError::Parse};
@@ -86,9 +86,9 @@ TEST_CASE("a message is the only allocation and copies share it") {
 }
 
 TEST_CASE("copy assignment drops the old message and shares the new one") {
-    memory::PoolHandle pool = root().child("error_assign");
+    memory::detail::PoolHandle pool = root().child("error_assign");
     REQUIRE(pool);
-    memory::Scope scope{*pool};
+    memory::detail::Scope scope{*pool};
     const std::size_t base = root().live();
     {
         dstd::Error target{TestError::Parse, "old text"};

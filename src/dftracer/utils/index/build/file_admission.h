@@ -10,7 +10,7 @@
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/build/parse_gate.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <algorithm>
 #include <atomic>
@@ -62,7 +62,7 @@ class FileAdmission {
         }
 
         FileAdmission* owner_ = nullptr;
-        memory::Reservation res_;
+        memory::detail::Reservation res_;
         std::uint64_t elastic_ = memory::NO_SPILL_BUDGET;
     };
 
@@ -145,7 +145,7 @@ class FileAdmission {
         auto got = co_await coro::reserve_async(
             *pool_, want, std::chrono::steady_clock::time_point::max());
         if (!got) {
-            if (got.error() == memory::Status::Cancelled)
+            if (got.error() == memory::detail::Status::Cancelled)
                 coro::throw_cancelled("file admission cancelled");
             throw common::DFTUtilsException(
                 common::ErrorCode::MemoryBudgetExceeded,
@@ -185,23 +185,23 @@ class FileAdmission {
    private:
     static constexpr std::size_t MAX_INFLATE_WAYS = 16;
 
-    memory::Pool* open(std::uint64_t budget, std::uint64_t sink_bytes) {
+    memory::detail::Pool* open(std::uint64_t budget, std::uint64_t sink_bytes) {
         if (budget == memory::NO_SPILL_BUDGET) return nullptr;
         const std::uint64_t kept =
             sink_bytes +
             budget / common::constants::file_admission::UNTRACKED_DIVISOR;
         const std::uint64_t pool_bytes =
             std::min<std::uint64_t>(budget > kept ? budget - kept : budget,
-                                    memory::Manager::get().budget());
+                                    memory::detail::Manager::get().budget());
         pool_cap_ = pool_bytes;
         hold_cap_ = std::max<std::uint64_t>(
             pool_bytes -
                 pool_bytes /
                     common::constants::file_admission::PIECE_ROOM_DIVISOR,
             1);
-        handle_ = memory::current_pool().child(
-            "index files", memory::PoolKind::Scratch,
-            memory::Limits{static_cast<std::size_t>(pool_bytes)});
+        handle_ = memory::detail::current_pool().child(
+            "index files", memory::detail::PoolKind::Scratch,
+            memory::detail::Limits{static_cast<std::size_t>(pool_bytes)});
         if (!handle_)
             throw common::DFTUtilsException(
                 common::ErrorCode::MemoryBudgetExceeded,
@@ -225,8 +225,8 @@ class FileAdmission {
         in_flight_.fetch_sub(1, std::memory_order_relaxed);
     }
 
-    memory::PoolHandle handle_;
-    memory::Pool* pool_ = nullptr;
+    memory::detail::PoolHandle handle_;
+    memory::detail::Pool* pool_ = nullptr;
     std::uint64_t pool_cap_ = 0;
     std::uint64_t hold_cap_ = 0;
     std::size_t workers_;

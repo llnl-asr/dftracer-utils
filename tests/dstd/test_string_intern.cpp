@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -24,8 +24,8 @@ TEST_SUITE("StringIntern") {
     TEST_CASE("StringIntern - a table of a few strings costs a few KB") {
         // A build makes one table per file, so a fixed cost per table grows
         // with the file count.
-        memory::PoolHandle pool =
-            memory::Manager::get().general().child("intern size");
+        memory::detail::PoolHandle pool =
+            memory::detail::Manager::get().general().child("intern size");
         {
             dstd::StringIntern intern(pool.get());
             for (int i = 0; i < 100; ++i)

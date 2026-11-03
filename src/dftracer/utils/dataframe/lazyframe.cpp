@@ -2011,8 +2011,8 @@ class IsDupCursor : public Cursor {
     static constexpr std::uint64_t COUNT_ENTRY_BYTES =
         sizeof(Counts::value_type) + sizeof(Counts::bucket_type);
 
-    memory::Pool& counts_pool() const {
-        return gov_.pool() ? *gov_.pool() : memory::current_pool();
+    memory::detail::Pool& counts_pool() const {
+        return gov_.pool() ? *gov_.pool() : memory::detail::current_pool();
     }
 
     // Declared first, so its pool closes after the counts free.
@@ -5264,7 +5264,7 @@ namespace {
 struct CursorChain {
     // The query run's Results pool, when the chain is a run. Declared first so
     // it closes after every cursor.
-    memory::PoolHandle pool;
+    memory::detail::PoolHandle pool;
     // Declared before the cursor so it outlives the cursor built over it.
     dstd::SharedPtr<const Source> source;
     dstd::UniquePtr<Cursor> cursor;
@@ -5440,9 +5440,10 @@ coro::AsyncGenerator<DataFrame> stream_plan(PlanParts plan,
     // coroutine the driver makes. It has no limit, as the plan's budget stays
     // with the fraction triggers and the governor answers to the process
     // budget.
-    memory::PoolHandle pool =
-        memory::Manager::get().root().child("query", memory::PoolKind::Results);
-    memory::Scope scope{pool ? *pool : memory::current_pool()};
+    memory::detail::PoolHandle pool =
+        memory::detail::Manager::get().root().child(
+            "query", memory::detail::PoolKind::Results);
+    memory::detail::Scope scope{pool ? *pool : memory::detail::current_pool()};
     CursorChain chain =
         lower_cursor_chain(std::move(plan.source), plan.ops, budget);
     chain.pool = std::move(pool);

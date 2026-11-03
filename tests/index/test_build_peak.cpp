@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/open_extent.h>
 #include <doctest/doctest.h>
@@ -49,7 +49,7 @@ std::size_t peak_live(const dstd::Vector<dstd::String>& files,
     std::atomic<std::size_t> peak{0};
     dstd::Thread sampler([&] {
         while (!done.load(std::memory_order_relaxed)) {
-            const auto live = memory::Manager::get().stats().live;
+            const auto live = memory::detail::Manager::get().stats().live;
             auto seen = peak.load(std::memory_order_relaxed);
             while (live > seen && !peak.compare_exchange_weak(
                                       seen, live, std::memory_order_relaxed)) {
@@ -57,7 +57,7 @@ std::size_t peak_live(const dstd::Vector<dstd::String>& files,
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     });
-    const auto base = memory::Manager::get().stats().live;
+    const auto base = memory::detail::Manager::get().stats().live;
     index::build::IndexBuildBatchResult result;
     {
         Runtime rt(1);

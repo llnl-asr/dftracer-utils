@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_MEMORY_ALLOCATOR_H
 #define DFTRACER_UTILS_MEMORY_ALLOCATOR_H
 
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 
 #include <cstddef>
 #include <limits>
@@ -34,11 +34,11 @@ class Allocator {
         if (n > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
             throw std::bad_array_new_length();
         }
-        return static_cast<T*>(memory::allocate(n * sizeof(T), alignof(T)));
+        return static_cast<T*>(detail::allocate(n * sizeof(T), alignof(T)));
     }
 
     void deallocate(T* p, std::size_t n) noexcept {
-        memory::deallocate(p, n * sizeof(T));
+        detail::deallocate(p, n * sizeof(T));
     }
 };
 
@@ -65,27 +65,27 @@ class PoolAllocator {
     using propagate_on_container_swap = std::true_type;
     using is_always_equal = std::false_type;
 
-    explicit PoolAllocator(Pool& pool) noexcept : pool_(&pool) {}
+    explicit PoolAllocator(detail::Pool& pool) noexcept : pool_(&pool) {}
     template <class U>
     constexpr PoolAllocator(const PoolAllocator<U>& other) noexcept
         : pool_(&other.pool()) {}
 
-    Pool& pool() const noexcept { return *pool_; }
+    detail::Pool& pool() const noexcept { return *pool_; }
 
     [[nodiscard]] T* allocate(std::size_t n) {
         if (n > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
             throw std::bad_array_new_length();
         }
         return static_cast<T*>(
-            memory::allocate(n * sizeof(T), alignof(T), *pool_));
+            detail::allocate(n * sizeof(T), alignof(T), *pool_));
     }
 
     void deallocate(T* p, std::size_t n) noexcept {
-        memory::deallocate(p, n * sizeof(T));
+        detail::deallocate(p, n * sizeof(T));
     }
 
    private:
-    Pool* pool_;
+    detail::Pool* pool_;
 };
 
 template <class T, class U>

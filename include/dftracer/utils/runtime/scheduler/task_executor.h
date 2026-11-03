@@ -4,7 +4,7 @@
 
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/typedefs.h>
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -197,7 +197,7 @@ class TaskExecutor : public coro::Executor {
         dstd::SharedPtr<std::any> input,  // keep std: as the Task API wants
         TaskOwner* owner, common::TaskIndex parent_task_id = -1) = 0;
     virtual common::TaskIndex enqueue_tracked(
-        coro::Coro coro, dstd::StringView name,
+        coro::detail::Coro coro, dstd::StringView name,
         dstd::SharedPtr<std::atomic<common::TaskIndex>> tid_out = nullptr) = 0;
 
     /// Task the calling worker is running, -1 when not on a worker thread.

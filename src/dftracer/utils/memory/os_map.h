@@ -11,7 +11,7 @@
 #include <unistd.h>
 #endif
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 #if defined(__SANITIZE_THREAD__)
 #define DFTRACER_UTILS_MEMORY_TSAN 1
@@ -50,6 +50,6 @@ inline int os_madvise(void* addr, std::size_t len, int advice) noexcept {
 }
 #endif
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail
 
 #endif  // DFTRACER_UTILS_MEMORY_OS_MAP_H

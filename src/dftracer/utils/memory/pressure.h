@@ -4,7 +4,7 @@
 
 #include <cstddef>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 /// Anonymous plus shared memory of this process in bytes: RssAnon and
 /// RssShmem of /proc/self/status on Linux, `phys_footprint` on macOS. Zero
@@ -20,6 +20,6 @@ std::size_t read_limit_memory() noexcept;
 /// has one. Zero when there is none, always on macOS.
 std::size_t read_process_limit() noexcept;
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail
 
 #endif  // DFTRACER_UTILS_MEMORY_PRESSURE_H

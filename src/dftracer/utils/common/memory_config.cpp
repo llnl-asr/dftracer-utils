@@ -61,7 +61,7 @@ dstd::Result<void> configure_memory_from_env() {
         }
         memory::configure(*config);
         auto report = Env::get<int>(constants::memory_settings::REPORT_ENV);
-        memory::set_exit_report(
+        memory::detail::set_exit_report(
             report ? *report != 0 : constants::memory_settings::DEFAULT_REPORT);
     });
     return first;

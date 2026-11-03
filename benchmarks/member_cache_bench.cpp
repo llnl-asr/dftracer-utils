@@ -15,7 +15,7 @@
 
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/async_once.h>
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/hash_map.h>

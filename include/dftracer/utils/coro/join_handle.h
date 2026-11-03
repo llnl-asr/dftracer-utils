@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_CORO_JOIN_HANDLE_H
 #define DFTRACER_UTILS_CORO_JOIN_HANDLE_H
 
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 
 #include <atomic>
 #include <coroutine>
@@ -43,7 +43,7 @@ class JoinHandle {
 
     /// Register a Coro with this join group.
     /// Must be called BEFORE the coroutine is enqueued for execution.
-    void track(Coro& c) {
+    void track(detail::Coro& c) {
         pending_.fetch_add(1, std::memory_order_relaxed);
         auto& p = c.handle().promise();
         p.join_counter = &pending_;

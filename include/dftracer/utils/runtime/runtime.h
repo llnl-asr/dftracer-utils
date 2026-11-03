@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_RUNTIME_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
@@ -13,7 +13,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/task_handle.h>
 
@@ -266,7 +266,8 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task,
     dstd::SharedFuture<void> void_future;
     dstd::SharedPtr<std::atomic<common::TaskIndex>> tid;
     {
-        memory::Scope bookkeeping_scope{memory::Manager::get().general()};
+        memory::detail::Scope bookkeeping_scope{
+            memory::detail::Manager::get().general()};
         if (name.empty()) {
             task_name = "task-" + dstd::to_string(task_name_counter_++);
         } else {
@@ -285,7 +286,7 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task,
                       dstd::SharedPtr<dstd::Promise<void>> vp,
                       TaskExecutor* exec,
                       dstd::SharedPtr<std::atomic<common::TaskIndex>> task_id)
-        -> coro::Coro {
+        -> coro::detail::Coro {
         try {
             T val = co_await std::move(t);
             t = coro::CoroTask<T>{std::coroutine_handle<
@@ -307,7 +308,7 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task,
     // Set the executor on the task's promise so awaitables (e.g. channels)
     // that capture `get_root_promise()->get_executor()` can schedule
     // resumption. Without this, awaiters end up with executor=nullptr because
-    // the wrapping `coro::Coro` doesn't extend PromiseBase and the
+    // the wrapping `coro::detail::Coro` doesn't extend PromiseBase and the
     // root-promise chain stops at the user's CoroTask.
     if (task.handle()) {
         task.handle().promise().set_executor(executor_.get());
@@ -318,7 +319,8 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task,
         executor_->enqueue_tracked(std::move(coro), task_name, tid);
 
     {
-        memory::Scope bookkeeping_scope{memory::Manager::get().general()};
+        memory::detail::Scope bookkeeping_scope{
+            memory::detail::Manager::get().general()};
         std::lock_guard<std::mutex> lock(futures_mutex_);
         cleanup_completed_futures();
         outstanding_futures_.push_back(void_future);

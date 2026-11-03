@@ -18,8 +18,8 @@ template <class T>
 // keep std: defines dstd::Future
 using SharedFuture = std::shared_future<T>;
 
-/// A std::promise whose shared state comes from memory::allocate, so the
-/// state counts in the memory budget.
+/// A std::promise whose shared state comes from memory::detail::allocate, so
+/// the state counts in the memory budget.
 template <class T>
 // keep std: defines dstd::Future
 class Promise : public std::promise<T> {

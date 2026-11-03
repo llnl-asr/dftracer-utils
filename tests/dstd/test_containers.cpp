@@ -11,7 +11,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
@@ -28,7 +28,7 @@ using namespace std::string_view_literals;
 
 namespace {
 
-memory::Pool& root() { return memory::Manager::get().root(); }
+memory::detail::Pool& root() { return memory::detail::Manager::get().root(); }
 
 // The longest string libc++ and libstdc++ both keep in the object.
 constexpr std::size_t SHORT_STRING = 15;
@@ -108,8 +108,8 @@ TEST_CASE("Vector copies, moves and grows like std::vector") {
 
 // keep std: test name and size check against the std twin
 TEST_CASE("String behaves as std::string and keeps the small buffer") {
-    memory::PoolHandle pool = root().child("strings");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("strings");
+    memory::detail::Scope s{*pool};
     {
         dstd::String small(SHORT_STRING, 'x');
         dstd::String copy = small;
@@ -290,8 +290,8 @@ TEST_CASE("Deque grows at both ends like std::deque") {
 }
 
 TEST_CASE("UniquePtr destroys and frees its object") {
-    memory::PoolHandle pool = root().child("unique");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("unique");
+    memory::detail::Scope s{*pool};
     {
         dstd::UniquePtr<Counted> p = dstd::make_unique<Counted>(7);
         CHECK(p->value == 7);
@@ -314,8 +314,8 @@ TEST_CASE("UniquePtr destroys and frees its object") {
 }
 
 TEST_CASE("SharedPtr shares one object and frees it with the last owner") {
-    memory::PoolHandle pool = root().child("shared");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("shared");
+    memory::detail::Scope s{*pool};
     {
         dstd::SharedPtr<Counted> a = dstd::make_shared<Counted>(5);
         CHECK(pool->blocks() == 1);
@@ -334,9 +334,9 @@ TEST_CASE("SharedPtr shares one object and frees it with the last owner") {
 }
 
 TEST_CASE("every container charges the scope pool and frees to zero") {
-    memory::PoolHandle pool = root().child("containers");
+    memory::detail::PoolHandle pool = root().child("containers");
     {
-        memory::Scope s{*pool};
+        memory::detail::Scope s{*pool};
         dstd::Vector<int> v(1000, 1);
         dstd::String text(1000, 'z');
         dstd::HashMap<dstd::String, int> hm;
@@ -353,7 +353,7 @@ TEST_CASE("every container charges the scope pool and frees to zero") {
         auto sp = dstd::make_shared<int>(2);
         CHECK(pool->live() >= 1000 * sizeof(int) + 1000);
         CHECK(pool->blocks() >= 9);
-        CHECK(memory::current_pool().id() == pool->id());
+        CHECK(memory::detail::current_pool().id() == pool->id());
     }
     CHECK(pool->live() == 0);
     CHECK(pool->blocks() == 0);

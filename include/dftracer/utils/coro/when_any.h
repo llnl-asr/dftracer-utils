@@ -5,11 +5,11 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/cancelled.h>
-#include <dftracer/utils/coro/completion_state.h>
-#include <dftracer/utils/coro/coro.h>
-#include <dftracer/utils/coro/resumption_helper.h>
+#include <dftracer/utils/coro/detail/completion_state.h>
+#include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <chrono>
@@ -126,14 +126,14 @@ struct WhenAnySharedState;
 // ============================================================================
 
 template <typename Awaitable>
-struct WhenAnySharedState : WhenAnyCompletionState {
+struct WhenAnySharedState : detail::WhenAnyCompletionState {
     std::atomic<bool> completed{false};
     WhenAnyResult<typename Awaitable::result_type> result;
     std::exception_ptr exception;
     dstd::Vector<dstd::SharedPtr<std::atomic<bool>>> cancellation_tokens;
     bool cancelled_winner = false;
     dstd::Vector<Awaitable> awaitables;
-    ChildClaims claims;
+    detail::ChildClaims claims;
 
     explicit WhenAnySharedState(dstd::Vector<Awaitable> aws)
         : awaitables(std::move(aws)) {
@@ -256,7 +256,8 @@ class WhenAnyAwaitable {
     void launch_wrapper() {
         // Fire-and-forget wrapper. It takes children until none is left or one
         // suspends it, then the launcher starts another wrapper.
-        auto wrapper = [](dstd::SharedPtr<SharedState> state) -> coro::Coro {
+        auto wrapper =
+            [](dstd::SharedPtr<SharedState> state) -> coro::detail::Coro {
             for (;;) {
                 const std::size_t index = state->claims.claim();
                 // Not awaitables.size(): the awaiter clears the vector after
@@ -453,7 +454,7 @@ struct WhenAnyTupleResult {
 };
 
 template <typename... Awaitables>
-struct WhenAnyTupleState : WhenAnyCompletionState {
+struct WhenAnyTupleState : detail::WhenAnyCompletionState {
     static constexpr std::size_t total_ = sizeof...(Awaitables);
 
     dstd::Optional<dstd::Tuple<Awaitables...>> awaitables_;
@@ -557,7 +558,7 @@ class WhenAnyTupleAwaitable {
     template <std::size_t I>
     void launch_one() {
         using A = std::tuple_element_t<I, dstd::Tuple<Awaitables...>>;
-        auto wrapper = [](dstd::SharedPtr<State> state) -> coro::Coro {
+        auto wrapper = [](dstd::SharedPtr<State> state) -> coro::detail::Coro {
             if (state->completed.load(std::memory_order_acquire) &&
                 detail::never_started(std::get<I>(*state->awaitables_))) {
                 state->on_wrapper_finished();
@@ -695,7 +696,7 @@ class TimeoutAwaitable {
         TimerService* timers = nullptr;
         std::atomic<TimerService::TimerId> timer{0};
         Outcome outcome = Outcome::Pending;
-        ParkNode* park = nullptr;
+        detail::ParkNode* park = nullptr;
 
         void cancel() noexcept {
             if (latch.on_cancelled()) {
@@ -761,7 +762,7 @@ class TimeoutAwaitable {
 
         State& st = *state_;
         st.handle = h;
-        st.executor = resume_executor_for(nullptr);
+        st.executor = detail::resume_executor_for(nullptr);
         st.timers = timers;
         if (st.executor) {
             st.park = st.executor->park(&st, &State::cancel_thunk);

@@ -7,7 +7,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -359,17 +359,18 @@ TEST_CASE("a gzip header with FHCRC and optional fields is accepted") {
 }
 
 TEST_CASE("compression state is charged to the calling pool") {
-    memory::PoolHandle pool = memory::Manager::get().root().child("codecs");
+    memory::detail::PoolHandle pool =
+        memory::detail::Manager::get().root().child("codecs");
     REQUIRE(pool);
     {
-        memory::Scope scope{*pool};
+        memory::detail::Scope scope{*pool};
         fileio::compress::GzipStreamInflater inf;
         REQUIRE(inf.init(31));
         CHECK(pool->live() > 0);
     }
     CHECK(pool->live() == 0);
     {
-        memory::Scope scope{*pool};
+        memory::detail::Scope scope{*pool};
         fileio::compress::GzipMemberDecompressor decompressor;
         CHECK(pool->live() > 0);
     }

@@ -17,7 +17,7 @@ namespace dftracer::utils::dstd {
 
 /**
  * @brief A thread on pthread_create whose start block comes from
- * memory::allocate, so it counts in the memory budget.
+ * memory::detail::allocate, so it counts in the memory budget.
  *
  * The destructor joins a thread that is still joinable, so a Thread never
  * ends the process the way a joinable std::thread does. The constructor ends

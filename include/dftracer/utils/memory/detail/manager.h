@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_MEMORY_MANAGER_H
-#define DFTRACER_UTILS_MEMORY_MANAGER_H
+#ifndef DFTRACER_UTILS_MEMORY_DETAIL_MANAGER_H
+#define DFTRACER_UTILS_MEMORY_DETAIL_MANAGER_H
 
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 
 #include <atomic>
 #include <cstddef>
@@ -11,7 +11,7 @@
 #include <string_view>
 #include <vector>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 class Manager;
 class Pool;
@@ -716,6 +716,6 @@ void exempt_from_exit_check(Pool& pool) noexcept;
  */
 void add_exit_hook(void (*hook)()) noexcept;
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail
 
-#endif  // DFTRACER_UTILS_MEMORY_MANAGER_H
+#endif  // DFTRACER_UTILS_MEMORY_DETAIL_MANAGER_H

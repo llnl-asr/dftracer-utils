@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_CORO_SCOPE_H
 
 #include <dftracer/utils/common/exception_helpers.h>
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/join_handle.h>
 #include <dftracer/utils/coro/spawn_future.h>
@@ -59,7 +59,7 @@ class Scope {
         requires std::is_invocable_r_v<CoroTask<void>, Fn&>
     void spawn(Fn fn) {
         if (!admit()) return;
-        Coro child = run_fn_child(std::move(fn), this);
+        detail::Coro child = run_fn_child(std::move(fn), this);
         start(child);
     }
 
@@ -73,7 +73,7 @@ class Scope {
         }
         bind(task.handle().promise());
         task.handle().promise().cancel_source_ = &state->cancel_flag;
-        Coro child = run_future_child(std::move(task), state);
+        detail::Coro child = run_future_child(std::move(task), state);
         start(child);
         return SpawnFuture<T>(std::move(state));
     }
@@ -87,7 +87,7 @@ class Scope {
             state->complete_with_exception(std::move(refused));
             return SpawnFuture<T>(std::move(state));
         }
-        Coro child = run_fn_future_child(std::move(fn), this, state);
+        detail::Coro child = run_fn_future_child(std::move(fn), this, state);
         start(child);
         return SpawnFuture<T>(std::move(state));
     }
@@ -139,17 +139,17 @@ class Scope {
     std::exception_ptr refusal() const;
     void fail(std::exception_ptr error) noexcept;
     void finish_join(bool self_join);
-    void start(Coro& child);
+    void start(detail::Coro& child);
 
     void bind(PromiseBase& promise) const noexcept {
         promise.set_executor(executor_);
         promise.scope_ = this;
     }
 
-    static Coro run_child(CoroTask<void> task, Scope* scope);
+    static detail::Coro run_child(CoroTask<void> task, Scope* scope);
 
     template <class Fn>
-    static Coro run_fn_child(Fn fn, Scope* scope) {
+    static detail::Coro run_fn_child(Fn fn, Scope* scope) {
         std::exception_ptr error;
         try {
             CoroTask<void> task = fn();
@@ -164,8 +164,8 @@ class Scope {
     // Publishes an error only after the handler ends, since the awaiter may
     // run at once and the handler still holds the thrown object.
     template <class T>
-    static Coro run_future_child(CoroTask<T> task,
-                                 dstd::SharedPtr<SharedState<T>> state) {
+    static detail::Coro run_future_child(
+        CoroTask<T> task, dstd::SharedPtr<SharedState<T>> state) {
         std::exception_ptr error;
         try {
             if constexpr (std::is_void_v<T>) {
@@ -182,8 +182,8 @@ class Scope {
     }
 
     template <class Fn, class T>
-    static Coro run_fn_future_child(Fn fn, Scope* scope,
-                                    dstd::SharedPtr<SharedState<T>> state) {
+    static detail::Coro run_fn_future_child(
+        Fn fn, Scope* scope, dstd::SharedPtr<SharedState<T>> state) {
         std::exception_ptr error;
         try {
             CoroTask<T> task = fn();

@@ -2,11 +2,11 @@
 #ifndef DFTRACER_UTILS_MEMORY_HEAP_PAGE_H
 #define DFTRACER_UTILS_MEMORY_HEAP_PAGE_H
 
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 
 #include <cstddef>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 inline constexpr std::size_t HEAP_PAGE_SIZE = std::size_t{64} << 10;
 inline constexpr std::size_t HEAP_SPAN_SIZE = std::size_t{4} << 20;
@@ -78,6 +78,6 @@ std::size_t page_class_size(std::size_t cls) noexcept;
 /// The small class that serves @p size at @p align, as page_allocate picks it.
 std::size_t page_class_for(std::size_t size, std::size_t align) noexcept;
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail
 
 #endif  // DFTRACER_UTILS_MEMORY_HEAP_PAGE_H

@@ -7,7 +7,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/open_extent.h>
 #include <doctest/doctest.h>
@@ -73,7 +73,7 @@ template <class Fn>
 std::size_t peak_live(Fn&& run) {
     index::build::g_parse_peak_live.store(0);
     index::build::g_probe_parse.store(true);
-    const auto base = memory::Manager::get().stats().live;
+    const auto base = memory::detail::Manager::get().stats().live;
     run();
     index::build::g_probe_parse.store(false);
     const auto top = index::build::g_parse_peak_live.load();
@@ -143,7 +143,7 @@ TEST_SUITE("BootstrapPeak") {
         CHECK(bootstrap_test::counts(few_df) ==
               bootstrap_test::counts(many_df));
         CHECK(total_of(many_df) == PEAK_FILES * BIG_EVENTS);
-        CHECK_FALSE(memory::Manager::get().leaked());
+        CHECK_FALSE(memory::detail::Manager::get().leaked());
     }
 
     // Run by the case below in a new process, as what an earlier run leaves

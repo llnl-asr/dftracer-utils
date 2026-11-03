@@ -2,7 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <signal.h>
@@ -48,10 +48,11 @@ void report_fault(int, siginfo_t*, void*) { ::_exit(70); }
 }  // namespace
 
 TEST_CASE("frames are charged to the task's pool") {
-    memory::PoolHandle pool = memory::Manager::get().root().child("frames");
+    memory::detail::PoolHandle pool =
+        memory::detail::Manager::get().root().child("frames");
     REQUIRE(pool);
     {
-        memory::Scope scope{*pool};
+        memory::detail::Scope scope{*pool};
         coro::CoroTask<void> task = MAKE_IDLE();
         CHECK(pool->blocks() == 1);
         CHECK(pool->live() > 0);

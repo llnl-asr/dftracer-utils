@@ -2,7 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 
 #include <array>
@@ -15,7 +15,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-memory::Pool& root() { return memory::Manager::get().root(); }
+memory::detail::Pool& root() { return memory::detail::Manager::get().root(); }
 
 int g_alive = 0;
 
@@ -49,8 +49,8 @@ static_assert(!std::is_copy_constructible_v<dstd::Function<void()>>);
 static_assert(std::is_nothrow_move_constructible_v<dstd::Function<void()>>);
 
 TEST_CASE("a small callable stays in the buffer") {
-    memory::PoolHandle pool = root().child("small");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("small");
+    memory::detail::Scope s{*pool};
     {
         int base = 40;
         dstd::Function<int(int)> f = [base](int x) { return base + x; };
@@ -66,8 +66,8 @@ TEST_CASE("a small callable stays in the buffer") {
 }
 
 TEST_CASE("a large callable goes to the heap and is freed") {
-    memory::PoolHandle pool = root().child("large");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("large");
+    memory::detail::Scope s{*pool};
     {
         dstd::Function<int(int)> f = Large{};
         CHECK(f(1) == 65);
@@ -113,8 +113,8 @@ TEST_CASE("move leaves the source empty and destroys each target once") {
 }
 
 TEST_CASE("a move-only capture works") {
-    memory::PoolHandle pool = root().child("move-only");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("move-only");
+    memory::detail::Scope s{*pool};
     {
         auto owned = dstd::make_unique<int>(7);
         dstd::Function<int()> f = [p = std::move(owned)] { return *p; };
@@ -176,16 +176,16 @@ struct alignas(32) OverAligned {
 }  // namespace
 
 TEST_CASE("a throwing copy into the heap frees the block") {
-    memory::PoolHandle pool = root().child("throwing");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("throwing");
+    memory::detail::Scope s{*pool};
     ThrowingCopy source;
     CHECK_THROWS_AS(dstd::Function<int(int)>{source}, std::runtime_error);
     CHECK(pool->blocks() == 0);
 }
 
 TEST_CASE("an over-aligned callable goes to the heap with its alignment") {
-    memory::PoolHandle pool = root().child("aligned");
-    memory::Scope s{*pool};
+    memory::detail::PoolHandle pool = root().child("aligned");
+    memory::detail::Scope s{*pool};
     {
         dstd::Function<int(int)> f = OverAligned{};
         CHECK(pool->blocks() == 1);

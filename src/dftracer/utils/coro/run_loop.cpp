@@ -2,7 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/run_loop.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <chrono>
 
@@ -47,7 +47,8 @@ bool RunLoop::run_one() {
         ready_.pop_front();
     }
     if (handle && !handle.done()) {
-        memory::Scope scope{memory::Manager::get().general(), nullptr};
+        memory::detail::Scope scope{memory::detail::Manager::get().general(),
+                                    nullptr};
         // Resumed under this loop as the current executor, so frames released
         // during the resume route their destruction to the thread-local queue
         // drained below.

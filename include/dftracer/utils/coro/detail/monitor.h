@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_CORO_MONITOR_H
-#define DFTRACER_UTILS_CORO_MONITOR_H
+#ifndef DFTRACER_UTILS_CORO_DETAIL_MONITOR_H
+#define DFTRACER_UTILS_CORO_DETAIL_MONITOR_H
 
-namespace dftracer::utils::coro {
+namespace dftracer::utils::coro::detail {
 
 /// How a coroutine first entered the monitor, shown as a tag in the report.
 ///   Task  - a submitted task (Executor::enqueue with a task id)
@@ -12,16 +12,14 @@ namespace dftracer::utils::coro {
 ///   captured in deep mode
 enum class CoroKind : unsigned char { Task, Spawn, Io, Sync };
 
-namespace detail {
 extern bool g_monitor_deep;
-}
 
 /// Deep mode (DFTRACER_UTILS_MONITOR=deep) also traces co_await'd CoroTasks
 /// reached by symmetric transfer - synchronous coroutines that never suspend
 /// and so never reach the executor queue. Inline over a plain bool so the
 /// disabled co_await path (the common case) is a single load, not a function
 /// call.
-inline bool monitor_deep_enabled() { return detail::g_monitor_deep; }
+inline bool monitor_deep_enabled() { return g_monitor_deep; }
 
 /// Coroutine execution monitoring, toggled at runtime by env vars (read once
 /// and cached, so the disabled path is a single branch):
@@ -75,6 +73,6 @@ void monitor_resume_end(const void* handle, bool done);
 /// child's resume()), so the child's record still exists here.
 void monitor_sync_complete(const void* handle);
 
-}  // namespace dftracer::utils::coro
+}  // namespace dftracer::utils::coro::detail
 
-#endif  // DFTRACER_UTILS_CORO_MONITOR_H
+#endif  // DFTRACER_UTILS_CORO_DETAIL_MONITOR_H

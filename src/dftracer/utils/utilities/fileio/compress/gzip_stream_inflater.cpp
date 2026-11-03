@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/compress/zng_stream.h>
@@ -17,9 +17,9 @@ std::atomic<std::uint64_t> CHECKSUM_STREAMS{0};
 
 void track_allocations(zng_stream& zs) noexcept {
     zs.zalloc = [](void*, unsigned items, unsigned size) -> void* {
-        return memory::c_malloc(static_cast<std::size_t>(items) * size);
+        return memory::detail::c_malloc(static_cast<std::size_t>(items) * size);
     };
-    zs.zfree = [](void*, void* p) { memory::c_free(p); };
+    zs.zfree = [](void*, void* p) { memory::detail::c_free(p); };
     zs.opaque = nullptr;
 }
 

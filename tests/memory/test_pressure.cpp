@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/memory/constants.h>
-#include <dftracer/utils/memory/heap.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/constants.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <sys/wait.h>
@@ -17,6 +17,7 @@
 #include <vector>
 
 using namespace dftracer::utils::memory;
+using namespace dftracer::utils::memory::detail;
 
 namespace {
 
@@ -110,7 +111,7 @@ TEST_CASE("unattributed is measured minus ours") {
     CHECK(none.unattributed ==
           (none.measured > ours ? none.measured - ours : 0));
 
-    ExternalSlot external = attach_external("test");
+    detail::ExternalSlot external = attach_external("test");
     external.set(5 * MIB);
     Stats s = m.stats();
     CHECK(s.external == none.external + 5 * MIB);

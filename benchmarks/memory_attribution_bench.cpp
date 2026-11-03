@@ -2,12 +2,12 @@
 // Benchmark: how much of a workload's memory the memory pools explain.
 // Each workload runs in its own child process (fork) so the peak of one does
 // not hide the next. A bench thread samples the memory probe and
-// memory::pool_stats() every millisecond; the parent prints per workload the
-// peak and end RSS, the peak anon bytes, the peak `operator new` live bytes,
-// the peak live and reserved bytes of the root pool and of the workload's own
-// pools ("query" for a lazy plan, "genesis/..." for genesis, "fold buffers"
-// for the index build), and unattributed = peak anon - peak root live. Memory
-// that no pool holds (the C library) is unattributed.
+// memory::detail::pool_stats() every millisecond; the parent prints per
+// workload the peak and end RSS, the peak anon bytes, the peak `operator new`
+// live bytes, the peak live and reserved bytes of the root pool and of the
+// workload's own pools ("query" for a lazy plan, "genesis/..." for genesis,
+// "fold buffers" for the index build), and unattributed = peak anon - peak root
+// live. Memory that no pool holds (the C library) is unattributed.
 //
 //   memory_attribution_bench           (larger sizes)
 //   memory_attribution_bench --smoke   (small sizes plus the checks, for ctest)
@@ -31,7 +31,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -118,7 +118,7 @@ bool ends_with(dstd::StringView s, dstd::StringView tail) {
     return s.size() >= tail.size() && s.substr(s.size() - tail.size()) == tail;
 }
 
-bool in_group(const memory::PoolStats& p, PoolGroup g) {
+bool in_group(const memory::detail::PoolStats& p, PoolGroup g) {
     switch (g) {
         case PoolGroup::None:
             return false;
@@ -184,10 +184,10 @@ class Sampler {
     void sample() {
         const dftu::memory_probe::Reading r = dftu::memory_probe::read();
         const std::int64_t live = dftu::memory_probe::live_bytes();
-        const auto pools = memory::pool_stats();
+        const auto pools = memory::detail::pool_stats();
         std::uint64_t group_live = 0;
         std::uint64_t group_reserved = 0;
-        for (const memory::PoolStats& p : pools) {
+        for (const memory::detail::PoolStats& p : pools) {
             if (p.path == "root") {
                 result_.peak_root_live =
                     std::max<std::uint64_t>(result_.peak_root_live, p.live);
@@ -207,13 +207,13 @@ class Sampler {
             std::max(result_.peak_group_reserved, group_reserved);
     }
 
-    // keep std: memory::pool_stats is below dstd
-    bool parent_in_group(const std::vector<memory::PoolStats>& pools,
-                         const memory::PoolStats& p) const {
+    // keep std: memory::detail::pool_stats is below dstd
+    bool parent_in_group(const std::vector<memory::detail::PoolStats>& pools,
+                         const memory::detail::PoolStats& p) const {
         std::uint16_t id = p.parent;
         for (std::size_t depth = 0; depth < pools.size(); ++depth) {
-            const memory::PoolStats* up = nullptr;
-            for (const memory::PoolStats& q : pools)
+            const memory::detail::PoolStats* up = nullptr;
+            for (const memory::detail::PoolStats& q : pools)
                 if (q.id == id) up = &q;
             if (up == nullptr || up->path == "root") return false;
             if (in_group(*up, group_)) return true;

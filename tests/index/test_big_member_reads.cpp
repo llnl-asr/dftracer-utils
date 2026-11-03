@@ -11,7 +11,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
@@ -140,10 +140,10 @@ dstd::Vector<std::uint8_t> many_members(const Trace& t) {
 std::size_t peak_above_start(const dstd::Function<void()>& body) {
     std::atomic<bool> done{false};
     std::atomic<std::size_t> peak{0};
-    const std::size_t base = memory::Manager::get().stats().live;
+    const std::size_t base = memory::detail::Manager::get().stats().live;
     dstd::Thread sampler([&] {
         while (!done.load(std::memory_order_relaxed)) {
-            const auto live = memory::Manager::get().stats().live;
+            const auto live = memory::detail::Manager::get().stats().live;
             auto seen = peak.load(std::memory_order_relaxed);
             while (live > seen && !peak.compare_exchange_weak(
                                       seen, live, std::memory_order_relaxed)) {

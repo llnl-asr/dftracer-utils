@@ -3,8 +3,8 @@
 #define DFTRACER_UTILS_COMMON_MEMORY_CONFIG_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/memory/heap.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 namespace dftracer::utils::common {
 
@@ -30,17 +30,17 @@ dstd::Result<void> configure_memory_from_env();
  * caller cannot wait out. Cancelled and Ok map to Unknown, since no code names
  * a cancellation.
  */
-constexpr ErrorCode error_code_of(memory::Status status) noexcept {
+constexpr ErrorCode error_code_of(memory::detail::Status status) noexcept {
     switch (status) {
-        case memory::Status::OverBudget:
-        case memory::Status::OverCap:
-        case memory::Status::Pending:
+        case memory::detail::Status::OverBudget:
+        case memory::detail::Status::OverCap:
+        case memory::detail::Status::Pending:
             return ErrorCode::MemoryBudgetExceeded;
-        case memory::Status::PoolTableFull:
-        case memory::Status::SlotTableFull:
+        case memory::detail::Status::PoolTableFull:
+        case memory::detail::Status::SlotTableFull:
             return ErrorCode::Internal;
-        case memory::Status::Cancelled:
-        case memory::Status::Ok:
+        case memory::detail::Status::Cancelled:
+        case memory::detail::Status::Ok:
             return ErrorCode::Unknown;
     }
     return ErrorCode::Unknown;

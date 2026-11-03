@@ -17,7 +17,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <stdlib.h>
@@ -45,7 +45,8 @@ constexpr std::size_t SMALL_SORT_BUDGET = SORT_BUDGET / 4;
 
 std::size_t spill_slot_bytes() {
     std::size_t total = 0;
-    for (const memory::ExternalStats& e : memory::external_stats())
+    for (const memory::detail::ExternalStats& e :
+         memory::detail::external_stats())
         if (e.name == "spill") total += e.bytes;
     return total;
 }
@@ -156,15 +157,15 @@ TEST_CASE("spill bytes show as external") {
     std::size_t seen = 0;
     std::size_t stats_external = 0;
     std::size_t free_budget = 0;
-    memory::Status reserved = memory::Status::SlotTableFull;
+    memory::detail::Status reserved = memory::detail::Status::SlotTableFull;
     auto source = dstd::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
         if (i != LOOK_AT) return;
         seen = spill_slot_bytes();
-        stats_external = memory::Manager::get().stats().external;
-        memory::Manager& m = memory::Manager::get();
+        stats_external = memory::detail::Manager::get().stats().external;
+        memory::detail::Manager& m = memory::detail::Manager::get();
         const std::size_t held = m.root().reserved();
         free_budget = m.budget() > held ? m.budget() - held : 0;
-        memory::PoolHandle pool = m.root().child("probe");
+        memory::detail::PoolHandle pool = m.root().child("probe");
         REQUIRE(pool);
         reserved = pool->try_reserve(free_budget / 2).status();
     });
@@ -183,7 +184,7 @@ TEST_CASE("spill bytes show as external") {
         // The spilled bytes exceed what the budget had left, so a reserve
         // that fits only succeeds when they are not counted.
         REQUIRE(seen > free_budget);
-        CHECK(reserved == memory::Status::Ok);
+        CHECK(reserved == memory::detail::Status::Ok);
     } else {
         MESSAGE("the working directory is tmpfs; spill bytes count there");
     }

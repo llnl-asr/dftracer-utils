@@ -4,7 +4,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/quantile_store.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -252,13 +252,13 @@ TEST_CASE("conversion sizes the sketch once") {
     for (int i = 0; i < 5000; ++i)
         inside.push_back(v[static_cast<std::size_t>(i) % 64]);
     const auto before_convert =
-        dftracer::utils::memory::debug_allocation_count();
+        dftracer::utils::memory::detail::debug_allocation_count();
     REQUIRE(before_convert > 0);
 
     s.add(v[3]);
     REQUIRE_FALSE(s.is_exact());
     const auto after_convert =
-        dftracer::utils::memory::debug_allocation_count();
+        dftracer::utils::memory::detail::debug_allocation_count();
     // The sketch object and its bins.
     CHECK(after_convert - before_convert == 2);
 
@@ -266,6 +266,7 @@ TEST_CASE("conversion sizes the sketch once") {
 
     for (int i = 0; i < 2500; ++i) s.add(inside[static_cast<std::size_t>(i)]);
     s.add_many(dstd_span(inside, 2500));
-    CHECK(dftracer::utils::memory::debug_allocation_count() == after_convert);
+    CHECK(dftracer::utils::memory::detail::debug_allocation_count() ==
+          after_convert);
     CHECK(s.count() == 64 + 1 + 5000);
 }

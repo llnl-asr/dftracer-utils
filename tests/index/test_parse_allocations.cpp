@@ -7,7 +7,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -47,7 +47,7 @@ TEST_SUITE("IndexParseAllocations") {
 
         Runtime rt(4);
         index::build::IndexBuildBatchResult result;
-        const auto pool_before = memory::debug_allocation_count();
+        const auto pool_before = memory::detail::debug_allocation_count();
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             auto config =
                 dstd::make_shared<index::build::IndexBuildBatchConfig>();
@@ -58,7 +58,8 @@ TEST_SUITE("IndexParseAllocations") {
                 co_await index::build::BatchBuilder::process(std::move(config));
         });
         rt.submit(std::move(task), "parse-allocations").wait();
-        const auto pool = memory::debug_allocation_count() - pool_before;
+        const auto pool =
+            memory::detail::debug_allocation_count() - pool_before;
         REQUIRE(pool > 0);
         rt.shutdown();
 
@@ -82,7 +83,7 @@ TEST_SUITE("IndexParseAllocations") {
 
         Runtime rt(4);
         index::build::IndexBuildBatchResult result;
-        const auto pool_before = memory::debug_allocation_count();
+        const auto pool_before = memory::detail::debug_allocation_count();
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             auto config =
                 dstd::make_shared<index::build::IndexBuildBatchConfig>();
@@ -93,7 +94,8 @@ TEST_SUITE("IndexParseAllocations") {
                 co_await index::build::BatchBuilder::process(std::move(config));
         });
         rt.submit(std::move(task), "parse-allocations-small").wait();
-        const auto pool = memory::debug_allocation_count() - pool_before;
+        const auto pool =
+            memory::detail::debug_allocation_count() - pool_before;
         REQUIRE(pool > 0);
         rt.shutdown();
 

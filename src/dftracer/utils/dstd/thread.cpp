@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/thread.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -99,7 +99,8 @@ int Thread::create(void (*run)(void*), void* arg,
             return rc;
         }
     }
-    void* raw = memory::try_allocate(sizeof(Trampoline), alignof(Trampoline));
+    void* raw =
+        memory::detail::try_allocate(sizeof(Trampoline), alignof(Trampoline));
     if (raw == nullptr) {
         (void)pthread_attr_destroy(&attr);
         return ENOMEM;
@@ -109,7 +110,7 @@ int Thread::create(void (*run)(void*), void* arg,
     (void)pthread_attr_destroy(&attr);
     if (rc != 0) {
         t->~Trampoline();
-        memory::deallocate(t, sizeof(Trampoline));
+        memory::detail::deallocate(t, sizeof(Trampoline));
         return rc;
     }
     joinable_ = true;

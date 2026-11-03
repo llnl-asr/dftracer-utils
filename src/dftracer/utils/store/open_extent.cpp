@@ -431,7 +431,7 @@ struct ExtentWriter::IdleWait {
     ExtentWriter& writer;
     std::coroutine_handle<> handle;
     coro::Executor* executor = nullptr;
-    coro::ParkNode* park = nullptr;
+    coro::detail::ParkNode* park = nullptr;
 
     bool await_ready() const {
         std::lock_guard<std::mutex> lock(writer.idle_mutex_);

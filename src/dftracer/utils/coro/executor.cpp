@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/coro/resumption_helper.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -63,6 +63,8 @@ void drain_thread_local_destroys() {
         dstd::Vector<std::coroutine_handle<>>().swap(p.overflow);
 }
 
+namespace detail {
+
 Executor* resume_executor_for(Executor* preferred) noexcept {
     return preferred ? preferred : Executor::current();
 }
@@ -78,8 +80,6 @@ void post_resumption(Executor* executor, std::coroutine_handle<> handle) {
         "%s", "Coroutine resumption has no executor to resume through");
     std::abort();
 }
-
-namespace detail {
 
 bool runs_on(Executor* home) noexcept {
     // A thread that runs no executor resumes the awaiter itself, as before

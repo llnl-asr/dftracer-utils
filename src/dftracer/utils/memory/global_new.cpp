@@ -2,8 +2,8 @@
 // Replaces the global operator new and delete with this heap. Link it into
 // executables only, since a shared library would interpose for the whole host
 // process.
-#include <dftracer/utils/memory/heap.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <cstddef>
 #include <new>
@@ -12,8 +12,8 @@ using namespace dftracer::utils;
 
 namespace {
 
-using memory::Pool;
-using memory::PoolHandle;
+using memory::detail::Pool;
+using memory::detail::PoolHandle;
 
 constexpr std::size_t DEFAULT_ALIGN = alignof(std::max_align_t);
 
@@ -22,10 +22,10 @@ constexpr std::size_t DEFAULT_ALIGN = alignof(std::max_align_t);
 Pool& new_pool() {
     alignas(PoolHandle) static unsigned char storage[sizeof(PoolHandle)];
     static Pool* pool = [] {
-        auto* handle =
-            new (storage) PoolHandle(memory::Manager::get().root().child(
-                "global_new", memory::PoolKind::Results));
-        memory::exempt_from_exit_check(**handle);
+        auto* handle = new (storage)
+            PoolHandle(memory::detail::Manager::get().root().child(
+                "global_new", memory::detail::PoolKind::Results));
+        memory::detail::exempt_from_exit_check(**handle);
         return handle->get();
     }();
     return *pool;
@@ -33,7 +33,7 @@ Pool& new_pool() {
 
 [[gnu::always_inline]] inline void* get(std::size_t size, std::size_t align,
                                         void* site) {
-    return memory::allocate_at(size, align, new_pool(), site);
+    return memory::detail::allocate_at(size, align, new_pool(), site);
 }
 
 [[gnu::always_inline]] inline void* try_get(std::size_t size, std::size_t align,
@@ -50,7 +50,7 @@ Pool& new_pool() {
 // destructors and after the executable's.
 [[gnu::constructor(101)]] void init() {
     (void)new_pool();
-    memory::rearm_exit_check();
+    memory::detail::rearm_exit_check();
 }
 
 }  // namespace
@@ -86,33 +86,37 @@ void* operator new[](std::size_t size, std::align_val_t align,
                    __builtin_return_address(0));
 }
 
-void operator delete(void* p) noexcept { memory::deallocate(p); }
-void operator delete[](void* p) noexcept { memory::deallocate(p); }
-void operator delete(void* p, std::size_t) noexcept { memory::deallocate(p); }
-void operator delete[](void* p, std::size_t) noexcept { memory::deallocate(p); }
+void operator delete(void* p) noexcept { memory::detail::deallocate(p); }
+void operator delete[](void* p) noexcept { memory::detail::deallocate(p); }
+void operator delete(void* p, std::size_t) noexcept {
+    memory::detail::deallocate(p);
+}
+void operator delete[](void* p, std::size_t) noexcept {
+    memory::detail::deallocate(p);
+}
 void operator delete(void* p, std::align_val_t) noexcept {
-    memory::deallocate(p);
+    memory::detail::deallocate(p);
 }
 void operator delete[](void* p, std::align_val_t) noexcept {
-    memory::deallocate(p);
+    memory::detail::deallocate(p);
 }
 void operator delete(void* p, std::size_t, std::align_val_t) noexcept {
-    memory::deallocate(p);
+    memory::detail::deallocate(p);
 }
 void operator delete[](void* p, std::size_t, std::align_val_t) noexcept {
-    memory::deallocate(p);
+    memory::detail::deallocate(p);
 }
 void operator delete(void* p, const std::nothrow_t&) noexcept {
-    memory::deallocate(p);
+    memory::detail::deallocate(p);
 }
 void operator delete[](void* p, const std::nothrow_t&) noexcept {
-    memory::deallocate(p);
+    memory::detail::deallocate(p);
 }
 void operator delete(void* p, std::align_val_t,
                      const std::nothrow_t&) noexcept {
-    memory::deallocate(p);
+    memory::detail::deallocate(p);
 }
 void operator delete[](void* p, std::align_val_t,
                        const std::nothrow_t&) noexcept {
-    memory::deallocate(p);
+    memory::detail::deallocate(p);
 }

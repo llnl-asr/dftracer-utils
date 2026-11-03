@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/join_handle.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/string.h>
@@ -13,6 +13,7 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::coro;
+using namespace dftracer::utils::coro::detail;
 
 // Helper: coroutine lambdas MUST be named (not temporaries) because
 // the lambda object holds the captures and must outlive the coroutine

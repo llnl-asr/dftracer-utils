@@ -9,7 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/fold.h>
@@ -98,9 +98,10 @@ std::int64_t read_i64(dstd::ByteView bytes) {
         dstd::read_u64_le(reinterpret_cast<const std::uint8_t*>(bytes.data())));
 }
 
-memory::PoolHandle child_pool(const dstd::String& name, std::size_t limit) {
-    return memory::current_pool().child(name, memory::PoolKind::Scratch,
-                                        memory::Limits{limit});
+memory::detail::PoolHandle child_pool(const dstd::String& name,
+                                      std::size_t limit) {
+    return memory::detail::current_pool().child(
+        name, memory::detail::PoolKind::Scratch, memory::detail::Limits{limit});
 }
 
 /// `head` padded with 'x' to exactly `length` bytes, so every value of a raw
@@ -646,12 +647,13 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
     constexpr std::uint64_t QUOTA = 8 * EXTENT_BYTES;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_budget");
-    memory::PoolHandle budget_pool = child_pool("backpressure budget", 0);
+    memory::detail::PoolHandle budget_pool =
+        child_pool("backpressure budget", 0);
     REQUIRE(static_cast<bool>(budget_pool));
 
     dstd::UniquePtr<engine::Writer> writer;
     {
-        memory::Scope pool_scope(*budget_pool.get());
+        memory::detail::Scope pool_scope(*budget_pool.get());
         auto created = engine::Writer::create(
             dir.str(), *store_runtime().executor(), manual_options(QUOTA));
         REQUIRE(created.has_value());
@@ -753,12 +755,13 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
     constexpr std::size_t LIMIT_BYTES = 3 * EXTENT_BYTES;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_refused");
-    memory::PoolHandle budget_pool = child_pool("refused budget", LIMIT_BYTES);
+    memory::detail::PoolHandle budget_pool =
+        child_pool("refused budget", LIMIT_BYTES);
     REQUIRE(static_cast<bool>(budget_pool));
 
     dstd::UniquePtr<engine::Writer> writer;
     {
-        memory::Scope pool_scope(*budget_pool.get());
+        memory::detail::Scope pool_scope(*budget_pool.get());
         auto created = engine::Writer::create(
             dir.str(), *store_runtime().executor(), manual_options(QUOTA));
         REQUIRE(created.has_value());
@@ -914,12 +917,13 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     constexpr int SEGMENTS_PER_NAMESPACE = 2;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_limit");
-    memory::PoolHandle budget_pool = child_pool("limit budget", LIMIT_BYTES);
+    memory::detail::PoolHandle budget_pool =
+        child_pool("limit budget", LIMIT_BYTES);
     REQUIRE(static_cast<bool>(budget_pool));
 
     dstd::UniquePtr<engine::Writer> writer;
     {
-        memory::Scope pool_scope(*budget_pool.get());
+        memory::detail::Scope pool_scope(*budget_pool.get());
         auto created =
             engine::Writer::create(dir.str(), *store_runtime().executor(),
                                    manual_options(16 * LIMIT_BYTES));

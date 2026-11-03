@@ -7,13 +7,13 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/coro/cancelled.h>
-#include <dftracer/utils/coro/frame.h>
-#include <dftracer/utils/coro/monitor.h>
-#include <dftracer/utils/coro/pool_resume.h>
+#include <dftracer/utils/coro/detail/frame.h>
+#include <dftracer/utils/coro/detail/monitor.h>
+#include <dftracer/utils/coro/detail/pool_resume.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <coroutine>
@@ -62,7 +62,7 @@ struct ExecutorQuery {
 };
 }  // namespace detail
 
-struct PromiseBase : FrameAllocation {
+struct PromiseBase : detail::FrameAllocation {
     std::atomic<bool> awaiting_async_{false};
     /// Set (release) when the coroutine reaches its final suspend, so a thread
     /// blocking on it sees its result through the matching acquire.
@@ -383,9 +383,9 @@ class CoroTask {
         // Deep mode: capture this co_await'd child (run on the awaiter's
         // stack, so it never passes through the executor queue) and make it
         // the current coroutine so its own awaits nest under it.
-        if (monitor_deep_enabled()) {
-            monitor_resume_begin(
-                monitor_enqueue(coro_handle_.address(), CoroKind::Sync));
+        if (detail::monitor_deep_enabled()) {
+            detail::monitor_resume_begin(detail::monitor_enqueue(
+                coro_handle_.address(), detail::CoroKind::Sync));
         }
 
         if (coro_handle_.done()) return false;
@@ -429,8 +429,8 @@ class CoroTask {
                 coro_handle_.promise().trace_handle_);
         }
 #endif
-        if (monitor_deep_enabled()) {
-            monitor_sync_complete(coro_handle_.address());
+        if (detail::monitor_deep_enabled()) {
+            detail::monitor_sync_complete(coro_handle_.address());
         }
         if (coro_handle_.promise().cancelled_) {
             throw_cancelled("task cancelled");
@@ -479,7 +479,8 @@ class CoroTask {
      */
     void resume() {
         if (coro_handle_ && !coro_handle_.done()) {
-            memory::Scope scope{memory::Manager::get().general()};
+            memory::detail::Scope scope{
+                memory::detail::Manager::get().general()};
             coro_handle_.promise().started_ = true;
             coro_handle_.resume();
         }

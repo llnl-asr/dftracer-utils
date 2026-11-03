@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_INDEX_BUILD_PARSE_GATE_H
 
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <cstddef>
@@ -18,7 +18,7 @@ namespace dftracer::utils::index::build {
 class ParseGate {
    public:
     /// With a null @p pool a piece needs no reservation.
-    ParseGate(memory::Pool* pool, std::size_t workers) noexcept
+    ParseGate(memory::detail::Pool* pool, std::size_t workers) noexcept
         : pool_(pool),
           workers_(static_cast<std::int64_t>(workers)),
           free_(workers_) {}
@@ -57,7 +57,8 @@ class ParseGate {
     /// Reserves @p bytes for a piece beyond the first of a file without
     /// waiting. False when the pool is full or as many extra pieces as workers
     /// are held. Call drop_piece() when done.
-    bool try_piece(std::uint64_t bytes, memory::Reservation& out) noexcept {
+    bool try_piece(std::uint64_t bytes,
+                   memory::detail::Reservation& out) noexcept {
         std::int64_t n = extra_.load(std::memory_order_relaxed);
         do {
             if (n >= workers_) return false;
@@ -77,7 +78,7 @@ class ParseGate {
     }
 
    private:
-    memory::Pool* pool_;
+    memory::detail::Pool* pool_;
     std::int64_t workers_;
     std::atomic<std::int64_t> free_;
     std::atomic<std::int64_t> files_{0};

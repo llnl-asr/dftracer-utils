@@ -12,7 +12,7 @@
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <signal.h>
 #include <unistd.h>
 
@@ -143,10 +143,10 @@ bool spill_dir_in_memory(dstd::CStringView dir) {
 namespace {
 
 struct SpillSlot {
-    memory::ExternalSlot slot{memory::attach_external("spill")};
+    memory::detail::ExternalSlot slot{memory::detail::attach_external("spill")};
 };
 
-memory::ExternalSlot& spill_slot() {
+memory::detail::ExternalSlot& spill_slot() {
     return dstd::Singleton<SpillSlot>::get().slot;
 }
 
@@ -165,8 +165,8 @@ void SpillCharge::add(std::uint64_t bytes) noexcept {
     if (bytes == 0) return;
     bytes_.fetch_add(bytes, std::memory_order_relaxed);
     spill_slot().add(static_cast<std::ptrdiff_t>(bytes),
-                     in_memory_ ? memory::ExternalSlot::Kind::Counted
-                                : memory::ExternalSlot::Kind::Reported);
+                     in_memory_ ? memory::detail::ExternalSlot::Kind::Counted
+                                : memory::detail::ExternalSlot::Kind::Reported);
 }
 
 void SpillCharge::release(std::uint64_t bytes) noexcept {
@@ -178,16 +178,16 @@ void SpillCharge::release(std::uint64_t bytes) noexcept {
                                            std::memory_order_relaxed));
     if (take == 0) return;
     spill_slot().add(-static_cast<std::ptrdiff_t>(take),
-                     in_memory_ ? memory::ExternalSlot::Kind::Counted
-                                : memory::ExternalSlot::Kind::Reported);
+                     in_memory_ ? memory::detail::ExternalSlot::Kind::Counted
+                                : memory::detail::ExternalSlot::Kind::Reported);
 }
 
 SpillCharge::~SpillCharge() {
     const std::uint64_t bytes = bytes_.load(std::memory_order_relaxed);
     if (bytes == 0) return;
     spill_slot().add(-static_cast<std::ptrdiff_t>(bytes),
-                     in_memory_ ? memory::ExternalSlot::Kind::Counted
-                                : memory::ExternalSlot::Kind::Reported);
+                     in_memory_ ? memory::detail::ExternalSlot::Kind::Counted
+                                : memory::detail::ExternalSlot::Kind::Reported);
 }
 
 namespace {

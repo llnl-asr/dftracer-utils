@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_CORO_COMPLETION_LATCH_H
 #define DFTRACER_UTILS_CORO_COMPLETION_LATCH_H
 
-#include <dftracer/utils/coro/resumption_helper.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 
 #include <atomic>
 #include <coroutine>
@@ -64,7 +64,7 @@ class CompletionLatch {
 inline void resume_continuation(Executor* executor,
                                 std::coroutine_handle<> continuation) {
     if (continuation && !continuation.done()) {
-        post_resumption(executor, continuation);
+        detail::post_resumption(executor, continuation);
     }
 }
 

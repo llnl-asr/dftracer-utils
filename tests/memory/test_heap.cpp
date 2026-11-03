@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/memory/asan.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/heap_page.h>
-#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/memory/settings.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
@@ -23,6 +23,7 @@
 #include <vector>
 
 using namespace dftracer::utils::memory;
+using namespace dftracer::utils::memory::detail;
 
 namespace {
 
@@ -57,7 +58,7 @@ std::size_t large_run(std::size_t size) {
 }
 
 std::size_t huge_bytes(std::size_t size) {
-    return round_up(size + HEAP_PAGE_SIZE, HEAP_PAGE_SIZE);
+    return round_up(size + detail::HEAP_PAGE_SIZE, detail::HEAP_PAGE_SIZE);
 }
 
 void touch(void* p, std::size_t size) {
@@ -111,30 +112,31 @@ TEST_CASE("counters scenario" * doctest::skip()) {
     std::thread worker([&seen] {
         auto snap = [&seen] { seen.push_back(page_stats()); };
         snap();
-        void* a = page_allocate(100, 16);
+        void* a = detail::page_allocate(100, 16);
         snap();
-        void* b = page_allocate(100, 16);
+        void* b = detail::page_allocate(100, 16);
         snap();
-        void* m = page_allocate(100000, 16);
+        void* m = detail::page_allocate(100000, 16);
         snap();
-        void* l = page_allocate(2 * MIB, 16);
+        void* l = detail::page_allocate(2 * MIB, 16);
         snap();
-        void* h = page_allocate(100 * MIB, 16);
+        void* h = detail::page_allocate(100 * MIB, 16);
         snap();
-        page_deallocate(h, 100 * MIB);
+        detail::page_deallocate(h, 100 * MIB);
         snap();
-        page_deallocate(m, 100000);
+        detail::page_deallocate(m, 100000);
         snap();
-        page_deallocate(l, 2 * MIB);
+        detail::page_deallocate(l, 2 * MIB);
         snap();
-        page_deallocate(a, 100);
-        page_deallocate(b);
+        detail::page_deallocate(a, 100);
+        detail::page_deallocate(b);
         snap();
         // keep std: memory tests link only memory
         std::vector<void*> runs;
-        for (int i = 0; i < 4; ++i) runs.push_back(page_allocate(MIB, 16));
+        for (int i = 0; i < 4; ++i)
+            runs.push_back(detail::page_allocate(MIB, 16));
         snap();
-        for (void* p : runs) page_deallocate(p, MIB);
+        for (void* p : runs) detail::page_deallocate(p, MIB);
         snap();
     });
     worker.join();
@@ -145,7 +147,7 @@ TEST_CASE("counters scenario" * doctest::skip()) {
         CHECK(seen[i].live - seen[0].live == l);
         CHECK(seen[i].reserved - seen[0].reserved == r);
     };
-    const std::size_t span = HEAP_SPAN_SIZE;
+    const std::size_t span = detail::HEAP_SPAN_SIZE;
     const std::size_t big = huge_bytes(100 * MIB);
     const std::size_t run = 2 * MIB;
     const std::size_t mapped = run + HEAP_PAGE_SIZE;

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/memory/heap.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 
@@ -14,6 +14,7 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::memory;
+using namespace dftracer::utils::memory::detail;
 
 namespace {
 
@@ -33,7 +34,7 @@ struct CaptureReports {
     CaptureReports() {
         g_reports.clear();
         g_report_count = 0;
-        previous = set_reporter(capture);
+        previous = detail::set_reporter(capture);
     }
     ~CaptureReports() { set_reporter(previous); }
     Reporter previous;

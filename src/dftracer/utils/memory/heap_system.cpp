@@ -14,7 +14,7 @@
 #include <limits>
 #include <new>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::memory::detail {
 
 void abort_with(const char* message) noexcept {
     std::size_t left = std::strlen(message);
@@ -191,4 +191,4 @@ void* system_reallocate(void* p, std::size_t old_size, std::size_t new_size,
     return moved;
 }
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::memory::detail

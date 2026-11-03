@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_DSTD_MEMORY_H
 
 #include <dftracer/utils/memory/allocator.h>
-#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/detail/heap.h>
 
 #include <cstddef>
 #include <limits>
@@ -32,10 +32,11 @@ struct Delete {
             void* block =
                 dynamic_cast<void*>(const_cast<std::remove_cv_t<T>*>(p));
             p->~T();
-            memory::deallocate(block);
+            memory::detail::deallocate(block);
         } else {
             p->~T();
-            memory::deallocate(const_cast<std::remove_cv_t<T>*>(p), sizeof(T));
+            memory::detail::deallocate(const_cast<std::remove_cv_t<T>*>(p),
+                                       sizeof(T));
         }
     }
 };
@@ -49,7 +50,7 @@ struct Delete<T[]> {
                   "UniquePtr<T[]> needs a trivially destructible T");
 
     void operator()(T* p) const noexcept {
-        memory::deallocate(const_cast<std::remove_cv_t<T>*>(p));
+        memory::detail::deallocate(const_cast<std::remove_cv_t<T>*>(p));
     }
 };
 
@@ -70,7 +71,7 @@ std::remove_extent_t<T>* allocate_array(std::size_t n) {
         n > std::numeric_limits<std::size_t>::max() / sizeof(E)
             ? std::numeric_limits<std::size_t>::max()
             : n * sizeof(E);
-    return static_cast<E*>(memory::allocate(bytes, alignof(E)));
+    return static_cast<E*>(memory::detail::allocate(bytes, alignof(E)));
 }
 
 /// Builds @p n elements in @p p with @p make. If one throws, the block is
@@ -80,7 +81,7 @@ UniquePtr<T> fill_array(std::remove_extent_t<T>* p, std::size_t n, Make make) {
     try {
         for (std::size_t i = 0; i < n; ++i) make(p + i);
     } catch (...) {
-        memory::deallocate(p);
+        memory::detail::deallocate(p);
         throw;
     }
     return UniquePtr<T>(p);
@@ -91,11 +92,11 @@ UniquePtr<T> fill_array(std::remove_extent_t<T>* p, std::size_t n, Make make) {
 template <class T, class... Args>
     requires(!std::is_array_v<T>)
 UniquePtr<T> make_unique(Args&&... args) {
-    void* raw = memory::allocate(sizeof(T), alignof(T));
+    void* raw = memory::detail::allocate(sizeof(T), alignof(T));
     try {
         return UniquePtr<T>(::new (raw) T(std::forward<Args>(args)...));
     } catch (...) {
-        memory::deallocate(raw, sizeof(T));
+        memory::detail::deallocate(raw, sizeof(T));
         throw;
     }
 }
@@ -164,7 +165,8 @@ template <class T>
 // keep std: defines dstd::UniquePtr and dstd::SharedPtr
 using WeakPtr = std::weak_ptr<T>;
 
-/// One block for the object and its control block, from memory::allocate.
+/// One block for the object and its control block, from
+/// memory::detail::allocate.
 template <class T, class... Args>
     requires(!std::is_array_v<T>)
 SharedPtr<T> make_shared(Args&&... args) {
@@ -173,7 +175,7 @@ SharedPtr<T> make_shared(Args&&... args) {
 }
 
 /// An array of @p n value-initialized elements (zero for numbers) and its
-/// control block in one block from memory::allocate.
+/// control block in one block from memory::detail::allocate.
 template <class T>
     requires std::is_unbounded_array_v<T>
 SharedPtr<T> make_shared(std::size_t n) {
@@ -190,7 +192,7 @@ SharedPtr<T> make_shared_for_overwrite(std::size_t n) {
 }
 
 /// Shares the object or array of @p p. The count block comes from
-/// memory::allocate.
+/// memory::detail::allocate.
 template <class T>
 SharedPtr<T> to_shared_ptr(UniquePtr<T>&& p) {
     return SharedPtr<T>(p.release(), Delete<T>{},
@@ -198,7 +200,7 @@ SharedPtr<T> to_shared_ptr(UniquePtr<T>&& p) {
 }
 
 /// Shares @p p, freed by @p deleter. The count block comes from
-/// memory::allocate. When that allocation fails, @p deleter frees @p p.
+/// memory::detail::allocate. When that allocation fails, @p deleter frees @p p.
 template <class T, class D>
 SharedPtr<T> adopt_shared_ptr(T* p, D deleter) {
     return SharedPtr<T>(p, std::move(deleter), memory::Allocator<std::byte>{});

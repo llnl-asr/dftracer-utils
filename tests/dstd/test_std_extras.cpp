@@ -10,7 +10,7 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 #include <pthread.h>
 #include <testing_utilities.h>
@@ -163,7 +163,8 @@ TEST_CASE("write_file replaces and append_file extends") {
 
 TEST_CASE("UniquePtr of a derived type converts to its virtual bases") {
     std::atomic<int> destroyed{0};
-    const std::size_t before = memory::Manager::get().general().blocks();
+    const std::size_t before =
+        memory::detail::Manager::get().general().blocks();
     {
         dstd::UniquePtr<Base> base = dstd::make_unique<Derived>(&destroyed);
         CHECK(base->base_value == 1);
@@ -173,7 +174,7 @@ TEST_CASE("UniquePtr of a derived type converts to its virtual bases") {
               dynamic_cast<void*>(other.get()));
     }
     CHECK(destroyed.load() == 2);
-    CHECK(memory::Manager::get().general().blocks() == before);
+    CHECK(memory::detail::Manager::get().general().blocks() == before);
 }
 
 TEST_CASE("Thread::try_start runs the body or reports an error") {
@@ -244,13 +245,14 @@ TEST_CASE("from_chars stops at the first byte that is not part of a number") {
 }
 
 TEST_CASE("ConcurrentQueue takes its blocks from the memory library") {
-    const std::size_t before = memory::Manager::get().root().blocks();
+    const std::size_t before = memory::detail::Manager::get().root().blocks();
     const std::size_t general_before =
-        memory::Manager::get().general().blocks();
+        memory::detail::Manager::get().general().blocks();
     {
         dstd::ConcurrentQueue<std::int64_t> queue;
-        CHECK(memory::Manager::get().root().blocks() > before);
-        CHECK(memory::Manager::get().general().blocks() == general_before);
+        CHECK(memory::detail::Manager::get().root().blocks() > before);
+        CHECK(memory::detail::Manager::get().general().blocks() ==
+              general_before);
         dstd::Thread producer([&] {
             for (std::int64_t i = 0; i < 10000; ++i) REQUIRE(queue.enqueue(i));
         });
@@ -260,17 +262,18 @@ TEST_CASE("ConcurrentQueue takes its blocks from the memory library") {
         while (queue.try_dequeue(item)) sum += item;
         CHECK(sum == 10000LL * 9999 / 2);
     }
-    CHECK(memory::Manager::get().root().blocks() == before);
+    CHECK(memory::detail::Manager::get().root().blocks() == before);
 }
 
 TEST_CASE("ConcurrentQueue takes its blocks from the memory library") {
-    const std::size_t before = memory::Manager::get().root().blocks();
+    const std::size_t before = memory::detail::Manager::get().root().blocks();
     const std::size_t general_before =
-        memory::Manager::get().general().blocks();
+        memory::detail::Manager::get().general().blocks();
     {
         dstd::ConcurrentQueue<std::int64_t> queue;
-        CHECK(memory::Manager::get().root().blocks() > before);
-        CHECK(memory::Manager::get().general().blocks() == general_before);
+        CHECK(memory::detail::Manager::get().root().blocks() > before);
+        CHECK(memory::detail::Manager::get().general().blocks() ==
+              general_before);
         dstd::Thread producer([&] {
             for (std::int64_t i = 0; i < 10000; ++i) (void)queue.enqueue(i);
         });
@@ -285,11 +288,12 @@ TEST_CASE("ConcurrentQueue takes its blocks from the memory library") {
         CHECK(count == 10000);
         CHECK(sum == 10000LL * 9999 / 2);
     }
-    CHECK(memory::Manager::get().root().blocks() == before);
+    CHECK(memory::detail::Manager::get().root().blocks() == before);
 }
 
 TEST_CASE("UniquePtr array form zeroes on make_unique and frees its block") {
-    const std::size_t before = memory::Manager::get().general().blocks();
+    const std::size_t before =
+        memory::detail::Manager::get().general().blocks();
     {
         auto zeroed = dstd::make_unique<std::uint64_t[]>(4096);
         bool all_zero = true;
@@ -305,22 +309,23 @@ TEST_CASE("UniquePtr array form zeroes on make_unique and frees its block") {
         auto empty = dstd::make_unique<int[]>(0);
         CHECK(empty != nullptr);
     }
-    CHECK(memory::Manager::get().general().blocks() == before);
+    CHECK(memory::detail::Manager::get().general().blocks() == before);
 }
 
 TEST_CASE("share takes its count block from the memory library") {
     std::atomic<int> destroyed{0};
-    const std::size_t before = memory::Manager::get().general().blocks();
+    const std::size_t before =
+        memory::detail::Manager::get().general().blocks();
     {
         dstd::SharedPtr<Base> base =
             dstd::to_shared_ptr(dstd::make_unique<Derived>(&destroyed));
         CHECK(base->base_value == 1);
-        CHECK(memory::Manager::get().general().blocks() == before + 2);
+        CHECK(memory::detail::Manager::get().general().blocks() == before + 2);
         dstd::SharedPtr<Base> again = base;
         CHECK(base.use_count() == 2);
     }
     CHECK(destroyed.load() == 1);
-    CHECK(memory::Manager::get().general().blocks() == before);
+    CHECK(memory::detail::Manager::get().general().blocks() == before);
 }
 
 TEST_CASE("share with a deleter calls it once") {
@@ -348,7 +353,8 @@ static_assert(
     std::is_constructible_v<dstd::SharedPtr<int>, std::shared_ptr<int>>);
 
 TEST_CASE("SharedPtr array forms come from our heap and free everything") {
-    const std::size_t before = memory::Manager::get().general().blocks();
+    const std::size_t before =
+        memory::detail::Manager::get().general().blocks();
     {
         dstd::SharedPtr<std::uint64_t[]> zeroed =
             dstd::make_shared<std::uint64_t[]>(512);
@@ -356,7 +362,7 @@ TEST_CASE("SharedPtr array forms come from our heap and free everything") {
         for (std::size_t i = 0; i < 512; ++i)
             all_zero = all_zero && zeroed[i] == 0;
         CHECK(all_zero);
-        CHECK(memory::Manager::get().general().blocks() == before + 1);
+        CHECK(memory::detail::Manager::get().general().blocks() == before + 1);
         dstd::SharedPtr<char[]> raw =
             dstd::make_shared_for_overwrite<char[]>(64);
         raw[63] = 'x';
@@ -367,7 +373,7 @@ TEST_CASE("SharedPtr array forms come from our heap and free everything") {
         CHECK(copy.use_count() == 2);
         CHECK(copy[7] == 0);
     }
-    CHECK(memory::Manager::get().general().blocks() == before);
+    CHECK(memory::detail::Manager::get().general().blocks() == before);
 }
 
 // keep std: compares dstd with its std twin

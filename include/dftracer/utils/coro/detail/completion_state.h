@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_CORO_COMPLETION_STATE_H
-#define DFTRACER_UTILS_CORO_COMPLETION_STATE_H
+#ifndef DFTRACER_UTILS_CORO_DETAIL_COMPLETION_STATE_H
+#define DFTRACER_UTILS_CORO_DETAIL_COMPLETION_STATE_H
 
 #include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/completion_latch.h>
+#include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/coro/parked.h>
 
 #include <atomic>
 #include <coroutine>
 #include <cstddef>
 #include <exception>
 
-namespace dftracer::utils::coro {
-
-class Executor;
+namespace dftracer::utils::coro::detail {
 
 /// Common suspension/completion coordination shared by when_all / when_any
 /// shared-state structs. Holds the awaiting coroutine, its executor, and the
@@ -159,6 +157,6 @@ struct WhenAnyCompletionState : CompletionState {
     std::atomic<std::size_t> progress_{0};
 };
 
-}  // namespace dftracer::utils::coro
+}  // namespace dftracer::utils::coro::detail
 
-#endif  // DFTRACER_UTILS_CORO_COMPLETION_STATE_H
+#endif  // DFTRACER_UTILS_CORO_DETAIL_COMPLETION_STATE_H

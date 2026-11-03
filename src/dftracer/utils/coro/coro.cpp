@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/executor.h>
 
-namespace dftracer::utils::coro {
+namespace dftracer::utils::coro::detail {
 
 std::coroutine_handle<> CoroPromise::FinalAwaiter::await_suspend(
     std::coroutine_handle<CoroPromise> h) noexcept {
@@ -49,4 +49,4 @@ std::coroutine_handle<> CoroPromise::FinalAwaiter::await_suspend(
     return std::noop_coroutine();
 }
 
-}  // namespace dftracer::utils::coro
+}  // namespace dftracer::utils::coro::detail

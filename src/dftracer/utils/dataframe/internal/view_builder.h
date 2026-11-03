@@ -2,11 +2,11 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_VIEW_BUILDER_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_VIEW_BUILDER_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstdint>
 #include <memory>

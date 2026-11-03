@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FOLD_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -10,6 +9,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/trace/views/fold.h>
 

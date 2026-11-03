@@ -71,7 +71,8 @@ check_dir() {
     fi
 
     echo "Check formatting of C/C++ code in '$dir'"
-    find "$dir" \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) -print0 | \
+    find "$dir" \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) \
+        ! -path "*/dftracer/utils/dstd/vendor/*" -print0 | \
         xargs -0 -P "$num_jobs" "$clang_format" --dry-run -Werror
     return $?
 }

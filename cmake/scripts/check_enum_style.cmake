@@ -14,6 +14,8 @@ file(GLOB_RECURSE SOURCES
   "${SOURCE_DIR}/include/*.h" "${SOURCE_DIR}/include/*.hpp"
   "${SOURCE_DIR}/src/*.h" "${SOURCE_DIR}/src/*.hpp" "${SOURCE_DIR}/src/*.cpp"
   "${SOURCE_DIR}/src/*.c" "${SOURCE_DIR}/src/*.cc" "${SOURCE_DIR}/src/*.inl")
+# Vendored third-party text keeps upstream's spelling.
+list(FILTER SOURCES EXCLUDE REGEX "/dftracer/utils/dstd/vendor/")
 list(SORT SOURCES)
 
 set(HITS "")

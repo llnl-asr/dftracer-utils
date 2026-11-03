@@ -2,13 +2,13 @@
 #ifndef DFTRACER_UTILS_CORO_CHANNEL_H
 #define DFTRACER_UTILS_CORO_CHANNEL_H
 
-#include <concurrentqueue.h>
 #include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/parked.h>
 #include <dftracer/utils/coro/resumption_helper.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vendor/concurrentqueue.h>
 
 #include <atomic>
 #include <cassert>

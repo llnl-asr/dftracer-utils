@@ -257,6 +257,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The index of a 69 GB trace set with every column kept drops from 3.3 GB to 1.4 GB.
 - Require a unit such as `4MB` for the byte size flags that took a bare number of megabytes: `-s`/`--chunk-size` of `dftracer_split`, which defaulted to `4` meaning 4 MB, and `--read-batch-size` of `dftracer_index`.
   A bare number is refused with an error that names the flag, and the defaults are `4MB`.
+- Vendor unordered_dense 4.4.0, tl::expected 1.1.0 and the patched moodycamel concurrentqueue in `include/dftracer/utils/dstd/vendor/` and include them from there, where `include/` included `<ankerl/unordered_dense.h>`, `<tl/expected.hpp>` and `<concurrentqueue.h>` from the CPM include dirs.
+  A public header now reaches no CPM package, so a plugin built from a source checkout and a plugin built against an install prefix compile the same, and the vendored headers install with the rest of `include/`.
+  `cmake/patches/concurrentqueue-thread-exit.patch` is removed: its change is in the vendored header.
+- Add the ctest `public_third_party_headers`, which fails on an include under `include/` that is not ours, standard, system, `<mpi.h>` or vendored; simdjson and nanoarrow are its known exceptions until the API cut moves them out of `include/`.
 
 ### Added
 

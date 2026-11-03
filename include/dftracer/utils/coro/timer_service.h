@@ -2,12 +2,12 @@
 #ifndef DFTRACER_UTILS_CORO_TIMER_SERVICE_H
 #define DFTRACER_UTILS_CORO_TIMER_SERVICE_H
 
-#include <concurrentqueue.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/queue.h>
 #include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/vendor/concurrentqueue.h>
 #include <dftracer/utils/memory/manager.h>
 
 #include <atomic>

@@ -86,6 +86,8 @@ file(WRITE "${_awk_file}" "${_program}")
 file(GLOB_RECURSE _files
      "${SOURCE_DIR}/src/*.h" "${SOURCE_DIR}/src/*.cpp" "${SOURCE_DIR}/src/*.inc"
      "${SOURCE_DIR}/include/*.h" "${SOURCE_DIR}/include/*.hpp")
+# Vendored third-party text is not ours to check.
+list(FILTER _files EXCLUDE REGEX "/dftracer/utils/dstd/vendor/")
 
 set(_candidates "")
 foreach(_file ${_files})

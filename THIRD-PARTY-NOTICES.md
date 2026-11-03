@@ -1,11 +1,13 @@
 # Third-Party Notices
 
-`dftracer-utils` bundles and links the third-party components listed below. Each
-is fetched at configure time (via CPM, see `cmake/modules/Dependencies.cmake`)
-and statically or dynamically linked into the libraries, CLI binaries, and
-Python extension. Each component remains under its own license, reproduced in
-full in that component's source tree (under `.cpmsource/<name>/.../LICENSE`
-after a build) and available at the linked homepage.
+`dftracer-utils` bundles and links the third-party components listed below. The
+components in `include/dftracer/utils/dstd/vendor/` ship as source in this
+repository; every other one is fetched at configure time (via CPM, see
+`cmake/modules/Dependencies.cmake`) and statically or dynamically linked into
+the libraries, CLI binaries, and Python extension. Each component remains under
+its own license, reproduced in full in that component's source tree (under
+`.cpmsource/<name>/.../LICENSE` after a build, and in the vendored header
+itself) and available at the linked homepage.
 
 This project itself is licensed under the terms in [LICENSE](LICENSE); the
 notices here cover only the third-party dependencies.
@@ -29,6 +31,13 @@ notices here cover only the third-party dependencies.
 | PCRE2 | `BSD-3-Clause WITH PCRE2-exception` | https://github.com/PCRE2Project/pcre2 |
 | Vectorscan | `BSD-3-Clause` | https://github.com/VectorCamp/vectorscan |
 | utf8proc | MIT, and the Unicode, Inc. data files license (1991-2007) for `utf8proc_data.c` | https://github.com/JuliaStrings/utf8proc |
+
+Three of these rows are vendored single headers: moodycamel concurrentqueue,
+unordered_dense and tl::expected. Their full text, unchanged apart from one
+provenance line, is in `include/dftracer/utils/dstd/vendor/` as
+`concurrentqueue.h`, `unordered_dense.h` and `expected.hpp`, and it installs with
+the rest of `include/`. The vendored concurrentqueue carries the thread-exit
+unsubscribe fix upstream has not taken; the line names the upstream commit.
 
 ## Vendored build tooling
 
@@ -93,8 +102,9 @@ test suite.
   option.
 - moodycamel's queues embed Jeff Preshing's semaphore implementation, which
   carries a `Zlib` license (see the note in each queue's `LICENSE.md`).
-- Exact pinned versions are defined in `cmake/modules/Dependencies.cmake`; that
-  file is the source of truth for what is fetched.
+- Exact pinned versions are defined in `cmake/modules/Dependencies.cmake`, or, for
+  the vendored headers, in the first line of each file under
+  `include/dftracer/utils/dstd/vendor/`.
 - The lists above are generated from the dependencies actually vendored into the
   build (`.cpmsource/`). Some entries in `Dependencies.cmake` are conditional and
   are only fetched for certain configurations.

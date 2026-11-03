@@ -2,9 +2,9 @@
 #ifndef DFTRACER_UTILS_DSTD_HASHER_H
 #define DFTRACER_UTILS_DSTD_HASHER_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstddef>
 #include <cstdint>

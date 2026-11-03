@@ -2,12 +2,12 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_FILE_INDEX_DATA_H
 #define DFTRACER_UTILS_INDEX_PLAN_FILE_INDEX_DATA_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/index.h>

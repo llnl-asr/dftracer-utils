@@ -17,6 +17,8 @@ CLASSES = [
     "keep-abi",
 ]
 ABI_FILES = {"plugins/abi.h", "plugins/arrow_abi.h", "dataframe/abi.h"}
+# Vendored third-party single headers: upstream text, not a component of ours.
+VENDOR = os.path.join("include", UTILS, "dstd", "vendor")
 
 
 def area_of(rel):
@@ -36,7 +38,10 @@ def main():
         for dirpath, _, names in os.walk(os.path.join(root, tree)):
             for name in names:
                 if os.path.splitext(name)[1] in SOURCE_EXTS | HEADER_EXTS:
-                    files.append(os.path.relpath(os.path.join(dirpath, name), root))
+                    rel = os.path.relpath(os.path.join(dirpath, name), root)
+                    if rel.startswith(VENDOR + os.sep):
+                        continue
+                    files.append(rel)
     known = set(files)
 
     includers = {}

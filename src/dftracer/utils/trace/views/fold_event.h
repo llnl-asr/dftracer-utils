@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_FOLD_EVENT_H
 #define DFTRACER_UTILS_TRACE_VIEWS_FOLD_EVENT_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -11,6 +10,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/trace/event.h>

@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_RUNTIME_SCHEDULER_THREAD_POOL_EXECUTOR_H
 #define DFTRACER_UTILS_RUNTIME_SCHEDULER_THREAD_POOL_EXECUTOR_H
 
-#include <concurrentqueue.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/coro/coro.h>
@@ -17,6 +16,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/dstd/vendor/concurrentqueue.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 

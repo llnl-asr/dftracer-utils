@@ -2,9 +2,9 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_CONDITION_H
 #define DFTRACER_UTILS_INDEX_PLAN_CONDITION_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/index/store/file.h>
 

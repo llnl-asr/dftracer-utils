@@ -168,22 +168,6 @@ if(EXISTS \"\${CMAKE_CURRENT_LIST_DIR}/../zlib/ZlibTargets.cmake\")
     include(\"\${CMAKE_CURRENT_LIST_DIR}/../zlib/ZlibTargets.cmake\")
 endif()
 
-# UNORDERED_DENSE dependency (header-only)
-find_path(UNORDERED_DENSE_INCLUDE_DIR_BUNDLED
-    NAMES ankerl/unordered_dense.h
-    PATHS \${_IMPORT_PREFIX}/include
-    NO_DEFAULT_PATH
-)
-
-if(UNORDERED_DENSE_INCLUDE_DIR_BUNDLED AND NOT TARGET unordered_dense::unordered_dense)
-    add_library(unordered_dense::unordered_dense INTERFACE IMPORTED)
-    set_target_properties(unordered_dense::unordered_dense PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES \"\${UNORDERED_DENSE_INCLUDE_DIR_BUNDLED}\"
-    )
-else()
-    find_dependency(unordered_dense QUIET)
-endif()
-
 # SIMDJSON dependency
 find_library(SIMDJSON_LIBRARY_BUNDLED
     NAMES simdjson libsimdjson

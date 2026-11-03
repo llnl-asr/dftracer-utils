@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/coro/scope.h>
@@ -39,6 +38,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/budget.h>
 

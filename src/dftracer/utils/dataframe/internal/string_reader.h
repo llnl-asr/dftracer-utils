@@ -2,12 +2,12 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_STRING_READER_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_STRING_READER_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <algorithm>
 #include <cstdint>

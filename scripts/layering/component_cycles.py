@@ -7,6 +7,8 @@ INCLUDE = re.compile(r"^\s*#\s*include\s*<(dftracer/utils/[^>]+)>", re.M)
 SOURCE_EXTS = {".cpp", ".cc", ".cxx", ".c"}
 HEADER_EXTS = {".h", ".hpp", ".hh"}
 UTILS = os.path.join("dftracer", "utils")
+# Vendored third-party single headers: upstream text, not a component of ours.
+VENDOR = os.path.join("include", UTILS, "dstd", "vendor")
 
 
 def main():
@@ -21,8 +23,11 @@ def main():
                 stem, ext = os.path.splitext(name)
                 if ext in SOURCE_EXTS or ext in HEADER_EXTS:
                     full = os.path.join(dirpath, name)
+                    rel = os.path.relpath(full, root)
+                    if rel.startswith(VENDOR + os.sep):
+                        continue
                     key = os.path.relpath(os.path.join(dirpath, stem), base)
-                    files[os.path.relpath(full, root)] = (key, ext in SOURCE_EXTS)
+                    files[rel] = (key, ext in SOURCE_EXTS)
 
     graph = {key: set() for key, _ in files.values()}
     for rel, (key, is_source) in files.items():

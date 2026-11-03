@@ -16,6 +16,8 @@ set(ALLOWED
 
 file(GLOB_RECURSE sources "${SOURCE_DIR}/src/*.h" "${SOURCE_DIR}/src/*.cpp"
      "${SOURCE_DIR}/include/*.h" "${SOURCE_DIR}/python/*.cpp")
+# Vendored third-party text is not ours to check.
+list(FILTER sources EXCLUDE REGEX "/dftracer/utils/dstd/vendor/")
 list(SORT sources)
 
 set(errors "")

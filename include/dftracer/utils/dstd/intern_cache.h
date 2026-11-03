@@ -2,8 +2,8 @@
 #ifndef DFTRACER_UTILS_DSTD_INTERN_CACHE_H
 #define DFTRACER_UTILS_DSTD_INTERN_CACHE_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <array>
 #include <cstddef>

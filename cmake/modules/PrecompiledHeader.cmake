@@ -23,10 +23,7 @@ include_guard(GLOBAL)
 # no row: foreach_target.h must precede highway.h, so a precompiled highway.h
 # breaks every multi-target kernel.
 set(DFTU_PCH_THIRD_PARTY
-    "^simdjson\\.h$|simdjson"
-    "^concurrentqueue|concurrentqueue"
-    "^ankerl/|unordered_dense"
-    "^tl/expected|tl_expected|tl::expected")
+    "^simdjson\\.h$|simdjson")
 
 # Collects the names of every library that TARGET links, directly or through
 # the link interface of a library it links.

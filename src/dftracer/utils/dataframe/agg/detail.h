@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_AGG_DETAIL_H
 #define DFTRACER_UTILS_DATAFRAME_AGG_DETAIL_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -13,6 +12,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <algorithm>
 #include <bit>

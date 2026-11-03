@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/coro/task_abi.h>        // task_to_abi
@@ -37,6 +36,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 

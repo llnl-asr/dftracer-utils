@@ -10,9 +10,6 @@ need_libdeflate()
 need_zstd()
 need_simdjson()
 need_readerwriterqueue()
-need_concurrentqueue()
-need_tl_expected()
-need_unordered_dense()
 need_boost_math()
 need_yaml_cpp()
 
@@ -513,9 +510,6 @@ create_library(
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_dstd ${variant})
   if(TARGET ${VARIANT_TARGET})
-    link_unordered_dense(${VARIANT_TARGET})
-    link_tl_expected(${VARIANT_TARGET})
-
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_dstd_objects)
     elseif(COVERAGE_LINK_OPTIONS)
@@ -568,9 +562,6 @@ create_library(
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_common ${variant})
   if(TARGET ${VARIANT_TARGET})
-    link_unordered_dense(${VARIANT_TARGET})
-    link_tl_expected(${VARIANT_TARGET})
-
     # symbolize.cpp calls dladdr(), which lives in libdl on older glibc.
     target_link_libraries(${VARIANT_TARGET}
                           PUBLIC ${CMAKE_DL_LIBS})
@@ -617,7 +608,6 @@ create_library(
   dftracer_utils_common::static
   PUBLIC_LINK_LIBRARIES
   Threads::Threads
-  concurrentqueue
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -637,9 +627,6 @@ create_library(
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_coro ${variant})
   if(TARGET ${VARIANT_TARGET})
-    link_unordered_dense(${VARIANT_TARGET})
-    link_tl_expected(${VARIANT_TARGET})
-
     # monitor.cpp calls dladdr() for symbolization. On older glibc (e.g.
     # manylinux aarch64) dladdr lives in libdl; CMAKE_DL_LIBS is empty where the
     # symbol is already in libc or libSystem.
@@ -684,7 +671,6 @@ create_library(
   PUBLIC_LINK_LIBRARIES
   Threads::Threads
   readerwriterqueue
-  concurrentqueue
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -707,13 +693,8 @@ foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_runtime ${variant})
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
-    # Link dependencies using helper functions
-    link_unordered_dense(${VARIANT_TARGET})
-    link_tl_expected(${VARIANT_TARGET})
-
     target_link_libraries(${VARIANT_TARGET}
                           PUBLIC ${CMAKE_DL_LIBS})
-
 
     # mpi_utils.cpp is part of the runtime library sources when MPI is enabled,
     # so runtime itself needs the MPI include path and runtime. Without this the
@@ -808,7 +789,6 @@ foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_store ${variant})
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
-    link_tl_expected(${VARIANT_TARGET})
     # The crc of every page, record and block (crc.cpp).
     link_libdeflate(${VARIANT_TARGET})
     link_zstd(${VARIANT_TARGET})
@@ -1233,9 +1213,6 @@ foreach(variant objects shared static)
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
     link_zlib(${VARIANT_TARGET})
-
-    # Link tl::expected for C++20/23 expected shim
-    link_tl_expected(${VARIANT_TARGET})
 
     # The plugin host dlopen()s plugin shared libraries; libdl is empty where
     # the symbols already live in libc/libSystem.
@@ -1758,18 +1735,21 @@ endif()
 
 # Install headers: <includedir>/dftracer/utils/<subpath>, so a consumer includes
 # <dftracer/utils/...>. A wheel sets the includedir to dftracer/include (beside
-# dftracer/lib and dftracer/bin), so the same rule serves both.
+# dftracer/lib and dftracer/bin), so the same rule serves both. The one .hpp is
+# the vendored tl::expected in dstd/vendor/.
 install(
   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../include/dftracer/utils/
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dftracer/utils
   FILES_MATCHING
-  PATTERN "*.h")
+  PATTERN "*.h"
+  PATTERN "*.hpp")
 
 install(
   DIRECTORY ${CMAKE_BINARY_DIR}/include/dftracer/utils/
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dftracer/utils
   FILES_MATCHING
-  PATTERN "*.h")
+  PATTERN "*.h"
+  PATTERN "*.hpp")
 
 # RocksDB's headers, at <includedir>/rocksdb: the public
 # <dftracer/utils/index/store/database.h> includes <rocksdb/db.h>, so a consumer

@@ -36,7 +36,8 @@ set(_skip
     include/dftracer/utils/runtime/pipeline
     src/dftracer/utils/runtime/tasks
     src/dftracer/utils/runtime/task_graph
-    src/dftracer/utils/runtime/pipeline)
+    src/dftracer/utils/runtime/pipeline
+    include/dftracer/utils/dstd/vendor)
 
 set(_program [=[
 FNR == 1 { kept = 0 }

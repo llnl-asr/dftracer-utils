@@ -6,9 +6,9 @@
 // CounterAcc fold, and the ph="C" counter-series fold, plus group-value
 // extraction and containment-depth assignment. Internal to the server.
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/server/viz/internal.h>

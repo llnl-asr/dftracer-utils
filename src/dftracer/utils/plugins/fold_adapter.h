@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_H
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -11,6 +10,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/result_registry.h>

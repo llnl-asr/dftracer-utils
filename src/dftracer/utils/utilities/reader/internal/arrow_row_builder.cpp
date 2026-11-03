@@ -5,9 +5,9 @@
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/schema.h>

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include <concurrentqueue.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/platform_compat.h>  // hardware_concurrency
 #include <dftracer/utils/dataframe/agg/detail.h>
@@ -13,6 +12,7 @@
 #include <dftracer/utils/dstd/hash/fnv1a.h>       // string key hashing
 #include <dftracer/utils/dstd/hash/splitmix64.h>  // row hashing
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vendor/concurrentqueue.h>
 
 #include <algorithm>
 #include <atomic>

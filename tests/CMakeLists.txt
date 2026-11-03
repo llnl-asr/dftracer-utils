@@ -148,7 +148,7 @@ add_test(
   NAME spdx_headers
   COMMAND
     sh -c
-    "cd \"$0\" && bad=$(find include src tests benchmarks examples python scripts cmake web/src docs/source docs/scripts .gitlab CMakeLists.txt setup.py bootstrap.sh jsonlines.sh -type f \\( -name '*.h' -o -name '*.hpp' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.inl' -o -name '*.def' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.py' -o -name '*.pyi' -o -name '*.sh' -o -name '*.cmake' -o -name CMakeLists.txt \\) ! -path 'cmake/vendor/*' ! -path 'cmake/modules/CPM.cmake' ! -path 'docs/source/cpp_api/_generated/*' ! -path '*/node_modules/*' ! -path '*/__pycache__/*' ! -path 'python/dftracer/utils/_version.py' -exec grep -L 'SPDX-License-Identifier: MIT' {} + 2>/dev/null); if [ -n \"$bad\" ]; then echo \"source files without an SPDX-License-Identifier line:\"; echo \"$bad\"; exit 1; fi"
+    "cd \"$0\" && bad=$(find include src tests benchmarks examples python scripts cmake web/src docs/source docs/scripts .gitlab CMakeLists.txt setup.py bootstrap.sh jsonlines.sh -type f \\( -name '*.h' -o -name '*.hpp' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.inl' -o -name '*.def' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.py' -o -name '*.pyi' -o -name '*.sh' -o -name '*.cmake' -o -name CMakeLists.txt \\) ! -path 'cmake/vendor/*' ! -path 'cmake/modules/CPM.cmake' ! -path 'include/dftracer/utils/dstd/vendor/*' ! -path 'docs/source/cpp_api/_generated/*' ! -path '*/node_modules/*' ! -path '*/__pycache__/*' ! -path 'python/dftracer/utils/_version.py' -exec grep -L 'SPDX-License-Identifier: MIT' {} + 2>/dev/null); if [ -n \"$bad\" ]; then echo \"source files without an SPDX-License-Identifier line:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME dstd_no_upward
@@ -160,19 +160,19 @@ add_test(
   NAME no_coro_temp_awaiters
   COMMAND
     sh -c
-    "bad=$(grep -rnE 'co_await[[:space:]]+[A-Za-z_][A-Za-z0-9_:<>]*[[:space:]]*\\{' \"$0/include\" \"$0/src\" --include='*.h' --include='*.hpp' --include='*.cpp' --include='*.inl'); if [ -n \"$bad\" ]; then echo \"co_await on a braced temporary; GCC 12.1 destroys it twice, await a named local:\"; echo \"$bad\"; exit 1; fi"
+    "bad=$(grep -rnE 'co_await[[:space:]]+[A-Za-z_][A-Za-z0-9_:<>]*[[:space:]]*\\{' \"$0/include\" \"$0/src\" --include='*.h' --include='*.hpp' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/'); if [ -n \"$bad\" ]; then echo \"co_await on a braced temporary; GCC 12.1 destroys it twice, await a named local:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME no_quoted_includes
   COMMAND
     sh -c
-    "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*\"' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl'); if [ -n \"$bad\" ]; then echo \"quoted include; use <dftracer/utils/...> or the path from tests/ or benchmarks/:\"; echo \"$bad\"; exit 1; fi"
+    "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*\"' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/'); if [ -n \"$bad\" ]; then echo \"quoted include; use <dftracer/utils/...> or the path from tests/ or benchmarks/:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME no_header_using_namespace
   COMMAND
     sh -c
-    "bad=$(grep -rnE '^[[:space:]]*using namespace' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.inl'); if [ -n \"$bad\" ]; then echo \"using namespace in a header; qualify the names and put the directive in the .cpp:\"; echo \"$bad\"; exit 1; fi"
+    "bad=$(grep -rnE '^[[:space:]]*using namespace' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/'); if [ -n \"$bad\" ]; then echo \"using namespace in a header; qualify the names and put the directive in the .cpp:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME store_no_upward
@@ -209,6 +209,14 @@ add_test(NAME dstd_only
 add_test(NAME dstd_only_self
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_dstd_only.cmake)
+add_test(
+  NAME public_third_party_headers
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+          ${CMAKE_SOURCE_DIR}/cmake/scripts/check_public_third_party_headers.cmake)
+add_test(
+  NAME public_third_party_headers_self
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
+          ${CMAKE_SOURCE_DIR}/cmake/scripts/check_public_third_party_headers.cmake)
 add_test(NAME coro_lambdas
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_lambdas.cmake)

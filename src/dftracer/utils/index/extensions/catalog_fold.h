@@ -2,8 +2,8 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_CATALOG_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_CATALOG_FOLD_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/store/types.h>
 #include <dftracer/utils/trace/views/fold.h>
 

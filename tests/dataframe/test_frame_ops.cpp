@@ -20,11 +20,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-namespace dfm = dftracer::utils::dataframe;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::OpArgs;
-using dftracer::utils::dataframe::Series;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -74,25 +70,27 @@ dftu_dataframe* to_abi(const DataFrame& df) {
 
 TEST_SUITE("frame ops") {
     TEST_CASE("window: row_number, running_sum and lag by name") {
-        dstd::Vector<dfm::WindowColumn> specs(3);
-        specs[0].func = dfm::WindowFunc::RowNumber;
+        dstd::Vector<dataframe::WindowColumn> specs(3);
+        specs[0].func = dataframe::WindowFunc::RowNumber;
         specs[0].out = "rn";
-        specs[1].func = dfm::WindowFunc::RunningSum;
+        specs[1].func = dataframe::WindowFunc::RunningSum;
         specs[1].set_value("dur");
         specs[1].out = "cum";
-        specs[2].func = dfm::WindowFunc::Lag;
+        specs[2].func = dataframe::WindowFunc::Lag;
         specs[2].set_value("dur");
         specs[2].params.offset = 1;
         specs[2].out = "prev";
-        DataFrame out = dfm::window(make_events(), {"pid"}, {"ts"}, specs);
+        DataFrame out =
+            dataframe::window(make_events(), {"pid"}, {"ts"}, specs);
         CHECK(out.names == dstd::Vector<dstd::String>{"pid", "ts", "dur", "rn",
                                                       "cum", "prev"});
         CHECK(i64_col(out, "rn") == dstd::Vector<I>{1, 2, 3, 1});
         CHECK(i64_col(out, "cum") == dstd::Vector<I>{1, 3, 6, 4});
         CHECK(i64_col(out, "prev") == dstd::Vector<I>{NI, 1, 2, NI});
         specs[1].set_value("nope");
-        CHECK_THROWS_AS(dfm::window(make_events(), {"pid"}, {"ts"}, specs),
-                        std::out_of_range);
+        CHECK_THROWS_AS(
+            dataframe::window(make_events(), {"pid"}, {"ts"}, specs),
+            std::out_of_range);
     }
 
     TEST_CASE("gap_fill: locf over a grid, with and without a range") {
@@ -101,13 +99,14 @@ TEST_SUITE("frame ops") {
         df.columns.push_back(i64s({1, 1, 1}));
         df.columns.push_back(i64s({0, 10, 30}));
         df.columns.push_back(i64s({100, 110, 130}));
-        DataFrame locf = dfm::gap_fill(df, {"pid"}, "ts", 10, {"v"},
-                                       dfm::GapFillMode::Locf, dstd::nullopt);
+        DataFrame locf =
+            dataframe::gap_fill(df, {"pid"}, "ts", 10, {"v"},
+                                dataframe::GapFillMode::Locf, dstd::nullopt);
         CHECK(i64_col(locf, "ts") == dstd::Vector<I>{0, 10, 20, 30});
         CHECK(i64_col(locf, "v") == dstd::Vector<I>{100, 110, 110, 130});
-        DataFrame ranged =
-            dfm::gap_fill(df, {"pid"}, "ts", 10, {"v"}, dfm::GapFillMode::None,
-                          dstd::Pair<std::int64_t, std::int64_t>{0, 40});
+        DataFrame ranged = dataframe::gap_fill(
+            df, {"pid"}, "ts", 10, {"v"}, dataframe::GapFillMode::None,
+            dstd::Pair<std::int64_t, std::int64_t>{0, 40});
         CHECK(i64_col(ranged, "ts") == dstd::Vector<I>{0, 10, 20, 30, 40});
         CHECK(i64_col(ranged, "v") == dstd::Vector<I>{100, 110, NI, 130, NI});
     }
@@ -125,16 +124,18 @@ TEST_SUITE("frame ops") {
         right.columns.push_back(i64s({1, 1, 2}));
         right.columns.push_back(i64s({5, 20, 50}));
         right.columns.push_back(i64s({50, 200, 500}));
-        DataFrame out = dfm::asof(left, right, "ts", {"pid"},
-                                  dfm::AsofDirection::Backward, dstd::nullopt);
+        DataFrame out =
+            dataframe::asof(left, right, "ts", {"pid"},
+                            dataframe::AsofDirection::Backward, dstd::nullopt);
         CHECK(out.names == dstd::Vector<dstd::String>{"pid", "ts", "x", "y"});
         CHECK(i64_col(out, "x") == dstd::Vector<I>{1, 2, 3});
         CHECK(i64_col(out, "y") == dstd::Vector<I>{50, 200, NI});
-        DataFrame tight = dfm::asof(left, right, "ts", {"pid"},
-                                    dfm::AsofDirection::Backward, 3);
+        DataFrame tight = dataframe::asof(
+            left, right, "ts", {"pid"}, dataframe::AsofDirection::Backward, 3);
         CHECK(i64_col(tight, "y") == dstd::Vector<I>{NI, NI, NI});
-        DataFrame fwd = dfm::asof(left, right, "ts", {"pid"},
-                                  dfm::AsofDirection::Forward, dstd::nullopt);
+        DataFrame fwd =
+            dataframe::asof(left, right, "ts", {"pid"},
+                            dataframe::AsofDirection::Forward, dstd::nullopt);
         CHECK(i64_col(fwd, "y") == dstd::Vector<I>{200, NI, 500});
     }
 
@@ -148,19 +149,20 @@ TEST_SUITE("frame ops") {
         right.columns.push_back(i64s({10, 20}));
         right.columns.push_back(i64s({1, 2}));
         DataFrame inner =
-            dfm::interval(left, right, "p", "lo", "hi", {}, false);
+            dataframe::interval(left, right, "p", "lo", "hi", {}, false);
         CHECK(inner.names == dstd::Vector<dstd::String>{"p", "tag"});
         CHECK(i64_col(inner, "p") == dstd::Vector<I>{5, 15});
         CHECK(i64_col(inner, "tag") == dstd::Vector<I>{1, 2});
-        DataFrame outer = dfm::interval(left, right, "p", "lo", "hi", {}, true);
+        DataFrame outer =
+            dataframe::interval(left, right, "p", "lo", "hi", {}, true);
         CHECK(i64_col(outer, "p") == dstd::Vector<I>{5, 15, 99});
         CHECK(i64_col(outer, "tag") == dstd::Vector<I>{1, 2, NI});
     }
 
     TEST_CASE("the four ops as lazy plan steps through frame_op") {
         auto scan = [](DataFrame df) {
-            return dfm::LazyFrame::scan(
-                dstd::make_shared<dfm::InMemorySource>(std::move(df)));
+            return dataframe::LazyFrame::scan(
+                dstd::make_shared<dataframe::InMemorySource>(std::move(df)));
         };
         auto run = [](dftracer::utils::coro::CoroTask<DataFrame> t) {
             return dftracer::utils::default_runtime()
@@ -177,7 +179,7 @@ TEST_SUITE("frame ops") {
         specs[1].out = "cum";
         OpArgs warg;
         warg.strlist(1, pid, 1).strlist(2, ts, 1).winlist(3, specs);
-        dfm::LazyFrame plan =
+        dataframe::LazyFrame plan =
             scan(make_events()).frame_op("dftu.frame.window", warg);
         CHECK(plan.schema().empty());
         DataFrame w = run(plan.collect(1));

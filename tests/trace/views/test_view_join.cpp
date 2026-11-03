@@ -12,8 +12,6 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 using namespace test_view_common;
 
-namespace dataframe = dftracer::utils::dataframe;
-
 namespace {
 
 std::int64_t col_of(const dataframe::DataFrame& b, const dstd::String& name) {

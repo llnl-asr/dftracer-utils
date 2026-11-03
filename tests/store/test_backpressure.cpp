@@ -45,26 +45,7 @@ struct DataFileWriterTestHook {
 
 namespace {
 
-namespace memory = dftracer::utils::memory;
-namespace store = dftracer::utils::store;
-
-using dftracer::utils::Runtime;
-using dftracer::utils::TaskHandle;
-using dstd::ByteView;
-using dstd::Condition;
-using store::Batch;
-using store::FoldKind;
-using store::NamespaceSpec;
-using store::ScopeKey;
-using store::ScopeState;
-using store::engine::DataFileReader;
-using store::engine::NamespaceId;
-using store::engine::Snapshot;
-using store::engine::Writer;
-using store::engine::WriterErrc;
-using store::engine::WriterExtentsCounters;
-using store::engine::WriterOptions;
-using store::engine::WriterTestHook;
+using namespace dftracer::utils::store;
 
 constexpr std::uint32_t EXTENT_BYTES = 64 * 1024;
 constexpr int RUNTIME_THREADS = 8;
@@ -95,11 +76,11 @@ constexpr bool SANITIZED = false;
 constexpr bool SANITIZED = false;
 #endif
 
-ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::String to_std(ByteView bytes) {
+dstd::String to_std(dstd::ByteView bytes) {
     return dstd::String(reinterpret_cast<const char*>(bytes.data()),
                         bytes.size());
 }
@@ -111,7 +92,7 @@ dstd::String i64_bytes(std::int64_t value) {
     return bytes;
 }
 
-std::int64_t read_i64(ByteView bytes) {
+std::int64_t read_i64(dstd::ByteView bytes) {
     REQUIRE(bytes.size() == 8);
     return std::bit_cast<std::int64_t>(
         dstd::read_u64_le(reinterpret_cast<const std::uint8_t*>(bytes.data())));
@@ -156,8 +137,8 @@ dstd::String scope_path(int index) {
 
 /// Options that commit only when asked: neither the size nor the interval ever
 /// fires, so a commit is the only thing that seals an extent.
-WriterOptions manual_options(std::uint64_t quota) {
-    WriterOptions options;
+engine::WriterOptions manual_options(std::uint64_t quota) {
+    engine::WriterOptions options;
     options.extent_size = EXTENT_BYTES;
     options.extent_quota_bytes = quota;
     options.commit_bytes = std::uint64_t{1} << 40;
@@ -172,20 +153,21 @@ Runtime& store_runtime() {
     return runtime;
 }
 
-dstd::UniquePtr<Writer> make_writer(const dftu_utils_test::ScopedTestDir& dir,
-                                    const WriterOptions& options) {
+dstd::UniquePtr<engine::Writer> make_writer(
+    const dftu_utils_test::ScopedTestDir& dir,
+    const engine::WriterOptions& options) {
     auto created =
-        Writer::create(dir.str(), *store_runtime().executor(), options);
+        engine::Writer::create(dir.str(), *store_runtime().executor(), options);
     REQUIRE(created.has_value());
     return std::move(*created);
 }
 
-dstd::Expected<void, dstd::Error> close_writer(Writer& writer) {
+dstd::Expected<void, dstd::Error> close_writer(engine::Writer& writer) {
     return store_runtime().submit(writer.close()).get();
 }
 
 bool is_busy(const dstd::Error& error) {
-    return error.is_code(WriterErrc::Busy);
+    return error.is_code(engine::WriterErrc::Busy);
 }
 
 template <class Handle>
@@ -194,7 +176,7 @@ void await_handle(Handle& handle, std::chrono::seconds limit) {
     handle.wait();
 }
 
-void await_space(Writer& writer) {
+void await_space(engine::Writer& writer) {
     TaskHandle handle = store_runtime().submit(writer.space(), "writer-space");
     await_handle(handle, WAIT_LIMIT);
 }
@@ -202,7 +184,7 @@ void await_space(Writer& writer) {
 /// The commit of one batch with the retry the writer documents. The attempts
 /// are bounded so a writer that never makes progress fails the test.
 coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_retrying(
-    Writer& writer, Batch batch, int attempts) {
+    engine::Writer& writer, Batch batch, int attempts) {
     for (int attempt = 0; attempt < attempts; ++attempt) {
         auto committed = writer.commit(std::move(batch));
         if (committed.has_value() || !is_busy(committed.error())) {
@@ -211,13 +193,13 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_retrying(
         co_await writer.space();
     }
     co_return dstd::Unexpected<dstd::Error>(
-        dstd::Error(WriterErrc::Busy, "the writer made no progress"));
+        dstd::Error(engine::WriterErrc::Busy, "the writer made no progress"));
 }
 
 template <class KeyFn, class ValueFn>
-Batch raw_batch(Writer& writer, NamespaceId space, const ScopeKey& scope,
-                std::size_t keys, std::size_t value_bytes, KeyFn key_of,
-                ValueFn value_of) {
+Batch raw_batch(engine::Writer& writer, engine::NamespaceId space,
+                const ScopeKey& scope, std::size_t keys,
+                std::size_t value_bytes, KeyFn key_of, ValueFn value_of) {
     Batch batch = writer.batch(space, scope, 0);
     for (std::size_t k = 0; k < keys; ++k) {
         const dstd::String value = padded(value_of(k), value_bytes);
@@ -226,8 +208,8 @@ Batch raw_batch(Writer& writer, NamespaceId space, const ScopeKey& scope,
     return batch;
 }
 
-Batch fold_batch(Writer& writer, NamespaceId space, const ScopeKey& scope,
-                 std::int64_t value, std::size_t keys) {
+Batch fold_batch(engine::Writer& writer, engine::NamespaceId space,
+                 const ScopeKey& scope, std::int64_t value, std::size_t keys) {
     Batch batch = writer.batch(space, scope, 0);
     for (std::size_t k = 0; k < keys; ++k) {
         const dstd::String key =
@@ -290,7 +272,7 @@ struct CopyRow {
 };
 
 dstd::Vector<CopyRow> read_copies(const dstd::String& path) {
-    auto reader = DataFileReader::open(dstd::String(path));
+    auto reader = engine::DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
     dstd::Map<std::uint32_t, dstd::String> scope_paths;
     for (const store::engine::ScopeItem& scope : reader->index().scopes) {
@@ -325,13 +307,13 @@ TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
 
     auto created = writer->add_namespace(put_spec("raw-a", 0));
     REQUIRE(created.has_value());
-    const NamespaceId raw_a = *created;
+    const engine::NamespaceId raw_a = *created;
     created = writer->add_namespace(put_spec("raw-b", 1));
     REQUIRE(created.has_value());
-    const NamespaceId raw_b = *created;
+    const engine::NamespaceId raw_b = *created;
     created = writer->add_namespace(fold_spec("sums", FoldKind::SumI64));
     REQUIRE(created.has_value());
-    const NamespaceId sums = *created;
+    const engine::NamespaceId sums = *created;
 
     const auto scope_of = [](int thread, int round) {
         return scope_path((thread * 31 + round * 7) % SCOPES);
@@ -402,7 +384,8 @@ TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
 
     REQUIRE(close_writer(*writer).has_value());
 
-    const WriterExtentsCounters counters = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters counters =
+        engine::WriterTestHook::extents(*writer);
     CHECK(counters.quota == QUOTA);
     CHECK(counters.busy > 0);
     CHECK(counters.over_quota == 0);
@@ -410,7 +393,7 @@ TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
     CHECK(counters.held == 0);
     CHECK(counters.reserved == 0);
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
 
     auto cursor = snapshot->scan_all(put_spec("raw-a", 0), {}, {});
@@ -441,7 +424,7 @@ TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
 
     auto created = writer->add_namespace(put_spec("quota", 0));
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
 
     const auto key_of = [](int batch, std::size_t k) {
@@ -481,7 +464,8 @@ TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
     await_handle(handle, TASK_LIMIT);
     CHECK(errors.load() == 0);
 
-    const WriterExtentsCounters before = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters before =
+        engine::WriterTestHook::extents(*writer);
     CHECK(before.quota == EXTENT_BYTES);
     CHECK(before.busy > 0);
     CHECK(before.over_quota == 0);
@@ -489,11 +473,12 @@ TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
 
     REQUIRE(close_writer(*writer).has_value());
 
-    const WriterExtentsCounters after = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters after =
+        engine::WriterTestHook::extents(*writer);
     CHECK(after.held == 0);
     CHECK(after.reserved == 0);
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     auto cursor = snapshot->scan_all(put_spec("quota", 0), {}, {});
     const RowsByScope got = index_rows(collect(cursor));
@@ -501,10 +486,10 @@ TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
     CHECK(got == expected);
 
     dftu_utils_test::ScopedTestDir other("store_backpressure_zero_quota");
-    auto refused = Writer::create(other.str(), *store_runtime().executor(),
-                                  manual_options(0));
+    auto refused = engine::Writer::create(
+        other.str(), *store_runtime().executor(), manual_options(0));
     REQUIRE_FALSE(refused.has_value());
-    CHECK(refused.error().is(Condition::InvalidArgument));
+    CHECK(refused.error().is(dstd::Condition::InvalidArgument));
 }
 
 TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
@@ -513,7 +498,7 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
 
     auto created = writer->add_namespace(put_spec("busy", 0));
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     // The refused commit names the second scope, so its copy id only shows
     // whether the commit that was Busy consumed one.
     const ScopeKey refused_scope = file_scope(scope_path(0));
@@ -560,7 +545,7 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
     CHECK(copy_id_of(copies, scope_path(0)) == 3);
     for (const CopyRow& copy : copies) CHECK(copy.generation == 1);
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     REQUIRE(snapshot->state(put_spec("busy", 0), refused_scope) ==
             ScopeState::Ready);
@@ -593,7 +578,7 @@ TEST_CASE("back pressure: a batch larger than the quota is taken over it") {
 
     auto created = writer->add_namespace(put_spec("over", 0));
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
 
     const auto key_of = [](std::size_t k) {
@@ -609,7 +594,8 @@ TEST_CASE("back pressure: a batch larger than the quota is taken over it") {
                                           BIG_VALUE_BYTES, key_of, value_of));
     REQUIRE(taken.has_value());
 
-    const WriterExtentsCounters counters = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters counters =
+        engine::WriterTestHook::extents(*writer);
     CHECK(counters.quota == EXTENT_BYTES);
     CHECK(counters.over_quota == 1);
     CHECK(counters.peak_held > counters.quota);
@@ -637,7 +623,7 @@ TEST_CASE("back pressure: a batch larger than the quota is taken over it") {
 
     REQUIRE(close_writer(*writer).has_value());
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     for (std::size_t k = 0; k < BIG_KEYS; ++k) {
         auto value =
@@ -663,18 +649,18 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
     memory::PoolHandle budget_pool = child_pool("backpressure budget", 0);
     REQUIRE(static_cast<bool>(budget_pool));
 
-    dstd::UniquePtr<Writer> writer;
+    dstd::UniquePtr<engine::Writer> writer;
     {
         memory::Scope pool_scope(*budget_pool.get());
-        auto created = Writer::create(dir.str(), *store_runtime().executor(),
-                                      manual_options(QUOTA));
+        auto created = engine::Writer::create(
+            dir.str(), *store_runtime().executor(), manual_options(QUOTA));
         REQUIRE(created.has_value());
         writer = std::move(*created);
     }
 
     auto created = writer->add_namespace(put_spec("budget", 0));
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     const auto scope_of = [](int thread) {
         return scope_path(thread % SCOPES);
     };
@@ -719,8 +705,8 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
                                     }),
                                 RETRY_ATTEMPTS);
                             if (!done.has_value()) errors.fetch_add(1);
-                            const WriterExtentsCounters counters =
-                                WriterTestHook::extents(*writer);
+                            const engine::WriterExtentsCounters counters =
+                                engine::WriterTestHook::extents(*writer);
                             if (counters.held == 0) continue;
                             if (counters.reserved >= counters.held) {
                                 charged_while_held.fetch_add(1);
@@ -738,17 +724,19 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
     CHECK(charged_while_held.load() > 0);
     CHECK(uncharged_while_held.load() == 0);
 
-    const WriterExtentsCounters held = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters held =
+        engine::WriterTestHook::extents(*writer);
     CHECK(held.over_quota == 0);
     CHECK(held.peak_held <= held.quota);
 
     REQUIRE(close_writer(*writer).has_value());
 
-    const WriterExtentsCounters after = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters after =
+        engine::WriterTestHook::extents(*writer);
     CHECK(after.held == 0);
     CHECK(after.reserved == 0);
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     auto cursor = snapshot->scan_all(put_spec("budget", 0), {}, {});
     const RowsByScope got = index_rows(collect(cursor));
@@ -768,18 +756,18 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
     memory::PoolHandle budget_pool = child_pool("refused budget", LIMIT_BYTES);
     REQUIRE(static_cast<bool>(budget_pool));
 
-    dstd::UniquePtr<Writer> writer;
+    dstd::UniquePtr<engine::Writer> writer;
     {
         memory::Scope pool_scope(*budget_pool.get());
-        auto created = Writer::create(dir.str(), *store_runtime().executor(),
-                                      manual_options(QUOTA));
+        auto created = engine::Writer::create(
+            dir.str(), *store_runtime().executor(), manual_options(QUOTA));
         REQUIRE(created.has_value());
         writer = std::move(*created);
     }
 
     auto created = writer->add_namespace(put_spec("refused", 0));
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
     const auto key_of = [](int batch, std::size_t k) {
         return "r" + dstd::to_string(batch) + "-k" + dstd::to_string(k);
@@ -818,15 +806,16 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
     await_handle(handle, TASK_LIMIT);
     CHECK(errors.load() == 0);
 
-    const WriterExtentsCounters counters = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters counters =
+        engine::WriterTestHook::extents(*writer);
     CHECK(counters.over_quota == BATCHES);
     CHECK(counters.busy > 0);
     CHECK(counters.reserved == 0);
 
     REQUIRE(close_writer(*writer).has_value());
-    CHECK(WriterTestHook::extents(*writer).held == 0);
+    CHECK(engine::WriterTestHook::extents(*writer).held == 0);
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     auto cursor = snapshot->scan_all(put_spec("refused", 0), {}, {});
     const RowsByScope got = index_rows(collect(cursor));
@@ -840,7 +829,7 @@ TEST_CASE("back pressure: a latched extent error ends space() and commit") {
 
     auto created = writer->add_namespace(put_spec("latched", 0));
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
 
     const auto one = [&](const dstd::String& tag) {
@@ -851,26 +840,28 @@ TEST_CASE("back pressure: a latched extent error ends space() and commit") {
     };
 
     REQUIRE(writer->commit(one("held")).has_value());
-    const WriterExtentsCounters before = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters before =
+        engine::WriterTestHook::extents(*writer);
     CHECK(before.held > 0);
 
     store::engine::DataFileWriterTestHook::reopen_read_only(
-        WriterTestHook::file(*writer), dstd::String(writer->path()));
+        engine::WriterTestHook::file(*writer), dstd::String(writer->path()));
 
     auto flushed = store_runtime().submit(writer->flush());
     await_handle(flushed, WAIT_LIMIT);
     const auto flush_result = flushed.get();
     REQUIRE_FALSE(flush_result.has_value());
-    CHECK(flush_result.error().is(Condition::Io));
+    CHECK(flush_result.error().is(dstd::Condition::Io));
 
-    const WriterExtentsCounters failed = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters failed =
+        engine::WriterTestHook::extents(*writer);
     CHECK(failed.held == 0);
     CHECK(failed.reservation == 0);
 
     auto refused = writer->commit(one("second"));
     REQUIRE_FALSE(refused.has_value());
     CHECK_FALSE(is_busy(refused.error()));
-    CHECK(refused.error().is(Condition::Io));
+    CHECK(refused.error().is(dstd::Condition::Io));
 
     await_space(*writer);
     await_space(*writer);
@@ -887,7 +878,7 @@ TEST_CASE(
 
     auto created = writer->add_namespace(put_spec("parked", 0));
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
 
     REQUIRE(writer
@@ -896,15 +887,16 @@ TEST_CASE(
                     [](std::size_t k) { return "k" + dstd::to_string(k); },
                     [](std::size_t k) { return "v" + dstd::to_string(k); }))
                 .has_value());
-    CHECK(WriterTestHook::extents(*writer).held > 0);
+    CHECK(engine::WriterTestHook::extents(*writer).held > 0);
 
     // space() seals the open extent and parks before its write fails. Nothing
     // else touches the writer, so only the failed write can end the wait.
     store::engine::DataFileWriterTestHook::reopen_read_only(
-        WriterTestHook::file(*writer), dstd::String(writer->path()));
+        engine::WriterTestHook::file(*writer), dstd::String(writer->path()));
     await_space(*writer);
 
-    const WriterExtentsCounters after = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters after =
+        engine::WriterTestHook::extents(*writer);
     CHECK(after.held == 0);
     CHECK(after.reservation == 0);
 
@@ -925,16 +917,17 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     memory::PoolHandle budget_pool = child_pool("limit budget", LIMIT_BYTES);
     REQUIRE(static_cast<bool>(budget_pool));
 
-    dstd::UniquePtr<Writer> writer;
+    dstd::UniquePtr<engine::Writer> writer;
     {
         memory::Scope pool_scope(*budget_pool.get());
-        auto created = Writer::create(dir.str(), *store_runtime().executor(),
-                                      manual_options(16 * LIMIT_BYTES));
+        auto created =
+            engine::Writer::create(dir.str(), *store_runtime().executor(),
+                                   manual_options(16 * LIMIT_BYTES));
         REQUIRE(created.has_value());
         writer = std::move(*created);
     }
 
-    dstd::Vector<NamespaceId> spaces;
+    dstd::Vector<engine::NamespaceId> spaces;
     for (int n = 0; n < NAMESPACES; ++n) {
         auto created =
             writer->add_namespace(put_spec("limit-" + dstd::to_string(n), 0));
@@ -967,7 +960,8 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
             refused = true;
         }
     }
-    const WriterExtentsCounters at_refusal = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters at_refusal =
+        engine::WriterTestHook::extents(*writer);
     CHECK(refused);
     CHECK(taken > 0);
     CHECK(at_refusal.busy == 1);
@@ -996,11 +990,12 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     CHECK(errors.load() == 0);
 
     REQUIRE(close_writer(*writer).has_value());
-    const WriterExtentsCounters after = WriterTestHook::extents(*writer);
+    const engine::WriterExtentsCounters after =
+        engine::WriterTestHook::extents(*writer);
     CHECK(after.held == 0);
     CHECK(after.over_released == 0);
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     for (int n = 0; n < NAMESPACES; ++n) {
         auto cursor = snapshot->scan_all(
@@ -1015,7 +1010,7 @@ TEST_CASE("back pressure: a Busy commit writes none of its big values") {
 
     auto created = writer->add_namespace(put_spec("big", 0));
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
 
     // A 40 KiB segment is past the half-extent quota and stays in its open
@@ -1024,7 +1019,7 @@ TEST_CASE("back pressure: a Busy commit writes none of its big values") {
     const dstd::String fill_value(40 * 1024, 'f');
     fill.put(view_of(dstd::String("fill")), view_of(fill_value));
     REQUIRE(writer->commit(std::move(fill)).has_value());
-    CHECK(WriterTestHook::extents(*writer).over_quota == 1);
+    CHECK(engine::WriterTestHook::extents(*writer).over_quota == 1);
 
     const dstd::String path = dstd::String(writer->path());
     const auto size_before = dstd::fs::file_size(path).value();
@@ -1044,7 +1039,7 @@ TEST_CASE("back pressure: a Busy commit writes none of its big values") {
     CHECK(retried.get().has_value());
     REQUIRE(close_writer(*writer).has_value());
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     auto cursor = snapshot->scan_all(put_spec("big", 0), {}, {});
     const dstd::Vector<Row> rows = collect(cursor);
@@ -1060,11 +1055,11 @@ TEST_CASE(
 
     auto created = writer->add_namespace(put_spec("announce", 0));
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
 
-    static Writer* hooked = nullptr;
-    static NamespaceId hooked_space;
+    static engine::Writer* hooked = nullptr;
+    static engine::NamespaceId hooked_space;
     static const ScopeKey* hooked_scope = nullptr;
     static bool appended = false;
     hooked = writer.get();
@@ -1075,7 +1070,7 @@ TEST_CASE(
     // Nothing is held when space() seals, so its seal writes nothing. The hook
     // then commits a batch that stays in an open extent. Only the commit's own
     // seal, done because a wait is announced, writes it and wakes the waiter.
-    WriterTestHook::set_space_sealed([](Writer& w) {
+    engine::WriterTestHook::set_space_sealed([](engine::Writer& w) {
         if (&w != hooked || appended) return;
         Batch batch = w.batch(hooked_space, *hooked_scope, 0);
         const dstd::String value(RAW_VALUE_BYTES, 'a');
@@ -1083,12 +1078,12 @@ TEST_CASE(
         appended = w.commit(std::move(batch)).has_value();
     });
     await_space(*writer);
-    WriterTestHook::set_space_sealed(nullptr);
+    engine::WriterTestHook::set_space_sealed(nullptr);
     CHECK(appended);
-    CHECK(WriterTestHook::extents(*writer).held == 0);
+    CHECK(engine::WriterTestHook::extents(*writer).held == 0);
 
     REQUIRE(close_writer(*writer).has_value());
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     auto cursor = snapshot->scan_all(put_spec("announce", 0), {}, {});
     CHECK(collect(cursor).size() == 1);
@@ -1104,10 +1099,9 @@ TEST_CASE("back pressure keeps extents full under steady load") {
     auto writer = make_writer(dir, manual_options(4 * EXTENT_BYTES));
     auto created = writer->add_namespace(put_spec("full", 0));
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
 
-    namespace io_fault = store::engine::io_fault;
-    io_fault::start_counting();
+    engine::io_fault::start_counting();
     std::atomic<int> errors{0};
     TaskHandle handle = store_runtime().submit(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
@@ -1133,13 +1127,14 @@ TEST_CASE("back pressure keeps extents full under steady load") {
         "full extents");
     await_handle(handle, TASK_LIMIT);
     REQUIRE(close_writer(*writer).has_value());
-    const io_fault::Counts counts = io_fault::stop_counting();
+    const engine::io_fault::Counts counts = engine::io_fault::stop_counting();
     CHECK(errors.load() == 0);
 
-    const auto extent = static_cast<std::size_t>(io_fault::WriteKind::Extent);
+    const auto extent =
+        static_cast<std::size_t>(engine::io_fault::WriteKind::Extent);
     const std::uint64_t extents = counts.writes[extent];
     const std::uint64_t bytes = counts.bytes[extent];
-    const std::uint64_t busy = WriterTestHook::extents(*writer).busy;
+    const std::uint64_t busy = engine::WriterTestHook::extents(*writer).busy;
     INFO("extents " << extents << " bytes " << bytes << " busy " << busy);
     REQUIRE(extents > 0);
     if (!SANITIZED) CHECK(busy > 0);

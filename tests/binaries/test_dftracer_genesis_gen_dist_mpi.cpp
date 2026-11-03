@@ -16,8 +16,6 @@
 
 using namespace dftracer::utils;
 
-using dftu_utils_test::ScopedTestDir;
-
 namespace {
 
 dstd::String binary() {
@@ -76,7 +74,7 @@ TEST_CASE("ranks split the run groups and join one output") {
         return;
     }
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_mpi");
+    dftu_utils_test::ScopedTestDir d("gen_dist_mpi");
     const dstd::Path root = d.path() / "root";
     for (int i = 0; i < 6; ++i)
         write_run(root, "in" + dstd::to_string(i), 200 * (i + 1));
@@ -103,7 +101,7 @@ TEST_CASE("--shard is refused with more than one rank") {
         return;
     }
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_mpi_shard");
+    dftu_utils_test::ScopedTestDir d("gen_dist_mpi_shard");
     write_run(d.path() / "root", "in", 100);
     CHECK(
         dftu_utils_test::run_mpi(launcher, 2, binary(),

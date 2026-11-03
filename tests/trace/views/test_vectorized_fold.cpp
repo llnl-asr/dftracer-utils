@@ -17,20 +17,13 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::trace::RecordPhase;
-using dstd::StringIntern;
-namespace df = dftracer::utils::dataframe;
-namespace detail = dftracer::utils::trace::views::detail;
-using detail::FoldBatch;
-using detail::FoldEvent;
-using detail::ScanUnit;
-using detail::VectorizedFold;
+using namespace dftracer::utils::trace;
 
 namespace {
 
-FoldEvent ev(StringIntern& in, std::uint64_t pid, std::uint64_t ts,
-             std::uint64_t dur) {
-    FoldEvent e;
+views::detail::FoldEvent ev(dstd::StringIntern& in, std::uint64_t pid,
+                            std::uint64_t ts, std::uint64_t dur) {
+    views::detail::FoldEvent e;
     e.cat_id = in.get_or_insert("POSIX");
     e.name_id = in.get_or_insert("read");
     e.pid = pid;
@@ -43,7 +36,7 @@ FoldEvent ev(StringIntern& in, std::uint64_t pid, std::uint64_t ts,
 }
 
 // Sum a numeric column with a real SIMD reduce over the materialized batch.
-std::int64_t col_sum(const df::DataFrame& d, const char* name) {
+std::int64_t col_sum(const dataframe::DataFrame& d, const char* name) {
     for (std::size_t i = 0; i < d.names.size(); ++i)
         if (d.names[i] == name) {
             dftu_scalar s =
@@ -60,10 +53,10 @@ struct Acc {
     std::int64_t dur_sum = 0;
 };
 
-VectorizedFold<Acc> make_fold(StringIntern& in) {
-    return VectorizedFold<Acc>(
+views::detail::VectorizedFold<Acc> make_fold(dstd::StringIntern& in) {
+    return views::detail::VectorizedFold<Acc>(
         in, [] { return Acc{}; },
-        [](Acc& a, const df::DataFrame& d) {
+        [](Acc& a, const dataframe::DataFrame& d) {
             a.rows += d.num_rows();
             a.dur_sum += col_sum(d, "dur");
         },
@@ -77,41 +70,47 @@ VectorizedFold<Acc> make_fold(StringIntern& in) {
 
 TEST_SUITE("VectorizedFold") {
     TEST_CASE("a batch is folded as columns, not per event") {
-        StringIntern in;
+        dstd::StringIntern in;
         auto fold = make_fold(in);
-        dstd::Vector<FoldEvent> evs = {ev(in, 1, 100, 5), ev(in, 1, 110, 5),
-                                       ev(in, 2, 120, 5)};
-        ScanUnit unit{};
-        fold.step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
+        dstd::Vector<views::detail::FoldEvent> evs = {
+            ev(in, 1, 100, 5), ev(in, 1, 110, 5), ev(in, 2, 120, 5)};
+        views::detail::ScanUnit unit{};
+        fold.step(views::detail::FoldBatch{
+            dstd::Span<const views::detail::FoldEvent>(evs), unit, {}});
         CHECK(fold.result().rows == 3);
         CHECK(fold.result().dur_sum == 15);  // SIMD reduce of the dur column
     }
 
     TEST_CASE("per-worker slices fold independently and merge") {
-        StringIntern in;
+        dstd::StringIntern in;
         auto proto = make_fold(in);
         auto a = proto.slice();  // fresh state, like a worker slot
         auto b = proto.slice();
-        dstd::Vector<FoldEvent> ea = {ev(in, 1, 1, 10), ev(in, 1, 2, 10)};
-        dstd::Vector<FoldEvent> eb = {ev(in, 2, 3, 7)};
-        ScanUnit unit{};
-        a->step(FoldBatch{dstd::Span<const FoldEvent>(ea), unit, {}});
-        b->step(FoldBatch{dstd::Span<const FoldEvent>(eb), unit, {}});
+        dstd::Vector<views::detail::FoldEvent> ea = {ev(in, 1, 1, 10),
+                                                     ev(in, 1, 2, 10)};
+        dstd::Vector<views::detail::FoldEvent> eb = {ev(in, 2, 3, 7)};
+        views::detail::ScanUnit unit{};
+        a->step(views::detail::FoldBatch{
+            dstd::Span<const views::detail::FoldEvent>(ea), unit, {}});
+        b->step(views::detail::FoldBatch{
+            dstd::Span<const views::detail::FoldEvent>(eb), unit, {}});
         a->merge(*b);
 
-        const auto* av = static_cast<VectorizedFold<Acc>*>(a.get());
+        const auto* av =
+            static_cast<views::detail::VectorizedFold<Acc>*>(a.get());
         CHECK(av->result().rows == 3);
         CHECK(av->result().dur_sum == 27);
     }
 
     TEST_CASE("a metadata-only batch materializes nothing") {
-        StringIntern in;
+        dstd::StringIntern in;
         auto fold = make_fold(in);
-        FoldEvent m = ev(in, 1, 1, 0);
+        views::detail::FoldEvent m = ev(in, 1, 1, 0);
         m.phase = RecordPhase::Metadata;
-        dstd::Vector<FoldEvent> evs = {m};
-        ScanUnit unit{};
-        fold.step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
+        dstd::Vector<views::detail::FoldEvent> evs = {m};
+        views::detail::ScanUnit unit{};
+        fold.step(views::detail::FoldBatch{
+            dstd::Span<const views::detail::FoldEvent>(evs), unit, {}});
         CHECK(fold.result().rows == 0);
         CHECK(fold.result().dur_sum == 0);
     }

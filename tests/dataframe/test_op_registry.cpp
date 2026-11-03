@@ -11,14 +11,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::Agg;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::find_op;
-using dftracer::utils::dataframe::GroupAgg;
-using dftracer::utils::dataframe::OpArgs;
-using dftracer::utils::dataframe::OpKind;
-using dftracer::utils::dataframe::Series;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -153,9 +146,6 @@ TEST_SUITE("op_registry") {
               "dftu.series.count", "dftu.series.reduce", "dftu.series.mode"})
             CHECK(dftu_op_find(name) != nullptr);
         CHECK(dftu_op_find("no_such_op") == nullptr);
-
-        using dftracer::utils::dataframe::op_at;
-        using dftracer::utils::dataframe::op_count;
 
         uint32_t n = op_count();
         REQUIRE(n >= 120);  // ~100 column ops + ~23 frame ops

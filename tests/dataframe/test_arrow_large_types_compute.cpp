@@ -20,18 +20,7 @@
 #include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;
-
-namespace df = dftracer::utils::dataframe;
-
-using dftracer::utils::dataframe::AggOp;
-using dftracer::utils::dataframe::AggSpec;
-using dftracer::utils::dataframe::AggStatePtr;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::is_wide_offset_type;
-using dftracer::utils::dataframe::narrow_varwidth_type;
-using dftracer::utils::dataframe::OwnedArrow;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -393,8 +382,6 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
     TEST_CASE(
         "DataFrame::group_by groups a LargeString key by exact value, "
         "keeping the wide-offset layout") {
-        using dftracer::utils::dataframe::Agg;
-        using dftracer::utils::dataframe::GroupAgg;
         Series keys = make_large_utf8({"x", "y", "x", "z", "y", "x"});
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
@@ -431,27 +418,28 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
-        AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                           dstd::Vector<const Series*>{&v1});
-        AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                           dstd::Vector<const Series*>{&v2});
-        df::agg_merge(*st1, *st2);
-        REQUIRE(df::agg_num_groups(*st1) == 3);
+        AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                  dstd::Vector<const Series*>{&v1});
+        AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                  dstd::Vector<const Series*>{&v2});
+        dataframe::agg_merge(*st1, *st2);
+        REQUIRE(dataframe::agg_num_groups(*st1) == 3);
 
         // Round-trip the merged partial through the spill blob before
         // finalizing, exercising the same path agg/serialize.cpp writes.
-        const dstd::String blob = df::agg_serialize(*st1);
-        AggStatePtr back = df::agg_deserialize(blob);
-        REQUIRE(df::agg_num_groups(*back) == 3);
+        const dstd::String blob = dataframe::agg_serialize(*st1);
+        AggStatePtr back = dataframe::agg_deserialize(blob);
+        REQUIRE(dataframe::agg_num_groups(*back) == 3);
 
-        DataFrame out = df::agg_finalize(*back, "k");
+        DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::LargeString);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
-        for (std::int64_t g = 0; g < df::agg_num_groups(*st1); ++g) {
-            const dstd::Vector<dstd::String> key = df::agg_group_key(*st1, g);
+        for (std::int64_t g = 0; g < dataframe::agg_num_groups(*st1); ++g) {
+            const dstd::Vector<dstd::String> key =
+                dataframe::agg_group_key(*st1, g);
             REQUIRE(key.size() == 1);
             if (key[0] == "x")
                 CHECK(n[g] == 3);

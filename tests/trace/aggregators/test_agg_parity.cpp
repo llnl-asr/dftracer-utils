@@ -35,12 +35,6 @@ using namespace test_view_common;
 
 namespace {
 
-namespace df = dftracer::utils::dataframe;
-using dstd::Map;
-using dstd::String;
-using dstd::StringView;
-using dstd::Vector;
-
 constexpr const char* RECORD_ENV = "DFTRACER_UTILS_AGG_PARITY_RECORD";
 constexpr double TOL_EXACT = 0.0;
 constexpr double TOL_MOMENT = 1e-9;
@@ -52,22 +46,22 @@ constexpr std::uint64_t SPAN_US = 12000000ULL;
 constexpr std::uint64_t ONE_SECOND_US = 1000000ULL;
 constexpr std::uint64_t FIVE_SECONDS_US = 5000000ULL;
 
-String read_text(const dstd::String& path) {
+dstd::String read_text(const dstd::String& path) {
     return dftu_utils_test::read_text(path);
 }
 
 // Writes the reference when recording and returns "", else returns the
 // reference text (a failure when the file is missing).
-String reference(const char* file, StringView produced) {
+dstd::String reference(const char* file, dstd::StringView produced) {
     if (const char* dir = std::getenv(RECORD_ENV)) {
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         dftu_utils_test::FileOut ofs(dstd::String(dir) + "/" + file);
         ofs << produced;
-        return String();
+        return dstd::String();
     }
     const dstd::String path =
         dstd::String(DFTRACER_UTILS_AGG_PARITY_DATA_DIR) + "/" + file;
-    String text = read_text(path);
+    dstd::String text = read_text(path);
     INFO("missing reference " << path);
     REQUIRE(!text.empty());
     return text;
@@ -260,8 +254,8 @@ Fixtures& fixtures() {
     return f;
 }
 
-String escape(StringView s) {
-    String out;
+dstd::String escape(dstd::StringView s) {
+    dstd::String out;
     for (unsigned char c : s) {
         if (c < 0x20 || c > 0x7e || c == '\\') {
             char buf[8];
@@ -274,18 +268,18 @@ String escape(StringView s) {
     return out;
 }
 
-String number_text(double v) {
+dstd::String number_text(double v) {
     char buf[40];
     std::snprintf(buf, sizeof buf, "%.17g", v);
-    return String(buf);
+    return dstd::String(buf);
 }
 
-Vector<String> split(StringView s, char sep) {
-    Vector<String> out;
+dstd::Vector<dstd::String> split(dstd::StringView s, char sep) {
+    dstd::Vector<dstd::String> out;
     std::size_t start = 0;
     while (start <= s.size()) {
         const auto p = s.find(sep, start);
-        if (p == StringView::npos) {
+        if (p == dstd::StringView::npos) {
             out.emplace_back(s.substr(start));
             break;
         }
@@ -295,7 +289,7 @@ Vector<String> split(StringView s, char sep) {
     return out;
 }
 
-bool starts_with(StringView s, StringView prefix) {
+bool starts_with(dstd::StringView s, dstd::StringView prefix) {
     return s.substr(0, prefix.size()) == prefix;
 }
 
@@ -308,20 +302,21 @@ bool rel_close(double x, double y, double tol) {
 
 // Line 1: column names. Line 2: S for a text column, N for a number. Then one
 // line per row, sorted by the key columns, tab separated.
-String table_text(const df::DataFrame& t, const Vector<String>& keys) {
+dstd::String table_text(const dataframe::DataFrame& t,
+                        const dstd::Vector<dstd::String>& keys) {
     const std::size_t ncols = t.names.size();
-    Vector<bool> text(ncols);
-    Vector<bool> is_key(ncols);
+    dstd::Vector<bool> text(ncols);
+    dstd::Vector<bool> is_key(ncols);
     for (std::size_t c = 0; c < ncols; ++c) {
-        text[c] = t.columns[c].type() == df::TypeId::String;
+        text[c] = t.columns[c].type() == dataframe::TypeId::String;
         is_key[c] = std::find(keys.begin(), keys.end(),
-                              StringView(t.names[c])) != keys.end();
+                              dstd::StringView(t.names[c])) != keys.end();
     }
-    Vector<dstd::Pair<String, String>> rows;
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> rows;
     for (std::int64_t r = 0; r < t.num_rows(); ++r) {
-        String line, key;
+        dstd::String line, key;
         for (std::size_t c = 0; c < ncols; ++c) {
-            String cell;
+            dstd::String cell;
             if (t.columns[c].is_null(r)) {
                 cell = "null";
             } else if (text[c]) {
@@ -339,10 +334,10 @@ String table_text(const df::DataFrame& t, const Vector<String>& keys) {
         rows.emplace_back(key + line, line);
     }
     std::sort(rows.begin(), rows.end());
-    String out;
+    dstd::String out;
     for (std::size_t c = 0; c < ncols; ++c) {
         if (c) out += '\t';
-        out += StringView(t.names[c]);
+        out += dstd::StringView(t.names[c]);
     }
     out += '\n';
     for (std::size_t c = 0; c < ncols; ++c) {
@@ -360,7 +355,7 @@ String table_text(const df::DataFrame& t, const Vector<String>& keys) {
 // An unclassified name fails the test, so a new column gets a rule on purpose.
 // The bare names epoch, level, size, step, offset and ret are the per-group
 // means of those event arguments.
-double column_tolerance(StringView name, bool& known) {
+double column_tolerance(dstd::StringView name, bool& known) {
     known = true;
     if (name == "n" || name == "time_bucket" || starts_with(name, "busy") ||
         starts_with(name, "active") || starts_with(name, "count") ||
@@ -381,7 +376,7 @@ double column_tolerance(StringView name, bool& known) {
     return TOL_EXACT;
 }
 
-bool cells_close(const String& a, const String& b, double tol) {
+bool cells_close(const dstd::String& a, const dstd::String& b, double tol) {
     if (a == b) return true;
     if (tol == 0.0 || a == "null" || b == "null") return false;
     return rel_close(std::strtod(a.c_str(), nullptr),
@@ -389,18 +384,19 @@ bool cells_close(const String& a, const String& b, double tol) {
 }
 
 struct ParsedTable {
-    Vector<String> cols;
-    Vector<String> kinds;
-    Map<String, Vector<String>> rows;
+    dstd::Vector<dstd::String> cols;
+    dstd::Vector<dstd::String> kinds;
+    dstd::Map<dstd::String, dstd::Vector<dstd::String>> rows;
 };
 
-ParsedTable parse_table(StringView text, const Vector<String>& keys) {
+ParsedTable parse_table(dstd::StringView text,
+                        const dstd::Vector<dstd::String>& keys) {
     ParsedTable t;
     const auto lines = split(text, '\n');
     REQUIRE(lines.size() >= 2);
     t.cols = split(lines[0], '\t');
     t.kinds = split(lines[1], '\t');
-    Vector<std::size_t> key_idx;
+    dstd::Vector<std::size_t> key_idx;
     for (const auto& k : keys) {
         const auto it = std::find(t.cols.begin(), t.cols.end(), k);
         REQUIRE(it != t.cols.end());
@@ -410,7 +406,7 @@ ParsedTable parse_table(StringView text, const Vector<String>& keys) {
         if (lines[i].empty()) continue;
         auto cells = split(lines[i], '\t');
         REQUIRE(cells.size() == t.cols.size());
-        String key;
+        dstd::String key;
         for (auto k : key_idx) {
             key += cells[k];
             key += '\x1f';
@@ -421,8 +417,9 @@ ParsedTable parse_table(StringView text, const Vector<String>& keys) {
     return t;
 }
 
-void compare_table(const char* label, StringView ref_text, StringView out_text,
-                   const Vector<String>& keys) {
+void compare_table(const char* label, dstd::StringView ref_text,
+                   dstd::StringView out_text,
+                   const dstd::Vector<dstd::String>& keys) {
     INFO(label);
     const ParsedTable ref = parse_table(ref_text, keys);
     const ParsedTable out = parse_table(out_text, keys);
@@ -455,7 +452,7 @@ using BuildView = View (*)(const View&);
 
 struct ViewQuery {
     const char* file;
-    Vector<String> keys;
+    dstd::Vector<dstd::String> keys;
     BuildView build;
 };
 
@@ -488,8 +485,8 @@ const dstd::Vector<AggSpec>& occupancy_aggs() {
     return aggs;
 }
 
-Vector<ViewQuery> view_queries() {
-    Vector<ViewQuery> queries{
+dstd::Vector<ViewQuery> view_queries() {
+    dstd::Vector<ViewQuery> queries{
         {"view_cat.tsv",
          {"cat"},
          [](const View& v) {
@@ -583,9 +580,10 @@ dstd::Vector<ViewFile> view_files(const dstd::Vector<dstd::String>& gz) {
     return files;
 }
 
-String replace_all(String s, StringView from, StringView to) {
+dstd::String replace_all(dstd::String s, dstd::StringView from,
+                         dstd::StringView to) {
     if (from.empty()) return s;
-    for (auto p = s.find(from); p != String::npos;
+    for (auto p = s.find(from); p != dstd::String::npos;
          p = s.find(from, p + to.size()))
         s.replace(p, from.size(), to);
     return s;
@@ -593,10 +591,10 @@ String replace_all(String s, StringView from, StringView to) {
 
 // The scratch directory name and the wall-clock time differ on every run, so
 // both are fixed to constants.
-String normalize_report(String text) {
+dstd::String normalize_report(dstd::String text) {
     text = replace_all(std::move(text), fixtures().root.str(), "<DIR>");
-    const StringView tag = "\"execution_time_ms\":";
-    for (auto p = text.find(tag); p != String::npos;
+    const dstd::StringView tag = "\"execution_time_ms\":";
+    for (auto p = text.find(tag); p != dstd::String::npos;
          p = text.find(tag, p + 1)) {
         std::size_t b = p + tag.size();
         while (b < text.size() && text[b] == ' ') ++b;
@@ -611,7 +609,7 @@ String normalize_report(String text) {
     return text;
 }
 
-String run_comparator(const dstd::Vector<dstd::String>& extra) {
+dstd::String run_comparator(const dstd::Vector<dstd::String>& extra) {
     const dstd::String binary = dftu_utils_test::find_binary_by_name(
         "DFTRACER_UTILS_COMPARATOR_PATH", "dftracer_comparator");
     REQUIRE(!binary.empty());
@@ -623,23 +621,23 @@ String run_comparator(const dstd::Vector<dstd::String>& extra) {
     const dstd::String out =
         dftu_utils_test::run_process_capture(binary, args, false, &rc);
     REQUIRE(rc == 0);
-    return normalize_report(String(out));
+    return normalize_report(dstd::String(out));
 }
 
 using Elem = simdjson::dom::element;
 using Obj = simdjson::dom::object;
 using Arr = simdjson::dom::array;
-using Fields = Map<String, Elem>;
-using EachFn = void (*)(const Elem&, const Elem&, const String&);
+using Fields = dstd::Map<dstd::String, Elem>;
+using EachFn = void (*)(const Elem&, const Elem&, const dstd::String&);
 
 enum class MetricKind { Exact, Moment, Quantile };
 
-MetricKind metric_kind(StringView name, bool& known) {
-    static constexpr StringView exact[] = {
+MetricKind metric_kind(dstd::StringView name, bool& known) {
+    static constexpr dstd::StringView exact[] = {
         "count",   "unique_files",  "proc_files", "processes",
         "threads", "time_pipeline", "time_io",    "total_bytes"};
-    static constexpr StringView moment[] = {"dur_mean", "size_mean",
-                                            "transfer_size", "bandwidth"};
+    static constexpr dstd::StringView moment[] = {"dur_mean", "size_mean",
+                                                  "transfer_size", "bandwidth"};
     known = true;
     if (std::find(std::begin(exact), std::end(exact), name) != std::end(exact))
         return MetricKind::Exact;
@@ -647,39 +645,39 @@ MetricKind metric_kind(StringView name, bool& known) {
         std::end(moment))
         return MetricKind::Moment;
     const auto p = name.rfind("_p");
-    if (p != StringView::npos && p + 2 < name.size() &&
+    if (p != dstd::StringView::npos && p + 2 < name.size() &&
         std::isdigit(static_cast<unsigned char>(name[p + 2])))
         return MetricKind::Quantile;
     known = false;
     return MetricKind::Exact;
 }
 
-Fields fields_of(const Elem& e, const String& where) {
+Fields fields_of(const Elem& e, const dstd::String& where) {
     Fields out;
     Obj obj;
     REQUIRE_MESSAGE(e.get(obj) == simdjson::SUCCESS,
                     where << ": not an object");
-    for (auto field : obj) out.emplace(String(field.key), field.value);
+    for (auto field : obj) out.emplace(dstd::String(field.key), field.value);
     return out;
 }
 
-Vector<Elem> items_of(const Elem& e, const String& where) {
-    Vector<Elem> out;
+dstd::Vector<Elem> items_of(const Elem& e, const dstd::String& where) {
+    dstd::Vector<Elem> out;
     Arr arr;
     REQUIRE_MESSAGE(e.get(arr) == simdjson::SUCCESS, where << ": not an array");
     for (auto item : arr) out.push_back(item);
     return out;
 }
 
-String string_field(const Fields& f, StringView key) {
+dstd::String string_field(const Fields& f, dstd::StringView key) {
     const auto it = f.find(key);
-    StringView sv;
+    dstd::StringView sv;
     if (it == f.end() || it->second.get(sv) != simdjson::SUCCESS)
-        return String();
-    return String(sv);
+        return dstd::String();
+    return dstd::String(sv);
 }
 
-double number_field(const Fields& f, StringView key) {
+double number_field(const Fields& f, dstd::StringView key) {
     double v = 0;
     const auto it = f.find(key);
     if (it != f.end() && it->second.get(v) != simdjson::SUCCESS) v = 0;
@@ -687,7 +685,7 @@ double number_field(const Fields& f, StringView key) {
 }
 
 void compare_key_sets(const Fields& ref, const Fields& out,
-                      const String& where) {
+                      const dstd::String& where) {
     for (const auto& entry : ref)
         CHECK_MESSAGE(out.count(entry.first) != 0,
                       where << ": field missing in output: " << entry.first);
@@ -696,7 +694,8 @@ void compare_key_sets(const Fields& ref, const Fields& out,
                       where << ": field not in reference: " << entry.first);
 }
 
-void compare_exact(const Elem& ref, const Elem& out, const String& where) {
+void compare_exact(const Elem& ref, const Elem& out,
+                   const dstd::String& where) {
     const bool numbers = ref.is_number() && out.is_number();
     const bool same_type = ref.type() == out.type() || numbers;
     CHECK_MESSAGE(same_type, where << ": type differs");
@@ -712,7 +711,8 @@ void compare_exact(const Elem& ref, const Elem& out, const String& where) {
                         << simdjson::minify(out));
 }
 
-void compare_metric(const Elem& ref_e, const Elem& out_e, const String& where) {
+void compare_metric(const Elem& ref_e, const Elem& out_e,
+                    const dstd::String& where) {
     const Fields ref = fields_of(ref_e, where);
     const Fields out = fields_of(out_e, where);
     compare_key_sets(ref, out, where);
@@ -730,7 +730,7 @@ void compare_metric(const Elem& ref_e, const Elem& out_e, const String& where) {
     for (const auto& [key, value] : ref) {
         const auto it = out.find(key);
         if (it == out.end()) continue;
-        const String field = where + "." + key;
+        const dstd::String field = where + "." + key;
         const double a = number_field(ref, key);
         const double b = number_field(out, key);
         if (key == "baseline" || key == "variant") {
@@ -765,9 +765,10 @@ void compare_metric(const Elem& ref_e, const Elem& out_e, const String& where) {
 
 // The order of the entries is not compared, as the report orders groups by
 // values that move with the quantiles.
-void compare_named(const Elem& ref_e, const Elem& out_e, StringView id_key,
-                   const String& where, EachFn each) {
-    Map<String, Elem> ref, out;
+void compare_named(const Elem& ref_e, const Elem& out_e,
+                   dstd::StringView id_key, const dstd::String& where,
+                   EachFn each) {
+    dstd::Map<dstd::String, Elem> ref, out;
     for (const auto& item : items_of(ref_e, where))
         ref.emplace(string_field(fields_of(item, where), id_key), item);
     for (const auto& item : items_of(out_e, where))
@@ -782,11 +783,13 @@ void compare_named(const Elem& ref_e, const Elem& out_e, StringView id_key,
                       where << ": not in reference: " << entry.first);
 }
 
-void compare_metrics(const Elem& ref, const Elem& out, const String& where) {
+void compare_metrics(const Elem& ref, const Elem& out,
+                     const dstd::String& where) {
     compare_named(ref, out, "name", where + ".metrics", compare_metric);
 }
 
-void compare_node(const Elem& ref_e, const Elem& out_e, const String& where) {
+void compare_node(const Elem& ref_e, const Elem& out_e,
+                  const dstd::String& where) {
     const Fields ref = fields_of(ref_e, where);
     const Fields out = fields_of(out_e, where);
     compare_key_sets(ref, out, where);
@@ -800,7 +803,7 @@ void compare_node(const Elem& ref_e, const Elem& out_e, const String& where) {
                     where + ".summary");
     compare_named(ref.at("groups"), out.at("groups"), "label",
                   where + ".groups",
-                  [](const Elem& r, const Elem& o, const String& w) {
+                  [](const Elem& r, const Elem& o, const dstd::String& w) {
                       const Fields rf = fields_of(r, w);
                       const Fields of = fields_of(o, w);
                       compare_key_sets(rf, of, w);
@@ -810,7 +813,7 @@ void compare_node(const Elem& ref_e, const Elem& out_e, const String& where) {
                   where + ".children", compare_node);
 }
 
-void compare_report(StringView ref_text, StringView out_text) {
+void compare_report(dstd::StringView ref_text, dstd::StringView out_text) {
     simdjson::dom::parser ref_parser, out_parser;
     Elem ref_root, out_root;
     REQUIRE(ref_parser.parse(ref_text).get(ref_root) == simdjson::SUCCESS);
@@ -827,7 +830,8 @@ void compare_report(StringView ref_text, StringView out_text) {
         const Fields om = fields_of(out.at(key), key);
         compare_key_sets(rm, om, key);
         for (const auto& [k, v] : rm)
-            if (om.count(k)) compare_exact(v, om.at(k), String(key) + "." + k);
+            if (om.count(k))
+                compare_exact(v, om.at(k), dstd::String(key) + "." + k);
     }
     if (ref.count("nodes") && out.count("nodes"))
         compare_named(ref.at("nodes"), out.at("nodes"), "name", "nodes",
@@ -836,7 +840,7 @@ void compare_report(StringView ref_text, StringView out_text) {
 
 // Numbers come from sampled quantiles and fitted mixtures, so they get the
 // sketch accuracy.
-void compare_yaml(StringView ref_text, StringView out_text) {
+void compare_yaml(dstd::StringView ref_text, dstd::StringView out_text) {
     const auto ref = split(ref_text, '\n');
     const auto out = split(out_text, '\n');
     REQUIRE(ref.size() == out.size());
@@ -844,13 +848,13 @@ void compare_yaml(StringView ref_text, StringView out_text) {
         const auto rp = ref[i].find(": ");
         const auto op = out[i].find(": ");
         INFO("line " << i + 1 << ": " << ref[i] << " vs " << out[i]);
-        if (rp == String::npos || op == String::npos) {
+        if (rp == dstd::String::npos || op == dstd::String::npos) {
             CHECK(ref[i] == out[i]);
             continue;
         }
         CHECK(ref[i].substr(0, rp) == out[i].substr(0, op));
-        const String rv = ref[i].substr(rp + 2);
-        const String ov = out[i].substr(op + 2);
+        const dstd::String rv = ref[i].substr(rp + 2);
+        const dstd::String ov = out[i].substr(op + 2);
         char* rend = nullptr;
         char* oend = nullptr;
         const double x = std::strtod(rv.c_str(), &rend);
@@ -870,13 +874,13 @@ void compare_yaml(StringView ref_text, StringView out_text) {
 TEST_SUITE("AggParity") {
     TEST_CASE("view aggregate tables") {
         Fixtures& fx = fixtures();
-        const Vector<ViewQuery> queries = view_queries();
+        const dstd::Vector<ViewQuery> queries = view_queries();
         for (const auto& q : queries) {
             SUBCASE(q.file) {
                 View base = View::from_files(view_files(fx.baseline_files));
-                const df::DataFrame t = q.build(base).collect().get();
-                const String produced = table_text(t, q.keys);
-                const String ref = reference(q.file, produced);
+                const dataframe::DataFrame t = q.build(base).collect().get();
+                const dstd::String produced = table_text(t, q.keys);
+                const dstd::String ref = reference(q.file, produced);
                 if (!ref.empty()) compare_table(q.file, ref, produced, q.keys);
             }
         }
@@ -895,8 +899,8 @@ TEST_SUITE("AggParity") {
             {"comparator_dlio_preset.json", {"--preset", "dlio"}}};
         for (const auto& run : runs) {
             SUBCASE(run.file) {
-                const String produced = run_comparator(run.args);
-                const String ref = reference(run.file, produced);
+                const dstd::String produced = run_comparator(run.args);
+                const dstd::String ref = reference(run.file, produced);
                 if (!ref.empty()) compare_report(ref, produced);
             }
         }
@@ -910,8 +914,8 @@ TEST_SUITE("AggParity") {
         REQUIRE(dftu_utils_test::run_process(
                     binary, {fixtures().dlio_dir, "-o", out,
                              "--simulation-iterations", "2"}) == 0);
-        const String produced = read_text(out);
-        const String ref = reference("dlio_config.yaml", produced);
+        const dstd::String produced = read_text(out);
+        const dstd::String ref = reference("dlio_config.yaml", produced);
         if (!ref.empty()) compare_yaml(ref, produced);
     }
 }

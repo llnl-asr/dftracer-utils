@@ -24,11 +24,7 @@
 #include <random>
 
 using namespace dftracer::utils;
-using dftracer::utils::index::gzip::GzipMemberRecord;
-using dftracer::utils::index::gzip::GzipRecordKind;
-using dftracer::utils::utilities::reader::internal::ReaderInflater;
-using dftu_utils_test::run_coro;
-namespace gz = dftracer::utils::utilities::fileio::compress;
+using namespace dftracer::utils::utilities;
 
 namespace {
 // Streams opened in a mode where zlib-ng verifies the checksum, counted while
@@ -37,9 +33,10 @@ namespace {
 std::atomic<std::uint64_t> PATH_CHECKSUM_OPENS{0};
 
 struct CrcWindow {
-    std::uint64_t start = gz::zlib_checksum_streams_opened();
+    std::uint64_t start = fileio::compress::zlib_checksum_streams_opened();
     ~CrcWindow() {
-        PATH_CHECKSUM_OPENS += gz::zlib_checksum_streams_opened() - start;
+        PATH_CHECKSUM_OPENS +=
+            fileio::compress::zlib_checksum_streams_opened() - start;
     }
 };
 }  // namespace
@@ -66,7 +63,7 @@ dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
 }
 
 dstd::Vector<std::uint8_t> gzip_member(const dstd::String& text) {
-    gz::GzipMemberCompressor c;
+    fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out;
     REQUIRE(c.compress_member_into(out, text.data(), text.size()));
     return out;
@@ -159,16 +156,17 @@ dstd::String zlib_decode_all(const dstd::String& path) {
 // Each path returns the decoded text, or nullopt when it rejected the input.
 using PathResult = dstd::Optional<dstd::String>;
 
-PathResult read_with_inflater(const dstd::String& path, GzipRecordKind kind) {
+PathResult read_with_inflater(const dstd::String& path,
+                              index::gzip::GzipRecordKind kind) {
     const int fd = ::open(path.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
     dstd::String out;
     bool ok = false;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        ReaderInflater inflater;
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        reader::internal::ReaderInflater inflater;
         CrcWindow window;
         off_t offset = 0;
-        GzipMemberRecord rec;
+        index::gzip::GzipMemberRecord rec;
         rec.kind = kind;
         ok = co_await inflater.seek_to_member(fd, offset, rec, dstd::String());
         dstd::Vector<unsigned char> buf(1u << 20);
@@ -186,16 +184,16 @@ PathResult read_with_inflater(const dstd::String& path, GzipRecordKind kind) {
 }
 
 PathResult reader_head_stream(const dstd::String& path) {
-    return read_with_inflater(path, GzipRecordKind::Head);
+    return read_with_inflater(path, index::gzip::GzipRecordKind::Head);
 }
 
 PathResult reader_whole_member(const dstd::String& path) {
-    return read_with_inflater(path, GzipRecordKind::Member);
+    return read_with_inflater(path, index::gzip::GzipRecordKind::Member);
 }
 
 PathResult indexer_stream(const dstd::String& path) {
     dstd::Optional<index::gzip::GzipBuildArtifacts> art;
-    run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         CrcWindow window;
         art = co_await index::gzip::build_gzip_index_artifacts(
             dstd::String(path), CKPT,
@@ -219,7 +217,8 @@ PathResult truncated_decoder(const dstd::String& path) {
     dstd::Optional<std::size_t> keep;
     {
         CrcWindow window;
-        keep = gz::decode_truncated_member(in.data(), in.size(), out);
+        keep = fileio::compress::decode_truncated_member(in.data(), in.size(),
+                                                         out);
     }
     if (!keep) return dstd::nullopt;
     return dstd::String(out.begin(), out.begin() + *keep);
@@ -228,10 +227,11 @@ PathResult truncated_decoder(const dstd::String& path) {
 PathResult rechunker(const dstd::String& path) {
     const dstd::String out_path = path + ".rechunked.gz";
     bool ok = true;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         CrcWindow window;
         try {
-            co_await gz::gzip_rechunk_to_members(path, out_path, 1u << 20, 1);
+            co_await fileio::compress::gzip_rechunk_to_members(path, out_path,
+                                                               1u << 20, 1);
         } catch (...) {
             ok = false;
         }
@@ -271,9 +271,9 @@ bool same(const PathCase& p, const PathResult& got, const dstd::String& text) {
 TEST_CASE("the control: a stream that verifies the gzip checksum is counted") {
     Sample s;
     TempFile f(s.bytes);
-    const auto before = gz::zlib_checksum_streams_opened();
+    const auto before = fileio::compress::zlib_checksum_streams_opened();
     index::detect_file_schema(dstd::String(f.path));
-    CHECK(gz::zlib_checksum_streams_opened() > before);
+    CHECK(fileio::compress::zlib_checksum_streams_opened() > before);
 }
 
 TEST_CASE(
@@ -319,7 +319,7 @@ TEST_CASE("a flipped data byte is rejected on every path") {
 
 TEST_CASE("a gzip header with FHCRC and optional fields is accepted") {
     const dstd::String text = hex_lines(200000, 3);
-    gz::GzipMemberCompressor c;
+    fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> plain;
     REQUIRE(c.compress_member_into(plain, text.data(), text.size()));
     constexpr std::size_t PLAIN_HEADER = 10;
@@ -331,14 +331,15 @@ TEST_CASE("a gzip header with FHCRC and optional fields is accepted") {
         for (const char* p = s; *p; ++p) header.push_back(*p);
         header.push_back(0);
     }
-    const std::uint32_t hcrc = gz::gzip_crc32(0, header.data(), header.size());
+    const std::uint32_t hcrc =
+        fileio::compress::gzip_crc32(0, header.data(), header.size());
     header.push_back(static_cast<std::uint8_t>(hcrc & 0xff));
     header.push_back(static_cast<std::uint8_t>((hcrc >> 8) & 0xff));
     dstd::Vector<std::uint8_t> member = header;
     member.insert(member.end(), plain.begin() + PLAIN_HEADER, plain.end());
 
     auto decode = [&](const dstd::Vector<std::uint8_t>& in) {
-        gz::GzipStreamInflater inf;
+        fileio::compress::GzipStreamInflater inf;
         REQUIRE(inf.init(31));
         inf.set_input(in.data(), in.size());
         dstd::String out(text.size() + 16, '\0');
@@ -349,12 +350,12 @@ TEST_CASE("a gzip header with FHCRC and optional fields is accepted") {
         return dstd::Pair<decltype(rc), dstd::String>{rc, out};
     };
     const auto good = decode(member);
-    CHECK(good.first == gz::InflateStatus::StreamEnd);
+    CHECK(good.first == fileio::compress::InflateStatus::StreamEnd);
     CHECK(good.second == text);
 
     auto bad = member;
     bad[header.size() - 1] ^= 1;
-    CHECK(decode(bad).first == gz::InflateStatus::DataError);
+    CHECK(decode(bad).first == fileio::compress::InflateStatus::DataError);
 }
 
 TEST_CASE("compression state is charged to the calling pool") {
@@ -362,14 +363,14 @@ TEST_CASE("compression state is charged to the calling pool") {
     REQUIRE(pool);
     {
         memory::Scope scope{*pool};
-        gz::GzipStreamInflater inf;
+        fileio::compress::GzipStreamInflater inf;
         REQUIRE(inf.init(31));
         CHECK(pool->live() > 0);
     }
     CHECK(pool->live() == 0);
     {
         memory::Scope scope{*pool};
-        gz::GzipMemberDecompressor decompressor;
+        fileio::compress::GzipMemberDecompressor decompressor;
         CHECK(pool->live() > 0);
     }
     CHECK(pool->live() == 0);

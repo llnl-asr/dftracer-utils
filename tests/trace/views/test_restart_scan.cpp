@@ -24,10 +24,7 @@ using namespace dftu_utils_test;
 using namespace test_view_common;
 
 using namespace dftracer::utils::trace::views::detail;
-using dftracer::utils::index::gzip::GzipRecordKind;
-namespace gz = dftracer::utils::utilities::fileio::compress;
-namespace st = dftracer::utils::index::store;
-namespace scan = dftracer::utils::trace::views::detail::scan;
+using namespace dftracer::utils::trace;
 
 namespace {
 
@@ -67,7 +64,7 @@ Trace make_trace() {
 }
 
 void append_member(dstd::Vector<std::uint8_t>& out, const dstd::String& text) {
-    gz::GzipMemberCompressor c;
+    utilities::fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> buf(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), buf.data(), buf.size());
     REQUIRE(n.has_value());
@@ -149,12 +146,13 @@ TEST_SUITE("RestartScan") {
         const Fixture& fx = fixture();
         const auto pieces = members(fx.one);
         REQUIRE(pieces.size() > 3);
-        CHECK(pieces[0].kind == GzipRecordKind::Head);
+        CHECK(pieces[0].kind == index::gzip::GzipRecordKind::Head);
         for (std::size_t i = 1; i < pieces.size(); ++i)
-            CHECK(pieces[i].kind == GzipRecordKind::Restart);
+            CHECK(pieces[i].kind == index::gzip::GzipRecordKind::Restart);
         const auto multi = members(fx.many);
         REQUIRE(multi.size() > 3);
-        for (const auto& m : multi) CHECK(m.kind == GzipRecordKind::Member);
+        for (const auto& m : multi)
+            CHECK(m.kind == index::gzip::GzipRecordKind::Member);
 
         const auto a = View::from_files({fx.one.file()}).collect().get();
         const auto b = View::from_files({fx.many.file()}).collect().get();
@@ -185,7 +183,7 @@ TEST_SUITE("RestartScan") {
         const auto pieces = members(fx.one);
         REQUIRE(pieces.size() > 3);
 
-        ScanPlan plan = scan::from_files({fx.one.file()});
+        ScanPlan plan = views::detail::scan::from_files({fx.one.file()});
         ViewDefinition vdef = make_vdef(*plan, /*for_aggregation=*/false);
         std::uint64_t skipped = 0;
         const auto units = run(gather_units(*plan, vdef, skipped));

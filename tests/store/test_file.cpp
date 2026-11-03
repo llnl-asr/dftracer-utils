@@ -36,7 +36,7 @@ using namespace dftracer::utils;
 namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
-    static void close_fd(DataFileWriter& writer) {
+    static void close_fd(engine::DataFileWriter& writer) {
         if (writer.fd_ >= 0) ::close(writer.fd_);
         writer.fd_ = -1;
     }
@@ -46,38 +46,19 @@ struct DataFileWriterTestHook {
 
 namespace {
 
-namespace store = dftracer::utils::store;
-namespace memory = dftracer::utils::memory;
-
-using dstd::ByteView;
-using store::ScopeKind;
-using store::SourceStat;
-using store::engine::CopyItem;
-using store::engine::CopyState;
-using store::engine::DataFileReader;
-using store::engine::DataFileWriter;
-using store::engine::DropItem;
-using store::engine::EraseItem;
-using store::engine::ExtentRef;
-using store::engine::ExtentRefItem;
-using store::engine::ExtentSegment;
-using store::engine::FileIndex;
-using store::engine::IndexedExtentRef;
-using store::engine::NamespaceItem;
-using store::engine::ScopeItem;
-using store::engine::SegmentBuilder;
+using namespace dftracer::utils::store;
 
 constexpr std::size_t EXTENT_SIZE = 4096;
 
-ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
-dstd::Vector<std::uint8_t> bytes_of(ByteView bytes) {
+dstd::Vector<std::uint8_t> bytes_of(dstd::ByteView bytes) {
     const auto* begin = reinterpret_cast<const std::uint8_t*>(bytes.data());
     return dstd::Vector<std::uint8_t>(begin, begin + bytes.size());
 }
@@ -90,7 +71,7 @@ dstd::Vector<std::uint8_t> std_bytes(const dstd::Vector<std::uint8_t>& bytes) {
     return dstd::Vector<std::uint8_t>(bytes.begin(), bytes.end());
 }
 
-bool same_bytes(ByteView a, ByteView b) {
+bool same_bytes(dstd::ByteView a, dstd::ByteView b) {
     return a.size() == b.size() &&
            (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
 }
@@ -211,7 +192,7 @@ struct SegmentData {
 };
 
 SegmentData make_segment(std::uint32_t seed, std::size_t entry_count) {
-    SegmentBuilder builder;
+    engine::SegmentBuilder builder;
     for (std::size_t i = 0; i < entry_count; ++i) {
         const dstd::String key =
             "key-" + dstd::to_string(seed) + "-" + dstd::to_string(i);
@@ -225,8 +206,8 @@ SegmentData make_segment(std::uint32_t seed, std::size_t entry_count) {
             bytes_of(builder.first_key()), bytes_of(builder.last_key())};
 }
 
-NamespaceItem make_namespace(std::uint32_t local_id) {
-    NamespaceItem item;
+engine::NamespaceItem make_namespace(std::uint32_t local_id) {
+    engine::NamespaceItem item;
     item.local_id = local_id;
     item.name = dstd::String("test.ns." + dstd::to_string(local_id));
     item.format_version = 7;
@@ -236,8 +217,8 @@ NamespaceItem make_namespace(std::uint32_t local_id) {
     return item;
 }
 
-ScopeItem make_scope(std::uint32_t local_id) {
-    ScopeItem item;
+engine::ScopeItem make_scope(std::uint32_t local_id) {
+    engine::ScopeItem item;
     item.local_id = local_id;
     item.kind = local_id % 2 == 0 ? ScopeKind::File : ScopeKind::Files;
     item.paths.push_back(
@@ -253,22 +234,23 @@ SourceStat make_source(std::uint32_t local_id, std::uint32_t namespace_id) {
     return source;
 }
 
-CopyItem make_copy(std::uint32_t local_id, std::uint32_t namespace_id,
-                   std::uint32_t scope_id) {
-    CopyItem item;
+engine::CopyItem make_copy(std::uint32_t local_id, std::uint32_t namespace_id,
+                           std::uint32_t scope_id) {
+    engine::CopyItem item;
     item.local_id = local_id;
     item.namespace_id = namespace_id;
     item.scope_id = scope_id;
     item.params_hash = 4000 + local_id;
     item.generation = local_id;
-    item.state = local_id % 2 == 0 ? CopyState::Ready : CopyState::Failed;
+    item.state = local_id % 2 == 0 ? engine::CopyState::Ready
+                                   : engine::CopyState::Failed;
     item.sources.push_back(make_source(local_id, namespace_id));
     return item;
 }
 
-DropItem make_drop(std::uint32_t namespace_id, std::uint32_t scope_id,
-                   std::uint32_t generation) {
-    DropItem item;
+engine::DropItem make_drop(std::uint32_t namespace_id, std::uint32_t scope_id,
+                           std::uint32_t generation) {
+    engine::DropItem item;
     item.namespace_id = namespace_id;
     item.scope_id = scope_id;
     item.generation = generation;
@@ -280,15 +262,15 @@ DropItem make_drop(std::uint32_t namespace_id, std::uint32_t scope_id,
     return item;
 }
 
-ExtentRefItem make_extent_ref(const ExtentRef& extent,
-                              const SegmentData& segment,
-                              std::uint32_t copy_id) {
-    ExtentRefItem item;
+engine::ExtentRefItem make_extent_ref(const engine::ExtentRef& extent,
+                                      const SegmentData& segment,
+                                      std::uint32_t copy_id) {
+    engine::ExtentRefItem item;
     item.offset = extent.offset;
     item.length = extent.length;
     item.crc = extent.crc;
     item.sequence = copy_id;
-    ExtentSegment extent_segment;
+    engine::ExtentSegment extent_segment;
     extent_segment.copy_id = copy_id;
     extent_segment.offset_in_extent = 0;
     extent_segment.length = static_cast<std::uint32_t>(segment.bytes.size());
@@ -300,7 +282,7 @@ ExtentRefItem make_extent_ref(const ExtentRef& extent,
 }
 
 SegmentData make_wide_segment(std::uint32_t seed, std::size_t key_bytes) {
-    SegmentBuilder builder;
+    engine::SegmentBuilder builder;
     dstd::String key = dstd::to_string(seed);
     key.resize(key_bytes, 'k');
     const dstd::String value = "v" + dstd::to_string(seed);
@@ -337,9 +319,9 @@ struct ClosedRun {
     store::engine::BlockHandle handle;
 };
 
-dstd::Vector<ClosedRun> closed_runs(const DataFileReader& reader) {
+dstd::Vector<ClosedRun> closed_runs(const engine::DataFileReader& reader) {
     dstd::Vector<ClosedRun> runs;
-    const FileIndex& index = reader.index();
+    const engine::FileIndex& index = reader.index();
     REQUIRE(index.tail.has_value());
     REQUIRE(index.tail->directory_levels == 1);
     auto top = store::engine::SlotTable::open(view_of(index.tail->top_table));
@@ -367,7 +349,7 @@ dstd::Vector<ClosedRun> closed_runs(const DataFileReader& reader) {
     return runs;
 }
 
-SegmentBlockView read_segment_block(const DataFileReader& reader,
+SegmentBlockView read_segment_block(const engine::DataFileReader& reader,
                                     store::engine::BlockHandle handle) {
     SegmentBlockView block;
     block.handle = handle;
@@ -391,7 +373,7 @@ SegmentBlockView read_segment_block(const DataFileReader& reader,
         entry.ordinal = read_u64_le_at(raw, at + 44U);
         at += 52;
         for (dstd::String* key : {&entry.first_key, &entry.last_key}) {
-            ByteView body = view_of(raw);
+            dstd::ByteView body = view_of(raw);
             auto length = store::engine::decode_varint(body, at);
             REQUIRE(length.has_value());
             REQUIRE(at + *length <= raw.size());
@@ -405,8 +387,8 @@ SegmentBlockView read_segment_block(const DataFileReader& reader,
     return block;
 }
 
-void check_namespace(const NamespaceItem& actual,
-                     const NamespaceItem& expected) {
+void check_namespace(const engine::NamespaceItem& actual,
+                     const engine::NamespaceItem& expected) {
     CHECK(actual.local_id == expected.local_id);
     CHECK(dstd::String(actual.name) == dstd::String(expected.name));
     CHECK(actual.format_version == expected.format_version);
@@ -415,7 +397,8 @@ void check_namespace(const NamespaceItem& actual,
     CHECK(actual.durable == expected.durable);
 }
 
-void check_scope(const ScopeItem& actual, const ScopeItem& expected) {
+void check_scope(const engine::ScopeItem& actual,
+                 const engine::ScopeItem& expected) {
     CHECK(actual.local_id == expected.local_id);
     CHECK(actual.kind == expected.kind);
     REQUIRE(actual.paths.size() == expected.paths.size());
@@ -424,7 +407,8 @@ void check_scope(const ScopeItem& actual, const ScopeItem& expected) {
     }
 }
 
-void check_copy(const CopyItem& actual, const CopyItem& expected) {
+void check_copy(const engine::CopyItem& actual,
+                const engine::CopyItem& expected) {
     CHECK(actual.local_id == expected.local_id);
     CHECK(actual.namespace_id == expected.namespace_id);
     CHECK(actual.scope_id == expected.scope_id);
@@ -439,7 +423,8 @@ void check_copy(const CopyItem& actual, const CopyItem& expected) {
     }
 }
 
-void check_drop(const DropItem& actual, const DropItem& expected) {
+void check_drop(const engine::DropItem& actual,
+                const engine::DropItem& expected) {
     CHECK(actual.namespace_id == expected.namespace_id);
     CHECK(actual.scope_id == expected.scope_id);
     CHECK(actual.generation == expected.generation);
@@ -447,15 +432,16 @@ void check_drop(const DropItem& actual, const DropItem& expected) {
     CHECK(same_bytes(view_of(actual.end_key), view_of(expected.end_key)));
 }
 
-void check_erase(const EraseItem& actual, const EraseItem& expected) {
+void check_erase(const engine::EraseItem& actual,
+                 const engine::EraseItem& expected) {
     CHECK(actual.copy_id == expected.copy_id);
     CHECK(actual.ordinal == expected.ordinal);
     CHECK(same_bytes(view_of(actual.begin_key), view_of(expected.begin_key)));
     CHECK(same_bytes(view_of(actual.end_key), view_of(expected.end_key)));
 }
 
-void check_extent_ref(const IndexedExtentRef& actual,
-                      const IndexedExtentRef& expected) {
+void check_extent_ref(const engine::IndexedExtentRef& actual,
+                      const engine::IndexedExtentRef& expected) {
     CHECK(actual.sequence == expected.sequence);
     CHECK(actual.ref.offset == expected.ref.offset);
     CHECK(actual.ref.length == expected.ref.length);
@@ -476,7 +462,8 @@ void check_extent_ref(const IndexedExtentRef& actual,
     }
 }
 
-void check_index_equal(const FileIndex& actual, const FileIndex& expected) {
+void check_index_equal(const engine::FileIndex& actual,
+                       const engine::FileIndex& expected) {
     REQUIRE(actual.namespaces.size() == expected.namespaces.size());
     REQUIRE(actual.scopes.size() == expected.scopes.size());
     REQUIRE(actual.copies.size() == expected.copies.size());
@@ -504,17 +491,18 @@ void check_index_equal(const FileIndex& actual, const FileIndex& expected) {
     }
 }
 
-void check_index_equal(const DataFileReader& reader,
-                       const FileIndex& expected) {
-    FileIndex actual = reader.index();
+void check_index_equal(const engine::DataFileReader& reader,
+                       const engine::FileIndex& expected) {
+    engine::FileIndex actual = reader.index();
     auto refs = reader.all_extent_refs();
     REQUIRE(refs.has_value());
     actual.extent_refs = std::move(*refs);
     check_index_equal(actual, expected);
 }
 
-FileIndex prefix_state(const FileIndex& full, std::size_t commit_count) {
-    FileIndex prefix;
+engine::FileIndex prefix_state(const engine::FileIndex& full,
+                               std::size_t commit_count) {
+    engine::FileIndex prefix;
     prefix.last_sequence = static_cast<std::uint64_t>(commit_count);
     for (std::size_t i = 0; i < commit_count; ++i) {
         prefix.namespaces.push_back(full.namespaces[i]);
@@ -526,8 +514,9 @@ FileIndex prefix_state(const FileIndex& full, std::size_t commit_count) {
     return prefix;
 }
 
-FileIndex state_after_sequence(const FileIndex& full, std::uint64_t sequence) {
-    FileIndex state;
+engine::FileIndex state_after_sequence(const engine::FileIndex& full,
+                                       std::uint64_t sequence) {
+    engine::FileIndex state;
     state.last_sequence = sequence;
     const std::size_t count = sequence < full.namespaces.size()
                                   ? static_cast<std::size_t>(sequence)
@@ -623,19 +612,19 @@ dstd::Vector<std::size_t> record_flip_offsets(const RecordMeta& record) {
     return offsets;
 }
 
-void add_five_commit(DataFileWriter& writer, FileIndex& expected,
-                     std::uint32_t commit_id,
-                     dstd::Vector<ExtentRef>* extents = nullptr) {
-    const NamespaceItem ns = make_namespace(commit_id);
-    const ScopeItem scope = make_scope(commit_id);
-    const CopyItem copy = make_copy(commit_id, commit_id, commit_id);
-    const DropItem drop = make_drop(commit_id, commit_id, commit_id);
+void add_five_commit(engine::DataFileWriter& writer,
+                     engine::FileIndex& expected, std::uint32_t commit_id,
+                     dstd::Vector<engine::ExtentRef>* extents = nullptr) {
+    const engine::NamespaceItem ns = make_namespace(commit_id);
+    const engine::ScopeItem scope = make_scope(commit_id);
+    const engine::CopyItem copy = make_copy(commit_id, commit_id, commit_id);
+    const engine::DropItem drop = make_drop(commit_id, commit_id, commit_id);
     const SegmentData segment = make_segment(commit_id, 4);
     REQUIRE_FALSE(segment.bytes.empty());
 
     auto extent = writer.append_extent(view_of(segment.bytes));
     REQUIRE(extent.has_value());
-    const ExtentRefItem extent_ref =
+    const engine::ExtentRefItem extent_ref =
         make_extent_ref(*extent, segment, commit_id);
 
     writer.add(ns);
@@ -667,25 +656,26 @@ TEST_SUITE("index store file") {
         const dstd::String host = "host.example";
         const dstd::String label = "rank-0";
 
-        auto created = DataFileWriter::create(path, EXTENT_SIZE, host, label);
+        auto created =
+            engine::DataFileWriter::create(path, EXTENT_SIZE, host, label);
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        FileIndex expected;
+        engine::FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
         expected.host = dstd::String(host);
         expected.label = dstd::String(label);
-        dstd::Vector<ExtentRef> extents;
+        dstd::Vector<engine::ExtentRef> extents;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             add_five_commit(writer, expected, commit_id, &extents);
         }
         expected.last_sequence = 6;
         REQUIRE(writer.close().has_value());
 
-        auto opened = DataFileReader::open(path);
+        auto opened = engine::DataFileReader::open(path);
         REQUIRE(opened.has_value());
         CHECK(opened->records_read() == 1);
-        const FileIndex& actual = opened->index();
+        const engine::FileIndex& actual = opened->index();
         CHECK(actual.extent_size == EXTENT_SIZE);
         CHECK(dstd::String(actual.host) == host);
         CHECK(dstd::String(actual.label) == label);
@@ -711,11 +701,12 @@ TEST_SUITE("index store file") {
         const dstd::String host = "host.example";
         const dstd::String label = "rank-0";
 
-        auto created = DataFileWriter::create(path, EXTENT_SIZE, host, label);
+        auto created =
+            engine::DataFileWriter::create(path, EXTENT_SIZE, host, label);
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        FileIndex expected;
+        engine::FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
         expected.host = dstd::String(host);
         expected.label = dstd::String(label);
@@ -724,7 +715,7 @@ TEST_SUITE("index store file") {
         }
         expected.last_sequence = 5;
 
-        auto opened = DataFileReader::open(path);
+        auto opened = engine::DataFileReader::open(path);
         REQUIRE(opened.has_value());
         CHECK(opened->records_read() == 5);
         check_index_equal(*opened, expected);
@@ -735,19 +726,19 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("checkpoints.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        dstd::Vector<NamespaceItem> expected_namespaces;
-        dstd::Vector<ExtentRef> expected_extents;
+        dstd::Vector<engine::NamespaceItem> expected_namespaces;
+        dstd::Vector<engine::ExtentRef> expected_extents;
         for (std::uint32_t commit_id = 1; commit_id <= 200; ++commit_id) {
-            const NamespaceItem ns = make_namespace(commit_id);
+            const engine::NamespaceItem ns = make_namespace(commit_id);
             const dstd::String extent_bytes =
                 "extent-" + dstd::to_string(commit_id);
             auto extent = writer.append_extent(view_of(extent_bytes));
             REQUIRE(extent.has_value());
-            ExtentRefItem ref;
+            engine::ExtentRefItem ref;
             ref.offset = extent->offset;
             ref.length = extent->length;
             ref.crc = extent->crc;
@@ -759,7 +750,7 @@ TEST_SUITE("index store file") {
             REQUIRE(writer.commit().has_value());
         }
 
-        auto opened = DataFileReader::open(path);
+        auto opened = engine::DataFileReader::open(path);
         REQUIRE(opened.has_value());
         CHECK(opened->records_read() == 9);
         CHECK(opened->index().last_sequence == 200);
@@ -788,15 +779,15 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("crash.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        FileIndex expected;
+        engine::FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
         expected.host = dstd::String("host");
         expected.label = dstd::String("label");
-        dstd::Vector<ExtentRef> expected_extents;
+        dstd::Vector<engine::ExtentRef> expected_extents;
         for (std::uint32_t commit_id = 1; commit_id <= 20; ++commit_id) {
             add_five_commit(writer, expected, commit_id, &expected_extents);
         }
@@ -837,7 +828,7 @@ TEST_SUITE("index store file") {
                 }
             }
 
-            auto opened = DataFileReader::open(copy_path);
+            auto opened = engine::DataFileReader::open(copy_path);
             if (commits_before == 0) {
                 REQUIRE_FALSE(opened.has_value());
                 CHECK((opened.error().is(dstd::Condition::Parse) ||
@@ -855,11 +846,11 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("missing_middle.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        FileIndex expected;
+        engine::FileIndex expected;
         for (std::uint32_t commit_id = 1; commit_id <= 6; ++commit_id) {
             add_five_commit(writer, expected, commit_id);
         }
@@ -881,7 +872,7 @@ TEST_SUITE("index store file") {
             const dstd::String copy_path = temp.file("missing_middle_copy.dfs");
             write_file(copy_path, corrupted);
 
-            auto opened = DataFileReader::open(copy_path);
+            auto opened = engine::DataFileReader::open(copy_path);
             REQUIRE(opened.has_value());
             check_index_equal(*opened, prefix_state(expected, 2));
         }
@@ -892,11 +883,11 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("copied_record.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        FileIndex expected;
+        engine::FileIndex expected;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             add_five_commit(writer, expected, commit_id);
         }
@@ -917,7 +908,7 @@ TEST_SUITE("index store file") {
         const dstd::String copy_path = temp.file("copied_record_copy.dfs");
         write_file(copy_path, corrupted);
 
-        auto opened = DataFileReader::open(copy_path);
+        auto opened = engine::DataFileReader::open(copy_path);
         REQUIRE(opened.has_value());
         check_index_equal(*opened, expected);
     }
@@ -925,11 +916,11 @@ TEST_SUITE("index store file") {
     TEST_CASE("an empty file opens as an empty index with and without close") {
         TempDir temp;
         const dstd::String no_close_path = temp.file("empty_no_close.dfs");
-        auto created =
-            DataFileWriter::create(no_close_path, EXTENT_SIZE, "host", "label");
+        auto created = engine::DataFileWriter::create(
+            no_close_path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
 
-        auto opened_no_close = DataFileReader::open(no_close_path);
+        auto opened_no_close = engine::DataFileReader::open(no_close_path);
         REQUIRE(opened_no_close.has_value());
         CHECK(opened_no_close->index().extent_size == EXTENT_SIZE);
         CHECK(opened_no_close->index().last_sequence == 0);
@@ -940,12 +931,12 @@ TEST_SUITE("index store file") {
         CHECK(opened_no_close->index().extent_refs.size() == 0);
 
         const dstd::String close_path = temp.file("empty_close.dfs");
-        auto close_created =
-            DataFileWriter::create(close_path, EXTENT_SIZE, "host", "label");
+        auto close_created = engine::DataFileWriter::create(
+            close_path, EXTENT_SIZE, "host", "label");
         REQUIRE(close_created.has_value());
         REQUIRE(close_created->close().has_value());
 
-        auto opened_close = DataFileReader::open(close_path);
+        auto opened_close = engine::DataFileReader::open(close_path);
         REQUIRE(opened_close.has_value());
         CHECK(opened_close->index().extent_size == EXTENT_SIZE);
         CHECK(opened_close->index().last_sequence == 1);
@@ -961,7 +952,7 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("version.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         REQUIRE(created->close().has_value());
 
@@ -973,7 +964,7 @@ TEST_SUITE("index store file") {
         bytes[11] = 0;
         write_file(path, bytes);
 
-        auto opened = DataFileReader::open(path);
+        auto opened = engine::DataFileReader::open(path);
         REQUIRE_FALSE(opened.has_value());
         CHECK(opened.error().is(dstd::Condition::Unsupported));
     }
@@ -984,7 +975,7 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("latched.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
@@ -1017,11 +1008,11 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("checkpoint_bad_header.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        FileIndex expected;
+        engine::FileIndex expected;
         for (std::uint32_t commit_id = 1; commit_id <= 70; ++commit_id) {
             add_five_commit(writer, expected, commit_id);
         }
@@ -1033,7 +1024,7 @@ TEST_SUITE("index store file") {
             temp.file("checkpoint_bad_header_copy.dfs");
         write_file(copy_path, corrupted);
 
-        auto opened = DataFileReader::open(copy_path);
+        auto opened = engine::DataFileReader::open(copy_path);
         REQUIRE(opened.has_value());
         check_index_equal(*opened, expected);
     }
@@ -1045,14 +1036,14 @@ TEST_SUITE("index store file") {
         dstd::Vector<std::uint8_t> garbage(store::engine::FILE_HEADER_BYTES * 2,
                                            'g');
         write_file(garbage_path, garbage);
-        auto opened_garbage = DataFileReader::open(garbage_path);
+        auto opened_garbage = engine::DataFileReader::open(garbage_path);
         REQUIRE_FALSE(opened_garbage.has_value());
         CHECK((opened_garbage.error().is(dstd::Condition::Parse) ||
                opened_garbage.error().is(dstd::Condition::Io)));
 
         const dstd::String valid_path = temp.file("valid.dfs");
-        auto created =
-            DataFileWriter::create(valid_path, EXTENT_SIZE, "host", "label");
+        auto created = engine::DataFileWriter::create(valid_path, EXTENT_SIZE,
+                                                      "host", "label");
         REQUIRE(created.has_value());
         REQUIRE(created->commit().has_value());
         const dstd::Vector<std::uint8_t> valid = read_file(valid_path);
@@ -1061,7 +1052,7 @@ TEST_SUITE("index store file") {
         const dstd::String short_path = temp.file("short_header.dfs");
         write_file(short_path, dstd::Vector<std::uint8_t>(valid.begin(),
                                                           valid.begin() + 100));
-        auto opened_short = DataFileReader::open(short_path);
+        auto opened_short = engine::DataFileReader::open(short_path);
         REQUIRE_FALSE(opened_short.has_value());
         CHECK((opened_short.error().is(dstd::Condition::Parse) ||
                opened_short.error().is(dstd::Condition::Io)));
@@ -1072,14 +1063,14 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("zero_extent.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
         const dstd::String extent_bytes(64, 'p');
         auto extent = writer.append_extent(view_of(extent_bytes));
         REQUIRE(extent.has_value());
-        ExtentRefItem ref;
+        engine::ExtentRefItem ref;
         ref.offset = extent->offset;
         ref.length = extent->length;
         ref.crc = extent->crc;
@@ -1099,7 +1090,7 @@ TEST_SUITE("index store file") {
         const dstd::String copy_path = temp.file("zero_extent_copy.dfs");
         write_file(copy_path, corrupted);
 
-        auto opened = DataFileReader::open(copy_path);
+        auto opened = engine::DataFileReader::open(copy_path);
         REQUIRE(opened.has_value());
         REQUIRE(opened->index().extent_refs.size() == 1);
         auto read =
@@ -1115,16 +1106,16 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("bad_header.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
-            const NamespaceItem ns = make_namespace(commit_id);
+            const engine::NamespaceItem ns = make_namespace(commit_id);
             const dstd::String extent_bytes =
                 "extent-" + dstd::to_string(commit_id);
             auto extent = writer.append_extent(view_of(extent_bytes));
             REQUIRE(extent.has_value());
-            ExtentRefItem ref;
+            engine::ExtentRefItem ref;
             ref.offset = extent->offset;
             ref.length = extent->length;
             ref.crc = extent->crc;
@@ -1140,7 +1131,7 @@ TEST_SUITE("index store file") {
         const dstd::String copy_path = temp.file("bad_header_copy.dfs");
         write_file(copy_path, corrupted);
 
-        auto opened = DataFileReader::open(copy_path);
+        auto opened = engine::DataFileReader::open(copy_path);
         REQUIRE(opened.has_value());
         CHECK(opened->index().last_sequence == 5);
         CHECK(opened->index().namespaces.size() == 5);
@@ -1155,16 +1146,16 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("bad_tail.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
-            const NamespaceItem ns = make_namespace(commit_id);
+            const engine::NamespaceItem ns = make_namespace(commit_id);
             const dstd::String extent_bytes =
                 "extent-" + dstd::to_string(commit_id);
             auto extent = writer.append_extent(view_of(extent_bytes));
             REQUIRE(extent.has_value());
-            ExtentRefItem ref;
+            engine::ExtentRefItem ref;
             ref.offset = extent->offset;
             ref.length = extent->length;
             ref.crc = extent->crc;
@@ -1183,7 +1174,7 @@ TEST_SUITE("index store file") {
         const dstd::String copy_path = temp.file("bad_tail_copy.dfs");
         write_file(copy_path, corrupted);
 
-        auto opened = DataFileReader::open(copy_path);
+        auto opened = engine::DataFileReader::open(copy_path);
         REQUIRE(opened.has_value());
         CHECK(opened->index().last_sequence == 4);
         CHECK(opened->index().namespaces.size() == 4);
@@ -1195,8 +1186,8 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("extents_no_commit.dfs");
 
         {
-            auto created =
-                DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            auto created = engine::DataFileWriter::create(path, EXTENT_SIZE,
+                                                          "host", "label");
             REQUIRE(created.has_value());
             auto& writer = *created;
             REQUIRE(writer.append_extent(view_of(dstd::String(64, 'a')))
@@ -1205,7 +1196,7 @@ TEST_SUITE("index store file") {
                         .has_value());
         }
 
-        auto opened = DataFileReader::open(path);
+        auto opened = engine::DataFileReader::open(path);
         REQUIRE(opened.has_value());
         CHECK(opened->index().extent_size == EXTENT_SIZE);
         CHECK(opened->index().last_sequence == 0);
@@ -1252,7 +1243,7 @@ TEST_SUITE("index store file") {
             };
 
         {
-            ScopeItem scope;
+            engine::ScopeItem scope;
             scope.local_id = 1;
             scope.kind = ScopeKind::Root;
             auto encoded =
@@ -1267,7 +1258,7 @@ TEST_SUITE("index store file") {
         }
 
         {
-            ExtentRefItem ref;
+            engine::ExtentRefItem ref;
             ref.offset = record_offset;
             ref.length = 16;
             ref.crc = 0;
@@ -1285,7 +1276,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("an erase record round-trips its range") {
         const std::uint64_t record_offset = store::engine::FILE_HEADER_BYTES;
-        const auto encode = [&](const EraseItem& erase) {
+        const auto encode = [&](const engine::EraseItem& erase) {
             auto encoded =
                 store::engine::encode_record(store::engine::RecordKind::Commit,
                                              1, 0, record_offset, {erase});
@@ -1294,10 +1285,10 @@ TEST_SUITE("index store file") {
         };
         const auto decode = [](const dstd::Vector<std::uint8_t>& record) {
             return store::engine::decode_record(
-                ByteView{record.data(), record.size()});
+                dstd::ByteView{record.data(), record.size()});
         };
 
-        EraseItem item;
+        engine::EraseItem item;
         item.copy_id = 3;
         item.ordinal = 9;
         item.begin_key = bytes_of_string("key-b");
@@ -1307,18 +1298,20 @@ TEST_SUITE("index store file") {
             auto decoded = decode(encode(item));
             REQUIRE(decoded.has_value());
             REQUIRE(decoded->items.size() == 1);
-            const auto* found = std::get_if<EraseItem>(&decoded->items[0]);
+            const auto* found =
+                std::get_if<engine::EraseItem>(&decoded->items[0]);
             REQUIRE(found != nullptr);
             check_erase(*found, item);
         }
 
         {
-            EraseItem open_end = item;
+            engine::EraseItem open_end = item;
             open_end.end_key.clear();
             auto decoded = decode(encode(open_end));
             REQUIRE(decoded.has_value());
             REQUIRE(decoded->items.size() == 1);
-            const auto* found = std::get_if<EraseItem>(&decoded->items[0]);
+            const auto* found =
+                std::get_if<engine::EraseItem>(&decoded->items[0]);
             REQUIRE(found != nullptr);
             check_erase(*found, open_end);
             CHECK(found->end_key.empty());
@@ -1362,7 +1355,7 @@ TEST_SUITE("index store file") {
 
     TEST_CASE("a copy record round-trips its sources") {
         const std::uint64_t record_offset = store::engine::FILE_HEADER_BYTES;
-        const auto encode = [&](const CopyItem& copy) {
+        const auto encode = [&](const engine::CopyItem& copy) {
             auto encoded = store::engine::encode_record(
                 store::engine::RecordKind::Commit, 1, 0, record_offset, {copy});
             REQUIRE(encoded.has_value());
@@ -1370,17 +1363,17 @@ TEST_SUITE("index store file") {
         };
         const auto decode = [](const dstd::Vector<std::uint8_t>& record) {
             auto decoded = store::engine::decode_record(
-                ByteView{record.data(), record.size()});
+                dstd::ByteView{record.data(), record.size()});
             return decoded;
         };
 
-        CopyItem item;
+        engine::CopyItem item;
         item.local_id = 3;
         item.namespace_id = 2;
         item.scope_id = 7;
         item.params_hash = 0x0102030405060708ULL;
         item.generation = 5;
-        item.state = CopyState::Failed;
+        item.state = engine::CopyState::Failed;
         // Values with few repeated bytes keep the body raw, so the cases below
         // can edit it in place.
         item.sources.push_back(SourceStat{0x8A3F19C2E4B75D61ULL,
@@ -1394,18 +1387,20 @@ TEST_SUITE("index store file") {
             auto decoded = decode(encode(item));
             REQUIRE(decoded.has_value());
             REQUIRE(decoded->items.size() == 1);
-            const auto* found = std::get_if<CopyItem>(&decoded->items[0]);
+            const auto* found =
+                std::get_if<engine::CopyItem>(&decoded->items[0]);
             REQUIRE(found != nullptr);
             check_copy(*found, item);
         }
 
         {
-            CopyItem bare = item;
+            engine::CopyItem bare = item;
             bare.sources.clear();
             auto decoded = decode(encode(bare));
             REQUIRE(decoded.has_value());
             REQUIRE(decoded->items.size() == 1);
-            const auto* found = std::get_if<CopyItem>(&decoded->items[0]);
+            const auto* found =
+                std::get_if<engine::CopyItem>(&decoded->items[0]);
             REQUIRE(found != nullptr);
             check_copy(*found, bare);
             CHECK(found->sources.empty());
@@ -1443,11 +1438,11 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("forward_prev.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        FileIndex expected;
+        engine::FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
         expected.host = dstd::String("host");
         expected.label = dstd::String("label");
@@ -1487,7 +1482,7 @@ TEST_SUITE("index store file") {
         const dstd::String copy_path = temp.file("forward_prev_copy.dfs");
         write_file(copy_path, corrupted);
 
-        auto opened = DataFileReader::open(copy_path);
+        auto opened = engine::DataFileReader::open(copy_path);
         REQUIRE(opened.has_value());
         check_index_equal(*opened, prefix_state(expected, 4));
     }
@@ -1497,11 +1492,11 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("bit_flips.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        FileIndex expected;
+        engine::FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
         expected.host = dstd::String("host");
         expected.label = dstd::String("label");
@@ -1523,7 +1518,7 @@ TEST_SUITE("index store file") {
                 const dstd::String copy_path = temp.file("flip_record.dfs");
                 write_file(copy_path, corrupted);
 
-                auto opened = DataFileReader::open(copy_path);
+                auto opened = engine::DataFileReader::open(copy_path);
                 REQUIRE(opened.has_value());
                 const std::uint64_t visible_sequence =
                     newest_visible_sequence(records, record.sequence);
@@ -1533,7 +1528,8 @@ TEST_SUITE("index store file") {
             }
         }
 
-        for (const IndexedExtentRef& extent_ref : expected.extent_refs) {
+        for (const engine::IndexedExtentRef& extent_ref :
+             expected.extent_refs) {
             REQUIRE(extent_ref.ref.length != 0);
             const std::size_t begin =
                 static_cast<std::size_t>(extent_ref.ref.offset);
@@ -1546,7 +1542,7 @@ TEST_SUITE("index store file") {
                 const dstd::String copy_path = temp.file("flip_extent.dfs");
                 write_file(copy_path, corrupted);
 
-                auto opened = DataFileReader::open(copy_path);
+                auto opened = engine::DataFileReader::open(copy_path);
                 REQUIRE(opened.has_value());
                 check_index_equal(*opened, state_after_sequence(expected, 70));
             }
@@ -1558,11 +1554,11 @@ TEST_SUITE("index store file") {
         const dstd::String path = temp.file("torn_header.dfs");
 
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        FileIndex expected;
+        engine::FileIndex expected;
         expected.extent_size = EXTENT_SIZE;
         expected.host = dstd::String("host");
         expected.label = dstd::String("label");
@@ -1587,7 +1583,7 @@ TEST_SUITE("index store file") {
 
         const dstd::String stale_path = temp.file("torn_header_stale.dfs");
         write_file(stale_path, stale_header);
-        auto opened_stale = DataFileReader::open(stale_path);
+        auto opened_stale = engine::DataFileReader::open(stale_path);
         REQUIRE(opened_stale.has_value());
         check_index_equal(*opened_stale, prefix_state(expected, 3));
 
@@ -1599,7 +1595,7 @@ TEST_SUITE("index store file") {
                         read_u32_le_at(current, tail_at + 12U));
         const dstd::String torn_path = temp.file("torn_header_new_tail.dfs");
         write_file(torn_path, torn);
-        auto opened_torn = DataFileReader::open(torn_path);
+        auto opened_torn = engine::DataFileReader::open(torn_path);
         REQUIRE(opened_torn.has_value());
         check_index_equal(*opened_torn, expected);
     }
@@ -1612,7 +1608,7 @@ TEST_SUITE("index store file") {
     }
 
     TEST_CASE("a scope directory finds every scope in scope order") {
-        dstd::Vector<NamespaceItem> namespaces(2);
+        dstd::Vector<engine::NamespaceItem> namespaces(2);
         namespaces[0].local_id = 1;
         namespaces[0].name = dstd::String("b.space");
         namespaces[0].fold_kind = 1;
@@ -1622,9 +1618,9 @@ TEST_SUITE("index store file") {
 
         const dstd::Vector<dstd::Vector<dstd::String>> scope_paths = {
             {"/t/b.pfw"}, {"/t/a.pfw"}, {"/t/a.pfw", "/t/c.pfw"}, {"/t/a"}};
-        dstd::Vector<ScopeItem> scopes;
+        dstd::Vector<engine::ScopeItem> scopes;
         for (std::size_t i = 0; i < scope_paths.size(); ++i) {
-            ScopeItem scope;
+            engine::ScopeItem scope;
             scope.local_id = static_cast<std::uint32_t>(10 + i);
             scope.kind =
                 scope_paths[i].size() > 1 ? ScopeKind::Files : ScopeKind::File;
@@ -1633,21 +1629,21 @@ TEST_SUITE("index store file") {
             }
             scopes.push_back(std::move(scope));
         }
-        dstd::Vector<CopyItem> copies;
+        dstd::Vector<engine::CopyItem> copies;
         for (std::uint32_t i = 0; i < 4; ++i) {
             copies.push_back(
-                {100 + i, 1, 10 + i, 7, i + 1, CopyState::Ready, {}});
+                {100 + i, 1, 10 + i, 7, i + 1, engine::CopyState::Ready, {}});
         }
-        copies.push_back({200, 2, 10, 0, 5, CopyState::Failed, {}});
-        copies.push_back({201, 2, 99, 0, 6, CopyState::Ready, {}});
-        dstd::Vector<DropItem> drops;
+        copies.push_back({200, 2, 10, 0, 5, engine::CopyState::Failed, {}});
+        copies.push_back({201, 2, 99, 0, 6, engine::CopyState::Ready, {}});
+        dstd::Vector<engine::DropItem> drops;
         drops.push_back({1, 10, 9, {}, {}});
 
         const dstd::String low = "k0";
         const dstd::String mid = "k5";
         const dstd::String high = "k9";
-        dstd::Vector<EraseItem> erases;
-        EraseItem erase;
+        dstd::Vector<engine::EraseItem> erases;
+        engine::EraseItem erase;
         erase.copy_id = 100;
         erase.ordinal = 3;
         erase.begin_key = bytes_of_string(mid);
@@ -1724,24 +1720,24 @@ TEST_SUITE("index store file") {
         auto other = directory->entry(0);
         REQUIRE(other.has_value());
         REQUIRE(other->copies.size() == 1);
-        CHECK(other->copies[0].state == CopyState::Failed);
+        CHECK(other->copies[0].state == engine::CopyState::Failed);
         CHECK(other->copies[0].commits.size() == 1);
     }
 
     TEST_CASE("a scope directory keeps the sources of each copy") {
-        dstd::Vector<NamespaceItem> namespaces(1);
+        dstd::Vector<engine::NamespaceItem> namespaces(1);
         namespaces[0] = make_namespace(1);
-        dstd::Vector<ScopeItem> scopes(1);
+        dstd::Vector<engine::ScopeItem> scopes(1);
         scopes[0].local_id = 10;
         scopes[0].kind = ScopeKind::Files;
         scopes[0].paths.push_back(dstd::String("/t/a.pfw"));
         scopes[0].paths.push_back(dstd::String("/t/b.pfw"));
 
-        dstd::Vector<CopyItem> copies;
-        copies.push_back({100, 1, 10, 5, 1, CopyState::Ready, {}});
+        dstd::Vector<engine::CopyItem> copies;
+        copies.push_back({100, 1, 10, 5, 1, engine::CopyState::Ready, {}});
         copies.back().sources.push_back(SourceStat{11, 12, 13});
         copies.back().sources.push_back(SourceStat{21, 22, 23});
-        copies.push_back({101, 1, 10, 6, 2, CopyState::Failed, {}});
+        copies.push_back({101, 1, 10, 6, 2, engine::CopyState::Failed, {}});
 
         auto built = store::engine::build_scope_directory(namespaces, scopes,
                                                           copies, {}, {}, {});
@@ -1761,10 +1757,10 @@ TEST_SUITE("index store file") {
         CHECK(entry->copies[0].sources[1].hash == 23);
         CHECK(entry->copies[0].params_hash == 5);
         CHECK(entry->copies[1].sources.empty());
-        CHECK(entry->copies[1].state == CopyState::Failed);
+        CHECK(entry->copies[1].state == engine::CopyState::Failed);
 
-        dstd::Vector<CopyItem> wrong;
-        wrong.push_back({102, 1, 10, 7, 3, CopyState::Ready, {}});
+        dstd::Vector<engine::CopyItem> wrong;
+        wrong.push_back({102, 1, 10, 7, 3, engine::CopyState::Ready, {}});
         wrong.back().sources.push_back(SourceStat{1, 2, 3});
         auto rejected = store::engine::build_scope_directory(namespaces, scopes,
                                                              wrong, {}, {}, {});
@@ -1775,13 +1771,13 @@ TEST_SUITE("index store file") {
     }
 
     TEST_CASE("a scope directory whose slot leaves its bytes does not open") {
-        dstd::Vector<NamespaceItem> namespaces(1);
+        dstd::Vector<engine::NamespaceItem> namespaces(1);
         namespaces[0].local_id = 1;
         namespaces[0].name = dstd::String("ns");
-        dstd::Vector<ScopeItem> scopes(1);
+        dstd::Vector<engine::ScopeItem> scopes(1);
         scopes[0].local_id = 2;
-        dstd::Vector<CopyItem> copies;
-        copies.push_back({3, 1, 2, 0, 1, CopyState::Ready, {}});
+        dstd::Vector<engine::CopyItem> copies;
+        copies.push_back({3, 1, 2, 0, 1, engine::CopyState::Ready, {}});
         auto built = store::engine::build_scope_directory(namespaces, scopes,
                                                           copies, {}, {}, {});
         REQUIRE(built.has_value());
@@ -1790,19 +1786,20 @@ TEST_SUITE("index store file") {
         dstd::write_u32_le(broken.data() + 4 + 12, 1U << 20);
         CHECK_FALSE(
             store::engine::ScopeDirectory::open(view_of(broken)).has_value());
-        CHECK(store::engine::ScopeDirectory::open(ByteView{}).has_value());
+        CHECK(
+            store::engine::ScopeDirectory::open(dstd::ByteView{}).has_value());
     }
 
     TEST_CASE("segment runs pack into blocks of one copy") {
         TempDir temp;
         const dstd::String path = temp.file("segment_blocks.dfs");
-        auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host.example", "rank-0");
+        auto created = engine::DataFileWriter::create(path, EXTENT_SIZE,
+                                                      "host.example", "rank-0");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        const NamespaceItem ns = make_namespace(1);
-        const ScopeItem scope = make_scope(1);
+        const engine::NamespaceItem ns = make_namespace(1);
+        const engine::ScopeItem scope = make_scope(1);
         const std::uint32_t small_copy = 10;
         const std::uint32_t other_copy = 12;
         writer.add(ns);
@@ -1814,7 +1811,7 @@ TEST_SUITE("index store file") {
         REQUIRE_FALSE(first.bytes.empty());
         auto first_extent = writer.append_extent(view_of(first.bytes));
         REQUIRE(first_extent.has_value());
-        ExtentRefItem first_item =
+        engine::ExtentRefItem first_item =
             make_extent_ref(*first_extent, first, small_copy);
         first_item.sequence = 1;
         writer.add(std::move(first_item));
@@ -1824,7 +1821,7 @@ TEST_SUITE("index store file") {
         REQUIRE_FALSE(second.bytes.empty());
         auto second_extent = writer.append_extent(view_of(second.bytes));
         REQUIRE(second_extent.has_value());
-        ExtentRefItem second_item =
+        engine::ExtentRefItem second_item =
             make_extent_ref(*second_extent, second, small_copy);
         second_item.sequence = 2;
         writer.add(std::move(second_item));
@@ -1833,7 +1830,7 @@ TEST_SUITE("index store file") {
         constexpr std::size_t WIDE_SEGMENTS = 640;
         constexpr std::size_t WIDE_KEY_BYTES = 200;
         dstd::Vector<SegmentData> wide;
-        dstd::Vector<ExtentRef> wide_extents;
+        dstd::Vector<engine::ExtentRef> wide_extents;
         wide.reserve(WIDE_SEGMENTS);
         wide_extents.reserve(WIDE_SEGMENTS);
         for (std::size_t i = 0; i < WIDE_SEGMENTS; ++i) {
@@ -1846,7 +1843,7 @@ TEST_SUITE("index store file") {
         }
         const std::uint64_t wide_sequence = 3;
         for (std::size_t i = 0; i < WIDE_SEGMENTS; ++i) {
-            ExtentRefItem item =
+            engine::ExtentRefItem item =
                 make_extent_ref(wide_extents[i], wide[i], small_copy);
             item.sequence = wide_sequence;
             writer.add(std::move(item));
@@ -1857,7 +1854,7 @@ TEST_SUITE("index store file") {
         REQUIRE_FALSE(last.bytes.empty());
         auto last_extent = writer.append_extent(view_of(last.bytes));
         REQUIRE(last_extent.has_value());
-        ExtentRefItem last_item =
+        engine::ExtentRefItem last_item =
             make_extent_ref(*last_extent, last, other_copy);
         last_item.sequence = 4;
         writer.add(std::move(last_item));
@@ -1865,7 +1862,7 @@ TEST_SUITE("index store file") {
 
         REQUIRE(writer.close().has_value());
 
-        auto reader = DataFileReader::open(path);
+        auto reader = engine::DataFileReader::open(path);
         REQUIRE(reader.has_value());
         const dstd::Vector<ClosedRun> runs = closed_runs(*reader);
 
@@ -1934,12 +1931,12 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const dstd::String path = temp.file("space.dfs");
         constexpr std::size_t SPACE_EXTENT_SIZE = std::size_t{1} << 20;
-        auto created = DataFileWriter::create(path, SPACE_EXTENT_SIZE,
-                                              "host.example", "rank-0");
+        auto created = engine::DataFileWriter::create(path, SPACE_EXTENT_SIZE,
+                                                      "host.example", "rank-0");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        NamespaceItem fold_namespace = make_namespace(3);
+        engine::NamespaceItem fold_namespace = make_namespace(3);
         fold_namespace.fold_kind =
             static_cast<std::uint8_t>(store::FoldKind::SumI64);
         writer.add(make_namespace(1));
@@ -1954,7 +1951,7 @@ TEST_SUITE("index store file") {
         const auto segment_entry =
             [](std::uint32_t copy_id, std::uint32_t offset,
                const SegmentData& segment, std::uint64_t ordinal) {
-                ExtentSegment entry;
+                engine::ExtentSegment entry;
                 entry.copy_id = copy_id;
                 entry.offset_in_extent = offset;
                 entry.length = static_cast<std::uint32_t>(segment.bytes.size());
@@ -1964,9 +1961,9 @@ TEST_SUITE("index store file") {
                 entry.last_key = segment.last_key;
                 return entry;
             };
-        const auto extent_item = [](const ExtentRef& extent,
+        const auto extent_item = [](const engine::ExtentRef& extent,
                                     std::uint64_t sequence) {
-            ExtentRefItem item;
+            engine::ExtentRefItem item;
             item.offset = extent.offset;
             item.length = extent.length;
             item.crc = extent.crc;
@@ -1975,7 +1972,7 @@ TEST_SUITE("index store file") {
         };
 
         constexpr std::uint64_t COMMITS = 6;
-        dstd::Vector<ExtentRef> written;
+        dstd::Vector<engine::ExtentRef> written;
         std::uint64_t raw_written = 0;
         for (std::uint64_t sequence = 1; sequence <= COMMITS; ++sequence) {
             const SegmentData left =
@@ -2003,20 +2000,22 @@ TEST_SUITE("index store file") {
             written.push_back(*packed_extent);
             written.push_back(*folded_extent);
 
-            ExtentRefItem packed_item = extent_item(*packed_extent, sequence);
+            engine::ExtentRefItem packed_item =
+                extent_item(*packed_extent, sequence);
             packed_item.segments.push_back(segment_entry(1, 0, left, sequence));
             packed_item.segments.push_back(
                 segment_entry(2, right_at, right, sequence));
             writer.add(std::move(packed_item));
 
-            ExtentRefItem folded_item = extent_item(*folded_extent, sequence);
+            engine::ExtentRefItem folded_item =
+                extent_item(*folded_extent, sequence);
             folded_item.segments.push_back(
                 segment_entry(3, 0, folded, sequence));
             writer.add(std::move(folded_item));
             REQUIRE(writer.commit().has_value());
         }
 
-        SegmentBuilder large;
+        engine::SegmentBuilder large;
         const dstd::String large_key = "large-key";
         const dstd::String large_value(300U * 1024U, 'x');
         large.add(view_of(large_key), view_of(large_value));
@@ -2031,7 +2030,8 @@ TEST_SUITE("index store file") {
         REQUIRE(large_extent.has_value());
         raw_written += large_segment.bytes.size();
         written.push_back(*large_extent);
-        ExtentRefItem large_item = extent_item(*large_extent, COMMITS + 1);
+        engine::ExtentRefItem large_item =
+            extent_item(*large_extent, COMMITS + 1);
         large_item.segments.push_back(
             segment_entry(4, 0, large_segment, COMMITS + 1));
         writer.add(std::move(large_item));
@@ -2053,9 +2053,9 @@ TEST_SUITE("index store file") {
                   space.dict_bytes ==
               space.file_bytes);
 
-        auto opened = DataFileReader::open(path);
+        auto opened = engine::DataFileReader::open(path);
         REQUIRE(opened.has_value());
-        const FileIndex& index = opened->index();
+        const engine::FileIndex& index = opened->index();
         REQUIRE(index.tail.has_value());
         REQUIRE(written.size() == index.tail->extent_count);
 
@@ -2066,7 +2066,7 @@ TEST_SUITE("index store file") {
         std::uint64_t page_bytes = 0;
         std::uint64_t page_raw_bytes = 0;
         std::uint64_t compressed = 0;
-        for (const ExtentRef& ref : written) {
+        for (const engine::ExtentRef& ref : written) {
             auto stored = opened->read_extent(ref);
             REQUIRE(stored.has_value());
             auto view = store::engine::ExtentPages::open(view_of(*stored));
@@ -2131,7 +2131,7 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const dstd::String path = temp.file("space_leaves.dfs");
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
@@ -2145,7 +2145,7 @@ TEST_SUITE("index store file") {
         REQUIRE(writer.commit().has_value());
         REQUIRE(writer.close().has_value());
 
-        auto opened = DataFileReader::open(path);
+        auto opened = engine::DataFileReader::open(path);
         REQUIRE(opened.has_value());
         auto top = store::engine::SlotTable::open(
             view_of(opened->index().tail->top_table));
@@ -2178,7 +2178,7 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const dstd::String path = temp.file("space_open.dfs");
         auto created =
-            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+            engine::DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
         const SegmentData segment = make_segment(1, 2);

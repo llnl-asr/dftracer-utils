@@ -24,11 +24,7 @@
 #include <memory>
 
 using namespace dftracer::utils;
-using dftracer::utils::server::HttpRequest;
-using dftracer::utils::server::HttpResponse;
-using dftracer::utils::server::register_viz_api;
-using dftracer::utils::server::Router;
-using dftracer::utils::server::TraceIndex;
+using namespace dftracer::utils::server;
 
 namespace {
 
@@ -60,8 +56,7 @@ dstd::String regular_event(long ts) {
 
 void write_single_member(const dstd::String& path,
                          const dstd::String& content) {
-    using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
-    GzipMemberCompressor comp;
+    utilities::fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
     dftu_utils_test::FileOut ofs(path);

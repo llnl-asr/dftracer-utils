@@ -10,7 +10,6 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace;
-using dftracer::utils::json::JsonValue;
 
 namespace {
 
@@ -20,7 +19,7 @@ DFTracerEvent parse_line(simdjson::dom::parser& p, const dstd::String& line) {
     pad.resize(line.size() + simdjson::SIMDJSON_PADDING);
     auto doc = p.parse(pad.data(), line.size(), false);
     DFTracerEvent ev;
-    JsonValue jv(doc.value());
+    json::JsonValue jv(doc.value());
     DFTracerEvent::parse(jv, ev);
     return ev;
 }
@@ -138,7 +137,7 @@ TEST_SUITE("json-path") {
         dstd::String pad = s;
         pad.resize(s.size() + simdjson::SIMDJSON_PADDING);
         auto doc = p.parse(pad.data(), s.size(), false);
-        JsonValue jv(doc.value());
+        json::JsonValue jv(doc.value());
 
         CHECK(jv.at("args.used.MPI").get<std::uint64_t>() == 1);
         CHECK(jv.at("args.tags.0.model.size").get<std::uint64_t>() == 42);

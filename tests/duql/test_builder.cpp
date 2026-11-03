@@ -21,7 +21,6 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::duql;
-using dftracer::utils::json::JsonValue;
 
 namespace {
 
@@ -37,7 +36,9 @@ struct JsonDoc {
             valid = true;
         }
     }
-    JsonValue root() { return valid ? JsonValue(elem) : JsonValue(); }
+    json::JsonValue root() {
+        return valid ? json::JsonValue(elem) : json::JsonValue();
+    }
 };
 
 // Owns a dftu_duql and its serialized string across the assertions.

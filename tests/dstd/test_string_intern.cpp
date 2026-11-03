@@ -18,18 +18,16 @@
 
 using namespace dftracer::utils;
 
-using dstd::StringIntern;
-using Status = StringIntern::InsertStatus;
+using Status = dstd::StringIntern::InsertStatus;
 
 TEST_SUITE("StringIntern") {
     TEST_CASE("StringIntern - a table of a few strings costs a few KB") {
         // A build makes one table per file, so a fixed cost per table grows
         // with the file count.
-        namespace memory = dftracer::utils::memory;
         memory::PoolHandle pool =
             memory::Manager::get().general().child("intern size");
         {
-            StringIntern intern(pool.get());
+            dstd::StringIntern intern(pool.get());
             for (int i = 0; i < 100; ++i)
                 intern.get_or_insert("s" + dstd::to_string(i));
             MESSAGE("bytes for 100 strings: " << pool->live());
@@ -39,7 +37,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - round trips every string it is given") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         dstd::Vector<std::uint32_t> ids;
         constexpr int N = 200000;
         for (int i = 0; i < N; ++i)
@@ -51,30 +49,30 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - find gives the id of a held string only") {
-        StringIntern intern;
-        CHECK(intern.find("dur") == StringIntern::NO_ID);
+        dstd::StringIntern intern;
+        CHECK(intern.find("dur") == dstd::StringIntern::NO_ID);
         const auto dur = intern.get_or_insert("dur");
         const auto size = intern.get_or_insert("size");
         CHECK(intern.find("dur") == dur);
         CHECK(intern.find("size") == size);
-        CHECK(intern.find("du") == StringIntern::NO_ID);
-        CHECK(intern.find("dur_sum") == StringIntern::NO_ID);
-        CHECK(intern.find("") == StringIntern::NO_ID);
+        CHECK(intern.find("du") == dstd::StringIntern::NO_ID);
+        CHECK(intern.find("dur_sum") == dstd::StringIntern::NO_ID);
+        CHECK(intern.find("") == dstd::StringIntern::NO_ID);
         CHECK(intern.get_or_insert("dur") == dur);
     }
 
     TEST_CASE("StringIntern - ids beyond the table are reported, not empty") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         auto id = intern.get_or_insert("a");
         CHECK(intern.resolve(id) == "a");
         // A free slot inside the table is a genuine absent string.
         CHECK(intern.resolve(id + 1).empty());
-        CHECK_THROWS_AS(intern.resolve(StringIntern::FAST_CAPACITY),
+        CHECK_THROWS_AS(intern.resolve(dstd::StringIntern::FAST_CAPACITY),
                         std::out_of_range);
     }
 
     TEST_CASE("StringIntern - insert_at_id preserves loaded ids") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         CHECK(intern.insert_at_id(5000000, "loaded") == Status::Ok);
         CHECK(intern.resolve(5000000) == "loaded");
         CHECK(intern.get_or_insert("loaded") == 5000000);
@@ -87,14 +85,14 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - insert_at_id reports an id past the table") {
-        StringIntern intern;
-        CHECK(intern.insert_at_id(StringIntern::FAST_CAPACITY, "x") ==
+        dstd::StringIntern intern;
+        CHECK(intern.insert_at_id(dstd::StringIntern::FAST_CAPACITY, "x") ==
               Status::OutOfRange);
         CHECK(intern.size() == 0u);
     }
 
     TEST_CASE("StringIntern - new strings never reuse a loaded id") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         CHECK(intern.insert_at_id(42, "loaded") == Status::Ok);
         for (int i = 0; i < 100; ++i) {
             auto id = intern.get_or_insert("fresh_" + dstd::to_string(i));
@@ -105,7 +103,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - deterministic ids are content derived") {
-        StringIntern a, b;
+        dstd::StringIntern a, b;
         a.enable_deterministic_ids();
         b.enable_deterministic_ids();
         b.get_or_insert("filler");
@@ -118,7 +116,7 @@ TEST_SUITE("StringIntern") {
     TEST_CASE("StringIntern - insertion log enumerates only real entries") {
         // Content-derived ids are sparse over the whole id space, so anything
         // persisting the dictionary must walk the log, not the id range.
-        StringIntern intern;
+        dstd::StringIntern intern;
         intern.enable_deterministic_ids();
         dstd::Vector<dstd::String> inserted;
         for (int i = 0; i < 1000; ++i) {
@@ -133,7 +131,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - concurrent inserts all resolve") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         constexpr int THREADS = 8;
         constexpr int PER_THREAD = 20000;
         dstd::Vector<dstd::Thread> threads;
@@ -155,10 +153,10 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - a chunk outlives the intern") {
-        dstd::SharedPtr<StringIntern::Chunk> chunk;
+        dstd::SharedPtr<dstd::StringIntern::Chunk> chunk;
         std::uint32_t len, off;
         {
-            StringIntern intern;
+            dstd::StringIntern intern;
             auto id = intern.get_or_insert("kept alive");
             auto loc = intern.locate(id);
             REQUIRE(loc.data != nullptr);
@@ -170,7 +168,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - locate agrees with resolve under threads") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         constexpr int THREADS = 8;
         constexpr int PER_THREAD = 100000;
         dstd::Vector<dstd::Thread> threads;
@@ -185,7 +183,7 @@ TEST_SUITE("StringIntern") {
                     ids[t].push_back(id);
                     auto loc = intern.locate(id);
                     if (dstd::StringView(loc.data, loc.len) != name(t, i))
-                        ids[t].push_back(StringIntern::NO_ID);
+                        ids[t].push_back(dstd::StringIntern::NO_ID);
                 }
             });
         }
@@ -194,7 +192,7 @@ TEST_SUITE("StringIntern") {
             std::size_t k = 0;
             for (int i = 0; i < PER_THREAD; ++i) {
                 auto id = ids[t][k++];
-                REQUIRE(id != StringIntern::NO_ID);
+                REQUIRE(id != dstd::StringIntern::NO_ID);
                 auto loc = intern.locate(id);
                 CHECK(dstd::StringView(loc.data, loc.len) == name(t, i));
                 CHECK(intern.resolve(id) == name(t, i));
@@ -206,9 +204,9 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - a string over a chunk gets its own chunk") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         auto small = intern.get_or_insert("small");
-        dstd::String big(StringIntern::CHUNK_BYTES + 1000, 'x');
+        dstd::String big(dstd::StringIntern::CHUNK_BYTES + 1000, 'x');
         big[12345] = 'y';
         auto big_id = intern.get_or_insert(big);
         auto after = intern.get_or_insert("after");
@@ -224,7 +222,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - records stay inside their chunk") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         dstd::String v(1000, 'a');
         dstd::Vector<std::uint32_t> ids;
         for (int i = 0; i < 3000; ++i) {
@@ -243,7 +241,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - overlapping concurrent inserts agree on ids") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         constexpr int THREADS = 14;
         constexpr int PER_THREAD = 100000;
         constexpr int STRIDE = 5000;
@@ -282,7 +280,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - deterministic ids keep their fixed values") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         intern.enable_deterministic_ids();
         const dstd::Pair<const char*, std::uint32_t> expected[] = {
             {"hello", 229782084},
@@ -303,9 +301,9 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - deterministic ids agree under threads") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         intern.enable_deterministic_ids();
-        StringIntern serial;
+        dstd::StringIntern serial;
         serial.enable_deterministic_ids();
         constexpr int N = 20000;
         dstd::Vector<dstd::Thread> threads;
@@ -324,7 +322,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - a deterministic id collision throws") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         intern.enable_deterministic_ids();
         dstd::Vector<dstd::String> kept;
         bool threw = false;
@@ -344,7 +342,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - insert_at_id aliases a known string") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         const auto first = intern.get_or_insert("shared");
         CHECK(intern.insert_at_id(first + 7, "shared") == Status::Ok);
         CHECK(intern.resolve(first) == "shared");
@@ -358,7 +356,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - the log is in insertion order") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         dstd::Vector<std::uint32_t> ids;
         for (int i = 0; i < 5000; ++i)
             ids.push_back(
@@ -370,7 +368,7 @@ TEST_SUITE("StringIntern") {
     }
 
     TEST_CASE("StringIntern - readers see every logged entry resolve") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         std::atomic<bool> done{false};
         std::atomic<int> bad{0};
         dstd::Thread reader([&] {

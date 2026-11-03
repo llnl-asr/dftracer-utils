@@ -19,11 +19,7 @@
 #include <cstdlib>
 
 using namespace dftracer::utils;
-namespace mdc = dftracer::utils::utilities::reader::internal;
-using dftracer::utils::utilities::reader::ReadConfig;
-using dftracer::utils::utilities::reader::TraceReader;
-using dftracer::utils::utilities::reader::TraceReaderConfig;
-using dftu_utils_test::run_coro;
+using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -60,15 +56,15 @@ TEST_CASE("member cache: fills from a read then returns" * doctest::skip()) {
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, 4096));
     REQUIRE(dftu_utils_test::build_index(gz, index_dir));
 
-    mdc::configure_global_member_decode_cache(64ull * 1024 * 1024);
-    auto* cache = mdc::global_member_decode_cache();
+    reader::internal::configure_global_member_decode_cache(64ull * 1024 * 1024);
+    auto* cache = reader::internal::global_member_decode_cache();
     REQUIRE(cache != nullptr);
 
     std::int64_t lines = 0;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        TraceReader reader(
-            TraceReaderConfig{dstd::String(gz), dstd::String(index_dir)});
-        auto gen = reader.read_lines(ReadConfig{});
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        reader::TraceReader reader(reader::TraceReaderConfig{
+            dstd::String(gz), dstd::String(index_dir)});
+        auto gen = reader.read_lines(reader::ReadConfig{});
         while (co_await gen.next()) ++lines;
         co_return;
     });

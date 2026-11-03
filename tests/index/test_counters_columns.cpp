@@ -33,13 +33,7 @@
 #include <tuple>
 
 using namespace dftracer::utils;
-namespace agg = dftracer::utils::index::schemas::dft::agg;
-using dftracer::utils::index::Indexer;
-using dftracer::utils::index::IndexerOptions;
-using dftracer::utils::index::schemas::dft::agg::AggregationConfig;
-using dftracer::utils::trace::views::View;
-using dftracer::utils::trace::views::ViewFile;
-using dftu_utils_test::TestEnvironment;
+using namespace dftracer::utils::index;
 
 namespace {
 
@@ -97,7 +91,7 @@ IndexerOptions with_aggregation(const dstd::String& index_dir) {
     IndexerOptions o;
     o.index_dir = index_dir;
     o.checkpoint_size = CHECKPOINT_SIZE;
-    AggregationConfig c;
+    schemas::dft::agg::AggregationConfig c;
     c.time_interval_us = 1'000'000;
     o.aggregation = c;
     return o;
@@ -218,7 +212,7 @@ void check_against(const dataframe::DataFrame& df, const Expected& want) {
 
 std::uint16_t shard_of(
     const dstd::Tuple<dstd::String, dstd::String, std::uint64_t>& key) {
-    return agg::system_shard(std::get<0>(key), std::get<1>(key));
+    return schemas::dft::agg::system_shard(std::get<0>(key), std::get<1>(key));
 }
 
 // What the column blocks of the index of `gz` in `idx` hold: how many there
@@ -238,7 +232,8 @@ Blocks blocks_of(const dstd::String& gz, const dstd::String& idx) {
         snapshot.file(index::store::internal::get_logical_path(gz));
     REQUIRE(file.has_value());
     common::unwrap(index::for_each_agg_chunk_columns(
-        snapshot, *file, [&](std::uint64_t, const agg::ChunkColumns& block) {
+        snapshot, *file,
+        [&](std::uint64_t, const schemas::dft::agg::ChunkColumns& block) {
             ++out.total;
             bool holds_counter = false;
             for (std::uint64_t r = 0; r < block.rows; ++r)
@@ -256,16 +251,16 @@ Blocks blocks_of(const dstd::String& gz, const dstd::String& idx) {
 
 TEST_SUITE("CountersColumns") {
     TEST_CASE("the counters of the index are the per-second means") {
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir());
         const dstd::String idx = env.get_dir() + "/idx";
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(idx))
             .build();
-        const auto typed =
-            View::from_files({{dstd::String(gz), dstd::String(idx)}})
-                .collect_typed()
-                .get();
+        const auto typed = trace::views::View::from_files(
+                               {{dstd::String(gz), dstd::String(idx)}})
+                               .collect_typed()
+                               .get();
         check_against(typed.counters, expected_groups());
 
         // The trace spans several chunks, and the counters still come out as
@@ -276,16 +271,16 @@ TEST_SUITE("CountersColumns") {
     }
 
     TEST_CASE("a shard split splits the counters without a repeat") {
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir());
         const dstd::String idx = env.get_dir() + "/idx";
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(idx))
             .build();
-        const auto whole =
-            View::from_files({{dstd::String(gz), dstd::String(idx)}})
-                .collect_typed()
-                .get();
+        const auto whole = trace::views::View::from_files(
+                               {{dstd::String(gz), dstd::String(idx)}})
+                               .collect_typed()
+                               .get();
         check_against(whole.counters, expected_groups());
 
         // The split falls on the second shard the groups name, so both halves
@@ -302,14 +297,14 @@ TEST_SUITE("CountersColumns") {
         CHECK_FALSE(lo.empty());
         CHECK_FALSE(hi.empty());
 
-        const auto first =
-            View::from_files({{dstd::String(gz), dstd::String(idx)}})
-                .collect_typed(0, boundary)
-                .get();
-        const auto second =
-            View::from_files({{dstd::String(gz), dstd::String(idx)}})
-                .collect_typed(boundary, 4096)
-                .get();
+        const auto first = trace::views::View::from_files(
+                               {{dstd::String(gz), dstd::String(idx)}})
+                               .collect_typed(0, boundary)
+                               .get();
+        const auto second = trace::views::View::from_files(
+                                {{dstd::String(gz), dstd::String(idx)}})
+                                .collect_typed(boundary, 4096)
+                                .get();
         check_against(first.counters, lo);
         check_against(second.counters, hi);
 

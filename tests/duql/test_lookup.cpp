@@ -20,18 +20,17 @@
 
 using namespace dftracer::utils;
 
-namespace df = dftracer::utils::dataframe;
 using namespace dftracer::utils::duql;
 
 namespace {
 
 // The runs table {run, app}: 1 laghos, 2 amg, 2 amg.
-dstd::SharedPtr<const df::DataFrame> runs() {
-    auto f = dstd::make_shared<df::DataFrame>();
+dstd::SharedPtr<const dataframe::DataFrame> runs() {
+    auto f = dstd::make_shared<dataframe::DataFrame>();
     const std::int64_t ids[] = {1, 2, 2};
     f->names = {"run", "app"};
-    f->columns.push_back(df::Series::flat_i64(ids, 3));
-    f->columns.push_back(df::Series::strings(
+    f->columns.push_back(dataframe::Series::flat_i64(ids, 3));
+    f->columns.push_back(dataframe::Series::strings(
         dstd::Vector<dstd::String>{"laghos", "amg", "amg"}));
     return f;
 }
@@ -81,12 +80,12 @@ TEST_CASE("lookups evaluate on JSON and flattened records") {
 }
 
 TEST_CASE("an arrow's conflicting values fail in a value position") {
-    auto f = dstd::make_shared<df::DataFrame>();
+    auto f = dstd::make_shared<dataframe::DataFrame>();
     const std::int64_t ids[] = {1, 1};
     f->names = {"run", "app"};
-    f->columns.push_back(df::Series::flat_i64(ids, 2));
-    f->columns.push_back(
-        df::Series::strings(dstd::Vector<dstd::String>{"laghos", "amg"}));
+    f->columns.push_back(dataframe::Series::flat_i64(ids, 2));
+    f->columns.push_back(dataframe::Series::strings(
+        dstd::Vector<dstd::String>{"laghos", "amg"}));
     auto p = compile_program(
         "let runs = where run > 0; where (run -> runs.app) ?? \"\" == \"amg\"",
         {}, nullptr);
@@ -167,16 +166,16 @@ TEST_CASE("a joined sub-query term leaves the scan filter") {
 TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     // pid 1: (ts 10, dur 5) (20, 9) (20, 1) (30, null) (null, 100);
     // pid 2: (15, 7).
-    auto side = dstd::make_shared<df::DataFrame>();
+    auto side = dstd::make_shared<dataframe::DataFrame>();
     const std::int64_t dur[] = {5, 9, 1, 0, 100, 7};
     const std::int64_t pid[] = {1, 1, 1, 1, 1, 2};
     const std::int64_t ts[] = {10, 20, 20, 30, 0, 15};
     const std::uint8_t dur_valid[] = {0b110111};
     const std::uint8_t ts_valid[] = {0b101111};
     side->names = {"__correlated_value", "__ck0", "__correlated_range"};
-    side->columns.push_back(df::Series::flat_i64(dur, 6, dur_valid));
-    side->columns.push_back(df::Series::flat_i64(pid, 6));
-    side->columns.push_back(df::Series::flat_i64(ts, 6, ts_valid));
+    side->columns.push_back(dataframe::Series::flat_i64(dur, 6, dur_valid));
+    side->columns.push_back(dataframe::Series::flat_i64(pid, 6));
+    side->columns.push_back(dataframe::Series::flat_i64(ts, 6, ts_valid));
 
     auto lookup_of = [&](const dstd::String& text) {
         auto p = compile_program(text, {}, nullptr);
@@ -212,10 +211,10 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const std::int64_t lo[] = {10, 11, 0, 0, 0, 0};
     const std::int64_t hi[] = {20, 30, 5, 100, 100, 100};
     const std::uint8_t hi_valid[] = {0b011111};
-    const df::Series k = df::Series::flat_i64(opid, 6);
-    const df::Series a = df::Series::flat_i64(lo, 6);
-    const df::Series b = df::Series::flat_i64(hi, 6, hi_valid);
-    const dstd::Vector<const df::Series*> keys = {&k, &a, &b};
+    const dataframe::Series k = dataframe::Series::flat_i64(opid, 6);
+    const dataframe::Series a = dataframe::Series::flat_i64(lo, 6);
+    const dataframe::Series b = dataframe::Series::flat_i64(hi, 6, hi_valid);
+    const dstd::Vector<const dataframe::Series*> keys = {&k, &a, &b};
     auto band = [&](const dstd::String& agg) {
         const auto [bp, bl] = lookup_of(
             "derive v = (from data | where pid == ^.pid and ts between ^.lo "
@@ -223,14 +222,13 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
             agg + " })");
         return lookup_column(*bl, keys, 6);
     };
-    auto ints = [](const df::Series& s) {
+    auto ints = [](const dataframe::Series& s) {
         dstd::Vector<dstd::String> out;
         for (std::int64_t r = 0; r < s.length(); ++r)
-            out.push_back(
-                s.is_null(r)
-                    ? "null"
-                    : dstd::to_string(
-                          s.cast(df::TypeId::Int64).data<std::int64_t>()[r]));
+            out.push_back(s.is_null(r)
+                              ? "null"
+                              : dstd::to_string(s.cast(dataframe::TypeId::Int64)
+                                                    .data<std::int64_t>()[r]));
         return out;
     };
     using V = dstd::Vector<dstd::String>;
@@ -239,8 +237,8 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     CHECK(ints(band("sum(dur)")) == V{"15", "10", "null", "7", "null", "null"});
     CHECK(ints(band("min(dur)")) == V{"1", "1", "null", "7", "null", "null"});
     CHECK(ints(band("max(dur)")) == V{"9", "9", "null", "7", "null", "null"});
-    const df::Series mean = band("mean(dur)");
-    CHECK(mean.type() == df::TypeId::Float64);
+    const dataframe::Series mean = band("mean(dur)");
+    CHECK(mean.type() == dataframe::TypeId::Float64);
     CHECK(mean.data<double>()[0] == doctest::Approx(5.0));
     CHECK(mean.is_null(2));
 
@@ -249,14 +247,14 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
         "^.hi | select dur)");
     const std::int64_t one_lo[] = {10, 0};
     const std::int64_t one_hi[] = {10, 100};
-    const df::Series k2 = df::Series::flat_i64(opid, 2);
-    const df::Series a2 = df::Series::flat_i64(one_lo, 2);
-    const df::Series b2 = df::Series::flat_i64(one_hi, 1);
+    const dataframe::Series k2 = dataframe::Series::flat_i64(opid, 2);
+    const dataframe::Series a2 = dataframe::Series::flat_i64(one_lo, 2);
+    const dataframe::Series b2 = dataframe::Series::flat_i64(one_hi, 1);
     CHECK(ints(lookup_column(*sl, {&k2, &a2, &b2}, 1)) == V{"5"});
     dstd::String error;
     try {
-        const df::Series b3 = df::Series::flat_i64(one_hi + 1, 1);
-        const df::Series a3 = df::Series::flat_i64(one_lo + 1, 1);
+        const dataframe::Series b3 = dataframe::Series::flat_i64(one_hi + 1, 1);
+        const dataframe::Series a3 = dataframe::Series::flat_i64(one_lo + 1, 1);
         (void)lookup_column(*sl, {&k2, &a3, &b3}, 1);
     } catch (const dftracer::utils::common::DFTUtilsException& e) {
         error = e.what();

@@ -363,7 +363,6 @@ TEST_SUITE("View") {
         }
         REQUIRE(partsA.size() > 2);
 
-        namespace st = dftracer::utils::index::store;
         const dstd::String idxA =
             dstd::String(determine_index_path(partsA[0], ""));
         const dstd::String idxB =
@@ -837,7 +836,7 @@ TEST_SUITE("View") {
 
 namespace {
 
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils::trace;
 
 constexpr int DICT_ROWS = 1000;
 
@@ -865,7 +864,7 @@ View dict_trace(TestEnvironment& env) {
         dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-dstd::String cell(const df::Series& s, std::int64_t r) {
+dstd::String cell(const dataframe::Series& s, std::int64_t r) {
     return s.is_null(r) ? "<null>" : dstd::String(s.string_at(r));
 }
 
@@ -874,9 +873,8 @@ dstd::String cell(const df::Series& s, std::int64_t r) {
 TEST_SUITE("View scan string columns") {
     TEST_CASE(
         "a scan batch is a dictionary or a view column over intern chunks") {
-        namespace detail = dftracer::utils::trace::views::detail;
         dstd::Vector<std::uint32_t> cat_ids, path_ids;
-        df::Series cat, path;
+        dataframe::Series cat, path;
         {
             dstd::StringIntern intern;
             for (int i = 0; i < 1000; ++i) {
@@ -886,13 +884,13 @@ TEST_SUITE("View scan string columns") {
                     "/data/dir/file-" + dstd::to_string(i % 900)));
             }
             cat_ids[7] = dstd::StringIntern::NO_ID;
-            cat = detail::interned_column(cat_ids, intern);
-            path = detail::interned_column(path_ids, intern);
+            cat = views::detail::interned_column(cat_ids, intern);
+            path = views::detail::interned_column(path_ids, intern);
         }
 
-        CHECK(cat.encoding() == df::Encoding::Dictionary);
+        CHECK(cat.encoding() == dataframe::Encoding::Dictionary);
         CHECK(cat.handle()->child()->length == 3);
-        CHECK(path.encoding() == df::Encoding::View);
+        CHECK(path.encoding() == dataframe::Encoding::View);
         REQUIRE(cat.length() == 1000);
         REQUIRE(path.length() == 1000);
         CHECK(cat.null_count() == 1);
@@ -906,17 +904,17 @@ TEST_SUITE("View scan string columns") {
 
     TEST_CASE("repeated, unique and null-bearing string columns") {
         TestEnvironment env(10);
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             test_view_common::run(dict_trace(env).collect());
         REQUIRE(f.num_rows() == DICT_ROWS);
 
-        const df::Series cat = f.column("cat");
+        const dataframe::Series cat = f.column("cat");
 
-        const df::Series path = f.column("args.path");
+        const dataframe::Series path = f.column("args.path");
 
-        const df::Series metric = f.column("args.metric");
+        const dataframe::Series metric = f.column("args.metric");
 
-        const df::Series ts = f.column("ts");
+        const dataframe::Series ts = f.column("ts");
         for (std::int64_t r = 0; r < f.num_rows(); ++r) {
             const auto i = (ts.data<std::uint64_t>()[r] - 1000) / 10;
             CAPTURE(i);
@@ -938,14 +936,15 @@ TEST_SUITE("View scan string columns") {
         CHECK(q(R"(where starts_with(cat, "c"))").num_rows() == DICT_ROWS);
         CHECK(q(R"(where args.metric == "m0")").num_rows() == 167);
 
-        const df::DataFrame g = q("group cat { n = count() } | sort cat");
+        const dataframe::DataFrame g =
+            q("group cat { n = count() } | sort cat");
         REQUIRE(g.num_rows() == 3);
-        const df::Series gc = g.column("cat");
+        const dataframe::Series gc = g.column("cat");
         CHECK(cell(gc, 0) == "c0");
         CHECK(cell(gc, 1) == "c1");
         CHECK(cell(gc, 2) == "c2");
 
-        const df::DataFrame s = q("sort -cat | take 1 | select cat");
+        const dataframe::DataFrame s = q("sort -cat | take 1 | select cat");
         REQUIRE(s.num_rows() == 1);
         CHECK(cell(s.column("cat"), 0) == "c2");
     }

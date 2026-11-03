@@ -28,15 +28,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::col;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::InMemorySource;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::OpArgs;
-using dftracer::utils::dataframe::Schema;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -285,8 +277,6 @@ TEST_SUITE("lazy frame ops") {
     TEST_CASE(
         "reduce: one aggregate over every eligible column, whole frame "
         "or per key") {
-        using dftracer::utils::dataframe::Agg;
-        using dftracer::utils::dataframe::GroupAgg;
         DataFrame df;
         df.names = {"k", "s", "a", "b"};
         double b[4] = {2.0, 4.0, 6.5, 1.5};
@@ -384,7 +374,6 @@ TEST_SUITE("lazy frame ops") {
     }
 
     TEST_CASE("a group with no present value has no min, max or moment") {
-        using dftracer::utils::dataframe::Agg;
         // k = [x, y, x], a = [1, null, 3]: group y has no value of a.
         const std::int64_t av[3] = {1, 0, 3};
         const std::uint8_t valid[1] = {0x05};
@@ -485,8 +474,6 @@ TEST_SUITE("lazy frame ops") {
     }
 
     TEST_CASE("an Int64 sum that overflows is null, in Int64") {
-        using dftracer::utils::dataframe::Agg;
-        using dftracer::utils::dataframe::GroupAgg;
         constexpr std::int64_t BIG = std::numeric_limits<std::int64_t>::max();
         // Group x overflows upward and y downward; z wraps and wraps back, so
         // its sum fits.
@@ -769,10 +756,6 @@ TEST_SUITE("lazy frame ops") {
     }
 
     TEST_CASE("group-wise transforms: eager and lazy, pandas values") {
-        using dftracer::utils::dataframe::GroupBy;
-        using dftracer::utils::dataframe::GroupwiseOp;
-        using dftracer::utils::dataframe::LazyGroupBy;
-        using dftracer::utils::dataframe::RankMethod;
         const DataFrame df = make_groups();
         GroupBy g = df.group_by({"k"});
 
@@ -887,7 +870,6 @@ TEST_SUITE("lazy frame ops") {
     }
 
     TEST_CASE("column_op: a registered column op over one column") {
-        using dftracer::utils::dataframe::OpArgs;
         const DataFrame df = make_groups();
         dftu_dataframe* h = to_abi(df);
         REQUIRE(h);

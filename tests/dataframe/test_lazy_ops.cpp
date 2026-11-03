@@ -15,8 +15,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::OpArgs;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

@@ -8,8 +8,6 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-using binaries::ArgParser;
-using binaries::ParseOutcome;
 
 namespace {
 
@@ -26,9 +24,10 @@ struct Options {
     double millis = 0;
 };
 
-ParseOutcome run(Options& o, const dstd::Vector<dstd::StringView>& args,
-                 bool require_input = false) {
-    ArgParser p("tool", "1.2.3", "A test tool.");
+binaries::ParseOutcome run(Options& o,
+                           const dstd::Vector<dstd::StringView>& args,
+                           bool require_input = false) {
+    binaries::ArgParser p("tool", "1.2.3", "A test tool.");
     auto& in = p.positional(o.inputs, "PATH", "Files or folders");
     if (require_input) in.at_least_one();
     p.option(o.output, {"-o", "--output"}, "Output file");

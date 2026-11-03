@@ -20,7 +20,7 @@
 #include <algorithm>
 
 using namespace dftracer::utils;
-namespace istore = dftracer::utils::index::store;
+using namespace dftracer::utils::index;
 
 namespace {
 
@@ -85,7 +85,6 @@ TEST_SUITE("Schemas") {
     }
 
     TEST_CASE("detection picks the most specific matching schema") {
-        using index::detect_schema;
         const dstd::Vector<dstd::StringView> dft = {
             R"({"id":1,"name":"read","cat":"POSIX","ph":"X","ts":1})", "[",
             R"({"name":"FH","ph":"M","args":{"name":"/a","value":"1"}})"};
@@ -126,9 +125,9 @@ TEST_SUITE("Schemas") {
             const auto snapshot =
                 common::unwrap(index::plan::open_snapshot(files[0].index_path));
             const auto file =
-                snapshot.file(istore::internal::get_logical_path(trace));
+                snapshot.file(index::store::internal::get_logical_path(trace));
             REQUIRE(file.has_value());
-            dstd::Map<dstd::String, istore::PathStat> cat;
+            dstd::Map<dstd::String, index::store::PathStat> cat;
             for (auto& [p, st] :
                  common::unwrap(index::catalog(snapshot, *file)))
                 cat.emplace(dstd::String(p.data(), p.size()), st);
@@ -136,9 +135,9 @@ TEST_SUITE("Schemas") {
                  {"op", "host", "lat", "io.off", "hosts.0", "hosts.1", "ok"})
                 CHECK_MESSAGE(cat.count(p), p);
             CHECK(cat.at("op").count == 4000);
-            CHECK(cat.at("ok").type == istore::PathType::Bool);
-            const auto blooms = common::unwrap(
-                index::paths(snapshot, *file, istore::IndexExtension::Bloom));
+            CHECK(cat.at("ok").type == index::store::PathType::Bool);
+            const auto blooms = common::unwrap(index::paths(
+                snapshot, *file, index::store::IndexExtension::Bloom));
             const auto has = [&](const char* name) {
                 return std::any_of(
                     blooms.begin(), blooms.end(), [&](const auto& b) {

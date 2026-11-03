@@ -14,7 +14,7 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::fileio::lines::sources;
 using namespace dftracer::utils::utilities::fileio::lines;
 using namespace dftracer::utils::coro;
-using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
+using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -28,7 +28,7 @@ CoroTask<dstd::Vector<dstd::String>> collect_lines(AsyncGenerator<Line> gen) {
 
 // Compress `text` into one gzip member and append it to `out`.
 void append_member(dstd::Vector<std::uint8_t>& out, const dstd::String& text) {
-    GzipMemberCompressor comp;
+    fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(text.data(), text.size());
     REQUIRE(member.has_value());
     out.insert(out.end(), member->begin(), member->end());

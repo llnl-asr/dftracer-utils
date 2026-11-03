@@ -15,18 +15,14 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace::comparator;
-using dftracer::utils::dataframe::FieldStat;
-using dftracer::utils::index::schemas::dft::agg::AggPartial;
-using dftracer::utils::trace::AggKey;
-using dftracer::utils::trace::AggQueryResult;
-using dftracer::utils::trace::AggSums;
+using namespace dftracer::utils::trace;
 
 // `m2` holds the central second moment, sum((x - mean)^2), about the running
 // mean (held as `shift`, with `cmean` the remainder); the caller passes both.
-static FieldStat make_stats(double mean, double central_m2, uint64_t total,
-                            uint64_t min_val, uint64_t max_val,
-                            uint64_t count = 0) {
-    FieldStat s;
+static dataframe::FieldStat make_stats(double mean, double central_m2,
+                                       uint64_t total, uint64_t min_val,
+                                       uint64_t max_val, uint64_t count = 0) {
+    dataframe::FieldStat s;
     s.sum = static_cast<double>(total);
     s.min = static_cast<double>(min_val);
     s.max = static_cast<double>(max_val);
@@ -94,8 +90,8 @@ static CollapsedMetrics make_collapsed(double count_mean, double dur_mean,
 
 TEST_SUITE("ComputeCohensd") {
     TEST_CASE("compute_cohens_d - identical distributions") {
-        FieldStat base = make_stats(50.0, 100.0, 500, 10, 100);
-        FieldStat var = make_stats(50.0, 100.0, 500, 10, 100);
+        dataframe::FieldStat base = make_stats(50.0, 100.0, 500, 10, 100);
+        dataframe::FieldStat var = make_stats(50.0, 100.0, 500, 10, 100);
         double d = compute_cohens_d(base, 10, var, 10);
         CHECK(d == doctest::Approx(0.0).epsilon(1e-10));
     }
@@ -103,15 +99,15 @@ TEST_SUITE("ComputeCohensd") {
     TEST_CASE("compute_cohens_d - large difference") {
         // baseline: mean=10, m2=10 (small variance)
         // variant:  mean=100, m2=10
-        FieldStat base = make_stats(10.0, 10.0, 100, 5, 15);
-        FieldStat var = make_stats(100.0, 10.0, 1000, 90, 110);
+        dataframe::FieldStat base = make_stats(10.0, 10.0, 100, 5, 15);
+        dataframe::FieldStat var = make_stats(100.0, 10.0, 1000, 90, 110);
         double d = compute_cohens_d(base, 10, var, 10);
         CHECK(std::abs(d) > 0.8);
     }
 
     TEST_CASE("compute_cohens_d - insufficient samples") {
-        FieldStat base = make_stats(10.0, 50.0, 10, 5, 15);
-        FieldStat var = make_stats(20.0, 50.0, 20, 10, 30);
+        dataframe::FieldStat base = make_stats(10.0, 50.0, 10, 5, 15);
+        dataframe::FieldStat var = make_stats(20.0, 50.0, 20, 10, 30);
 
         // n_base = 1 -> returns 0
         CHECK(compute_cohens_d(base, 1, var, 10) ==
@@ -122,8 +118,8 @@ TEST_SUITE("ComputeCohensd") {
     }
 
     TEST_CASE("compute_cohens_d - zero variance") {
-        FieldStat base = make_stats(42.0, 0.0, 420, 42, 42);
-        FieldStat var = make_stats(42.0, 0.0, 420, 42, 42);
+        dataframe::FieldStat base = make_stats(42.0, 0.0, 420, 42, 42);
+        dataframe::FieldStat var = make_stats(42.0, 0.0, 420, 42, 42);
         double d = compute_cohens_d(base, 10, var, 10);
         CHECK(d == doctest::Approx(0.0).epsilon(1e-10));
     }
@@ -313,7 +309,7 @@ TEST_SUITE("ComparisonFilter") {
         AggKey key;
         key.cat = merged.strings().get_or_insert("posix");
         key.name = merged.strings().get_or_insert("read");
-        AggPartial p;
+        index::schemas::dft::agg::AggPartial p;
         for (uint64_t v : {10, 20, 30, 40, 50}) {
             ++p.count;
             p.duration.add(v);
@@ -335,7 +331,7 @@ TEST_SUITE("ComparisonFilter") {
             AggKey key;
             key.cat = merged.strings().get_or_insert("posix");
             key.name = merged.strings().get_or_insert(name);
-            AggPartial p;
+            index::schemas::dft::agg::AggPartial p;
             p.count = 1;
             p.ts = ts;
             p.te = te;
@@ -346,12 +342,12 @@ TEST_SUITE("ComparisonFilter") {
         };
         // Thread 3 of pid 2 and pid 1 are two threads; pid 2 touches file 8
         // twice, across both names, which is one pair.
-        row("read", 90, 400, 310, [](AggPartial& p) {
+        row("read", 90, 400, 310, [](index::schemas::dft::agg::AggPartial& p) {
             p.observe(1, 1, 7);
             p.observe(1, 2, 7);
             p.observe(2, 3, 8);
         });
-        row("write", 95, 96, 1, [](AggPartial& p) {
+        row("write", 95, 96, 1, [](index::schemas::dft::agg::AggPartial& p) {
             p.observe(2, 3, 8);
             p.observe(2, 3, 0);
         });

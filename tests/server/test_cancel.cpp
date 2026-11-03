@@ -5,8 +5,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-using dftracer::utils::server::CancelRegistry;
-using dftracer::utils::server::CancelToken;
+using namespace dftracer::utils;
+using namespace dftracer::utils::server;
 
 TEST_SUITE("CancelToken") {
     TEST_CASE("default token is never cancelled") {

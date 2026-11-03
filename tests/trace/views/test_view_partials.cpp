@@ -28,11 +28,7 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 using namespace test_view_common;
 
-namespace df = dftracer::utils::dataframe;
-namespace ix = dftracer::utils::index;
-namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace scan = dftracer::utils::trace::views::detail::scan;
-namespace trace = dftracer::utils::trace;
+using namespace dftracer::utils::trace;
 
 namespace {
 
@@ -59,7 +55,7 @@ struct Fixture {
     TestEnvironment env{200};
     dstd::Vector<dstd::String> gz;
     dstd::String index_path;
-    agg::AggregationConfig aggregation;
+    index::schemas::dft::agg::AggregationConfig aggregation;
 
     // `extras` keeps the string args epoch and step as extra group keys and
     // writes them on the events and counters. `mixed` adds counters named
@@ -114,11 +110,11 @@ struct Fixture {
         }
         aggregation.compute_percentiles = true;
         if (extras) aggregation.extra_group_keys = {"epoch", "step"};
-        ix::IndexerOptions o;
+        index::IndexerOptions o;
         o.index_dir = env.get_dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
         o.aggregation = aggregation;
-        ix::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
+        index::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
         index_path =
             dstd::String(determine_index_path(gz.front(), o.index_dir));
     }
@@ -144,29 +140,29 @@ dstd::Vector<AggSpec> specs() {
 }
 
 // The aggregation of `p` by a full scan of the traces, the partials bypassed.
-df::DataFrame scan_only(const scan::ScanPlan& p) {
-    namespace detail = dftracer::utils::trace::views::detail;
+dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
     Runtime rt;
-    df::DataFrame out;
-    rt.block_on(
-        coro::named("scan-only",
-                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                        auto st = co_await detail::build_engine_agg_state(*p);
-                        out = detail::finalize_engine_result(*st, *p);
-                    })));
-    return detail::apply_agg_post_ops(std::move(out), *p);
+    dataframe::DataFrame out;
+    rt.block_on(coro::named(
+        "scan-only",
+        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto st = co_await views::detail::build_engine_agg_state(*p);
+            out = views::detail::finalize_engine_result(*st, *p);
+        })));
+    return views::detail::apply_agg_post_ops(std::move(out), *p);
 }
 
 using Rows = dstd::Map<dstd::String, dstd::Map<dstd::String, double>>;
 
-Rows rows_of(const df::DataFrame& f, const dstd::Vector<dstd::String>& keys) {
+Rows rows_of(const dataframe::DataFrame& f,
+             const dstd::Vector<dstd::String>& keys) {
     Rows out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
         dstd::String k;
         for (const auto& c : keys) k += bstr(f, r, c) + '|';
         auto& cells = out[k];
         for (std::size_t c = 0; c < f.names.size(); ++c)
-            if (f.columns[c].type() != df::TypeId::String)
+            if (f.columns[c].type() != dataframe::TypeId::String)
                 cells[dstd::String(f.names[c])] = bnum(f, r, f.names[c]);
     }
     return out;
@@ -174,7 +170,8 @@ Rows rows_of(const df::DataFrame& f, const dstd::Vector<dstd::String>& keys) {
 
 // `got` has the rows of `expected`: the counts, sums, means and extremes
 // equal, the quantile within the accuracy of its sketch.
-void same_rows(const df::DataFrame& got, const df::DataFrame& expected,
+void same_rows(const dataframe::DataFrame& got,
+               const dataframe::DataFrame& expected,
                const dstd::Vector<dstd::String>& keys) {
     const Rows g = rows_of(got, keys);
     const Rows e = rows_of(expected, keys);
@@ -198,14 +195,14 @@ void same_rows(const df::DataFrame& got, const df::DataFrame& expected,
 }
 
 // The raw scan of the events of the traces (profiles left out), grouped.
-df::DataFrame scan_events(const Fixture& fx, dstd::Vector<GroupKey> keys,
-                          std::uint64_t window_us = 0) {
-    auto p = scan::from_files(fx.files());
-    p = scan::filter(
+dataframe::DataFrame scan_events(const Fixture& fx, dstd::Vector<GroupKey> keys,
+                                 std::uint64_t window_us = 0) {
+    auto p = views::detail::scan::from_files(fx.files());
+    p = views::detail::scan::filter(
         p, Query::from_string(R"(cat in ["POSIX", "STDIO"])").value());
-    p = scan::group_by(p, std::move(keys));
-    if (window_us != 0) p = scan::time_bucket(p, window_us);
-    return scan_only(scan::agg(p, specs()));
+    p = views::detail::scan::group_by(p, std::move(keys));
+    if (window_us != 0) p = views::detail::scan::time_bucket(p, window_us);
+    return scan_only(views::detail::scan::agg(p, specs()));
 }
 
 }  // namespace
@@ -220,14 +217,14 @@ TEST_SUITE("ViewPartials") {
             {GroupKey::cat(), GroupKey::hhash()}};
         const dstd::Vector<dstd::Vector<dstd::String>> columns{
             {"name"}, {"hhash"}, {"pid", "name"}, {"cat", "hhash"}};
-        dstd::Vector<df::DataFrame> expected;
+        dstd::Vector<dataframe::DataFrame> expected;
         for (const auto& g : groupings) expected.push_back(scan_events(fx, g));
 
         fx.delete_traces();
         for (std::size_t i = 0; i < groupings.size(); ++i) {
             // A scan answers over the events only. The profile counters of
             // the traces are a kind of their own in the partials.
-            const df::DataFrame got =
+            const dataframe::DataFrame got =
                 fx.view()
                     .filter(Query::from_string(R"(cat in ["POSIX", "STDIO"])")
                                 .value())
@@ -250,14 +247,15 @@ TEST_SUITE("ViewPartials") {
         const dstd::Vector<GroupKey> keys{GroupKey::cat(), GroupKey::pid(),
                                           GroupKey::tid()};
         Fixture fx;
-        auto p = scan::from_files(fx.files());
-        p = scan::filter(
+        auto p = views::detail::scan::from_files(fx.files());
+        p = views::detail::scan::filter(
             p, Query::from_string(R"(cat in ["POSIX", "STDIO"])").value());
-        p = scan::group_by(p, keys);
-        const df::DataFrame expected = scan_only(scan::agg(p, stats_specs));
+        p = views::detail::scan::group_by(p, keys);
+        const dataframe::DataFrame expected =
+            scan_only(views::detail::scan::agg(p, stats_specs));
 
         fx.delete_traces();
-        const df::DataFrame got =
+        const dataframe::DataFrame got =
             fx.view()
                 .filter(
                     Query::from_string(R"(cat in ["POSIX", "STDIO"])").value())
@@ -280,9 +278,10 @@ TEST_SUITE("ViewPartials") {
         // A rollup is stored beside one index, so the files share one.
         Fixture fx;
         const dstd::Vector<ViewFile> one{fx.files().front()};
-        auto p = scan::from_files(one);
-        p = scan::group_by(p, keys);
-        const df::DataFrame expected = scan_only(scan::agg(p, stats_specs));
+        auto p = views::detail::scan::from_files(one);
+        p = views::detail::scan::group_by(p, keys);
+        const dataframe::DataFrame expected =
+            scan_only(views::detail::scan::agg(p, stats_specs));
 
         fx.delete_traces();
         const View rollup =
@@ -331,13 +330,13 @@ TEST_SUITE("ViewPartials") {
                       {AggOp::Sum, "dur", "total"},
                       {AggOp::Mean, "dur", "avg"}});
         };
-        const df::DataFrame expected_events =
+        const dataframe::DataFrame expected_events =
             scan_events(fx, {GroupKey::name(), GroupKey::pid()}, WINDOW_US);
 
         fx.delete_traces();
         const TypedResult typed = typed_view().collect_typed().get();
 
-        auto strip = [](const df::DataFrame& f) {
+        auto strip = [](const dataframe::DataFrame& f) {
             // the engine columns the typed frames share with the scan
             return rows_of(f, {"time_bucket", "name", "pid"});
         };
@@ -457,13 +456,14 @@ TEST_SUITE("ViewPartials") {
         };
         const TypedResult before_epoch = profiles_by("epoch");
         const TypedResult before_step = profiles_by("step");
-        dstd::Vector<df::DataFrame> expected;
+        dstd::Vector<dataframe::DataFrame> expected;
         for (const char* arg : {"epoch", "step"}) {
-            auto p = scan::from_files(fx.files());
-            p = scan::filter(
+            auto p = views::detail::scan::from_files(fx.files());
+            p = views::detail::scan::filter(
                 p, Query::from_string(R"(cat in ["POSIX", "STDIO"])").value());
-            p = scan::group_by(p, {GroupKey::name(), GroupKey::of_arg(arg)});
-            expected.push_back(scan_only(scan::agg(p, specs())));
+            p = views::detail::scan::group_by(
+                p, {GroupKey::name(), GroupKey::of_arg(arg)});
+            expected.push_back(scan_only(views::detail::scan::agg(p, specs())));
         }
 
         fx.delete_traces();

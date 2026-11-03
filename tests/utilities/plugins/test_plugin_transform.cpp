@@ -32,12 +32,8 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::CoroScope;
-using dftracer::utils::Runtime;
-using dftracer::utils::plugins::build_injected_plugins;
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
-using test_plugin_common::index_trace;
 
 namespace {
 
@@ -214,7 +210,7 @@ dstd::String make_trace(dftu_utils_test::TestEnvironment& env) {
 
 void run_host(dstd::Vector<dftu_plugin*> plugins,
               dstd::Vector<ViewFile> files) {
-    auto set = build_injected_plugins(std::move(plugins));
+    auto set = plugins::build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));
     Runtime rt(4);
@@ -252,7 +248,7 @@ TEST_SUITE("PluginTransform") {
     TEST_CASE(
         "a later plugin reads the rewritten batch, an earlier one the scan") {
         dftu_utils_test::TestEnvironment env(EVENTS);
-        ViewFile file = index_trace(make_trace(env));
+        ViewFile file = test_plugin_common::index_trace(make_trace(env));
         g_before.reset();
         g_after.reset();
         g_after_query.reset();

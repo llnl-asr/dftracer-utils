@@ -13,7 +13,6 @@
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-namespace build = dftracer::utils::index::build;
 
 namespace {
 
@@ -47,14 +46,16 @@ TEST_SUITE("IndexParseAllocations") {
             files.emplace_back(write_trace(env.get_dir(), i));
 
         Runtime rt(4);
-        build::IndexBuildBatchResult result;
+        index::build::IndexBuildBatchResult result;
         const auto pool_before = memory::debug_allocation_count();
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+            auto config =
+                dstd::make_shared<index::build::IndexBuildBatchConfig>();
             config->file_paths = files;
             config->index_dir = env.get_dir() + "/idx";
             config->parallelism = 4;
-            result = co_await build::BatchBuilder::process(std::move(config));
+            result =
+                co_await index::build::BatchBuilder::process(std::move(config));
         });
         rt.submit(std::move(task), "parse-allocations").wait();
         const auto pool = memory::debug_allocation_count() - pool_before;
@@ -80,14 +81,16 @@ TEST_SUITE("IndexParseAllocations") {
             files.emplace_back(write_trace(env.get_dir(), i, SMALL_EVENTS));
 
         Runtime rt(4);
-        build::IndexBuildBatchResult result;
+        index::build::IndexBuildBatchResult result;
         const auto pool_before = memory::debug_allocation_count();
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+            auto config =
+                dstd::make_shared<index::build::IndexBuildBatchConfig>();
             config->file_paths = files;
             config->index_dir = env.get_dir() + "/idx";
             config->parallelism = 4;
-            result = co_await build::BatchBuilder::process(std::move(config));
+            result =
+                co_await index::build::BatchBuilder::process(std::move(config));
         });
         rt.submit(std::move(task), "parse-allocations-small").wait();
         const auto pool = memory::debug_allocation_count() - pool_before;

@@ -17,13 +17,7 @@
 #include <cstring>
 
 using namespace dftracer::utils;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Encoding;
-using dftracer::utils::dataframe::new_buffer;
-using dftracer::utils::dataframe::OwnedArrow;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
-using dftracer::utils::dataframe::writable;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

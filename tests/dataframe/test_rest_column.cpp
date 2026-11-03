@@ -23,13 +23,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-namespace df = dftracer::utils::dataframe;
-using df::col;
-using df::DataFrame;
-using df::LazyFrame;
-using df::Series;
-using df::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -87,16 +81,16 @@ Series list_column(std::int64_t rows) {
     return Series::list(offs, ints(values));
 }
 
-class PartsCursor : public df::Cursor {
+class PartsCursor : public dataframe::Cursor {
    public:
     PartsCursor(dstd::Vector<Part> parts, bool with_list)
         : parts_(std::move(parts)), with_list_(with_list) {}
 
-    dftracer::utils::coro::CoroTask<dstd::Optional<df::Morsel>> next(
+    dftracer::utils::coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
         std::int64_t) override {
         if (next_ >= parts_.size()) co_return dstd::nullopt;
         const Part& p = parts_[next_];
-        df::Morsel m;
+        dataframe::Morsel m;
         m.batch_index = static_cast<std::int64_t>(next_++);
         m.rows = static_cast<std::int64_t>(p.cols.front().second.size());
         auto& d = m.dyn_state();
@@ -122,31 +116,34 @@ class PartsCursor : public df::Cursor {
 
 // Declares a and b (and l) only; with `declare_all` it declares x and y too
 // and returns nothing undeclared.
-class PartsSource : public df::Source {
+class PartsSource : public dataframe::Source {
    public:
     PartsSource(dstd::Vector<Part> parts, bool declare_all, bool with_list)
         : parts_(std::move(parts)),
           declare_all_(declare_all),
           with_list_(with_list) {}
 
-    df::Schema schema() const override {
-        df::Schema s;
+    dataframe::Schema schema() const override {
+        dataframe::Schema s;
         Names names{"a", "b"};
         if (declare_all_) names.insert(names.end(), {"x", "y"});
         for (const dstd::String& n : names)
-            s.fields.push_back(df::Field{n, df::scalar(TypeId::Int64), true});
-        if (with_list_)
             s.fields.push_back(
-                df::Field{"l", df::list_of(df::scalar(TypeId::Int64)), true});
+                dataframe::Field{n, dataframe::scalar(TypeId::Int64), true});
+        if (with_list_)
+            s.fields.push_back(dataframe::Field{
+                "l", dataframe::list_of(dataframe::scalar(TypeId::Int64)),
+                true});
         return s;
     }
 
     bool undeclared_columns() const override { return !declare_all_; }
 
-    df::ScanResult scan(const df::ScanRequest& req) const override {
-        df::ScanResult r;
+    dataframe::ScanResult scan(
+        const dataframe::ScanRequest& req) const override {
+        dataframe::ScanResult r;
         r.cursor = dstd::make_unique<PartsCursor>(parts_, with_list_);
-        r.filters.assign(req.filters.size(), df::Pushed::No);
+        r.filters.assign(req.filters.size(), dataframe::Pushed::No);
         return r;
     }
 
@@ -157,24 +154,26 @@ class PartsSource : public df::Source {
 };
 
 // A source declaring `declared` of each part's columns.
-class RightSource : public df::Source {
+class RightSource : public dataframe::Source {
    public:
     RightSource(dstd::Vector<Part> parts, Names declared)
         : parts_(std::move(parts)), declared_(std::move(declared)) {}
 
-    df::Schema schema() const override {
-        df::Schema s;
+    dataframe::Schema schema() const override {
+        dataframe::Schema s;
         for (const dstd::String& n : declared_)
-            s.fields.push_back(df::Field{n, df::scalar(TypeId::Int64), true});
+            s.fields.push_back(
+                dataframe::Field{n, dataframe::scalar(TypeId::Int64), true});
         return s;
     }
 
     bool undeclared_columns() const override { return true; }
 
-    df::ScanResult scan(const df::ScanRequest& req) const override {
-        df::ScanResult r;
+    dataframe::ScanResult scan(
+        const dataframe::ScanRequest& req) const override {
+        dataframe::ScanResult r;
         r.cursor = dstd::make_unique<PartsCursor>(parts_, false);
-        r.filters.assign(req.filters.size(), df::Pushed::No);
+        r.filters.assign(req.filters.size(), dataframe::Pushed::No);
         return r;
     }
 
@@ -211,7 +210,8 @@ DataFrame run(const LazyFrame& lf) {
 }
 
 dstd::String cell(const Series& c, std::int64_t i) {
-    return c.is_null(i) ? dstd::String("null") : df::cell_to_string(c, i);
+    return c.is_null(i) ? dstd::String("null")
+                        : dataframe::cell_to_string(c, i);
 }
 
 dstd::Vector<dstd::String> column(const DataFrame& f,
@@ -246,7 +246,7 @@ LazyFrame lookup_side() {
     side.columns.push_back(ints({1, 5, 6}));
     side.columns.push_back(ints({7, 8, 9}));
     return LazyFrame::scan(
-        dstd::make_shared<df::InMemorySource>(std::move(side)));
+        dstd::make_shared<dataframe::InMemorySource>(std::move(side)));
 }
 
 void node_schema(void*, const dftu_schema*, const dftu_op_arg*, dftu_schema*) {}
@@ -293,7 +293,7 @@ TEST_SUITE("rest column") {
             {"concat", [](const LazyFrame& l) { return l.concat(l); }},
             {"left join",
              [](const LazyFrame& l) {
-                 return l.join(lookup_side(), {"a"}, df::JoinHow::Left);
+                 return l.join(lookup_side(), {"a"}, dataframe::JoinHow::Left);
              }},
             {"unique on a subset",
              [](const LazyFrame& l) { return l.unique({"a"}); }},
@@ -315,7 +315,7 @@ TEST_SUITE("rest column") {
     TEST_CASE("a derived column keeps its position for later ops") {
         DataFrame out =
             run(rest_scan()
-                    .with_column("c", col(0) * df::lit(std::int64_t{2}))
+                    .with_column("c", col(0) * dataframe::lit(std::int64_t{2}))
                     .filter(col(2) > std::int64_t{6}));
         CHECK(out.names == Names{"a", "b", "c", "x", "y"});
         CHECK(column(out, "c") ==
@@ -348,9 +348,9 @@ TEST_SUITE("rest column") {
 
     TEST_CASE("ops that build columns from named inputs leave them out") {
         CHECK(run(rest_scan().select({"a"})).names == Names{"a"});
-        df::GroupAgg sum{df::Agg::Sum, "b", "sum_b"};
-        DataFrame g = run(
-            rest_scan().group_by(Names{"a"}, dstd::Vector<df::GroupAgg>{sum}));
+        dataframe::GroupAgg sum{dataframe::Agg::Sum, "b", "sum_b"};
+        DataFrame g = run(rest_scan().group_by(
+            Names{"a"}, dstd::Vector<dataframe::GroupAgg>{sum}));
         CHECK(g.names == Names{"a", "sum_b"});
         CHECK(run(rest_scan().null_count()).names == Names{"a", "b"});
         CHECK(run(rest_scan().filter(col(0) > std::int64_t{0}).select({"b"}))
@@ -375,8 +375,8 @@ TEST_SUITE("rest column") {
         side.columns.push_back(ints({5}));
         const LazyFrame joined = rest_scan().join(
             LazyFrame::scan(
-                dstd::make_shared<df::InMemorySource>(std::move(side))),
-            {"a"}, df::JoinHow::Left);
+                dstd::make_shared<dataframe::InMemorySource>(std::move(side))),
+            {"a"}, dataframe::JoinHow::Left);
         CHECK_THROWS_WITH_AS(run(joined), doctest::Contains("'x'"),
                              std::invalid_argument);
     }
@@ -388,7 +388,7 @@ TEST_SUITE("rest column") {
         left.columns.push_back(ints({70, 80}));
         const LazyFrame lf =
             LazyFrame::scan(
-                dstd::make_shared<df::InMemorySource>(std::move(left)))
+                dstd::make_shared<dataframe::InMemorySource>(std::move(left)))
                 .concat(rest_scan());
         DataFrame out = run(lf);
         CHECK(out.names == Names{"a", "b", "x", "y"});
@@ -403,7 +403,8 @@ TEST_SUITE("rest column") {
     }
 
     TEST_CASE("a join keeps the undeclared columns of both sides") {
-        for (const df::JoinHow how : {df::JoinHow::Left, df::JoinHow::Lookup}) {
+        for (const dataframe::JoinHow how :
+             {dataframe::JoinHow::Left, dataframe::JoinHow::Lookup}) {
             CAPTURE(static_cast<int>(how));
             DataFrame out = run(rest_scan().join(right_side(), {"a"}, how));
             Names names = out.names;
@@ -440,9 +441,9 @@ TEST_SUITE("rest column") {
         left.columns.push_back(ints({1, 6}));
         left.columns.push_back(ints({10, 60}));
         DataFrame out =
-            run(LazyFrame::scan(
-                    dstd::make_shared<df::InMemorySource>(std::move(left)))
-                    .join(right_side(), {"a"}, df::JoinHow::Left));
+            run(LazyFrame::scan(dstd::make_shared<dataframe::InMemorySource>(
+                                    std::move(left)))
+                    .join(right_side(), {"a"}, dataframe::JoinHow::Left));
         Names names = out.names;
         std::sort(names.begin(), names.end());
         CHECK(names == Names{"a", "b", "w", "x", "z"});
@@ -454,9 +455,9 @@ TEST_SUITE("rest column") {
         with_x.columns.push_back(ints({5}));
         with_x.columns.push_back(ints({-1}));
         DataFrame clash =
-            run(LazyFrame::scan(
-                    dstd::make_shared<df::InMemorySource>(std::move(with_x)))
-                    .join(right_side(), {"a"}, df::JoinHow::Left));
+            run(LazyFrame::scan(dstd::make_shared<dataframe::InMemorySource>(
+                                    std::move(with_x)))
+                    .join(right_side(), {"a"}, dataframe::JoinHow::Left));
         CHECK(column(clash, "x") == dstd::Vector<dstd::String>{"-1"});
         CHECK(column(clash, "x_right") == dstd::Vector<dstd::String>{"12"});
         CHECK(column(clash, "z") == dstd::Vector<dstd::String>{"22"});
@@ -467,9 +468,10 @@ TEST_SUITE("rest column") {
         vt.output_schema = node_schema;
         vt.open = node_open;
         REQUIRE(dftu_node_register("test.rest.node", &vt, nullptr) == 0);
-        CHECK_THROWS_WITH_AS(
-            run(rest_scan().sort_by("a").op("test.rest.node", df::OpArgs())),
-            doctest::Contains("op test.rest.node"), std::invalid_argument);
+        CHECK_THROWS_WITH_AS(run(rest_scan().sort_by("a").op(
+                                 "test.rest.node", dataframe::OpArgs())),
+                             doctest::Contains("op test.rest.node"),
+                             std::invalid_argument);
         CHECK(dftu_node_unregister("test.rest.node") == 0);
     }
 

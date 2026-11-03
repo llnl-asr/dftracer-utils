@@ -23,9 +23,6 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 using namespace test_view_common;
 
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::OpArgs;
-
 namespace {
 
 // Widens a FLAT numeric column's row `row` to double regardless of its
@@ -168,7 +165,7 @@ TEST_SUITE("View C ABI") {
 
         View cpp_view = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                             .duql(R"(cat == "POSIX")");
-        DataFrame cpp_df = run(cpp_view.collect());
+        dataframe::DataFrame cpp_df = run(cpp_view.collect());
 
         CHECK(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
         CHECK(dftu_dataframe_num_rows(df) == 30);
@@ -202,7 +199,7 @@ TEST_SUITE("View C ABI") {
         duql::Params p;
         p.emplace("min", duql::LiteralValue{std::uint64_t{30}});
         p.emplace("n", duql::LiteralValue{std::uint64_t{3}});
-        const DataFrame want =
+        const dataframe::DataFrame want =
             run(View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                     .duql(text, p)
                     .collect());
@@ -276,7 +273,7 @@ TEST_SUITE("View C ABI") {
             CHECK(error == nullptr);
             dftu_dataframe* df = dftu_lazyframe_collect(lf, 0);
             REQUIRE(df != nullptr);
-            const DataFrame want =
+            const dataframe::DataFrame want =
                 run(View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                         .duql(c.text)
                         .collect());
@@ -312,7 +309,7 @@ TEST_SUITE("View C ABI") {
 
         duql::Params p;
         p.emplace("min", duql::LiteralValue{std::uint64_t{30}});
-        const DataFrame want =
+        const dataframe::DataFrame want =
             run(View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                     .duql(text, p)
                     .collect());
@@ -344,7 +341,7 @@ TEST_SUITE("View C ABI") {
         REQUIRE(lf != nullptr);
         dftu_dataframe* df = dftu_lazyframe_collect(lf, 0);
         REQUIRE(df != nullptr);
-        const DataFrame want =
+        const dataframe::DataFrame want =
             run(View::from_file(dstd::String(s.gz), dstd::String(s.idx))
                     .duql(text)
                     .collect());
@@ -421,7 +418,7 @@ TEST_SUITE("View C ABI") {
             View cpp_view = View::from_file(dstd::String(gz), dstd::String(idx))
                                 .group_by({GroupKey::name()})
                                 .agg({{AggOp::Count, "", "n"}});
-            DataFrame cpp_df = run(cpp_view.collect());
+            dataframe::DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -454,7 +451,7 @@ TEST_SUITE("View C ABI") {
             View cpp_view = View::from_file(dstd::String(gz), dstd::String(idx))
                                 .group_by({GroupKey::pid()})
                                 .agg({{AggOp::Sum, "dur", "total_dur"}});
-            DataFrame cpp_df = run(cpp_view.collect());
+            dataframe::DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -490,7 +487,7 @@ TEST_SUITE("View C ABI") {
             View cpp_view = View::from_file(dstd::String(gz), dstd::String(idx))
                                 .group_by({GroupKey::field("dur")})
                                 .agg({{AggOp::Count, "", "n"}});
-            DataFrame cpp_df = run(cpp_view.collect());
+            dataframe::DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -532,7 +529,7 @@ TEST_SUITE("View C ABI") {
                 View::from_file(dstd::String(am_gz), dstd::String(am_idx))
                     .group_by({GroupKey::pid()})
                     .agg({{AggOp::ArgMax, "name", "argmax_name", "dur"}});
-            DataFrame cpp_df = run(cpp_view.collect());
+            dataframe::DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -579,7 +576,7 @@ TEST_SUITE("View C ABI") {
                 View::from_file(dstd::String(am_gz), dstd::String(am_idx))
                     .group_by({GroupKey::pid()})
                     .agg({{AggOp::Pct, "dur", "p50_dur", "", 0.5}});
-            DataFrame cpp_df = run(cpp_view.collect());
+            dataframe::DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -621,7 +618,7 @@ TEST_SUITE("View C ABI") {
                 View::from_file(dstd::String(am_gz), dstd::String(am_idx))
                     .group_by({GroupKey::pid()})
                     .agg({{AggOp::Busy, "", "busy_us"}});
-            DataFrame cpp_df = run(cpp_view.collect());
+            dataframe::DataFrame cpp_df = run(cpp_view.collect());
 
             REQUIRE(dftu_dataframe_num_rows(df) == cpp_df.num_rows());
             REQUIRE(dftu_dataframe_num_rows(df) == 2);
@@ -742,7 +739,7 @@ TEST_SUITE("View C ABI") {
 
         const dftu_op_desc* sort_op = dftu_op_find("dftu.lazy.sort_by");
         REQUIRE(sort_op != nullptr);
-        OpArgs sort_args;
+        dataframe::OpArgs sort_args;
         sort_args.str(1, "ts").i32(2, 0);
         const dftu_lazyframe* sort_in[1] = {lf};
         dftu_lazyframe* sorted =
@@ -751,7 +748,7 @@ TEST_SUITE("View C ABI") {
 
         const dftu_op_desc* head_op = dftu_op_find("dftu.lazy.head");
         REQUIRE(head_op != nullptr);
-        OpArgs head_args;
+        dataframe::OpArgs head_args;
         head_args.i64(1, 5);
         const dftu_lazyframe* head_in[1] = {sorted};
         dftu_lazyframe* headed =
@@ -765,7 +762,7 @@ TEST_SUITE("View C ABI") {
                             .duql(R"(cat == "POSIX")")
                             .sort_by("ts", false)
                             .head(5);
-        DataFrame via_eager = run(cpp_view.collect());
+        dataframe::DataFrame via_eager = run(cpp_view.collect());
 
         REQUIRE(dftu_dataframe_num_rows(via_lazy) == via_eager.num_rows());
         REQUIRE(dftu_dataframe_num_rows(via_lazy) == 5);

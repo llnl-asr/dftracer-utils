@@ -23,7 +23,6 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
-using dftracer::utils::duql::Query;
 
 static dstd::String create_pfw_gz(TestEnvironment& env, int n) {
     dstd::String pfw = env.get_dir() + "/trace.pfw";
@@ -179,7 +178,7 @@ TEST_SUITE("ViewScanner") {
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
 
-        auto q = Query::from_string(R"(cat == "POSIX")");
+        auto q = duql::Query::from_string(R"(cat == "POSIX")");
         REQUIRE(q.has_value());
         input.query = std::move(*q);
 
@@ -202,7 +201,7 @@ TEST_SUITE("ViewScanner") {
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
 
-        auto q = Query::from_string(R"(cat == "NONEXISTENT")");
+        auto q = duql::Query::from_string(R"(cat == "NONEXISTENT")");
         REQUIRE(q.has_value());
         input.query = std::move(*q);
 
@@ -227,7 +226,7 @@ TEST_SUITE("ViewScanner") {
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
         input.view.include_metadata = true;
 
-        auto q = Query::from_string(R"(name == "start")");
+        auto q = duql::Query::from_string(R"(name == "start")");
         REQUIRE(q.has_value());
         input.query = std::move(*q);
 

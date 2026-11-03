@@ -48,13 +48,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace layout = dftracer::utils::index::store::layout;
-using dataframe::FieldStat;
-using dataframe::FieldStatDomain;
-using trace::AggQuery;
-using trace::AggQueryResult;
-using trace::AggQuerySource;
+using namespace dftracer::utils::trace;
 
 namespace {
 
@@ -105,11 +99,13 @@ class Acc {
     dstd::StringView arg_string(dstd::StringView k) const {
         return k == "fhash" ? dstd::StringView(e_.fhash) : dstd::StringView{};
     }
-    void metric_args(agg::MetricArgs& m) const {
+    void metric_args(index::schemas::dft::agg::MetricArgs& m) const {
         for (const auto& [name, v] : e_.args) {
-            for (std::size_t i = 0; i < agg::METRIC_ARG_COUNT; ++i)
-                if (name == agg::METRIC_ARG_NAMES[i]) {
-                    m.add(static_cast<agg::MetricArg>(i), v);
+            for (std::size_t i = 0;
+                 i < index::schemas::dft::agg::METRIC_ARG_COUNT; ++i)
+                if (name == index::schemas::dft::agg::METRIC_ARG_NAMES[i]) {
+                    m.add(static_cast<index::schemas::dft::agg::MetricArg>(i),
+                          v);
                     break;
                 }
         }
@@ -129,8 +125,9 @@ std::uint64_t next(std::uint64_t& s) {
     return s >> 17;
 }
 
-agg::AggregationConfig make_config(std::uint64_t interval_us) {
-    agg::AggregationConfig cfg;
+index::schemas::dft::agg::AggregationConfig make_config(
+    std::uint64_t interval_us) {
+    index::schemas::dft::agg::AggregationConfig cfg;
     cfg.time_interval_us = interval_us;
     cfg.group_by_file = false;
     cfg.compute_percentiles = true;
@@ -297,7 +294,8 @@ bool kept(const Ev& e, const Ask& a) {
 }
 
 std::uint64_t file_of(const Ev& e) {
-    return e.fhash.empty() ? 0 : agg::agg_hash_of_hex(e.fhash);
+    return e.fhash.empty() ? 0
+                           : index::schemas::dft::agg::agg_hash_of_hex(e.fhash);
 }
 
 Key key_of(const Ev& e, const Ask& a) {
@@ -313,22 +311,24 @@ struct Truth {
     dstd::Set<std::uint64_t> pids, tids, files, pid_tids, pid_files;
     dstd::Map<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>> spans;
     dstd::Vector<double> dur, size, off;
-    agg::AggregationMetrics metrics{0.01};
+    index::schemas::dft::agg::AggregationMetrics metrics{0.01};
 };
 
 // A per-event aggregator, one state per group key of the query.
-dstd::Map<Key, Truth> reference(const dstd::Vector<Ev>& events, const Ask& ask,
-                                const agg::AggregationConfig& cfg) {
+dstd::Map<Key, Truth> reference(
+    const dstd::Vector<Ev>& events, const Ask& ask,
+    const index::schemas::dft::agg::AggregationConfig& cfg) {
     dstd::Map<Key, Truth> out;
     for (const Ev& e : events) {
         if (!kept(e, ask)) continue;
         Truth& t = out[key_of(e, ask)];
-        agg::oracle_event(Acc(e), t.metrics, cfg);
+        index::schemas::dft::agg::oracle_event(Acc(e), t.metrics, cfg);
         t.pids.insert(e.pid);
         t.tids.insert(e.tid);
-        t.pid_tids.insert(agg::pid_tid_id(e.pid, e.tid));
+        t.pid_tids.insert(index::schemas::dft::agg::pid_tid_id(e.pid, e.tid));
         if (!e.fhash.empty())
-            t.pid_files.insert(agg::pid_file_id(e.pid, file_of(e)));
+            t.pid_files.insert(
+                index::schemas::dft::agg::pid_file_id(e.pid, file_of(e)));
         if (!e.fhash.empty()) t.files.insert(file_of(e));
         const std::uint64_t end =
             e.ts + (e.counter ? cfg.time_interval_us : e.dur);
@@ -352,7 +352,8 @@ bool near(double a, double b, double scale, double tol) {
     return std::abs(a - b) <= tol * std::max(scale, 1e-300);
 }
 
-void check_stat(const FieldStat& a, const FieldStat& b, const char* what) {
+void check_stat(const dataframe::FieldStat& a, const dataframe::FieldStat& b,
+                const char* what) {
     INFO("field: ", what);
     REQUIRE(a.n == b.n);
     if (a.n == 0) return;
@@ -379,12 +380,14 @@ double exact_rule(dstd::Vector<double> v, double q) {
     return v[lo] * (1.0 - frac) + v[lo + 1] * frac;
 }
 
-void check_quantiles(const agg::QuantileStore& q,
+void check_quantiles(const index::schemas::dft::agg::QuantileStore& q,
                      const dstd::Vector<double>& truth, const char* what) {
     INFO("quantiles of ", what);
     REQUIRE(q.count() == truth.size());
     if (truth.empty()) return;
-    CHECK(q.is_exact() == (truth.size() <= agg::QuantileStore::EXACT_CAPACITY));
+    CHECK(q.is_exact() ==
+          (truth.size() <=
+           index::schemas::dft::agg::QuantileStore::EXACT_CAPACITY));
     dstd::Vector<double> sorted = truth;
     std::sort(sorted.begin(), sorted.end());
     const std::size_t last = sorted.size() - 1;
@@ -411,8 +414,9 @@ Key row_key(const AggQueryResult& r, const trace::AggKey& k) {
             k.window};
 }
 
-void check_group(const agg::AggPartial& p, const Truth& t, bool quantiles) {
-    const agg::AggregationMetrics& ref = t.metrics;
+void check_group(const index::schemas::dft::agg::AggPartial& p, const Truth& t,
+                 bool quantiles) {
+    const index::schemas::dft::agg::AggregationMetrics& ref = t.metrics;
 
     CHECK(p.count == ref.count);
     CHECK(p.ts == ref.ts);
@@ -561,7 +565,7 @@ std::size_t partial_count(const Fixture& fx) {
         common::unwrap(index::for_each_agg_partial(
             snapshot, *file,
             [&](std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
-                std::uint32_t, agg::PartialKind,
+                std::uint32_t, index::schemas::dft::agg::PartialKind,
                 dstd::Span<const std::uint8_t>) {
                 ++n;
                 return true;
@@ -630,7 +634,8 @@ dstd::String mixed_trace() {
 // The same stat of two answers of one query. Both fold the same values of the
 // same events, but the chunk tasks merge in their own order, and a sum of
 // doubles that outgrows its mantissa may differ in its last bits.
-void check_same_stat(const FieldStat& a, const FieldStat& b, const char* what) {
+void check_same_stat(const dataframe::FieldStat& a,
+                     const dataframe::FieldStat& b, const char* what) {
     INFO("field: ", what);
     REQUIRE(a.n == b.n);
     if (a.n == 0) return;
@@ -644,15 +649,16 @@ void check_same_stat(const FieldStat& a, const FieldStat& b, const char* what) {
     CHECK(near(a.cm4, b.cm4, s2 * s2, MOMENT_TOL));
 }
 
-void check_same_quantiles(const agg::QuantileStore& a,
-                          const agg::QuantileStore& b) {
+void check_same_quantiles(const index::schemas::dft::agg::QuantileStore& a,
+                          const index::schemas::dft::agg::QuantileStore& b) {
     REQUIRE(a.count() == b.count());
     if (a.count() == 0) return;
     for (double p : {0.0, 0.1, 0.5, 0.9, 0.99, 1.0})
         CHECK(a.quantile(p) == b.quantile(p));
 }
 
-void check_same_partial(const agg::AggPartial& a, const agg::AggPartial& b) {
+void check_same_partial(const index::schemas::dft::agg::AggPartial& a,
+                        const index::schemas::dft::agg::AggPartial& b) {
     CHECK(a.count == b.count);
     CHECK(a.ts == b.ts);
     CHECK(a.te == b.te);
@@ -781,12 +787,12 @@ TEST_SUITE("AggQuery") {
             const AggQueryResult a = run(full);
             const AggQueryResult b = run(trimmed);
             REQUIRE(a.rows.size() == b.rows.size());
-            dstd::Map<Key, const agg::AggPartial*> by_key;
+            dstd::Map<Key, const index::schemas::dft::agg::AggPartial*> by_key;
             for (const auto& [k, p] : a.rows) by_key[row_key(a, k)] = &p;
             for (const auto& [k, p] : b.rows) {
                 const auto it = by_key.find(row_key(b, k));
                 REQUIRE(it != by_key.end());
-                const agg::AggPartial& want = *it->second;
+                const index::schemas::dft::agg::AggPartial& want = *it->second;
                 CHECK(p.count == want.count);
                 CHECK(p.ts == want.ts);
                 CHECK(p.te == want.te);
@@ -859,7 +865,8 @@ TEST_SUITE("AggQuery") {
                 const Key key = row_key(r, k);
                 const auto t = truth.find(key);
                 REQUIRE(t != truth.end());
-                const agg::AggregationMetrics& ref = t->second.metrics;
+                const index::schemas::dft::agg::AggregationMetrics& ref =
+                    t->second.metrics;
                 CHECK(p.count == ref.count);
                 CHECK(p.duration.n == ref.duration.stat.n);
                 CHECK(p.duration.sum == ref.duration.stat.sum);
@@ -1191,7 +1198,7 @@ TEST_SUITE("AggQuery") {
         q.ordered = true;
         q.workers = 1;
         const AggQueryResult serial = run(q);
-        dstd::Map<Key, const agg::AggPartial*> want;
+        dstd::Map<Key, const index::schemas::dft::agg::AggPartial*> want;
         for (const auto& [k, p] : serial.rows) want[row_key(serial, k)] = &p;
         q.workers = 0;
         for (int round = 0; round < 8; ++round) {
@@ -1200,7 +1207,7 @@ TEST_SUITE("AggQuery") {
             for (const auto& [k, p] : got.rows) {
                 const auto it = want.find(row_key(got, k));
                 REQUIRE(it != want.end());
-                const FieldStat& a = it->second->duration;
+                const dataframe::FieldStat& a = it->second->duration;
                 CHECK(p.duration.sum == a.sum);
                 CHECK(p.duration.cmean == a.cmean);
                 CHECK(p.duration.cm2 == a.cm2);
@@ -1241,7 +1248,7 @@ TEST_SUITE("AggQuery") {
                 return key;
             }());
             REQUIRE(b != parallel.rows.end());
-            const agg::AggPartial& c = b->second;
+            const index::schemas::dft::agg::AggPartial& c = b->second;
             CHECK(a.count == c.count);
             CHECK(a.ts == c.ts);
             CHECK(a.te == c.te);

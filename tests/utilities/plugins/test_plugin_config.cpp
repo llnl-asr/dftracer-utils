@@ -17,18 +17,15 @@ using namespace dftracer::utils;
 #error "CONFIG_KEYS_PLUGIN_PATH must be defined by CMake"
 #endif
 
-using dftracer::utils::plugins::ConfigTree;
-using dftracer::utils::plugins::Plugins;
-
 namespace {
 
 // The fixture declares `label` required and `stride` optional.
-ConfigTree config_of(const dstd::String& json) {
-    return ConfigTree::from_json_string(json);
+plugins::ConfigTree config_of(const dstd::String& json) {
+    return plugins::ConfigTree::from_json_string(json);
 }
 
-auto load(ConfigTree cfg) {
-    return Plugins::builder()
+auto load(plugins::ConfigTree cfg) {
+    return plugins::Plugins::builder()
         .add(CONFIG_KEYS_PLUGIN_PATH, std::move(cfg))
         .build();
 }
@@ -98,7 +95,7 @@ TEST_CASE("an unparseable `query` fails the load") {
 }
 
 TEST_CASE("no config at all still fails when a key is required") {
-    auto set = Plugins::builder().add(CONFIG_KEYS_PLUGIN_PATH).build();
+    auto set = plugins::Plugins::builder().add(CONFIG_KEYS_PLUGIN_PATH).build();
     REQUIRE(!set.has_value());
     CHECK(has_substr(set.error().message(), "required key 'label' is missing"));
 }

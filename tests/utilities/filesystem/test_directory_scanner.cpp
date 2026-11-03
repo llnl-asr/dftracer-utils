@@ -30,10 +30,8 @@ static dstd::Vector<FileEntry> run_scan(Scanner& scanner, const Input& input) {
     return result;
 }
 
-using dftu_utils_test::ScopedTestDir;
-
 TEST_CASE("DirectoryScannerUtility - Basic Operations") {
-    ScopedTestDir fixture("dftracer_test_directory_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_directory_scanner");
     auto scanner = dstd::make_shared<DirectoryScannerUtility>();
 
     SUBCASE("Scan empty directory") {
@@ -103,7 +101,7 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
 }
 
 TEST_CASE("DirectoryScannerUtility - Recursive Scanning") {
-    ScopedTestDir fixture("dftracer_test_directory_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_directory_scanner");
     auto scanner = dstd::make_shared<DirectoryScannerUtility>();
 
     SUBCASE("Recursive scan - simple hierarchy") {
@@ -207,7 +205,7 @@ TEST_CASE("DirectoryScannerUtility - Recursive Scanning") {
 }
 
 TEST_CASE("DirectoryScannerUtility - FileEntry Metadata") {
-    ScopedTestDir fixture("dftracer_test_directory_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_directory_scanner");
     auto scanner = dstd::make_shared<DirectoryScannerUtility>();
 
     SUBCASE("FileEntry contains correct metadata") {
@@ -272,7 +270,7 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Metadata") {
 }
 
 TEST_CASE("DirectoryScannerUtility - Directory Struct") {
-    ScopedTestDir fixture("dftracer_test_directory_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_directory_scanner");
 
     SUBCASE("Directory equality operator") {
         DirectoryScannerUtilityInput dir1{"/path/to/dir", false};
@@ -295,7 +293,7 @@ TEST_CASE("DirectoryScannerUtility - Directory Struct") {
 }
 
 TEST_CASE("DirectoryScannerUtility - Edge Cases") {
-    ScopedTestDir fixture("dftracer_test_directory_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_directory_scanner");
     auto scanner = dstd::make_shared<DirectoryScannerUtility>();
 
     SUBCASE("Empty files") {
@@ -348,7 +346,7 @@ TEST_CASE("DirectoryScannerUtility - Edge Cases") {
 }
 
 TEST_CASE("DirectoryScannerUtility - FileEntry Construction") {
-    ScopedTestDir fixture("dftracer_test_directory_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_directory_scanner");
 
     SUBCASE("FileEntry default constructor") {
         FileEntry entry;

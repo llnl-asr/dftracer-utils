@@ -15,9 +15,6 @@
 
 using namespace dftracer::utils;
 
-namespace dut = dftracer::utils;
-namespace mem = dftracer::utils::memory;
-
 namespace {
 
 constexpr std::size_t MIB = std::size_t{1} << 20;
@@ -40,19 +37,19 @@ bool read_peak(const std::string& output, std::size_t& peak) {
 
 TEST_CASE("child: hold a block and exit" * doctest::skip()) {
     fresh_process::announce();
-    REQUIRE(dut::common::configure_memory_from_env());
+    REQUIRE(common::configure_memory_from_env());
     constexpr std::size_t BYTES = 64 * MIB;
-    auto* block = static_cast<char*>(mem::allocate(BYTES, 64));
+    auto* block = static_cast<char*>(memory::allocate(BYTES, 64));
     REQUIRE(block != nullptr);
     for (std::size_t i = 0; i < BYTES; i += 4096) block[i] = 1;
-    CHECK(mem::Manager::get().stats().live >= BYTES);
-    mem::deallocate(block, BYTES);
+    CHECK(memory::Manager::get().stats().live >= BYTES);
+    memory::deallocate(block, BYTES);
 }
 
 TEST_CASE("the report shows a peak at least as large as a block held") {
-    ::setenv(dut::common::constants::memory_settings::REPORT_ENV, "1", 1);
+    ::setenv(common::constants::memory_settings::REPORT_ENV, "1", 1);
     auto result = fresh_process::run("child: hold a block and exit");
-    ::unsetenv(dut::common::constants::memory_settings::REPORT_ENV);
+    ::unsetenv(common::constants::memory_settings::REPORT_ENV);
     REQUIRE(result.ok());
     std::size_t peak = 0;
     REQUIRE(read_peak(result.output, peak));
@@ -65,13 +62,13 @@ TEST_CASE("the report shows a peak at least as large as a block held") {
     unsigned long long heap_peak = 0;
     REQUIRE(std::sscanf(result.output.c_str() + at, " heap_peak=%llu",
                         &heap_peak) == 1);
-    if (mem::active_backend() == mem::Backend::PageHeap) {
+    if (memory::active_backend() == memory::Backend::PageHeap) {
         CHECK(heap_peak >= 64 * MIB);
     }
 }
 
 TEST_CASE("no report without the variable") {
-    ::unsetenv(dut::common::constants::memory_settings::REPORT_ENV);
+    ::unsetenv(common::constants::memory_settings::REPORT_ENV);
     auto result = fresh_process::run("child: hold a block and exit");
     REQUIRE(result.ok());
     CHECK(result.output.find("dftracer-utils memory:") == dstd::String::npos);

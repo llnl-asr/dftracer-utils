@@ -18,10 +18,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::Morsel;
-using dftracer::utils::dataframe::Series;
-namespace spill = dftracer::utils::dataframe::spill;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 dstd::Optional<Morsel> run(

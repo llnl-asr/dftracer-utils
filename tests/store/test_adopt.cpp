@@ -16,12 +16,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-namespace store = dftracer::utils::store;
-
-using store::Namespace;
-using store::NamespaceSpec;
-using store::ScopeKey;
-using store::Store;
+using namespace dftracer::utils::store;
 
 dstd::ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};

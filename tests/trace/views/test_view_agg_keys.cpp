@@ -18,7 +18,7 @@ using namespace dftracer::utils::trace::views;
 using namespace test_view_common;
 using namespace aggparity;
 
-namespace scan = dftracer::utils::trace::views::detail::scan;
+using namespace dftracer::utils::trace;
 
 TEST_SUITE("View") {
     TEST_CASE(
@@ -299,30 +299,39 @@ TEST_SUITE("View") {
         // columns (x/y), with 0.0 where an arg never appears in a group.
         // Grouped by name so read has x-present/y-absent and write the reverse.
         auto run_both_dyn =
-            [&](const dstd::Function<scan::ScanPlan(scan::ScanPlan)>& agg_of,
+            [&](const dstd::Function<views::detail::scan::ScanPlan(
+                    views::detail::scan::ScanPlan)>& agg_of,
                 std::uint64_t mem_budget) {
                 auto build = [&] {
-                    scan::ScanPlan v =
-                        scan::from_file(dstd::String(gz7), dstd::String(idx7));
-                    if (mem_budget) v = scan::memory_budget(v, mem_budget);
-                    return agg_of(scan::group_by(v, {GroupKey::name()}));
+                    views::detail::scan::ScanPlan v =
+                        views::detail::scan::from_file(dstd::String(gz7),
+                                                       dstd::String(idx7));
+                    if (mem_budget)
+                        v = views::detail::scan::memory_budget(v, mem_budget);
+                    return agg_of(
+                        views::detail::scan::group_by(v, {GroupKey::name()}));
                 };
                 check_match(collect_groupmap_plan(build()),
                             collect_engine_plan(build()), "name");
             };
         SUBCASE("group_by name + auto_numeric_metrics (legacy bare mean)") {
             run_both_dyn(
-                [](scan::ScanPlan v) { return scan::agg_numeric_args(v); }, 0);
+                [](views::detail::scan::ScanPlan v) {
+                    return views::detail::scan::agg_numeric_args(v);
+                },
+                0);
         }
         SUBCASE("group_by name + auto_numeric_metrics, forced spill") {
             run_both_dyn(
-                [](scan::ScanPlan v) { return scan::agg_numeric_args(v); },
+                [](views::detail::scan::ScanPlan v) {
+                    return views::detail::scan::agg_numeric_args(v);
+                },
                 128);
         }
         SUBCASE("group_by name + explicit numeric_arg_aggs") {
             run_both_dyn(
-                [](scan::ScanPlan v) {
-                    return scan::agg_numeric_args(
+                [](views::detail::scan::ScanPlan v) {
+                    return views::detail::scan::agg_numeric_args(
                         v, {
                                AggSpec(AggOp::Sum),
                                AggSpec(AggOp::Mean),
@@ -340,8 +349,8 @@ TEST_SUITE("View") {
         }
         SUBCASE("group_by name + explicit numeric_arg_aggs, forced spill") {
             run_both_dyn(
-                [](scan::ScanPlan v) {
-                    return scan::agg_numeric_args(
+                [](views::detail::scan::ScanPlan v) {
+                    return views::detail::scan::agg_numeric_args(
                         v, {
                                AggSpec(AggOp::Sum),
                                AggSpec(AggOp::Mean),
@@ -355,9 +364,11 @@ TEST_SUITE("View") {
         // dyn path collapses to just the group count column in both paths.
         SUBCASE("group_by name + auto_numeric_metrics, no numeric args") {
             auto build = [&] {
-                return scan::agg_numeric_args(scan::group_by(
-                    scan::from_file(dstd::String(gz), dstd::String(idx)),
-                    {GroupKey::name()}));
+                return views::detail::scan::agg_numeric_args(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(gz),
+                                                       dstd::String(idx)),
+                        {GroupKey::name()}));
             };
             check_match(collect_groupmap_plan(build()),
                         collect_engine_plan(build()), "name");
@@ -367,11 +378,13 @@ TEST_SUITE("View") {
         // spilled.
         auto run_single_scan_dyn = [&](std::uint64_t mem_budget) {
             auto build = [&] {
-                scan::ScanPlan v =
-                    scan::from_file(dstd::String(gz7), dstd::String(idx7));
-                if (mem_budget) v = scan::memory_budget(v, mem_budget);
-                return scan::agg_numeric_args(
-                    scan::group_by(v, {GroupKey::name()}),
+                views::detail::scan::ScanPlan v =
+                    views::detail::scan::from_file(dstd::String(gz7),
+                                                   dstd::String(idx7));
+                if (mem_budget)
+                    v = views::detail::scan::memory_budget(v, mem_budget);
+                return views::detail::scan::agg_numeric_args(
+                    views::detail::scan::group_by(v, {GroupKey::name()}),
                     {AggSpec(AggOp::Mean), AggSpec(AggOp::Sum),
                      AggSpec(AggOp::Min), AggSpec(AggOp::Max)});
             };
@@ -389,13 +402,16 @@ TEST_SUITE("View") {
         // occupancy, byte-matching the oracle in-memory and spilled.
         auto run_mixed = [&](std::uint64_t mem_budget) {
             auto build = [&] {
-                scan::ScanPlan v =
-                    scan::from_file(dstd::String(gz7), dstd::String(idx7));
-                if (mem_budget) v = scan::memory_budget(v, mem_budget);
-                return scan::agg_numeric_args(
-                    scan::agg(scan::group_by(v, {GroupKey::name()}),
-                              {{AggOp::Sum, "dur", "sum_dur"},
-                               {AggOp::Busy, "", "busy"}}),
+                views::detail::scan::ScanPlan v =
+                    views::detail::scan::from_file(dstd::String(gz7),
+                                                   dstd::String(idx7));
+                if (mem_budget)
+                    v = views::detail::scan::memory_budget(v, mem_budget);
+                return views::detail::scan::agg_numeric_args(
+                    views::detail::scan::agg(
+                        views::detail::scan::group_by(v, {GroupKey::name()}),
+                        {{AggOp::Sum, "dur", "sum_dur"},
+                         {AggOp::Busy, "", "busy"}}),
                     {AggSpec(AggOp::Mean), AggSpec(AggOp::Sum)});
             };
             check_match(collect_groupmap_plan(build()),
@@ -417,22 +433,28 @@ TEST_SUITE("View") {
         // time_bucket(_min); group_by (if any) runs first, matching the
         // group_by-then-time_bucket order used elsewhere in this file.
         auto run_both_bucket =
-            [&](const dstd::Function<scan::ScanPlan(scan::ScanPlan)>& bucket_of,
+            [&](const dstd::Function<views::detail::scan::ScanPlan(
+                    views::detail::scan::ScanPlan)>& bucket_of,
                 const dstd::Vector<GroupKey>& extra_gks,
                 const dstd::Vector<dstd::String>& extra_key_cols,
                 std::uint64_t mem_budget) {
                 auto build = [&] {
-                    scan::ScanPlan v =
-                        scan::from_file(dstd::String(gz), dstd::String(idx));
-                    if (mem_budget) v = scan::memory_budget(v, mem_budget);
-                    scan::ScanPlan grouped =
-                        extra_gks.empty() ? v : scan::group_by(v, extra_gks);
-                    return scan::agg(bucket_of(grouped),
-                                     {
-                                         {AggOp::Count, "", "n"},
-                                         {AggOp::Sum, "dur", "sum_dur"},
-                                         {AggOp::Mean, "dur", "mean_dur"},
-                                     });
+                    views::detail::scan::ScanPlan v =
+                        views::detail::scan::from_file(dstd::String(gz),
+                                                       dstd::String(idx));
+                    if (mem_budget)
+                        v = views::detail::scan::memory_budget(v, mem_budget);
+                    views::detail::scan::ScanPlan grouped =
+                        extra_gks.empty()
+                            ? v
+                            : views::detail::scan::group_by(v, extra_gks);
+                    return views::detail::scan::agg(
+                        bucket_of(grouped),
+                        {
+                            {AggOp::Count, "", "n"},
+                            {AggOp::Sum, "dur", "sum_dur"},
+                            {AggOp::Mean, "dur", "mean_dur"},
+                        });
                 };
                 // Warm the on-disk index once so legacy and engine below see
                 // the same (already-built) index: bucket_origin_min reads its
@@ -440,7 +462,7 @@ TEST_SUITE("View") {
                 // index, so comparing a first-touch run against a second-touch
                 // run would compare two different origins, not the same
                 // formula.
-                scan::collect(build()).collect().get();
+                views::detail::scan::collect(build()).collect().get();
                 dataframe::DataFrame legacy = collect_groupmap_plan(build());
                 dataframe::DataFrame engine = collect_engine_plan(build());
                 dstd::Vector<dstd::String> keys = {"time_bucket"};
@@ -451,61 +473,78 @@ TEST_SUITE("View") {
 
         SUBCASE("time_bucket alone") {
             run_both_bucket(
-                [](scan::ScanPlan v) { return scan::time_bucket(v, 1000); }, {},
-                {}, 0);
+                [](views::detail::scan::ScanPlan v) {
+                    return views::detail::scan::time_bucket(v, 1000);
+                },
+                {}, {}, 0);
         }
         SUBCASE("time_bucket alone, forced spill") {
             run_both_bucket(
-                [](scan::ScanPlan v) { return scan::time_bucket(v, 1000); }, {},
-                {}, 128);
+                [](views::detail::scan::ScanPlan v) {
+                    return views::detail::scan::time_bucket(v, 1000);
+                },
+                {}, {}, 128);
         }
         SUBCASE("time_bucket + name") {
             run_both_bucket(
-                [](scan::ScanPlan v) { return scan::time_bucket(v, 1000); },
+                [](views::detail::scan::ScanPlan v) {
+                    return views::detail::scan::time_bucket(v, 1000);
+                },
                 {GroupKey::name()}, {"name"}, 0);
         }
         SUBCASE("time_bucket + name, forced spill") {
             run_both_bucket(
-                [](scan::ScanPlan v) { return scan::time_bucket(v, 1000); },
+                [](views::detail::scan::ScanPlan v) {
+                    return views::detail::scan::time_bucket(v, 1000);
+                },
                 {GroupKey::name()}, {"name"}, 128);
         }
         SUBCASE("time_bucket with an explicit origin") {
             run_both_bucket(
-                [](scan::ScanPlan v) { return scan::time_bucket(v, 700, 500); },
+                [](views::detail::scan::ScanPlan v) {
+                    return views::detail::scan::time_bucket(v, 700, 500);
+                },
                 {}, {}, 0);
         }
         SUBCASE("time_bucket_min (trace-min-aligned origin)") {
             run_both_bucket(
-                [](scan::ScanPlan v) { return scan::time_bucket_min(v, 700); },
+                [](views::detail::scan::ScanPlan v) {
+                    return views::detail::scan::time_bucket_min(v, 700);
+                },
                 {}, {}, 0);
         }
         SUBCASE("time_bucket with a non-1.0 time_scale") {
             run_both_bucket(
-                [](scan::ScanPlan v) {
-                    return scan::time_bucket(scan::time_scale(v, 0.01), 10);
+                [](views::detail::scan::ScanPlan v) {
+                    return views::detail::scan::time_bucket(
+                        views::detail::scan::time_scale(v, 0.01), 10);
                 },
                 {}, {}, 0);
         }
 
         auto build_postop_base = [&] {
-            return scan::agg(scan::group_by(scan::from_file(dstd::String(gz),
-                                                            dstd::String(idx)),
-                                            {GroupKey::name()}),
-                             {
-                                 {AggOp::Count, "", "n"},
-                                 {AggOp::Sum, "dur", "sum_dur"},
-                             });
+            return views::detail::scan::agg(
+                views::detail::scan::group_by(
+                    views::detail::scan::from_file(dstd::String(gz),
+                                                   dstd::String(idx)),
+                    {GroupKey::name()}),
+                {
+                    {AggOp::Count, "", "n"},
+                    {AggOp::Sum, "dur", "sum_dur"},
+                });
         };
         SUBCASE("group_by name + sort_by") {
             auto build = [&] {
-                return scan::sort_by(build_postop_base(), "sum_dur");
+                return views::detail::scan::sort_by(build_postop_base(),
+                                                    "sum_dur");
             };
             check_match(collect_groupmap_plan(build()),
                         collect_engine_plan(build()), "name");
         }
         SUBCASE("group_by name + topk") {
             auto build = [&] {
-                return scan::topk(build_postop_base(), "sum_dur", 2);
+                return views::detail::scan::topk(build_postop_base(), "sum_dur",
+                                                 2);
             };
             dataframe::DataFrame legacy = collect_groupmap_plan(build());
             dataframe::DataFrame engine = collect_engine_plan(build());
@@ -514,8 +553,11 @@ TEST_SUITE("View") {
         }
         SUBCASE("group_by name + offset/limit") {
             auto build = [&] {
-                return scan::limit(
-                    scan::offset(scan::sort_by(build_postop_base(), "name"), 1),
+                return views::detail::scan::limit(
+                    views::detail::scan::offset(
+                        views::detail::scan::sort_by(build_postop_base(),
+                                                     "name"),
+                        1),
                     1);
             };
             dataframe::DataFrame legacy = collect_groupmap_plan(build());
@@ -525,7 +567,8 @@ TEST_SUITE("View") {
         }
         SUBCASE("group_by name + select") {
             auto build = [&] {
-                return scan::select(build_postop_base(), {"name", "sum_dur"});
+                return views::detail::scan::select(build_postop_base(),
+                                                   {"name", "sum_dur"});
             };
             dataframe::DataFrame legacy = collect_groupmap_plan(build());
             dataframe::DataFrame engine = collect_engine_plan(build());
@@ -539,11 +582,13 @@ TEST_SUITE("View") {
         // the nested column) so a differing group order still compares right.
         auto run_both_hist = [&](std::uint64_t mem_budget) {
             auto build = [&] {
-                scan::ScanPlan v =
-                    scan::from_file(dstd::String(gz), dstd::String(idx));
-                if (mem_budget) v = scan::memory_budget(v, mem_budget);
-                return scan::agg(
-                    scan::group_by(v, {GroupKey::cat()}),
+                views::detail::scan::ScanPlan v =
+                    views::detail::scan::from_file(dstd::String(gz),
+                                                   dstd::String(idx));
+                if (mem_budget)
+                    v = views::detail::scan::memory_budget(v, mem_budget);
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(v, {GroupKey::cat()}),
                     {{AggOp::Count, "", "n"}, {AggOp::Hist, "dur", "h"}});
             };
             dataframe::DataFrame legacy = collect_groupmap_plan(build());
@@ -581,23 +626,28 @@ TEST_SUITE("View") {
         SUBCASE(
             "engine materialize() persists a rollup a coarser query reads") {
             auto fine = [&] {
-                return scan::agg(
-                    scan::group_by(
-                        scan::from_file(dstd::String(gz), dstd::String(idx)),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(gz),
+                                                       dstd::String(idx)),
                         {GroupKey::cat(), GroupKey::name()}),
                     {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
             };
             auto coarse = [&] {
-                return scan::agg(
-                    scan::group_by(
-                        scan::from_file(dstd::String(gz), dstd::String(idx)),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(gz),
+                                                       dstd::String(idx)),
                         {GroupKey::cat()}),
                     {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
             };
             dataframe::DataFrame expect = collect_groupmap_plan(coarse());
             // The plan collect routes through collect_frame, where the engine
             // materialize persist lives (collect_engine bypasses it).
-            scan::collect(scan::materialize(fine(), 0, 0)).collect().get();
+            views::detail::scan::collect(
+                views::detail::scan::materialize(fine(), 0, 0))
+                .collect()
+                .get();
             dataframe::DataFrame engine_served = collect_engine_plan(coarse());
             check_match(expect, engine_served, "cat");
         }
@@ -696,9 +746,10 @@ TEST_SUITE("View") {
         // write carries y), unlike Count() which is the group row count.
         SUBCASE("group_by name + Count over a sometimes-absent field") {
             auto build = [&] {
-                return scan::agg(
-                    scan::group_by(
-                        scan::from_file(dstd::String(gz7), dstd::String(idx7)),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(gz7),
+                                                       dstd::String(idx7)),
                         {GroupKey::name()}),
                     {{AggOp::Count, "", "n"},
                      {AggOp::Count, "x", "n_x"},
@@ -709,11 +760,12 @@ TEST_SUITE("View") {
         }
         SUBCASE("group_by name + Count(field), forced spill") {
             auto build = [&] {
-                return scan::agg(
-                    scan::group_by(
-                        scan::memory_budget(scan::from_file(dstd::String(gz7),
-                                                            dstd::String(idx7)),
-                                            128),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::memory_budget(
+                            views::detail::scan::from_file(dstd::String(gz7),
+                                                           dstd::String(idx7)),
+                            128),
                         {GroupKey::name()}),
                     {{AggOp::Count, "", "n"}, {AggOp::Count, "x", "n_x"}});
             };
@@ -723,9 +775,10 @@ TEST_SUITE("View") {
         // dyn Count is the same per-arg present count (Float64 in both paths).
         SUBCASE("group_by name + dyn Count/Sum") {
             auto build = [&] {
-                return scan::agg_numeric_args(
-                    scan::group_by(
-                        scan::from_file(dstd::String(gz7), dstd::String(idx7)),
+                return views::detail::scan::agg_numeric_args(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(gz7),
+                                                       dstd::String(idx7)),
                         {GroupKey::name()}),
                     {AggSpec(AggOp::Count), AggSpec(AggOp::Sum)});
             };
@@ -757,9 +810,10 @@ TEST_SUITE("View") {
         }
         SUBCASE("group_by name + Sum/Mean/ArgMax over an arg value field") {
             auto build = [&] {
-                return scan::agg(
-                    scan::group_by(
-                        scan::from_file(dstd::String(gz9), dstd::String(idx9)),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(gz9),
+                                                       dstd::String(idx9)),
                         {GroupKey::name()}),
                     {{AggOp::Sum, "v", "sum_v"},
                      {AggOp::Mean, "v", "mean_v"},
@@ -770,11 +824,12 @@ TEST_SUITE("View") {
         }
         SUBCASE("group_by name + arg value-field aggs, forced spill") {
             auto build = [&] {
-                return scan::agg(
-                    scan::group_by(
-                        scan::memory_budget(scan::from_file(dstd::String(gz9),
-                                                            dstd::String(idx9)),
-                                            128),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::memory_budget(
+                            views::detail::scan::from_file(dstd::String(gz9),
+                                                           dstd::String(idx9)),
+                            128),
                         {GroupKey::name()}),
                     {{AggOp::Sum, "v", "sum_v"}, {AggOp::Mean, "v", "mean_v"}});
             };
@@ -809,10 +864,11 @@ TEST_SUITE("View") {
         }
         SUBCASE("group_by name + Sum/Min/Max over derived size and te") {
             auto build = [&] {
-                return scan::agg(
-                    scan::group_by(scan::from_file(dstd::String(gz_sz),
-                                                   dstd::String(idx_sz)),
-                                   {GroupKey::name()}),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(gz_sz),
+                                                       dstd::String(idx_sz)),
+                        {GroupKey::name()}),
                     {{AggOp::Sum, "size", "sum_size"},
                      {AggOp::Min, "size", "min_size"},
                      {AggOp::Max, "size", "max_size"},
@@ -820,18 +876,19 @@ TEST_SUITE("View") {
                      {AggOp::Min, "te", "min_te"},
                      {AggOp::Max, "te", "max_te"}});
             };
-            REQUIRE(!scan::is_row_query(build()));
+            REQUIRE(!views::detail::scan::is_row_query(build()));
             check_match(collect_groupmap_plan(build()),
                         collect_engine_plan(build()), "name");
         }
         SUBCASE("derived size/te aggs, forced spill") {
             auto build = [&] {
-                return scan::agg(
-                    scan::group_by(scan::memory_budget(
-                                       scan::from_file(dstd::String(gz_sz),
-                                                       dstd::String(idx_sz)),
-                                       128),
-                                   {GroupKey::name()}),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::memory_budget(
+                            views::detail::scan::from_file(
+                                dstd::String(gz_sz), dstd::String(idx_sz)),
+                            128),
+                        {GroupKey::name()}),
                     {{AggOp::Sum, "size", "sum_size"},
                      {AggOp::Sum, "te", "sum_te"}});
             };
@@ -866,26 +923,28 @@ TEST_SUITE("View") {
         }
         SUBCASE("group_by name + Sum/Mean/ArgMax over a nested value path") {
             auto build = [&] {
-                return scan::agg(
-                    scan::group_by(scan::from_file(dstd::String(gz_nv),
-                                                   dstd::String(idx_nv)),
-                                   {GroupKey::name()}),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(gz_nv),
+                                                       dstd::String(idx_nv)),
+                        {GroupKey::name()}),
                     {{AggOp::Sum, "args.n.v", "sum_nv"},
                      {AggOp::Mean, "args.n.v", "mean_nv"},
                      {AggOp::ArgMax, "args.n.v", "top_nv", "dur"}});
             };
-            REQUIRE(!scan::is_row_query(build()));
+            REQUIRE(!views::detail::scan::is_row_query(build()));
             check_match(collect_groupmap_plan(build()),
                         collect_engine_plan(build()), "name");
         }
         SUBCASE("nested value path aggs, forced spill") {
             auto build = [&] {
-                return scan::agg(
-                    scan::group_by(scan::memory_budget(
-                                       scan::from_file(dstd::String(gz_nv),
-                                                       dstd::String(idx_nv)),
-                                       128),
-                                   {GroupKey::name()}),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::memory_budget(
+                            views::detail::scan::from_file(
+                                dstd::String(gz_nv), dstd::String(idx_nv)),
+                            128),
+                        {GroupKey::name()}),
                     {{AggOp::Sum, "args.n.v", "sum_nv"},
                      {AggOp::Mean, "args.n.v", "mean_nv"}});
             };
@@ -903,13 +962,14 @@ TEST_SUITE("View") {
         // write group is all-absent.
         SUBCASE("Sum over an int arg absent from a group keeps engine's type") {
             auto build = [&] {
-                return scan::agg(
-                    scan::group_by(
-                        scan::from_file(dstd::String(gz7), dstd::String(idx7)),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(gz7),
+                                                       dstd::String(idx7)),
                         {GroupKey::name()}),
                     {{AggOp::Sum, "x", "sum_x"}});
             };
-            REQUIRE(!scan::is_row_query(build()));
+            REQUIRE(!views::detail::scan::is_row_query(build()));
             dataframe::DataFrame legacy = collect_groupmap_plan(build());
             dataframe::DataFrame engine = collect_engine_plan(build());
             CHECK(
@@ -980,9 +1040,11 @@ TEST_SUITE("View") {
                 .agg(count);
         };
         auto plan = [&](dstd::Vector<GroupKey> gb) {
-            return scan::agg(
-                scan::group_by(
-                    scan::from_file(dstd::String(gz), dstd::String(idx)), gb),
+            return views::detail::scan::agg(
+                views::detail::scan::group_by(
+                    views::detail::scan::from_file(dstd::String(gz),
+                                                   dstd::String(idx)),
+                    gb),
                 count);
         };
 
@@ -1022,7 +1084,8 @@ TEST_SUITE("View") {
         SUBCASE("engine collect, forced spill") {
             for (const Probe& p : probes)
                 CHECK(groups(collect_engine_plan(
-                                 scan::memory_budget(plan(p.gb), 128)),
+                                 views::detail::scan::memory_budget(plan(p.gb),
+                                                                    128)),
                              p.cols) == p.want);
         }
         SUBCASE("GroupMap oracle agrees") {
@@ -1041,13 +1104,15 @@ TEST_SUITE("View") {
             }
         }
         SUBCASE("rollup: coarsened and same grain") {
-            scan::collect(scan::materialize(plan(probes[5].gb), 0, 0))
+            views::detail::scan::collect(
+                views::detail::scan::materialize(plan(probes[5].gb), 0, 0))
                 .collect()
                 .get();
             CHECK(groups(collect_engine_plan(plan(probes[0].gb)),
                          probes[0].cols) == probes[0].want);
             for (const Probe& p : probes) {
-                scan::collect(scan::materialize(plan(p.gb), 0, 0))
+                views::detail::scan::collect(
+                    views::detail::scan::materialize(plan(p.gb), 0, 0))
                     .collect()
                     .get();
                 CHECK(groups(collect_engine_plan(plan(p.gb)), p.cols) ==

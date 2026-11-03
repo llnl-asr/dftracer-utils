@@ -19,12 +19,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::gap_fill;
-using dftracer::utils::dataframe::GapFillMode;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

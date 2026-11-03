@@ -14,9 +14,7 @@
 #include <algorithm>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -57,8 +55,6 @@ void write_file(dstd::PathView p, const dstd::String& text) {
     (void)dstd::fs::write_file(dstd::PathView(owned), text);
 }
 
-using dftu_utils_test::ScopedTestDir;
-
 }  // namespace
 
 TEST_SUITE("host_ops") {
@@ -91,7 +87,7 @@ TEST_SUITE("host_ops") {
     }
 
     TEST_CASE("dftu.fs.scan_dir lists a directory as a String column") {
-        ScopedTestDir dir("dftu_host_ops_scan");
+        dftu_utils_test::ScopedTestDir dir("dftu_host_ops_scan");
         write_file(dir.path() / "a.log", "x");
         write_file(dir.path() / "b.txt", "y");
 
@@ -117,7 +113,7 @@ TEST_SUITE("host_ops") {
     }
 
     TEST_CASE("dftu.fs.scan_dir_pattern keeps only matching files") {
-        ScopedTestDir dir("dftu_host_ops_pattern");
+        dftu_utils_test::ScopedTestDir dir("dftu_host_ops_pattern");
         write_file(dir.path() / "a.log", "x");
         write_file(dir.path() / "b.txt", "y");
         write_file(dir.path() / "c.log", "z");
@@ -136,7 +132,7 @@ TEST_SUITE("host_ops") {
     }
 
     TEST_CASE("dftu.file.compress and dftu.file.decompress round trip") {
-        ScopedTestDir dir("dftu_host_ops_gzip");
+        dftu_utils_test::ScopedTestDir dir("dftu_host_ops_gzip");
         const dstd::String text(64 * 1024, 'q');
         const dstd::String src = dstd::String((dir.path() / "in.txt").str());
         const dstd::String gz = dstd::String((dir.path() / "in.txt.gz").str());
@@ -160,7 +156,7 @@ TEST_SUITE("host_ops") {
     }
 
     TEST_CASE("dftu.file.compress reports a missing input as false") {
-        ScopedTestDir dir("dftu_host_ops_gzip_missing");
+        dftu_utils_test::ScopedTestDir dir("dftu_host_ops_gzip_missing");
         const dstd::String src =
             dstd::String((dir.path() / "absent.txt").str());
         const dstd::String gz =

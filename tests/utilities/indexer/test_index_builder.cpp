@@ -26,6 +26,8 @@
 #include <testing_utilities.h>
 #include <unistd.h>
 
+using namespace dftracer::utils::utilities;
+
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::store;
@@ -63,12 +65,11 @@ BuildOutcome build_one(const dstd::String& gz, bool force = false) {
 // its path plus the compressed offset of every member.
 dstd::Pair<dstd::String, dstd::Vector<std::uint64_t>> write_multi_member_gz(
     const dstd::Vector<dstd::String>& member_texts) {
-    using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
     dstd::Vector<std::uint8_t> bytes;
     dstd::Vector<std::uint64_t> offsets;
     for (const auto& text : member_texts) {
         offsets.push_back(bytes.size());
-        GzipMemberCompressor comp;
+        fileio::compress::GzipMemberCompressor comp;
         auto member = comp.compress_member(text.data(), text.size());
         REQUIRE(member.has_value());
         bytes.insert(bytes.end(), member->begin(), member->end());
@@ -109,9 +110,6 @@ TEST_SUITE("IndexBuilder") {
     // exactly one slice. If either is wrong, summed slice line counts drift
     // from the whole-file count.
     TEST_CASE("Sliced builds conserve lines across member boundaries") {
-        namespace gz = dftracer::utils::index::gzip;
-        using dftracer::utils::index::gzip::GzipMember;
-
         // Members deliberately end mid-line so lines straddle boundaries.
         const dstd::Vector<dstd::String> texts = {
             "line1\nlineA_par",      // ends mid-line
@@ -121,7 +119,7 @@ TEST_SUITE("IndexBuilder") {
         auto [gz_file, offs] = write_multi_member_gz(texts);
         const std::uint64_t fsize = dstd::fs::file_size(gz_file).value();
 
-        dstd::Vector<GzipMember> members(texts.size());
+        dstd::Vector<index::gzip::GzipMember> members(texts.size());
         for (std::size_t i = 0; i < texts.size(); ++i) {
             members[i].c_offset = offs[i];
             members[i].c_size =
@@ -133,7 +131,7 @@ TEST_SUITE("IndexBuilder") {
 
         std::uint64_t whole_lines = 0;
         run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
-            auto a = co_await gz::build_gzip_index_artifacts(
+            auto a = co_await index::gzip::build_gzip_index_artifacts(
                 gz_file, 1u << 20, no_visitors, &scope);
             REQUIRE(a.has_value());
             whole_lines = a->total_lines;
@@ -141,12 +139,12 @@ TEST_SUITE("IndexBuilder") {
 
         std::uint64_t sliced_lines = 0;
         for (std::size_t b = 0; b < members.size(); ++b) {
-            gz::GzipMemberSlice slice;
+            index::gzip::GzipMemberSlice slice;
             slice.members = &members;
             slice.member_begin = b;
             slice.member_end = b + 1;
             run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
-                auto a = co_await gz::build_gzip_index_artifacts(
+                auto a = co_await index::gzip::build_gzip_index_artifacts(
                     gz_file, 1u << 20, no_visitors, &scope, &slice);
                 REQUIRE(a.has_value());
                 sliced_lines += a->total_lines;

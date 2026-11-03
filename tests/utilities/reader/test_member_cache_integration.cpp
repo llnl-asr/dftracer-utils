@@ -23,11 +23,7 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::build;
-namespace mdc = dftracer::utils::utilities::reader::internal;
-using dftracer::utils::utilities::reader::ReadConfig;
-using dftracer::utils::utilities::reader::TraceReader;
-using dftracer::utils::utilities::reader::TraceReaderConfig;
-using dftu_utils_test::run_coro;
+using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -43,8 +39,7 @@ dstd::String make_trace(int n) {
 
 void write_single_member(const dstd::String& path,
                          const dstd::String& content) {
-    using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
-    GzipMemberCompressor comp;
+    fileio::compress::GzipMemberCompressor comp;
     auto m = comp.compress_member(content.data(), content.size());
     REQUIRE(m.has_value());
     dstd::String ofs;
@@ -54,10 +49,10 @@ void write_single_member(const dstd::String& path,
 
 std::int64_t read_line_count(const dstd::String& gz, const dstd::String& idx) {
     std::int64_t count = 0;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        TraceReader reader(
-            TraceReaderConfig{dstd::String(gz), dstd::String(idx)});
-        auto gen = reader.read_lines(ReadConfig{});
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        reader::TraceReader reader(
+            reader::TraceReaderConfig{dstd::String(gz), dstd::String(idx)});
+        auto gen = reader.read_lines(reader::ReadConfig{});
         while (co_await gen.next()) ++count;
         co_return;
     });
@@ -76,46 +71,48 @@ TEST_SUITE("member_cache_integration") {
         const dstd::String index_dir = dstd::String((dir / "idx").str());
 
         write_single_member(src, make_trace(n));
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await utilities::fileio::compress::gzip_rechunk_to_members(
                 dstd::String(src), dstd::String(gz), /*member_size=*/4096,
                 /*level=*/6);
             co_return;
         });
         {
-            run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-                auto config = dstd::make_shared<IndexBuildBatchConfig>();
-                config->file_paths = {dstd::String(dstd::StringView(gz))};
-                config->index_dir = index_dir;
-                auto r = co_await BatchBuilder::process(std::move(config));
-                REQUIRE(r.indexed + r.skipped == 1);
-                co_return;
-            });
+            dftu_utils_test::run_coro(
+                [&](coro::Scope&) -> coro::CoroTask<void> {
+                    auto config = dstd::make_shared<IndexBuildBatchConfig>();
+                    config->file_paths = {dstd::String(dstd::StringView(gz))};
+                    config->index_dir = index_dir;
+                    auto r = co_await BatchBuilder::process(std::move(config));
+                    REQUIRE(r.indexed + r.skipped == 1);
+                    co_return;
+                });
         }
 
         // Baseline before the cache is configured (plain per-reader decode).
-        REQUIRE(mdc::global_member_decode_cache() == nullptr);
+        REQUIRE(reader::internal::global_member_decode_cache() == nullptr);
         const std::int64_t baseline = read_line_count(gz, index_dir);
         CHECK(baseline >= n);  // n events plus the leading "[" line
 
         // Enable the process cache and read the same file concurrently.
-        mdc::configure_global_member_decode_cache(256ull * 1024 * 1024);
-        auto* cache = mdc::global_member_decode_cache();
+        reader::internal::configure_global_member_decode_cache(256ull * 1024 *
+                                                               1024);
+        auto* cache = reader::internal::global_member_decode_cache();
         REQUIRE(cache != nullptr);
         const auto before = cache->stats();
 
         const int readers = 16;
         dstd::Vector<std::int64_t> counts(readers, 0);
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<coro::CoroTask<std::int64_t>> tasks;
             tasks.reserve(readers);
             for (int r = 0; r < readers; ++r) {
                 tasks.push_back(
                     [](dstd::String gzp,
                        dstd::String idxp) -> coro::CoroTask<std::int64_t> {
-                        TraceReader reader(TraceReaderConfig{
+                        reader::TraceReader reader(reader::TraceReaderConfig{
                             dstd::String(gzp), dstd::String(idxp)});
-                        auto gen = reader.read_lines(ReadConfig{});
+                        auto gen = reader.read_lines(reader::ReadConfig{});
                         std::int64_t c = 0;
                         while (co_await gen.next()) ++c;
                         co_return c;

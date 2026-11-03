@@ -16,8 +16,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace dlio = dftracer::utils::utilities::dlio;
+using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -80,7 +79,7 @@ TEST_SUITE("dlio trace loader") {
         for (int i = 0; i < FILES; ++i)
             files.emplace_back(write_rank(env.get_dir(), i, dur_sum));
 
-        agg::AggregationConfig config;
+        index::schemas::dft::agg::AggregationConfig config;
         config.time_interval_us = 5'000'000;
         config.compute_statistics = true;
         config.compute_percentiles = true;

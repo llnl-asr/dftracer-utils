@@ -31,9 +31,6 @@
 #include <variant>
 
 using namespace dftracer::utils;
-namespace build = dftracer::utils::index::build;
-namespace istore = dftracer::utils::index::store;
-namespace walks = dftracer::utils::trace::internal::parse_walks;
 
 namespace {
 
@@ -124,16 +121,17 @@ dstd::String write_trace(const dstd::String& dir) {
     return path;
 }
 
-build::IndexBuildBatchResult build_one(const dstd::String& file,
-                                       const dstd::String& index_dir) {
+index::build::IndexBuildBatchResult build_one(const dstd::String& file,
+                                              const dstd::String& index_dir) {
     Runtime rt(4);
-    build::IndexBuildBatchResult result;
+    index::build::IndexBuildBatchResult result;
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+        auto config = dstd::make_shared<index::build::IndexBuildBatchConfig>();
         config->file_paths = {dstd::String(dstd::StringView(file))};
         config->index_dir = index_dir;
         config->parallelism = 4;
-        result = co_await build::BatchBuilder::process(std::move(config));
+        result =
+            co_await index::build::BatchBuilder::process(std::move(config));
     });
     rt.submit(std::move(task), "parse-walks").wait();
     rt.shutdown();
@@ -163,7 +161,6 @@ constexpr NamespaceDigest RECORDED[] = {
 // record is its namespace, scope paths, key and value.
 dstd::Map<dstd::String, std::uint64_t> namespace_digests(
     dstd::StringView index_path, dstd::StringView dir) {
-    namespace kv = dftracer::utils::store;
     dstd::Map<dstd::String, std::uint64_t> out;
     const auto without_dir = [&dir](dstd::StringView bytes) {
         dstd::String text(bytes);
@@ -172,14 +169,15 @@ dstd::Map<dstd::String, std::uint64_t> namespace_digests(
             text.erase(at, dir.size());
         return text;
     };
-    auto opened = kv::Store::open(dstd::String(index_path) + "/store");
+    auto opened = dftracer::utils::store::Store::open(dstd::String(index_path) +
+                                                      "/store");
     REQUIRE(opened.has_value());
     auto snapshot = opened->snapshot();
     REQUIRE(snapshot.has_value());
     auto declared = snapshot->namespaces();
     REQUIRE(declared.has_value());
     for (const auto& decl : *declared) {
-        kv::Namespace ns;
+        dftracer::utils::store::Namespace ns;
         ns.spec.name = decl.name;
         ns.spec.format_version = decl.format_version;
         auto [it, fresh] =
@@ -210,14 +208,12 @@ dstd::Map<dstd::String, std::uint64_t> namespace_digests(
     return out;
 }
 
-namespace views = dftracer::utils::trace::views::detail;
-using dstd::StringIntern;
-
 // Resolves interned ids, so events from different interns compare.
-dstd::String describe(const views::FoldEvent& ev, const StringIntern& in) {
+dstd::String describe(const trace::views::detail::FoldEvent& ev,
+                      const dstd::StringIntern& in) {
     const auto text = [&](std::uint32_t id) {
-        return id == StringIntern::NO_ID ? dstd::String("<none>")
-                                         : dstd::String(in.resolve(id));
+        return id == dstd::StringIntern::NO_ID ? dstd::String("<none>")
+                                               : dstd::String(in.resolve(id));
     };
     dstd::String o;
     o += common::str_cat(
@@ -264,18 +260,20 @@ TEST_SUITE("IndexParseWalks") {
         for (int i = 0; i < RECORDS; ++i)
             if (has_args_object(shape_of(i))) ++with_args;
 
-        walks::g_record_walks = 0;
-        walks::g_args_walks = 0;
-        walks::g_count = true;
+        trace::internal::parse_walks::g_record_walks = 0;
+        trace::internal::parse_walks::g_args_walks = 0;
+        trace::internal::parse_walks::g_count = true;
         build_one(file, env.get_dir() + "/idx");
-        walks::g_count = false;
+        trace::internal::parse_walks::g_count = false;
 
-        MESSAGE("record walks " << walks::g_record_walks.load() << " for "
-                                << RECORDS << " records, args walks "
-                                << walks::g_args_walks.load() << " for "
-                                << with_args << " args objects");
-        CHECK(walks::g_record_walks.load() == std::uint64_t{RECORDS});
-        CHECK(walks::g_args_walks.load() == with_args);
+        MESSAGE("record walks "
+                << trace::internal::parse_walks::g_record_walks.load()
+                << " for " << RECORDS << " records, args walks "
+                << trace::internal::parse_walks::g_args_walks.load() << " for "
+                << with_args << " args objects");
+        CHECK(trace::internal::parse_walks::g_record_walks.load() ==
+              std::uint64_t{RECORDS});
+        CHECK(trace::internal::parse_walks::g_args_walks.load() == with_args);
     }
 
     TEST_CASE("the index of a fixed trace is unchanged") {
@@ -285,7 +283,7 @@ TEST_SUITE("IndexParseWalks") {
         const dstd::String path =
             trace::internal::determine_index_path(file, env.get_dir() + "/idx");
         const auto digests = namespace_digests(
-            istore::internal::normalize_index_root(path), env.get_dir());
+            index::store::internal::normalize_index_root(path), env.get_dir());
         for (const auto& [name, digest] : digests)
             MESSAGE("namespace " << name << " " << digest);
         CHECK(digests.size() == std::size(RECORDED));
@@ -345,13 +343,14 @@ TEST_SUITE("IndexParseWalks") {
         dftu_utils_test::TestEnvironment env(10);
         const dstd::String file = dftu_utils_test::write_gz_trace(
             env.get_dir() + "/long.pfw.gz", out);
-        walks::g_record_walks = 0;
-        walks::g_count = true;
+        trace::internal::parse_walks::g_record_walks = 0;
+        trace::internal::parse_walks::g_count = true;
         const auto result = build_one(file, env.get_dir() + "/idx");
-        walks::g_count = false;
+        trace::internal::parse_walks::g_count = false;
         REQUIRE(result.results.size() == 1);
         CHECK(result.results[0].events_processed == std::size_t{LINES});
-        CHECK(walks::g_record_walks.load() == std::uint64_t{LINES});
+        CHECK(trace::internal::parse_walks::g_record_walks.load() ==
+              std::uint64_t{LINES});
     }
 
     TEST_CASE("the one-walk decode equals the old three-walk decode") {
@@ -396,24 +395,25 @@ TEST_SUITE("IndexParseWalks") {
                         text + " needs_args=" + (needs_args ? "1" : "0") +
                         " capture=" + (capture ? "1" : "0");
 
-                    StringIntern old_intern;
-                    views::DecodeHints old_hints;
-                    views::FoldEvent old_ev;
+                    dstd::StringIntern old_intern;
+                    trace::views::detail::DecodeHints old_hints;
+                    trace::views::detail::FoldEvent old_ev;
                     trace::DFTracerEvent probe;
                     simdjson::dom::element args;
                     bool has_args = false;
                     const bool kept = trace::DFTracerEvent::parse_scalars(
                         root, probe, args, has_args);
-                    views::extract_fold_event_into(old_ev, root, old_intern,
-                                                   needs_args, nullptr, capture,
-                                                   &old_hints);
+                    trace::views::detail::extract_fold_event_into(
+                        old_ev, root, old_intern, needs_args, nullptr, capture,
+                        &old_hints);
 
-                    StringIntern new_intern;
-                    views::DecodeHints new_hints;
-                    views::FoldEventBuffer batch;
-                    const bool appended = views::append_dftracer_record(
-                        batch, root, new_intern, needs_args, capture, new_hints,
-                        nullptr);
+                    dstd::StringIntern new_intern;
+                    trace::views::detail::DecodeHints new_hints;
+                    trace::views::detail::FoldEventBuffer batch;
+                    const bool appended =
+                        trace::views::detail::append_dftracer_record(
+                            batch, root, new_intern, needs_args, capture,
+                            new_hints, nullptr);
                     INFO(label);
                     REQUIRE(appended == kept);
                     if (!kept) {

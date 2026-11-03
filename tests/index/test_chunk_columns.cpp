@@ -34,21 +34,18 @@
 #include <utility>
 
 using namespace dftracer::utils;
-namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace views = dftracer::utils::trace::views;
-namespace layout = dftracer::utils::index::store::layout;
-using index::Indexer;
-using index::IndexerOptions;
+using namespace dftracer::utils::index;
 
 namespace {
 
 constexpr std::size_t CHECKPOINT_SIZE = 4096;
 constexpr int RECORDS = 120;
 
-agg::ChunkColumn column_of(std::uint32_t path, agg::ColumnKind kind,
-                           const dstd::Vector<std::uint64_t>& rows,
-                           const dstd::Vector<std::uint64_t>& bits) {
-    agg::ChunkColumn column;
+schemas::dft::agg::ChunkColumn column_of(
+    std::uint32_t path, schemas::dft::agg::ColumnKind kind,
+    const dstd::Vector<std::uint64_t>& rows,
+    const dstd::Vector<std::uint64_t>& bits) {
+    schemas::dft::agg::ChunkColumn column;
     column.path = path;
     column.kind = kind;
     column.rows.assign(rows.begin(), rows.end());
@@ -56,8 +53,8 @@ agg::ChunkColumn column_of(std::uint32_t path, agg::ColumnKind kind,
     return column;
 }
 
-agg::ChunkColumns core_block(std::size_t rows) {
-    agg::ChunkColumns block;
+schemas::dft::agg::ChunkColumns core_block(std::size_t rows) {
+    schemas::dft::agg::ChunkColumns block;
     block.rows = rows;
     block.ids.assign({4, 7, 9});
     for (std::size_t r = 0; r < rows; ++r) {
@@ -75,8 +72,8 @@ agg::ChunkColumns core_block(std::size_t rows) {
     return block;
 }
 
-void check_core_columns(const agg::ChunkColumns& want,
-                        const agg::ChunkColumns& got) {
+void check_core_columns(const schemas::dft::agg::ChunkColumns& want,
+                        const schemas::dft::agg::ChunkColumns& got) {
     REQUIRE(got.rows == want.rows);
     REQUIRE(got.ids == want.ids);
     CHECK(got.ts == want.ts);
@@ -92,16 +89,16 @@ void check_core_columns(const agg::ChunkColumns& want,
     CHECK(got.file == want.file);
 }
 
-agg::ChunkColumns encode_then_decode(
-    const agg::ChunkColumns& block,
+schemas::dft::agg::ChunkColumns encode_then_decode(
+    const schemas::dft::agg::ChunkColumns& block,
     std::size_t column_count = std::numeric_limits<std::size_t>::max()) {
     dstd::Vector<std::uint8_t> bytes;
     const std::size_t count =
         column_count == std::numeric_limits<std::size_t>::max()
             ? block.columns.size()
             : column_count;
-    agg::encode_chunk_columns(block, count, bytes);
-    auto got = agg::decode_chunk_columns(
+    schemas::dft::agg::encode_chunk_columns(block, count, bytes);
+    auto got = schemas::dft::agg::decode_chunk_columns(
         dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()));
     REQUIRE(got.has_value());
     return *got;
@@ -119,10 +116,9 @@ bool same(const dstd::Vector<std::uint64_t>& got,
            std::equal(got.begin(), got.end(), want.begin());
 }
 
-agg::ChunkColumn roundtrip_column(agg::ColumnKind kind,
-                                  const dstd::Vector<std::uint64_t>& bits,
-                                  const dstd::Vector<std::uint64_t>& rows,
-                                  std::size_t block_rows) {
+schemas::dft::agg::ChunkColumn roundtrip_column(
+    schemas::dft::agg::ColumnKind kind, const dstd::Vector<std::uint64_t>& bits,
+    const dstd::Vector<std::uint64_t>& rows, std::size_t block_rows) {
     auto block = core_block(block_rows);
     CHECK(rows.size() == bits.size());
     block.columns.push_back(column_of(1, kind, rows, bits));
@@ -154,14 +150,14 @@ struct Num {
                 return double_bits_of(d);
         }
     }
-    agg::ColumnKind column_kind() const {
+    schemas::dft::agg::ColumnKind column_kind() const {
         switch (kind) {
             case NumKind::Int64:
-                return agg::ColumnKind::Int64;
+                return schemas::dft::agg::ColumnKind::Int64;
             case NumKind::Uint64:
-                return agg::ColumnKind::Uint64;
+                return schemas::dft::agg::ColumnKind::Uint64;
             default:
-                return agg::ColumnKind::Double;
+                return schemas::dft::agg::ColumnKind::Double;
         }
     }
 };
@@ -390,7 +386,7 @@ IndexerOptions options(const dstd::String& index_dir) {
     o.index_dir = index_dir;
     o.checkpoint_size = CHECKPOINT_SIZE;
     o.parallelism = 4;
-    agg::AggregationConfig c;
+    schemas::dft::agg::AggregationConfig c;
     c.time_interval_us = 100'000;
     o.aggregation = c;
     return o;
@@ -403,7 +399,7 @@ void build(const dstd::Vector<dstd::String>& files,
     Indexer::open(std::move(paths), options(index_dir)).build();
 }
 
-void check_row_core(const agg::ChunkColumns& block, std::size_t r,
+void check_row_core(const schemas::dft::agg::ChunkColumns& block, std::size_t r,
                     const Row& row) {
     CHECK(block.ts[r] == row.ts);
     CHECK(block.has_dur[r] == (row.has_dur ? 1 : 0));
@@ -422,19 +418,19 @@ void check_row_core(const agg::ChunkColumns& block, std::size_t r,
 }
 
 // One arg path holds one column per kind its values take.
-const agg::ChunkColumn* column_for(const agg::ChunkColumns& block,
-                                   dstd::StringView path,
-                                   agg::ColumnKind kind) {
-    for (const agg::ChunkColumn& column : block.columns)
+const schemas::dft::agg::ChunkColumn* column_for(
+    const schemas::dft::agg::ChunkColumns& block, dstd::StringView path,
+    schemas::dft::agg::ColumnKind kind) {
+    for (const schemas::dft::agg::ChunkColumn& column : block.columns)
         if (column.kind == kind && block.texts[column.path] == path)
             return &column;
     return nullptr;
 }
 
-void check_row_args(const agg::ChunkColumns& block, std::size_t r,
+void check_row_args(const schemas::dft::agg::ChunkColumns& block, std::size_t r,
                     const Row& row) {
     for (const auto& [path, value] : row.args) {
-        const agg::ChunkColumn* column =
+        const schemas::dft::agg::ChunkColumn* column =
             column_for(block, path, value.column_kind());
         if (column == nullptr) {
             CHECK_MESSAGE(false, "no column for ", path, " on row ", r);
@@ -452,9 +448,9 @@ void check_row_args(const agg::ChunkColumns& block, std::size_t r,
     }
 }
 
-void check_columns_against(const agg::ChunkColumns& block,
+void check_columns_against(const schemas::dft::agg::ChunkColumns& block,
                            const dstd::Vector<Row>& rows, std::size_t at) {
-    for (const agg::ChunkColumn& column : block.columns) {
+    for (const schemas::dft::agg::ChunkColumn& column : block.columns) {
         const auto& path = block.texts[column.path];
         CHECK_FALSE(path.empty());
         CHECK(column.rows.size() == column.bits.size());
@@ -485,7 +481,7 @@ Decoded read_and_check(const index::Snapshot& snapshot,
     std::size_t at = 0;
     auto scanned = index::for_each_agg_chunk_columns(
         snapshot, file,
-        [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+        [&](std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block) {
             ++out.blocks;
             out.chunks.push_back(chunk);
             CHECK(block.chunk == chunk);
@@ -534,7 +530,7 @@ dstd::Span<const std::uint8_t> span_of(dstd::StringView bytes) {
 // block-local ids.
 struct ColumnShape {
     dstd::String path;
-    agg::ColumnKind kind = agg::ColumnKind::Int64;
+    schemas::dft::agg::ColumnKind kind = schemas::dft::agg::ColumnKind::Int64;
     dstd::Vector<std::uint64_t> rows;
     dstd::Vector<std::uint64_t> bits;
 
@@ -562,10 +558,11 @@ dstd::String repeated_key_trace() {
 }
 
 dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> values_of(
-    const agg::ChunkColumns& block, dstd::StringView path,
-    agg::ColumnKind kind) {
+    const schemas::dft::agg::ChunkColumns& block, dstd::StringView path,
+    schemas::dft::agg::ColumnKind kind) {
     dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> out;
-    const agg::ChunkColumn* column = column_for(block, path, kind);
+    const schemas::dft::agg::ChunkColumn* column =
+        column_for(block, path, kind);
     if (column == nullptr) return out;
     REQUIRE(column->rows.size() == column->bits.size());
     for (std::size_t k = 0; k < column->rows.size(); ++k)
@@ -587,9 +584,9 @@ dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> columns_of(
     dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> out;
     auto scanned = index::for_each_agg_chunk_columns(
         snapshot, file,
-        [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+        [&](std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block) {
             dstd::Vector<ColumnShape> shapes;
-            for (const agg::ChunkColumn& column : block.columns)
+            for (const schemas::dft::agg::ChunkColumn& column : block.columns)
                 shapes.push_back({dstd::String(block.texts[column.path]),
                                   column.kind,
                                   dstd::Vector<std::uint64_t>(
@@ -608,7 +605,7 @@ dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> columns_of(
 TEST_SUITE("ChunkColumns") {
     TEST_CASE("integers round trip bit exact") {
         roundtrip_column(
-            agg::ColumnKind::Int64,
+            schemas::dft::agg::ColumnKind::Int64,
             {static_cast<std::uint64_t>(std::int64_t{-1}),
              static_cast<std::uint64_t>(std::int64_t{0}),
              static_cast<std::uint64_t>(std::int64_t{-9007199254740993LL}),
@@ -621,7 +618,7 @@ TEST_SUITE("ChunkColumns") {
     }
 
     TEST_CASE("a uint64 above INT64_MAX round trips bit exact") {
-        roundtrip_column(agg::ColumnKind::Uint64,
+        roundtrip_column(schemas::dft::agg::ColumnKind::Uint64,
                          {0, std::numeric_limits<std::uint64_t>::max(),
                           std::uint64_t{1} << 63, 42},
                          {0, 1, 2, 3}, 4);
@@ -632,8 +629,9 @@ TEST_SUITE("ChunkColumns") {
             0.1, 12.5, 1e-7, 123456.789, -0.0, 1e300, 5e-324, 3.14159265358979};
         dstd::Vector<std::uint64_t> bits;
         for (const double v : values) bits.push_back(double_bits_of(v));
-        const auto column = roundtrip_column(agg::ColumnKind::Double, bits,
-                                             {0, 1, 2, 3, 4, 5, 6, 7}, 8);
+        const auto column =
+            roundtrip_column(schemas::dft::agg::ColumnKind::Double, bits,
+                             {0, 1, 2, 3, 4, 5, 6, 7}, 8);
         for (std::size_t k = 0; k < values.size(); ++k)
             CHECK(double_bits_of(column.double_at(k)) == bits[k]);
     }
@@ -643,7 +641,7 @@ TEST_SUITE("ChunkColumns") {
                                              1e-12, 1234.5, 7,    0.5,   1e12};
         dstd::Vector<std::uint64_t> bits;
         for (const double v : values) bits.push_back(double_bits_of(v));
-        roundtrip_column(agg::ColumnKind::Double, bits,
+        roundtrip_column(schemas::dft::agg::ColumnKind::Double, bits,
                          {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, 10);
     }
 
@@ -654,7 +652,8 @@ TEST_SUITE("ChunkColumns") {
             0x7ff0000000000000ULL,
             double_bits_of(-1.5),
         };
-        roundtrip_column(agg::ColumnKind::Double, bits, {0, 1, 2, 3}, 4);
+        roundtrip_column(schemas::dft::agg::ColumnKind::Double, bits,
+                         {0, 1, 2, 3}, 4);
     }
 
     TEST_CASE("random doubles round trip bit exact") {
@@ -674,16 +673,16 @@ TEST_SUITE("ChunkColumns") {
                            mantissa);
             rows.push_back(k);
         }
-        roundtrip_column(agg::ColumnKind::Double, bits, rows,
+        roundtrip_column(schemas::dft::agg::ColumnKind::Double, bits, rows,
                          static_cast<std::size_t>(rows.size()));
     }
 
     TEST_CASE("a column of one row and a column with gaps round trip") {
-        roundtrip_column(agg::ColumnKind::Int64,
+        roundtrip_column(schemas::dft::agg::ColumnKind::Int64,
                          {static_cast<std::uint64_t>(std::int64_t{-3})}, {4},
                          9);
         roundtrip_column(
-            agg::ColumnKind::Double,
+            schemas::dft::agg::ColumnKind::Double,
             {double_bits_of(0.25), double_bits_of(41.25), double_bits_of(8.5)},
             {0, 5, 8}, 9);
     }
@@ -698,14 +697,14 @@ TEST_SUITE("ChunkColumns") {
     TEST_CASE("several columns of one path of different kinds round trip") {
         auto block = core_block(4);
         block.columns.push_back(
-            column_of(1, agg::ColumnKind::Int64, {0, 2},
+            column_of(1, schemas::dft::agg::ColumnKind::Int64, {0, 2},
                       {static_cast<std::uint64_t>(std::int64_t{-9}),
                        static_cast<std::uint64_t>(std::int64_t{11})}));
         block.columns.push_back(
-            column_of(1, agg::ColumnKind::Double, {1, 3},
+            column_of(1, schemas::dft::agg::ColumnKind::Double, {1, 3},
                       {double_bits_of(0.5), double_bits_of(2.25)}));
         block.columns.push_back(
-            column_of(2, agg::ColumnKind::Uint64, {0, 1, 2, 3},
+            column_of(2, schemas::dft::agg::ColumnKind::Uint64, {0, 1, 2, 3},
                       {std::numeric_limits<std::uint64_t>::max(), 1, 2, 3}));
         const auto got = encode_then_decode(block);
         check_core_columns(block, got);
@@ -721,19 +720,20 @@ TEST_SUITE("ChunkColumns") {
     TEST_CASE("a malformed block is rejected") {
         auto block = core_block(3);
         block.columns.push_back(
-            column_of(1, agg::ColumnKind::Int64, {0, 1},
+            column_of(1, schemas::dft::agg::ColumnKind::Int64, {0, 1},
                       {1, static_cast<std::uint64_t>(std::int64_t{-1})}));
         dstd::Vector<std::uint8_t> bytes;
-        agg::encode_chunk_columns(block, block.columns.size(), bytes);
+        schemas::dft::agg::encode_chunk_columns(block, block.columns.size(),
+                                                bytes);
         const auto truncate = [&](std::size_t size) {
-            auto got = agg::decode_chunk_columns(
+            auto got = schemas::dft::agg::decode_chunk_columns(
                 dstd::Span<const std::uint8_t>(bytes.data(), size));
             CHECK_FALSE(got.has_value());
         };
         for (std::size_t size = 0; size < bytes.size(); ++size) truncate(size);
         auto bad = bytes;
         bad[0] = 99;
-        CHECK_FALSE(agg::decode_chunk_columns(
+        CHECK_FALSE(schemas::dft::agg::decode_chunk_columns(
                         dstd::Span<const std::uint8_t>(bad.data(), bad.size()))
                         .has_value());
     }
@@ -741,10 +741,11 @@ TEST_SUITE("ChunkColumns") {
     TEST_CASE("a cat, name or host run above the block's ids is rejected") {
         auto block = core_block(4);
         block.columns.push_back(
-            column_of(1, agg::ColumnKind::Int64, {0, 1},
+            column_of(1, schemas::dft::agg::ColumnKind::Int64, {0, 1},
                       {1, static_cast<std::uint64_t>(std::int64_t{-1})}));
         dstd::Vector<std::uint8_t> bytes;
-        agg::encode_chunk_columns(block, block.columns.size(), bytes);
+        schemas::dft::agg::encode_chunk_columns(block, block.columns.size(),
+                                                bytes);
         const std::size_t ids = block.ids.size();
         const dstd::Vector<std::uint8_t> values = {2, 3, 4, 0x7f, 0x80, 0xff};
         std::size_t accepted = 0;
@@ -754,9 +755,9 @@ TEST_SUITE("ChunkColumns") {
                 if (bytes[at] == value) continue;
                 auto patched = bytes;
                 patched[at] = value;
-                auto got =
-                    agg::decode_chunk_columns(dstd::Span<const std::uint8_t>(
-                        patched.data(), patched.size()));
+                auto got = schemas::dft::agg::decode_chunk_columns(
+                    dstd::Span<const std::uint8_t>(patched.data(),
+                                                   patched.size()));
                 if (!got) {
                     ++rejected;
                     continue;
@@ -833,7 +834,8 @@ TEST_SUITE("ChunkColumns") {
         dstd::Vector<dstd::String> first_texts;
         const auto scanned = index::for_each_agg_chunk_columns(
             snapshot, file,
-            [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+            [&](std::uint64_t chunk,
+                const schemas::dft::agg::ChunkColumns& block) {
                 ++blocks;
                 if (blocks == 1) {
                     first_chunk = chunk;
@@ -901,11 +903,11 @@ TEST_SUITE("ChunkColumns") {
             CHECK_FALSE(columns.empty());
 
         const dstd::String root = env.get_dir() + "/set";
-        views::write_shard_set(dstd::String(root),
-                               {dstd::String(ia), dstd::String(ib)});
+        trace::views::write_shard_set(dstd::String(root),
+                                      {dstd::String(ia), dstd::String(ib)});
         const dstd::String out = env.get_dir() + "/merged";
-        CHECK(views::merge_shard_set(dstd::String(root), dstd::String(out)) ==
-              2);
+        CHECK(trace::views::merge_shard_set(dstd::String(root),
+                                            dstd::String(out)) == 2);
 
         const dstd::String merged =
             dstd::String(trace::internal::determine_index_path("x", out));
@@ -936,15 +938,17 @@ TEST_SUITE("ChunkColumns") {
         std::size_t blocks = 0;
         const auto scanned = index::for_each_agg_chunk_columns(
             snapshot, file,
-            [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+            [&](std::uint64_t chunk,
+                const schemas::dft::agg::ChunkColumns& block) {
                 ++blocks;
                 CHECK(block.chunk == chunk);
                 CHECK(block.rows > 0);
                 REQUIRE(at + block.rows <= RECORDS);
-                CHECK(values_of(block, "used", agg::ColumnKind::Int64) ==
+                CHECK(values_of(block, "used",
+                                schemas::dft::agg::ColumnKind::Int64) ==
                       first_values(block.rows, at, 10));
                 CHECK(values_of(block, "nested.CPP_APP",
-                                agg::ColumnKind::Int64) ==
+                                schemas::dft::agg::ColumnKind::Int64) ==
                       first_values(block.rows, at, 100));
                 at += block.rows;
                 return true;
@@ -972,16 +976,19 @@ TEST_SUITE("ChunkColumns") {
             REQUIRE_FALSE(record.key.empty());
             const dstd::StringView value = record.value;
             const auto kind = static_cast<std::uint8_t>(record.key[0]);
-            if (kind == layout::agg_kind::COLUMNS) {
-                const auto decoded = agg::decode_chunk_columns(span_of(value));
+            if (kind == index::store::layout::agg_kind::COLUMNS) {
+                const auto decoded =
+                    schemas::dft::agg::decode_chunk_columns(span_of(value));
                 REQUIRE_MESSAGE(decoded.has_value(), record.key);
                 ++blocks;
-            } else if (kind == layout::agg_kind::PARTIAL) {
+            } else if (kind == index::store::layout::agg_kind::PARTIAL) {
                 REQUIRE(
-                    agg::AggPartial::deserialize(span_of(value)).has_value());
+                    schemas::dft::agg::AggPartial::deserialize(span_of(value))
+                        .has_value());
                 ++partials;
             } else {
-                CHECK_MESSAGE(kind == layout::agg_kind::DICT, record.key);
+                CHECK_MESSAGE(kind == index::store::layout::agg_kind::DICT,
+                              record.key);
             }
         }
         CHECK(blocks > 0);

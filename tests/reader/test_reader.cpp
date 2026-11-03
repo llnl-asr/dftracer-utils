@@ -22,8 +22,6 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
-using dftracer::utils::index::store::IndexerError;
-using dftracer::utils::utilities::reader::ReaderError;
 using namespace dftu_utils_test;
 
 TEST_CASE("C++ Indexer - Basic functionality") {
@@ -176,13 +174,13 @@ TEST_CASE("C++ API - Error handling") {
         CHECK_THROWS_AS(CheckpointIndexerFactory::create(
                             "/nonexistent/path.gz", "/nonexistent/path.idx",
                             static_cast<std::uint64_t>(1.0)),
-                        IndexerError);
+                        index::store::IndexerError);
     }
 
     SUBCASE("Invalid reader creation") {
         CHECK_THROWS_AS(ReaderFactory::create("/nonexistent/path.gz",
                                               "/nonexistent/path.idx"),
-                        ReaderError);
+                        utilities::reader::ReaderError);
     }
 }
 
@@ -371,7 +369,7 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
     SUBCASE("Indexer with invalid chunk size should throw in constructor") {
         CHECK_THROWS_AS(
             CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.0)),
-            IndexerError);
+            index::store::IndexerError);
     }
 
     SUBCASE("Reader with invalid paths should throw in constructor") {
@@ -419,9 +417,9 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
         // Invalid ranges should throw
         char buffer[1024];
         CHECK_THROWS_AS(reader->read(100, 50, buffer, sizeof(buffer)),
-                        ReaderError);  // start > end
+                        utilities::reader::ReaderError);  // start > end
         CHECK_THROWS_AS(reader->read(50, 50, buffer, sizeof(buffer)),
-                        ReaderError);  // start == end
+                        utilities::reader::ReaderError);  // start == end
     }
 }
 
@@ -644,7 +642,7 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         result.clear();
         CHECK_THROWS_AS(
             reader->read(max_bytes, max_bytes + 1000, buffer, sizeof(buffer)),
-            ReaderError);
+            utilities::reader::ReaderError);
     }
 }
 

@@ -23,23 +23,20 @@ using namespace test_view_common;
 
 namespace {
 
-using dftracer::utils::index::Field;
-using dftracer::utils::index::Json;
-
 constexpr int RECORDS = 3000;
 
 struct Access {
-    Field<dstd::String, "op"> op;
-    Field<std::int64_t, "lat"> lat;
-    Field<dstd::Optional<std::int64_t>, "io.off"> off;
-    Field<dstd::Optional<Json>, "tags"> tags;
-    Field<dstd::Optional<dstd::String>, "hosts.1"> host;
+    index::Field<dstd::String, "op"> op;
+    index::Field<std::int64_t, "lat"> lat;
+    index::Field<dstd::Optional<std::int64_t>, "io.off"> off;
+    index::Field<dstd::Optional<index::Json>, "tags"> tags;
+    index::Field<dstd::Optional<dstd::String>, "hosts.1"> host;
 };
 
 struct Event {
-    Field<dstd::String, "name"> name;
-    Field<double, "ts"> ts;
-    Field<dstd::Optional<std::int64_t>, "args.size"> size;
+    index::Field<dstd::String, "name"> name;
+    index::Field<double, "ts"> ts;
+    index::Field<dstd::Optional<std::int64_t>, "args.size"> size;
 };
 
 // Record i: op read on even i, lat i, io.off 10*i on multiples of 3, tags on

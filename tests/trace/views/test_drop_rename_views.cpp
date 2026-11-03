@@ -133,15 +133,14 @@ dstd::String join_names(const dataframe::DataFrame& f) {
     return out;
 }
 
-namespace st = dftracer::utils::index::store;
-
 bool has_catalog(const dstd::String& gz) {
     try {
         const auto snapshot = dftu_utils_test::index_snapshot(
             dstd::String(determine_index_path(gz, "")));
         const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
-        return file && dftracer::utils::index::extension_current(
-                           snapshot, *file, st::IndexExtension::Catalog);
+        return file &&
+               dftracer::utils::index::extension_current(
+                   snapshot, *file, index::store::IndexExtension::Catalog);
     } catch (...) {
         return false;
     }

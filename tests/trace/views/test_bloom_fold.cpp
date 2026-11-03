@@ -43,13 +43,11 @@ using namespace test_view_common;
 using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::extensions;
-using dftracer::utils::index::extensions::ScalableBloomFilter;
-using dstd::StringIntern;
 
 namespace {
 
-FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
-                             bool needs_args,
+FoldEvent extract_fold_event(simdjson::dom::element root,
+                             dstd::StringIntern& intern, bool needs_args,
                              const dstd::Vector<dstd::String>* extra = nullptr,
                              bool capture_schema = false) {
     FoldEvent ev;
@@ -148,7 +146,7 @@ dftracer::utils::index::FileBuild start_build(const dstd::String& root) {
 }
 
 dstd::Vector<FoldEvent> events_of(const dstd::Vector<dstd::String>& lines,
-                                  StringIntern& intern) {
+                                  dstd::StringIntern& intern) {
     dstd::Vector<FoldEvent> out;
     out.reserve(lines.size());
     simdjson::dom::parser parser;
@@ -169,7 +167,7 @@ TEST_SUITE("BloomFold") {
     // come with the rest of the tier.
     TEST_CASE("spill runs live until their build commits or is dropped") {
         TestEnvironment env(10);
-        StringIntern intern;
+        dstd::StringIntern intern;
         dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 8; ++i)
             lines.push_back(R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
@@ -328,7 +326,7 @@ TEST_SUITE("BloomFold") {
                             R"(,"dur":1,"args":{"fhash":"fh1"}})");
 
         auto drive = [&](CoverageSet cov) {
-            StringIntern intern;
+            dstd::StringIntern intern;
             auto events = events_of(lines, intern);
             BloomFold fold(intern);
             FoldBatch batch{dstd::Span<const FoldEvent>(events), unit};
@@ -385,7 +383,7 @@ TEST_SUITE("BloomFold") {
             R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"fhash":"fh1"}})",
             R"({"ph":"X","name":"write","cat":"STDIO","pid":2,"tid":3,"ts":2,"dur":1,"args":{"fhash":"fh1"}})",
         };
-        StringIntern intern;
+        dstd::StringIntern intern;
         auto events = events_of(lines, intern);
         BloomFold bloom(intern);
         RowSetFold dict(intern, dftracer_rowsets());
@@ -437,7 +435,7 @@ TEST_SUITE("BloomFold") {
             R"({"ph":"X","name":"write","cat":"STDIO","pid":2,"tid":3,"ts":2,"dur":1,"args":{"fhash":"fh1"}})" +
             "\n";
 
-        StringIntern intern;
+        dstd::StringIntern intern;
         BloomFold bloom(intern);
         RowSetFold dict(intern, dftracer_rowsets());
         std::array<Fold*, 2> fp{&bloom, &dict};
@@ -545,36 +543,39 @@ TEST_SUITE("BloomFold") {
 }
 
 TEST_SUITE("BloomCore") {
-    using dftracer::utils::index::schemas::dft::BloomCore;
-
     TEST_CASE("merging a chunk's states keeps numeric min and max") {
-        BloomCore::ChunkIndexerConfig config;
-        BloomCore::ChunkState a, b;
-        BloomCore::init_chunk_state(a, config, {});
-        BloomCore::init_chunk_state(b, config, {});
-        BloomCore::EventCache cache_a;
-        BloomCore::EventCache cache_b;
-        BloomCore::observe_data(a, cache_a, 0, 1, "read", "POSIX", 9, 1, 9, 9,
-                                true, "", "", "");
-        BloomCore::observe_data(b, cache_b, 0, 1, "read", "POSIX", 10, 1, 10,
-                                10, true, "", "", "");
-        BloomCore::merge_chunk_state(a, b);
-        const auto& ts = a.fixed_dim_stats[BloomCore::FdTs];
+        index::schemas::dft::BloomCore::ChunkIndexerConfig config;
+        index::schemas::dft::BloomCore::ChunkState a, b;
+        index::schemas::dft::BloomCore::init_chunk_state(a, config, {});
+        index::schemas::dft::BloomCore::init_chunk_state(b, config, {});
+        index::schemas::dft::BloomCore::EventCache cache_a;
+        index::schemas::dft::BloomCore::EventCache cache_b;
+        index::schemas::dft::BloomCore::observe_data(
+            a, cache_a, 0, 1, "read", "POSIX", 9, 1, 9, 9, true, "", "", "");
+        index::schemas::dft::BloomCore::observe_data(
+            b, cache_b, 0, 1, "read", "POSIX", 10, 1, 10, 10, true, "", "", "");
+        index::schemas::dft::BloomCore::merge_chunk_state(a, b);
+        const auto& ts =
+            a.fixed_dim_stats[index::schemas::dft::BloomCore::FdTs];
         CHECK(ts.min_value == "9");
         CHECK(ts.max_value == "10");
     }
 
     TEST_CASE("an extra dimension keeps min and max in its own type") {
-        BloomCore::ChunkIndexerConfig config;
-        BloomCore::ChunkState c;
-        BloomCore::init_chunk_state(c, config, {"size", "mode", "mix"});
-        BloomCore::observe_extra(c, 0, std::int64_t{9});
-        BloomCore::observe_extra(c, 0, std::int64_t{10});
-        BloomCore::observe_extra(c, 0, 2.5);
-        BloomCore::observe_extra(c, 1, dstd::StringView("rw"));
-        BloomCore::observe_extra(c, 1, dstd::StringView("r"));
-        BloomCore::observe_extra(c, 2, std::int64_t{1});
-        BloomCore::observe_extra(c, 2, dstd::StringView("x"));
+        index::schemas::dft::BloomCore::ChunkIndexerConfig config;
+        index::schemas::dft::BloomCore::ChunkState c;
+        index::schemas::dft::BloomCore::init_chunk_state(
+            c, config, {"size", "mode", "mix"});
+        index::schemas::dft::BloomCore::observe_extra(c, 0, std::int64_t{9});
+        index::schemas::dft::BloomCore::observe_extra(c, 0, std::int64_t{10});
+        index::schemas::dft::BloomCore::observe_extra(c, 0, 2.5);
+        index::schemas::dft::BloomCore::observe_extra(c, 1,
+                                                      dstd::StringView("rw"));
+        index::schemas::dft::BloomCore::observe_extra(c, 1,
+                                                      dstd::StringView("r"));
+        index::schemas::dft::BloomCore::observe_extra(c, 2, std::int64_t{1});
+        index::schemas::dft::BloomCore::observe_extra(c, 2,
+                                                      dstd::StringView("x"));
 
         const auto& size = c.extra_dim_stats[0];
         CHECK(size.value_type == "double");
@@ -595,17 +596,18 @@ TEST_SUITE("BloomCore") {
     }
 
     TEST_CASE("merging an extra dimension joins its types") {
-        BloomCore::ChunkIndexerConfig config;
-        BloomCore::ChunkState a, b, c;
+        index::schemas::dft::BloomCore::ChunkIndexerConfig config;
+        index::schemas::dft::BloomCore::ChunkState a, b, c;
         for (auto* s : {&a, &b, &c})
-            BloomCore::init_chunk_state(*s, config, {"n"});
-        BloomCore::observe_extra(a, 0, std::int64_t{9});
-        BloomCore::observe_extra(b, 0, std::int64_t{10});
-        BloomCore::merge_chunk_state(a, b);
+            index::schemas::dft::BloomCore::init_chunk_state(*s, config, {"n"});
+        index::schemas::dft::BloomCore::observe_extra(a, 0, std::int64_t{9});
+        index::schemas::dft::BloomCore::observe_extra(b, 0, std::int64_t{10});
+        index::schemas::dft::BloomCore::merge_chunk_state(a, b);
         CHECK(a.extra_dim_stats[0].min_value == "9");
         CHECK(a.extra_dim_stats[0].max_value == "10");
-        BloomCore::observe_extra(c, 0, dstd::StringView("x"));
-        BloomCore::merge_chunk_state(a, c);
+        index::schemas::dft::BloomCore::observe_extra(c, 0,
+                                                      dstd::StringView("x"));
+        index::schemas::dft::BloomCore::merge_chunk_state(a, c);
         CHECK(a.extra_dim_stats[0].value_type == "mixed");
         CHECK(a.extra_dim_stats[0].min_value.empty());
     }
@@ -652,15 +654,14 @@ TEST_SUITE("BloomFold - auto fields") {
         });
         const auto snapshot = dftu_utils_test::index_snapshot(index_path);
         const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
-        using dftracer::utils::index::store::IndexExtension;
         auto dims = dftu_utils_test::index_take(dftracer::utils::index::paths(
-            snapshot, file, IndexExtension::Zonemap));
+            snapshot, file, index::store::IndexExtension::Zonemap));
         for (auto d : {"size", "mode", "fname"})
             CHECK(std::find(dims.begin(), dims.end(), d) != dims.end());
 
         auto size =
             dftu_utils_test::index_take(dftracer::utils::index::granules(
-                snapshot, file, IndexExtension::Zonemap, "size"));
+                snapshot, file, index::store::IndexExtension::Zonemap, "size"));
         REQUIRE(size.size() >= 2);
         for (const auto& [chunk, bytes] : size) {
             auto zone = dftracer::utils::index::extensions::kinds::decode_zone(
@@ -682,7 +683,6 @@ TEST_SUITE("BloomFold - auto fields") {
 }
 
 TEST_CASE("numeric bounds keep the min and max text of the text path") {
-    using dftracer::utils::index::schemas::dft::BloomCore;
     // Zeros of either sign print differently but compare equal.
     for (const auto& values : dstd::Vector<dstd::Vector<double>>{
              {0.0, -1e-7}, {1e-7, -1e-7}, {-1e-7, 1e-7}, {-1e-7, 0.0, 2e-7}}) {
@@ -690,10 +690,10 @@ TEST_CASE("numeric bounds keep the min and max text of the text path") {
         ChunkDimensionStats typed;
         text_path.value_type.clear();
         typed.value_type.clear();
-        BloomCore::NumericBounds bounds;
+        index::schemas::dft::BloomCore::NumericBounds bounds;
         for (double v : values) {
-            BloomCore::observe_value(text_path, v);
-            BloomCore::observe_value(typed, bounds, v);
+            index::schemas::dft::BloomCore::observe_value(text_path, v);
+            index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
         }
         CHECK(typed.min_value == text_path.min_value);
         CHECK(typed.max_value == text_path.max_value);
@@ -706,7 +706,7 @@ TEST_CASE("numeric bounds keep the min and max text of the text path") {
         ChunkDimensionStats typed;
         text_path.value_type.clear();
         typed.value_type.clear();
-        BloomCore::NumericBounds bounds;
+        index::schemas::dft::BloomCore::NumericBounds bounds;
         for (int i = 0; i < 300; ++i) {
             // Doubles that print to the same 6 decimals, integers, a
             // double between two integers, and the odd non-finite value.
@@ -714,26 +714,26 @@ TEST_CASE("numeric bounds keep the min and max text of the text path") {
             if (kind < 3) {
                 const double base = std::floor(real(rng) * 1e3) / 1e3;
                 const double v = base + static_cast<double>(rng() % 5) * 1e-7;
-                BloomCore::observe_value(text_path, v);
-                BloomCore::observe_value(typed, bounds, v);
+                index::schemas::dft::BloomCore::observe_value(text_path, v);
+                index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
             } else if (kind < 5) {
                 const auto v = static_cast<std::int64_t>(rng() % 2001) - 1000;
-                BloomCore::observe_value(text_path, v);
-                BloomCore::observe_value(typed, bounds, v);
+                index::schemas::dft::BloomCore::observe_value(text_path, v);
+                index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
             } else if (kind < 6) {
                 const auto v = static_cast<std::uint64_t>(rng() % 1000);
-                BloomCore::observe_value(text_path, v);
-                BloomCore::observe_value(typed, bounds, v);
+                index::schemas::dft::BloomCore::observe_value(text_path, v);
+                index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
             } else if (kind < 7) {
                 const double v = static_cast<double>(rng() % 2001) - 1000.5;
-                BloomCore::observe_value(text_path, v);
-                BloomCore::observe_value(typed, bounds, v);
+                index::schemas::dft::BloomCore::observe_value(text_path, v);
+                index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
             } else if (round % 10 == 0) {
                 const double v = rng() % 2
                                      ? std::numeric_limits<double>::infinity()
                                      : std::nan("");
-                BloomCore::observe_value(text_path, v);
-                BloomCore::observe_value(typed, bounds, v);
+                index::schemas::dft::BloomCore::observe_value(text_path, v);
+                index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
             }
             REQUIRE(typed.value_type == text_path.value_type);
             REQUIRE(typed.present == text_path.present);

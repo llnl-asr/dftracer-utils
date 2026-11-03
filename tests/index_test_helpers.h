@@ -23,8 +23,6 @@
 // back through a snapshot.
 namespace dftu_utils_test {
 
-using dftracer::utils::index::store::IndexExtension;
-
 inline dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> dstd_paths(
     const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& paths) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
@@ -90,8 +88,7 @@ struct IndexRecord {
 /// namespace, scope and key order. `scope` joins the scope paths with NUL.
 inline dftracer::utils::dstd::Vector<IndexRecord> dump_index(
     dftracer::utils::dstd::StringView index_path) {
-    namespace kv = dftracer::utils::store;
-    auto store = index_take(kv::Store::open(
+    auto store = index_take(dftracer::utils::store::Store::open(
         dftracer::utils::index::store::internal::normalize_index_root(
             index_path) +
         "/store"));
@@ -99,7 +96,7 @@ inline dftracer::utils::dstd::Vector<IndexRecord> dump_index(
     auto declared = index_take(snapshot.namespaces());
     dftracer::utils::dstd::Vector<IndexRecord> out;
     for (const auto& decl : declared) {
-        kv::Namespace ns;
+        dftracer::utils::store::Namespace ns;
         ns.spec.name = decl.name;
         ns.spec.format_version = decl.format_version;
         auto cursor = snapshot.scan_all(ns, {}, {});
@@ -153,7 +150,7 @@ inline dftracer::utils::index::FileBuild register_test_file(
                                    logical_path.data(), logical_path.size()),
                                stat));
     dftracer::utils::index::put_file_metadata(build, 0, 0, 0, false);
-    build.finish(IndexExtension::Members, 0);
+    build.finish(dftracer::utils::index::store::IndexExtension::Members, 0);
     return build;
 }
 
@@ -169,9 +166,12 @@ inline dftracer::utils::index::FileBuild rebuild_test_file(
 /// Finishes the pruning extensions the build did not finish, so readers use
 /// the data a test wrote. Members is finished too unless the build did.
 inline void mark_built(dftracer::utils::index::FileBuild& build) {
-    for (auto ext : {IndexExtension::Members, IndexExtension::Zonemap,
-                     IndexExtension::Bloom, IndexExtension::Counts,
-                     IndexExtension::Postings, IndexExtension::Stats})
+    for (auto ext : {dftracer::utils::index::store::IndexExtension::Members,
+                     dftracer::utils::index::store::IndexExtension::Zonemap,
+                     dftracer::utils::index::store::IndexExtension::Bloom,
+                     dftracer::utils::index::store::IndexExtension::Counts,
+                     dftracer::utils::index::store::IndexExtension::Postings,
+                     dftracer::utils::index::store::IndexExtension::Stats})
         build.finish(ext, 0);
 }
 
@@ -181,8 +181,6 @@ inline void put_dimension_stats(
     dftracer::utils::index::FileBuild& build, std::uint64_t chunk,
     const dftracer::utils::index::extensions::ChunkDimensionStats& ds,
     std::uint64_t observed) {
-    namespace kinds = dftracer::utils::index::extensions::kinds;
-    namespace idx = dftracer::utils::index;
     const auto compressed = ds.compress_value_counts(4096);
     dftracer::utils::dstd::Optional<std::uint64_t> present;
     if (ds.dimension == "ts" || ds.dimension == "dur") {
@@ -192,7 +190,7 @@ inline void put_dimension_stats(
         for (const auto& [value, count] : *ds.value_counts) carried += count;
         present = carried;
     }
-    kinds::Zone zone;
+    dftracer::utils::index::extensions::kinds::Zone zone;
     zone.value_type = ds.value_type;
     zone.min = ds.min_value;
     zone.max = ds.max_value;
@@ -200,16 +198,22 @@ inline void put_dimension_stats(
     zone.present = present;
     const dftracer::utils::dstd::String dimension(ds.dimension.data(),
                                                   ds.dimension.size());
-    const dftracer::utils::dstd::String zone_payload = kinds::encode_zone(zone);
-    idx::put_path_granule(build, IndexExtension::Zonemap, dimension, chunk,
-                          zone_payload);
+    const dftracer::utils::dstd::String zone_payload =
+        dftracer::utils::index::extensions::kinds::encode_zone(zone);
+    dftracer::utils::index::put_path_granule(
+        build, dftracer::utils::index::store::IndexExtension::Zonemap,
+        dimension, chunk, zone_payload);
     if (compressed) {
         const dftracer::utils::dstd::String counts_payload =
-            kinds::encode_counts({observed, *compressed});
-        idx::put_path_granule(build, IndexExtension::Counts, dimension, chunk,
-                              counts_payload);
+            dftracer::utils::index::extensions::kinds::encode_counts(
+                {observed, *compressed});
+        dftracer::utils::index::put_path_granule(
+            build, dftracer::utils::index::store::IndexExtension::Counts,
+            dimension, chunk, counts_payload);
     }
-    idx::put_path(build, IndexExtension::Zonemap, dimension);
+    dftracer::utils::index::put_path(
+        build, dftracer::utils::index::store::IndexExtension::Zonemap,
+        dimension);
 }
 
 inline void put_chunk_bloom(
@@ -221,7 +225,7 @@ inline void put_chunk_bloom(
         dftracer::utils::index::extensions::kinds::encode_bloom(bloom,
                                                                 num_entries);
     dftracer::utils::index::put_path_granule(
-        build, IndexExtension::Bloom,
+        build, dftracer::utils::index::store::IndexExtension::Bloom,
         dftracer::utils::dstd::StringView(path.data(), path.size()), chunk,
         payload);
 }
@@ -235,7 +239,7 @@ inline void put_file_bloom(
         dftracer::utils::index::extensions::kinds::encode_bloom(bloom,
                                                                 num_entries);
     dftracer::utils::index::put_path_file(
-        build, IndexExtension::Bloom,
+        build, dftracer::utils::index::store::IndexExtension::Bloom,
         dftracer::utils::dstd::StringView(path.data(), path.size()), payload);
 }
 
@@ -243,8 +247,8 @@ inline void put_file_bloom(
 inline bool pruning_tier_current(
     const dftracer::utils::index::Snapshot& snapshot,
     const dftracer::utils::index::FileRef& file) {
-    return dftracer::utils::index::extension_current(snapshot, file,
-                                                     IndexExtension::Stats);
+    return dftracer::utils::index::extension_current(
+        snapshot, file, dftracer::utils::index::store::IndexExtension::Stats);
 }
 
 /// Chunks that hold a bloom of `path`.
@@ -254,7 +258,8 @@ inline std::size_t bloom_chunks(
     dftracer::utils::dstd::StringView path) {
     return index_take(
                dftracer::utils::index::granules(
-                   snapshot, file, IndexExtension::Bloom,
+                   snapshot, file,
+                   dftracer::utils::index::store::IndexExtension::Bloom,
                    dftracer::utils::dstd::StringView(path.data(), path.size())))
         .size();
 }
@@ -264,7 +269,8 @@ inline bool has_file_bloom(const dftracer::utils::index::Snapshot& snapshot,
                            dftracer::utils::dstd::StringView path) {
     return index_take(
                dftracer::utils::index::path_file(
-                   snapshot, file, IndexExtension::Bloom,
+                   snapshot, file,
+                   dftracer::utils::index::store::IndexExtension::Bloom,
                    dftracer::utils::dstd::StringView(path.data(), path.size())))
         .has_value();
 }

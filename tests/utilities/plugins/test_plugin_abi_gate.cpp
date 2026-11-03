@@ -13,14 +13,13 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::plugins::Plugins;
-
 #ifndef BAD_ABI_VERSION_PLUGIN_PATH
 #error "BAD_ABI_VERSION_PLUGIN_PATH must be defined by CMake"
 #endif
 
 TEST_CASE("a plugin stamped with a mismatched ABI version is refused") {
-    auto set = Plugins::builder().add(BAD_ABI_VERSION_PLUGIN_PATH).build();
+    auto set =
+        plugins::Plugins::builder().add(BAD_ABI_VERSION_PLUGIN_PATH).build();
 
     REQUIRE_FALSE(set.has_value());
     CHECK(set.error().message().find("ABI version") != dstd::String::npos);

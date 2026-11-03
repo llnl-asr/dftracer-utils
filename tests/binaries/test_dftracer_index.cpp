@@ -246,10 +246,9 @@ TEST_SUITE("DFTracerIndex") {
         REQUIRE(env.is_valid());
         const auto f = create_pfw_gz(env, 100, 0);
         REQUIRE(!f.empty());
-        namespace ix = dftracer::utils::index;
-        ix::IndexerOptions o;
+        index::IndexerOptions o;
         o.aggregation.time_interval_us = 5'000'000;
-        ix::Indexer::open({dstd::String(dstd::StringView(f))}, o).build();
+        index::Indexer::open({dstd::String(dstd::StringView(f))}, o).build();
 
         const auto index_path = dstd::String(
             dftracer::utils::trace::internal::determine_index_path(f, ""));
@@ -263,14 +262,14 @@ TEST_SUITE("DFTracerIndex") {
               dstd::String::npos);
         CHECK(out.find("Files processed: 1\n") != dstd::String::npos);
 
-        ix::release_root(index_path);
+        index::release_root(index_path);
         const auto snapshot = dftracer::utils::common::unwrap(
-            ix::plan::open_snapshot(index_path));
+            index::plan::open_snapshot(index_path));
         const auto config = dftracer::utils::common::unwrap(
-            ix::schemas::dft::agg::tier::read_config(snapshot));
+            index::schemas::dft::agg::tier::read_config(snapshot));
         REQUIRE(config);
         CHECK(config->time_interval_us ==
-              ix::schemas::dft::agg::standard_aggregation_config()
+              index::schemas::dft::agg::standard_aggregation_config()
                   .time_interval_us);
     }
 

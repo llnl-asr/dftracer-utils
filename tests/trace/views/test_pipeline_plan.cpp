@@ -13,28 +13,26 @@ using namespace dftracer::utils::trace::internal;
 using namespace dftu_utils_test;
 using namespace test_view_common;
 
-namespace views_detail = dftracer::utils::trace::views::detail;
-namespace scan = dftracer::utils::trace::views::detail::scan;
-using scan::ScanPlan;
+using namespace dftracer::utils::trace;
 
 TEST_SUITE("Pipeline plan") {
     TEST_CASE("execute rejects a shape no lowering handles") {
         dstd::StringIntern intern;
 
-        views_detail::Pipeline with_ops;
+        views::detail::Pipeline with_ops;
         with_ops.ops.push_back(
-            {views_detail::NodeKind::StreamOp, nullptr, nullptr, nullptr});
-        CHECK_THROWS_AS(run(views_detail::execute(with_ops, intern)),
+            {views::detail::NodeKind::StreamOp, nullptr, nullptr, nullptr});
+        CHECK_THROWS_AS(run(views::detail::execute(with_ops, intern)),
                         std::logic_error);
 
-        views_detail::Pipeline incomplete;
-        CHECK_THROWS_AS(run(views_detail::execute(incomplete, intern)),
+        views::detail::Pipeline incomplete;
+        CHECK_THROWS_AS(run(views::detail::execute(incomplete, intern)),
                         std::logic_error);
 
-        views_detail::Pipeline null_sink;
+        views::detail::Pipeline null_sink;
         null_sink.sinks.push_back(
-            {views_detail::NodeKind::Sink, nullptr, nullptr, nullptr});
-        CHECK_THROWS_AS(run(views_detail::execute(null_sink, intern)),
+            {views::detail::NodeKind::Sink, nullptr, nullptr, nullptr});
+        CHECK_THROWS_AS(run(views::detail::execute(null_sink, intern)),
                         std::logic_error);
     }
 
@@ -43,18 +41,23 @@ TEST_SUITE("Pipeline plan") {
         dstd::String gz = test_view_common::create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        ScanPlan base = scan::from_file(dstd::String(gz), dstd::String(idx));
-        dataframe::DataFrame all = run(scan::collect_frame(base));
+        views::detail::scan::ScanPlan base =
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx));
+        dataframe::DataFrame all =
+            run(views::detail::scan::collect_frame(base));
         REQUIRE(all.num_rows() == 50);
         CHECK(bhas(all, "cat"));
         CHECK(bhas(all, "name"));
         CHECK(bhas(all, "dur"));
 
-        ScanPlan sorted = scan::sort_by(
-            scan::filter(base, duql::parse_or_throw(R"(cat == "POSIX")")),
+        views::detail::scan::ScanPlan sorted = views::detail::scan::sort_by(
+            views::detail::scan::filter(
+                base, duql::parse_or_throw(R"(cat == "POSIX")")),
             "dur", true);
-        ScanPlan posix_plan = scan::limit(scan::offset(sorted, 2), 10);
-        dataframe::DataFrame posix = run(scan::collect_frame(posix_plan));
+        views::detail::scan::ScanPlan posix_plan = views::detail::scan::limit(
+            views::detail::scan::offset(sorted, 2), 10);
+        dataframe::DataFrame posix =
+            run(views::detail::scan::collect_frame(posix_plan));
         REQUIRE(posix.num_rows() == 10);
         for (std::int64_t i = 0; i < posix.num_rows(); ++i)
             CHECK(bstr(posix, i, "cat") == "POSIX");

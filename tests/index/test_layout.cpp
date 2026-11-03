@@ -14,12 +14,7 @@
 #include <cstdint>
 #include <initializer_list>
 
-namespace dstd = dftracer::utils::dstd;
-namespace encoding = dftracer::utils::index::store::internal::encoding;
-namespace idx = dftracer::utils::index;
-namespace layout = dftracer::utils::index::store::layout;
-namespace store = dftracer::utils::index::store;
-using layout::Ext;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -32,7 +27,8 @@ dftracer::utils::dstd::String kind_key(std::uint8_t kind) {
 void check_separate_ranges(std::initializer_list<std::uint8_t> kinds) {
     for (const std::uint8_t kind : kinds) {
         const dftracer::utils::dstd::String begin = kind_key(kind);
-        const dftracer::utils::dstd::String end = layout::prefix_end(begin);
+        const dftracer::utils::dstd::String end =
+            index::store::layout::prefix_end(begin);
         dftracer::utils::dstd::String deepest = begin;
         deepest.append(16, '\xFF');
         CHECK(deepest < end);
@@ -59,11 +55,13 @@ dftracer::utils::dstd::Optional<dftu_utils_test::IndexRecord> find_record(
 TEST_SUITE("index layout") {
     TEST_CASE("integers read big-endian") {
         using namespace std::string_view_literals;
-        CHECK(layout::read_u16("\x01\x02"sv) == 0x0102);
-        CHECK(layout::read_u32("\x01\x02\x03\x04"sv) == 0x01020304U);
-        CHECK(layout::read_u64("\x01\x02\x03\x04\x05\x06\x07\x08"sv) ==
+        CHECK(index::store::layout::read_u16("\x01\x02"sv) == 0x0102);
+        CHECK(index::store::layout::read_u32("\x01\x02\x03\x04"sv) ==
+              0x01020304U);
+        CHECK(index::store::layout::read_u64(
+                  "\x01\x02\x03\x04\x05\x06\x07\x08"sv) ==
               0x0102030405060708ULL);
-        CHECK_THROWS(layout::read_u32("\x01\x02\x03"sv));
+        CHECK_THROWS(index::store::layout::read_u32("\x01\x02\x03"sv));
     }
 
     TEST_CASE("a stored key is its kind byte then its big-endian tail") {
@@ -74,32 +72,34 @@ TEST_SUITE("index layout") {
                                           env.get_dir().size()) +
             "/.dftindex";
         const dftracer::utils::dstd::String trace = "/traces/layout.pfw.gz";
-        const idx::gzip::GzipMemberRecord member{1, 4096, 512, 100, 4096, 7, 8};
-        idx::SourceStat stat;
+        const index::gzip::GzipMemberRecord member{1,    4096, 512, 100,
+                                                   4096, 7,    8};
+        index::SourceStat stat;
         stat.hash = 1;
         auto build = dftu_utils_test::index_take(
             dftu_utils_test::open_test_index(root).build(
                 dftracer::utils::dstd::StringView(trace.data(), trace.size()),
                 stat));
-        idx::put_file_metadata(build, 0, 0, 0, false);
-        idx::put_gzip_member(build, member);
-        idx::put_path_granule(build, store::IndexExtension::Zonemap, "cat", 2,
-                              "zone");
+        index::put_file_metadata(build, 0, 0, 0, false);
+        index::put_gzip_member(build, member);
+        index::put_path_granule(build, index::store::IndexExtension::Zonemap,
+                                "cat", 2, "zone");
         dftu_utils_test::mark_built(build);
         dftu_utils_test::commit_test_build(build);
 
         const auto records = dftu_utils_test::dump_index(root);
         dftracer::utils::dstd::String member_key =
-            kind_key(layout::members::MEMBER);
+            kind_key(index::store::layout::members::MEMBER);
         member_key.append("\x00\x00\x00\x01", 4);
         const auto member_record =
             find_record(records, "dftu.idx.core.members", member_key);
         REQUIRE(member_record.has_value());
-        CHECK(member_record->value ==
-              encoding::encode_gzip_member_value(member));
+        CHECK(
+            member_record->value ==
+            index::store::internal::encoding::encode_gzip_member_value(member));
 
         dftracer::utils::dstd::String zone_key =
-            kind_key(layout::path_kind::DATA);
+            kind_key(index::store::layout::path_kind::DATA);
         zone_key.append("cat");
         zone_key.push_back('\0');
         zone_key.append("\x00\x00\x00\x02", 4);
@@ -110,77 +110,85 @@ TEST_SUITE("index layout") {
     }
 
     TEST_CASE("one kind's key range holds no key of another kind") {
-        check_separate_ranges({layout::members::MEMBER,
-                               layout::members::METADATA,
-                               layout::members::RESTART});
-        check_separate_ranges({layout::path_kind::PATHS,
-                               layout::path_kind::DATA,
-                               layout::path_kind::FILE});
-        check_separate_ranges({layout::path_kind::PATHS,
-                               layout::path_kind::IN_FILE,
-                               layout::path_kind::IN_GRANULE});
-        check_separate_ranges({layout::stats_kind::CHUNK_STATS,
-                               layout::stats_kind::FILE_SCALAR_STATS,
-                               layout::stats_kind::FILE_PID_TID_COUNTS});
-        check_separate_ranges({layout::agg_kind::PARTIAL,
-                               layout::agg_kind::META, layout::agg_kind::DICT,
-                               layout::agg_kind::COLUMNS});
+        check_separate_ranges({index::store::layout::members::MEMBER,
+                               index::store::layout::members::METADATA,
+                               index::store::layout::members::RESTART});
+        check_separate_ranges({index::store::layout::path_kind::PATHS,
+                               index::store::layout::path_kind::DATA,
+                               index::store::layout::path_kind::FILE});
+        check_separate_ranges({index::store::layout::path_kind::PATHS,
+                               index::store::layout::path_kind::IN_FILE,
+                               index::store::layout::path_kind::IN_GRANULE});
+        check_separate_ranges(
+            {index::store::layout::stats_kind::CHUNK_STATS,
+             index::store::layout::stats_kind::FILE_SCALAR_STATS,
+             index::store::layout::stats_kind::FILE_PID_TID_COUNTS});
+        check_separate_ranges({index::store::layout::agg_kind::PARTIAL,
+                               index::store::layout::agg_kind::META,
+                               index::store::layout::agg_kind::DICT,
+                               index::store::layout::agg_kind::COLUMNS});
     }
 
     TEST_CASE("a prefix range ends at the first larger key") {
         using namespace std::string_view_literals;
-        CHECK(layout::prefix_end("\x01\xFF"sv) == "\x02"sv);
-        CHECK(layout::prefix_end("\x01"sv) == "\x02"sv);
+        CHECK(index::store::layout::prefix_end("\x01\xFF"sv) == "\x02"sv);
+        CHECK(index::store::layout::prefix_end("\x01"sv) == "\x02"sv);
         const dftracer::utils::dstd::String all_ff(3, '\xFF');
-        CHECK(layout::prefix_end(all_ff) ==
+        CHECK(index::store::layout::prefix_end(all_ff) ==
               all_ff + dftracer::utils::dstd::String(8, '\xFF'));
         const dftracer::utils::dstd::String path_key =
-            kind_key(layout::path_kind::DATA) + "a" + '\0';
+            kind_key(index::store::layout::path_kind::DATA) + "a" + '\0';
         dftracer::utils::dstd::String last = path_key;
         last.append(4, '\xFF');
-        CHECK(last < layout::prefix_end(path_key));
+        CHECK(last < index::store::layout::prefix_end(path_key));
         const dftracer::utils::dstd::String next_path =
-            kind_key(layout::path_kind::DATA) + "ab";
-        CHECK_FALSE(next_path < layout::prefix_end(path_key));
+            kind_key(index::store::layout::path_kind::DATA) + "ab";
+        CHECK_FALSE(next_path < index::store::layout::prefix_end(path_key));
     }
 
     TEST_CASE("chunk metadata round-trips and keeps an over-cap list unknown") {
-        store::ChunkMetadata metadata;
+        index::store::ChunkMetadata metadata;
         metadata.records = 0x0102030405060708ULL;
         metadata.names =
             dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
                 "hhash", "name"};
         metadata.paths = dftracer::utils::dstd::nullopt;
         const dftracer::utils::dstd::String body =
-            layout::encode_chunk_metadata(metadata);
-        const auto decoded = layout::decode_chunk_metadata(body);
+            index::store::layout::encode_chunk_metadata(metadata);
+        const auto decoded = index::store::layout::decode_chunk_metadata(body);
         REQUIRE(decoded.has_value());
         CHECK(decoded->records == metadata.records);
         REQUIRE(decoded->names.has_value());
         CHECK(*decoded->names == *metadata.names);
         CHECK_FALSE(decoded->paths.has_value());
-        CHECK_FALSE(layout::decode_chunk_metadata("").has_value());
         CHECK_FALSE(
-            layout::decode_chunk_metadata(body.substr(0, body.size() - 1))
-                .has_value());
-        CHECK_FALSE(layout::decode_chunk_metadata(body + "x").has_value());
+            index::store::layout::decode_chunk_metadata("").has_value());
+        CHECK_FALSE(index::store::layout::decode_chunk_metadata(
+                        body.substr(0, body.size() - 1))
+                        .has_value());
+        CHECK_FALSE(index::store::layout::decode_chunk_metadata(body + "x")
+                        .has_value());
     }
 
     TEST_CASE("a catalog path stat is ten bytes and rejects another type") {
-        const store::PathStat stat{store::PathType::String, 0x28, 7};
+        const index::store::PathStat stat{index::store::PathType::String, 0x28,
+                                          7};
         const dftracer::utils::dstd::String body =
-            layout::encode_path_stat(stat);
+            index::store::layout::encode_path_stat(stat);
         CHECK(body == dftracer::utils::dstd::String(
                           "\x05\x28\x00\x00\x00\x00\x00\x00\x00\x07", 10));
-        const auto decoded = layout::decode_path_stat(body);
+        const auto decoded = index::store::layout::decode_path_stat(body);
         REQUIRE(decoded.has_value());
-        CHECK(decoded->type == store::PathType::String);
+        CHECK(decoded->type == index::store::PathType::String);
         CHECK(decoded->seen == 0x28);
         CHECK(decoded->count == 7);
-        CHECK_FALSE(layout::decode_path_stat(body.substr(0, 9)).has_value());
-        CHECK_FALSE(layout::decode_path_stat(body + "x").has_value());
+        CHECK_FALSE(index::store::layout::decode_path_stat(body.substr(0, 9))
+                        .has_value());
+        CHECK_FALSE(
+            index::store::layout::decode_path_stat(body + "x").has_value());
         const dftracer::utils::dstd::String unknown_type(
             "\x09\x00\x00\x00\x00\x00\x00\x00\x00\x07", 10);
-        CHECK_FALSE(layout::decode_path_stat(unknown_type).has_value());
+        CHECK_FALSE(
+            index::store::layout::decode_path_stat(unknown_type).has_value());
     }
 }

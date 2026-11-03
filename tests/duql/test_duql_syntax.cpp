@@ -25,15 +25,12 @@
 
 using namespace dftracer::utils;
 
-namespace duql = dftracer::utils::duql;
-using duql::syntax::Tok;
-
 namespace {
 
-dstd::Vector<Tok> kinds(dstd::StringView text) {
+dstd::Vector<duql::syntax::Tok> kinds(dstd::StringView text) {
     auto tokens = duql::syntax::lex(text);
     REQUIRE(tokens.has_value());
-    dstd::Vector<Tok> out;
+    dstd::Vector<duql::syntax::Tok> out;
     for (const auto& t : *tokens) out.push_back(t.kind);
     return out;
 }
@@ -149,26 +146,33 @@ bool has(const dstd::String& text, dstd::StringView part) {
 }  // namespace
 
 TEST_CASE("lex - minus is always an operator") {
-    CHECK(kinds("5-3") ==
-          dstd::Vector<Tok>{Tok::Int, Tok::Minus, Tok::Int, Tok::End});
-    CHECK(kinds("x > -5") == dstd::Vector<Tok>{Tok::Name, Tok::Gt, Tok::Minus,
-                                               Tok::Int, Tok::End});
+    CHECK(kinds("5-3") == dstd::Vector<duql::syntax::Tok>{
+                              duql::syntax::Tok::Int, duql::syntax::Tok::Minus,
+                              duql::syntax::Tok::Int, duql::syntax::Tok::End});
+    CHECK(kinds("x > -5") == dstd::Vector<duql::syntax::Tok>{
+                                 duql::syntax::Tok::Name, duql::syntax::Tok::Gt,
+                                 duql::syntax::Tok::Minus,
+                                 duql::syntax::Tok::Int,
+                                 duql::syntax::Tok::End});
     CHECK(kinds("a->b") ==
-          dstd::Vector<Tok>{Tok::Name, Tok::Arrow, Tok::Name, Tok::End});
+          dstd::Vector<duql::syntax::Tok>{
+              duql::syntax::Tok::Name, duql::syntax::Tok::Arrow,
+              duql::syntax::Tok::Name, duql::syntax::Tok::End});
 }
 
 TEST_CASE("lex - backtick keys") {
     auto tokens = duql::syntax::lex("counters.`cpu.idle_pct`.p50 > 90");
     REQUIRE(tokens.has_value());
     REQUIRE(tokens->size() >= 6);
-    CHECK((*tokens)[2].kind == Tok::Qname);
+    CHECK((*tokens)[2].kind == duql::syntax::Tok::Qname);
     CHECK((*tokens)[2].text == "cpu.idle_pct");
     CHECK_FALSE(duql::syntax::lex("`` == 1").has_value());
     CHECK_FALSE(duql::syntax::lex("`abc == 1").has_value());
 }
 
 TEST_CASE("lex - comments are skipped") {
-    CHECK(kinds("# only a comment") == dstd::Vector<Tok>{Tok::End});
+    CHECK(kinds("# only a comment") ==
+          dstd::Vector<duql::syntax::Tok>{duql::syntax::Tok::End});
     CHECK(kinds("a == 1 # trailing\nand b == 2") == kinds("a == 1 and b == 2"));
     CHECK(kinds("a # mid\n== 1") == kinds("a == 1"));
 }
@@ -176,13 +180,13 @@ TEST_CASE("lex - comments are skipped") {
 TEST_CASE("lex - params, durations and numbers") {
     auto tokens = duql::syntax::lex("$app 250ms 1.5 1e3 42");
     REQUIRE(tokens.has_value());
-    CHECK((*tokens)[0].kind == Tok::Param);
+    CHECK((*tokens)[0].kind == duql::syntax::Tok::Param);
     CHECK((*tokens)[0].text == "app");
-    CHECK((*tokens)[1].kind == Tok::Duration);
+    CHECK((*tokens)[1].kind == duql::syntax::Tok::Duration);
     CHECK((*tokens)[1].text == "250ms");
-    CHECK((*tokens)[2].kind == Tok::Float);
-    CHECK((*tokens)[3].kind == Tok::Float);
-    CHECK((*tokens)[4].kind == Tok::Int);
+    CHECK((*tokens)[2].kind == duql::syntax::Tok::Float);
+    CHECK((*tokens)[3].kind == duql::syntax::Tok::Float);
+    CHECK((*tokens)[4].kind == duql::syntax::Tok::Int);
     auto bad = duql::syntax::lex("x == 1abc");
     REQUIRE_FALSE(bad.has_value());
     CHECK(has(bad.error().message, "Invalid number"));
@@ -191,7 +195,7 @@ TEST_CASE("lex - params, durations and numbers") {
 TEST_CASE("lex - call adjacency") {
     auto call = duql::syntax::lex("any(tags)");
     REQUIRE(call.has_value());
-    CHECK((*call)[1].kind == Tok::Lparen);
+    CHECK((*call)[1].kind == duql::syntax::Tok::Lparen);
     CHECK((*call)[1].adjacent);
     auto spaced = duql::syntax::lex("f (x)");
     REQUIRE(spaced.has_value());
@@ -211,22 +215,23 @@ TEST_CASE("lex - call adjacency") {
 }
 
 TEST_CASE("parse - duql pragma") {
-    using duql::syntax::DUQL_VERSION_MAJOR;
-    using duql::syntax::DUQL_VERSION_MINOR;
     const auto with = [](int major, int minor) {
         return "duql " + dstd::int_text(major) + "." + dstd::int_text(minor) +
                "\nwhere a == 1";
     };
-    auto q = duql::syntax::parse(with(DUQL_VERSION_MAJOR, DUQL_VERSION_MINOR));
+    auto q = duql::syntax::parse(with(duql::syntax::DUQL_VERSION_MAJOR,
+                                      duql::syntax::DUQL_VERSION_MINOR));
     REQUIRE(q.has_value());
     CHECK(q->pipeline);
 
     auto major_only = duql::syntax::parse(
-        "duql " + dstd::int_text(DUQL_VERSION_MAJOR) + "\nwhere a == 1");
+        "duql " + dstd::int_text(duql::syntax::DUQL_VERSION_MAJOR) +
+        "\nwhere a == 1");
     REQUIRE(major_only.has_value());
 
-    for (const auto& text : {with(DUQL_VERSION_MAJOR + 1, 0),
-                             with(DUQL_VERSION_MAJOR, DUQL_VERSION_MINOR + 1),
+    for (const auto& text : {with(duql::syntax::DUQL_VERSION_MAJOR + 1, 0),
+                             with(duql::syntax::DUQL_VERSION_MAJOR,
+                                  duql::syntax::DUQL_VERSION_MINOR + 1),
                              dstd::String("duql 1e2\nwhere a == 1")}) {
         CAPTURE(text);
         auto bad = duql::syntax::parse(text);
@@ -462,7 +467,7 @@ TEST_CASE("parse - case block is the positional case") {
         parsed(R"(derive s = case(x > 1, "a", x > 0, "b", "c"))")));
     CHECK(duql::syntax::equal(parsed(R"(derive s = CASE { x > 1 => "a" })"),
                               parsed(R"(derive s = case(x > 1, "a", null))")));
-    CHECK(kinds("a => b")[1] == Tok::Fatarrow);
+    CHECK(kinds("a => b")[1] == duql::syntax::Tok::Fatarrow);
     const dstd::Vector<dstd::Pair<const char*, const char*>> errors = {
         {"derive s = case { }", "pair"},
         {R"(derive s = case { else => 1, x > 1 => 2 })", "last"},

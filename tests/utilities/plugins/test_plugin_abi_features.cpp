@@ -34,16 +34,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::Runtime;
-using dftracer::utils::plugins::ConfigTree;
-using dftracer::utils::plugins::PluginFold;
-using dstd::StringIntern;
-namespace views = dftracer::utils::trace::views;
-using dftracer::utils::trace::RecordPhase;
-using views::detail::FoldBatch;
-using views::detail::FoldEvent;
-using views::detail::ScanUnit;
-
 namespace {
 
 coro::CoroTask<void>* as_coro(::dftu_task* t) {
@@ -97,14 +87,15 @@ struct CountSlice {
     void finalize(dftracer::utils::plugins::Host) {}
 };
 
-FoldEvent make_event(StringIntern& intern, const char* fhash,
-                     const char* hhash) {
-    FoldEvent fe;
+trace::views::detail::FoldEvent make_event(dstd::StringIntern& intern,
+                                           const char* fhash,
+                                           const char* hhash) {
+    trace::views::detail::FoldEvent fe;
     fe.cat_id = intern.get_or_insert("POSIX");
     fe.name_id = intern.get_or_insert("read");
     fe.fhash_id = intern.get_or_insert(fhash);
     fe.hhash_id = intern.get_or_insert(hhash);
-    fe.phase = RecordPhase::Complete;
+    fe.phase = trace::RecordPhase::Complete;
     fe.ts = 1;
     fe.dur = 5;
     fe.has_dur = true;
@@ -292,12 +283,12 @@ dftracer::utils::plugins::Task op_all(dftracer::utils::plugins::Host h,
 // it is destroyed first.
 template <class Slice>
 struct FoldFixture {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* plugin;
-    dstd::UniquePtr<PluginFold> fold;
+    dstd::UniquePtr<plugins::PluginFold> fold;
     explicit FoldFixture(const dftu_value* config)
         : plugin(dftracer::utils::plugins::make_plugin<Slice>(config)),
-          fold(dstd::make_unique<PluginFold>(plugin, intern)) {}
+          fold(dstd::make_unique<plugins::PluginFold>(plugin, intern)) {}
     dftu_plugin_host& host() { return fold->host(); }
     ~FoldFixture() {
         fold.reset();
@@ -385,13 +376,14 @@ TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
     p.destroy = col_destroy;
     p.on_batch = col_on_batch;
 
-    StringIntern intern;
-    PluginFold fold(&p, intern);
-    dstd::Vector<FoldEvent> evs = {make_event(intern, "f", "h"),
-                                   make_event(intern, "f", "h"),
-                                   make_event(intern, "f", "h")};
-    ScanUnit unit{};
-    fold.step(FoldBatch{dstd::Span<const FoldEvent>(evs), unit, {}});
+    dstd::StringIntern intern;
+    plugins::PluginFold fold(&p, intern);
+    dstd::Vector<trace::views::detail::FoldEvent> evs = {
+        make_event(intern, "f", "h"), make_event(intern, "f", "h"),
+        make_event(intern, "f", "h")};
+    trace::views::detail::ScanUnit unit{};
+    fold.step(trace::views::detail::FoldBatch{
+        dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
     CHECK(g_col_state.dur_sum == 15);  // 3 events x dur 5, SIMD-reduced
 }
 
@@ -406,7 +398,7 @@ TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
                 R"("nested":{"inner":7},"buckets":[10,20,30]})"));
     }
 
-    ConfigTree tree = ConfigTree::from_json_file(path);
+    plugins::ConfigTree tree = plugins::ConfigTree::from_json_file(path);
     dftu_plugin* p =
         dftracer::utils::plugins::make_plugin<ConfigSlice>(tree.root());
     auto* slice = static_cast<ConfigSlice*>(p->make_slice(p->self));
@@ -458,18 +450,19 @@ TEST_CASE("plugin ABI: duql_compile then duql_matches on known events") {
 TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
     SUBCASE("fhash predicate keeps every match, drops the rest") {
         g_count = CountState{};
-        ConfigTree tree;
+        plugins::ConfigTree tree;
         tree.set("duql", "fhash == \"fhAAA\"");
         FoldFixture<CountSlice> fx(tree.root());
 
-        dstd::Vector<FoldEvent> evs;
+        dstd::Vector<trace::views::detail::FoldEvent> evs;
         evs.push_back(make_event(fx.intern, "fhAAA", "hh1"));
         evs.push_back(make_event(fx.intern, "fhBBB", "hh1"));
         evs.push_back(make_event(fx.intern, "fhAAA", "hh2"));
         evs.push_back(make_event(fx.intern, "fhCCC", "hh2"));
         evs.push_back(make_event(fx.intern, "fhAAA", "hh3"));
-        ScanUnit unit{};
-        FoldBatch batch{dstd::Span<const FoldEvent>(evs), unit};
+        trace::views::detail::ScanUnit unit{};
+        trace::views::detail::FoldBatch batch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         fx.fold->step(batch);
         CHECK(fx.fold->take_pending() == nullptr);
@@ -481,16 +474,17 @@ TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
 
     SUBCASE("hhash predicate routes on a non cat/name field too") {
         g_count = CountState{};
-        ConfigTree tree;
+        plugins::ConfigTree tree;
         tree.set("duql", "hhash == \"hhZ\"");
         FoldFixture<CountSlice> fx(tree.root());
 
-        dstd::Vector<FoldEvent> evs;
+        dstd::Vector<trace::views::detail::FoldEvent> evs;
         evs.push_back(make_event(fx.intern, "fh1", "hhZ"));
         evs.push_back(make_event(fx.intern, "fh2", "hhY"));
         evs.push_back(make_event(fx.intern, "fh3", "hhZ"));
-        ScanUnit unit{};
-        FoldBatch batch{dstd::Span<const FoldEvent>(evs), unit};
+        trace::views::detail::ScanUnit unit{};
+        trace::views::detail::FoldBatch batch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         fx.fold->step(batch);
         CHECK(g_count.seen == 2);

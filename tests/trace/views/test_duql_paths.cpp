@@ -33,9 +33,6 @@ struct doctest::StringMaker<dstd::Set<dstd::String>> {
 namespace {
 
 using Names = dstd::Set<dstd::String>;
-using dataframe::DataFrame;
-using dataframe::Series;
-namespace reader = dftracer::utils::utilities::reader;
 
 // One event per line, named by its role. `x` sits under args as a number, an
 // empty string, a string, null or not at all; `lvl` is a top-level string that
@@ -111,7 +108,7 @@ dstd::String name_of(dstd::StringView line) {
     return dstd::String(name);
 }
 
-Names names_of(const DataFrame& df) {
+Names names_of(const dataframe::DataFrame& df) {
     Names out;
     const auto col = bcol(df, "name");
     REQUIRE(col >= 0);
@@ -134,7 +131,8 @@ coro::CoroTask<Names> reader_lines(
     co_return out;
 }
 
-coro::CoroTask<Names> reader_json(coro::AsyncGenerator<reader::JsonLine> gen) {
+coro::CoroTask<Names> reader_json(
+    coro::AsyncGenerator<utilities::reader::JsonLine> gen) {
     Names out;
     while (auto opt = co_await gen.next())
         if (auto v = opt->parser->get_string("name")) out.emplace(*v);
@@ -145,30 +143,30 @@ coro::CoroTask<Names> reader_json(coro::AsyncGenerator<reader::JsonLine> gen) {
 // one type, so x keeps only the values of the filter's literal type and every
 // other value becomes null, which gives the same result by the spec rule. `sh`
 // has no column form and no filter selects it, so it is left out.
-DataFrame frame_of(bool numeric_x) {
+dataframe::DataFrame frame_of(bool numeric_x) {
     const dstd::Vector<dstd::StringView> name{"a1", "a2", "a3", "e", "s",
                                               "n",  "m",  "mp", "np"};
     const dstd::Vector<dstd::StringView> cat{"POSIX", "STDIO", "STDIO",
                                              "STDIO", "STDIO", "STDIO",
                                              "STDIO", "POSIX", "POSIX"};
-    DataFrame df;
+    dataframe::DataFrame df;
     df.names = {"name", "cat", "x", "lvl"};
-    df.columns.push_back(Series::strings(name));
-    df.columns.push_back(Series::strings(cat));
+    df.columns.push_back(dataframe::Series::strings(name));
+    df.columns.push_back(dataframe::Series::strings(cat));
     if (numeric_x) {
         const std::int64_t x[] = {1, 2, 3, 0, 0, 0, 0, 0, 0};
         const std::uint8_t valid[] = {0b00000111, 0};
-        df.columns.push_back(Series::flat_i64(x, 9, valid));
+        df.columns.push_back(dataframe::Series::flat_i64(x, 9, valid));
     } else {
         const dstd::Vector<dstd::StringView> x{"", "", "", "", "a",
                                                "", "", "", ""};
         const std::uint8_t valid[] = {0b00011000, 0};
-        df.columns.push_back(Series::strings(x, valid));
+        df.columns.push_back(dataframe::Series::strings(x, valid));
     }
     const dstd::Vector<dstd::StringView> lvl{"hi", "", "", "", "",
                                              "",   "", "", ""};
     const std::uint8_t lvl_valid[] = {0b00000011, 0};
-    df.columns.push_back(Series::strings(lvl, lvl_valid));
+    df.columns.push_back(dataframe::Series::strings(lvl, lvl_valid));
     return df;
 }
 
@@ -178,8 +176,9 @@ TEST_SUITE("duql paths") {
     TEST_CASE("every path selects the records the three-valued rule keeps") {
         TestEnvironment env(10);
         const dstd::String gz = write_trace(env);
-        reader::TraceReader tr({.file_path = dstd::String(gz),
-                                .index_dir = dstd::String(env.get_dir())});
+        utilities::reader::TraceReader tr(
+            {.file_path = dstd::String(gz),
+             .index_dir = dstd::String(env.get_dir())});
         REQUIRE(tr.has_index());
 
         for (const auto& c : cases()) {
@@ -206,12 +205,12 @@ TEST_SUITE("duql paths") {
             for (const auto& line : sink.lines()) sunk.insert(name_of(line));
             CHECK(sunk == c.expected);
 
-            reader::ReadConfig rc;
+            utilities::reader::ReadConfig rc;
             rc.query = c.filter;
             CHECK(run(reader_lines(tr.read_lines(rc))) == c.expected);
             CHECK(run(reader_json(tr.read_json(rc))) == c.expected);
 
-            const DataFrame df = frame_of(c.numeric_x);
+            const dataframe::DataFrame df = frame_of(c.numeric_x);
             const auto q = duql::Query::from_string(c.filter);
             REQUIRE(q.has_value());
             CHECK(names_of(df.filter(df.mask(*q))) == c.expected);
@@ -278,19 +277,20 @@ TEST_SUITE("duql paths") {
         dftracer::utils::index::Indexer::open(
             {dstd::String(dstd::StringView(gz))})
             .build();
-        reader::TraceReader tr({.file_path = dstd::String(gz),
-                                .index_dir = dstd::String(env.get_dir())});
+        utilities::reader::TraceReader tr(
+            {.file_path = dstd::String(gz),
+             .index_dir = dstd::String(env.get_dir())});
         REQUIRE(tr.has_index());
 
-        DataFrame frame;
+        dataframe::DataFrame frame;
         {
             const dstd::Vector<dstd::StringView> name{"t1", "t2", "t3", "t4",
                                                       "t5"};
             const std::int64_t x[] = {4, 5, 6, 7, 0};
             const std::uint8_t valid[] = {0b00001111};
             frame.names = {"name", "x"};
-            frame.columns.push_back(Series::strings(name));
-            frame.columns.push_back(Series::flat_i64(x, 5, valid));
+            frame.columns.push_back(dataframe::Series::strings(name));
+            frame.columns.push_back(dataframe::Series::flat_i64(x, 5, valid));
         }
 
         for (const auto& c : expr_cases) {
@@ -305,7 +305,7 @@ TEST_SUITE("duql paths") {
             Names sunk;
             for (const auto& line : sink.lines()) sunk.insert(name_of(line));
             CHECK(sunk == c.expected);
-            reader::ReadConfig rc;
+            utilities::reader::ReadConfig rc;
             rc.query = c.filter;
             CHECK(run(reader_lines(tr.read_lines(rc))) == c.expected);
             CHECK(run(reader_json(tr.read_json(rc))) == c.expected);
@@ -338,12 +338,12 @@ TEST_SUITE("duql paths") {
     }
 
     TEST_CASE("a DataFrame without the column selects as if it were missing") {
-        DataFrame df;
+        dataframe::DataFrame df;
         const dstd::Vector<dstd::StringView> name{"p", "s"};
         const dstd::Vector<dstd::StringView> cat{"POSIX", "STDIO"};
         df.names = {"name", "cat"};
-        df.columns.push_back(Series::strings(name));
-        df.columns.push_back(Series::strings(cat));
+        df.columns.push_back(dataframe::Series::strings(name));
+        df.columns.push_back(dataframe::Series::strings(cat));
         auto kept = [&](const char* filter) {
             const auto q = duql::Query::from_string(filter);
             REQUIRE(q.has_value());

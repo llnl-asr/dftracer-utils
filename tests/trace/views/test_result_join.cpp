@@ -17,11 +17,7 @@
 
 using namespace dftracer::utils;
 
-namespace dataframe = dftracer::utils::dataframe;
-
-namespace views = dftracer::utils::trace::views;
-using views::join_batches;
-using views::JoinType;
+using namespace dftracer::utils::trace;
 
 namespace {
 
@@ -84,8 +80,8 @@ dataframe::DataFrame build_right() {
 
 TEST_SUITE("ResultJoin") {
     TEST_CASE("INNER keeps only the key intersection") {
-        dataframe::DataFrame j =
-            join_batches(build_left(), build_right(), 1, JoinType::Inner);
+        dataframe::DataFrame j = views::join_batches(
+            build_left(), build_right(), 1, views::JoinType::Inner);
         CHECK(keys_of(j) == dstd::Set<dstd::String>{"b", "c"});
         CHECK(col_of(j, "l_count") >= 0);
         CHECK(col_of(j, "r_sum") >= 0);
@@ -95,8 +91,8 @@ TEST_SUITE("ResultJoin") {
     }
 
     TEST_CASE("LEFT keeps all left keys; unmatched null the right side") {
-        dataframe::DataFrame j =
-            join_batches(build_left(), build_right(), 1, JoinType::Left);
+        dataframe::DataFrame j = views::join_batches(
+            build_left(), build_right(), 1, views::JoinType::Left);
         CHECK(keys_of(j) == dstd::Set<dstd::String>{"a", "b", "c"});
         CHECK(num(j, "l_count", row_of(j, "a")) == doctest::Approx(10.0));
         CHECK(is_null(j, "r_sum", row_of(j, "a")));
@@ -105,8 +101,8 @@ TEST_SUITE("ResultJoin") {
     }
 
     TEST_CASE("RIGHT keeps all right keys; unmatched null the left side") {
-        dataframe::DataFrame j =
-            join_batches(build_left(), build_right(), 1, JoinType::Right);
+        dataframe::DataFrame j = views::join_batches(
+            build_left(), build_right(), 1, views::JoinType::Right);
         CHECK(keys_of(j) == dstd::Set<dstd::String>{"b", "c", "d"});
         CHECK(is_null(j, "l_count", row_of(j, "d")));
         CHECK(num(j, "r_sum", row_of(j, "d")) == doctest::Approx(4.0));
@@ -114,8 +110,8 @@ TEST_SUITE("ResultJoin") {
     }
 
     TEST_CASE("FULL keeps the key union, nulling each absent side") {
-        dataframe::DataFrame j =
-            join_batches(build_left(), build_right(), 1, JoinType::Full);
+        dataframe::DataFrame j = views::join_batches(
+            build_left(), build_right(), 1, views::JoinType::Full);
         CHECK(keys_of(j) == dstd::Set<dstd::String>{"a", "b", "c", "d"});
         CHECK(is_null(j, "r_sum", row_of(j, "a")));
         CHECK(is_null(j, "l_count", row_of(j, "d")));
@@ -124,8 +120,8 @@ TEST_SUITE("ResultJoin") {
     }
 
     TEST_CASE("LEFT_SEMI keeps matched left rows, left columns only") {
-        dataframe::DataFrame j =
-            join_batches(build_left(), build_right(), 1, JoinType::LeftSemi);
+        dataframe::DataFrame j = views::join_batches(
+            build_left(), build_right(), 1, views::JoinType::LeftSemi);
         CHECK(keys_of(j) == dstd::Set<dstd::String>{"b", "c"});
         CHECK(col_of(j, "l_count") >= 0);
         CHECK(col_of(j, "r_sum") == -1);  // no right columns
@@ -133,16 +129,16 @@ TEST_SUITE("ResultJoin") {
     }
 
     TEST_CASE("LEFT_ANTI keeps unmatched left rows, left columns only") {
-        dataframe::DataFrame j =
-            join_batches(build_left(), build_right(), 1, JoinType::LeftAnti);
+        dataframe::DataFrame j = views::join_batches(
+            build_left(), build_right(), 1, views::JoinType::LeftAnti);
         CHECK(keys_of(j) == dstd::Set<dstd::String>{"a"});
         CHECK(col_of(j, "r_sum") == -1);
         CHECK(num(j, "l_count", row_of(j, "a")) == doctest::Approx(10.0));
     }
 
     TEST_CASE("rows are sorted by key; column order is key, l_, r_") {
-        dataframe::DataFrame j =
-            join_batches(build_left(), build_right(), 1, JoinType::Full);
+        dataframe::DataFrame j = views::join_batches(
+            build_left(), build_right(), 1, views::JoinType::Full);
         for (std::int64_t i = 0; i + 1 < j.num_rows(); ++i)
             CHECK(j.columns[0].string_at(i) < j.columns[0].string_at(i + 1));
         CHECK(j.names[0] == "cat");
@@ -166,7 +162,8 @@ TEST_SUITE("ResultJoin") {
         dstd::Vector<double> rv{9.0, 8.0, 7.0};
         r.columns.push_back(dataframe::Series::flat_f64(rv.data(), 3));
 
-        dataframe::DataFrame j = join_batches(l, r, 2, JoinType::Inner);
+        dataframe::DataFrame j =
+            views::join_batches(l, r, 2, views::JoinType::Inner);
         REQUIRE(j.num_rows() == 2);  // (1,write), (2,read)
         CHECK(j.columns[0].string_at(0) == "1");
         CHECK(j.columns[1].string_at(0) == "write");
@@ -181,7 +178,8 @@ TEST_SUITE("ResultJoin") {
         l.columns.push_back(dataframe::Series::strings({"read", "write"}));
         dataframe::DataFrame r = make({"a"}, "sum", {2.5});
 
-        dataframe::DataFrame j = join_batches(l, r, 1, JoinType::Left);
+        dataframe::DataFrame j =
+            views::join_batches(l, r, 1, views::JoinType::Left);
         const std::int64_t ci = col_of(j, "l_top");
         REQUIRE(ci >= 0);
         CHECK(j.columns[static_cast<std::size_t>(ci)].string_at(
@@ -195,7 +193,8 @@ TEST_SUITE("ResultJoin") {
         r.names = {"pid", "name"};
         r.columns.push_back(dataframe::Series::strings({"1"}));
         r.columns.push_back(dataframe::Series::strings({"read"}));
-        dataframe::DataFrame j = join_batches(l, r, 1, JoinType::Inner);
+        dataframe::DataFrame j =
+            views::join_batches(l, r, 1, views::JoinType::Inner);
         CHECK(j.num_columns() == 0);
     }
 
@@ -207,7 +206,7 @@ TEST_SUITE("ResultJoin") {
         b.names = {"k", "count"};
         b.columns.push_back(dataframe::Series::flat_f64(keys, 2));
         b.columns.push_back(dataframe::Series::flat_f64(keys, 2));
-        CHECK_THROWS_AS(join_batches(b, b, 1, JoinType::Inner),
+        CHECK_THROWS_AS(views::join_batches(b, b, 1, views::JoinType::Inner),
                         dftracer::utils::common::DFTUtilsException);
     }
 }

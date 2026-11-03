@@ -29,19 +29,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::Runtime;
-using dftracer::utils::plugins::Host;
-using dftracer::utils::plugins::NamedResultRegistry;
-using dftracer::utils::plugins::OwnedDataFrame;
-using dftracer::utils::plugins::PluginFold;
-using dftracer::utils::trace::RecordPhase;
-using dstd::StringIntern;
-namespace agg = dftracer::utils::plugins::agg;
-namespace views = dftracer::utils::trace::views;
-using views::detail::FoldBatch;
-using views::detail::FoldEvent;
-using views::detail::ScanUnit;
-
 namespace {
 
 constexpr const char* ACC_NAME = "by_name";
@@ -58,12 +45,13 @@ constexpr std::uint64_t TINY_BUDGET = 4096;
 // String-repr op, all of which have to survive a serialize/merge round trip.
 ::dftu_task* spill_columns(void*, const dftu_dataframe* df,
                            const dftu_plugin_host* host) {
-    Host h(host);
+    plugins::Host h(host);
     const auto acc =
         h.agg(ACC_NAME, {"name"},
-              {agg::count("n"), agg::sum("dur", "sum_dur"),
-               agg::mean("dur", "mean_dur"), agg::pct("dur", "p50_dur", 0.5),
-               agg::argmax("cat", "cat_at_max", "dur")});
+              {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur"),
+               plugins::agg::mean("dur", "mean_dur"),
+               plugins::agg::pct("dur", "p50_dur", 0.5),
+               plugins::agg::argmax("cat", "cat_at_max", "dur")});
     if (acc) acc.accumulate(df);
     return nullptr;
 }
@@ -105,12 +93,14 @@ dftu_plugin make_plugin(::dftu_task* (*on_columns)(void*, const dftu_dataframe*,
     return p;
 }
 
-FoldEvent evt(StringIntern& intern, const dstd::String& cat,
-              const dstd::String& name, std::uint64_t dur) {
-    FoldEvent fe;
+trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
+                                    const dstd::String& cat,
+                                    const dstd::String& name,
+                                    std::uint64_t dur) {
+    trace::views::detail::FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);
     fe.name_id = intern.get_or_insert(name);
-    fe.phase = RecordPhase::Complete;
+    fe.phase = trace::RecordPhase::Complete;
     fe.pid = 1;
     fe.tid = 1;
     fe.ts = dur;
@@ -121,8 +111,9 @@ FoldEvent evt(StringIntern& intern, const dstd::String& cat,
 
 // GROUPS distinct keys, each seen twice (in two different slices) so every
 // group's aggregate depends on the cross-slice merge as well as on the spill.
-dstd::Vector<dstd::Vector<FoldEvent>> wide_slices(StringIntern& intern) {
-    dstd::Vector<FoldEvent> a, b;
+dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> wide_slices(
+    dstd::StringIntern& intern) {
+    dstd::Vector<trace::views::detail::FoldEvent> a, b;
     a.reserve(GROUPS);
     b.reserve(GROUPS);
     for (int i = 0; i < GROUPS; ++i) {
@@ -135,10 +126,10 @@ dstd::Vector<dstd::Vector<FoldEvent>> wide_slices(StringIntern& intern) {
     return {std::move(a), std::move(b)};
 }
 
-void finalize_now(PluginFold& f) {
+void finalize_now(plugins::PluginFold& f) {
     Runtime rt(1);
     rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  co_await f.finalize(views::detail::CoverageSet{});
+                  co_await f.finalize(trace::views::detail::CoverageSet{});
               }),
               "fin")
         .wait();
@@ -202,11 +193,12 @@ struct Row {
     dstd::Vector<dstd::String> top_cat;
 };
 
-dftu_dataframe* result_frame(NamedResultRegistry& named) {
+dftu_dataframe* result_frame(plugins::NamedResultRegistry& named) {
     auto it = named.results().find(ACC_NAME);
     if (it == named.results().end()) return nullptr;
-    if (!std::holds_alternative<OwnedDataFrame>(it->second)) return nullptr;
-    return std::get<OwnedDataFrame>(it->second).handle;
+    if (!std::holds_alternative<plugins::OwnedDataFrame>(it->second))
+        return nullptr;
+    return std::get<plugins::OwnedDataFrame>(it->second).handle;
 }
 
 // Run the plugin over `wide_slices` with `budget`, returning the finalized
@@ -215,17 +207,22 @@ dftu_dataframe* result_frame(NamedResultRegistry& named) {
 dstd::Map<dstd::String, Row> run_with_budget(dftu_plugin& p,
                                              std::uint64_t budget,
                                              std::size_t* runs, bool nested) {
-    StringIntern intern;
-    NamedResultRegistry named;
-    PluginFold master(&p, intern, nullptr, &named, "spill_test", budget);
-    for (const dstd::Vector<FoldEvent>& evs : wide_slices(intern)) {
+    dstd::StringIntern intern;
+    plugins::NamedResultRegistry named;
+    plugins::PluginFold master(&p, intern, nullptr, &named, "spill_test",
+                               budget);
+    for (const dstd::Vector<trace::views::detail::FoldEvent>& evs :
+         wide_slices(intern)) {
         auto slice = master.slice();
-        auto* pf = static_cast<PluginFold*>(slice.get());
-        ScanUnit unit{};
+        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        trace::views::detail::ScanUnit unit{};
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
-            pf->step(FoldBatch{
-                dstd::Span<const FoldEvent>(evs.data() + at, n), unit, {}});
+            pf->step(trace::views::detail::FoldBatch{
+                dstd::Span<const trace::views::detail::FoldEvent>(
+                    evs.data() + at, n),
+                unit,
+                {}});
         }
         master.merge(*pf);
     }

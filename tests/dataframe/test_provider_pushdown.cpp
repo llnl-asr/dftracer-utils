@@ -25,17 +25,7 @@
 #include <stdexcept>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::col;
-using dftracer::utils::dataframe::Cursor;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::make_provider_source;
-using dftracer::utils::dataframe::Morsel;
-using dftracer::utils::dataframe::Pushed;
-using dftracer::utils::dataframe::ScanRequest;
-using dftracer::utils::dataframe::ScanResult;
-using dftracer::utils::dataframe::Source;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

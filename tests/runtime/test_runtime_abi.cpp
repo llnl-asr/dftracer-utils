@@ -9,9 +9,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::Runtime;
-using dftracer::utils::task_to_abi;
-
 namespace {
 
 coro::CoroTask<void> set_flag(std::atomic<int>* n) {

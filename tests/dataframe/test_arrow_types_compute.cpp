@@ -23,21 +23,7 @@
 #include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;
-
-namespace df = dftracer::utils::dataframe;
-
-using dftracer::utils::dataframe::Agg;
-using dftracer::utils::dataframe::AggOp;
-using dftracer::utils::dataframe::AggSpec;
-using dftracer::utils::dataframe::AggStatePtr;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::DataType;
-using dftracer::utils::dataframe::fixed_size_binary;
-using dftracer::utils::dataframe::GroupAgg;
-using dftracer::utils::dataframe::OwnedArrow;
-using dftracer::utils::dataframe::Scalar;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -861,22 +847,23 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
-        AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                           dstd::Vector<const Series*>{&v1});
-        AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                           dstd::Vector<const Series*>{&v2});
-        df::agg_merge(*st1, *st2);
-        REQUIRE(df::agg_num_groups(*st1) == 3);
+        AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                  dstd::Vector<const Series*>{&v1});
+        AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                  dstd::Vector<const Series*>{&v2});
+        dataframe::agg_merge(*st1, *st2);
+        REQUIRE(dataframe::agg_num_groups(*st1) == 3);
 
-        DataFrame out = df::agg_finalize(*st1, "k");
+        DataFrame out = dataframe::agg_finalize(*st1, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::FixedSizeBinary);
         CHECK(out.column("k").data_type().fixed_size() == 4);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
-        for (std::int64_t g = 0; g < df::agg_num_groups(*st1); ++g) {
-            const dstd::Vector<dstd::String> key = df::agg_group_key(*st1, g);
+        for (std::int64_t g = 0; g < dataframe::agg_num_groups(*st1); ++g) {
+            const dstd::Vector<dstd::String> key =
+                dataframe::agg_group_key(*st1, g);
             REQUIRE(key.size() == 1);
             if (key[0] == "aaaa")
                 CHECK(n[g] == 3);
@@ -897,14 +884,14 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
 
-        AggStatePtr st = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st, dstd::Vector<const Series*>{&keys},
-                           dstd::Vector<const Series*>{&values});
-        const dstd::String blob = df::agg_serialize(*st);
-        AggStatePtr back = df::agg_deserialize(blob);
+        AggStatePtr st = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st, dstd::Vector<const Series*>{&keys},
+                                  dstd::Vector<const Series*>{&values});
+        const dstd::String blob = dataframe::agg_serialize(*st);
+        AggStatePtr back = dataframe::agg_deserialize(blob);
 
-        REQUIRE(df::agg_num_groups(*back) == 3);
-        DataFrame out = df::agg_finalize(*back, "k");
+        REQUIRE(dataframe::agg_num_groups(*back) == 3);
+        DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::FixedSizeBinary);
         CHECK(out.column("k").data_type().fixed_size() == 4);
@@ -967,22 +954,22 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
-        AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                           dstd::Vector<const Series*>{&v1});
-        AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                           dstd::Vector<const Series*>{&v2});
-        df::agg_merge(*st1, *st2);
-        REQUIRE(df::agg_num_groups(*st1) == 3);
+        AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                  dstd::Vector<const Series*>{&v1});
+        AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                  dstd::Vector<const Series*>{&v2});
+        dataframe::agg_merge(*st1, *st2);
+        REQUIRE(dataframe::agg_num_groups(*st1) == 3);
 
         // Round-trip the merged partial through the spill blob before
         // finalizing, exercising the same path agg/serialize.cpp writes.
-        const dstd::String blob = df::agg_serialize(*st1);
-        AggStatePtr back = df::agg_deserialize(blob);
-        REQUIRE(df::agg_num_groups(*back) == 3);
+        const dstd::String blob = dataframe::agg_serialize(*st1);
+        AggStatePtr back = dataframe::agg_deserialize(blob);
+        REQUIRE(dataframe::agg_num_groups(*back) == 3);
 
-        DataFrame out = df::agg_finalize(*back, "k");
+        DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::Decimal128);
         const DataType dt = out.column("k").data_type();
@@ -1048,20 +1035,20 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
-        AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                           dstd::Vector<const Series*>{&v1});
-        AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                           dstd::Vector<const Series*>{&v2});
-        df::agg_merge(*st1, *st2);
-        REQUIRE(df::agg_num_groups(*st1) == 3);
+        AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                  dstd::Vector<const Series*>{&v1});
+        AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                  dstd::Vector<const Series*>{&v2});
+        dataframe::agg_merge(*st1, *st2);
+        REQUIRE(dataframe::agg_num_groups(*st1) == 3);
 
-        const dstd::String blob = df::agg_serialize(*st1);
-        AggStatePtr back = df::agg_deserialize(blob);
-        REQUIRE(df::agg_num_groups(*back) == 3);
+        const dstd::String blob = dataframe::agg_serialize(*st1);
+        AggStatePtr back = dataframe::agg_deserialize(blob);
+        REQUIRE(dataframe::agg_num_groups(*back) == 3);
 
-        DataFrame out = df::agg_finalize(*back, "k");
+        DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::Decimal256);
         const DataType dt = out.column("k").data_type();
@@ -1121,20 +1108,20 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
-        AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                           dstd::Vector<const Series*>{&v1});
-        AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                           dstd::Vector<const Series*>{&v2});
-        df::agg_merge(*st1, *st2);
-        REQUIRE(df::agg_num_groups(*st1) == 3);
+        AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                  dstd::Vector<const Series*>{&v1});
+        AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                  dstd::Vector<const Series*>{&v2});
+        dataframe::agg_merge(*st1, *st2);
+        REQUIRE(dataframe::agg_num_groups(*st1) == 3);
 
-        const dstd::String blob = df::agg_serialize(*st1);
-        AggStatePtr back = df::agg_deserialize(blob);
-        REQUIRE(df::agg_num_groups(*back) == 3);
+        const dstd::String blob = dataframe::agg_serialize(*st1);
+        AggStatePtr back = dataframe::agg_deserialize(blob);
+        REQUIRE(dataframe::agg_num_groups(*back) == 3);
 
-        DataFrame out = df::agg_finalize(*back, "k");
+        DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::Binary);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
@@ -1191,20 +1178,20 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
-        AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                           dstd::Vector<const Series*>{&v1});
-        AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                           dstd::Vector<const Series*>{&v2});
-        df::agg_merge(*st1, *st2);
-        REQUIRE(df::agg_num_groups(*st1) == 3);
+        AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                  dstd::Vector<const Series*>{&v1});
+        AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                  dstd::Vector<const Series*>{&v2});
+        dataframe::agg_merge(*st1, *st2);
+        REQUIRE(dataframe::agg_num_groups(*st1) == 3);
 
-        const dstd::String blob = df::agg_serialize(*st1);
-        AggStatePtr back = df::agg_deserialize(blob);
-        REQUIRE(df::agg_num_groups(*back) == 3);
+        const dstd::String blob = dataframe::agg_serialize(*st1);
+        AggStatePtr back = dataframe::agg_deserialize(blob);
+        REQUIRE(dataframe::agg_num_groups(*back) == 3);
 
-        DataFrame out = df::agg_finalize(*back, "k");
+        DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::LargeBinary);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
@@ -1247,7 +1234,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         REQUIRE(n != nullptr);
         int seen_one = 0, seen_neg_zero = 0, seen_pos_zero = 0, seen_nan = 0;
         for (std::int64_t r = 0; r < 4; ++r) {
-            const float f = df::half_to_float(bits[r]);
+            const float f = dataframe::half_to_float(bits[r]);
             if (std::isnan(f)) {
                 ++seen_nan;
                 CHECK(n[r] == 1);
@@ -1281,21 +1268,21 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
-        AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                           dstd::Vector<const Series*>{&v1});
-        AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                           dstd::Vector<const Series*>{&v2});
-        df::agg_merge(*st1, *st2);
+        AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                  dstd::Vector<const Series*>{&v1});
+        AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                  dstd::Vector<const Series*>{&v2});
+        dataframe::agg_merge(*st1, *st2);
         // {1.0}x2, {-0.0}x2, {+0.0}x1, {NaN}x1
-        REQUIRE(df::agg_num_groups(*st1) == 4);
+        REQUIRE(dataframe::agg_num_groups(*st1) == 4);
 
-        const dstd::String blob = df::agg_serialize(*st1);
-        AggStatePtr back = df::agg_deserialize(blob);
-        REQUIRE(df::agg_num_groups(*back) == 4);
+        const dstd::String blob = dataframe::agg_serialize(*st1);
+        AggStatePtr back = dataframe::agg_deserialize(blob);
+        REQUIRE(dataframe::agg_num_groups(*back) == 4);
 
-        DataFrame out = df::agg_finalize(*back, "k");
+        DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 4);
         CHECK(out.column("k").type() == TypeId::Float16);
         const std::uint16_t* bits = out.column("k").data<std::uint16_t>();
@@ -1303,7 +1290,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         const std::int64_t* n = out.column("n").data<std::int64_t>();
         int seen_one = 0, seen_neg_zero = 0, seen_pos_zero = 0, seen_nan = 0;
         for (std::int64_t r = 0; r < 4; ++r) {
-            const float f = df::half_to_float(bits[r]);
+            const float f = dataframe::half_to_float(bits[r]);
             if (std::isnan(f)) {
                 ++seen_nan;
                 CHECK(n[r] == 1);

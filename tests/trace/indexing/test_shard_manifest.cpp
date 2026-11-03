@@ -10,34 +10,25 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::index::shard_manifest_path;
-using dftracer::utils::index::store::IndexShardManifest;
-using dftracer::utils::index::store::parse_manifest;
-using dftracer::utils::index::store::read_shard_manifest;
-using dftracer::utils::index::store::resolve_shard_set_root;
-using dftracer::utils::index::store::to_json;
-using dftracer::utils::index::store::write_shard_manifest;
-
 namespace {
 
-IndexShardManifest sample() {
-    IndexShardManifest m;
+index::store::IndexShardManifest sample() {
+    index::store::IndexShardManifest m;
     m.format_version = 8;
     m.shards.push_back({"shard-0000.dftindex", 128, 10482375});
     m.shards.push_back({"shard-0001.dftindex", 73, 512});
     return m;
 }
 
-using dftu_utils_test::ScopedTestDir;
-
 }  // namespace
 
 TEST_SUITE("shard_manifest") {
     TEST_CASE("round-trips through JSON") {
-        IndexShardManifest in = sample();
-        const dstd::String json = to_json(in);
+        index::store::IndexShardManifest in = sample();
+        const dstd::String json = index::store::to_json(in);
         CHECK(json.find("file_id") == dstd::String::npos);
-        IndexShardManifest out = parse_manifest(json);
+        index::store::IndexShardManifest out =
+            index::store::parse_manifest(json);
 
         CHECK(out.format_version == in.format_version);
         REQUIRE(out.shards.size() == in.shards.size());
@@ -49,17 +40,20 @@ TEST_SUITE("shard_manifest") {
     }
 
     TEST_CASE("an empty manifest round-trips") {
-        IndexShardManifest in;
+        index::store::IndexShardManifest in;
         in.format_version = 8;
-        IndexShardManifest out = parse_manifest(to_json(in));
+        index::store::IndexShardManifest out =
+            index::store::parse_manifest(index::store::to_json(in));
         CHECK(out.format_version == 8);
         CHECK(out.shards.empty());
     }
 
     TEST_CASE("write then read from a directory") {
-        ScopedTestDir dir("dftu_shard_manifest_test");
-        write_shard_manifest(dstd::String(dir.path().str()), sample());
-        auto loaded = read_shard_manifest(dstd::String(dir.path().str()));
+        dftu_utils_test::ScopedTestDir dir("dftu_shard_manifest_test");
+        index::store::write_shard_manifest(dstd::String(dir.path().str()),
+                                           sample());
+        auto loaded =
+            index::store::read_shard_manifest(dstd::String(dir.path().str()));
         REQUIRE(loaded.has_value());
         REQUIRE(loaded->shards.size() == 2);
         CHECK(loaded->shards[1].num_files == 73);
@@ -67,69 +61,78 @@ TEST_SUITE("shard_manifest") {
     }
 
     TEST_CASE("reading a directory with no manifest returns nullopt") {
-        ScopedTestDir dir("dftu_shard_manifest_test");
+        dftu_utils_test::ScopedTestDir dir("dftu_shard_manifest_test");
         CHECK_FALSE(
-            read_shard_manifest(dstd::String(dir.path().str())).has_value());
+            index::store::read_shard_manifest(dstd::String(dir.path().str()))
+                .has_value());
     }
 
     // The publish is a rename over any prior manifest; a reader that opens the
     // file at any instant sees a complete manifest, never a partial one.
     TEST_CASE("write replaces a prior manifest atomically") {
-        ScopedTestDir dir("dftu_shard_manifest_test");
-        write_shard_manifest(dstd::String(dir.path().str()), sample());
+        dftu_utils_test::ScopedTestDir dir("dftu_shard_manifest_test");
+        index::store::write_shard_manifest(dstd::String(dir.path().str()),
+                                           sample());
 
-        IndexShardManifest second;
+        index::store::IndexShardManifest second;
         second.format_version = 8;
         second.shards.push_back({"only.dftindex", 1, 1});
-        write_shard_manifest(dstd::String(dir.path().str()), second);
+        index::store::write_shard_manifest(dstd::String(dir.path().str()),
+                                           second);
 
-        auto loaded = read_shard_manifest(dstd::String(dir.path().str()));
+        auto loaded =
+            index::store::read_shard_manifest(dstd::String(dir.path().str()));
         REQUIRE(loaded.has_value());
         REQUIRE(loaded->shards.size() == 1);
         CHECK(loaded->shards[0].path == "only.dftindex");
     }
 
     TEST_CASE("a path with quotes and control chars survives escaping") {
-        IndexShardManifest in;
+        index::store::IndexShardManifest in;
         in.format_version = 8;
         in.shards.push_back({"weird\"\\\n\tname.dftindex", 1, 1});
-        IndexShardManifest out = parse_manifest(to_json(in));
+        index::store::IndexShardManifest out =
+            index::store::parse_manifest(index::store::to_json(in));
         REQUIRE(out.shards.size() == 1);
         CHECK(out.shards[0].path == "weird\"\\\n\tname.dftindex");
     }
 
     TEST_CASE("resolve_shard_set_root names the root holding the manifest") {
-        ScopedTestDir dir("dftu_shard_manifest_test");
-        CHECK(resolve_shard_set_root(dstd::String(dir.path().str())).empty());
+        dftu_utils_test::ScopedTestDir dir("dftu_shard_manifest_test");
+        CHECK(
+            index::store::resolve_shard_set_root(dstd::String(dir.path().str()))
+                .empty());
 
         const dstd::String root = dstd::String(
             (dir.path() / dstd::String(dftracer::utils::index::INDEX_ROOT_NAME))
                 .str());
-        write_shard_manifest(root, sample());
-        CHECK(resolve_shard_set_root(dstd::String(dir.path().str())) == root);
-        CHECK(resolve_shard_set_root(root) == root);
-        CHECK(dstd::fs::exists(shard_manifest_path(root)).value());
+        index::store::write_shard_manifest(root, sample());
+        CHECK(index::store::resolve_shard_set_root(
+                  dstd::String(dir.path().str())) == root);
+        CHECK(index::store::resolve_shard_set_root(root) == root);
+        CHECK(dstd::fs::exists(index::shard_manifest_path(root)).value());
         CHECK_FALSE(
             dstd::fs::exists(dir.path() / dstd::String(".dftindex-shards"))
                 .value());
     }
 
     TEST_CASE("a manifest with no format version has none, not 0") {
-        auto m = parse_manifest(R"({"shards":[]})");
+        auto m = index::store::parse_manifest(R"({"shards":[]})");
         CHECK_FALSE(m.format_version.has_value());
-        auto written = parse_manifest(to_json(sample()));
+        auto written =
+            index::store::parse_manifest(index::store::to_json(sample()));
         REQUIRE(written.format_version.has_value());
         CHECK(*written.format_version == 8);
     }
 
     TEST_CASE("malformed JSON throws") {
-        CHECK_THROWS_AS(parse_manifest("{ not json"),
+        CHECK_THROWS_AS(index::store::parse_manifest("{ not json"),
                         dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("a shard entry missing its path throws") {
         CHECK_THROWS_AS(
-            parse_manifest(
+            index::store::parse_manifest(
                 R"({"format_version":8,"shards":[{"num_files":1}]})"),
             dftracer::utils::common::DFTUtilsException);
     }

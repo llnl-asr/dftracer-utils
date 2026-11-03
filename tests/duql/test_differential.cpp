@@ -22,9 +22,6 @@
 
 using namespace dftracer::utils;
 
-namespace duql = dftracer::utils::duql;
-using dftracer::utils::json::JsonValue;
-
 namespace {
 
 void leaves(const duql::QueryNode& node,
@@ -150,9 +147,9 @@ dstd::String record_at(const dstd::String& path, const dstd::String& value) {
 // The field map a reader builds for `path` from `record`.
 duql::ValueMap map_of(const dstd::String& path, simdjson::dom::element record) {
     duql::ValueMap m;
-    JsonValue v = JsonValue(record).at(path);
+    json::JsonValue v = json::JsonValue(record).at(path);
     if (!v.exists() && !path.starts_with("args."))
-        v = JsonValue(record).at("args." + path);
+        v = json::JsonValue(record).at("args." + path);
     if (!v.exists()) return m;
     const auto el = v.element();
     using T = simdjson::dom::element_type;
@@ -228,7 +225,7 @@ TEST_CASE("literal leaves and their expression form agree") {
                     REQUIRE(
                         records.parse(text.data(), text.size()).get(record) ==
                         simdjson::SUCCESS);
-                    const JsonValue jv(record);
+                    const json::JsonValue jv(record);
                     CHECK(duql::evaluate_truth(*leaf, jv) ==
                           duql::evaluate_truth(**expr, jv));
                     const auto map = map_of(path, record);
@@ -239,8 +236,8 @@ TEST_CASE("literal leaves and their expression form agree") {
             simdjson::dom::element empty;
             REQUIRE(records.parse(simdjson::padded_string(dstd::String("{}")))
                         .get(empty) == simdjson::SUCCESS);
-            CHECK(duql::evaluate_truth(*leaf, JsonValue(empty)) ==
-                  duql::evaluate_truth(**expr, JsonValue(empty)));
+            CHECK(duql::evaluate_truth(*leaf, json::JsonValue(empty)) ==
+                  duql::evaluate_truth(**expr, json::JsonValue(empty)));
         }
     }
     CHECK(compared > 1000);

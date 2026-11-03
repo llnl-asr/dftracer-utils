@@ -21,9 +21,6 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 using namespace test_view_common;
 
-namespace df = dftracer::utils::dataframe;
-namespace ix = dftracer::utils::index;
-
 namespace {
 
 dstd::String write_records(TestEnvironment& env, const dstd::String& name,
@@ -36,7 +33,7 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
     const dstd::String gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
     (void)dstd::fs::remove(plain);
-    ix::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
+    index::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
     return gz;
 }
 
@@ -46,24 +43,24 @@ View view_of(const dstd::String& gz) {
         dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-df::DataFrame frame(const View& v) {
-    df::DataFrame f = run(v.lazy().collect());
+dataframe::DataFrame frame(const View& v) {
+    dataframe::DataFrame f = run(v.lazy().collect());
     for (auto& c : f.columns)
         if (!c.is_flat()) c = c.materialize();
     return f;
 }
 
-dstd::String cell(const df::DataFrame& f, std::int64_t r,
+dstd::String cell(const dataframe::DataFrame& f, std::int64_t r,
                   dstd::StringView name) {
     const auto i = bcol(f, name);
     REQUIRE(i >= 0);
     const auto& c = f.columns[static_cast<std::size_t>(i)];
     if (c.is_null(r)) return "null";
-    if (c.type() == df::TypeId::String) return bstr(f, r, name);
+    if (c.type() == dataframe::TypeId::String) return bstr(f, r, name);
     return dstd::to_string(static_cast<long long>(bnum(f, r, name)));
 }
 
-dstd::Vector<dstd::String> column(const df::DataFrame& f,
+dstd::Vector<dstd::String> column(const dataframe::DataFrame& f,
                                   dstd::StringView name) {
     dstd::Vector<dstd::String> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
@@ -110,20 +107,21 @@ TEST_SUITE("View duql sources") {
     TEST_CASE("dftracer row sets") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "t", dftracer_lines()));
-        const df::DataFrame files = frame(v.duql("from files | sort fhash"));
+        const dataframe::DataFrame files =
+            frame(v.duql("from files | sort fhash"));
         CHECK(files.names == dstd::Vector<dstd::String>{"fhash", "path"});
         CHECK(column(files, "path") ==
               dstd::Vector<dstd::String>{"/data/a", "/data/b"});
-        const df::DataFrame hosts = frame(v.duql("from hosts"));
+        const dataframe::DataFrame hosts = frame(v.duql("from hosts"));
         CHECK(hosts.names == dstd::Vector<dstd::String>{"hhash", "name"});
         CHECK(column(hosts, "name") == dstd::Vector<dstd::String>{"node1"});
-        const df::DataFrame strings = frame(v.duql("from strings"));
+        const dataframe::DataFrame strings = frame(v.duql("from strings"));
         CHECK(strings.names == dstd::Vector<dstd::String>{"shash", "value"});
-        const df::DataFrame ranks = frame(v.duql("from ranks"));
+        const dataframe::DataFrame ranks = frame(v.duql("from ranks"));
         CHECK(ranks.names == dstd::Vector<dstd::String>{"pid", "rank"});
         CHECK(column(ranks, "rank") == dstd::Vector<dstd::String>{"3"});
         // Metadata rows keep their args, which the index does not list.
-        const df::DataFrame pr =
+        const dataframe::DataFrame pr =
             frame(v.duql("from all | where name == \"PR\" | take 1"));
         CHECK(column(pr, "args.value") == dstd::Vector<dstd::String>{"3"});
     }
@@ -157,13 +155,13 @@ TEST_SUITE("View duql sources") {
     TEST_CASE("arrows into source row sets") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "t", dftracer_lines()));
-        const df::DataFrame f = frame(
+        const dataframe::DataFrame f = frame(
             v.duql(R"(where fhash -> files.path == "/data/a" | select ts)"));
         CHECK(column(f, "ts") == dstd::Vector<dstd::String>{"10", "30"});
         CHECK(v.explain_duql(R"(where fhash -> files.path == "/data/a")")
                   .find("fhash in (keys of files) (pushed)") !=
               dstd::String::npos);
-        const df::DataFrame d =
+        const dataframe::DataFrame d =
             frame(v.duql("where ph != \"M\" | derive p = fhash -> files.path,"
                          " h = hhash -> hosts.name,"
                          " c = exec_hash -> strings(shash).value"
@@ -241,9 +239,9 @@ TEST_SUITE("View duql sources") {
         const dstd::String hand =
             "where cat == \"POSIX\" | bucket 10us | agg { b = sum(dur) } | "
             "sort b";
-        const df::DataFrame want = frame(v.duql(hand));
+        const dataframe::DataFrame want = frame(v.duql(hand));
         REQUIRE(want.num_rows() == 3);
-        const df::DataFrame stage =
+        const dataframe::DataFrame stage =
             frame(v.duql(rate + "where ts > 0 | io_rate(10us) | sort b"));
         CHECK(stage.names == want.names);
         CHECK(column(stage, "b") == column(want, "b"));
@@ -271,7 +269,7 @@ TEST_SUITE("View duql sources") {
     }
 
     TEST_CASE("pipeline macros from a source and a file") {
-        ix::register_schema(R"(
+        index::register_schema(R"(
 id: weblog2
 fields:
   status: {type: int}
@@ -279,7 +277,7 @@ fields:
 source: |
   def worst(n) = sort -status | where status > n
 )",
-                            "test");
+                               "test");
         TestEnvironment env(10);
         const View w =
             view_of(write_records(env, "w2",
@@ -299,7 +297,7 @@ source: |
         }
         dftracer::utils::duql::load_macros(path);
         const View v = view_of(write_records(env, "t", dftracer_lines()));
-        const df::DataFrame want = frame(v.duql(
+        const dataframe::DataFrame want = frame(v.duql(
             "where cat == \"POSIX\" | bucket 10us | agg { b = sum(dur) } | "
             "sort b"));
         CHECK(column(frame(v.duql("where ts > 0 | posix_rate(10us) | sort b")),
@@ -311,7 +309,7 @@ source: |
     }
 
     TEST_CASE("a user schema's source") {
-        ix::register_schema(R"(
+        index::register_schema(R"(
 id: weblog
 fields:
   status: {type: int}
@@ -320,7 +318,7 @@ source: |
   slow = where request_time > 1;
   def failed = status >= 500
 )",
-                            "test");
+                               "test");
         TestEnvironment env(10);
         const View v =
             view_of(write_records(env, "w",
@@ -335,23 +333,23 @@ source: |
 
     TEST_CASE("sources that do not compile reject registration") {
         CHECK(error_of([] {
-                  ix::register_schema("id: bad1\nsource: \"slow = where x >\"",
-                                      "test");
+                  index::register_schema(
+                      "id: bad1\nsource: \"slow = where x >\"", "test");
               }).find("bad1") != dstd::String::npos);
         CHECK(error_of([] {
-                  ix::register_schema(
+                  index::register_schema(
                       "id: bad2\nsource: \"data = where x > 1 | take 1\"",
                       "test");
               }).find("'data' must be one 'where'") != dstd::String::npos);
         CHECK(error_of([] {
-                  ix::register_schema("id: bad3\nsource: \"all = where x\"",
-                                      "test");
+                  index::register_schema("id: bad3\nsource: \"all = where x\"",
+                                         "test");
               }).find("'all' is every record") != dstd::String::npos);
     }
 
     TEST_CASE("only a source with args_fallback reads bare names under args") {
-        CHECK(ix::get_schema("dftracer").args_fallback);
-        CHECK_FALSE(ix::get_schema("generic").args_fallback);
+        CHECK(index::get_schema("dftracer").args_fallback);
+        CHECK_FALSE(index::get_schema("generic").args_fallback);
         TestEnvironment env(10);
         const View d = view_of(write_records(env, "t", dftracer_lines()));
         CHECK(column(frame(d.duql(R"(where fhash == "h2" | select ts)")),

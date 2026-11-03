@@ -16,7 +16,6 @@
 #include <thread>
 
 using namespace dftracer::utils;
-namespace memory = dftracer::utils::memory;
 
 namespace {
 

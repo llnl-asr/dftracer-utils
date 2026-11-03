@@ -9,9 +9,7 @@
 #include <limits>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

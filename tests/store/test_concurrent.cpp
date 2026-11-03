@@ -49,25 +49,7 @@ struct DataFileWriterTestHook {
 
 namespace {
 
-namespace store = dftracer::utils::store;
-
-using dftracer::utils::Runtime;
-using dstd::ByteView;
-using dstd::Condition;
-using store::Batch;
-using store::FoldKind;
-using store::NamespaceSpec;
-using store::ScopeKey;
-using store::ScopeState;
-using store::engine::ChangeKind;
-using store::engine::CommitterTestHook;
-using store::engine::CopyChange;
-using store::engine::DataFileReader;
-using store::engine::NamespaceId;
-using store::engine::Snapshot;
-using store::engine::Writer;
-using store::engine::WriterErrc;
-using store::engine::WriterOptions;
+using namespace dftracer::utils::store;
 
 constexpr std::uint32_t EXTENT = 4096;
 constexpr int RUNTIME_THREADS = 8;
@@ -88,11 +70,11 @@ constexpr bool SANITIZED = false;
 constexpr bool SANITIZED = false;
 #endif
 
-ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::String to_std(ByteView bytes) {
+dstd::String to_std(dstd::ByteView bytes) {
     return dstd::String(reinterpret_cast<const char*>(bytes.data()),
                         bytes.size());
 }
@@ -104,7 +86,7 @@ dstd::String i64_bytes(std::int64_t value) {
     return bytes;
 }
 
-std::int64_t read_i64(ByteView bytes) {
+std::int64_t read_i64(dstd::ByteView bytes) {
     REQUIRE(bytes.size() == 8);
     return std::bit_cast<std::int64_t>(
         dstd::read_u64_le(reinterpret_cast<const std::uint8_t*>(bytes.data())));
@@ -143,10 +125,10 @@ dstd::String scope_path(int index) {
     return "/data/file-" + dstd::to_string(index) + ".dft";
 }
 
-WriterOptions store_options(std::uint32_t extent_size,
-                            std::uint64_t commit_bytes,
-                            std::chrono::milliseconds commit_interval) {
-    WriterOptions options;
+engine::WriterOptions store_options(std::uint32_t extent_size,
+                                    std::uint64_t commit_bytes,
+                                    std::chrono::milliseconds commit_interval) {
+    engine::WriterOptions options;
     options.extent_size = extent_size;
     options.commit_bytes = commit_bytes;
     options.commit_interval = commit_interval;
@@ -155,7 +137,7 @@ WriterOptions store_options(std::uint32_t extent_size,
     return options;
 }
 
-WriterOptions manual_options(std::uint32_t extent_size) {
+engine::WriterOptions manual_options(std::uint32_t extent_size) {
     return store_options(extent_size, std::uint64_t{1} << 40,
                          std::chrono::hours(1));
 }
@@ -165,31 +147,32 @@ Runtime& store_runtime() {
     return runtime;
 }
 
-dstd::UniquePtr<Writer> make_writer(const dftu_utils_test::ScopedTestDir& dir,
-                                    const WriterOptions& options) {
+dstd::UniquePtr<engine::Writer> make_writer(
+    const dftu_utils_test::ScopedTestDir& dir,
+    const engine::WriterOptions& options) {
     auto created =
-        Writer::create(dir.str(), *store_runtime().executor(), options);
+        engine::Writer::create(dir.str(), *store_runtime().executor(), options);
     REQUIRE(created.has_value());
     return std::move(*created);
 }
 
-dstd::Expected<void, dstd::Error> flush_writer(Writer& writer) {
+dstd::Expected<void, dstd::Error> flush_writer(engine::Writer& writer) {
     return store_runtime().submit(writer.flush()).get();
 }
 
-dstd::Expected<void, dstd::Error> close_writer(Writer& writer) {
+dstd::Expected<void, dstd::Error> close_writer(engine::Writer& writer) {
     return store_runtime().submit(writer.close()).get();
 }
 
 /// commit() with the retry the writer documents, for a caller that is not a
 /// coroutine: on Busy it waits for space() on the store runtime and commits
 /// the same batch again, since a Busy commit left the batch whole.
-dstd::Expected<void, dstd::Error> commit_waiting(Writer& writer,
+dstd::Expected<void, dstd::Error> commit_waiting(engine::Writer& writer,
                                                  Batch&& batch) {
     for (;;) {
         auto committed = writer.commit(std::move(batch));
         if (committed.has_value() ||
-            !committed.error().is_code(WriterErrc::Busy)) {
+            !committed.error().is_code(engine::WriterErrc::Busy)) {
             return committed;
         }
         store_runtime().submit(writer.space()).get();
@@ -213,7 +196,7 @@ dstd::String copy_out(const dstd::String& source,
 }
 
 std::size_t record_count(const dstd::String& path) {
-    auto reader = DataFileReader::open(dstd::String(path));
+    auto reader = engine::DataFileReader::open(dstd::String(path));
     if (!reader) return 0;
     return reader->records_read();
 }
@@ -221,7 +204,7 @@ std::size_t record_count(const dstd::String& path) {
 /// Every extent ref a file holds names a copy the same file announces, so a
 /// byte copy of it never holds an extent whose items are still to come.
 void check_extent_refs_announced(const dstd::String& path) {
-    auto reader = DataFileReader::open(dstd::String(path));
+    auto reader = engine::DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
     dstd::Vector<std::uint32_t> copies;
     for (const store::engine::CopyItem& copy : reader->index().copies) {
@@ -238,7 +221,7 @@ void check_extent_refs_announced(const dstd::String& path) {
 }
 
 dstd::Vector<std::uint64_t> copy_generations(const dstd::String& path) {
-    auto reader = DataFileReader::open(dstd::String(path));
+    auto reader = engine::DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
     dstd::Vector<std::uint64_t> out;
     for (const store::engine::CopyItem& copy : reader->index().copies) {
@@ -248,7 +231,7 @@ dstd::Vector<std::uint64_t> copy_generations(const dstd::String& path) {
 }
 
 dstd::Vector<std::uint64_t> drop_generations(const dstd::String& path) {
-    auto reader = DataFileReader::open(dstd::String(path));
+    auto reader = engine::DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
     dstd::Vector<std::uint64_t> out;
     for (const store::engine::DropItem& drop : reader->index().drops) {
@@ -305,13 +288,13 @@ TEST_CASE("many threads commit and one close keeps every key and every sum") {
 
     auto created = writer->add_namespace(put_spec("raw-a", 0));
     REQUIRE(created.has_value());
-    const NamespaceId raw_a = *created;
+    const engine::NamespaceId raw_a = *created;
     created = writer->add_namespace(put_spec("raw-b", 1));
     REQUIRE(created.has_value());
-    const NamespaceId raw_b = *created;
+    const engine::NamespaceId raw_b = *created;
     created = writer->add_namespace(fold_spec("sums", FoldKind::SumI64));
     REQUIRE(created.has_value());
-    const NamespaceId sums = *created;
+    const engine::NamespaceId sums = *created;
 
     const auto scope_of = [](int thread, int batch) {
         return scope_path((thread * 31 + batch * 7) % SCOPES);
@@ -380,7 +363,7 @@ TEST_CASE("many threads commit and one close keeps every key and every sum") {
     auto closed = close_writer(*writer);
     REQUIRE(closed.has_value());
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
 
     auto cursor = snapshot->scan_all(put_spec("raw-a", 0), {}, {});
@@ -416,7 +399,7 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
     const NamespaceSpec spec = put_spec("atomic", 0);
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope("/data/atomic.dft");
     const dstd::String file_name = dstd::String(writer->name());
 
@@ -452,7 +435,7 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
         const dstd::String copy =
             copy_out(dstd::String(writer->path()), copies, file_name);
         check_extent_refs_announced(copies.file(file_name));
-        auto snapshot = Snapshot::open(copy);
+        auto snapshot = engine::Snapshot::open(copy);
         if (!snapshot.has_value() ||
             snapshot->state(spec, scope) != ScopeState::Ready) {
             return;
@@ -485,7 +468,7 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
     auto closed = close_writer(*writer);
     REQUIRE(closed.has_value());
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     REQUIRE(snapshot->state(spec, scope) == ScopeState::Ready);
     auto cursor = snapshot->scan_all(spec, {}, {});
@@ -526,7 +509,7 @@ TEST_CASE("flush makes a committed batch visible in a byte copy") {
 
     const dstd::String copy = copy_out(dstd::String(writer->path()), copies,
                                        dstd::String(writer->name()));
-    auto snapshot = Snapshot::open(copy);
+    auto snapshot = engine::Snapshot::open(copy);
     REQUIRE(snapshot.has_value());
     REQUIRE(snapshot->state(spec, scope) == ScopeState::Ready);
     for (int k = 0; k < 5; ++k) {
@@ -571,8 +554,8 @@ static bool marker_recorded(const dstd::String& path, const dstd::String& key) {
     const dstd::Vector<std::uint8_t> bytes =
         read_range(path, tail, record_bytes);
     if (bytes.size() != record_bytes) return false;
-    auto record =
-        store::engine::decode_record(ByteView{bytes.data(), bytes.size()});
+    auto record = store::engine::decode_record(
+        dstd::ByteView{bytes.data(), bytes.size()});
     if (!record.has_value() || record->offset != tail) return false;
     for (const store::engine::RecordItem& item : record->items) {
         const auto* ref = std::get_if<store::engine::ExtentRefItem>(&item);
@@ -614,7 +597,7 @@ TEST_CASE("flush holds every batch committed before it under other threads") {
     const NamespaceSpec spec = put_spec("raced", 0);
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     const ScopeKey background_scope = file_scope("/data/background.dft");
     const ScopeKey marker_scope = file_scope("/data/marker.dft");
     const dstd::String value = "value";
@@ -697,7 +680,7 @@ TEST_CASE("every extent ref carries the sequence of the record that holds it") {
          offset + 40U <= file.size();
          offset += store::engine::FILE_HEADER_BYTES) {
         auto record = store::engine::decode_record(
-            ByteView{file.data() + offset, file.size() - offset});
+            dstd::ByteView{file.data() + offset, file.size() - offset});
         if (!record.has_value() || record->offset != offset) continue;
         // The footer repeats the items of the chain, so it carries the sequence
         // each extent ref was first recorded under, not its own.
@@ -711,7 +694,7 @@ TEST_CASE("every extent ref carries the sequence of the record that holds it") {
     }
     CHECK(refs >= ROUNDS);
 
-    auto reader = DataFileReader::open(dstd::String(path));
+    auto reader = engine::DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
     CHECK(reader->index().last_sequence ==
           static_cast<std::uint64_t>(ROUNDS) + 1U);
@@ -809,18 +792,19 @@ TEST_CASE("group commit by time writes a record without flush") {
 TEST_CASE(
     "a durable namespace syncs per group commit and a volatile one at close") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_durable");
-    CommitterTestHook::reset();
+    engine::CommitterTestHook::reset();
 
     auto writer = make_writer(dir, manual_options(EXTENT));
     auto created = writer->add_namespace(durable_spec("durable", true));
     REQUIRE(created.has_value());
-    const NamespaceId durable = *created;
+    const engine::NamespaceId durable = *created;
     created = writer->add_namespace(durable_spec("volatile", false));
     REQUIRE(created.has_value());
-    const NamespaceId volatile_space = *created;
+    const engine::NamespaceId volatile_space = *created;
     const ScopeKey scope = file_scope("/data/durable.dft");
 
-    const auto commit = [&](NamespaceId space, const dstd::String& key) {
+    const auto commit = [&](engine::NamespaceId space,
+                            const dstd::String& key) {
         Batch entries = writer->batch(space, scope, 0);
         entries.put(view_of(key), view_of(dstd::String("value")));
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -828,23 +812,23 @@ TEST_CASE(
 
     commit(durable, "d1");
     REQUIRE(flush_writer(*writer).has_value());
-    CHECK(CommitterTestHook::syncs() == 2);
+    CHECK(engine::CommitterTestHook::syncs() == 2);
 
     commit(volatile_space, "v1");
     REQUIRE(flush_writer(*writer).has_value());
-    CHECK(CommitterTestHook::syncs() == 2);
+    CHECK(engine::CommitterTestHook::syncs() == 2);
 
     commit(durable, "d2");
     REQUIRE(flush_writer(*writer).has_value());
-    CHECK(CommitterTestHook::syncs() == 4);
+    CHECK(engine::CommitterTestHook::syncs() == 4);
 
     REQUIRE(close_writer(*writer).has_value());
-    CHECK(CommitterTestHook::syncs() == 4);
+    CHECK(engine::CommitterTestHook::syncs() == 4);
 }
 
 TEST_CASE("one publish of several building copies writes one record") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_publish_many");
-    CommitterTestHook::reset();
+    engine::CommitterTestHook::reset();
 
     auto writer = make_writer(dir, manual_options(EXTENT));
     auto first = writer->add_namespace(durable_spec("first", true));
@@ -854,7 +838,7 @@ TEST_CASE("one publish of several building copies writes one record") {
     const ScopeKey scope = file_scope("/data/publish.dft");
     const ScopeKey other = file_scope("/data/publish_other.dft");
 
-    for (const NamespaceId space : {*first, *second}) {
+    for (const engine::NamespaceId space : {*first, *second}) {
         Batch entries = writer->building_batch(space, scope);
         entries.put(view_of(dstd::String("k")), view_of(dstd::String("v")));
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -863,16 +847,16 @@ TEST_CASE("one publish of several building copies writes one record") {
     entries.put(view_of(dstd::String("k")), view_of(dstd::String("v")));
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
     REQUIRE(flush_writer(*writer).has_value());
-    const std::uint64_t before = CommitterTestHook::syncs();
+    const std::uint64_t before = engine::CommitterTestHook::syncs();
 
-    const CopyChange targets[] = {{*first, &scope, 1, nullptr},
-                                  {*second, &scope, 2, nullptr},
-                                  {*first, &other, 3, nullptr}};
+    const engine::CopyChange targets[] = {{*first, &scope, 1, nullptr},
+                                          {*second, &scope, 2, nullptr},
+                                          {*first, &other, 3, nullptr}};
     REQUIRE(writer->apply(targets).has_value());
     REQUIRE(flush_writer(*writer).has_value());
-    CHECK(CommitterTestHook::syncs() - before == 2);
+    CHECK(engine::CommitterTestHook::syncs() - before == 2);
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     CHECK(snapshot->copy_info(durable_spec("first", true), scope).state ==
           ScopeState::Ready);
@@ -886,7 +870,7 @@ TEST_CASE("one publish of several building copies writes one record") {
 
 TEST_CASE("one apply of a drop, a fail and a publish writes one record") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_apply_mixed");
-    CommitterTestHook::reset();
+    engine::CommitterTestHook::reset();
 
     auto writer = make_writer(dir, manual_options(EXTENT));
     auto dropped = writer->add_namespace(durable_spec("dropped", true));
@@ -897,7 +881,7 @@ TEST_CASE("one apply of a drop, a fail and a publish writes one record") {
     REQUIRE(built.has_value());
     const ScopeKey scope = file_scope("/data/apply.dft");
 
-    for (const NamespaceId space : {*dropped, *failed}) {
+    for (const engine::NamespaceId space : {*dropped, *failed}) {
         Batch entries = writer->batch(space, scope, 1);
         entries.put(view_of(dstd::String("k")), view_of(dstd::String("old")));
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -907,19 +891,19 @@ TEST_CASE("one apply of a drop, a fail and a publish writes one record") {
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
     REQUIRE(flush_writer(*writer).has_value());
 
-    auto before = Snapshot::open(dir.str());
+    auto before = engine::Snapshot::open(dir.str());
     REQUIRE(before.has_value());
-    const std::uint64_t syncs = CommitterTestHook::syncs();
+    const std::uint64_t syncs = engine::CommitterTestHook::syncs();
 
-    const CopyChange changes[] = {
-        {*dropped, &scope, 0, nullptr, ChangeKind::Dropped},
-        {*failed, &scope, 4, nullptr, ChangeKind::Failed},
-        {*built, &scope, 6, nullptr, ChangeKind::Ready}};
+    const engine::CopyChange changes[] = {
+        {*dropped, &scope, 0, nullptr, engine::ChangeKind::Dropped},
+        {*failed, &scope, 4, nullptr, engine::ChangeKind::Failed},
+        {*built, &scope, 6, nullptr, engine::ChangeKind::Ready}};
     REQUIRE(writer->apply(changes).has_value());
     REQUIRE(flush_writer(*writer).has_value());
-    CHECK(CommitterTestHook::syncs() - syncs == 2);
+    CHECK(engine::CommitterTestHook::syncs() - syncs == 2);
 
-    auto after = Snapshot::open(dir.str());
+    auto after = engine::Snapshot::open(dir.str());
     REQUIRE(after.has_value());
     CHECK(after->copy_info(durable_spec("dropped", true), scope).state ==
           ScopeState::Absent);
@@ -956,33 +940,34 @@ TEST_CASE("an apply with one bad change applies nothing") {
     REQUIRE(commit_waiting(*writer, std::move(plain)).has_value());
     REQUIRE(flush_writer(*writer).has_value());
 
-    const CopyChange no_building[] = {
-        {*space, &scope, 0, nullptr, ChangeKind::Dropped},
-        {*other, &unbuilt, 0, nullptr, ChangeKind::Ready}};
+    const engine::CopyChange no_building[] = {
+        {*space, &scope, 0, nullptr, engine::ChangeKind::Dropped},
+        {*other, &unbuilt, 0, nullptr, engine::ChangeKind::Ready}};
     CHECK_FALSE(writer->apply(no_building).has_value());
-    const CopyChange twice[] = {
-        {*space, &scope, 0, nullptr, ChangeKind::Dropped},
-        {*space, &scope, 3, nullptr, ChangeKind::Failed}};
+    const engine::CopyChange twice[] = {
+        {*space, &scope, 0, nullptr, engine::ChangeKind::Dropped},
+        {*space, &scope, 3, nullptr, engine::ChangeKind::Failed}};
     CHECK_FALSE(writer->apply(twice).has_value());
-    const CopyChange no_scope[] = {
-        {*space, &scope, 0, nullptr, ChangeKind::Dropped},
-        {*other, nullptr, 0, nullptr, ChangeKind::Failed}};
+    const engine::CopyChange no_scope[] = {
+        {*space, &scope, 0, nullptr, engine::ChangeKind::Dropped},
+        {*other, nullptr, 0, nullptr, engine::ChangeKind::Failed}};
     CHECK_FALSE(writer->apply(no_scope).has_value());
-    const CopyChange unknown[] = {
-        {*space, &scope, 0, nullptr, ChangeKind::Dropped},
-        {NamespaceId{99}, &scope, 0, nullptr, ChangeKind::Failed}};
+    const engine::CopyChange unknown[] = {
+        {*space, &scope, 0, nullptr, engine::ChangeKind::Dropped},
+        {engine::NamespaceId{99}, &scope, 0, nullptr,
+         engine::ChangeKind::Failed}};
     CHECK_FALSE(writer->apply(unknown).has_value());
     REQUIRE(flush_writer(*writer).has_value());
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     CHECK(snapshot->copy_info(durable_spec("space", true), scope).state ==
           ScopeState::Ready);
     CHECK(snapshot->copy_info(durable_spec("other", true), unbuilt).state ==
           ScopeState::Absent);
 
-    const CopyChange fine[] = {
-        {*space, &scope, 0, nullptr, ChangeKind::Dropped}};
+    const engine::CopyChange fine[] = {
+        {*space, &scope, 0, nullptr, engine::ChangeKind::Dropped}};
     REQUIRE(writer->apply(fine).has_value());
     REQUIRE(close_writer(*writer).has_value());
 }
@@ -1003,15 +988,15 @@ TEST_CASE("a publish with one bad target publishes nothing") {
     REQUIRE(commit_waiting(*writer, std::move(plain)).has_value());
     REQUIRE(flush_writer(*writer).has_value());
 
-    const CopyChange targets[] = {{*space, &building, 1, nullptr},
-                                  {*space, &ready, 1, nullptr}};
+    const engine::CopyChange targets[] = {{*space, &building, 1, nullptr},
+                                          {*space, &ready, 1, nullptr}};
     CHECK_FALSE(writer->apply(targets).has_value());
-    const CopyChange twice[] = {{*space, &building, 1, nullptr},
-                                {*space, &building, 1, nullptr}};
+    const engine::CopyChange twice[] = {{*space, &building, 1, nullptr},
+                                        {*space, &building, 1, nullptr}};
     CHECK_FALSE(writer->apply(twice).has_value());
     REQUIRE(flush_writer(*writer).has_value());
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     CHECK(snapshot->copy_info(durable_spec("space", true), building).state !=
           ScopeState::Ready);
@@ -1030,7 +1015,7 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
     const NamespaceSpec spec = put_spec("generations", 0);
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
 
     const auto scope_of = [](int thread) { return scope_path(thread + 10); };
     const auto key_of = [](int thread, int round, int key) {
@@ -1096,7 +1081,7 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
     }
     CHECK(generations == distinct_expected);
 
-    auto snapshot = Snapshot::open(dir.str());
+    auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     for (int t = 0; t < THREADS; ++t) {
         const ScopeKey scope = file_scope(scope_of(t));
@@ -1118,7 +1103,7 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
 
 TEST_CASE("a writer destroyed without close drains its extent writes") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_teardown");
-    const std::uint64_t before = CommitterTestHook::live_batches();
+    const std::uint64_t before = engine::CommitterTestHook::live_batches();
     {
         auto writer = make_writer(dir, manual_options(EXTENT));
         const NamespaceSpec spec = put_spec("teardown", 0);
@@ -1138,19 +1123,19 @@ TEST_CASE("a writer destroyed without close drains its extent writes") {
         open_extent.put(view_of(dstd::String("open")),
                         view_of(dstd::String("value")));
         REQUIRE(commit_waiting(*writer, std::move(open_extent)).has_value());
-        CHECK(CommitterTestHook::live_batches() > before);
+        CHECK(engine::CommitterTestHook::live_batches() > before);
 
         writer.reset();
     }
     // A completion that lands after the destructor would write into the batch
     // it carries, so every batch is gone once it returned.
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    CHECK(CommitterTestHook::live_batches() == before);
+    CHECK(engine::CommitterTestHook::live_batches() == before);
 }
 
 TEST_CASE("a failed extent write deletes the batches of its extent") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_failed_extent");
-    const std::uint64_t before = CommitterTestHook::live_batches();
+    const std::uint64_t before = engine::CommitterTestHook::live_batches();
     auto writer = make_writer(dir, manual_options(EXTENT));
     const NamespaceSpec spec = put_spec("failed_extent", 0);
     auto created = writer->add_namespace(spec);
@@ -1160,25 +1145,25 @@ TEST_CASE("a failed extent write deletes the batches of its extent") {
     Batch entries = writer->batch(*created, scope, 0);
     entries.put(view_of(dstd::String("key")), view_of(dstd::String("value")));
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
-    CHECK(CommitterTestHook::live_batches() == before + 1);
+    CHECK(engine::CommitterTestHook::live_batches() == before + 1);
 
     store::engine::DataFileWriterTestHook::reopen_read_only(
         store::engine::WriterTestHook::file(*writer),
         dstd::String(writer->path()));
     auto flushed = flush_writer(*writer);
     REQUIRE_FALSE(flushed.has_value());
-    CHECK(flushed.error().is(Condition::Io));
-    CHECK(CommitterTestHook::live_batches() == before);
+    CHECK(flushed.error().is(dstd::Condition::Io));
+    CHECK(engine::CommitterTestHook::live_batches() == before);
 }
 
 TEST_CASE("a failed record write latches for commit, flush and close") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_latch");
-    CommitterTestHook::reset();
+    engine::CommitterTestHook::reset();
     auto writer = make_writer(dir, manual_options(EXTENT));
     const NamespaceSpec spec = put_spec("latched", 0);
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
-    const NamespaceId space = *created;
+    const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope("/data/latched.dft");
 
     const auto commit_one = [&](const dstd::String& key) {
@@ -1189,20 +1174,20 @@ TEST_CASE("a failed record write latches for commit, flush and close") {
 
     REQUIRE(commit_one("first").has_value());
 
-    CommitterTestHook::fail_next_record(true);
+    engine::CommitterTestHook::fail_next_record(true);
     auto flushed = flush_writer(*writer);
     REQUIRE_FALSE(flushed.has_value());
-    CHECK(flushed.error().is(Condition::Io));
+    CHECK(flushed.error().is(dstd::Condition::Io));
 
     auto committed = commit_one("second");
     REQUIRE_FALSE(committed.has_value());
-    CHECK(committed.error().is(Condition::Io));
+    CHECK(committed.error().is(dstd::Condition::Io));
 
     auto flushed_again = flush_writer(*writer);
     REQUIRE_FALSE(flushed_again.has_value());
-    CHECK(flushed_again.error().is(Condition::Io));
+    CHECK(flushed_again.error().is(dstd::Condition::Io));
 
     auto closed = close_writer(*writer);
     REQUIRE_FALSE(closed.has_value());
-    CHECK(closed.error().is(Condition::Io));
+    CHECK(closed.error().is(dstd::Condition::Io));
 }

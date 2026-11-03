@@ -15,7 +15,6 @@
 
 using namespace dftracer::utils;
 
-namespace df = dftracer::utils::dataframe;
 using namespace dftracer::utils::duql;
 
 namespace {
@@ -47,36 +46,37 @@ dstd::Vector<std::uint8_t> validity(const dstd::Vector<dstd::Optional<T>>& v) {
 }
 
 template <class T>
-df::Series numbers(df::TypeId type, const dstd::Vector<dstd::Optional<T>>& v) {
+dataframe::Series numbers(dataframe::TypeId type,
+                          const dstd::Vector<dstd::Optional<T>>& v) {
     dstd::Vector<T> data;
     for (const auto& x : v) data.push_back(x.value_or(T{}));
     const auto bits = validity(v);
-    return df::Series::flat(type, data.data(), N, bits.data());
+    return dataframe::Series::flat(type, data.data(), N, bits.data());
 }
 
-df::DataFrame frame() {
-    df::DataFrame f;
+dataframe::DataFrame frame() {
+    dataframe::DataFrame f;
     f.names = {"i", "j", "f", "u", "s", "b", "t"};
-    f.columns.push_back(numbers(df::TypeId::Int64, I));
-    f.columns.push_back(numbers(df::TypeId::Int64, J));
-    f.columns.push_back(numbers(df::TypeId::Float64, F));
-    f.columns.push_back(numbers(df::TypeId::Uint64, U));
+    f.columns.push_back(numbers(dataframe::TypeId::Int64, I));
+    f.columns.push_back(numbers(dataframe::TypeId::Int64, J));
+    f.columns.push_back(numbers(dataframe::TypeId::Float64, F));
+    f.columns.push_back(numbers(dataframe::TypeId::Uint64, U));
     dstd::Vector<dstd::StringView> s;
     for (const auto& x : S) s.push_back(x ? dstd::StringView(*x) : "");
     const auto sbits = validity(S);
-    f.columns.push_back(df::Series::strings(s, sbits.data()));
+    f.columns.push_back(dataframe::Series::strings(s, sbits.data()));
     dstd::Vector<std::uint8_t> b;
     for (const auto& x : B) b.push_back(x.value_or(false) ? 1 : 0);
     dstd::Vector<std::uint8_t> packed((N + 7) / 8, 0);
     for (std::size_t r = 0; r < b.size(); ++r)
         if (b[r]) packed[r / 8] |= static_cast<std::uint8_t>(1U << (r % 8));
     const auto bbits = validity(B);
-    f.columns.push_back(
-        df::Series::flat(df::TypeId::Bool, packed.data(), N, bbits.data()));
+    f.columns.push_back(dataframe::Series::flat(
+        dataframe::TypeId::Bool, packed.data(), N, bbits.data()));
     dstd::Vector<dstd::StringView> t;
     for (const auto& x : T) t.push_back(x ? dstd::StringView(*x) : "");
     const auto tbits = validity(T);
-    f.columns.push_back(df::Series::strings(t, tbits.data()));
+    f.columns.push_back(dataframe::Series::strings(t, tbits.data()));
     return f;
 }
 
@@ -97,7 +97,7 @@ ValueMap row(std::size_t r) {
     return m;
 }
 
-Truth column_truth(const df::Series& mask, std::int64_t r) {
+Truth column_truth(const dataframe::Series& mask, std::int64_t r) {
     if (mask.is_null(r)) return Truth::Unknown;
     const auto* bits = mask.data<std::uint8_t>();
     return (bits[r / 8] >> (r % 8)) & 1 ? Truth::Yes : Truth::No;
@@ -218,12 +218,12 @@ TEST_CASE("vectorized expressions agree with the row evaluator") {
         "exists(i)",
         "i + 1 > 0 and f > 0",
     };
-    const df::DataFrame f = frame();
+    const dataframe::DataFrame f = frame();
     for (const char* text : FORMS) {
         INFO("query: ", dstd::String(text));
         auto q = parse(text);
         REQUIRE_MESSAGE(q.has_value(), (q ? "" : q.error().format()));
-        const df::Series mask = df::evaluate_mask(**q, f);
+        const dataframe::Series mask = dataframe::evaluate_mask(**q, f);
         for (std::int64_t r = 0; r < N; ++r) {
             const Truth want =
                 evaluate_truth(**q, row(static_cast<std::size_t>(r)));
@@ -246,12 +246,12 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
                                    253402300799999999};
     const dstd::Vector<OptD> SECS = {1700000000.9, -0.5,  0.0,   2.5,
                                      {},           -1e30, 1e300, 86399.0};
-    df::DataFrame f;
+    dataframe::DataFrame f;
     f.names = {"ts", "secs", "s"};
-    f.columns.push_back(numbers(df::TypeId::Int64, TS));
-    f.columns.push_back(numbers(df::TypeId::Float64, SECS));
+    f.columns.push_back(numbers(dataframe::TypeId::Int64, TS));
+    f.columns.push_back(numbers(dataframe::TypeId::Float64, SECS));
     f.columns.push_back(
-        df::Series::strings({"a", "b", "c", "d", "e", "f", "g", "h"}));
+        dataframe::Series::strings({"a", "b", "c", "d", "e", "f", "g", "h"}));
     Roles roles;
     roles.fields.emplace("ts", 1000);
     roles.fields.emplace("secs", 1000000000);
@@ -279,7 +279,8 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
         auto p = compile_program(text, {}, &roles);
         REQUIRE_MESSAGE(p.has_value(), (p ? "" : p.error().format()));
         REQUIRE(p->main.filter);
-        const df::Series mask = df::evaluate_mask(*p->main.filter, f);
+        const dataframe::Series mask =
+            dataframe::evaluate_mask(*p->main.filter, f);
         for (std::int64_t r = 0; r < N; ++r) {
             ValueMap m;
             m["ts"] = cell(TS[static_cast<std::size_t>(r)]);
@@ -299,13 +300,13 @@ TEST_CASE("quantifiers over a list column agree with the row evaluator") {
     const dstd::Vector<std::int32_t> offs = {0, 2, 2, 2, 4, 5};
     const dstd::Vector<std::int64_t> vals = {1, 5, 2, 0, 7};
     const dstd::Vector<std::uint8_t> valid = {0x17};  // element 3 is null
-    df::DataFrame f;
+    dataframe::DataFrame f;
     f.names = {"l", "s"};
     f.columns.push_back(
-        df::Series::list(offs,
-                         df::Series::flat_i64(vals.data(), 5, valid.data()))
+        dataframe::Series::list(
+            offs, dataframe::Series::flat_i64(vals.data(), 5, valid.data()))
             .take(dstd::Vector<std::int64_t>{0, 1, -1, 3, 4}));
-    f.columns.push_back(df::Series::strings({"a", "b", "c", "d", "e"}));
+    f.columns.push_back(dataframe::Series::strings({"a", "b", "c", "d", "e"}));
     const char* const JSON[] = {"[1,5]", "[]", nullptr, "[2,null]", "[7]"};
     const char* const S5[] = {"a", "b", "c", "d", "e"};
     const char* const FORMS[] = {
@@ -321,7 +322,7 @@ TEST_CASE("quantifiers over a list column agree with the row evaluator") {
         INFO("query: ", dstd::String(text));
         auto q = parse(text);
         REQUIRE_MESSAGE(q.has_value(), (q ? "" : q.error().format()));
-        const df::Series mask = df::evaluate_mask(**q, f);
+        const dataframe::Series mask = dataframe::evaluate_mask(**q, f);
         for (std::int64_t r = 0; r < 5; ++r) {
             ValueMap m;
             if (JSON[r]) m["l"] = Cell::json(JSON[r], true);

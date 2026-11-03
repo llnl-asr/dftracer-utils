@@ -22,12 +22,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-namespace df = dftracer::utils::dataframe;
-using df::AsofDirection;
-using df::DataFrame;
-using df::Series;
-using df::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -166,7 +161,7 @@ DataFrame ts_vals(const dstd::Vector<I>& ts, const dstd::Vector<S>& vals) {
 
 DataFrame asof_g(const DataFrame& l, const DataFrame& r, AsofDirection dir,
                  dstd::Optional<double> tol = dstd::nullopt) {
-    return df::asof(l, r, "ts", {}, dir, tol);
+    return dataframe::asof(l, r, "ts", {}, dir, tol);
 }
 
 DataFrame points(const dstd::Vector<I>& p) { return frame({"point"}, i64s(p)); }
@@ -177,7 +172,7 @@ DataFrame spans(const dstd::Vector<I>& lo, const dstd::Vector<I>& hi,
 }
 
 DataFrame interval_g(const DataFrame& l, const DataFrame& r, bool outer) {
-    return df::interval(l, r, "point", "lo", "hi", {}, outer);
+    return dataframe::interval(l, r, "point", "lo", "hi", {}, outer);
 }
 
 }  // namespace
@@ -250,8 +245,8 @@ TEST_CASE("asof - by-key partitioning") {
     const DataFrame l = frame({"pid", "ts"}, i64s({1, 2}), i64s({10, 10}));
     const DataFrame r = frame({"pid", "ts", "val"}, i64s({1, 1, 2}),
                               i64s({5, 8, 3}), strs({"a1", "a2", "b1"}));
-    const DataFrame out =
-        df::asof(l, r, "ts", {"pid"}, AsofDirection::Backward, dstd::nullopt);
+    const DataFrame out = dataframe::asof(
+        l, r, "ts", {"pid"}, AsofDirection::Backward, dstd::nullopt);
     CHECK(out.names == dstd::Vector<dstd::String>{"pid", "ts", "val"});
     CHECK(i64_col(out, "pid") == dstd::Vector<I>{1, 2});
     CHECK(str_col(out, "val") == dstd::Vector<S>{"a2", "b1"});
@@ -261,8 +256,8 @@ TEST_CASE("asof - a null by key matches a null by key") {
     const DataFrame l = frame({"k", "ts"}, i64s({NI, 1}), i64s({10, 10}));
     const DataFrame r = frame({"k", "ts", "val"}, i64s({1, NI}), i64s({5, 7}),
                               strs({"a", "b"}));
-    const DataFrame out =
-        df::asof(l, r, "ts", {"k"}, AsofDirection::Backward, dstd::nullopt);
+    const DataFrame out = dataframe::asof(
+        l, r, "ts", {"k"}, AsofDirection::Backward, dstd::nullopt);
     CHECK(i64_col(out, "k") == dstd::Vector<I>{1, NI});
     CHECK(str_col(out, "val") == dstd::Vector<S>{"a", "b"});
 }
@@ -403,12 +398,12 @@ TEST_CASE("asof - an exact ts match is taken") {
 TEST_CASE("asof - errors") {
     const DataFrame l = ts_frame({1});
     const DataFrame r = ts_vals({1}, {"a"});
-    CHECK_THROWS_AS(
-        df::asof(l, r, "nope", {}, AsofDirection::Backward, dstd::nullopt),
-        std::out_of_range);
-    CHECK_THROWS_AS(
-        df::asof(l, r, "ts", {"nope"}, AsofDirection::Backward, dstd::nullopt),
-        std::out_of_range);
+    CHECK_THROWS_AS(dataframe::asof(l, r, "nope", {}, AsofDirection::Backward,
+                                    dstd::nullopt),
+                    std::out_of_range);
+    CHECK_THROWS_AS(dataframe::asof(l, r, "ts", {"nope"},
+                                    AsofDirection::Backward, dstd::nullopt),
+                    std::out_of_range);
     CHECK_THROWS_AS(
         asof_g(frame({"ts"}, f64s({1.0})), r, AsofDirection::Backward),
         std::invalid_argument);
@@ -417,9 +412,10 @@ TEST_CASE("asof - errors") {
                            AsofDirection::Backward),
                     std::invalid_argument);
     CHECK_THROWS_AS(
-        df::asof(frame({"k", "ts"}, i64s({1}), i64s({1})),
-                 frame({"k", "ts", "val"}, strs({"1"}), i64s({1}), strs({"a"})),
-                 "ts", {"k"}, AsofDirection::Backward, dstd::nullopt),
+        dataframe::asof(
+            frame({"k", "ts"}, i64s({1}), i64s({1})),
+            frame({"k", "ts", "val"}, strs({"1"}), i64s({1}), strs({"a"})),
+            "ts", {"k"}, AsofDirection::Backward, dstd::nullopt),
         std::invalid_argument);
 }
 
@@ -461,7 +457,7 @@ TEST_CASE("interval - by-key partitioning") {
     const DataFrame r = frame({"pid", "lo", "hi", "val"}, i64s({1, 2}),
                               i64s({0, 0}), i64s({10, 10}), strs({"p1", "p2"}));
     const DataFrame out =
-        df::interval(l, r, "point", "lo", "hi", {"pid"}, false);
+        dataframe::interval(l, r, "point", "lo", "hi", {"pid"}, false);
     CHECK(out.names == dstd::Vector<dstd::String>{"pid", "point", "val"});
     CHECK(i64_col(out, "pid") == dstd::Vector<I>{1, 2});
     CHECK(str_col(out, "val") == dstd::Vector<S>{"p1", "p2"});
@@ -471,7 +467,8 @@ TEST_CASE("interval - a null by key matches a null by key") {
     const DataFrame l = frame({"k", "point"}, i64s({NI, 1}), i64s({5, 5}));
     const DataFrame r = frame({"k", "lo", "hi", "val"}, i64s({NI}), i64s({0}),
                               i64s({10}), strs({"n"}));
-    const DataFrame out = df::interval(l, r, "point", "lo", "hi", {"k"}, true);
+    const DataFrame out =
+        dataframe::interval(l, r, "point", "lo", "hi", {"k"}, true);
     CHECK(i64_col(out, "k") == dstd::Vector<I>{1, NI});
     CHECK(str_col(out, "val") == dstd::Vector<S>{NS, "n"});
 }
@@ -505,8 +502,8 @@ TEST_CASE("interval - null semantics") {
     SUBCASE("null point matches nothing") {
         const DataFrame l =
             frame({"ts", "val"}, i64s({NI, 5}), strs({"L0", "L1"}));
-        const DataFrame out = df::interval(l, spans({0}, {10}, {"span"}), "ts",
-                                           "lo", "hi", {}, true);
+        const DataFrame out = dataframe::interval(l, spans({0}, {10}, {"span"}),
+                                                  "ts", "lo", "hi", {}, true);
         CHECK(out.names ==
               dstd::Vector<dstd::String>{"ts", "val", "val_right"});
         CHECK(i64_col(out, "ts") == dstd::Vector<I>{5, NI});
@@ -527,22 +524,24 @@ TEST_CASE("interval - null semantics") {
 TEST_CASE("interval - errors") {
     const DataFrame l = points({5});
     const DataFrame r = spans({0}, {10}, {"a"});
-    CHECK_THROWS_AS(df::interval(l, r, "nope", "lo", "hi", {}, false),
+    CHECK_THROWS_AS(dataframe::interval(l, r, "nope", "lo", "hi", {}, false),
                     std::out_of_range);
-    CHECK_THROWS_AS(df::interval(l, r, "point", "lo", "nope", {}, false),
+    CHECK_THROWS_AS(dataframe::interval(l, r, "point", "lo", "nope", {}, false),
                     std::out_of_range);
-    CHECK_THROWS_AS(df::interval(frame({"point"}, f64s({5.0})), r, "point",
-                                 "lo", "hi", {}, false),
+    CHECK_THROWS_AS(dataframe::interval(frame({"point"}, f64s({5.0})), r,
+                                        "point", "lo", "hi", {}, false),
                     std::invalid_argument);
-    CHECK_THROWS_AS(df::interval(frame({"point"}, strs({"5"})),
-                                 frame({"lo", "hi"}, strs({"0"}), strs({"9"})),
-                                 "point", "lo", "hi", {}, false),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(df::interval(frame({"k", "point"}, i64s({1}), i64s({5})),
-                                 frame({"k", "lo", "hi"}, strs({"1"}),
-                                       i64s({0}), i64s({10})),
-                                 "point", "lo", "hi", {"k"}, false),
-                    std::invalid_argument);
+    CHECK_THROWS_AS(
+        dataframe::interval(frame({"point"}, strs({"5"})),
+                            frame({"lo", "hi"}, strs({"0"}), strs({"9"})),
+                            "point", "lo", "hi", {}, false),
+        std::invalid_argument);
+    CHECK_THROWS_AS(
+        dataframe::interval(
+            frame({"k", "point"}, i64s({1}), i64s({5})),
+            frame({"k", "lo", "hi"}, strs({"1"}), i64s({0}), i64s({10})),
+            "point", "lo", "hi", {"k"}, false),
+        std::invalid_argument);
 }
 
 namespace {
@@ -707,7 +706,7 @@ TEST_CASE("asof matches a nested-loop reference") {
                         dstd::Vector<dstd::String> names = left.names;
                         names.emplace_back("rid");
 
-                        const DataFrame out = df::asof(
+                        const DataFrame out = dataframe::asof(
                             left, right, "t", by_names(by_mode), dir, tol);
                         CHECK(out.names == names);
                         CHECK(i64_col(out, "lid") == lids);
@@ -767,7 +766,7 @@ TEST_CASE("interval matches a nested-loop reference") {
                     dstd::Vector<dstd::String> names = left.names;
                     names.emplace_back("rid");
 
-                    const DataFrame out = df::interval(
+                    const DataFrame out = dataframe::interval(
                         left, right, "p", "lo", "hi", by_names(by_mode), outer);
                     CHECK(out.names == names);
                     CHECK(i64_col(out, "lid") == lids);

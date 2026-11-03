@@ -26,20 +26,6 @@
 
 using namespace dftracer::utils;
 
-namespace views = dftracer::utils::trace::views;
-using dftracer::utils::Runtime;
-using dftracer::utils::plugins::NamedResult;
-using dftracer::utils::plugins::NamedResultRegistry;
-using dftracer::utils::plugins::OwnedArrow;
-using dftracer::utils::plugins::OwnedLazyFrame;
-using dftracer::utils::plugins::PluginFold;
-using dftracer::utils::plugins::SharedResultRegistry;
-using dstd::StringIntern;
-using views::detail::CoverageSet;
-using views::detail::FoldBatch;
-using views::detail::FoldEvent;
-using views::detail::ScanUnit;
-
 namespace {
 
 // Counts events per slice, merges the counts, and emits "count=<total>" as a
@@ -60,19 +46,20 @@ struct CountBlobSlice {
 
 struct FoldHolder {
     dftu_plugin* plugin;
-    dstd::UniquePtr<PluginFold> fold;
-    FoldHolder(dftu_plugin* p, StringIntern& intern, SharedResultRegistry* reg,
-               NamedResultRegistry* named)
+    dstd::UniquePtr<plugins::PluginFold> fold;
+    FoldHolder(dftu_plugin* p, dstd::StringIntern& intern,
+               plugins::SharedResultRegistry* reg,
+               plugins::NamedResultRegistry* named)
         : plugin(p),
-          fold(dstd::make_unique<PluginFold>(p, intern, reg, named)) {}
+          fold(dstd::make_unique<plugins::PluginFold>(p, intern, reg, named)) {}
     ~FoldHolder() {
         fold.reset();
         if (plugin && plugin->destroy) plugin->destroy(plugin->self);
     }
 };
 
-dstd::Vector<FoldEvent> make_events(std::uint64_t count) {
-    dstd::Vector<FoldEvent> evs(count);
+dstd::Vector<trace::views::detail::FoldEvent> make_events(std::uint64_t count) {
+    dstd::Vector<trace::views::detail::FoldEvent> evs(count);
     for (std::uint64_t i = 0; i < count; ++i) {
         evs[i].ts = i;
         // step() drops METADATA/UNKNOWN-phase events before it ever reaches
@@ -82,10 +69,10 @@ dstd::Vector<FoldEvent> make_events(std::uint64_t count) {
     return evs;
 }
 
-void finalize_now(PluginFold& f) {
+void finalize_now(plugins::PluginFold& f) {
     Runtime rt(1);
     rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  co_await f.finalize(CoverageSet{});
+                  co_await f.finalize(trace::views::detail::CoverageSet{});
               }),
               "fin")
         .wait();
@@ -106,9 +93,9 @@ void schema_release(ArrowSchema* s) {
 
 TEST_SUITE("PluginResults") {
     TEST_CASE("a plugin's emitted blob round-trips to the registry verbatim") {
-        StringIntern intern;
-        SharedResultRegistry reg;
-        NamedResultRegistry named;
+        dstd::StringIntern intern;
+        plugins::SharedResultRegistry reg;
+        plugins::NamedResultRegistry named;
         FoldHolder master(
             dftracer::utils::plugins::make_plugin<CountBlobSlice>(nullptr),
             intern, &reg, &named);
@@ -117,10 +104,11 @@ TEST_SUITE("PluginResults") {
         std::uint64_t total = 0;
         for (std::uint64_t n : counts) {
             auto slice = master.fold->slice();
-            auto* pf = static_cast<PluginFold*>(slice.get());
+            auto* pf = static_cast<plugins::PluginFold*>(slice.get());
             auto evs = make_events(n);
-            ScanUnit unit;
-            FoldBatch fb{dstd::Span<const FoldEvent>(evs), unit};
+            trace::views::detail::ScanUnit unit;
+            trace::views::detail::FoldBatch fb{
+                dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
             pf->step(fb);
             master.fold->merge(*pf);
             total += n;
@@ -137,7 +125,7 @@ TEST_SUITE("PluginResults") {
     }
 
     TEST_CASE("emit_arrow moves the array/schema and releases them on clear") {
-        NamedResultRegistry named;
+        plugins::NamedResultRegistry named;
         g_released = 0;
 
         ArrowArray a{};
@@ -152,7 +140,7 @@ TEST_SUITE("PluginResults") {
 
         auto it = named.results().find("tbl");
         REQUIRE(it != named.results().end());
-        REQUIRE(std::holds_alternative<OwnedArrow>(it->second));
+        REQUIRE(std::holds_alternative<plugins::OwnedArrow>(it->second));
         CHECK(g_released == 0);
 
         named.clear();
@@ -160,7 +148,7 @@ TEST_SUITE("PluginResults") {
     }
 
     TEST_CASE("emit_arrow rejects null arguments") {
-        NamedResultRegistry named;
+        plugins::NamedResultRegistry named;
         ArrowArray a{};
         ArrowSchema s{};
         CHECK(named.emit_arrow(nullptr, &a, &s) == -1);
@@ -169,7 +157,7 @@ TEST_SUITE("PluginResults") {
     }
 
     TEST_CASE("an emitted lazyframe is owned and collects to the frame") {
-        NamedResultRegistry named;
+        plugins::NamedResultRegistry named;
 
         const std::int64_t v[4] = {5, 15, 20, 8};
         dftu_series* col = dftu_series_new_flat(DFTU_TYPE_INT64, v, 4, nullptr);
@@ -186,9 +174,10 @@ TEST_SUITE("PluginResults") {
 
         auto it = named.results().find("plan");
         REQUIRE(it != named.results().end());
-        REQUIRE(std::holds_alternative<OwnedLazyFrame>(it->second));
+        REQUIRE(std::holds_alternative<plugins::OwnedLazyFrame>(it->second));
 
-        dftu_lazyframe* got = std::get<OwnedLazyFrame>(it->second).handle;
+        dftu_lazyframe* got =
+            std::get<plugins::OwnedLazyFrame>(it->second).handle;
         REQUIRE(got != nullptr);
         dftu_dataframe* out = dftu_lazyframe_collect(got, 0);
         REQUIRE(out != nullptr);

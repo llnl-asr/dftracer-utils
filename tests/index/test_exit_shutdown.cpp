@@ -11,8 +11,7 @@
 #include <cstdlib>
 
 using namespace dftracer::utils;
-
-namespace cache = dftracer::utils::index::cache;
+using namespace dftracer::utils::index;
 
 namespace {
 

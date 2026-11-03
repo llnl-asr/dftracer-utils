@@ -21,14 +21,8 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::plugins::ConfigTree;
-using dftracer::utils::plugins::PluginRun;
-using dftracer::utils::plugins::Plugins;
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
-using test_plugin_common::index_trace;
-using test_plugin_common::result_text;
-using test_plugin_common::run_set;
 
 #ifndef READS_PROJECTION_PLUGIN_PATH
 #error "READS_PROJECTION_PLUGIN_PATH must be defined by CMake"
@@ -60,17 +54,17 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dstd::fs::remove(pfw);
 
-    return index_trace(gz);
+    return test_plugin_common::index_trace(gz);
 }
 
-ConfigTree config_of(const dstd::String& json) {
-    return ConfigTree::from_json_string(json);
+plugins::ConfigTree config_of(const dstd::String& json) {
+    return plugins::ConfigTree::from_json_string(json);
 }
 
 }  // namespace
 
 TEST_CASE("a declared reads() narrows on_batch to exactly those columns") {
-    auto set = Plugins::builder()
+    auto set = plugins::Plugins::builder()
                    .add(READS_PROJECTION_PLUGIN_PATH,
                         config_of(R"({"declare_reads": true})"))
                    .build();
@@ -81,18 +75,23 @@ TEST_CASE("a declared reads() narrows on_batch to exactly those columns") {
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
     View view = View::from_files({make_trace(env)});
-    PluginRun run = run_set(*set, view, "reads-projection");
+    plugins::PluginRun run =
+        test_plugin_common::run_set(*set, view, "reads-projection");
 
-    CHECK(result_text(run, "reads_probe.num_columns") == "3");
-    CHECK(result_text(run, "reads_probe.columns") == "args.x,cat,dur");
-    CHECK(result_text(run, "reads_probe.has_args_x") == "1");
-    CHECK(result_text(run, "reads_probe.args_x_sum") == "190.000000");
+    CHECK(test_plugin_common::result_text(run, "reads_probe.num_columns") ==
+          "3");
+    CHECK(test_plugin_common::result_text(run, "reads_probe.columns") ==
+          "args.x,cat,dur");
+    CHECK(test_plugin_common::result_text(run, "reads_probe.has_args_x") ==
+          "1");
+    CHECK(test_plugin_common::result_text(run, "reads_probe.args_x_sum") ==
+          "190.000000");
 }
 
 TEST_CASE(
     "no declared reads() materializes every fixed column plus one per arg "
     "key") {
-    auto set = Plugins::builder()
+    auto set = plugins::Plugins::builder()
                    .add(READS_PROJECTION_PLUGIN_PATH,
                         config_of(R"({"declare_reads": false})"))
                    .build();
@@ -103,19 +102,23 @@ TEST_CASE(
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
     View view = View::from_files({make_trace(env)});
-    PluginRun run = run_set(*set, view, "reads-projection");
+    plugins::PluginRun run =
+        test_plugin_common::run_set(*set, view, "reads-projection");
 
     // 7 fixed columns (name, cat, pid, tid, ts, dur, ph) plus 5 distinct arg
     // keys (x, y, z, w, v): strictly more than the declared case's 3.
-    CHECK(result_text(run, "reads_probe.num_columns") == "12");
-    CHECK(result_text(run, "reads_probe.columns") ==
+    CHECK(test_plugin_common::result_text(run, "reads_probe.num_columns") ==
+          "12");
+    CHECK(test_plugin_common::result_text(run, "reads_probe.columns") ==
           "args.v,args.w,args.x,args.y,args.z,cat,dur,name,ph,pid,tid,ts");
-    CHECK(result_text(run, "reads_probe.has_args_x") == "1");
-    CHECK(result_text(run, "reads_probe.args_x_sum") == "190.000000");
+    CHECK(test_plugin_common::result_text(run, "reads_probe.has_args_x") ==
+          "1");
+    CHECK(test_plugin_common::result_text(run, "reads_probe.args_x_sum") ==
+          "190.000000");
 }
 
 TEST_CASE("a path-decoded file hands the plugin its own columns") {
-    auto set = Plugins::builder()
+    auto set = plugins::Plugins::builder()
                    .add(READS_PROJECTION_PLUGIN_PATH,
                         config_of(R"({"declare_reads": false})"))
                    .build();
@@ -135,28 +138,32 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
     (void)dstd::fs::remove(plain);
     dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
         .build();
-    using dftracer::utils::trace::internal::determine_index_path;
     View view = View::from_files(
         {ViewFile{dstd::String(gz),
-                  dstd::String(dstd::String(determine_index_path(gz, "")))}});
-    PluginRun run = run_set(*set, view, "reads-projection");
+                  dstd::String(dstd::String(
+                      trace::internal::determine_index_path(gz, "")))}});
+    plugins::PluginRun run =
+        test_plugin_common::run_set(*set, view, "reads-projection");
 
-    CHECK(result_text(run, "reads_probe.columns") == "k,x");
-    CHECK(result_text(run, "reads_probe.args_x_sum") == "190.000000");
+    CHECK(test_plugin_common::result_text(run, "reads_probe.columns") == "k,x");
+    CHECK(test_plugin_common::result_text(run, "reads_probe.args_x_sum") ==
+          "190.000000");
 
     // A projection of the View decodes only its paths for the scan; the
     // plugin still reads every field.
-    auto narrowed = Plugins::builder()
+    auto narrowed = plugins::Plugins::builder()
                         .add(READS_PROJECTION_PLUGIN_PATH,
                              config_of(R"({"declare_reads": false})"))
                         .build();
     REQUIRE(narrowed.has_value());
-    PluginRun projected = run_set(
+    plugins::PluginRun projected = test_plugin_common::run_set(
         *narrowed,
         View::from_files(
-            {ViewFile{dstd::String(gz), dstd::String(dstd::String(
-                                            determine_index_path(gz, "")))}})
+            {ViewFile{dstd::String(gz),
+                      dstd::String(dstd::String(
+                          trace::internal::determine_index_path(gz, "")))}})
             .select({"k"}),
         "reads-projection");
-    CHECK(result_text(projected, "reads_probe.args_x_sum") == "190.000000");
+    CHECK(test_plugin_common::result_text(
+              projected, "reads_probe.args_x_sum") == "190.000000");
 }

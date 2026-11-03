@@ -15,17 +15,15 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-using dftracer::utils::utilities::reader::internal::MemberDecodeCache;
-using dftu_utils_test::run_coro;
-using Bytes = MemberDecodeCache::Bytes;
+using namespace dftracer::utils::utilities;
+using Bytes = reader::internal::MemberDecodeCache::Bytes;
 
 namespace {
 
 // Producer that counts invocations and yields a few times so concurrent
 // callers pile up on the in-flight entry before it completes.
-MemberDecodeCache::Producer counting_producer(std::atomic<int>& calls,
-                                              std::uint8_t fill,
-                                              std::size_t size) {
+reader::internal::MemberDecodeCache::Producer counting_producer(
+    std::atomic<int>& calls, std::uint8_t fill, std::size_t size) {
     return [&calls, fill, size]() -> coro::CoroTask<Bytes> {
         calls.fetch_add(1, std::memory_order_relaxed);
         for (int i = 0; i < 4; ++i) co_await coro::yield();
@@ -41,12 +39,12 @@ MemberDecodeCache::Producer counting_producer(std::atomic<int>& calls,
 
 TEST_SUITE("MemberDecodeCache") {
     TEST_CASE("concurrent requests for one member decode once") {
-        MemberDecodeCache cache(64 * 1024 * 1024);
+        reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
         std::atomic<int> calls{0};
         const int n = 32;
 
         dstd::Vector<Bytes> results(n);
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<coro::CoroTask<Bytes>> tasks;
             tasks.reserve(n);
             for (int i = 0; i < n; ++i) {
@@ -72,11 +70,11 @@ TEST_SUITE("MemberDecodeCache") {
     }
 
     TEST_CASE("distinct members each decode once") {
-        MemberDecodeCache cache(64 * 1024 * 1024);
+        reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
         std::atomic<int> calls{0};
         const int n = 8;
 
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<coro::CoroTask<Bytes>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(cache.get_or_decode(
@@ -93,10 +91,10 @@ TEST_SUITE("MemberDecodeCache") {
     }
 
     TEST_CASE("repeat request hits the cache (no re-decode)") {
-        MemberDecodeCache cache(64 * 1024 * 1024);
+        reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
         std::atomic<int> calls{0};
 
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             auto a = co_await cache.get_or_decode(
                 2, 3, counting_producer(calls, 0x11, 512));
             auto b = co_await cache.get_or_decode(
@@ -112,15 +110,16 @@ TEST_SUITE("MemberDecodeCache") {
     TEST_CASE("members stay while the whole cache has room") {
         // 20 members over 16 shards put two in some shard: 120 bytes, over a
         // per-shard split of 1600 bytes (100) though the total (1200) fits.
-        MemberDecodeCache cache(/*capacity_bytes=*/1600);
+        reader::internal::MemberDecodeCache cache(/*capacity_bytes=*/1600);
         std::atomic<int> calls{0};
         auto pass = [&](std::uint64_t first, std::uint64_t last) {
-            run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-                for (std::uint64_t m = first; m < last; ++m)
-                    co_await cache.get_or_decode(
-                        5, m, counting_producer(calls, 0x22, 60));
-                co_return;
-            });
+            dftu_utils_test::run_coro(
+                [&](coro::Scope&) -> coro::CoroTask<void> {
+                    for (std::uint64_t m = first; m < last; ++m)
+                        co_await cache.get_or_decode(
+                            5, m, counting_producer(calls, 0x22, 60));
+                    co_return;
+                });
         };
         pass(0, 20);
         pass(0, 20);
@@ -136,11 +135,11 @@ TEST_SUITE("MemberDecodeCache") {
         // Total budget far below the working set; spread across shards, some
         // shard fills and evicts. Each member is decoded once here (distinct
         // keys, sequential), so decodes == members and evictions > 0.
-        MemberDecodeCache cache(/*capacity_bytes=*/4096);
+        reader::internal::MemberDecodeCache cache(/*capacity_bytes=*/4096);
         std::atomic<int> calls{0};
         const int members = 400;
 
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             for (int m = 0; m < members; ++m) {
                 co_await cache.get_or_decode(
                     9, static_cast<std::uint64_t>(m),

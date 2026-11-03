@@ -21,8 +21,7 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 using namespace test_view_common;
 
-namespace scan = dftracer::utils::trace::views::detail::scan;
-using scan::ScanPlan;
+using namespace dftracer::utils::trace;
 
 namespace {
 
@@ -78,11 +77,13 @@ void check_metadata_variant(bool numeric_ph) {
     prime_index(gz, idx);
 
     // phase("metadata") returns the CM record as a row, args flattened.
-    ScanPlan meta = scan::phase(
-        scan::from_file(dstd::String(gz), dstd::String(idx)), Phase::Metadata);
-    dataframe::LazyFrame meta_lazy = scan::collect(meta);
+    views::detail::scan::ScanPlan meta = views::detail::scan::phase(
+        views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
+        Phase::Metadata);
+    dataframe::LazyFrame meta_lazy = views::detail::scan::collect(meta);
     dataframe::DataFrame via_lazy = run(meta_lazy.collect());
-    dataframe::DataFrame via_eager = run(scan::collect_frame(meta));
+    dataframe::DataFrame via_eager =
+        run(views::detail::scan::collect_frame(meta));
 
     REQUIRE(via_lazy.num_rows() > 0);
     REQUIRE(via_eager.num_rows() == via_lazy.num_rows());
@@ -98,30 +99,34 @@ void check_metadata_variant(bool numeric_ph) {
     CHECK(found);
 
     // The query filter applies to metadata rows (both collect paths).
-    ScanPlan filtered = scan::filter(
-        scan::phase(scan::from_file(dstd::String(gz), dstd::String(idx)),
-                    Phase::Metadata),
+    views::detail::scan::ScanPlan filtered = views::detail::scan::filter(
+        views::detail::scan::phase(
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
+            Phase::Metadata),
         duql::parse_or_throw("args.name == \"time_metric\""));
-    dataframe::LazyFrame filtered_lazy = scan::collect(filtered);
+    dataframe::LazyFrame filtered_lazy = views::detail::scan::collect(filtered);
     dataframe::DataFrame f_lazy = run(filtered_lazy.collect());
-    dataframe::DataFrame f_eager = run(scan::collect_frame(filtered));
+    dataframe::DataFrame f_eager =
+        run(views::detail::scan::collect_frame(filtered));
     CHECK(f_lazy.num_rows() == 1);
     CHECK(f_eager.num_rows() == 1);
     CHECK(bstr(f_lazy, 0, "args.value") == "NS");
 
     // A non-matching metadata filter returns nothing (the filter really runs).
-    ScanPlan no_match = scan::filter(
-        scan::phase(scan::from_file(dstd::String(gz), dstd::String(idx)),
-                    Phase::Metadata),
+    views::detail::scan::ScanPlan no_match = views::detail::scan::filter(
+        views::detail::scan::phase(
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
+            Phase::Metadata),
         duql::parse_or_throw("args.name == \"nope\""));
-    dataframe::LazyFrame no_match_lazy = scan::collect(no_match);
+    dataframe::LazyFrame no_match_lazy = views::detail::scan::collect(no_match);
     CHECK(run(no_match_lazy.collect()).num_rows() == 0);
-    CHECK(run(scan::collect_frame(no_match)).num_rows() == 0);
+    CHECK(run(views::detail::scan::collect_frame(no_match)).num_rows() == 0);
 
     // A normal event row query never includes the metadata record.
-    ScanPlan events = scan::phase(
-        scan::from_file(dstd::String(gz), dstd::String(idx)), Phase::Events);
-    dataframe::LazyFrame events_lazy = scan::collect(events);
+    views::detail::scan::ScanPlan events = views::detail::scan::phase(
+        views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
+        Phase::Events);
+    dataframe::LazyFrame events_lazy = views::detail::scan::collect(events);
     dataframe::DataFrame ev_lazy = run(events_lazy.collect());
     CHECK(ev_lazy.num_rows() == 5);
     CHECK(rows_named(ev_lazy, "CM") == 0);
@@ -227,16 +232,18 @@ TEST_SUITE("View - metadata under pruning") {
         TestEnvironment env(200);
         const dstd::String gz = create_threaded_trace(env);
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        ScanPlan q = scan::filter(
-            scan::phase(scan::from_file(dstd::String(gz), dstd::String(idx)),
-                        Phase::Metadata),
+        views::detail::scan::ScanPlan q = views::detail::scan::filter(
+            views::detail::scan::phase(views::detail::scan::from_file(
+                                           dstd::String(gz), dstd::String(idx)),
+                                       Phase::Metadata),
             duql::parse_or_throw(R"(args.name == "t37")"));
-        CHECK(run(scan::collect_frame(q)).num_rows() == 1);
-        ScanPlan all = scan::filter(
-            scan::phase(scan::from_file(dstd::String(gz), dstd::String(idx)),
-                        Phase::Metadata),
+        CHECK(run(views::detail::scan::collect_frame(q)).num_rows() == 1);
+        views::detail::scan::ScanPlan all = views::detail::scan::filter(
+            views::detail::scan::phase(views::detail::scan::from_file(
+                                           dstd::String(gz), dstd::String(idx)),
+                                       Phase::Metadata),
             duql::parse_or_throw(R"(name == "thread_name")"));
-        CHECK(run(scan::collect_frame(all)).num_rows() == 40);
+        CHECK(run(views::detail::scan::collect_frame(all)).num_rows() == 40);
     }
 
     TEST_CASE("a metadata query reads no chunk of a file without metadata") {
@@ -281,11 +288,12 @@ TEST_SUITE("View - metadata under pruning") {
                                               snapshot, gz)))
                             .has_value());
         }
-        ScanPlan all = scan::filter(
-            scan::phase(scan::from_file(dstd::String(gz), dstd::String(idx)),
-                        Phase::Metadata),
+        views::detail::scan::ScanPlan all = views::detail::scan::filter(
+            views::detail::scan::phase(views::detail::scan::from_file(
+                                           dstd::String(gz), dstd::String(idx)),
+                                       Phase::Metadata),
             duql::parse_or_throw(R"(name == "thread_name")"));
-        CHECK(run(scan::collect_frame(all)).num_rows() == 40);
+        CHECK(run(views::detail::scan::collect_frame(all)).num_rows() == 40);
         StringSink pruned;
         View::from_file(dstd::String(gz), dstd::String(idx))
             .phase(Phase::Any)
@@ -329,30 +337,35 @@ TEST_SUITE("View - metadata under pruning") {
     TEST_CASE("metadata evidence prunes chunks no record can match") {
         TestEnvironment env(200);
         const dstd::String gz = create_threaded_trace(env);
-        namespace ip = dftracer::utils::index::plan;
-        auto chunks = [&](const dstd::String& text, ip::MetadataUse use) {
+        auto chunks = [&](const dstd::String& text,
+                          index::plan::MetadataUse use) {
             const auto q = dftracer::utils::duql::parse_or_throw(text);
-            auto out =
-                ip::prune_file({.index_path = determine_index_path(gz, ""),
-                                .file_path = dstd::String(dstd::StringView(gz)),
-                                .query = &q,
-                                .metadata = use})
-                    .get();
+            auto out = index::plan::prune_file(
+                           {.index_path = determine_index_path(gz, ""),
+                            .file_path = dstd::String(dstd::StringView(gz)),
+                            .query = &q,
+                            .metadata = use})
+                           .get();
             REQUIRE(out.has_value());
             REQUIRE_FALSE(out->all_chunks);
             return out->candidates.size();
         };
-        const auto total = chunks("dur >= 0", ip::MetadataUse::All);
-        const auto open = chunks(R"(name == "open")", ip::MetadataUse::None);
+        const auto total = chunks("dur >= 0", index::plan::MetadataUse::All);
+        const auto open =
+            chunks(R"(name == "open")", index::plan::MetadataUse::None);
         // No metadata record is named "open" or has a dur.
-        CHECK(chunks(R"(name == "open")", ip::MetadataUse::All) == open);
-        CHECK(chunks("dur > 5", ip::MetadataUse::Records) == 0);
-        const auto named =
-            chunks(R"(name == "thread_name")", ip::MetadataUse::Records);
+        CHECK(chunks(R"(name == "open")", index::plan::MetadataUse::All) ==
+              open);
+        CHECK(chunks("dur > 5", index::plan::MetadataUse::Records) == 0);
+        const auto named = chunks(R"(name == "thread_name")",
+                                  index::plan::MetadataUse::Records);
         CHECK(named > 1);
         CHECK(named < total);
-        CHECK(chunks(R"(name == "FH")", ip::MetadataUse::Records) <= 4);
-        CHECK(chunks(R"(args.name == "t37")", ip::MetadataUse::Records) >= 1);
-        CHECK(chunks(R"(args.name == "t37")", ip::MetadataUse::All) >= 1);
+        CHECK(chunks(R"(name == "FH")", index::plan::MetadataUse::Records) <=
+              4);
+        CHECK(chunks(R"(args.name == "t37")",
+                     index::plan::MetadataUse::Records) >= 1);
+        CHECK(chunks(R"(args.name == "t37")", index::plan::MetadataUse::All) >=
+              1);
     }
 }

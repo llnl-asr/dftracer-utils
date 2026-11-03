@@ -25,8 +25,6 @@
 
 using namespace dftracer::utils;
 
-namespace duql = dftracer::utils::duql;
-
 namespace {
 
 struct Leaf {
@@ -156,7 +154,6 @@ TEST_CASE("golden patterns keep their results") {
 }
 
 TEST_CASE("DataFrame kernels and duql agree on the golden patterns") {
-    namespace df = dftracer::utils::dataframe;
     const auto golden = dstd::fs::read_file(DUQL_GOLDEN_PATH);
     REQUIRE(golden.has_value());
     dftu_utils_test::LineStream in(*golden);
@@ -183,8 +180,8 @@ TEST_CASE("DataFrame kernels and duql agree on the golden patterns") {
             const auto strings = strings_for(l.pattern, rng);
             dstd::Vector<dstd::StringView> views(strings.begin(),
                                                  strings.end());
-            const df::Series col = df::Series::strings(views);
-            const df::Series m =
+            const dataframe::Series col = dataframe::Series::strings(views);
+            const dataframe::Series m =
                 regex ? col.str_search(l.pattern) : col.str_like(l.pattern);
             REQUIRE(m.handle());
             for (std::size_t i = 0; i < strings.size(); ++i) {
@@ -196,7 +193,7 @@ TEST_CASE("DataFrame kernels and duql agree on the golden patterns") {
             }
             if (!regex) continue;
             // str_matches is the whole-string form of the same regex.
-            const df::Series whole = col.str_matches(l.pattern);
+            const dataframe::Series whole = col.str_matches(l.pattern);
             const auto full = duql::compile_regex(l.pattern, false, true);
             REQUIRE(whole.handle());
             REQUIRE(full);

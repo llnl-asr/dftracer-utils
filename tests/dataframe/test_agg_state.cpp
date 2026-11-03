@@ -13,15 +13,7 @@
 #include <stdexcept>
 
 using namespace dftracer::utils;
-
-namespace df = dftracer::utils::dataframe;
-using df::AggDynInput;
-using df::AggDynSpec;
-using df::AggOp;
-using df::AggSpec;
-using df::DataFrame;
-using df::Series;
-using df::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -70,10 +62,10 @@ dstd::Vector<AggSpec> mixed_specs() {
 
 TEST_CASE("group_agg_state + agg_finalize matches group_agg") {
     Sample s(4096);
-    auto st = df::group_agg_state(s.keys1, s.values, mixed_specs());
-    DataFrame a = df::agg_finalize(*st, "k1");
-    DataFrame b = df::group_agg(s.keys1, s.values, mixed_specs(),
-                                dstd::Vector<dstd::String>{"k1"});
+    auto st = dataframe::group_agg_state(s.keys1, s.values, mixed_specs());
+    DataFrame a = dataframe::agg_finalize(*st, "k1");
+    DataFrame b = dataframe::group_agg(s.keys1, s.values, mixed_specs(),
+                                       dstd::Vector<dstd::String>{"k1"});
     REQUIRE(a.num_rows() == b.num_rows());
     REQUIRE(a.names == b.names);
     for (std::int64_t r = 0; r < a.num_rows(); ++r) {
@@ -101,8 +93,9 @@ TEST_CASE("group_agg keeps a Uint64 key's type and its > 2^63 value") {
     Series sv = Series::flat_i64(v.data(), 4);
     dstd::Vector<const Series*> keys{&sk};
     dstd::Vector<const Series*> values{&sv};
-    DataFrame r = df::group_agg(keys, values, {AggSpec{AggOp::Sum, 0, "sum"}},
-                                dstd::Vector<dstd::String>{"k"});
+    DataFrame r =
+        dataframe::group_agg(keys, values, {AggSpec{AggOp::Sum, 0, "sum"}},
+                             dstd::Vector<dstd::String>{"k"});
     REQUIRE(r.column("k").type() == TypeId::Uint64);
     REQUIRE(r.num_rows() == 2);
     const std::uint64_t* kc = r.column("k").data<std::uint64_t>();
@@ -123,8 +116,8 @@ TEST_CASE("group_agg keeps a Float64 key's type and value") {
     dstd::Vector<const Series*> keys{&sk};
     dstd::Vector<const Series*> values{&sv};
     DataFrame r =
-        df::group_agg(keys, values, {AggSpec{AggOp::Count, -1, "cnt"}},
-                      dstd::Vector<dstd::String>{"k"});
+        dataframe::group_agg(keys, values, {AggSpec{AggOp::Count, -1, "cnt"}},
+                             dstd::Vector<dstd::String>{"k"});
     REQUIRE(r.column("k").type() == TypeId::Float64);
     REQUIRE(r.num_rows() == 2);
     const double* kc = r.column("k").data<double>();
@@ -139,15 +132,16 @@ TEST_CASE("group_agg keeps a Float64 key's type and value") {
 
 TEST_CASE("agg_regroup coarsens (k1,k2)->k1 matching a direct k1 group_agg") {
     Sample s(6000);
-    auto fine = df::group_agg_state(s.keys2, s.values, mixed_specs());
+    auto fine = dataframe::group_agg_state(s.keys2, s.values, mixed_specs());
 
-    auto coarse = df::agg_regroup(*fine, {0});  // keep k1 only
-    df::agg_sort_groups(*coarse);
-    DataFrame got = df::agg_finalize(*coarse, "k1");
+    auto coarse = dataframe::agg_regroup(*fine, {0});  // keep k1 only
+    dataframe::agg_sort_groups(*coarse);
+    DataFrame got = dataframe::agg_finalize(*coarse, "k1");
 
-    auto direct_st = df::group_agg_state(s.keys1, s.values, mixed_specs());
-    df::agg_sort_groups(*direct_st);
-    DataFrame want = df::agg_finalize(*direct_st, "k1");
+    auto direct_st =
+        dataframe::group_agg_state(s.keys1, s.values, mixed_specs());
+    dataframe::agg_sort_groups(*direct_st);
+    DataFrame want = dataframe::agg_finalize(*direct_st, "k1");
 
     REQUIRE(got.num_rows() == want.num_rows());
     for (std::int64_t r = 0; r < got.num_rows(); ++r) {
@@ -191,14 +185,14 @@ TEST_CASE("agg_regroup preserves occupancy busy/active exactly") {
     dstd::Vector<AggSpec> specs{AggSpec{AggOp::Busy, 0, "busy", 0.0, 1},
                                 AggSpec{AggOp::Active, 0, "active", 0.0, 1}};
 
-    auto fine = df::group_agg_state(keys2, values, specs);
-    auto coarse = df::agg_regroup(*fine, {0});
-    df::agg_sort_groups(*coarse);
-    DataFrame got = df::agg_finalize(*coarse, "k1");
+    auto fine = dataframe::group_agg_state(keys2, values, specs);
+    auto coarse = dataframe::agg_regroup(*fine, {0});
+    dataframe::agg_sort_groups(*coarse);
+    DataFrame got = dataframe::agg_finalize(*coarse, "k1");
 
-    auto direct = df::group_agg_state(keys1, values, specs);
-    df::agg_sort_groups(*direct);
-    DataFrame want = df::agg_finalize(*direct, "k1");
+    auto direct = dataframe::group_agg_state(keys1, values, specs);
+    dataframe::agg_sort_groups(*direct);
+    DataFrame want = dataframe::agg_finalize(*direct, "k1");
 
     REQUIRE(got.num_rows() == want.num_rows());
     for (std::int64_t r = 0; r < got.num_rows(); ++r) {
@@ -226,11 +220,11 @@ TEST_CASE("agg_regroup with bucket_recut coarsens the time grain") {
     dstd::Vector<AggSpec> specs{AggSpec{AggOp::Sum, 0, "sum"},
                                 AggSpec{AggOp::Count, -1, "cnt"}};
 
-    auto fine = df::group_agg_state(keys, values, specs);
-    auto coarse = df::agg_regroup(*fine, {0, 1}, /*bucket_recut=*/20);
-    df::agg_sort_groups(*coarse);
-    DataFrame got =
-        df::agg_finalize(*coarse, dstd::Vector<dstd::String>{"bucket", "grp"});
+    auto fine = dataframe::group_agg_state(keys, values, specs);
+    auto coarse = dataframe::agg_regroup(*fine, {0, 1}, /*bucket_recut=*/20);
+    dataframe::agg_sort_groups(*coarse);
+    DataFrame got = dataframe::agg_finalize(
+        *coarse, dstd::Vector<dstd::String>{"bucket", "grp"});
 
     // Direct: floor each bucket to grain 20 up front, then group.
     dstd::Vector<std::int64_t> cb(n);
@@ -239,10 +233,10 @@ TEST_CASE("agg_regroup with bucket_recut coarsens the time grain") {
             (bucket[static_cast<std::size_t>(i)] / 20) * 20;
     Series scb = Series::flat_i64(cb.data(), n);
     dstd::Vector<const Series*> ckeys{&scb, &sg};
-    auto direct = df::group_agg_state(ckeys, values, specs);
-    df::agg_sort_groups(*direct);
-    DataFrame want =
-        df::agg_finalize(*direct, dstd::Vector<dstd::String>{"bucket", "grp"});
+    auto direct = dataframe::group_agg_state(ckeys, values, specs);
+    dataframe::agg_sort_groups(*direct);
+    DataFrame want = dataframe::agg_finalize(
+        *direct, dstd::Vector<dstd::String>{"bucket", "grp"});
 
     REQUIRE(got.num_rows() == want.num_rows());
     for (std::int64_t r = 0; r < got.num_rows(); ++r) {
@@ -281,13 +275,13 @@ struct DynSample {
 
 TEST_CASE("AggState dyn: per-batch name discovery unions into each group") {
     DynSample s;
-    auto st = df::agg_new({AggSpec{AggOp::Count, -1, "n"}}, dyn_specs());
+    auto st = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}}, dyn_specs());
     // Two batches over the same groups discover disjoint arg names (x then y);
     // each group's dyn set is the union, and the finalized columns are sorted.
     agg_accumulate(*st, s.keys, {}, dstd::Vector<AggDynInput>{{"x", &s.sx}});
     agg_accumulate(*st, s.keys, {}, dstd::Vector<AggDynInput>{{"y", &s.sy}});
-    df::agg_sort_groups(*st);
-    DataFrame r = df::agg_finalize(*st, "k");
+    dataframe::agg_sort_groups(*st);
+    DataFrame r = dataframe::agg_finalize(*st, "k");
 
     REQUIRE(r.num_rows() == 2);
     const dstd::Vector<dstd::String> expect{
@@ -311,11 +305,11 @@ TEST_CASE("AggState dyn: an Int64 arg keeps a stable exact Int64 sum column") {
     Series sk = Series::flat_i64(k.data(), 4);
     Series sz = Series::flat_i64(z.data(), 4);
     dstd::Vector<const Series*> keys{&sk};
-    auto st = df::agg_new({AggSpec{AggOp::Count, -1, "n"}},
-                          {{AggOp::Sum, 0.0, "sum_"}});
+    auto st = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}},
+                                 {{AggOp::Sum, 0.0, "sum_"}});
     agg_accumulate(*st, keys, {}, dstd::Vector<AggDynInput>{{"z", &sz}});
-    df::agg_sort_groups(*st);
-    DataFrame r = df::agg_finalize(*st, "k");
+    dataframe::agg_sort_groups(*st);
+    DataFrame r = dataframe::agg_finalize(*st, "k");
     CHECK(r.column("sum_z").type() == TypeId::Int64);
     CHECK(r.column("sum_z").data<std::int64_t>()[0] == 12);
     CHECK(r.column("sum_z").data<std::int64_t>()[1] == 24);
@@ -326,15 +320,15 @@ TEST_CASE("AggState dyn: merge unions disjoint and overlapping names") {
     // State A sees x and y; state B sees y and w, in the same groups.
     dstd::Vector<double> w{100, 200, 300, 400};
     Series sw = Series::flat_f64(w.data(), 4);
-    auto a = df::agg_new({AggSpec{AggOp::Count, -1, "n"}}, dyn_specs());
+    auto a = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}}, dyn_specs());
     agg_accumulate(*a, s.keys, {},
                    dstd::Vector<AggDynInput>{{"x", &s.sx}, {"y", &s.sy}});
-    auto b = df::agg_new({AggSpec{AggOp::Count, -1, "n"}}, dyn_specs());
+    auto b = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}}, dyn_specs());
     agg_accumulate(*b, s.keys, {},
                    dstd::Vector<AggDynInput>{{"y", &s.sy}, {"w", &sw}});
-    df::agg_merge(*a, *b);
-    df::agg_sort_groups(*a);
-    DataFrame r = df::agg_finalize(*a, "k");
+    dataframe::agg_merge(*a, *b);
+    dataframe::agg_sort_groups(*a);
+    DataFrame r = dataframe::agg_finalize(*a, "k");
 
     // Union of names: w, x, y (sorted). y was seen in both, so its count is the
     // sum of both contributions.
@@ -351,15 +345,15 @@ TEST_CASE("AggState dyn: merge unions disjoint and overlapping names") {
 
 TEST_CASE("AggState dyn: serialize/deserialize round-trips the side-table") {
     DynSample s;
-    auto st = df::agg_new({AggSpec{AggOp::Count, -1, "n"}}, dyn_specs());
+    auto st = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}}, dyn_specs());
     agg_accumulate(*st, s.keys, {},
                    dstd::Vector<AggDynInput>{{"x", &s.sx}, {"y", &s.sy}});
-    df::agg_sort_groups(*st);
-    DataFrame want = df::agg_finalize(*st, "k");
+    dataframe::agg_sort_groups(*st);
+    DataFrame want = dataframe::agg_finalize(*st, "k");
 
-    dstd::String blob = df::agg_serialize(*st);
-    auto back = df::agg_deserialize(blob);
-    DataFrame got = df::agg_finalize(*back, "k");
+    dstd::String blob = dataframe::agg_serialize(*st);
+    auto back = dataframe::agg_deserialize(blob);
+    DataFrame got = dataframe::agg_finalize(*back, "k");
 
     REQUIRE(got.names == want.names);
     REQUIRE(got.num_rows() == want.num_rows());
@@ -379,44 +373,48 @@ TEST_CASE("AggState dyn: a Pct reduction round-trips its per-name sketch") {
     Series sk = Series::flat_i64(k.data(), 1000);
     Series sx = Series::flat_f64(x.data(), 1000);
     dstd::Vector<const Series*> keys{&sk};
-    auto st = df::agg_new({AggSpec{AggOp::Count, -1, "n"}},
-                          {{AggOp::Pct, 0.9, "p90_"}});
+    auto st = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}},
+                                 {{AggOp::Pct, 0.9, "p90_"}});
     agg_accumulate(*st, keys, {}, dstd::Vector<AggDynInput>{{"x", &sx}});
-    DataFrame direct = df::agg_finalize(*st, "k");
+    DataFrame direct = dataframe::agg_finalize(*st, "k");
     const double q = direct.column("p90_x").data<double>()[0];
     CHECK(q == doctest::Approx(900.0).epsilon(0.02));
 
-    auto back = df::agg_deserialize(df::agg_serialize(*st));
-    DataFrame r = df::agg_finalize(*back, "k");
+    auto back = dataframe::agg_deserialize(dataframe::agg_serialize(*st));
+    DataFrame r = dataframe::agg_finalize(*back, "k");
     CHECK(r.column("p90_x").data<double>()[0] == doctest::Approx(q));
 }
 
 TEST_CASE("splitting groups into zero parts is an error") {
     Sample s(64);
-    auto st = df::group_agg_state(s.keys1, s.values, mixed_specs());
-    CHECK_THROWS(df::agg_split_groups(*st, 0, 0));
-    CHECK(df::agg_split_groups(*st, 3, 0).size() == 3);
+    auto st = dataframe::group_agg_state(s.keys1, s.values, mixed_specs());
+    CHECK_THROWS(dataframe::agg_split_groups(*st, 0, 0));
+    CHECK(dataframe::agg_split_groups(*st, 3, 0).size() == 3);
 }
 
 TEST_CASE("a blob read in the other format is an error, not misread bytes") {
     Sample s(64);
-    auto st = df::group_agg_state(s.keys1, s.values, mixed_specs());
-    df::agg_sort_groups(*st);
-    CHECK_THROWS(df::agg_deserialize(df::agg_serialize(*st, true), false));
-    CHECK_THROWS(df::agg_deserialize(df::agg_serialize(*st), true));
+    auto st = dataframe::group_agg_state(s.keys1, s.values, mixed_specs());
+    dataframe::agg_sort_groups(*st);
+    CHECK_THROWS(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*st, true), false));
+    CHECK_THROWS(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*st), true));
 }
 
 TEST_CASE(
     "compact serialization round-trips like the full one, in fewer bytes") {
     Sample s(4096);
-    auto st = df::group_agg_state(s.keys1, s.values, mixed_specs());
-    df::agg_sort_groups(*st);
-    const dstd::String full = df::agg_serialize(*st);
-    const dstd::String compact = df::agg_serialize(*st, true);
+    auto st = dataframe::group_agg_state(s.keys1, s.values, mixed_specs());
+    dataframe::agg_sort_groups(*st);
+    const dstd::String full = dataframe::agg_serialize(*st);
+    const dstd::String compact = dataframe::agg_serialize(*st, true);
     CHECK(compact.size() < full.size());
 
-    DataFrame a = df::agg_finalize(*df::agg_deserialize(full), "k1");
-    DataFrame b = df::agg_finalize(*df::agg_deserialize(compact, true), "k1");
+    DataFrame a =
+        dataframe::agg_finalize(*dataframe::agg_deserialize(full), "k1");
+    DataFrame b = dataframe::agg_finalize(
+        *dataframe::agg_deserialize(compact, true), "k1");
     REQUIRE(a.names == b.names);
     REQUIRE(a.num_rows() == b.num_rows());
     for (std::int64_t r = 0; r < a.num_rows(); ++r) {
@@ -437,23 +435,24 @@ TEST_CASE(
 
 TEST_CASE("agg_regroup over serialize/deserialize round-trip is exact") {
     Sample s(3000);
-    auto fine = df::group_agg_state(s.keys2, s.values, mixed_specs());
+    auto fine = dataframe::group_agg_state(s.keys2, s.values, mixed_specs());
     // Persist each group as a single-group blob, then rebuild one merged state
     // (the rollup read path), and coarsen that.
-    auto rebuilt = df::agg_new(mixed_specs());
-    const std::int64_t ng = df::agg_num_groups(*fine);
+    auto rebuilt = dataframe::agg_new(mixed_specs());
+    const std::int64_t ng = dataframe::agg_num_groups(*fine);
     for (std::int64_t g = 0; g < ng; ++g) {
-        dstd::String blob = df::agg_serialize(*df::agg_extract_group(*fine, g));
-        auto one = df::agg_deserialize(blob);
-        df::agg_merge(*rebuilt, *one);
+        dstd::String blob =
+            dataframe::agg_serialize(*dataframe::agg_extract_group(*fine, g));
+        auto one = dataframe::agg_deserialize(blob);
+        dataframe::agg_merge(*rebuilt, *one);
     }
-    auto coarse = df::agg_regroup(*rebuilt, {0});
-    df::agg_sort_groups(*coarse);
-    DataFrame got = df::agg_finalize(*coarse, "k1");
+    auto coarse = dataframe::agg_regroup(*rebuilt, {0});
+    dataframe::agg_sort_groups(*coarse);
+    DataFrame got = dataframe::agg_finalize(*coarse, "k1");
 
-    auto direct = df::group_agg_state(s.keys1, s.values, mixed_specs());
-    df::agg_sort_groups(*direct);
-    DataFrame want = df::agg_finalize(*direct, "k1");
+    auto direct = dataframe::group_agg_state(s.keys1, s.values, mixed_specs());
+    dataframe::agg_sort_groups(*direct);
+    DataFrame want = dataframe::agg_finalize(*direct, "k1");
 
     REQUIRE(got.num_rows() == want.num_rows());
     for (std::int64_t r = 0; r < got.num_rows(); ++r) {
@@ -472,21 +471,22 @@ namespace {
 // first batch carries the dynamics) and the full FieldStat per cell (taken when
 // the state holds the group already). Every reduction must answer the same from
 // either.
-df::AggStatePtr dyn_light_state(const dstd::Vector<AggDynSpec>& specs,
-                                const dstd::Vector<const Series*>& keys,
-                                const dstd::Vector<AggDynInput>& inputs) {
-    auto st = df::agg_new({}, specs);
+dataframe::AggStatePtr dyn_light_state(
+    const dstd::Vector<AggDynSpec>& specs,
+    const dstd::Vector<const Series*>& keys,
+    const dstd::Vector<AggDynInput>& inputs) {
+    auto st = dataframe::agg_new({}, specs);
     agg_accumulate(*st, keys, {}, inputs);
     return st;
 }
 
-df::AggStatePtr dyn_full_state(const dstd::Vector<AggDynSpec>& specs,
-                               const dstd::Vector<const Series*>& keys,
-                               const dstd::Vector<AggDynInput>& inputs) {
+dataframe::AggStatePtr dyn_full_state(const dstd::Vector<AggDynSpec>& specs,
+                                      const dstd::Vector<const Series*>& keys,
+                                      const dstd::Vector<AggDynInput>& inputs) {
     // The same batches regrouped into a fresh state, whose cells are FieldStats
     // unpacked from the light ones.
     auto st = dyn_light_state(specs, keys, inputs);
-    return df::agg_regroup(*st, {0});
+    return dataframe::agg_regroup(*st, {0});
 }
 
 // Every column, bit for bit. The two layouts must not differ in one bit.
@@ -519,10 +519,10 @@ void check_same_dyn(const dstd::Vector<AggDynSpec>& specs,
                     const dstd::Vector<AggDynInput>& inputs) {
     auto light = dyn_light_state(specs, keys, inputs);
     auto full = dyn_full_state(specs, keys, inputs);
-    df::agg_sort_groups(*light);
-    df::agg_sort_groups(*full);
-    check_same_columns(df::agg_finalize(*light, "k"),
-                       df::agg_finalize(*full, "k"));
+    dataframe::agg_sort_groups(*light);
+    dataframe::agg_sort_groups(*full);
+    check_same_columns(dataframe::agg_finalize(*light, "k"),
+                       dataframe::agg_finalize(*full, "k"));
 }
 
 // k = {0,0,0,0,1,1,2,2}, a: Int64 with rows 1 and 4 null, b: Float64 with row
@@ -561,8 +561,8 @@ TEST_CASE("AggState dyn: the light cells finalize like the full ones") {
     auto st =
         dyn_light_state({{AggOp::Sum, 0.0, "sum_"}, {AggOp::Count, 0.0, "n_"}},
                         d.keys, {{"a", &d.sa}, {"b", &d.sb}});
-    df::agg_sort_groups(*st);
-    DataFrame r = df::agg_finalize(*st, "k");
+    dataframe::agg_sort_groups(*st);
+    DataFrame r = dataframe::agg_finalize(*st, "k");
     CHECK(r.column("sum_a").type() == TypeId::Int64);
     CHECK(r.column("sum_a").data<std::int64_t>()[0] == 23);
     CHECK(r.column("sum_a").data<std::int64_t>()[1] == 17);
@@ -593,8 +593,8 @@ TEST_CASE("AggState dyn: an Int64 sum stays exact through the light cells") {
     check_same_dyn(specs, keys, in);
 
     auto st = dyn_light_state(specs, keys, in);
-    df::agg_sort_groups(*st);
-    DataFrame r = df::agg_finalize(*st, "k");
+    dataframe::agg_sort_groups(*st);
+    DataFrame r = dataframe::agg_finalize(*st, "k");
     // Group 0 sums to big exactly. Group 1 wraps, so its sum column is null.
     CHECK(!r.column("sum_a").is_null(0));
     CHECK(r.column("sum_a").data<std::int64_t>()[0] == big);
@@ -615,19 +615,19 @@ TEST_CASE("AggState dyn: a name fed two domains keeps the full cells") {
     const dstd::Vector<AggDynSpec> specs{{AggOp::Sum, 0.0, "sum_"},
                                          {AggOp::Count, 0.0, "n_"}};
 
-    auto light = df::agg_new({}, specs);
+    auto light = dataframe::agg_new({}, specs);
     agg_accumulate(*light, keys, {}, {{"a", &sa}});
     agg_accumulate(*light, keys, {}, {{"a", &sf}});
-    auto full = df::agg_new({}, specs);
+    auto full = dataframe::agg_new({}, specs);
     agg_accumulate(*full, keys, {});
     agg_accumulate(*full, keys, {}, {{"a", &sa}});
     agg_accumulate(*full, keys, {}, {{"a", &sf}});
-    df::agg_sort_groups(*light);
-    df::agg_sort_groups(*full);
-    check_same_columns(df::agg_finalize(*light, "k"),
-                       df::agg_finalize(*full, "k"));
+    dataframe::agg_sort_groups(*light);
+    dataframe::agg_sort_groups(*full);
+    check_same_columns(dataframe::agg_finalize(*light, "k"),
+                       dataframe::agg_finalize(*full, "k"));
 
-    DataFrame r = df::agg_finalize(*light, "k");
+    DataFrame r = dataframe::agg_finalize(*light, "k");
     // Every row of both batches counts, and the exact sum is the Int64 batch's.
     CHECK(r.column("n_a").data<std::int64_t>()[0] == 4);
     CHECK(r.column("sum_a").data<std::int64_t>()[0] == 3);
@@ -647,37 +647,37 @@ TEST_CASE("AggState dyn: merge unions names through both layouts") {
 
     // Two batches, one naming a only and one naming a and b. Folding them into
     // one state is the merge's answer. a is in both, so it counts twice.
-    auto ref = df::agg_new({}, specs);
+    auto ref = dataframe::agg_new({}, specs);
     agg_accumulate(*ref, keys, {}, {{"a", &sa}});
     agg_accumulate(*ref, keys, {}, {{"a", &sa}, {"b", &sb}});
-    df::agg_sort_groups(*ref);
-    const DataFrame w = df::agg_finalize(*ref, "k");
+    dataframe::agg_sort_groups(*ref);
+    const DataFrame w = dataframe::agg_finalize(*ref, "k");
     CHECK(w.column("n_a").data<std::int64_t>()[0] == 4);
     CHECK(w.column("sum_a").data<std::int64_t>()[0] == 6);
 
     auto merged_light = dyn_light_state(specs, keys, {{"a", &sa}});
     auto other = dyn_light_state(specs, keys, {{"a", &sa}, {"b", &sb}});
-    df::agg_merge(*merged_light, *other);
-    df::agg_sort_groups(*merged_light);
-    check_same_columns(df::agg_finalize(*merged_light, "k"), w);
+    dataframe::agg_merge(*merged_light, *other);
+    dataframe::agg_sort_groups(*merged_light);
+    check_same_columns(dataframe::agg_finalize(*merged_light, "k"), w);
 
     auto into_full = dyn_full_state(specs, keys, {{"a", &sa}});
-    df::agg_merge(*into_full, *other);
-    df::agg_sort_groups(*into_full);
-    check_same_columns(df::agg_finalize(*into_full, "k"), w);
+    dataframe::agg_merge(*into_full, *other);
+    dataframe::agg_sort_groups(*into_full);
+    check_same_columns(dataframe::agg_finalize(*into_full, "k"), w);
 
     // A full other, one pass of both names, into a fresh destination. The same
     // batches folded once into one state.
-    auto one_pass = df::agg_new({}, specs);
+    auto one_pass = dataframe::agg_new({}, specs);
     agg_accumulate(*one_pass, keys, {}, {{"a", &sa}, {"b", &sb}});
-    df::agg_sort_groups(*one_pass);
-    const DataFrame w1 = df::agg_finalize(*one_pass, "k");
+    dataframe::agg_sort_groups(*one_pass);
+    const DataFrame w1 = dataframe::agg_finalize(*one_pass, "k");
 
-    auto into_light = df::agg_new({}, specs);
+    auto into_light = dataframe::agg_new({}, specs);
     auto full_other = dyn_full_state(specs, keys, {{"a", &sa}, {"b", &sb}});
-    df::agg_merge(*into_light, *full_other);
-    df::agg_sort_groups(*into_light);
-    check_same_columns(df::agg_finalize(*into_light, "k"), w1);
+    dataframe::agg_merge(*into_light, *full_other);
+    dataframe::agg_sort_groups(*into_light);
+    check_same_columns(dataframe::agg_finalize(*into_light, "k"), w1);
 }
 
 TEST_CASE("AggState dyn: the light cells round-trip a blob") {
@@ -688,28 +688,31 @@ TEST_CASE("AggState dyn: the light cells round-trip a blob") {
                                          {AggOp::Max, 0.0, "max_"},
                                          {AggOp::Std, 0.0, "std_"}};
     auto st = dyn_light_state(specs, d.keys, {{"a", &d.sa}, {"b", &d.sb}});
-    df::agg_sort_groups(*st);
-    const DataFrame want = df::agg_finalize(*st, "k");
-    const dstd::String blob = df::agg_serialize(*st);
-    check_same_columns(df::agg_finalize(*df::agg_deserialize(blob), "k"), want);
+    dataframe::agg_sort_groups(*st);
+    const DataFrame want = dataframe::agg_finalize(*st, "k");
+    const dstd::String blob = dataframe::agg_serialize(*st);
     check_same_columns(
-        df::agg_finalize(
-            *df::agg_deserialize(df::agg_serialize(*st, true), true), "k"),
+        dataframe::agg_finalize(*dataframe::agg_deserialize(blob), "k"), want);
+    check_same_columns(
+        dataframe::agg_finalize(*dataframe::agg_deserialize(
+                                    dataframe::agg_serialize(*st, true), true),
+                                "k"),
         want);
 
     // A blob written while the cells were full reads back as full cells and
     // still agrees, and its tag is not the light one.
     auto full = dyn_full_state(specs, d.keys, {{"a", &d.sa}, {"b", &d.sb}});
-    df::agg_sort_groups(*full);
-    const dstd::String fblob = df::agg_serialize(*full);
-    check_same_columns(df::agg_finalize(*df::agg_deserialize(fblob), "k"),
-                       want);
+    dataframe::agg_sort_groups(*full);
+    const dstd::String fblob = dataframe::agg_serialize(*full);
+    check_same_columns(
+        dataframe::agg_finalize(*dataframe::agg_deserialize(fblob), "k"), want);
 }
 
 TEST_CASE("AggState dyn: an op the dyn path cannot compute is refused") {
     CHECK_THROWS_AS(
-        df::agg_new({}, {df::AggDynSpec{df::AggOp::CountValid, 0.0, "cv_"}}),
+        dataframe::agg_new({}, {dataframe::AggDynSpec{
+                                   dataframe::AggOp::CountValid, 0.0, "cv_"}}),
         std::invalid_argument);
-    CHECK_NOTHROW(
-        df::agg_new({}, {df::AggDynSpec{df::AggOp::Mean, 0.0, "mean_"}}));
+    CHECK_NOTHROW(dataframe::agg_new(
+        {}, {dataframe::AggDynSpec{dataframe::AggOp::Mean, 0.0, "mean_"}}));
 }

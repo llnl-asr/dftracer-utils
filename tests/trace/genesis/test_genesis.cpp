@@ -23,7 +23,6 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::genesis;
-using dftu_utils_test::ScopedTestDir;
 
 namespace {
 
@@ -73,7 +72,7 @@ void write_text(const dstd::Path& p, const dstd::String& content) {
     REQUIRE(dstd::fs::write_file(p.view(), content).has_value());
 }
 
-dstd::Path matrix_run(const ScopedTestDir& d, std::int64_t ppn,
+dstd::Path matrix_run(const dftu_utils_test::ScopedTestDir& d, std::int64_t ppn,
                       const dstd::String& trace,
                       const dstd::String& input = "in1") {
     const dstd::Path dir = d.path() / "app1" / "sys1" / input / "nodes_1" /
@@ -109,7 +108,7 @@ GroupResult process(RunGroup g, std::uint64_t share = TEST_SHARE,
     return out;
 }
 
-Discovery discover_dir(const ScopedTestDir& d) {
+Discovery discover_dir(const dftu_utils_test::ScopedTestDir& d) {
     Discovery out;
     dftu_utils_test::run_coro([&](coro::Scope& ctx) {
         return discover_into(ctx, dstd::String(d.str().data(), d.str().size()),
@@ -118,7 +117,7 @@ Discovery discover_dir(const ScopedTestDir& d) {
     return out;
 }
 
-GroupResult process_only(const ScopedTestDir& d) {
+GroupResult process_only(const dftu_utils_test::ScopedTestDir& d) {
     auto disc = discover_dir(d);
     REQUIRE(disc.skips.empty());
     REQUIRE(disc.groups.size() == 1);
@@ -219,7 +218,7 @@ TEST_CASE("run_id is FNV-1a 64 of the joined run keys") {
 }
 
 TEST_CASE("discover reads the matrix layout, one group per set") {
-    ScopedTestDir d("genesis_v1");
+    dftu_utils_test::ScopedTestDir d("genesis_v1");
     const dstd::Path dir =
         d.path() / "laghos" / "matrix" / "p1" / "nodes_2" / "ppn_4";
     write_text(dir / "summary.json",
@@ -243,7 +242,7 @@ TEST_CASE("discover reads the matrix layout, one group per set") {
 }
 
 TEST_CASE("discover reads the tioga v2 layout as one group of several sets") {
-    ScopedTestDir d("genesis_v2");
+    dftu_utils_test::ScopedTestDir d("genesis_v2");
     const dstd::Path dir =
         d.path() / "laghos" / "tioga" / "tioga" / "caseA" / "nodes_1" / "ppn_1";
     write_text(dir / "summary.json",
@@ -267,7 +266,7 @@ TEST_CASE("discover reads the tioga v2 layout as one group of several sets") {
 }
 
 TEST_CASE("discover skips a tioga v2 directory with missing slices") {
-    ScopedTestDir d("genesis_gap");
+    dftu_utils_test::ScopedTestDir d("genesis_gap");
     const dstd::Path dir =
         d.path() / "laghos" / "tioga" / "tioga" / "c" / "nodes_1" / "ppn_1";
     write_text(dir / "summary.json",
@@ -284,7 +283,7 @@ TEST_CASE("discover skips a tioga v2 directory with missing slices") {
 }
 
 TEST_CASE("discover reads the path-only layout as one sliced group") {
-    ScopedTestDir d("genesis_path");
+    dftu_utils_test::ScopedTestDir d("genesis_path");
     const dstd::Path c = d.path() / "minife" / "tioga" / "tioga" / "input_50" /
                          "nodes_2" / "ppn_2" / "compacted";
     write_gz(c / "nx50_N2_ppn2-1_chunk0.pfw.gz", "[\n");
@@ -303,7 +302,7 @@ TEST_CASE("discover reads the path-only layout as one sliced group") {
 }
 
 TEST_CASE("discover reads path-only slices kept in the run directory") {
-    ScopedTestDir d("genesis_run_dir");
+    dftu_utils_test::ScopedTestDir d("genesis_run_dir");
     const dstd::Path run =
         d.path() / "amg" / "tuolumne" / "p2_n8x8x4" / "nodes_1" / "ppn_2";
     write_gz(run / "app-1_chunk0.pfw.gz", "[\n");
@@ -320,7 +319,7 @@ TEST_CASE("discover reads path-only slices kept in the run directory") {
 }
 
 TEST_CASE("compacted slices win over traces beside them in the run directory") {
-    ScopedTestDir d("genesis_run_dir_both");
+    dftu_utils_test::ScopedTestDir d("genesis_run_dir_both");
     const dstd::Path run =
         d.path() / "minife" / "tioga" / "input_50" / "nodes_1" / "ppn_1";
     write_gz(run / "compacted" / "nx-1_chunk0.pfw.gz", "[\n");
@@ -334,7 +333,7 @@ TEST_CASE("compacted slices win over traces beside them in the run directory") {
 }
 
 TEST_CASE("a matrix set without its compacted file reads its raw traces") {
-    ScopedTestDir d("genesis_raw");
+    dftu_utils_test::ScopedTestDir d("genesis_raw");
     const dstd::Path dir =
         d.path() / "laghos" / "matrix" / "p1" / "nodes_1" / "ppn_2";
     write_text(dir / "summary.json",
@@ -361,7 +360,7 @@ TEST_CASE("a matrix set without its compacted file reads its raw traces") {
 }
 
 TEST_CASE("path-only sets come from each process's PAPI counters") {
-    ScopedTestDir d("genesis_derive");
+    dftu_utils_test::ScopedTestDir d("genesis_derive");
     const dstd::Path c = d.path() / "minife" / "tioga" / "tioga" / "in" /
                          "nodes_1" / "ppn_1" / "compacted";
     write_gz(c / "nx_N1_ppn1-1_chunk0.pfw.gz",
@@ -379,7 +378,7 @@ TEST_CASE("path-only sets come from each process's PAPI counters") {
 }
 
 TEST_CASE("a matrix summary without app and system takes them from the path") {
-    ScopedTestDir d("genesis_v1path");
+    dftu_utils_test::ScopedTestDir d("genesis_v1path");
     const dstd::Path dir =
         d.path() / "minife" / "matrix" / "input_9" / "nodes_1" / "ppn_1";
     write_text(dir / "summary.json",
@@ -394,7 +393,7 @@ TEST_CASE("a matrix summary without app and system takes them from the path") {
 }
 
 TEST_CASE("discover reports directory-level problems as skips") {
-    ScopedTestDir d("genesis_dirskip");
+    dftu_utils_test::ScopedTestDir d("genesis_dirskip");
     const dstd::Path base = d.path() / "a" / "s";
     write_text(base / "i1" / "nodes_1" / "ppn_1" / "summary.json", "{not json");
     write_text(base / "i2" / "nodes_1" / "ppn_1" / "summary.json",
@@ -411,7 +410,7 @@ TEST_CASE("discover reports directory-level problems as skips") {
 }
 
 TEST_CASE("the same function under two parents gives two records") {
-    ScopedTestDir d("genesis_paths");
+    dftu_utils_test::ScopedTestDir d("genesis_paths");
     matrix_run(
         d, 2,
         rank(1, 0, 1000) + rank(2, 0, 1000) + call(1, 1, "main", 0, 1000) +
@@ -435,7 +434,7 @@ TEST_CASE("the same function under two parents gives two records") {
 }
 
 TEST_CASE("duration aggregates are exact across ranks") {
-    ScopedTestDir d("genesis_exact");
+    dftu_utils_test::ScopedTestDir d("genesis_exact");
     matrix_run(d, 2,
                rank(1, 0, 1000) + rank(2, 0, 1000) +
                    call(1, 1, "main", 0, 1000) + call(1, 1, "X", 10, 5) +
@@ -451,7 +450,7 @@ TEST_CASE("duration aggregates are exact across ranks") {
 }
 
 TEST_CASE("per-process counters are pro-rated by overlap") {
-    ScopedTestDir d("genesis_prorate");
+    dftu_utils_test::ScopedTestDir d("genesis_prorate");
     matrix_run(d, 1,
                rank(1, 0, 1000) + papi(1, 0, "PAPI_TOT_CYC", 0) +
                    papi(1, 100, "PAPI_TOT_CYC", 1000) +
@@ -470,7 +469,7 @@ TEST_CASE("per-process counters are pro-rated by overlap") {
 }
 
 TEST_CASE("host count-like counters are split across the ranks of a host") {
-    ScopedTestDir d("genesis_net");
+    dftu_utils_test::ScopedTestDir d("genesis_net");
     dstd::String t =
         host("net", "net-  hsi0", 0, R"("bytes_sent":0)") +
         host("net", "net-  hsi0", 1000, R"("bytes_sent":100000000)");
@@ -485,7 +484,7 @@ TEST_CASE("host count-like counters are split across the ranks of a host") {
 }
 
 TEST_CASE("host levels are time-weighted and per-core cpu is dropped") {
-    ScopedTestDir d("genesis_cpu");
+    dftu_utils_test::ScopedTestDir d("genesis_cpu");
     matrix_run(d, 1,
                rank(1, 0, 1000) + host("sys", "cpu", 0, R"("user_pct":99)") +
                    host("sys", "cpu", 30, R"("user_pct":10)") +
@@ -505,7 +504,7 @@ TEST_CASE("host levels are time-weighted and per-core cpu is dropped") {
 }
 
 TEST_CASE("matrix GPU CSV values become per-GPU gauges") {
-    ScopedTestDir d("genesis_csv");
+    dftu_utils_test::ScopedTestDir d("genesis_csv");
     const dstd::Path dir = matrix_run(
         d, 1,
         R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"h1","name":"node1","value":"h1"}})"
@@ -527,7 +526,7 @@ TEST_CASE("matrix GPU CSV values become per-GPU gauges") {
 }
 
 TEST_CASE("GPU events nest under the host thread named by args.tid") {
-    ScopedTestDir d("genesis_gpu");
+    dftu_utils_test::ScopedTestDir d("genesis_gpu");
     matrix_run(
         d, 1,
         rank(1, 0, 1000) + call(1, 11, "operator()", 100, 200) +
@@ -537,7 +536,7 @@ TEST_CASE("GPU events nest under the host thread named by args.tid") {
 }
 
 TEST_CASE("async GPU events attach under the host call at their start") {
-    ScopedTestDir d("genesis_async");
+    dftu_utils_test::ScopedTestDir d("genesis_async");
     matrix_run(
         d, 1,
         rank(1, 0, 1000) + call(1, 11, "main", 0, 1000) +
@@ -551,7 +550,7 @@ TEST_CASE("async GPU events attach under the host call at their start") {
 }
 
 TEST_CASE("a GPU tracer thread attaches to the rank's main thread") {
-    ScopedTestDir d("genesis_cupti");
+    dftu_utils_test::ScopedTestDir d("genesis_cupti");
     matrix_run(d, 1,
                rank(1, 0, 1000) + call(1, 1, "main", 0, 1000) +
                    call(1, 7, "MemcpyDtoH", 100, 100, "CUDA_MEMCPY",
@@ -567,7 +566,7 @@ TEST_CASE("a GPU tracer thread attaches to the rank's main thread") {
 }
 
 TEST_CASE("events outside the process window are depth-0 duration records") {
-    ScopedTestDir d("genesis_window");
+    dftu_utils_test::ScopedTestDir d("genesis_window");
     matrix_run(d, 1,
                rank(1, 1000, 2000) + papi(1, 1000, "PAPI_TOT_CYC", 0) +
                    papi(1, 2000, "PAPI_TOT_CYC", 5) +
@@ -582,7 +581,7 @@ TEST_CASE("events outside the process window are depth-0 duration records") {
 }
 
 TEST_CASE("a truncated trace file skips the run and names the file") {
-    ScopedTestDir d("genesis_trunc");
+    dftu_utils_test::ScopedTestDir d("genesis_trunc");
     dstd::String t = rank(1, 0, 1000);
     for (int i = 0; i < 2000; ++i) t += call(1, 1, "w", i * 10, 5);
     const dstd::Path dir = matrix_run(d, 1, t);
@@ -596,19 +595,19 @@ TEST_CASE("a truncated trace file skips the run and names the file") {
 }
 
 TEST_CASE("missing process markers or processes skip the run") {
-    ScopedTestDir a("genesis_noend");
+    dftu_utils_test::ScopedTestDir a("genesis_noend");
     matrix_run(a, 2,
                rank(1, 0, 1000) + marker(2, "start", 0) +
                    call(1, 1, "m", 0, 10) + call(2, 2, "m", 0, 10));
     CHECK(skipped_with(process_only(a), "lacks dftracer start or end"));
 
-    ScopedTestDir b("genesis_noproc");
+    dftu_utils_test::ScopedTestDir b("genesis_noproc");
     matrix_run(b, 2, rank(1, 0, 1000) + call(1, 1, "m", 0, 10));
     CHECK(skipped_with(process_only(b), "expected 2 processes, found 1"));
 }
 
 TEST_CASE("a child that ends after its parent skips the run") {
-    ScopedTestDir d("genesis_overlap");
+    dftu_utils_test::ScopedTestDir d("genesis_overlap");
     matrix_run(
         d, 1,
         rank(1, 0, 1000) + call(1, 1, "p", 0, 100) + call(1, 1, "c", 50, 100));
@@ -617,7 +616,7 @@ TEST_CASE("a child that ends after its parent skips the run") {
 
 TEST_CASE("an overlap in any process skips the run, naming the first") {
     // The two processes are walked in parts of their own and merged.
-    ScopedTestDir one("genesis_overlap_second");
+    dftu_utils_test::ScopedTestDir one("genesis_overlap_second");
     matrix_run(one, 2,
                rank(1, 0, 1000) + rank(2, 0, 1000) + call(1, 1, "p1", 0, 100) +
                    call(1, 1, "k1", 10, 20) + call(2, 2, "p2", 0, 100) +
@@ -626,7 +625,7 @@ TEST_CASE("an overlap in any process skips the run, naming the first") {
     CHECK(second.runs.empty());
     CHECK(skipped_with(second, "call c2 at ts 50 ends after its parent p2"));
 
-    ScopedTestDir both("genesis_overlap_both");
+    dftu_utils_test::ScopedTestDir both("genesis_overlap_both");
     matrix_run(both, 2,
                rank(1, 0, 1000) + rank(2, 0, 1000) + call(1, 1, "p1", 0, 100) +
                    call(1, 1, "c1", 60, 100) + call(2, 2, "p2", 0, 100) +
@@ -637,7 +636,8 @@ TEST_CASE("an overlap in any process skips the run, naming the first") {
 }
 
 TEST_CASE("tioga v2 processes are assigned to sets by PAPI counters") {
-    auto make = [](const ScopedTestDir& d, const dstd::String& extra) {
+    auto make = [](const dftu_utils_test::ScopedTestDir& d,
+                   const dstd::String& extra) {
         const dstd::Path dir =
             d.path() / "l" / "tioga" / "tioga" / "c" / "nodes_1" / "ppn_1";
         write_text(dir / "summary.json",
@@ -650,7 +650,7 @@ TEST_CASE("tioga v2 processes are assigned to sets by PAPI counters") {
                      papi(2, 200, "PAPI_B", 0) + call(2, 2, "b", 200, 10) +
                      extra);
     };
-    ScopedTestDir ok("genesis_sets");
+    dftu_utils_test::ScopedTestDir ok("genesis_sets");
     make(ok, "");
     auto disc = discover_dir(ok);
     REQUIRE(disc.groups.size() == 1);
@@ -661,7 +661,7 @@ TEST_CASE("tioga v2 processes are assigned to sets by PAPI counters") {
     CHECK(r.runs[0].lines().find(R"("path":"a")") != dstd::String::npos);
     CHECK(r.runs[1].lines().find(R"("path":"b")") != dstd::String::npos);
 
-    ScopedTestDir bad("genesis_sets_bad");
+    dftu_utils_test::ScopedTestDir bad("genesis_sets_bad");
     make(bad, rank(3, 0, 10) + papi(3, 0, "PAPI_C", 0));
     auto disc2 = discover_dir(bad);
     auto r2 = process(disc2.groups.at(0));
@@ -670,7 +670,7 @@ TEST_CASE("tioga v2 processes are assigned to sets by PAPI counters") {
 }
 
 TEST_CASE("percentiles are within the sketch accuracy") {
-    ScopedTestDir d("genesis_sketch");
+    dftu_utils_test::ScopedTestDir d("genesis_sketch");
     std::mt19937 rng(7);
     std::uniform_int_distribution<int> dist(1, 10000);
     dstd::Vector<int> durs;
@@ -688,7 +688,7 @@ TEST_CASE("percentiles are within the sketch accuracy") {
 }
 
 TEST_CASE("the run record carries keys, settings and the summary") {
-    ScopedTestDir d("genesis_runline");
+    dftu_utils_test::ScopedTestDir d("genesis_runline");
     matrix_run(d, 1, rank(1, 0, 10) + call(1, 1, "m", 0, 5));
     auto r = process_only(d);
     REQUIRE(r.runs.size() == 1);
@@ -706,7 +706,7 @@ TEST_CASE("the run record carries keys, settings and the summary") {
 }
 
 TEST_CASE("records have a gtype and no dftracer envelope or metric keys") {
-    ScopedTestDir d("genesis_long");
+    dftu_utils_test::ScopedTestDir d("genesis_long");
     matrix_run(d, 1,
                rank(1, 0, 1000) + papi(1, 0, "PAPI_TOT_CYC", 0) +
                    papi(1, 500, "PAPI_TOT_CYC", 7) +
@@ -733,7 +733,7 @@ TEST_CASE("records have a gtype and no dftracer envelope or metric keys") {
 }
 
 TEST_CASE("stored sketches decode and merge exactly") {
-    ScopedTestDir d("genesis_merge");
+    dftu_utils_test::ScopedTestDir d("genesis_merge");
     dstd::String t = rank(1, 0, 100000) + call(1, 1, "main", 0, 100000) +
                      call(1, 1, "solve", 50000, 40000);
     for (int i = 0; i < 30; ++i) t += call(1, 1, "fgets", 100 + i * 100, 1 + i);
@@ -762,7 +762,7 @@ TEST_CASE("stored sketches decode and merge exactly") {
 }
 
 TEST_CASE("processing the same group twice gives identical output") {
-    ScopedTestDir d("genesis_det");
+    dftu_utils_test::ScopedTestDir d("genesis_det");
     matrix_run(d, 2,
                rank(1, 0, 1000) + rank(2, 0, 1000) +
                    papi(1, 0, "PAPI_TOT_CYC", 0) +
@@ -778,7 +778,7 @@ TEST_CASE("processing the same group twice gives identical output") {
 }
 
 TEST_CASE("an unknown host counter category skips the run") {
-    ScopedTestDir d("genesis_hostcat");
+    dftu_utils_test::ScopedTestDir d("genesis_hostcat");
     matrix_run(d, 1,
                rank(1, 0, 1000) + host("fan", "fan0", 0, R"("rpm":1)") +
                    call(1, 1, "m", 0, 10));
@@ -786,7 +786,7 @@ TEST_CASE("an unknown host counter category skips the run") {
 }
 
 TEST_CASE("a trace file name that matches no layout is reported") {
-    ScopedTestDir d("genesis_badname");
+    dftu_utils_test::ScopedTestDir d("genesis_badname");
     const dstd::Path c = d.path() / "minife" / "tioga" / "tioga" / "input_50" /
                          "nodes_1" / "ppn_1" / "compacted";
     write_gz(c / "trace.pfw.gz", "[\n");
@@ -826,8 +826,8 @@ struct SpillDirGuard {
 }  // namespace
 
 TEST_CASE("a share that keeps nothing in memory gives the same output") {
-    ScopedTestDir d("genesis_share");
-    ScopedTestDir spill("genesis_share_spill");
+    dftu_utils_test::ScopedTestDir d("genesis_share");
+    dftu_utils_test::ScopedTestDir spill("genesis_share_spill");
     SpillDirGuard guard(spill.path());
     matrix_run(d, 2, busy_trace());
     auto disc = discover_dir(d);
@@ -860,8 +860,8 @@ dstd::Vector<memory::PoolStats> genesis_pools() {
 }  // namespace
 
 TEST_CASE("a tiny share spills on its group pools and closes them clean") {
-    ScopedTestDir d("genesis_pools");
-    ScopedTestDir spill("genesis_pools_spill");
+    dftu_utils_test::ScopedTestDir d("genesis_pools");
+    dftu_utils_test::ScopedTestDir spill("genesis_pools_spill");
     SpillDirGuard guard(spill.path());
     matrix_run(d, 2, busy_trace());
     auto disc = discover_dir(d);
@@ -892,7 +892,7 @@ TEST_CASE("a tiny share spills on its group pools and closes them clean") {
 }
 
 TEST_CASE("a group that must spill names the spill directory when it fails") {
-    ScopedTestDir d("genesis_nospill");
+    dftu_utils_test::ScopedTestDir d("genesis_nospill");
     matrix_run(d, 2, busy_trace());
     const dstd::Path blocked = d.path() / "blocked";
     REQUIRE(
@@ -909,7 +909,7 @@ TEST_CASE("a group that must spill names the spill directory when it fails") {
 
 TEST_CASE(
     "path records beyond the state share skip the run and name the share") {
-    ScopedTestDir d("genesis_state");
+    dftu_utils_test::ScopedTestDir d("genesis_state");
     // About 200 bytes per path record, so 20000 paths pass the state quarter
     // of the tiny share and fit that of the test share.
     constexpr int PATHS = 20000;

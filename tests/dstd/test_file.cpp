@@ -12,11 +12,10 @@
 #include <utility>
 
 using namespace dftracer::utils;
-using dftu_utils_test::ScopedTestDir;
 
 namespace {
 
-dstd::Path in(const ScopedTestDir& dir, const char* name) {
+dstd::Path in(const dftu_utils_test::ScopedTestDir& dir, const char* name) {
     return dstd::Path(dir.file(name));
 }
 
@@ -30,7 +29,7 @@ dstd::OpenOptions options(dstd::Access access, dstd::Creation creation) {
 }  // namespace
 
 TEST_CASE("bytes written at an offset read back at that offset") {
-    ScopedTestDir dir("dstd_file_roundtrip");
+    dftu_utils_test::ScopedTestDir dir("dstd_file_roundtrip");
     auto f = dstd::File::open(
         in(dir, "a.bin"),
         options(dstd::Access::ReadWrite, dstd::Creation::AlwaysNew));
@@ -47,7 +46,7 @@ TEST_CASE("bytes written at an offset read back at that offset") {
 }
 
 TEST_CASE("a read at the end returns 0 and an exact read fails") {
-    ScopedTestDir dir("dstd_file_eof");
+    dftu_utils_test::ScopedTestDir dir("dstd_file_eof");
     auto f = dstd::File::open(
         in(dir, "a.bin"),
         options(dstd::Access::ReadWrite, dstd::Creation::AlwaysNew));
@@ -65,7 +64,7 @@ TEST_CASE("a read at the end returns 0 and an exact read fails") {
 }
 
 TEST_CASE("a write past the end fills the gap with zeros") {
-    ScopedTestDir dir("dstd_file_gap");
+    dftu_utils_test::ScopedTestDir dir("dstd_file_gap");
     auto f = dstd::File::open(
         in(dir, "a.bin"),
         options(dstd::Access::ReadWrite, dstd::Creation::AlwaysNew));
@@ -85,7 +84,7 @@ TEST_CASE("a write past the end fills the gap with zeros") {
 }
 
 TEST_CASE("creation rules decide whether open succeeds") {
-    ScopedTestDir dir("dstd_file_creation");
+    dftu_utils_test::ScopedTestDir dir("dstd_file_creation");
     const auto path = in(dir, "a.bin");
 
     auto missing = dstd::File::open(
@@ -116,7 +115,7 @@ TEST_CASE("creation rules decide whether open succeeds") {
 }
 
 TEST_CASE("read access cannot create or truncate") {
-    ScopedTestDir dir("dstd_file_read_create");
+    dftu_utils_test::ScopedTestDir dir("dstd_file_read_create");
     auto f = dstd::File::open(
         in(dir, "a.bin"),
         options(dstd::Access::Read, dstd::Creation::AlwaysNew));
@@ -126,7 +125,7 @@ TEST_CASE("read access cannot create or truncate") {
 }
 
 TEST_CASE("close is idempotent and a moved-from file is closed") {
-    ScopedTestDir dir("dstd_file_close");
+    dftu_utils_test::ScopedTestDir dir("dstd_file_close");
     auto f = dstd::File::open(
         in(dir, "a.bin"),
         options(dstd::Access::Write, dstd::Creation::AlwaysNew));

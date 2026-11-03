@@ -11,23 +11,7 @@
 #include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::DataType;
-using dftracer::utils::dataframe::decimal128;
-using dftracer::utils::dataframe::duration_of;
-using dftracer::utils::dataframe::fixed_size_binary;
-using dftracer::utils::dataframe::fixed_size_list_of;
-using dftracer::utils::dataframe::large_list_of;
-using dftracer::utils::dataframe::list_of;
-using dftracer::utils::dataframe::map_of;
-using dftracer::utils::dataframe::OwnedArrow;
-using dftracer::utils::dataframe::scalar;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::struct_of;
-using dftracer::utils::dataframe::time_of;
-using dftracer::utils::dataframe::timestamp;
-using dftracer::utils::dataframe::TimeUnit;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

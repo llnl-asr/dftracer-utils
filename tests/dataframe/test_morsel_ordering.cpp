@@ -12,14 +12,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::Cursor;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::InMemorySource;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::Morsel;
-using dftracer::utils::dataframe::Ordering;
-using dftracer::utils::dataframe::Series;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

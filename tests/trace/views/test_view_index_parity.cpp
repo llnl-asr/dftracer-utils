@@ -35,9 +35,7 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 using namespace test_view_common;
 
-namespace df = dftracer::utils::dataframe;
-namespace ix = dftracer::utils::index;
-namespace scan = dftracer::utils::trace::views::detail::scan;
+using namespace dftracer::utils::trace;
 
 namespace {
 
@@ -174,10 +172,10 @@ struct Fixture {
             (void)dstd::fs::remove(plain);
             gz.push_back(out);
         }
-        ix::IndexerOptions o;
+        index::IndexerOptions o;
         o.index_dir = env.get_dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
-        ix::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
+        index::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
         index_path =
             dstd::String(determine_index_path(gz.front(), o.index_dir));
     }
@@ -196,17 +194,16 @@ struct Fixture {
     }
 };
 
-df::DataFrame scan_only(const scan::ScanPlan& p) {
-    namespace detail = dftracer::utils::trace::views::detail;
+dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
     static Runtime rt;
-    df::DataFrame out;
-    rt.block_on(
-        coro::named("scan-only",
-                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                        auto st = co_await detail::build_engine_agg_state(*p);
-                        out = detail::finalize_engine_result(*st, *p);
-                    })));
-    return detail::apply_agg_post_ops(std::move(out), *p);
+    dataframe::DataFrame out;
+    rt.block_on(coro::named(
+        "scan-only",
+        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto st = co_await views::detail::build_engine_agg_state(*p);
+            out = views::detail::finalize_engine_result(*st, *p);
+        })));
+    return views::detail::apply_agg_post_ops(std::move(out), *p);
 }
 
 struct Shape {
@@ -259,7 +256,8 @@ dstd::String format_double(double v) {
     return buf;
 }
 
-const df::Series* column_of(const df::DataFrame& f, const dstd::String& name) {
+const dataframe::Series* column_of(const dataframe::DataFrame& f,
+                                   const dstd::String& name) {
     const std::int64_t c = bcol(f, name);
     return c < 0 ? nullptr : &f.columns[static_cast<std::size_t>(c)];
 }
@@ -270,10 +268,10 @@ dstd::String printable(dstd::String s) {
     return s;
 }
 
-dstd::String cell_text(const df::Series& column, std::int64_t row) {
+dstd::String cell_text(const dataframe::Series& column, std::int64_t row) {
     if (column.is_null(row)) return "null";
-    const df::Series c = column.materialize();
-    using T = df::TypeId;
+    const dataframe::Series c = column.materialize();
+    using T = dataframe::TypeId;
     if (c.type() == T::String || c.type() == T::LargeString)
         return printable(dstd::String(c.string_at(row)));
     if (c.type() == T::Int64)
@@ -291,21 +289,22 @@ dstd::String cell_text(const df::Series& column, std::int64_t row) {
 
 using Cells = dstd::Map<dstd::String, dstd::String>;
 
-dstd::String key_of(const df::DataFrame& f, std::int64_t row,
+dstd::String key_of(const dataframe::DataFrame& f, std::int64_t row,
                     const dstd::Vector<dstd::String>& keys) {
     dstd::String k;
     for (const auto& name : keys) {
-        const df::Series* c = column_of(f, name);
+        const dataframe::Series* c = column_of(f, name);
         k += c == nullptr ? dstd::String("missing") : cell_text(*c, row);
         k += '|';
     }
     return k;
 }
 
-Cells cells_of(const df::DataFrame& f, const dstd::Vector<dstd::String>& keys,
+Cells cells_of(const dataframe::DataFrame& f,
+               const dstd::Vector<dstd::String>& keys,
                const dstd::String& column) {
     Cells out;
-    const df::Series* c = column_of(f, column);
+    const dataframe::Series* c = column_of(f, column);
     if (c == nullptr) return out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out[key_of(f, r, keys)] = cell_text(*c, r);
@@ -402,10 +401,12 @@ TEST_SUITE("ViewIndexParity") {
         dstd::Map<dstd::String, dstd::String> scan_error;
         for (const auto& sh : shape_list) {
             for (const auto& ac : cases) {
-                auto p = scan::from_files(fx.files());
-                if (!sh.keys.empty()) p = scan::group_by(p, sh.keys);
-                if (sh.window_us != 0) p = scan::time_bucket(p, sh.window_us);
-                p = scan::agg(p, {ac.spec});
+                auto p = views::detail::scan::from_files(fx.files());
+                if (!sh.keys.empty())
+                    p = views::detail::scan::group_by(p, sh.keys);
+                if (sh.window_us != 0)
+                    p = views::detail::scan::time_bucket(p, sh.window_us);
+                p = views::detail::scan::agg(p, {ac.spec});
                 try {
                     expected[sh.label][ac.label] =
                         cells_of(scan_only(p), sh.columns,
@@ -542,23 +543,25 @@ TEST_SUITE("ViewIndexParity") {
         const dstd::String gz = plain + ".gz";
         REQUIRE(compress_file_to_gzip(plain, gz));
         (void)dstd::fs::remove(plain);
-        ix::IndexerOptions o;
+        index::IndexerOptions o;
         o.index_dir = env.get_dir() + "/idx";
-        ix::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
+        index::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
         const dstd::String index =
             dstd::String(determine_index_path(gz, o.index_dir));
 
         const dstd::Vector<AggSpec> count{{AggOp::Count, "", "n"}};
-        const df::DataFrame trace = scan_only(scan::agg(
-            scan::from_file(dstd::String(gz), dstd::String(index)), count));
+        const dataframe::DataFrame trace = scan_only(
+            views::detail::scan::agg(views::detail::scan::from_file(
+                                         dstd::String(gz), dstd::String(index)),
+                                     count));
         REQUIRE(trace.num_rows() == 1);
         CHECK(bnum(trace, 0, "n") == doctest::Approx(4));
 
         const View v = View::from_file(dstd::String(gz), dstd::String(index));
-        const df::DataFrame frame =
-            v.with_column("z", df::expr_lit(std::int64_t{1}))
+        const dataframe::DataFrame frame =
+            v.with_column("z", dataframe::expr_lit(std::int64_t{1}))
                 .group_by(dstd::Vector<dstd::String>{"z"},
-                          {{df::Agg::Count, "", "n"}})
+                          {{dataframe::Agg::Count, "", "n"}})
                 .collect()
                 .get();
         REQUIRE(frame.num_rows() == 1);
@@ -595,11 +598,11 @@ TEST_SUITE("ViewIndexParity") {
             (void)dstd::fs::remove(plain);
             gz.push_back(out);
         }
-        ix::IndexerOptions opts;
+        index::IndexerOptions opts;
         opts.index_dir = env.get_dir() + "/idx";
         opts.aggregation.time_interval_us = INTERVAL_US;
         opts.aggregation.extra_group_keys = {"epoch"};
-        ix::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
+        index::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
         const dstd::String index =
             dstd::String(determine_index_path(gz.front(), opts.index_dir));
 
@@ -677,9 +680,9 @@ TEST_SUITE("ViewIndexParity") {
             {"min_dur", {{"pwrite|", 5}, {"read|", 10}}},
             {"max_dur", {{"pwrite|", 20}, {"read|", 30}}}};
 
-        const df::DataFrame first = ask();
+        const dataframe::DataFrame first = ask();
         CHECK(dstd::fs::exists(index).value());
-        const df::DataFrame next = ask();
+        const dataframe::DataFrame next = ask();
         for (const auto& [column, cells] : want) {
             INFO(column);
             const Cells got = cells_of(first, columns, column);
@@ -715,10 +718,11 @@ TEST_SUITE("ViewIndexParity") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             plain, gz, MEMBER_BYTES));
         (void)dstd::fs::remove(plain);
-        ix::IndexerOptions opts;
+        index::IndexerOptions opts;
         opts.index_dir = env.get_dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
-        ix::Indexer::open({dstd::String(dstd::StringView(gz))}, opts).build();
+        index::Indexer::open({dstd::String(dstd::StringView(gz))}, opts)
+            .build();
         const dstd::String index =
             dstd::String(determine_index_path(gz, opts.index_dir));
 
@@ -760,10 +764,10 @@ TEST_SUITE("ViewIndexParity") {
             (void)dstd::fs::remove(plain);
             gz.push_back(out);
         }
-        ix::IndexerOptions opts;
+        index::IndexerOptions opts;
         opts.index_dir = env.get_dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
-        ix::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
+        index::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
         const dstd::Vector<ViewFile> files{
             {dstd::String(gz[0]),
              dstd::String(
@@ -783,11 +787,11 @@ TEST_SUITE("ViewIndexParity") {
         static Runtime rt;
         ExportStats stats;
         auto alone = [&](const Query& q) {
-            df::DataFrame out;
+            dataframe::DataFrame out;
             rt.block_on(coro::named(
                 "alone",
                 coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                    df::LazyFrame plan =
+                    dataframe::LazyFrame plan =
                         View::from_files(files).branch([&](ViewSession& s) {
                             auto c = s.collect(q, by_name, aggs());
                             return dstd::Function<void(const ExportStats&)>(
@@ -800,12 +804,12 @@ TEST_SUITE("ViewIndexParity") {
             return out;
         };
 
-        df::DataFrame fused_stdio;
-        df::DataFrame fused_posix;
+        dataframe::DataFrame fused_stdio;
+        dataframe::DataFrame fused_posix;
         rt.block_on(coro::named(
             "fused",
             coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                df::LazyFrame plan =
+                dataframe::LazyFrame plan =
                     View::from_files(files).branch([&](ViewSession& s) {
                         auto a = s.collect(stdio, by_name, aggs());
                         auto b = s.collect(posix, by_name, aggs());

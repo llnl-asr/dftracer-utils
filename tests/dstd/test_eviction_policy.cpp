@@ -6,12 +6,9 @@
 
 using namespace dftracer::utils;
 
-using dstd::cache::ClockEvictionPolicy;
-using dstd::cache::LruEvictionPolicy;
-
 TEST_SUITE("eviction_policy") {
     TEST_CASE("LRU evicts the least recently used") {
-        LruEvictionPolicy<int> lru;
+        dstd::cache::LruEvictionPolicy<int> lru;
         lru.touch(1);
         lru.touch(2);
         lru.touch(3);    // order MRU..LRU: 3, 2, 1
@@ -29,7 +26,7 @@ TEST_SUITE("eviction_policy") {
     }
 
     TEST_CASE("LRU remove drops a key") {
-        LruEvictionPolicy<int> lru;
+        dstd::cache::LruEvictionPolicy<int> lru;
         lru.touch(1);
         lru.touch(2);
         lru.remove(1);
@@ -41,7 +38,7 @@ TEST_SUITE("eviction_policy") {
     }
 
     TEST_CASE("CLOCK gives a touched key a second chance") {
-        ClockEvictionPolicy<int> clock;
+        dstd::cache::ClockEvictionPolicy<int> clock;
         clock.touch(1);  // ref=1
         clock.touch(2);  // ref=1
         clock.touch(3);  // ref=1
@@ -66,7 +63,7 @@ TEST_SUITE("eviction_policy") {
     }
 
     TEST_CASE("CLOCK remove keeps the hand valid") {
-        ClockEvictionPolicy<int> clock;
+        dstd::cache::ClockEvictionPolicy<int> clock;
         for (int i = 0; i < 5; ++i) clock.touch(i);
         clock.remove(2);
         clock.remove(4);

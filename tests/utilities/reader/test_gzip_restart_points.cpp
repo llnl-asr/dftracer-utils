@@ -19,15 +19,7 @@
 #include <random>
 
 using namespace dftracer::utils;
-using dftracer::utils::index::gzip::GzipIndexer;
-using dftracer::utils::index::gzip::GzipMemberRecord;
-using dftracer::utils::index::gzip::GzipRecordKind;
-using dftracer::utils::utilities::reader::internal::GzipReader;
-using dftracer::utils::utilities::reader::internal::RangeType;
-using dftracer::utils::utilities::reader::internal::StreamConfig;
-using dftracer::utils::utilities::reader::internal::StreamType;
-using dftu_utils_test::run_coro;
-namespace gz = dftracer::utils::utilities::fileio::compress;
+using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -47,7 +39,7 @@ dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
 }
 
 dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
-    gz::GzipMemberCompressor c;
+    fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
     REQUIRE(n.has_value());
@@ -59,7 +51,7 @@ struct Fixture {
     dstd::String dir;
     dstd::String gz_path;
     dstd::String index_path;
-    dstd::SharedPtr<GzipIndexer> indexer;
+    dstd::SharedPtr<index::gzip::GzipIndexer> indexer;
 
     explicit Fixture(const dstd::Vector<std::uint8_t>& bytes) {
         char tmpl[] = "/tmp/dftu_restart_XXXXXX";
@@ -71,24 +63,25 @@ struct Fixture {
         REQUIRE(f != nullptr);
         REQUIRE(std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size());
         std::fclose(f);
-        indexer = dstd::make_shared<GzipIndexer>(
+        indexer = dstd::make_shared<index::gzip::GzipIndexer>(
             dstd::String(dstd::StringView(gz_path)),
             dstd::String(dstd::StringView(index_path)), CKPT, true);
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await indexer->build_async();
         });
     }
     ~Fixture() { (void)dstd::fs::remove_all(dir); }
 
     dstd::String read_from(std::size_t start) {
-        GzipReader reader(indexer);
-        auto stream = reader.stream(StreamConfig()
-                                        .stream_type(StreamType::Bytes)
-                                        .range_type(RangeType::ByteRange)
-                                        .from(start)
-                                        .to(reader.get_max_bytes()));
+        reader::internal::GzipReader reader(indexer);
+        auto stream = reader.stream(
+            reader::internal::StreamConfig()
+                .stream_type(reader::internal::StreamType::Bytes)
+                .range_type(reader::internal::RangeType::ByteRange)
+                .from(start)
+                .to(reader.get_max_bytes()));
         dstd::String out;
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<char> buf(1u << 20);
             while (true) {
                 const auto n =
@@ -101,17 +94,18 @@ struct Fixture {
     }
 
     dstd::String read_lines(std::size_t first, std::size_t last) {
-        GzipReader reader(indexer);
+        reader::internal::GzipReader reader(indexer);
         dstd::String out;
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             out = co_await reader.read_lines_async(first, last);
         });
         return out;
     }
 };
 
-void check_pieces_cover(const dstd::Vector<GzipMemberRecord>& pieces,
-                        std::size_t total) {
+void check_pieces_cover(
+    const dstd::Vector<index::gzip::GzipMemberRecord>& pieces,
+    std::size_t total) {
     std::uint64_t uc = 0;
     for (const auto& p : pieces) {
         CHECK(p.uc_offset == uc);
@@ -135,10 +129,10 @@ TEST_SUITE("gzip_restart_points") {
         Fixture fx(gzip(text));
         const auto pieces = fx.indexer->get_members();
         REQUIRE(pieces.size() >= 6);
-        CHECK(pieces[0].kind == GzipRecordKind::Head);
+        CHECK(pieces[0].kind == index::gzip::GzipRecordKind::Head);
         CHECK(pieces[0].c_offset == 0);
         for (std::size_t i = 1; i < pieces.size(); ++i) {
-            CHECK(pieces[i].kind == GzipRecordKind::Restart);
+            CHECK(pieces[i].kind == index::gzip::GzipRecordKind::Restart);
             CHECK(pieces[i].bits <= 7);
             CHECK(pieces[i].c_offset ==
                   pieces[i - 1].c_offset + pieces[i - 1].c_size);
@@ -159,8 +153,9 @@ TEST_SUITE("gzip_restart_points") {
         }
         Fixture fx(comp);
         const auto pieces = fx.indexer->get_members();
-        CHECK(pieces[0].kind == GzipRecordKind::Head);
-        CHECK(pieces[pieces.size() - 1].kind == GzipRecordKind::Member);
+        CHECK(pieces[0].kind == index::gzip::GzipRecordKind::Head);
+        CHECK(pieces[pieces.size() - 1].kind ==
+              index::gzip::GzipRecordKind::Member);
         check_pieces_cover(pieces, text.size() + tail.size());
         check_reads_from_every_piece(fx, text + tail);
     }
@@ -180,7 +175,7 @@ TEST_SUITE("gzip_restart_points") {
         const auto members = fx.indexer->get_members();
         REQUIRE(members.size() == sizes.size());
         for (std::size_t i = 0; i < members.size(); ++i) {
-            CHECK(members[i].kind == GzipRecordKind::Member);
+            CHECK(members[i].kind == index::gzip::GzipRecordKind::Member);
             CHECK(members[i].bits == 0);
             CHECK(members[i].uc_size == sizes[i]);
         }

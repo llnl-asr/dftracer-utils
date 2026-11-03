@@ -17,8 +17,6 @@
 #include <cstdio>
 
 using namespace dftracer::utils;
-namespace build = dftracer::utils::index::build;
-namespace store = dftracer::utils::index::store;
 
 namespace {
 
@@ -40,17 +38,18 @@ dstd::String write_small_trace(const dstd::String& dir, int n) {
     return dftu_utils_test::write_gz_trace(dir + name, out);
 }
 
-build::IndexBuildBatchResult build_with(const dstd::Vector<dstd::String>& files,
-                                        const dstd::String& index_dir,
-                                        std::size_t workers) {
-    build::IndexBuildBatchResult result;
+index::build::IndexBuildBatchResult build_with(
+    const dstd::Vector<dstd::String>& files, const dstd::String& index_dir,
+    std::size_t workers) {
+    index::build::IndexBuildBatchResult result;
     Runtime rt(workers);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+        auto config = dstd::make_shared<index::build::IndexBuildBatchConfig>();
         config->file_paths.assign(files.begin(), files.end());
         config->index_dir = index_dir;
         config->parallelism = workers;
-        result = co_await build::BatchBuilder::process(std::move(config));
+        result =
+            co_await index::build::BatchBuilder::process(std::move(config));
     });
     rt.submit(std::move(task), "build-parallelism").wait();
     rt.shutdown();
@@ -76,7 +75,7 @@ TEST_SUITE("IndexBuildParallelism") {
         CHECK(one.metrics.max_files_in_flight == 1);
         CHECK(many.total_events == one.total_events);
 
-        auto sorted = [](dstd::Vector<build::IndexBuildResult> r) {
+        auto sorted = [](dstd::Vector<index::build::IndexBuildResult> r) {
             std::sort(r.begin(), r.end(), [](const auto& a, const auto& b) {
                 return a.file_path < b.file_path;
             });

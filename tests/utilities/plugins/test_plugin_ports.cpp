@@ -20,14 +20,6 @@
 
 using namespace dftracer::utils;
 
-namespace views = dftracer::utils::trace::views;
-using dftracer::utils::plugins::PluginFold;
-using dstd::StringIntern;
-using views::detail::FoldBatch;
-using views::detail::FoldEvent;
-using views::detail::FoldPortBus;
-using views::detail::ScanUnit;
-
 namespace {
 
 constexpr const char* PORT_CAP = "com.example.perbatch";
@@ -66,9 +58,10 @@ struct ConsumerSlice {
 // Owns a plugin plus a PluginFold bound to `bus`, torn down in the right order.
 struct FoldHolder {
     dftu_plugin* plugin;
-    dstd::UniquePtr<PluginFold> fold;
-    FoldHolder(dftu_plugin* p, StringIntern& intern, FoldPortBus* bus)
-        : plugin(p), fold(dstd::make_unique<PluginFold>(p, intern)) {
+    dstd::UniquePtr<plugins::PluginFold> fold;
+    FoldHolder(dftu_plugin* p, dstd::StringIntern& intern,
+               trace::views::detail::FoldPortBus* bus)
+        : plugin(p), fold(dstd::make_unique<plugins::PluginFold>(p, intern)) {
         fold->bind_port_bus(bus);
     }
     ~FoldHolder() {
@@ -77,9 +70,9 @@ struct FoldHolder {
     }
 };
 
-dstd::Vector<FoldEvent> make_events(std::uint64_t with_dur,
-                                    std::uint64_t total) {
-    dstd::Vector<FoldEvent> evs(total);
+dstd::Vector<trace::views::detail::FoldEvent> make_events(
+    std::uint64_t with_dur, std::uint64_t total) {
+    dstd::Vector<trace::views::detail::FoldEvent> evs(total);
     for (std::uint64_t i = 0; i < total; ++i) {
         // step() drops METADATA/UNKNOWN-phase events before it ever reaches
         // on_batch, and plugins::Event::has_dur() is phase() == Complete;
@@ -96,7 +89,7 @@ dstd::Vector<FoldEvent> make_events(std::uint64_t with_dur,
 
 TEST_SUITE("FoldPortBus") {
     TEST_CASE("publish then consume round-trips; absent key is NULL") {
-        FoldPortBus bus;
+        trace::views::detail::FoldPortBus bus;
         std::uint32_t len = 99;
         CHECK(bus.consume(1, &len) == nullptr);
         CHECK(len == 0);
@@ -111,7 +104,7 @@ TEST_SUITE("FoldPortBus") {
     }
 
     TEST_CASE("a second key coexists and clear resets the bus") {
-        FoldPortBus bus;
+        trace::views::detail::FoldPortBus bus;
         std::uint64_t a = 1, b = 2;
         bus.publish(10, &a, sizeof a);
         bus.publish(20, &b, sizeof b);
@@ -127,8 +120,8 @@ TEST_SUITE("FoldPortBus") {
 
 TEST_SUITE("PluginPorts") {
     TEST_CASE("producer before consumer delivers the value for the batch") {
-        StringIntern intern;
-        FoldPortBus bus;
+        dstd::StringIntern intern;
+        trace::views::detail::FoldPortBus bus;
         FoldHolder prod(
             dftracer::utils::plugins::make_plugin<ProducerSlice>(nullptr),
             intern, &bus);
@@ -137,8 +130,9 @@ TEST_SUITE("PluginPorts") {
             intern, &bus);
 
         auto evs = make_events(/*with_dur=*/3, /*total=*/5);
-        ScanUnit unit;
-        FoldBatch fb{dstd::Span<const FoldEvent>(evs), unit};
+        trace::views::detail::ScanUnit unit;
+        trace::views::detail::FoldBatch fb{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         g_present = false;
         g_consumed = 0;
@@ -150,8 +144,8 @@ TEST_SUITE("PluginPorts") {
     }
 
     TEST_CASE("consumer before producer reads NULL (the ordering rule)") {
-        StringIntern intern;
-        FoldPortBus bus;
+        dstd::StringIntern intern;
+        trace::views::detail::FoldPortBus bus;
         FoldHolder prod(
             dftracer::utils::plugins::make_plugin<ProducerSlice>(nullptr),
             intern, &bus);
@@ -160,8 +154,9 @@ TEST_SUITE("PluginPorts") {
             intern, &bus);
 
         auto evs = make_events(3, 5);
-        ScanUnit unit;
-        FoldBatch fb{dstd::Span<const FoldEvent>(evs), unit};
+        trace::views::detail::ScanUnit unit;
+        trace::views::detail::FoldBatch fb{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         g_present = true;
         g_consumed = 123;
@@ -173,8 +168,8 @@ TEST_SUITE("PluginPorts") {
     }
 
     TEST_CASE("a value published in one batch is gone in the next") {
-        StringIntern intern;
-        FoldPortBus bus;
+        dstd::StringIntern intern;
+        trace::views::detail::FoldPortBus bus;
         FoldHolder prod(
             dftracer::utils::plugins::make_plugin<ProducerSlice>(nullptr),
             intern, &bus);
@@ -183,8 +178,9 @@ TEST_SUITE("PluginPorts") {
             intern, &bus);
 
         auto evs = make_events(2, 4);
-        ScanUnit unit;
-        FoldBatch fb{dstd::Span<const FoldEvent>(evs), unit};
+        trace::views::detail::ScanUnit unit;
+        trace::views::detail::FoldBatch fb{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         bus.clear();
         prod.fold->step(fb);

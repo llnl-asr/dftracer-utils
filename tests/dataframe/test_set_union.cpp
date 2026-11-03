@@ -14,11 +14,7 @@
 #include <stdexcept>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Series;
-
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -29,9 +25,9 @@ DataFrame set_union_of(const Series& values,
                        const dstd::Vector<dstd::StringView>& keys) {
     Series g = Series::strings(dstd::Span<const dstd::StringView>(keys));
     dstd::Vector<const Series*> inputs = {&g, &values};
-    return df::group_agg_expr(df::expr_col(0),
-                              {df::agg_set_union(df::expr_col(1), "u")}, inputs,
-                              "g");
+    return dataframe::group_agg_expr(
+        dataframe::expr_col(0),
+        {dataframe::agg_set_union(dataframe::expr_col(1), "u")}, inputs, "g");
 }
 
 // The typed form over `values`: groups a (rows 0..1) and b (row 2).
@@ -39,9 +35,10 @@ DataFrame typed_of(const Series& values,
                    const dstd::Vector<dstd::StringView>& keys) {
     Series g = Series::strings(dstd::Span<const dstd::StringView>(keys));
     dstd::Vector<const Series*> inputs = {&g, &values};
-    return df::group_agg_expr(df::expr_col(0),
-                              {df::agg_set_union(df::expr_col(1), "u", true)},
-                              inputs, "g");
+    return dataframe::group_agg_expr(
+        dataframe::expr_col(0),
+        {dataframe::agg_set_union(dataframe::expr_col(1), "u", true)}, inputs,
+        "g");
 }
 
 // The elements of row `row` of a list column, via its offsets.
@@ -99,7 +96,7 @@ TEST_CASE("a column of an unsupported type is refused with its type named") {
     CHECK_THROWS_WITH_AS(set_union_of(st, {"a", "a", "b"}),
                          doctest::Contains("struct"), std::invalid_argument);
     dstd::Vector<std::int64_t> ts{1, 2, 3};
-    Series t = Series::flat(df::TypeId::Timestamp, ts.data(), 3);
+    Series t = Series::flat(dataframe::TypeId::Timestamp, ts.data(), 3);
     CHECK_THROWS_WITH_AS(set_union_of(t, {"a", "a", "b"}),
                          doctest::Contains("timestamp"), std::invalid_argument);
 }
@@ -145,10 +142,11 @@ TEST_CASE(
     Series b = Series::flat_i64(by.data(), 2);
     dstd::Vector<const Series*> inputs = {&g, &v, &b};
     CHECK_THROWS_WITH_AS(
-        df::group_agg_expr(
-            df::expr_col(0),
-            {df::agg_argmax(df::expr_col(1), df::expr_col(2), "m")}, inputs,
-            "g"),
+        dataframe::group_agg_expr(
+            dataframe::expr_col(0),
+            {dataframe::agg_argmax(dataframe::expr_col(1),
+                                   dataframe::expr_col(2), "m")},
+            inputs, "g"),
         doctest::Contains("list"), std::invalid_argument);
 }
 
@@ -157,8 +155,8 @@ TEST_CASE("typed set_union orders integers by value, not by text") {
     Series c = Series::flat_i64(v.data(), 3);
     DataFrame r = typed_of(c, {"a", "a", "b"});
     REQUIRE(r.num_rows() == 2);
-    CHECK(r.column("u").type() == df::TypeId::List);
-    CHECK(r.column("u").child(0).type() == df::TypeId::Int64);
+    CHECK(r.column("u").type() == dataframe::TypeId::List);
+    CHECK(r.column("u").child(0).type() == dataframe::TypeId::Int64);
     CHECK(list_cell<std::int64_t>(r, 0) == dstd::Vector<std::int64_t>{9, 10});
     CHECK(list_cell<std::int64_t>(r, 1) == dstd::Vector<std::int64_t>{10});
 }
@@ -169,7 +167,7 @@ TEST_CASE("typed set_union keeps a string holding the separator") {
     DataFrame r = typed_of(c, {"a", "a", "a"});
     REQUIRE(r.num_rows() == 1);
     const Series& u = r.column("u");
-    CHECK(u.child(0).type() == df::TypeId::String);
+    CHECK(u.child(0).type() == dataframe::TypeId::String);
     CHECK(u.offsets()[1] == 2);
     CHECK(u.child(0).string_at(0) == "a");
     CHECK(u.child(0).string_at(1) == "b" + SEP + "c");
@@ -179,7 +177,7 @@ TEST_CASE("typed set_union of floats, unsigned integers and bools") {
     dstd::Vector<double> f{0.1, 1e300, 0.1, -0.0, 0.0, std::nan("")};
     Series fc = Series::flat_f64(f.data(), 6);
     DataFrame rf = typed_of(fc, {"a", "a", "a", "a", "a", "a"});
-    CHECK(rf.column("u").child(0).type() == df::TypeId::Float64);
+    CHECK(rf.column("u").child(0).type() == dataframe::TypeId::Float64);
     const dstd::Vector<double> got = list_cell<double>(rf, 0);
     REQUIRE(got.size() == 5);
     CHECK(std::signbit(got[0]));  // negative zero before zero
@@ -190,15 +188,15 @@ TEST_CASE("typed set_union of floats, unsigned integers and bools") {
     CHECK(std::isnan(got[4]));  // NaN last
 
     dstd::Vector<std::uint64_t> u{18446744073709551615ull, 3, 3};
-    Series uc = Series::flat(df::TypeId::Uint64, u.data(), 3);
+    Series uc = Series::flat(dataframe::TypeId::Uint64, u.data(), 3);
     DataFrame ru = typed_of(uc, {"a", "a", "a"});
     CHECK(list_cell<std::uint64_t>(ru, 0) ==
           dstd::Vector<std::uint64_t>{3, 18446744073709551615ull});
 
     const std::uint8_t bits[1] = {0x05};  // true, false, true
-    Series bc = Series::flat(df::TypeId::Bool, bits, 3);
+    Series bc = Series::flat(dataframe::TypeId::Bool, bits, 3);
     DataFrame rb = typed_of(bc, {"a", "a", "a"});
-    CHECK(rb.column("u").child(0).type() == df::TypeId::Bool);
+    CHECK(rb.column("u").child(0).type() == dataframe::TypeId::Bool);
     CHECK(rb.column("u").offsets()[1] == 2);
     const std::uint8_t packed = rb.column("u").child(0).data<std::uint8_t>()[0];
     CHECK((packed & 1) == 0);  // false first
@@ -228,7 +226,7 @@ TEST_CASE("the text form is unchanged and refuses the separator") {
     dstd::Vector<std::int64_t> v{10, 9};
     Series c = Series::flat_i64(v.data(), 2);
     DataFrame r = set_union_of(c, {"a", "a"});
-    CHECK(r.column("u").type() == df::TypeId::String);
+    CHECK(r.column("u").type() == dataframe::TypeId::String);
     CHECK(cell(r, 0) == "10" + SEP + "9");
 }
 
@@ -241,17 +239,18 @@ TEST_CASE("typed set_union merges with a serialized partial") {
     Series key = Series::flat_i64(k.data(), 400);
     Series val = Series::flat_i64(v.data(), 400);
     dstd::Vector<const Series*> vals{&val};
-    dstd::Vector<df::AggSpec> specs{{df::AggOp::SetUnion, 0, "su", 1.0}};
-    auto a = df::agg_new(specs);
-    df::agg_accumulate(*a, key, vals, 0, 200);
-    auto b = df::agg_new(specs);
-    df::agg_accumulate(*b, key, vals, 200, 400);
-    auto b2 = df::agg_deserialize(df::agg_serialize(*b));
-    df::agg_merge(*a, *b2);
-    DataFrame merged = df::agg_finalize(*a, "k");
-    auto full = df::agg_new(specs);
-    df::agg_accumulate(*full, key, vals);
-    DataFrame direct = df::agg_finalize(*full, "k");
+    dstd::Vector<dataframe::AggSpec> specs{
+        {dataframe::AggOp::SetUnion, 0, "su", 1.0}};
+    auto a = dataframe::agg_new(specs);
+    dataframe::agg_accumulate(*a, key, vals, 0, 200);
+    auto b = dataframe::agg_new(specs);
+    dataframe::agg_accumulate(*b, key, vals, 200, 400);
+    auto b2 = dataframe::agg_deserialize(dataframe::agg_serialize(*b));
+    dataframe::agg_merge(*a, *b2);
+    DataFrame merged = dataframe::agg_finalize(*a, "k");
+    auto full = dataframe::agg_new(specs);
+    dataframe::agg_accumulate(*full, key, vals);
+    DataFrame direct = dataframe::agg_finalize(*full, "k");
     REQUIRE(merged.num_rows() == direct.num_rows());
     for (std::int64_t r = 0; r < merged.num_rows(); ++r) {
         merged.names[1] = "u";

@@ -20,7 +20,6 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::duql;
-using dftracer::utils::json::JsonValue;
 
 namespace {
 
@@ -31,7 +30,7 @@ Truth truth(const char* query, const char* record) {
     simdjson::dom::parser p;
     simdjson::dom::element el;
     REQUIRE(p.parse(record, std::strlen(record)).get(el) == simdjson::SUCCESS);
-    return evaluate_truth(**ast, JsonValue(el));
+    return evaluate_truth(**ast, json::JsonValue(el));
 }
 
 dstd::String error_of(const char* query) {
@@ -147,20 +146,19 @@ TEST_SUITE("duql patterns") {
         simdjson::dom::element el;
         REQUIRE(p.parse(record.data(), record.size()).get(el) ==
                 simdjson::SUCCESS);
-        const Truth first = evaluate_truth(**ast, JsonValue(el));
+        const Truth first = evaluate_truth(**ast, json::JsonValue(el));
         CHECK(first != Truth::Yes);
         for (int i = 0; i < 100; ++i)
-            CHECK(evaluate_truth(**ast, JsonValue(el)) == first);
+            CHECK(evaluate_truth(**ast, json::JsonValue(el)) == first);
 
-        namespace df = dftracer::utils::dataframe;
         const dstd::String value = dstd::String(10000, 'a') + "!";
-        const df::Series col =
-            df::Series::strings(dstd::Vector<dstd::StringView>{value, "aa"});
-        const df::Series m = col.str_search("^(a|aa)+$");
+        const dataframe::Series col = dataframe::Series::strings(
+            dstd::Vector<dstd::StringView>{value, "aa"});
+        const dataframe::Series m = col.str_search("^(a|aa)+$");
         REQUIRE(m.handle());
         const bool null0 = m.is_null(0);
         for (int i = 0; i < 20; ++i) {
-            const df::Series again = col.str_search("^(a|aa)+$");
+            const dataframe::Series again = col.str_search("^(a|aa)+$");
             CHECK(again.is_null(0) == null0);
             CHECK_FALSE(again.is_null(1));
         }
@@ -239,14 +237,13 @@ TEST_SUITE("duql patterns") {
     }
 
     TEST_CASE("DataFrame str_like escapes with a backslash") {
-        namespace df = dftracer::utils::dataframe;
-        const df::Series col = df::Series::strings(
+        const dataframe::Series col = dataframe::Series::strings(
             dstd::Vector<dstd::StringView>{"50%", "50x", "h\xc3\xa9", "a\nb"});
-        const df::Series pct = col.str_like("50\\%");
+        const dataframe::Series pct = col.str_like("50\\%");
         CHECK(pct.handle());
         CHECK(pct.all() == false);
-        const df::Series one = col.str_like("h_");
-        const df::Series nl = col.str_like("a%b");
+        const dataframe::Series one = col.str_like("h_");
+        const dataframe::Series nl = col.str_like("a%b");
         REQUIRE(one.handle());
         REQUIRE(nl.handle());
         CHECK(one.any());
@@ -274,7 +271,6 @@ TEST_CASE("a catastrophic pattern retries on Vectorscan at any length") {
 #include <hs.h>
 
 TEST_CASE("the engine path gives exact results") {
-    namespace df = dftracer::utils::dataframe;
     auto m = [](const char* re, bool icase, dstd::StringView s,
                 bool whole = false) {
         auto p = compile_regex(re, icase, whole);
@@ -319,9 +315,9 @@ TEST_CASE("the engine path gives exact results") {
     CHECK(m("^a\\Xc$", false, "ac") == MatchResult::No);
     CHECK(m("a\\Rb", false, "a\r\nb") == MatchResult::Yes);
 
-    const df::Series col =
-        df::Series::strings(dstd::Vector<dstd::StringView>{hard, "aa"});
-    const df::Series r = col.str_search("^(a|aa)+$");
+    const dataframe::Series col =
+        dataframe::Series::strings(dstd::Vector<dstd::StringView>{hard, "aa"});
+    const dataframe::Series r = col.str_search("^(a|aa)+$");
     REQUIRE(r.handle());
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
     CHECK_FALSE(r.is_null(0));

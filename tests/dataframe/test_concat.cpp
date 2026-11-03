@@ -26,16 +26,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::col;
-using dftracer::utils::dataframe::ConcatHow;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::InMemorySource;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::OpArgs;
-using dftracer::utils::dataframe::Schema;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

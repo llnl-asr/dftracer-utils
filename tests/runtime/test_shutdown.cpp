@@ -37,7 +37,6 @@
 
 using namespace dftracer::utils;
 using namespace std::chrono_literals;
-namespace memory = dftracer::utils::memory;
 
 namespace {
 

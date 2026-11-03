@@ -31,8 +31,7 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 using namespace test_view_common;
 
-namespace df = dftracer::utils::dataframe;
-namespace ix = dftracer::utils::index;
+using namespace dftracer::utils::trace;
 
 namespace {
 
@@ -59,11 +58,11 @@ dstd::String write_indexed(TestEnvironment& env, const dstd::String& name,
                            dstd::StringView schema = "",
                            std::uint64_t tier_interval_us = 0) {
     const dstd::String gz = write_gz(env, name, lines, member_bytes);
-    ix::IndexerOptions o;
+    index::IndexerOptions o;
     o.checkpoint_size = member_bytes;
     o.schema = schema;
     if (tier_interval_us > 0) o.aggregation.time_interval_us = tier_interval_us;
-    ix::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
+    index::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
     return gz;
 }
 
@@ -88,63 +87,59 @@ dstd::String dft_line(int pid, int tid, const char* name, std::int64_t ts,
            R"(,"ph":"X","args":{"size":7}})";
 }
 
-namespace scan = dftracer::utils::trace::views::detail::scan;
-
 // The aggregation of `p` by a full scan, the tier bypassed.
-df::DataFrame scan_only(const scan::ScanPlan& p) {
-    namespace detail = dftracer::utils::trace::views::detail;
+dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
     Runtime rt;
-    df::DataFrame out;
-    rt.block_on(
-        coro::named("scan-only",
-                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                        auto st = co_await detail::build_engine_agg_state(*p);
-                        out = detail::finalize_engine_result(*st, *p);
-                    })));
-    return detail::apply_agg_post_ops(std::move(out), *p);
+    dataframe::DataFrame out;
+    rt.block_on(coro::named(
+        "scan-only",
+        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto st = co_await views::detail::build_engine_agg_state(*p);
+            out = views::detail::finalize_engine_result(*st, *p);
+        })));
+    return views::detail::apply_agg_post_ops(std::move(out), *p);
 }
 
 // Fills `st` when the chunk partials answer `p`.
-bool partials_serve(const scan::ScanPlan& p, df::AggStatePtr& st) {
-    namespace detail = dftracer::utils::trace::views::detail;
-    detail::ensure_schema(*p);
+bool partials_serve(const views::detail::scan::ScanPlan& p,
+                    dataframe::AggStatePtr& st) {
+    views::detail::ensure_schema(*p);
     Runtime rt;
     bool served = false;
     rt.block_on(coro::named(
         "partials", coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            served = co_await detail::partials_collect(*p, st);
+            served = co_await views::detail::partials_collect(*p, st);
         })));
     return served;
 }
 
 // The aggregation of `p` from the chunk partials. Fails when they decline it.
-df::DataFrame tier_only(const scan::ScanPlan& p) {
-    namespace detail = dftracer::utils::trace::views::detail;
-    df::AggStatePtr st;
+dataframe::DataFrame tier_only(const views::detail::scan::ScanPlan& p) {
+    dataframe::AggStatePtr st;
     REQUIRE(partials_serve(p, st));
-    return detail::apply_agg_post_ops(detail::finalize_engine_result(*st, *p),
-                                      *p);
+    return views::detail::apply_agg_post_ops(
+        views::detail::finalize_engine_result(*st, *p), *p);
 }
 
 // Whether the chunk partials answer the events and profiles of `p`.
-bool typed_serve(const scan::ScanPlan& p, df::DataFrame& regular,
-                 df::DataFrame& profiles) {
-    namespace detail = dftracer::utils::trace::views::detail;
-    detail::ensure_schema(*p);
+bool typed_serve(const views::detail::scan::ScanPlan& p,
+                 dataframe::DataFrame& regular,
+                 dataframe::DataFrame& profiles) {
+    views::detail::ensure_schema(*p);
     Runtime rt;
     bool served = false;
-    rt.block_on(coro::named(
-        "typed-partials",
-        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            served =
-                co_await detail::partials_collect_typed(*p, regular, profiles);
-        })));
+    rt.block_on(
+        coro::named("typed-partials",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        served = co_await views::detail::partials_collect_typed(
+                            *p, regular, profiles);
+                    })));
     return served;
 }
 
 // Each row of `f` as its cells' text, keyed by the `keys` columns' text.
 dstd::Map<dstd::String, dstd::Vector<dstd::String>> rows_by_key(
-    const df::DataFrame& f, const dstd::Vector<dstd::String>& keys) {
+    const dataframe::DataFrame& f, const dstd::Vector<dstd::String>& keys) {
     dstd::Map<dstd::String, dstd::Vector<dstd::String>> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
         dstd::String k;
@@ -152,7 +147,7 @@ dstd::Map<dstd::String, dstd::Vector<dstd::String>> rows_by_key(
         auto& cells = out[k];
         for (std::size_t c = 0; c < f.names.size(); ++c)
             cells.push_back(
-                f.columns[c].type() == df::TypeId::String
+                f.columns[c].type() == dataframe::TypeId::String
                     ? bstr(f, r, f.names[c])
                     : dstd::String(dstd::double_text(bnum(f, r, f.names[c]))));
     }
@@ -160,7 +155,7 @@ dstd::Map<dstd::String, dstd::Vector<dstd::String>> rows_by_key(
 }
 
 // `a` and `b` hold the same columns and rows; with `types`, of the same types.
-void same_frame(const df::DataFrame& a, const df::DataFrame& b,
+void same_frame(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
                 const dstd::Vector<dstd::String>& keys, bool types = true) {
     REQUIRE(a.names == b.names);
     if (types)
@@ -171,7 +166,7 @@ void same_frame(const df::DataFrame& a, const df::DataFrame& b,
 }
 
 std::int64_t count_of(const View& v, const dstd::String& query) {
-    const df::DataFrame f =
+    const dataframe::DataFrame f =
         run(v.duql(query + " | agg { n = count() }").lazy().collect());
     REQUIRE(f.num_rows() == 1);
     return static_cast<std::int64_t>(bnum(f, 0, "n"));
@@ -179,8 +174,8 @@ std::int64_t count_of(const View& v, const dstd::String& query) {
 
 // 400 records of a path schema with every role: size i, op read or write,
 // hosts h0-h1, threads t0-t3.
-const ix::RecordSchema& path_roles() {
-    return ix::register_schema(R"(
+const index::RecordSchema& path_roles() {
+    return index::register_schema(R"(
 id: path_roles
 fields:
   start: {type: int, role: time}
@@ -190,7 +185,7 @@ fields:
   op: {type: string, role: name}
   size: {type: int}
 )",
-                               "test");
+                                  "test");
 }
 
 dstd::Vector<dstd::String> path_role_lines() {
@@ -205,10 +200,10 @@ dstd::Vector<dstd::String> path_role_lines() {
 }
 
 dstd::Map<dstd::String, double> counts_by_op(const View& v) {
-    const df::DataFrame f = v.group_by({GroupKey::name()})
-                                .agg({{AggOp::Count, "", "n"}})
-                                .collect()
-                                .get();
+    const dataframe::DataFrame f = v.group_by({GroupKey::name()})
+                                       .agg({{AggOp::Count, "", "n"}})
+                                       .collect()
+                                       .get();
     dstd::Map<dstd::String, double> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out[bstr(f, r, "op")] = bnum(f, r, "n");
@@ -220,7 +215,8 @@ dstd::Pair<dstd::String, bool> index_state(const dstd::String& gz,
                                            const dstd::String& idx) {
     const auto snapshot = dftu_utils_test::index_snapshot(idx);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
-    const auto schema = dftu_utils_test::index_take(ix::schema(snapshot, file));
+    const auto schema =
+        dftu_utils_test::index_take(index::schema(snapshot, file));
     return {schema ? dstd::String(schema->data(), schema->size()) : "",
             dftu_utils_test::pruning_tier_current(snapshot, file)};
 }
@@ -246,7 +242,7 @@ dstd::Vector<dstd::String> nested_calls(
 
 // Each flamegraph node's name path ("all/step/read") -> (total, count).
 dstd::Map<dstd::String, dstd::Pair<double, std::int64_t>> flame_paths(
-    const df::DataFrame& f) {
+    const dataframe::DataFrame& f) {
     dstd::Vector<dstd::String> path(static_cast<std::size_t>(f.num_rows()));
     dstd::Map<dstd::String, dstd::Pair<double, std::int64_t>> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
@@ -265,8 +261,8 @@ dstd::Map<dstd::String, dstd::Pair<double, std::int64_t>> flame_paths(
 
 TEST_SUITE("Schemaless") {
     TEST_CASE("a user schema with dftracer's roles gives the same call tree") {
-        ix::register_schema(DFT_ROLES, "test");
-        ix::register_schema(R"(
+        index::register_schema(DFT_ROLES, "test");
+        index::register_schema(R"(
 id: secs_roles
 fields:
   start: {type: float, role: time, unit: s}
@@ -275,7 +271,7 @@ fields:
   thread: {type: string, role: lane}
   op: {type: string, role: name}
 )",
-                            "test");
+                               "test");
         TestEnvironment env(10);
         const auto dft = nested_calls(dft_line);
         const dstd::String a = write_indexed(env, "dft", dft, 1024);
@@ -305,8 +301,8 @@ fields:
             dstd::String(c),
             dstd::String(dstd::String(determine_index_path(c, ""))));
 
-        const df::DataFrame ta = run(va.call_tree().collect());
-        const df::DataFrame tb = run(vb.call_tree().collect());
+        const dataframe::DataFrame ta = run(va.call_tree().collect());
+        const dataframe::DataFrame tb = run(vb.call_tree().collect());
         REQUIRE(ta.num_rows() == 80);
         REQUIRE(tb.num_rows() == ta.num_rows());
         for (std::int64_t r = 0; r < ta.num_rows(); ++r) {
@@ -315,8 +311,10 @@ fields:
                 CHECK(bnum(tb, r, col) == bnum(ta, r, col));
             CHECK(bstr(tb, r, "name") == bstr(ta, r, "name"));
         }
-        const df::DataFrame da = run(va.duql("call_tree").lazy().collect());
-        const df::DataFrame db = run(vb.duql("call_tree").lazy().collect());
+        const dataframe::DataFrame da =
+            run(va.duql("call_tree").lazy().collect());
+        const dataframe::DataFrame db =
+            run(vb.duql("call_tree").lazy().collect());
         REQUIRE(db.num_rows() == da.num_rows());
         for (std::int64_t r = 0; r < da.num_rows(); ++r)
             CHECK(bnum(db, r, "depth") == bnum(da, r, "depth"));
@@ -325,12 +323,12 @@ fields:
         CHECK(flame_paths(run(vb.flamegraph().collect())) == fa);
         CHECK(fa.at("all/step/read/sys").second == 20);
 
-        const df::DataFrame ga =
+        const dataframe::DataFrame ga =
             (va.group_by({GroupKey::pid(), GroupKey::tid(), GroupKey::name()})
                  .agg({{AggOp::Count, "", "n"}})
                  .collect()
                  .get());
-        const df::DataFrame gc =
+        const dataframe::DataFrame gc =
             (vc.group_by({GroupKey::pid(), GroupKey::tid(), GroupKey::name()})
                  .agg({{AggOp::Count, "", "n"}})
                  .collect()
@@ -345,9 +343,10 @@ fields:
                              dftracer::utils::common::DFTUtilsException);
 
         // Seconds and milliseconds come back in those units.
-        const df::DataFrame tc = run(vc.call_tree().collect());
+        const dataframe::DataFrame tc = run(vc.call_tree().collect());
         REQUIRE(tc.num_rows() == ta.num_rows());
-        CHECK(tc.columns[tc.column_index("ts")].type() == df::TypeId::Float64);
+        CHECK(tc.columns[tc.column_index("ts")].type() ==
+              dataframe::TypeId::Float64);
         dstd::MultiSet<dstd::Pair<dstd::String, std::int64_t>> la, lc;
         for (std::int64_t r = 0; r < ta.num_rows(); ++r) {
             la.emplace(bstr(ta, r, "name"),
@@ -381,14 +380,14 @@ fields:
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
         CHECK(count_of(v, "where k > 0") == 4);
-        const df::DataFrame ids =
+        const dataframe::DataFrame ids =
             run(v.duql("where k < 3 | select id | sort id").lazy().collect());
         REQUIRE(ids.num_rows() == 2);
-        REQUIRE(ids.columns[0].type() == df::TypeId::Uint64);
+        REQUIRE(ids.columns[0].type() == dataframe::TypeId::Uint64);
         const auto col = ids.columns[0].materialize();
         CHECK(col.data<std::uint64_t>()[0] == 18446744073709551614ULL);
         CHECK(col.data<std::uint64_t>()[1] == 18446744073709551615ULL);
-        const df::DataFrame wide =
+        const dataframe::DataFrame wide =
             run(v.duql("where k == 3 | select id").lazy().collect());
         REQUIRE(wide.num_rows() == 1);
         CHECK(bstr(wide, 0, "id") == "340282366920938463463374607431768211455");
@@ -412,7 +411,7 @@ fields:
     }
 
     TEST_CASE("a stored row set keeps declared types like the scan") {
-        ix::register_schema(R"(
+        index::register_schema(R"(
 id: typed_rows
 fields:
   n: {type: int}
@@ -420,7 +419,7 @@ fields:
 source: |
   items = where n > 0 | select n, meta
 )",
-                            "test");
+                               "test");
         TestEnvironment env(10);
         const dstd::String plain = env.get_dir() + "/t.ndjson";
         {
@@ -430,27 +429,27 @@ source: |
         }
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        ix::IndexerOptions o;
+        index::IndexerOptions o;
         o.schema = "typed_rows";
         auto indexer =
-            ix::Indexer::open({dstd::String(dstd::StringView(gz))}, o);
+            index::Indexer::open({dstd::String(dstd::StringView(gz))}, o);
         indexer.build();
-        const df::DataFrame stored = indexer.rowset("items");
+        const dataframe::DataFrame stored = indexer.rowset("items");
         REQUIRE(stored.num_rows() == 2);
-        CHECK(stored.columns[0].type() == df::TypeId::Int64);
+        CHECK(stored.columns[0].type() == dataframe::TypeId::Int64);
         CHECK(bstr(stored, 0, "meta") == R"({"a":[1,2],"b":1})");
         CHECK(bstr(stored, 1, "meta") == R"("x")");
     }
 
     TEST_CASE("declared types convert values; the rest read as null") {
-        ix::register_schema(R"(
+        index::register_schema(R"(
 id: coerce
 fields:
   at: {type: string, role: time}
   n: {type: int}
   label: {type: string}
 )",
-                            "test");
+                               "test");
         TestEnvironment env(10);
         const dstd::String gz = write_indexed(
             env, "coerce",
@@ -462,15 +461,16 @@ fields:
                 dstd::String(gz),
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("coerce");
-        const df::DataFrame f = run(v.duql("select n, label").lazy().collect());
+        const dataframe::DataFrame f =
+            run(v.duql("select n, label").lazy().collect());
         REQUIRE(f.num_rows() == 3);
         CHECK(bnum(f, 0, "n") == 42);
         CHECK(bnum(f, 1, "n") == 2);
         CHECK(f.columns[0].is_null(2));
-        CHECK(f.columns[0].type() == df::TypeId::Int64);
+        CHECK(f.columns[0].type() == dataframe::TypeId::Int64);
         CHECK(bstr(f, 0, "label") == "7");
         CHECK(bstr(f, 2, "label") == "true");
-        const df::DataFrame b =
+        const dataframe::DataFrame b =
             run(v.duql("bucket 1h | agg { c = count() } | sort bucket")
                     .lazy()
                     .collect());
@@ -483,14 +483,14 @@ fields:
     TEST_CASE(
         "digit text stays text in a string field and parses in a number "
         "field") {
-        ix::register_schema(R"(
+        index::register_schema(R"(
 id: digits
 fields:
   at: {type: string, role: time}
   x: {type: float}
   label: {type: string}
 )",
-                            "test");
+                               "test");
         TestEnvironment env(10);
         const dstd::String gz = write_indexed(
             env, "digits",
@@ -501,9 +501,10 @@ fields:
                 dstd::String(gz),
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("digits");
-        const df::DataFrame f = run(v.duql("select x, label").lazy().collect());
+        const dataframe::DataFrame f =
+            run(v.duql("select x, label").lazy().collect());
         REQUIRE(f.num_rows() == 2);
-        CHECK(f.columns[0].type() == df::TypeId::Float64);
+        CHECK(f.columns[0].type() == dataframe::TypeId::Float64);
         CHECK(bnum(f, 0, "x") == 1000);
         CHECK(bnum(f, 1, "x") == -1.5);
         CHECK(bstr(f, 0, "label") == "007");
@@ -511,7 +512,8 @@ fields:
     }
 
     TEST_CASE("bad lines and unconverted values are counted, not lost") {
-        ix::register_schema("id: counted\nfields:\n  n: {type: int}\n", "test");
+        index::register_schema("id: counted\nfields:\n  n: {type: int}\n",
+                               "test");
         TestEnvironment env(10);
         dstd::String deep;
         for (int i = 0; i < 1100; ++i) deep += R"({"a":)";
@@ -527,7 +529,7 @@ fields:
                 dstd::String(gz),
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("counted");
-        const df::DataFrame f = run(v.duql("select n").lazy().collect());
+        const dataframe::DataFrame f = run(v.duql("select n").lazy().collect());
         CHECK(f.num_rows() == 3);
         // A filter parses every line; the unfiltered export copies lines
         // through unparsed.
@@ -542,14 +544,14 @@ fields:
     }
 
     TEST_CASE("buckets and time ranges count in the time role's unit") {
-        ix::register_schema(R"(
+        index::register_schema(R"(
 id: seconds_log
 fields:
   t: {type: float, role: time, unit: s}
   d: {type: float, role: duration, unit: s}
   k: {type: string}
 )",
-                            "test");
+                               "test");
         TestEnvironment env(10);
         dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 300; ++i)
@@ -561,11 +563,11 @@ fields:
                 dstd::String(gz),
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("seconds_log");
-        const df::DataFrame trace =
+        const dataframe::DataFrame trace =
             run(v.duql("bucket 60s | agg { n = count() } | sort bucket")
                     .lazy()
                     .collect());
-        const df::DataFrame frame = run(
+        const dataframe::DataFrame frame = run(
             v.duql("bucket 60s | group one = 1 { n = count() } | sort bucket")
                 .lazy()
                 .collect());
@@ -580,14 +582,15 @@ fields:
             CHECK(bnum(frame, r, "n") == bnum(trace, r, "n"));
         }
         CHECK(count_of(v, "time_range 1100 .. 1200") == 100);
-        const df::DataFrame from_min = v.time_bucket_min(60000000)
-                                           .agg({{AggOp::Count, "", "n"}})
-                                           .collect()
-                                           .get();
+        const dataframe::DataFrame from_min =
+            v.time_bucket_min(60000000)
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get();
         REQUIRE(from_min.num_rows() == 5);
         for (std::int64_t r = 0; r < from_min.num_rows(); ++r)
             CHECK(bnum(from_min, r, "n") == 60);
-        const df::DataFrame busy =
+        const dataframe::DataFrame busy =
             run(v.duql("agg { b = busy(), s = sum(d) }").lazy().collect());
         REQUIRE(busy.num_rows() == 1);
         CHECK(bnum(busy, 0, "s") == 150);
@@ -676,10 +679,10 @@ fields:
                 .record_schema("generic");
         CHECK(count_of(v, "where name == \"b0150\"") == 1);
         CHECK(count_of(v, "where name in [\"a0001\", \"c0999\"]") == 2);
-        const auto snapshot =
-            ix::plan::open_snapshot(dstd::String(determine_index_path(gz, "")));
+        const auto snapshot = index::plan::open_snapshot(
+            dstd::String(determine_index_path(gz, "")));
         REQUIRE(snapshot.has_value());
-        const auto plan = ix::plan::explain_file_chunks(
+        const auto plan = index::plan::explain_file_chunks(
             *snapshot, dstd::String(dstd::StringView(gz)),
             duql::parse_or_throw("name == \"b0150\""));
         REQUIRE(plan.total_chunks > 3);
@@ -688,8 +691,8 @@ fields:
 
     TEST_CASE(
         "the aggregation tier answers a path schema's roles like the scan") {
-        ix::register_schema(DFT_ROLES, "test");
-        ix::register_schema(R"(
+        index::register_schema(DFT_ROLES, "test");
+        index::register_schema(R"(
 id: loose_roles
 fields:
   ts: {type: int, role: time}
@@ -698,7 +701,7 @@ fields:
   tid: {type: int, role: lane}
   name: {type: string, role: name}
 )",
-                            "test");
+                               "test");
         // The tier answers a plan over every file of its index, so each file
         // gets its own directory.
         TestEnvironment ea(10), eb(10), ec(10);
@@ -711,13 +714,14 @@ fields:
         auto plan = [](const dstd::String& gz, dstd::Vector<GroupKey> keys,
                        dstd::Vector<AggSpec> aggs,
                        const dstd::String& where = "") {
-            auto p = scan::from_file(
+            auto p = views::detail::scan::from_file(
                 dstd::String(gz),
                 dstd::String(dstd::String(determine_index_path(gz, ""))));
             if (!where.empty())
-                p = scan::filter(p, duql::parse_or_throw(where));
-            return scan::agg(scan::group_by(p, std::move(keys)),
-                             std::move(aggs));
+                p = views::detail::scan::filter(p, duql::parse_or_throw(where));
+            return views::detail::scan::agg(
+                views::detail::scan::group_by(p, std::move(keys)),
+                std::move(aggs));
         };
         const dstd::Vector<GroupKey> keys{GroupKey::name(), GroupKey::pid(),
                                           GroupKey::tid()};
@@ -728,36 +732,39 @@ fields:
             {AggOp::Min, "ts", "first"}};
         const dstd::Vector<dstd::String> cols{"name", "pid", "tid"};
 
-        const df::DataFrame dft_tier = tier_only(plan(a, keys, aggs));
+        const dataframe::DataFrame dft_tier = tier_only(plan(a, keys, aggs));
         same_frame(dft_tier, scan_only(plan(a, keys, aggs)), cols);
-        const df::DataFrame path_tier = tier_only(plan(b, keys, aggs));
+        const dataframe::DataFrame path_tier = tier_only(plan(b, keys, aggs));
         CHECK(path_tier.num_rows() == 16);
         same_frame(path_tier, scan_only(plan(b, keys, aggs)), cols);
         // dftracer reads its integers unsigned, a path record signed.
         same_frame(path_tier, dft_tier, cols, false);
 
         const dstd::String reads = R"(name == "read" and pid == 2)";
-        const df::DataFrame filtered = tier_only(plan(b, keys, aggs, reads));
+        const dataframe::DataFrame filtered =
+            tier_only(plan(b, keys, aggs, reads));
         CHECK(filtered.num_rows() == 2);
         same_frame(filtered, scan_only(plan(b, keys, aggs, reads)), cols);
 
         // A one second window holds every chunk of the file, so the partials
         // answer it. A two millisecond window cuts chunks, which only a
         // re-read of the traces can split, and a path plan reads none.
-        const auto bucketed = scan::time_bucket(plan(b, keys, aggs), 1000000);
-        df::DataFrame regular, profiles;
+        const auto bucketed =
+            views::detail::scan::time_bucket(plan(b, keys, aggs), 1000000);
+        dataframe::DataFrame regular, profiles;
         REQUIRE(typed_serve(bucketed, regular, profiles));
         CHECK(regular.num_rows() == 16);
         same_frame(regular, scan_only(bucketed),
                    {"time_bucket", "name", "pid", "tid"});
-        df::DataFrame cut_regular, cut_profiles;
-        CHECK_FALSE(typed_serve(scan::time_bucket(plan(b, keys, aggs), 2000),
-                                cut_regular, cut_profiles));
+        dataframe::DataFrame cut_regular, cut_profiles;
+        CHECK_FALSE(typed_serve(
+            views::detail::scan::time_bucket(plan(b, keys, aggs), 2000),
+            cut_regular, cut_profiles));
 
         // A field with no exact tier copy scans: cat is no role, the loose
         // schema's duration is a float and its entity optional.
-        auto declines = [](const scan::ScanPlan& p) {
-            df::AggStatePtr st;
+        auto declines = [](const views::detail::scan::ScanPlan& p) {
+            dataframe::AggStatePtr st;
             return !partials_serve(p, st);
         };
         // A record without its entity, or with a negative lane, is a null
@@ -786,7 +793,7 @@ fields:
     }
 
     TEST_CASE("file and rank keys relabel through a path schema's row sets") {
-        ix::register_schema(R"(
+        index::register_schema(R"(
 id: ranked_io
 fields:
   ts: {type: int, role: time}
@@ -798,15 +805,15 @@ source: |
   files = where kind == "file" | select fhash, path | distinct;
   ranks = where kind == "rank" | select pid, rank | distinct
 )",
-                            "test");
-        ix::register_schema(R"(
+                               "test");
+        index::register_schema(R"(
 id: unranked_io
 fields:
   ts: {type: int, role: time}
   pid: {type: int, role: entity}
   op: {type: string, role: name}
 )",
-                            "test");
+                               "test");
         TestEnvironment env(10);
         dstd::Vector<dstd::String> lines{
             R"({"kind":"file","fhash":"f1","path":"/data/a.bin"})",
@@ -821,10 +828,10 @@ fields:
                             (i < 4 ? "f1" : "f2") + R"("})");
         using Counts = dstd::Map<dstd::String, std::int64_t>;
         auto counts = [](const View& v, GroupKey key, const char* col) {
-            const df::DataFrame f = v.group_by({key})
-                                        .agg({{AggOp::Count, "", "n"}})
-                                        .collect()
-                                        .get();
+            const dataframe::DataFrame f = v.group_by({key})
+                                               .agg({{AggOp::Count, "", "n"}})
+                                               .collect()
+                                               .get();
             Counts out;
             for (std::int64_t r = 0; r < f.num_rows(); ++r)
                 out[bstr(f, r, col)] =
@@ -866,7 +873,7 @@ fields:
     }
 
     TEST_CASE("an indexed export of path records reads back as their schema") {
-        const ix::RecordSchema& schema = path_roles();
+        const index::RecordSchema& schema = path_roles();
         TestEnvironment env(10);
         const dstd::String src =
             write_indexed(env, "src", path_role_lines(), 1024, schema.id);
@@ -896,7 +903,7 @@ fields:
     }
 
     TEST_CASE("a path-schema file with no index is indexed on first touch") {
-        const ix::RecordSchema& schema = path_roles();
+        const index::RecordSchema& schema = path_roles();
         TestEnvironment env(10);
         const auto lines = path_role_lines();
         const dstd::String ref =
@@ -954,7 +961,7 @@ fields:
     }
 
     TEST_CASE("counters of path records take the lane from its role") {
-        const ix::RecordSchema& schema = path_roles();
+        const index::RecordSchema& schema = path_roles();
         TestEnvironment env(10);
         const dstd::String gz =
             write_indexed(env, "ctr", path_role_lines(), 1024, schema.id);
@@ -970,9 +977,9 @@ fields:
         REQUIRE(lines.size() == 4);
         for (int t = 0; t < 4; ++t) {
             const dstd::String pid =
-                dstd::to_string(ix::entity_id("h" + dstd::to_string(t % 2)));
+                dstd::to_string(index::entity_id("h" + dstd::to_string(t % 2)));
             const dstd::String tid =
-                dstd::to_string(ix::entity_id("t" + dstd::to_string(t)));
+                dstd::to_string(index::entity_id("t" + dstd::to_string(t)));
             CHECK(count_containing(
                       lines, "\"pid\":" + pid + ",\"tid\":" + tid + ",") == 1);
         }
@@ -992,7 +999,7 @@ fields:
                 dstd::String(gz),
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
-        const df::DataFrame f = run(
+        const dataframe::DataFrame f = run(
             v.duql("group k { s = sum(v + 1), n = sum(len(tags)) } | sort k")
                 .lazy()
                 .collect());
@@ -1003,7 +1010,7 @@ fields:
         CHECK(bstr(f, 1, "k") == "b");
         CHECK(bnum(f, 1, "s") == 400);
         CHECK(bnum(f, 1, "n") == 30);
-        const df::DataFrame o =
+        const dataframe::DataFrame o =
             run(v.duql("agg { n = sum(len(objs)) }").lazy().collect());
         CHECK(bnum(o, 0, "n") == 80);
     }
@@ -1021,19 +1028,19 @@ fields:
                 dstd::String(gz),
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
-        const df::DataFrame rows =
+        const dataframe::DataFrame rows =
             run(v.duql("sort k | take 5 | select retry").lazy().collect());
-        const df::Series& col = rows.columns[rows.column_index("retry")];
+        const dataframe::Series& col = rows.columns[rows.column_index("retry")];
         REQUIRE(col.is_json());
         const dstd::Vector<dstd::String> want{"0", "1", "2.5", R"("3")", "3"};
         for (std::int64_t r = 0; r < 5; ++r)
             CHECK(col.string_at(r) == want[static_cast<std::size_t>(r)]);
 
-        const df::DataFrame keys =
+        const dataframe::DataFrame keys =
             run(v.duql("group retry { n = count() } | sort retry")
                     .lazy()
                     .collect());
-        const df::Series& key = keys.columns[keys.column_index("retry")];
+        const dataframe::Series& key = keys.columns[keys.column_index("retry")];
         CHECK(key.is_json());
         dstd::Map<dstd::String, std::int64_t> by_key;
         for (std::int64_t r = 0; r < keys.num_rows(); ++r)
@@ -1049,7 +1056,7 @@ fields:
     }
 
     TEST_CASE("sessions of a path schema equal the dftracer sessions") {
-        ix::register_schema(R"(
+        index::register_schema(R"(
 id: secs_sessions
 fields:
   start: {type: float, role: time, unit: s}
@@ -1057,7 +1064,7 @@ fields:
   host: {type: string, role: entity}
   thread: {type: string, role: lane}
 )",
-                            "test");
+                               "test");
         TestEnvironment env(10);
         dstd::Vector<dstd::String> dft;
         dstd::Vector<dstd::String> secs;
@@ -1090,12 +1097,12 @@ fields:
         const View vb = View::from_file(
             dstd::String(b),
             dstd::String(dstd::String(determine_index_path(b, ""))));
-        const df::DataFrame fa = run(
+        const dataframe::DataFrame fa = run(
             va.duql("session pid, tid gap 105us max 300ms | group pid, tid, "
                     "session { n = count() } | sort pid, tid, session")
                 .lazy()
                 .collect());
-        const df::DataFrame fb = run(
+        const dataframe::DataFrame fb = run(
             vb.duql("session host, thread gap 105us max 300ms | group host, "
                     "thread, session { n = count() } | sort host, thread, "
                     "session")

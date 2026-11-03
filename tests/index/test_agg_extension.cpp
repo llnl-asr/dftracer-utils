@@ -33,16 +33,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-using dftracer::utils::index::Indexer;
-using dftracer::utils::index::IndexerOptions;
-using dftracer::utils::index::schemas::dft::agg::AggregationConfig;
-using dftracer::utils::index::store::IndexExtension;
-using dftracer::utils::trace::views::AggOp;
-using dftracer::utils::trace::views::GroupKey;
-using dftracer::utils::trace::views::Phase;
-using dftracer::utils::trace::views::View;
-using dftracer::utils::trace::views::ViewFile;
-using dftu_utils_test::TestEnvironment;
+using namespace dftracer::utils::index;
 
 namespace {
 
@@ -76,7 +67,7 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
 
 IndexerOptions with_aggregation(std::uint64_t interval_us) {
     IndexerOptions o;
-    AggregationConfig c;
+    schemas::dft::agg::AggregationConfig c;
     c.time_interval_us = interval_us;
     o.aggregation = c;
     return o;
@@ -87,10 +78,13 @@ dstd::String index_of(const dstd::String& trace) {
 }
 
 dataframe::DataFrame counters_of(const dstd::Vector<dstd::String>& traces) {
-    dstd::Vector<ViewFile> files;
+    dstd::Vector<trace::views::ViewFile> files;
     for (const auto& t : traces)
         files.push_back({dstd::String(t), dstd::String(index_of(t))});
-    return View::from_files(std::move(files)).collect_typed().get().counters;
+    return trace::views::View::from_files(std::move(files))
+        .collect_typed()
+        .get()
+        .counters;
 }
 
 bool same_counters(const dataframe::DataFrame& a,
@@ -121,33 +115,36 @@ void plant_sentinel(const dstd::String& trace) {
     const auto opened = dftu_utils_test::open_test_index(index_of(trace));
     const auto snapshot = dftu_utils_test::index_take(opened.snapshot());
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
-    const auto state =
-        index::extension_state(snapshot, file, IndexExtension::Bloom);
+    const auto state = index::extension_state(
+        snapshot, file, index::store::IndexExtension::Bloom);
     REQUIRE(state.has_value());
     auto build = dftu_utils_test::rebuild_test_file(opened, trace);
-    for (const auto& path : dftu_utils_test::index_take(
-             index::paths(snapshot, file, IndexExtension::Bloom))) {
-        index::put_path(build, IndexExtension::Bloom, path);
-        for (const auto& [granule, payload] : dftu_utils_test::index_take(
-                 index::granules(snapshot, file, IndexExtension::Bloom, path)))
-            index::put_path_granule(build, IndexExtension::Bloom, path, granule,
-                                    payload);
-        const auto whole = dftu_utils_test::index_take(
-            index::path_file(snapshot, file, IndexExtension::Bloom, path));
+    for (const auto& path : dftu_utils_test::index_take(index::paths(
+             snapshot, file, index::store::IndexExtension::Bloom))) {
+        index::put_path(build, index::store::IndexExtension::Bloom, path);
+        for (const auto& [granule, payload] :
+             dftu_utils_test::index_take(index::granules(
+                 snapshot, file, index::store::IndexExtension::Bloom, path)))
+            index::put_path_granule(build, index::store::IndexExtension::Bloom,
+                                    path, granule, payload);
+        const auto whole = dftu_utils_test::index_take(index::path_file(
+            snapshot, file, index::store::IndexExtension::Bloom, path));
         if (whole)
-            index::put_path_file(build, IndexExtension::Bloom, path, *whole);
+            index::put_path_file(build, index::store::IndexExtension::Bloom,
+                                 path, *whole);
     }
-    index::put_path_granule(build, IndexExtension::Bloom, SENTINEL, 0, "x");
-    build.finish(IndexExtension::Bloom, state->params_hash);
+    index::put_path_granule(build, index::store::IndexExtension::Bloom,
+                            SENTINEL, 0, "x");
+    build.finish(index::store::IndexExtension::Bloom, state->params_hash);
     dftu_utils_test::commit_test_build(build);
 }
 
 bool has_sentinel(const dstd::String& trace) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_of(trace));
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
-    return !dftu_utils_test::index_take(index::granules(snapshot, file,
-                                                        IndexExtension::Bloom,
-                                                        SENTINEL))
+    return !dftu_utils_test::index_take(
+                index::granules(snapshot, file,
+                                index::store::IndexExtension::Bloom, SENTINEL))
                 .empty();
 }
 
@@ -162,13 +159,13 @@ dstd::Optional<index::ExtensionEntry> agg_entry(const Indexer& ix,
 }
 
 double count_reads(const dstd::Vector<dstd::String>& traces) {
-    dstd::Vector<ViewFile> files;
+    dstd::Vector<trace::views::ViewFile> files;
     for (const auto& t : traces)
         files.push_back({dstd::String(t), dstd::String(index_of(t))});
-    const auto df = View::from_files(std::move(files))
-                        .phase(Phase::Events)
-                        .group_by({GroupKey::name()})
-                        .agg({{AggOp::Count, "", "n"}})
+    const auto df = trace::views::View::from_files(std::move(files))
+                        .phase(trace::views::Phase::Events)
+                        .group_by({trace::views::GroupKey::name()})
+                        .agg({{trace::views::AggOp::Count, "", "n"}})
                         .collect()
                         .get();
     REQUIRE(df.num_rows() == 1);
@@ -189,7 +186,7 @@ double count_reads(const dstd::Vector<dstd::String>& traces) {
 
 TEST_SUITE("AggExtension") {
     TEST_CASE("an aggregated file lists a current dftracer.agg entry") {
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir(), "a", 50, 1000);
         auto ix = Indexer::open({dstd::String(dstd::StringView(gz))},
                                 with_aggregation(1'000'000));
@@ -205,7 +202,7 @@ TEST_SUITE("AggExtension") {
     }
 
     TEST_CASE("an unreadable aggregation config is built again") {
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir(), "fix", 50, 1000);
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(1'000'000))
@@ -213,32 +210,35 @@ TEST_SUITE("AggExtension") {
         CHECK(count_reads({gz}) == 50);
         {
             // A value that does not decode as a config reads as absent.
-            namespace kv = dftracer::utils::store;
-            auto store = kv::Store::open(
+            auto store = dftracer::utils::store::Store::open(
                 index::store::internal::normalize_index_root(index_of(gz)) +
                 "/store");
             REQUIRE(store.has_value());
-            kv::NamespaceSpec spec;
+            dftracer::utils::store::NamespaceSpec spec;
             const auto name =
                 index::store::store_layout::agg_meta_namespace_name("config");
             spec.name.assign(name.data(), name.size());
             auto ns = store->ns(spec);
             REQUIRE(ns.has_value());
-            const kv::ScopeKey scope = kv::ScopeKey::root();
+            const dftracer::utils::store::ScopeKey scope =
+                dftracer::utils::store::ScopeKey::root();
             const dstd::String key =
                 dstd::String(1, static_cast<char>(
                                     index::store::layout::agg_kind::META)) +
                 "config";
-            kv::Batch batch = store->building_batch(*ns, scope);
+            dftracer::utils::store::Batch batch =
+                store->building_batch(*ns, scope);
             batch.put(dstd::ByteView(key), dstd::ByteView("garbage", 7));
             REQUIRE(default_runtime()
                         .submit(store->commit(std::move(batch)))
                         .get()
                         .has_value());
-            const kv::Publish target{&*ns, &scope, 0, nullptr};
+            const dftracer::utils::store::Publish target{&*ns, &scope, 0,
+                                                         nullptr};
             REQUIRE(default_runtime()
                         .submit(store->publish(
-                            dstd::Span<const kv::Publish>(&target, 1)))
+                            dstd::Span<const dftracer::utils::store::Publish>(
+                                &target, 1)))
                         .get()
                         .has_value());
         }
@@ -275,7 +275,7 @@ TEST_SUITE("AggExtension") {
     }
 
     TEST_CASE("an interval change rebuilds only the tier") {
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir(), "a", 50, 1000);
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(1'000'000))
@@ -298,7 +298,7 @@ TEST_SUITE("AggExtension") {
     }
 
     TEST_CASE("a changed source rebuilds the tier and that file only") {
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto a = write_trace(env.get_dir(), "a", 30, 1000, true);
         const auto b = write_trace(env.get_dir(), "b", 20, 500'000, true);
         Indexer::open({dstd::String(dstd::StringView(a)),
@@ -328,7 +328,7 @@ TEST_SUITE("AggExtension") {
         }
 
         // A fresh index over the same files gives the same answer.
-        TestEnvironment fresh(10);
+        dftu_utils_test::TestEnvironment fresh(10);
         const auto fa = fresh.get_dir() + "/a.pfw.gz";
         const auto fb = fresh.get_dir() + "/b.pfw.gz";
         REQUIRE(dstd::fs::copy_file(a, fa, dstd::fs::CopyMode::FailIfExists)
@@ -346,7 +346,7 @@ TEST_SUITE("AggExtension") {
     }
 
     TEST_CASE("a file without a current entry makes readers scan") {
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto a = write_trace(env.get_dir(), "a", 30, 1000);
         Indexer::open({dstd::String(dstd::StringView(a))},
                       with_aggregation(1'000'000))
@@ -365,7 +365,8 @@ TEST_SUITE("AggExtension") {
             const dstd::StringView target(key.data(), key.size());
             REQUIRE(default_runtime()
                         .submit(index::remove_extension(
-                            opened, IndexExtension::Agg, {&target, 1}))
+                            opened, index::store::IndexExtension::Agg,
+                            {&target, 1}))
                         .get()
                         .has_value());
         }

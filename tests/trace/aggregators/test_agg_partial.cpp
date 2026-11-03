@@ -27,10 +27,6 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::index::schemas::dft::agg;
-using dftracer::utils::dataframe::FieldStat;
-using dftracer::utils::dataframe::FieldStatDomain;
-using dstd::Span;
-using dstd::Vector;
 
 namespace {
 
@@ -244,9 +240,9 @@ void feed(Partials& into, const dstd::Vector<Ev>& events, std::size_t b,
 }
 
 AggPartial round_trip(const AggPartial& p) {
-    Vector<std::uint8_t> bytes;
+    dstd::Vector<std::uint8_t> bytes;
     p.serialize_into(bytes);
-    auto back = AggPartial::deserialize(Span<const std::uint8_t>(bytes));
+    auto back = AggPartial::deserialize(dstd::Span<const std::uint8_t>(bytes));
     REQUIRE(back.has_value());
     return std::move(*back);
 }
@@ -257,8 +253,8 @@ bool near(double a, double b, double scale, double tol) {
 
 // tol 0 means bit-exact moments after a round trip. Otherwise it is a relative
 // bound for a different order of merges.
-void check_stat(const FieldStat& a, const FieldStat& b, double tol,
-                const char* what) {
+void check_stat(const dataframe::FieldStat& a, const dataframe::FieldStat& b,
+                double tol, const char* what) {
     INFO("field: ", what);
     REQUIRE(a.n == b.n);
     if (a.n == 0) return;
@@ -266,7 +262,7 @@ void check_stat(const FieldStat& a, const FieldStat& b, double tol,
     CHECK(a.sum == b.sum);
     CHECK(a.min == b.min);
     CHECK(a.max == b.max);
-    if (a.domain != FieldStatDomain::F64 && a.domain == b.domain) {
+    if (a.domain != dataframe::FieldStatDomain::F64 && a.domain == b.domain) {
         CHECK(a.esum == b.esum);
         CHECK(a.emin == b.emin);
         CHECK(a.emax == b.emax);
@@ -608,9 +604,10 @@ TEST_SUITE("AggPartial") {
 
     TEST_CASE("a partial built from no event round trips empty") {
         AggPartial empty;
-        Vector<std::uint8_t> bytes;
+        dstd::Vector<std::uint8_t> bytes;
         empty.serialize_into(bytes);
-        auto back = AggPartial::deserialize(Span<const std::uint8_t>(bytes));
+        auto back =
+            AggPartial::deserialize(dstd::Span<const std::uint8_t>(bytes));
         REQUIRE(back.has_value());
         CHECK(back->count == 0);
         CHECK(back->ts == UINT64_MAX);
@@ -635,26 +632,28 @@ TEST_SUITE("AggPartial") {
         const AggPartial& p = whole.at({"posix", "read"});
         REQUIRE(p.size.n > 0);
         REQUIRE(p.duration_q.count() > 0);
-        Vector<std::uint8_t> bytes;
+        dstd::Vector<std::uint8_t> bytes;
         p.serialize_into(bytes);
-        REQUIRE(AggPartial::deserialize(Span<const std::uint8_t>(bytes))
+        REQUIRE(AggPartial::deserialize(dstd::Span<const std::uint8_t>(bytes))
                     .has_value());
 
         for (std::size_t len = 0; len < bytes.size(); ++len) {
             INFO("prefix length: ", len);
             CHECK_FALSE(AggPartial::deserialize(
-                            Span<const std::uint8_t>(bytes.data(), len))
+                            dstd::Span<const std::uint8_t>(bytes.data(), len))
                             .has_value());
         }
-        Vector<std::uint8_t> longer = bytes;
+        dstd::Vector<std::uint8_t> longer = bytes;
         longer.push_back(0);
-        CHECK_FALSE(AggPartial::deserialize(Span<const std::uint8_t>(longer))
-                        .has_value());
+        CHECK_FALSE(
+            AggPartial::deserialize(dstd::Span<const std::uint8_t>(longer))
+                .has_value());
 
-        Vector<std::uint8_t> bad_flags = bytes;
+        dstd::Vector<std::uint8_t> bad_flags = bytes;
         bad_flags[0] = 0xF0;
-        CHECK_FALSE(AggPartial::deserialize(Span<const std::uint8_t>(bad_flags))
-                        .has_value());
+        CHECK_FALSE(
+            AggPartial::deserialize(dstd::Span<const std::uint8_t>(bad_flags))
+                .has_value());
     }
 
     TEST_CASE("time bins add up by key and survive the wire") {
@@ -682,7 +681,7 @@ TEST_SUITE("AggPartial") {
         CHECK(added.size_n == 1);
         CHECK(added.size_sum == 16);
 
-        Vector<std::uint8_t> bytes;
+        dstd::Vector<std::uint8_t> bytes;
         p.serialize_into(bytes);
         const AggPartial back = round_trip(p);
         CHECK(back.bin_interval == p.bin_interval);
@@ -700,8 +699,8 @@ TEST_SUITE("AggPartial") {
 
         AggPartial::Fields no_bins;
         no_bins.bins = false;
-        auto skipped = AggPartial::deserialize(Span<const std::uint8_t>(bytes),
-                                               p.accuracy, no_bins);
+        auto skipped = AggPartial::deserialize(
+            dstd::Span<const std::uint8_t>(bytes), p.accuracy, no_bins);
         REQUIRE(skipped.has_value());
         CHECK(skipped->bins.empty());
         CHECK(skipped->bin_interval == 0);
@@ -710,7 +709,7 @@ TEST_SUITE("AggPartial") {
         for (std::size_t len = 0; len < bytes.size(); ++len) {
             INFO("prefix length: ", len);
             CHECK_FALSE(AggPartial::deserialize(
-                            Span<const std::uint8_t>(bytes.data(), len))
+                            dstd::Span<const std::uint8_t>(bytes.data(), len))
                             .has_value());
         }
 
@@ -730,7 +729,7 @@ TEST_SUITE("AggPartial") {
         const AggPartial back = round_trip(a);
         CHECK(back.size.ecarry == 1);
         CHECK(back.size.esum == a.size.esum);
-        CHECK(back.size.domain == FieldStatDomain::U64);
+        CHECK(back.size.domain == dataframe::FieldStatDomain::U64);
         CHECK(back.size.emax == a.size.emax);
         CHECK(back.size.n == 2);
     }
@@ -904,14 +903,14 @@ TEST_SUITE("AggPartial") {
             e.args = {{"ret", 4096}, {"offset", i * 4096}};
             REQUIRE(update_partial(p, Acc(e), cfg));
         }
-        Vector<std::uint8_t> bytes;
+        dstd::Vector<std::uint8_t> bytes;
         p.serialize_into(bytes);
         std::fprintf(stderr,
                      "sizeof AggPartial %zu FieldStat %zu QuantileStore %zu "
                      "DistinctIds %zu PidSpan %zu\n"
                      "typical partial (100 events, 1 pid, 2 tids, 1 file): "
                      "%zu bytes\n",
-                     sizeof(AggPartial), sizeof(FieldStat),
+                     sizeof(AggPartial), sizeof(dataframe::FieldStat),
                      sizeof(QuantileStore), sizeof(DistinctIds),
                      sizeof(PidSpan), bytes.size());
         CHECK(bytes.size() < 400);

@@ -20,11 +20,7 @@
 #include <fstream>
 
 using namespace dftracer::utils;
-using dftracer::utils::server::HttpRequest;
-using dftracer::utils::server::HttpResponse;
-using dftracer::utils::server::register_viz_api;
-using dftracer::utils::server::Router;
-using dftracer::utils::server::TraceIndex;
+using namespace dftracer::utils::server;
 
 namespace {
 
@@ -58,8 +54,7 @@ dstd::String make_trace(int n) {
 
 void write_single_member(const dstd::String& path,
                          const dstd::String& content) {
-    using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
-    GzipMemberCompressor comp;
+    utilities::fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
     dftu_utils_test::FileOut ofs(path);
@@ -106,16 +101,15 @@ TEST_SUITE("viz_stats_fastpath") {
             // a runtime. Members are the atomic decode/aggregate unit, so
             // several must sit fully inside a window for the fast path to skip
             // decodes.
-            namespace gzc = utilities::fileio::compress;
             Runtime rt(4);
-            auto task =
-                coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                    co_await gzc::gzip_rechunk_to_members(
-                        dstd::String(src), dstd::String(gz),
-                        /*member_size=*/4096, /*level=*/6);
-                    co_await index.initialize();
-                    co_return;
-                });
+            auto task = coro::with_scope([&](coro::Scope&)
+                                             -> coro::CoroTask<void> {
+                co_await utilities::fileio::compress::gzip_rechunk_to_members(
+                    dstd::String(src), dstd::String(gz),
+                    /*member_size=*/4096, /*level=*/6);
+                co_await index.initialize();
+                co_return;
+            });
             rt.submit(std::move(task), "setup").wait();
             rt.shutdown();
         }

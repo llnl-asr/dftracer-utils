@@ -16,17 +16,14 @@
 #include <tuple>
 
 using namespace dftracer::utils;
+using namespace dftracer::utils::index;
 
 namespace {
-
-using dftracer::utils::index::KeyBuilder;
-using dftracer::utils::index::KeyReader;
-using dstd::ByteView;
 
 constexpr std::uint64_t RANDOM_SEED = 0x5EED1234C0DEC0DEULL;
 constexpr std::size_t PAIR_COUNT = 10000;
 
-int compare_views(ByteView a, ByteView b) {
+int compare_views(dstd::ByteView a, dstd::ByteView b) {
     const auto common = a.size() < b.size() ? a.size() : b.size();
     if (common != 0) {
         const int cmp = std::memcmp(a.data(), b.data(), common);
@@ -470,16 +467,14 @@ TEST_SUITE("index store key") {
     }
 
     TEST_CASE("truncated and malformed keys return Parse") {
-        using dstd::Condition;
-
         const auto check_parse = [](const auto& result) {
             REQUIRE_FALSE(result.has_value());
-            CHECK(result.error().condition() == Condition::Parse);
-            CHECK(result.error().is(Condition::Parse));
+            CHECK(result.error().condition() == dstd::Condition::Parse);
+            CHECK(result.error().is(dstd::Condition::Parse));
         };
 
         {
-            KeyReader reader(ByteView{});
+            KeyReader reader(dstd::ByteView{});
             check_parse(reader.u8());
         }
         {
@@ -513,7 +508,7 @@ TEST_SUITE("index store key") {
             check_parse(reader.f64());
         }
         {
-            KeyReader reader(ByteView{});
+            KeyReader reader(dstd::ByteView{});
             check_parse(reader.str());
         }
         {
@@ -525,13 +520,14 @@ TEST_SUITE("index store key") {
         }
         {
             const std::array<std::uint8_t, 2> malformed = {0x00, 0x02};
-            KeyReader reader(ByteView(malformed.data(), malformed.size()));
+            KeyReader reader(
+                dstd::ByteView(malformed.data(), malformed.size()));
             check_parse(reader.str());
         }
         {
             const std::array<std::uint8_t, 1> truncated_escape = {0x00};
-            KeyReader reader(
-                ByteView(truncated_escape.data(), truncated_escape.size()));
+            KeyReader reader(dstd::ByteView(truncated_escape.data(),
+                                            truncated_escape.size()));
             check_parse(reader.str());
         }
     }

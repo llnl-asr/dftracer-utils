@@ -27,34 +27,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::Agg;
-using dftracer::utils::dataframe::AggregateSpec;
-using dftracer::utils::dataframe::ApplyStatus;
-using dftracer::utils::dataframe::col;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::eval;
-using dftracer::utils::dataframe::Expr;
-using dftracer::utils::dataframe::expr_col_index;
-using dftracer::utils::dataframe::expr_fingerprint;
-using dftracer::utils::dataframe::GroupAgg;
-using dftracer::utils::dataframe::InMemorySource;
-using dftracer::utils::dataframe::JoinSpec;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::make_provider_source;
-using dftracer::utils::dataframe::NamedExpr;
-using dftracer::utils::dataframe::ScanRequest;
-using dftracer::utils::dataframe::ScanResult;
-using dftracer::utils::dataframe::Schema;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::SortSpec;
-using dftracer::utils::dataframe::Source;
-using dftracer::utils::dataframe::SourceApplication;
-using dftracer::utils::dataframe::TypeId;
-using dftracer::utils::dataframe::detail::apply_plan_rule;
-using dftracer::utils::dataframe::detail::optimize_plan;
-using dftracer::utils::dataframe::detail::plan_fingerprint;
-using dftracer::utils::dataframe::detail::PlanRule;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -287,8 +260,10 @@ TEST_SUITE("source_hooks") {
                            .filter(col(0) > std::int64_t{2})
                            .sort_by("b")
                            .head(2);
-        CHECK(plan_fingerprint(apply_plan_rule(
-                  lf, PlanRule::SourceAbsorption)) == plan_fingerprint(lf));
+        CHECK(dataframe::detail::plan_fingerprint(
+                  dataframe::detail::apply_plan_rule(
+                      lf, dataframe::detail::PlanRule::SourceAbsorption)) ==
+              dataframe::detail::plan_fingerprint(lf));
     }
 
     TEST_CASE("an exact filter, sort and limit leave no residual ops") {
@@ -322,10 +297,11 @@ TEST_SUITE("source_hooks") {
         p.filter_status = ApplyStatus::Inexact;
         Smart s = smart(p);
         s.log->offered.clear();
-        apply_plan_rule(s.lf.filter(col(0) > std::int64_t{2})
-                            .filter(col(1) > std::int64_t{20})
-                            .sort_by("a"),
-                        PlanRule::SourceAbsorption);
+        dataframe::detail::apply_plan_rule(
+            s.lf.filter(col(0) > std::int64_t{2})
+                .filter(col(1) > std::int64_t{20})
+                .sort_by("a"),
+            dataframe::detail::PlanRule::SourceAbsorption);
         CHECK(s.log->offered == dstd::Vector<Kind>{Kind::Filter, Kind::Filter});
     }
 
@@ -334,7 +310,8 @@ TEST_SUITE("source_hooks") {
         s.log->offered.clear();
         LazyFrame lf =
             s.lf.filter(col(0) > std::int64_t{1}).sort_by("b").head(2);
-        LazyFrame out = apply_plan_rule(lf, PlanRule::SourceAbsorption);
+        LazyFrame out = dataframe::detail::apply_plan_rule(
+            lf, dataframe::detail::PlanRule::SourceAbsorption);
         CHECK(s.log->offered == dstd::Vector<Kind>{Kind::Filter, Kind::Sort});
         const dstd::String plan = out.explain();
         CHECK(plan.find("sort_by") != dstd::String::npos);
@@ -391,9 +368,11 @@ TEST_SUITE("source_hooks") {
         Policy p{all_kinds()};
         p.filter_status = ApplyStatus::Inexact;
         Smart s = smart(p);
-        LazyFrame once =
-            optimize_plan(s.lf.filter(col(0) > std::int64_t{2}).select({"a"}));
-        CHECK(plan_fingerprint(optimize_plan(once)) == plan_fingerprint(once));
+        LazyFrame once = dataframe::detail::optimize_plan(
+            s.lf.filter(col(0) > std::int64_t{2}).select({"a"}));
+        CHECK(dataframe::detail::plan_fingerprint(
+                  dataframe::detail::optimize_plan(once)) ==
+              dataframe::detail::plan_fingerprint(once));
     }
 
     TEST_CASE("tail reaches the source") {
@@ -453,8 +432,9 @@ TEST_SUITE("source_hooks") {
         Policy p{all_kinds()};
         p.return_same_handle = true;
         Smart s = smart(p);
-        CHECK_THROWS_AS(apply_plan_rule(s.lf.filter(col(0) > std::int64_t{1}),
-                                        PlanRule::SourceAbsorption),
+        CHECK_THROWS_AS(dataframe::detail::apply_plan_rule(
+                            s.lf.filter(col(0) > std::int64_t{1}),
+                            dataframe::detail::PlanRule::SourceAbsorption),
                         std::logic_error);
     }
 
@@ -462,9 +442,10 @@ TEST_SUITE("source_hooks") {
         Policy p{all_kinds()};
         p.projection_inexact = true;
         Smart s = smart(p);
-        CHECK_THROWS_AS(
-            apply_plan_rule(s.lf.select({"a"}), PlanRule::SourceAbsorption),
-            std::logic_error);
+        CHECK_THROWS_AS(dataframe::detail::apply_plan_rule(
+                            s.lf.select({"a"}),
+                            dataframe::detail::PlanRule::SourceAbsorption),
+                        std::logic_error);
     }
 }
 

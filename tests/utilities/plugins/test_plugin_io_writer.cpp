@@ -33,10 +33,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::Runtime;
-using dftracer::utils::plugins::PluginFold;
-using dstd::StringIntern;
-
 namespace {
 
 struct TrivialSlice {
@@ -47,11 +43,11 @@ struct TrivialSlice {
 };
 
 struct HostFixture {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    dstd::UniquePtr<PluginFold> fold =
-        dstd::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<plugins::PluginFold> fold =
+        dstd::make_unique<plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     ~HostFixture() {
         fold.reset();
@@ -190,11 +186,9 @@ dftracer::utils::plugins::Task compose_ops(dftracer::utils::plugins::Host h,
                                            std::int64_t* all0,
                                            std::int64_t* all1,
                                            std::int64_t* raced) {
-    using dftracer::utils::plugins::make_op;
-    using dftracer::utils::plugins::Op;
-    auto a = make_op<std::int64_t, std::int64_t>(
+    auto a = plugins::make_op<std::int64_t, std::int64_t>(
         h, [](std::int64_t x) { return x * 2; });
-    auto b = make_op<std::int64_t, std::int64_t>(
+    auto b = plugins::make_op<std::int64_t, std::int64_t>(
         h, [](std::int64_t x) { return x + 1; });
 
     std::int64_t in = 5;

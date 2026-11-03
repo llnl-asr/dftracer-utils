@@ -27,8 +27,7 @@
 #include <thread>
 
 using namespace dftracer::utils;
-namespace idx = dftracer::utils::index;
-namespace build = dftracer::utils::index::build;
+using namespace dftracer::utils::index;
 
 namespace {
 
@@ -61,20 +60,20 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
     return gz;
 }
 
-build::IndexBuildBatchResult run_build(
+index::build::IndexBuildBatchResult run_build(
     const dstd::String& file, const dstd::String& index_dir,
     std::uint64_t memory_budget,
-    build::IndexBuildBatchConfig::AggFoldFactory agg_fold_factory = {}) {
-    build::IndexBuildBatchResult out;
+    index::build::IndexBuildBatchConfig::AggFoldFactory agg_fold_factory = {}) {
+    index::build::IndexBuildBatchResult out;
     Runtime rt(4);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+        auto config = dstd::make_shared<index::build::IndexBuildBatchConfig>();
         config->file_paths = {dstd::String(dstd::StringView(file))};
         config->index_dir = index_dir;
         config->parallelism = 2;
         config->memory_budget = memory_budget;
         config->agg_fold_factory = std::move(agg_fold_factory);
-        out = co_await build::BatchBuilder::process(std::move(config));
+        out = co_await index::build::BatchBuilder::process(std::move(config));
     });
     rt.submit(std::move(task), "test-spill-publish").wait();
     rt.shutdown();
@@ -84,7 +83,7 @@ build::IndexBuildBatchResult run_build(
 }
 
 dstd::String index_root(const dstd::String& file, const dstd::String& dir) {
-    return dstd::String(idx::store::internal::normalize_index_root(
+    return dstd::String(index::store::internal::normalize_index_root(
         trace::internal::determine_index_path(file, dir)));
 }
 
@@ -95,8 +94,8 @@ TEST_SUITE("SpillPublish") {
         dftu_utils_test::TestEnvironment env(10);
         const auto file = write_trace(env.get_dir(), "spill", 12000);
         const auto dir = env.get_dir() + "/idx";
-        const auto logical = idx::store::internal::get_logical_path(file);
-        auto index = idx::Index::open(index_root(file, dir));
+        const auto logical = index::store::internal::get_logical_path(file);
+        auto index = index::Index::open(index_root(file, dir));
         REQUIRE(index);
 
         std::atomic<bool> stop{false};
@@ -109,7 +108,8 @@ TEST_SUITE("SpillPublish") {
                     const auto found = snapshot->file(logical);
                     if (found) {
                         visible.fetch_add(1);
-                        const auto stats = idx::chunk_stats(*snapshot, *found);
+                        const auto stats =
+                            index::chunk_stats(*snapshot, *found);
                         if (!stats || stats->empty()) without_tier.fetch_add(1);
                     }
                 }
@@ -127,29 +127,28 @@ TEST_SUITE("SpillPublish") {
         REQUIRE(snapshot);
         const auto found = snapshot->file(logical);
         REQUIRE(found);
-        const auto stats = idx::chunk_stats(*snapshot, *found);
+        const auto stats = index::chunk_stats(*snapshot, *found);
         REQUIRE(stats);
         CHECK_FALSE(stats->empty());
         MESSAGE("polls that saw the file: " << visible.load());
     }
 
     TEST_CASE("a file written through is never visible without its rows") {
-        namespace agg = idx::schemas::dft::agg;
         dftu_utils_test::TestEnvironment env(10);
         const auto file = write_trace(env.get_dir(), "through", 12000);
         const auto dir = env.get_dir() + "/idx";
-        const auto logical = idx::store::internal::get_logical_path(file);
+        const auto logical = index::store::internal::get_logical_path(file);
         const auto path =
             dstd::String(trace::internal::determine_index_path(file, dir));
-        auto index = idx::Index::open(index_root(file, dir));
+        auto index = index::Index::open(index_root(file, dir));
         REQUIRE(index);
 
-        agg::AggregationConfig config;
+        schemas::dft::agg::AggregationConfig config;
         config.time_interval_us = 100'000;
-        auto run = build::start_aggregation(path, config);
-        const auto run_bytes = agg::g_agg_run_bytes.exchange(1);
+        auto run = index::build::start_aggregation(path, config);
+        const auto run_bytes = schemas::dft::agg::g_agg_run_bytes.exchange(1);
 #if DFTRACER_UTILS_TEST_PROBES
-        const auto staged = agg::g_agg_runs_staged.load();
+        const auto staged = schemas::dft::agg::g_agg_runs_staged.load();
 #endif
 
         std::atomic<bool> stop{false};
@@ -157,16 +156,17 @@ TEST_SUITE("SpillPublish") {
         std::atomic<int> without_rows{0};
         dstd::Thread poller([&] {
             while (!stop.load()) {
-                auto read = idx::plan::open_snapshot(path);
+                auto read = index::plan::open_snapshot(path);
                 if (read) {
                     const auto ref = read->file(logical);
                     if (ref) {
                         visible.fetch_add(1);
                         std::size_t rows = 0;
-                        auto scanned = idx::for_each_agg_partial(
+                        auto scanned = index::for_each_agg_partial(
                             *read, *ref,
                             [&](std::uint64_t, std::uint32_t, std::uint32_t,
-                                std::uint32_t, std::uint32_t, agg::PartialKind,
+                                std::uint32_t, std::uint32_t,
+                                schemas::dft::agg::PartialKind,
                                 dstd::Span<const std::uint8_t>) {
                                 ++rows;
                                 return false;
@@ -181,11 +181,11 @@ TEST_SUITE("SpillPublish") {
             run_build(file, dir, 1 * MIB, std::move(run.factory));
         stop.store(true);
         poller.join();
-        agg::g_agg_run_bytes.store(run_bytes);
+        schemas::dft::agg::g_agg_run_bytes.store(run_bytes);
 
         REQUIRE(built.indexed == 1);
 #if DFTRACER_UTILS_TEST_PROBES
-        CHECK(agg::g_agg_runs_staged.load() > staged);
+        CHECK(schemas::dft::agg::g_agg_runs_staged.load() > staged);
 #endif
         CHECK(without_rows.load() == 0);
         MESSAGE("polls that saw the file: " << visible.load());
@@ -198,16 +198,16 @@ TEST_SUITE("SpillPublish") {
             dftu_utils_test::TestEnvironment env(10);
             const auto file = write_trace(env.get_dir(), "plugin", 12000);
             const auto dir = env.get_dir() + "/idx";
-            const auto logical = idx::store::internal::get_logical_path(file);
+            const auto logical = index::store::internal::get_logical_path(file);
             REQUIRE(run_build(file, dir, budget).indexed == 1);
 
-            auto index = idx::Index::open(index_root(file, dir));
+            auto index = index::Index::open(index_root(file, dir));
             REQUIRE(index);
             {
-                auto stale = idx::rebuild(*index, logical);
+                auto stale = index::rebuild(*index, logical);
                 REQUIRE(stale);
-                idx::put_plugin(*stale, "stale", 1, 5, {{0, dstd::String("x")}},
-                                dstd::nullopt);
+                index::put_plugin(*stale, "stale", 1, 5,
+                                  {{0, dstd::String("x")}}, dstd::nullopt);
                 REQUIRE(stale->commit().get());
             }
             auto plugin_count = [&] {
@@ -215,7 +215,7 @@ TEST_SUITE("SpillPublish") {
                 REQUIRE(snapshot);
                 const auto found = snapshot->file(logical);
                 REQUIRE(found);
-                const auto copies = idx::plugins(*snapshot, *found);
+                const auto copies = index::plugins(*snapshot, *found);
                 REQUIRE(copies);
                 return copies->size();
             };

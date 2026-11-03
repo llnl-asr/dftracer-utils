@@ -23,11 +23,6 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;
-namespace dataframe = dftracer::utils::dataframe;
-namespace store = dftracer::utils::index::store;
-using bootstrap_test::count_by_name;
-using bootstrap_test::counts;
-using bootstrap_test::view_files_of;
 
 namespace {
 
@@ -73,7 +68,8 @@ class LineSink : public ExportSink {
 
 dstd::Vector<dstd::String> export_lines(const dstd::Vector<dstd::String>& files,
                                         const dstd::String& index_dir) {
-    const auto view = View::from_files(view_files_of(files, index_dir));
+    const auto view =
+        View::from_files(bootstrap_test::view_files_of(files, index_dir));
     LineSink sink;
     default_runtime().block_on(
         coro::named("bootstrap-export",
@@ -99,7 +95,7 @@ TEST_SUITE("BootstrapParallelism") {
         trace::views::detail::bootstrap_counters().reset();
         const auto store_opens_before =
             dftracer::utils::store::internal::opens();
-        const auto cold = count_by_name(files, index_dir);
+        const auto cold = bootstrap_test::count_by_name(files, index_dir);
         const auto store_opens =
             dftracer::utils::store::internal::opens() - store_opens_before;
 
@@ -107,10 +103,10 @@ TEST_SUITE("BootstrapParallelism") {
               RUNNING_WORKERS);
         CHECK(store_opens == 1);
 
-        const auto warm = count_by_name(files, index_dir);
-        CHECK(counts(cold) == counts(warm));
+        const auto warm = bootstrap_test::count_by_name(files, index_dir);
+        CHECK(bootstrap_test::counts(cold) == bootstrap_test::counts(warm));
         std::int64_t total = 0;
-        for (const auto& [name, n] : counts(cold)) total += n;
+        for (const auto& [name, n] : bootstrap_test::counts(cold)) total += n;
         CHECK(total == FILES * EVENTS);
     }
 
@@ -133,7 +129,9 @@ TEST_SUITE("BootstrapParallelism") {
 
         const auto warm = export_lines(files, index_dir);
         CHECK(cold == warm);
-        CHECK(counts(count_by_name(files, index_dir)).size() == 7);
+        CHECK(bootstrap_test::counts(
+                  bootstrap_test::count_by_name(files, index_dir))
+                  .size() == 7);
         CHECK_FALSE(memory::Manager::get().leaked());
     }
 }

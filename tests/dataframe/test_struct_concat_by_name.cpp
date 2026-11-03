@@ -15,13 +15,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::concat;
-using dftracer::utils::dataframe::concat_columns;
-using dftracer::utils::dataframe::ConcatHow;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

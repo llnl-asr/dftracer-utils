@@ -24,9 +24,6 @@ using namespace dftu_utils_test;
 
 namespace {
 
-namespace ix = dftracer::utils::index;
-namespace st = dftracer::utils::index::store;
-
 constexpr int RECORDS = 400;
 
 using Catalog = dstd::Map<dstd::String, dstd::Tuple<int, int, std::uint64_t>>;
@@ -91,7 +88,7 @@ dstd::Vector<dstd::String> genesis_lines() {
 }
 
 void register_log_schema() {
-    ix::register_schema(
+    index::register_schema(
         "id: cf_log\n"
         "fields:\n"
         "  op: {type: string}\n"
@@ -105,8 +102,8 @@ bool has_catalog(const dstd::String& gz) {
     const auto snapshot = dftu_utils_test::index_snapshot(
         dstd::String(determine_index_path(gz, "")));
     const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
-    return file &&
-           ix::extension_current(snapshot, *file, st::IndexExtension::Catalog);
+    return file && index::extension_current(
+                       snapshot, *file, index::store::IndexExtension::Catalog);
 }
 
 Catalog catalog_of(const dstd::String& gz) {
@@ -115,7 +112,7 @@ Catalog catalog_of(const dstd::String& gz) {
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
     Catalog out;
     for (const auto& [path, stat] :
-         dftu_utils_test::index_take(ix::catalog(snapshot, file)))
+         dftu_utils_test::index_take(index::catalog(snapshot, file)))
         out[dstd::String(path.data(), path.size())] = {
             static_cast<int>(stat.type), stat.seen, stat.count};
     return out;
@@ -129,10 +126,10 @@ View view_of(const dstd::String& gz, const dstd::String& schema = "") {
 }
 
 void build_full(const dstd::String& gz, const dstd::String& schema = "") {
-    ix::IndexerOptions o;
+    index::IndexerOptions o;
     o.checkpoint_size = 2048;
     o.schema = schema;
-    ix::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
+    index::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
 }
 
 void expect_scan_catalog_equals_build(const dstd::Vector<dstd::String>& lines,
@@ -156,15 +153,15 @@ void plant_sentinel(const dstd::String& gz) {
         dstd::String(determine_index_path(gz, "")));
     const auto snapshot = dftu_utils_test::index_take(index.snapshot());
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
-    const auto state =
-        ix::extension_state(snapshot, file, st::IndexExtension::Catalog);
+    const auto state = index::extension_state(
+        snapshot, file, index::store::IndexExtension::Catalog);
     REQUIRE(state.has_value());
     auto build = dftu_utils_test::rebuild_test_file(index, gz);
     for (const auto& [path, stat] :
-         dftu_utils_test::index_take(ix::catalog(snapshot, file)))
-        ix::put_catalog_path(build, path, stat);
-    ix::put_catalog_path(build, "zz.sentinel", st::PathStat{});
-    build.finish(st::IndexExtension::Catalog, state->params_hash);
+         dftu_utils_test::index_take(index::catalog(snapshot, file)))
+        index::put_catalog_path(build, path, stat);
+    index::put_catalog_path(build, "zz.sentinel", index::store::PathStat{});
+    build.finish(index::store::IndexExtension::Catalog, state->params_hash);
     dftu_utils_test::commit_test_build(build);
 }
 

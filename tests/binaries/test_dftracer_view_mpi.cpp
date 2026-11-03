@@ -14,11 +14,6 @@
 
 using namespace dftracer::utils;
 
-using dftu_utils_test::find_binary_by_name;
-using dftu_utils_test::find_mpi_launcher;
-using dftu_utils_test::run_mpi;
-using dftu_utils_test::TestEnvironment;
-
 namespace {
 
 // Write cpu counter events (one per value) to a gzip trace.
@@ -103,15 +98,15 @@ TEST_SUITE("dftracer_view_mpi") {
     // dftracer_view built with MPI runs distributed counter aggregation under
     // mpirun; n=2 must match n=1 (single-node), same one binary.
     TEST_CASE("distributed counters match single-rank") {
-        dstd::String bin =
-            find_binary_by_name("DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
-        dstd::String launcher = find_mpi_launcher();
+        dstd::String bin = dftu_utils_test::find_binary_by_name(
+            "DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
+        dstd::String launcher = dftu_utils_test::find_mpi_launcher();
         if (bin.empty() || launcher.empty()) {
             MESSAGE("dftracer_view or MPI launcher unavailable, skipping.");
             return;
         }
 
-        TestEnvironment env(1);
+        dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
         // Inputs live in their own dir so the .pfw outputs are not rescanned.
         const dstd::String in = env.get_dir() + "/in";
@@ -128,7 +123,7 @@ TEST_SUITE("dftracer_view_mpi") {
         const dstd::Vector<dstd::String> args = {
             in,      "--counters", "--group-by", "name",
             "--agg", "mean:util",  "--output",   o};
-        REQUIRE(run_mpi(launcher, 2, bin, args) == 0);
+        REQUIRE(dftu_utils_test::run_mpi(launcher, 2, bin, args) == 0);
 
         const dstd::String s = read_sorted(o);
         CHECK(!s.empty());
@@ -139,15 +134,15 @@ TEST_SUITE("dftracer_view_mpi") {
     // Distributed collect() (aggregate table, not counters): merge_partials_to
     // _table across ranks must equal the single-rank collect.
     TEST_CASE("distributed aggregate table matches single-rank") {
-        dstd::String bin =
-            find_binary_by_name("DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
-        dstd::String launcher = find_mpi_launcher();
+        dstd::String bin = dftu_utils_test::find_binary_by_name(
+            "DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
+        dstd::String launcher = dftu_utils_test::find_mpi_launcher();
         if (bin.empty() || launcher.empty()) {
             MESSAGE("dftracer_view or MPI launcher unavailable, skipping.");
             return;
         }
 
-        TestEnvironment env(1);
+        dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
         const dstd::String in = env.get_dir() + "/in";
         REQUIRE(dstd::fs::create_directories(in).has_value());
@@ -159,7 +154,7 @@ TEST_SUITE("dftracer_view_mpi") {
         const dstd::String o = env.get_dir() + "/a.json";
         const dstd::Vector<dstd::String> args = {
             in, "--group-by", "name", "--agg", "mean:util", "--output", o};
-        REQUIRE(run_mpi(launcher, 2, bin, args) == 0);
+        REQUIRE(dftu_utils_test::run_mpi(launcher, 2, bin, args) == 0);
 
         const dstd::String s = read_sorted(o);
         CHECK(!s.empty());
@@ -174,15 +169,15 @@ TEST_SUITE("dftracer_view_mpi") {
     // the partial serialization the ranks ship. Guards the distributed
     // transport end to end.
     TEST_CASE("distributed occupancy merges across ranks") {
-        dstd::String bin =
-            find_binary_by_name("DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
-        dstd::String launcher = find_mpi_launcher();
+        dstd::String bin = dftu_utils_test::find_binary_by_name(
+            "DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
+        dstd::String launcher = dftu_utils_test::find_mpi_launcher();
         if (bin.empty() || launcher.empty()) {
             MESSAGE("dftracer_view or MPI launcher unavailable, skipping.");
             return;
         }
 
-        TestEnvironment env(1);
+        dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
         const dstd::String in = env.get_dir() + "/in";
         REQUIRE(dstd::fs::create_directories(in).has_value());
@@ -192,7 +187,7 @@ TEST_SUITE("dftracer_view_mpi") {
         const dstd::String o = env.get_dir() + "/occ.json";
         const dstd::Vector<dstd::String> args = {
             in, "--group-by", "name", "--agg", "busy", "--output", o};
-        REQUIRE(run_mpi(launcher, 2, bin, args) == 0);
+        REQUIRE(dftu_utils_test::run_mpi(launcher, 2, bin, args) == 0);
 
         const dstd::String s = read_sorted(o);
         CHECK(!s.empty());
@@ -206,15 +201,15 @@ TEST_SUITE("dftracer_view_mpi") {
     // merged event set must equal the single-rank merge (plain output so the
     // NDJSON lines sort/compare directly).
     TEST_CASE("distributed merge matches single-rank") {
-        dstd::String bin =
-            find_binary_by_name("DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
-        dstd::String launcher = find_mpi_launcher();
+        dstd::String bin = dftu_utils_test::find_binary_by_name(
+            "DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
+        dstd::String launcher = dftu_utils_test::find_mpi_launcher();
         if (bin.empty() || launcher.empty()) {
             MESSAGE("dftracer_view or MPI launcher unavailable, skipping.");
             return;
         }
 
-        TestEnvironment env(1);
+        dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
         const dstd::String in = env.get_dir() + "/in";
         REQUIRE(dstd::fs::create_directories(in).has_value());
@@ -224,7 +219,7 @@ TEST_SUITE("dftracer_view_mpi") {
         // Distributed --merge: each rank writes its shard, rank 0 concatenates.
         const dstd::String o = env.get_dir() + "/m.pfw";
         const dstd::Vector<dstd::String> args = {in, "--merge", "--output", o};
-        REQUIRE(run_mpi(launcher, 2, bin, args) == 0);
+        REQUIRE(dftu_utils_test::run_mpi(launcher, 2, bin, args) == 0);
 
         // Output is always a compressed trace (.gz).
         const dstd::String s = read_sorted_gz(o + ".gz");

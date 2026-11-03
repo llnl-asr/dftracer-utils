@@ -26,13 +26,6 @@
 using namespace dftracer::utils;
 namespace {
 
-using dftracer::utils::index::FileExplain;
-using dftracer::utils::index::Indexer;
-using dftracer::utils::index::IndexerOptions;
-using dftracer::utils::plugins::Plugins;
-using dftracer::utils::trace::views::ExportSink;
-using dftracer::utils::trace::views::View;
-
 constexpr int RECORDS = 3000;
 constexpr dstd::StringView EXT = "index_minmax.range";
 
@@ -54,8 +47,8 @@ dstd::String write_records(dftu_utils_test::TestEnvironment& env,
     return gz;
 }
 
-Plugins load(const dstd::String& config = "") {
-    auto builder = Plugins::builder();
+plugins::Plugins load(const dstd::String& config = "") {
+    auto builder = plugins::Plugins::builder();
     if (config.empty())
         builder.add(INDEX_MINMAX_PLUGIN_PATH);
     else
@@ -65,32 +58,33 @@ Plugins load(const dstd::String& config = "") {
     return std::move(*set);
 }
 
-Indexer open(const dstd::String& gz) {
-    IndexerOptions o;
+index::Indexer open(const dstd::String& gz) {
+    index::IndexerOptions o;
     o.extensions = {};
-    return Indexer::open({dstd::String(dstd::StringView(gz))}, o);
+    return index::Indexer::open({dstd::String(dstd::StringView(gz))}, o);
 }
 
 dstd::Optional<dftracer::utils::index::ExtensionEntry> entry(
-    const Indexer& ix) {
+    const index::Indexer& ix) {
     const auto manifest = ix.manifest();
     for (const auto& e : manifest.at(0).extensions)
         if (e.name == EXT) return e;
     return dstd::nullopt;
 }
 
-const dftracer::utils::index::ExtensionPrune* pruned(const FileExplain& f) {
+const dftracer::utils::index::ExtensionPrune* pruned(
+    const index::FileExplain& f) {
     for (const auto& e : f.extensions)
         if (e.name == EXT) return &e;
     return nullptr;
 }
 
-struct NullSink : ExportSink {
+struct NullSink : trace::views::ExportSink {
     void write(dstd::StringView) override {}
 };
 
-View view_of(const dstd::String& gz) {
-    return View::from_file(
+trace::views::View view_of(const dstd::String& gz) {
+    return trace::views::View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(
             dftracer::utils::trace::internal::determine_index_path(gz, ""))));
@@ -104,7 +98,7 @@ TEST_CASE("a plugin extension builds, prunes and survives being absent") {
     const dstd::String q = "v > 2990";
     std::uint64_t chunks = 0;
     {
-        Plugins set = load();
+        plugins::Plugins set = load();
         auto ix = open(gz);
         ix.build();
         const auto e = entry(ix);
@@ -139,7 +133,7 @@ TEST_CASE("a file indexed without the plugin needs work once it is loaded") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "b");
     open(gz).build();
-    Plugins set = load();
+    plugins::Plugins set = load();
     auto ix = open(gz);
     CHECK(ix.status().needs_work.size() == 1);
     ix.build();
@@ -152,10 +146,10 @@ TEST_CASE("another extension version makes the data stale") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "c");
     {
-        Plugins set = load();
+        plugins::Plugins set = load();
         open(gz).build();
     }
-    Plugins set = load(R"({"version": 2})");
+    plugins::Plugins set = load(R"({"version": 2})");
     auto ix = open(gz);
     REQUIRE(entry(ix));
     CHECK_FALSE(entry(ix)->current);
@@ -166,7 +160,7 @@ TEST_CASE("another extension version makes the data stale") {
 TEST_CASE("drop and rebuild a plugin extension by name") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "d");
-    Plugins set = load();
+    plugins::Plugins set = load();
     auto ix = open(gz);
     ix.build();
     ix.drop_extension(dstd::String(EXT));
@@ -178,6 +172,7 @@ TEST_CASE("drop and rebuild a plugin extension by name") {
 }
 
 TEST_CASE("a second registration of the same name fails to load") {
-    Plugins set = load();
-    CHECK_FALSE(Plugins::builder().add(INDEX_MINMAX_PLUGIN_PATH).build());
+    plugins::Plugins set = load();
+    CHECK_FALSE(
+        plugins::Plugins::builder().add(INDEX_MINMAX_PLUGIN_PATH).build());
 }

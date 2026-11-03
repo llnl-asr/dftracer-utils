@@ -21,10 +21,6 @@
 #include <sstream>
 
 using namespace dftracer::utils;
-namespace dataframe = dftracer::utils::dataframe;
-namespace build = dftracer::utils::index::build;
-using bootstrap_test::count_by_name;
-using bootstrap_test::counts;
 
 namespace {
 
@@ -75,18 +71,18 @@ dstd::String write_big_trace(const dstd::String& dir, int n) {
 // time a worker finishes parsing a piece, while `run` goes.
 template <class Fn>
 std::size_t peak_live(Fn&& run) {
-    build::g_parse_peak_live.store(0);
-    build::g_probe_parse.store(true);
+    index::build::g_parse_peak_live.store(0);
+    index::build::g_probe_parse.store(true);
     const auto base = memory::Manager::get().stats().live;
     run();
-    build::g_probe_parse.store(false);
-    const auto top = build::g_parse_peak_live.load();
+    index::build::g_probe_parse.store(false);
+    const auto top = index::build::g_parse_peak_live.load();
     return top > base ? top - base : 0;
 }
 
 std::int64_t total_of(const dataframe::DataFrame& df) {
     std::int64_t total = 0;
-    for (const auto& [name, n] : counts(df)) total += n;
+    for (const auto& [name, n] : bootstrap_test::counts(df)) total += n;
     return total;
 }
 
@@ -124,16 +120,19 @@ TEST_SUITE("BootstrapPeak") {
         for (int i = 0; i < PEAK_FILES; ++i)
             files.push_back(write_big_trace(env.get_dir(), i));
 
-        const auto limit = build::g_max_sink_bytes.exchange(SINK_LIMIT);
+        const auto limit = index::build::g_max_sink_bytes.exchange(SINK_LIMIT);
         dataframe::DataFrame few_df, many_df;
         configure_default_runtime({.threads = FEW_WORKERS, .eager = true});
-        const auto few_peak = peak_live(
-            [&] { few_df = count_by_name(files, env.get_dir() + "/idx_few"); });
+        const auto few_peak = peak_live([&] {
+            few_df = bootstrap_test::count_by_name(files,
+                                                   env.get_dir() + "/idx_few");
+        });
         configure_default_runtime({.threads = PEAK_WORKERS, .eager = true});
         const auto many_peak = peak_live([&] {
-            many_df = count_by_name(files, env.get_dir() + "/idx_many");
+            many_df = bootstrap_test::count_by_name(
+                files, env.get_dir() + "/idx_many");
         });
-        build::g_max_sink_bytes.store(limit);
+        index::build::g_max_sink_bytes.store(limit);
         MESSAGE("peak live bytes: " << FEW_WORKERS << " workers " << few_peak
                                     << ", " << PEAK_WORKERS << " workers "
                                     << many_peak);
@@ -141,7 +140,8 @@ TEST_SUITE("BootstrapPeak") {
         CHECK(few_peak > 0);
         CHECK(many_peak <=
               few_peak + (PEAK_WORKERS - FEW_WORKERS) * PER_WORKER_BUDGET);
-        CHECK(counts(few_df) == counts(many_df));
+        CHECK(bootstrap_test::counts(few_df) ==
+              bootstrap_test::counts(many_df));
         CHECK(total_of(many_df) == PEAK_FILES * BIG_EVENTS);
         CHECK_FALSE(memory::Manager::get().leaked());
     }
@@ -156,13 +156,14 @@ TEST_SUITE("BootstrapPeak") {
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < *n; ++i)
             files.push_back(write_big_trace(env.get_dir(), i));
-        build::g_max_sink_bytes.store(SINK_LIMIT);
+        index::build::g_max_sink_bytes.store(SINK_LIMIT);
         dftracer::utils::store::engine::g_dict_sample_bytes.store(
             DICT_SAMPLE_LIMIT);
         configure_default_runtime({.threads = PEAK_WORKERS, .eager = true});
         dataframe::DataFrame df;
-        const auto peak = peak_live(
-            [&] { df = count_by_name(files, env.get_dir() + "/idx"); });
+        const auto peak = peak_live([&] {
+            df = bootstrap_test::count_by_name(files, env.get_dir() + "/idx");
+        });
         std::fprintf(stderr, "PEAK %zu EVENTS %lld\n", peak,
                      static_cast<long long>(total_of(df)));
     }

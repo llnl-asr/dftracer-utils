@@ -19,7 +19,6 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
-namespace memory = dftracer::utils::memory;
 
 namespace {
 

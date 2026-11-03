@@ -22,10 +22,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::Runtime;
-using dftracer::utils::plugins::PluginFold;
-using dstd::StringIntern;
-
 extern "C" {
 ::dftu_task* dftu_test_compose_pipe(const ::dftu_plugin_host*,
                                     const std::int64_t*, std::int64_t*, int*);
@@ -130,12 +126,12 @@ TestFrame trace_test_frame(std::uint32_t n) {
 }
 
 struct HostFixture {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* plugin;
-    dstd::UniquePtr<PluginFold> fold;
+    dstd::UniquePtr<plugins::PluginFold> fold;
     HostFixture()
         : plugin(dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr)),
-          fold(dstd::make_unique<PluginFold>(plugin, intern)) {}
+          fold(dstd::make_unique<plugins::PluginFold>(plugin, intern)) {}
     ~HostFixture() {
         fold.reset();
         if (plugin && plugin->destroy) plugin->destroy(plugin->self);

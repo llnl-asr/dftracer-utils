@@ -19,13 +19,12 @@ namespace test_plugin_common {
 // caller only needs the resulting ViewFile.
 inline dftracer::utils::trace::views::ViewFile index_trace(
     const dftracer::utils::dstd::String& gz) {
-    using dftracer::utils::trace::internal::determine_index_path;
     using View = dftracer::utils::trace::views::View;
     using ViewFile = dftracer::utils::trace::views::ViewFile;
     using ExportSink = dftracer::utils::trace::views::ExportSink;
 
-    const dftracer::utils::dstd::String idx =
-        dftracer::utils::dstd::String(determine_index_path(gz, ""));
+    const dftracer::utils::dstd::String idx = dftracer::utils::dstd::String(
+        dftracer::utils::trace::internal::determine_index_path(gz, ""));
     struct Sink : ExportSink {
         void write(dftracer::utils::dstd::StringView) override {}
     } sink;
@@ -43,13 +42,11 @@ inline dftracer::utils::plugins::PluginRun run_set(
     const dftracer::utils::plugins::Plugins& set,
     const dftracer::utils::trace::views::View& view,
     const char* tag = "plugin-run") {
-    using dftracer::utils::Runtime;
-    using dftracer::utils::coro::CoroTask;
-
     dftracer::utils::plugins::PluginRun out;
-    Runtime rt(2);
+    dftracer::utils::Runtime rt(2);
     auto task = dftracer::utils::coro::with_scope(
-        [&](dftracer::utils::coro::Scope&) -> CoroTask<void> {
+        [&](dftracer::utils::coro::Scope&)
+            -> dftracer::utils::coro::CoroTask<void> {
             auto run = co_await set.run(view);
             REQUIRE(run.has_value());
             out = std::move(*run);

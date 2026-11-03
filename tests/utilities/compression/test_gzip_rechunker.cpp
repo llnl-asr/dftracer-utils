@@ -15,7 +15,7 @@
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-namespace gzc = dftracer::utils::utilities::fileio::compress;
+using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -32,7 +32,7 @@ dstd::String make_lines(std::size_t n) {
 
 dstd::String write_single_member_gz(const dstd::String& path,
                                     const dstd::String& payload) {
-    gzc::GzipMemberCompressor comp;
+    fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(payload.data(), payload.size());
     REQUIRE(member.has_value());
     dstd::String ofs;
@@ -54,7 +54,7 @@ dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
     dstd::String out;
     dstd::Vector<char> last_bytes;
     [&]() -> dftracer::utils::coro::CoroTask<void> {
-        auto gen = gzc::decode_gzip_members(sfd.get(), size);
+        auto gen = fileio::compress::decode_gzip_members(sfd.get(), size);
         while (auto chunk = co_await gen.next()) {
             last_bytes.push_back(chunk->empty() ? '\0' : chunk->back());
             out.append(chunk->data(), chunk->size());
@@ -75,8 +75,8 @@ bool needs_rechunk(const dstd::String& path, std::size_t cap) {
     dstd::ScopedFd sfd(fd);
     struct stat st;
     REQUIRE(::fstat(sfd.get(), &st) == 0);
-    return gzc::gzip_first_member(sfd.get(),
-                                  static_cast<std::uint64_t>(st.st_size), cap)
+    return fileio::compress::gzip_first_member(
+               sfd.get(), static_cast<std::uint64_t>(st.st_size), cap)
         .get()
         .exceeds_cap;
 }
@@ -103,7 +103,7 @@ TEST_SUITE("gzip_rechunker") {
         const dstd::String gz = dstd::String((dir / "wrapped.pfw.gz").str());
         const auto payload = make_lines(5000);
         {
-            gzc::GzipMemberCompressor comp;
+            fileio::compress::GzipMemberCompressor comp;
             auto head = comp.compress_member("[\n", 2);
             auto body = comp.compress_member(payload.data(), payload.size());
             REQUIRE(head.has_value());
@@ -125,14 +125,16 @@ TEST_SUITE("gzip_rechunker") {
         constexpr std::size_t CAP = 10 * 1024 * 1024;
 
         // Without a sample only the "[" member is read.
-        auto first = gzc::gzip_first_member(sfd.get(), size, CAP).get();
+        auto first =
+            fileio::compress::gzip_first_member(sfd.get(), size, CAP).get();
         CHECK(first.uncompressed == 2);
         CHECK_FALSE(first.exceeds_cap);
 
         // With one, the next member counts too, and the cap still applies to
         // the first member only.
         auto sampled =
-            gzc::gzip_first_member(sfd.get(), size, 16, 1 << 20).get();
+            fileio::compress::gzip_first_member(sfd.get(), size, 16, 1 << 20)
+                .get();
         CHECK(sampled.uncompressed == 2 + payload.size());
         CHECK(sampled.compressed == size);
         CHECK_FALSE(sampled.exceeds_cap);
@@ -150,8 +152,9 @@ TEST_SUITE("gzip_rechunker") {
 
         // One member in, small member size out.
         CHECK(decode_all(in).second == 1);
-        gzc::gzip_rechunk_to_members(in, out, /*member_size=*/8 * 1024,
-                                     /*level=*/6)
+        fileio::compress::gzip_rechunk_to_members(in, out,
+                                                  /*member_size=*/8 * 1024,
+                                                  /*level=*/6)
             .get();
 
         auto [content, last_bytes] = decode_members(out);
@@ -174,7 +177,7 @@ TEST_SUITE("gzip_rechunker") {
         payload += "{\"id\":99999,\"trailing\":true}";  // no final '\n'
         write_single_member_gz(in, payload);
 
-        gzc::gzip_rechunk_to_members(in, out, 4 * 1024, 6).get();
+        fileio::compress::gzip_rechunk_to_members(in, out, 4 * 1024, 6).get();
         CHECK(decode_all(out).first == payload);
 
         (void)dstd::fs::remove_all(dir);

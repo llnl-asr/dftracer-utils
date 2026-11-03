@@ -19,7 +19,6 @@ using namespace dftracer::utils;
 
 using namespace dftracer::utils::utilities::fileio;
 using namespace dftu_utils_test;
-using dstd::ByteView;
 
 TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
     dstd::Path test_file = make_unique_test_path("test_streaming_writer.txt");
@@ -27,7 +26,7 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
     SUBCASE("Write single chunk") {
         {
             StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
-            ByteView chunk("Hello, World!");
+            dstd::ByteView chunk("Hello, World!");
             writer.process(chunk).get();
             writer.close();
 
@@ -47,9 +46,9 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
     SUBCASE("Write multiple chunks") {
         {
             StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
-            writer.process(ByteView("First ")).get();
-            writer.process(ByteView("Second ")).get();
-            writer.process(ByteView("Third")).get();
+            writer.process(dstd::ByteView("First ")).get();
+            writer.process(dstd::ByteView("Second ")).get();
+            writer.process(dstd::ByteView("Third")).get();
             writer.close();
 
             CHECK(writer.total_bytes() ==
@@ -68,9 +67,9 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
     SUBCASE("Write empty chunk") {
         {
             StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
-            writer.process(ByteView("Before")).get();
-            writer.process(ByteView()).get();  // Empty chunk
-            writer.process(ByteView("After")).get();
+            writer.process(dstd::ByteView("Before")).get();
+            writer.process(dstd::ByteView()).get();  // Empty chunk
+            writer.process(dstd::ByteView("After")).get();
             writer.close();
 
             CHECK(writer.total_bytes() == 11);
@@ -93,7 +92,7 @@ TEST_CASE("StreamingFileWriterUtility - Binary Data") {
         {
             StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
             dstd::Vector<unsigned char> data = {0x00, 0x01, 0x02, 0xFF, 0xFE};
-            writer.process(ByteView(data.data(), data.size())).get();
+            writer.process(dstd::ByteView(data.data(), data.size())).get();
             writer.close();
 
             CHECK(writer.total_bytes() == 5);
@@ -116,7 +115,7 @@ TEST_CASE("StreamingFileWriterUtility - Binary Data") {
         {
             StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
             dstd::Vector<unsigned char> data = {0x00, 0x00, 0x00};
-            writer.process(ByteView(data.data(), data.size())).get();
+            writer.process(dstd::ByteView(data.data(), data.size())).get();
             writer.close();
 
             CHECK(writer.total_bytes() == 3);
@@ -143,7 +142,7 @@ TEST_CASE("StreamingFileWriterUtility - Append Mode") {
     // Write initial content
     {
         StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
-        writer.process(ByteView("Initial content\n")).get();
+        writer.process(dstd::ByteView("Initial content\n")).get();
         writer.close();
     }
 
@@ -151,7 +150,7 @@ TEST_CASE("StreamingFileWriterUtility - Append Mode") {
     {
         StreamingFileWriterUtility writer(dstd::PathView(test_file.str()),
                                           true);  // append=true
-        writer.process(ByteView("Appended content\n")).get();
+        writer.process(dstd::ByteView("Appended content\n")).get();
         writer.close();
     }
 
@@ -173,7 +172,7 @@ TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
             StreamingFileWriterUtility writer(dstd::PathView(test_file.str()),
                                               false,
                                               true);  // create_dirs=true
-            writer.process(ByteView("Content")).get();
+            writer.process(dstd::ByteView("Content")).get();
             writer.close();
         }
 
@@ -197,7 +196,7 @@ TEST_CASE("StreamingFileWriterUtility - Error Handling") {
         StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
         writer.close();
 
-        CHECK_THROWS_AS(writer.process(ByteView("Data")).get(),
+        CHECK_THROWS_AS(writer.process(dstd::ByteView("Data")).get(),
                         dftracer::utils::common::DFTUtilsException);
 
         (void)dstd::fs::remove(test_file);
@@ -224,7 +223,8 @@ TEST_CASE("StreamingFileWriterUtility - Large Files") {
             // Write 1MB in 1KB chunks
             dstd::Vector<unsigned char> chunk(1024, 0xAA);
             for (int i = 0; i < 1024; ++i) {
-                writer.process(ByteView(chunk.data(), chunk.size())).get();
+                writer.process(dstd::ByteView(chunk.data(), chunk.size()))
+                    .get();
             }
             writer.close();
 
@@ -244,7 +244,7 @@ TEST_CASE("StreamingFileWriterUtility - Large Files") {
 
             // Write 10000 small chunks
             for (int i = 0; i < 10000; ++i) {
-                writer.process(ByteView("x")).get();
+                writer.process(dstd::ByteView("x")).get();
             }
             writer.close();
 
@@ -265,7 +265,7 @@ TEST_CASE("StreamingFileWriterUtility - Round Trip") {
             StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
             for (int i = 0; i < 100; ++i) {
                 dstd::String line = "Line " + dstd::to_string(i) + "\n";
-                writer.process(ByteView(line)).get();
+                writer.process(dstd::ByteView(line)).get();
                 original_data += line;
             }
             writer.close();
@@ -288,7 +288,7 @@ TEST_CASE("StreamingFileWriterUtility - Automatic Closure") {
     SUBCASE("Destructor closes file") {
         {
             StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
-            writer.process(ByteView("Data")).get();
+            writer.process(dstd::ByteView("Data")).get();
             // No explicit close() - destructor should handle it
         }
 
@@ -309,8 +309,8 @@ TEST_CASE("StreamingFileWriterUtility - Different Data Types") {
     SUBCASE("Write text data") {
         {
             StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
-            writer.process(ByteView("Text line 1\n")).get();
-            writer.process(ByteView("Text line 2\n")).get();
+            writer.process(dstd::ByteView("Text line 1\n")).get();
+            writer.process(dstd::ByteView("Text line 2\n")).get();
             writer.close();
         }
 
@@ -330,7 +330,7 @@ TEST_CASE("StreamingFileWriterUtility - Different Data Types") {
             for (int i = 0; i < 100; ++i) {
                 unsigned char byte = (i % 2 == 0) ? 0xAA : 0x55;
                 dstd::Vector<unsigned char> data = {byte};
-                writer.process(ByteView(data.data(), data.size())).get();
+                writer.process(dstd::ByteView(data.data(), data.size())).get();
             }
             writer.close();
         }
@@ -355,7 +355,7 @@ TEST_CASE("StreamingFileWriterUtility - Truncate vs Append") {
     // Write initial data
     {
         StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
-        writer.process(ByteView("Initial data\n")).get();
+        writer.process(dstd::ByteView("Initial data\n")).get();
         writer.close();
     }
 
@@ -364,7 +364,7 @@ TEST_CASE("StreamingFileWriterUtility - Truncate vs Append") {
             StreamingFileWriterUtility writer(
                 dstd::PathView(test_file.str()),
                 false);  // append=false (truncate)
-            writer.process(ByteView("New data\n")).get();
+            writer.process(dstd::ByteView("New data\n")).get();
             writer.close();
         }
 
@@ -385,7 +385,7 @@ TEST_CASE("StreamingFileWriterUtility - Path Information") {
         CHECK(writer.path().str() == test_file.str());
         CHECK_FALSE(writer.is_closed());
 
-        writer.process(ByteView("Data")).get();
+        writer.process(dstd::ByteView("Data")).get();
         writer.close();
 
         CHECK(writer.is_closed());

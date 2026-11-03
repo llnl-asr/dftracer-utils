@@ -19,15 +19,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::col;
-using dftracer::utils::dataframe::DataType;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::make_provider_source;
-using dftracer::utils::dataframe::Schema;
-using dftracer::utils::dataframe::Source;
-using dftracer::utils::dataframe::TimeUnit;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

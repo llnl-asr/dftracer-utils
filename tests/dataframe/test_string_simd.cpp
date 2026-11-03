@@ -23,10 +23,7 @@
 #include <random>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
-namespace simd = dftracer::utils::dataframe::strsimd;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -281,11 +278,11 @@ Rows map_rows(const Rows& in,
 // Run `body` with the vector kernels, then with the byte reference forced.
 template <class Body>
 void both_modes(Body body) {
-    simd::set_force_scalar(false);
+    strsimd::set_force_scalar(false);
     body("simd");
-    simd::set_force_scalar(true);
+    strsimd::set_force_scalar(true);
     body("scalar");
-    simd::set_force_scalar(false);
+    strsimd::set_force_scalar(false);
 }
 
 dstd::Vector<dstd::String> list_row(const Series& list, std::int64_t i) {
@@ -301,24 +298,25 @@ dstd::Vector<dstd::String> list_row(const Series& list, std::int64_t i) {
 
 TEST_SUITE("string simd") {
     TEST_CASE("reports the dispatched target") {
-        std::printf("string kernels: Highway target %s\n", simd::target_name());
-        CHECK(dstd::String(simd::target_name()).size() > 0);
+        std::printf("string kernels: Highway target %s\n",
+                    strsimd::target_name());
+        CHECK(dstd::String(strsimd::target_name()).size() > 0);
     }
 
     TEST_CASE("bit helpers") {
         dstd::Vector<std::uint64_t> b(4, 0);
         for (std::size_t i : {0u, 63u, 64u, 130u, 255u})
             b[i >> 6] |= std::uint64_t{1} << (i & 63);
-        CHECK(simd::bits_any(b.data(), 0, 1));
-        CHECK(!simd::bits_any(b.data(), 1, 63));
-        CHECK(simd::bits_any(b.data(), 1, 64));
-        CHECK(simd::bits_next(b.data(), 1, 256) == 63);
-        CHECK(simd::bits_next(b.data(), 131, 255) == 255);  // none: e
-        CHECK(simd::bits_next(b.data(), 64, 65) == 64);
-        CHECK(simd::bits_prev(b.data(), 0, 256) == 255);
-        CHECK(simd::bits_prev(b.data(), 1, 63) == simd::NPOS);
-        CHECK(simd::bits_prev(b.data(), 0, 130) == 64);
-        CHECK(simd::bits_prev(b.data(), 65, 131) == 130);
+        CHECK(strsimd::bits_any(b.data(), 0, 1));
+        CHECK(!strsimd::bits_any(b.data(), 1, 63));
+        CHECK(strsimd::bits_any(b.data(), 1, 64));
+        CHECK(strsimd::bits_next(b.data(), 1, 256) == 63);
+        CHECK(strsimd::bits_next(b.data(), 131, 255) == 255);  // none: e
+        CHECK(strsimd::bits_next(b.data(), 64, 65) == 64);
+        CHECK(strsimd::bits_prev(b.data(), 0, 256) == 255);
+        CHECK(strsimd::bits_prev(b.data(), 1, 63) == strsimd::NPOS);
+        CHECK(strsimd::bits_prev(b.data(), 0, 130) == 64);
+        CHECK(strsimd::bits_prev(b.data(), 65, 131) == 130);
     }
 
     TEST_CASE("case maps") {
@@ -384,16 +382,16 @@ TEST_SUITE("string simd") {
             dstd::Vector<bool> want;
             for (const Row& r : in) want.push_back(r ? r_is(*r, cls) : false);
             Series s = make(in);
-            for (simd::PredStrategy st :
-                 {simd::PredStrategy::Bits, simd::PredStrategy::Rows,
-                  simd::PredStrategy::Auto}) {
-                simd::set_pred_strategy(st);
+            for (strsimd::PredStrategy st :
+                 {strsimd::PredStrategy::Bits, strsimd::PredStrategy::Rows,
+                  strsimd::PredStrategy::Auto}) {
+                strsimd::set_pred_strategy(st);
                 both_modes([&](const char* mode) {
                     expect_bools(Series{dftu_series_str_is(s.handle(), cls)},
                                  in, want, mode);
                 });
             }
-            simd::set_pred_strategy(simd::PredStrategy::Auto);
+            strsimd::set_pred_strategy(strsimd::PredStrategy::Auto);
         }
     }
 

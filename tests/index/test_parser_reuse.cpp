@@ -17,7 +17,6 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-namespace build = dftracer::utils::index::build;
 
 namespace {
 
@@ -63,27 +62,30 @@ TEST_SUITE("IndexParserReuse") {
         for (int i = 0; i < FILES; ++i)
             files.emplace_back(write_small_trace(env.get_dir(), i));
         constexpr std::size_t RETAIN =
-            build::IndexFoldDriver::PARSER_RETAIN_BYTES;
+            index::build::IndexFoldDriver::PARSER_RETAIN_BYTES;
         constexpr std::size_t LONG_LINE = 2 * RETAIN;
         files.emplace(files.begin() + FILES / 2,
                       write_long_line_trace(env.get_dir(), LONG_LINE));
 
-        const auto created_before = build::g_parsers_created.load();
-        build::IndexBuildBatchResult result;
+        const auto created_before = index::build::g_parsers_created.load();
+        index::build::IndexBuildBatchResult result;
         Runtime rt(WORKERS);
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+            auto config =
+                dstd::make_shared<index::build::IndexBuildBatchConfig>();
             config->file_paths = files;
             config->index_dir = env.get_dir() + "/idx";
             config->parallelism = WORKERS;
-            result = co_await build::BatchBuilder::process(std::move(config));
+            result =
+                co_await index::build::BatchBuilder::process(std::move(config));
         });
         rt.submit(std::move(task), "parser-reuse").wait();
 
         REQUIRE(result.indexed == FILES + 1);
-        const auto created = build::g_parsers_created.load() - created_before;
-        const auto peak = build::g_parser_peak_capacity.load();
-        const auto live = build::g_parser_live_capacity.load();
+        const auto created =
+            index::build::g_parsers_created.load() - created_before;
+        const auto peak = index::build::g_parser_peak_capacity.load();
+        const auto live = index::build::g_parser_live_capacity.load();
         MESSAGE("parsers created: " << created << ", peak capacity: " << peak
                                     << ", live capacity: " << live);
         rt.shutdown();

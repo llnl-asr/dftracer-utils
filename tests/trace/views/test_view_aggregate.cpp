@@ -100,38 +100,34 @@ dstd::Vector<HistBin> hist_bins(const dataframe::DataFrame& b, std::int64_t row,
     return out;
 }
 
-using gmoracle::groupmap_oracle;
-
-namespace scan = dftracer::utils::trace::views::detail::scan;
+using namespace dftracer::utils::trace;
 
 // The engine collect path (run_collect_via_engine + post-ops), the production
 // aggregation path every aggregating View collect takes.
-dataframe::DataFrame engine_collect(const scan::ScanPlan& v) {
-    namespace detail = dftracer::utils::trace::views::detail;
+dataframe::DataFrame engine_collect(const views::detail::scan::ScanPlan& v) {
     Runtime rt;
     dataframe::DataFrame result;
-    rt.block_on(
-        coro::named("engine-collect",
-                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                        result = co_await detail::run_collect_via_engine(*v);
-                    })));
-    return detail::apply_agg_post_ops(std::move(result), *v);
+    rt.block_on(coro::named(
+        "engine-collect",
+        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            result = co_await views::detail::run_collect_via_engine(*v);
+        })));
+    return views::detail::apply_agg_post_ops(std::move(result), *v);
 }
 
 // The engine scan with the tier/rollup fast paths bypassed:
 // build_engine_agg_state always folds events, so this is the ground-truth full
 // scan a tier answer must match.
-dataframe::DataFrame scan_only(const scan::ScanPlan& v) {
-    namespace detail = dftracer::utils::trace::views::detail;
+dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& v) {
     Runtime rt;
     dataframe::DataFrame result;
-    rt.block_on(
-        coro::named("scan-only",
-                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                        auto st = co_await detail::build_engine_agg_state(*v);
-                        result = detail::finalize_engine_result(*st, *v);
-                    })));
-    return detail::apply_agg_post_ops(std::move(result), *v);
+    rt.block_on(coro::named(
+        "scan-only",
+        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto st = co_await views::detail::build_engine_agg_state(*v);
+            result = views::detail::finalize_engine_result(*st, *v);
+        })));
+    return views::detail::apply_agg_post_ops(std::move(result), *v);
 }
 
 // Build the aggregation tier every build makes, so the chunk partials can
@@ -299,7 +295,6 @@ TEST_SUITE("View") {
 
     TEST_CASE(
         "View - session join/compare combine two branches over the one scan") {
-        namespace cmp = dftracer::utils::trace::comparator;
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         dstd::String gz =
@@ -341,7 +336,7 @@ TEST_SUITE("View") {
                       .collect()
                       .get();
         auto rj = join_batches(ra, rb, 1, JoinType::Inner);
-        auto rc = cmp::CompareView::compare_batches(ra, rb, 1);
+        auto rc = comparator::CompareView::compare_batches(ra, rb, 1);
 
         // INNER join keeps only cat=posix (b is posix-only).
         REQUIRE(j->num_rows() == rj.num_rows());
@@ -383,8 +378,7 @@ TEST_SUITE("View") {
     }
 
     TEST_CASE("View - agg accepts unified F field expressions") {
-        namespace fld = dftracer::utils::dataframe::field;
-        const auto& F = fld::F;
+        const auto& F = dataframe::field::F;
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         dstd::String gz = create_mixed_trace(env, 30, 20);
@@ -394,7 +388,7 @@ TEST_SUITE("View") {
         // and the AggSpec form produce the same table (same default col names).
         auto by_expr = View::from_file(dstd::String(gz), dstd::String(idx))
                            .group_by({GroupKey::cat()})
-                           .agg(dstd::Vector<fld::FieldAggExpr>{
+                           .agg(dstd::Vector<dataframe::field::FieldAggExpr>{
                                F("dur").sum(), F("dur").mean(), F.any.count()})
                            .collect()
                            .get();
@@ -461,8 +455,7 @@ TEST_SUITE("View") {
     }
 
     TEST_CASE("View - F.any wildcard aggregates numeric args (mean)") {
-        namespace fld = dftracer::utils::dataframe::field;
-        const auto& F = fld::F;
+        const auto& F = dataframe::field::F;
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // Two cats, each with a numeric arg "level"; mean over the wildcard
@@ -486,8 +479,8 @@ TEST_SUITE("View") {
 
         auto any = View::from_file(dstd::String(gz), dstd::String(idx))
                        .group_by({GroupKey::cat()})
-                       .agg(dstd::Vector<fld::FieldAggExpr>{F.any.mean(),
-                                                            F.any.count()})
+                       .agg(dstd::Vector<dataframe::field::FieldAggExpr>{
+                           F.any.mean(), F.any.count()})
                        .collect()
                        .get();
         REQUIRE(
@@ -504,11 +497,12 @@ TEST_SUITE("View") {
         CHECK(level["stdio"] == doctest::Approx(101.5));  // mean 100..103
 
         // F.any.sum() applies a sum to every numeric arg (one sum_<arg>).
-        auto anysum = View::from_file(dstd::String(gz), dstd::String(idx))
-                          .group_by({GroupKey::cat()})
-                          .agg(dstd::Vector<fld::FieldAggExpr>{F.any.sum()})
-                          .collect()
-                          .get();
+        auto anysum =
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::cat()})
+                .agg(dstd::Vector<dataframe::field::FieldAggExpr>{F.any.sum()})
+                .collect()
+                .get();
         REQUIRE(bhas(anysum, "sum_level"));
         dstd::Map<dstd::String, double> slevel;
         for (std::int64_t i = 0; i < anysum.num_rows(); ++i)
@@ -631,12 +625,15 @@ TEST_SUITE("View") {
         // auto_spill() picks ~1/3 memory: large budget, so it runs the spill
         // path but only flushes the final run - still identical output.
         StringSink sa;
-        scan::export_counters(
-            scan::auto_spill(scan::agg_numeric_args(scan::group_by(
-                scan::phase(
-                    scan::from_file(dstd::String(gz), dstd::String(idx)),
-                    Phase::Counters),
-                {GroupKey::name()}))),
+        views::detail::scan::export_counters(
+            views::detail::scan::auto_spill(
+                views::detail::scan::agg_numeric_args(
+                    views::detail::scan::group_by(
+                        views::detail::scan::phase(
+                            views::detail::scan::from_file(dstd::String(gz),
+                                                           dstd::String(idx)),
+                            Phase::Counters),
+                        {GroupKey::name()}))),
             sa)
             .get();
         auto autos = sa.lines();
@@ -858,8 +855,8 @@ TEST_SUITE("View") {
         View::from_file(dstd::String(gz), dstd::String(idx))
             .sink_json(sink)
             .get();
-        scan::ScanPlan base = scan::rollup_root(
-            scan::from_file(dstd::String(gz), dstd::String(idx)),
+        views::detail::scan::ScanPlan base = views::detail::scan::rollup_root(
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
             dstd::String(env.get_dir() + "/rollups"));
 
         GroupKey bucketed = GroupKey::name();
@@ -873,18 +870,21 @@ TEST_SUITE("View") {
             return out;
         };
         auto count_by = [&](GroupKey gk) {
-            return scan::agg(scan::group_by(base, {std::move(gk)}),
-                             {{AggOp::Count, "", "n"}});
+            return views::detail::scan::agg(
+                views::detail::scan::group_by(base, {std::move(gk)}),
+                {{AggOp::Count, "", "n"}});
         };
-        const auto bucketed_first = names_of(run(
-            scan::collect_frame(scan::materialize(count_by(bucketed), 0, 0))));
+        const auto bucketed_first =
+            names_of(run(views::detail::scan::collect_frame(
+                views::detail::scan::materialize(count_by(bucketed), 0, 0))));
 
         // Same kind and field, no transform: a different key.
-        CHECK(names_of(run(scan::collect_frame(count_by(GroupKey::name())))) ==
+        CHECK(names_of(run(views::detail::scan::collect_frame(
+                  count_by(GroupKey::name())))) ==
               dstd::Vector<dstd::String>{"fwrite", "read"});
         // The transformed key itself is still served, with the same groups.
-        CHECK(names_of(run(scan::collect_frame(count_by(bucketed)))) ==
-              bucketed_first);
+        CHECK(names_of(run(views::detail::scan::collect_frame(
+                  count_by(bucketed)))) == bucketed_first);
     }
 
     TEST_CASE(
@@ -922,21 +922,23 @@ TEST_SUITE("View") {
         // A per-event predicate (dur is not a tier key) forces the real scan
         // path where the materialize hook lives, independent of tier state.
         auto make = [&]() {
-            return scan::agg(
-                scan::group_by(scan::filter(scan::from_file(dstd::String(gz),
-                                                            dstd::String(idx)),
-                                            duql::parse_or_throw("dur >= 0")),
-                               {GroupKey::cat()}),
+            return views::detail::scan::agg(
+                views::detail::scan::group_by(
+                    views::detail::scan::filter(
+                        views::detail::scan::from_file(dstd::String(gz),
+                                                       dstd::String(idx)),
+                        duql::parse_or_throw("dur >= 0")),
+                    {GroupKey::cat()}),
                 {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
 
-        auto expect = canon(run(scan::collect_frame(make())));
+        auto expect = canon(run(views::detail::scan::collect_frame(make())));
         REQUIRE(expect.size() >= 1);
 
         // A materialize plan persists the result into the rollup store of the
         // index root as a byproduct of answering it.
-        CHECK(canon(run(scan::collect_frame(
-                  scan::materialize(make(), 0, 0)))) == expect);
+        CHECK(canon(run(views::detail::scan::collect_frame(
+                  views::detail::scan::materialize(make(), 0, 0)))) == expect);
         {
             auto db = dftracer::utils::index::cache::open_rollup_db(
                 dftracer::utils::index::rollups_dir(idx),
@@ -947,7 +949,7 @@ TEST_SUITE("View") {
         }
 
         // A repeat query - even without materialize - reads the rollup back.
-        CHECK(canon(run(scan::collect_frame(make()))) == expect);
+        CHECK(canon(run(views::detail::scan::collect_frame(make()))) == expect);
     }
 
     TEST_CASE("View - materialize() builds the rollup without a table") {
@@ -1227,8 +1229,8 @@ TEST_SUITE("View") {
         dstd::String gz = write_agg_trace(env);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         View base = View::from_file(dstd::String(gz), dstd::String(idx));
-        scan::ScanPlan plan =
-            scan::from_file(dstd::String(gz), dstd::String(idx));
+        views::detail::scan::ScanPlan plan =
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx));
 
         // Mixed keys/ops over one shared scan: numeric + a sketch + SetUnion,
         // an auto-numeric dyn branch, and an occupancy branch.
@@ -1244,12 +1246,14 @@ TEST_SUITE("View") {
         View vb =
             base.group_by({GroupKey::name()}).agg(aggs_b).agg_numeric_args();
         View vc = base.group_by({GroupKey::cat()}).agg(aggs_c);
-        scan::ScanPlan pa =
-            scan::agg(scan::group_by(plan, {GroupKey::cat()}), aggs_a);
-        scan::ScanPlan pb = scan::agg_numeric_args(
-            scan::agg(scan::group_by(plan, {GroupKey::name()}), aggs_b));
-        scan::ScanPlan pc =
-            scan::agg(scan::group_by(plan, {GroupKey::cat()}), aggs_c);
+        views::detail::scan::ScanPlan pa = views::detail::scan::agg(
+            views::detail::scan::group_by(plan, {GroupKey::cat()}), aggs_a);
+        views::detail::scan::ScanPlan pb =
+            views::detail::scan::agg_numeric_args(views::detail::scan::agg(
+                views::detail::scan::group_by(plan, {GroupKey::name()}),
+                aggs_b));
+        views::detail::scan::ScanPlan pc = views::detail::scan::agg(
+            views::detail::scan::group_by(plan, {GroupKey::cat()}), aggs_c);
 
         auto run = base.session();
         auto a = run.collect(va.lazy());
@@ -1269,17 +1273,19 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         dstd::String gz = write_agg_trace(env);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        scan::ScanPlan base =
-            scan::from_file(dstd::String(gz), dstd::String(idx));
+        views::detail::scan::ScanPlan base =
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx));
         auto by = [&](GroupKey gk, dstd::Vector<AggSpec> specs) {
-            return scan::agg(scan::group_by(base, {std::move(gk)}),
-                             std::move(specs));
+            return views::detail::scan::agg(
+                views::detail::scan::group_by(base, {std::move(gk)}),
+                std::move(specs));
         };
 
-        auto check = [&](const scan::ScanPlan& v,
+        auto check = [&](const views::detail::scan::ScanPlan& v,
                          const dstd::Vector<dstd::String>& keys) {
-            dstd::String p = run(scan::aggregate_partial(v));
-            dataframe::DataFrame merged = scan::merge_partials_to_table(v, {p});
+            dstd::String p = run(views::detail::scan::aggregate_partial(v));
+            dataframe::DataFrame merged =
+                views::detail::scan::merge_partials_to_table(v, {p});
             frames_equal(merged, engine_collect(v), keys);
         };
         // Numeric reductions, a percentile sketch, and SetUnion survive the
@@ -1294,14 +1300,15 @@ TEST_SUITE("View") {
                  {{AggOp::Busy, "", "busy"}, {AggOp::Active, "", "act"}}),
               {"cat"});
         // Auto-numeric dyn survives the name-union across the round-trip.
-        check(scan::agg_numeric_args(
+        check(views::detail::scan::agg_numeric_args(
                   by(GroupKey::name(), {{AggOp::Count, "", "n"}})),
               {"name"});
 
         // Hist (a list<struct> column) round-trips bin for bin.
-        scan::ScanPlan vh = by(GroupKey::cat(), {{AggOp::Hist, "dur", "h"}});
-        dataframe::DataFrame mh = scan::merge_partials_to_table(
-            vh, {run(scan::aggregate_partial(vh))});
+        views::detail::scan::ScanPlan vh =
+            by(GroupKey::cat(), {{AggOp::Hist, "dur", "h"}});
+        dataframe::DataFrame mh = views::detail::scan::merge_partials_to_table(
+            vh, {run(views::detail::scan::aggregate_partial(vh))});
         dataframe::DataFrame eh = engine_collect(vh);
         REQUIRE(mh.num_rows() == eh.num_rows());
         dstd::Map<dstd::String, std::int64_t> mrow, erow;
@@ -1991,12 +1998,14 @@ TEST_SUITE("View") {
         build_tier_index(gz);  // an EVENT tier answerable() would try
 
         auto make = [&] {
-            return scan::agg(scan::group_by(scan::from_file(dstd::String(gz),
-                                                            dstd::String(idx)),
-                                            {GroupKey::cat()}),
-                             {{AggOp::Busy, "", "busy"},
-                              {AggOp::Active, "", "active"},
-                              {AggOp::Count, "", "n"}});
+            return views::detail::scan::agg(
+                views::detail::scan::group_by(
+                    views::detail::scan::from_file(dstd::String(gz),
+                                                   dstd::String(idx)),
+                    {GroupKey::cat()}),
+                {{AggOp::Busy, "", "busy"},
+                 {AggOp::Active, "", "active"},
+                 {AggOp::Count, "", "n"}});
         };
         // No time_range: answerable() would previously serve occupancy from the
         // tier's per-key stats, which carry no per-event intervals -> zeros.
@@ -2026,9 +2035,11 @@ TEST_SUITE("View") {
             run.collect(base.group_by({GroupKey::cat()}).agg(occ).lazy());
         run.execute().get();
 
-        dataframe::DataFrame scanned = scan_only(scan::agg(
-            scan::group_by(scan::from_file(dstd::String(gz), dstd::String(idx)),
-                           {GroupKey::cat()}),
+        dataframe::DataFrame scanned = scan_only(views::detail::scan::agg(
+            views::detail::scan::group_by(
+                views::detail::scan::from_file(dstd::String(gz),
+                                               dstd::String(idx)),
+                {GroupKey::cat()}),
             occ));
         frames_equal(*got, scanned, {"cat"});
         double max_busy = 0;
@@ -2048,10 +2059,11 @@ TEST_SUITE("View") {
         build_tier_index(gz);
 
         auto make = [&] {
-            return scan::agg(
-                scan::group_by(
-                    scan::time_scale(
-                        scan::from_file(dstd::String(gz), dstd::String(idx)),
+            return views::detail::scan::agg(
+                views::detail::scan::group_by(
+                    views::detail::scan::time_scale(
+                        views::detail::scan::from_file(dstd::String(gz),
+                                                       dstd::String(idx)),
                         0.001),
                     {GroupKey::cat()}),
                 {{AggOp::Sum, "dur", "total"},

@@ -13,7 +13,6 @@
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-namespace build = dftracer::utils::index::build;
 
 namespace {
 
@@ -44,14 +43,16 @@ TEST_SUITE("IndexFoldDriver") {
         for (int i = 0; i < 256; ++i)
             files.emplace_back(write_trace(env.get_dir(), i, 300));
 
-        build::IndexBuildBatchResult result;
+        index::build::IndexBuildBatchResult result;
         Runtime rt(8);
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+            auto config =
+                dstd::make_shared<index::build::IndexBuildBatchConfig>();
             config->file_paths = files;
             config->index_dir = env.get_dir() + "/idx";
             config->parallelism = 8;
-            result = co_await build::BatchBuilder::process(std::move(config));
+            result =
+                co_await index::build::BatchBuilder::process(std::move(config));
         });
         rt.submit(std::move(task), "fold-buffer-pools").wait();
         rt.shutdown();

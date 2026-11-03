@@ -19,9 +19,6 @@
 #include <random>
 
 using namespace dftracer::utils;
-namespace views = dftracer::utils::trace::views;
-namespace reader = dftracer::utils::utilities::reader;
-using dftracer::utils::duql::Query;
 
 namespace {
 
@@ -189,25 +186,26 @@ struct ViewCounts {
     std::uint64_t plain = 0;
 };
 
-ViewCounts view_counts(const dstd::String& gz, const Query& q) {
-    views::detail::ViewPlan vp;
+ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
+    trace::views::detail::ViewPlan vp;
     vp.files.push_back(
         {dstd::String(gz),
          dftracer::utils::trace::internal::determine_index_path(gz, "")});
     vp.query = q;
-    auto vdef = views::detail::make_vdef(vp, false);
+    auto vdef = trace::views::detail::make_vdef(vp, false);
     auto run = [&]() -> dftracer::utils::coro::CoroTask<ViewCounts> {
         std::uint64_t skipped = 0;
-        auto units = co_await views::detail::gather_units(vp, vdef, skipped);
+        auto units =
+            co_await trace::views::detail::gather_units(vp, vdef, skipped);
         ViewCounts out;
         for (const bool prefilter : {true, false}) {
             vdef.prefilter = prefilter;
             std::uint64_t matched = 0;
             for (const auto& u : units) {
-                auto sin =
-                    views::detail::make_scanner_input(u, vdef, vdef.query);
+                auto sin = trace::views::detail::make_scanner_input(u, vdef,
+                                                                    vdef.query);
                 sin.with_batch_size(READ_BUFFER_BYTES);
-                views::ViewScannerUtility scanner;
+                trace::views::ViewScannerUtility scanner;
                 auto gen = scanner(sin);
                 while (auto b = co_await gen.next())
                     matched += b->events_matched;
@@ -221,8 +219,8 @@ ViewCounts view_counts(const dstd::String& gz, const Query& q) {
 
 std::size_t reader_count(dstd::StringView gz, const dstd::String& text) {
     auto run = [&]() -> dftracer::utils::coro::CoroTask<std::size_t> {
-        reader::TraceReader r({.file_path = dstd::String(gz)});
-        reader::ReadConfig cfg;
+        utilities::reader::TraceReader r({.file_path = dstd::String(gz)});
+        utilities::reader::ReadConfig cfg;
         cfg.query = text;
         cfg.buffer_size = READ_BUFFER_BYTES;
         auto gen = r.read_json(cfg);
@@ -236,8 +234,8 @@ std::size_t reader_count(dstd::StringView gz, const dstd::String& text) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 std::int64_t arrow_count(dstd::StringView gz, const dstd::String& text) {
     auto run = [&]() -> dftracer::utils::coro::CoroTask<std::int64_t> {
-        reader::TraceReader r({.file_path = dstd::String(gz)});
-        reader::ReadConfig cfg;
+        utilities::reader::TraceReader r({.file_path = dstd::String(gz)});
+        utilities::reader::ReadConfig cfg;
         cfg.query = text;
         cfg.buffer_size = READ_BUFFER_BYTES;
         auto gen = r.read_arrow(cfg);
@@ -274,7 +272,7 @@ TEST_CASE("the pre-filter never drops a match") {
     for (int i = 0; i < 300; ++i) {
         const dstd::String text = random_query(rng, 3);
         CAPTURE(text);
-        const Query q = dftracer::utils::duql::parse_or_throw(text);
+        const duql::Query q = dftracer::utils::duql::parse_or_throw(text);
         std::uint64_t data = 0, all = 0;
         for (std::size_t k = 0; k < lines.size(); ++k) {
             auto root = parser.parse(padded[k]).value();
@@ -350,7 +348,7 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
         const dstd::String text =
             rng() % 2 ? leaf() : "(" + leaf() + ") and (" + leaf() + ")";
         CAPTURE(text);
-        const Query q = dftracer::utils::duql::parse_or_throw(text);
+        const duql::Query q = dftracer::utils::duql::parse_or_throw(text);
         std::uint64_t all = 0;
         for (auto& p : padded)
             all += q.evaluate(dftracer::utils::json::JsonValue(

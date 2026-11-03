@@ -13,7 +13,7 @@ using namespace dftu_utils_test;
 using namespace test_view_common;
 using namespace aggparity;
 
-namespace scan = dftracer::utils::trace::views::detail::scan;
+using namespace dftracer::utils::trace;
 
 TEST_SUITE("View") {
     TEST_CASE("View - occupancy engine path matches the GroupMap path") {
@@ -39,20 +39,20 @@ TEST_SUITE("View") {
         (void)dstd::fs::remove(pfw);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        namespace detail = dftracer::utils::trace::views::detail;
-        auto collect_engine = [](const scan::ScanPlan& v) {
+        auto collect_engine = [](const views::detail::scan::ScanPlan& v) {
             static dftracer::utils::Runtime rt;
             dataframe::DataFrame result;
             rt.block_on(coro::named(
                 "occ-engine",
                 coro::with_scope(
                     [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
-                        result = co_await detail::run_collect_via_engine(*v);
+                        result =
+                            co_await views::detail::run_collect_via_engine(*v);
                     })));
-            return detail::apply_agg_post_ops(std::move(result), *v);
+            return views::detail::apply_agg_post_ops(std::move(result), *v);
         };
-        auto collect_groupmap = [](const scan::ScanPlan& v) {
-            return groupmap_oracle(v);
+        auto collect_groupmap = [](const views::detail::scan::ScanPlan& v) {
+            return gmoracle::groupmap_oracle(v);
         };
         auto check_match = [](const dataframe::DataFrame& a0,
                               const dataframe::DataFrame& b0,
@@ -78,20 +78,23 @@ TEST_SUITE("View") {
 
         auto run_both = [&](std::uint64_t occ_cell, std::uint64_t mem_budget) {
             auto build = [&] {
-                scan::ScanPlan v =
-                    scan::from_file(dstd::String(gz), dstd::String(idx));
-                if (mem_budget) v = scan::memory_budget(v, mem_budget);
-                if (occ_cell) v = scan::occ_cell(v, occ_cell);
-                return scan::agg(scan::group_by(v, {GroupKey::name()}),
-                                 {
-                                     {AggOp::Sum, "dur", "sum_dur"},
-                                     {AggOp::Busy, "", "busy"},
-                                     {AggOp::Concurrency, "", "concurrency"},
-                                     {AggOp::Utilization, "", "utilization"},
-                                     {AggOp::Active, "", "active"},
-                                 });
+                views::detail::scan::ScanPlan v =
+                    views::detail::scan::from_file(dstd::String(gz),
+                                                   dstd::String(idx));
+                if (mem_budget)
+                    v = views::detail::scan::memory_budget(v, mem_budget);
+                if (occ_cell) v = views::detail::scan::occ_cell(v, occ_cell);
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(v, {GroupKey::name()}),
+                    {
+                        {AggOp::Sum, "dur", "sum_dur"},
+                        {AggOp::Busy, "", "busy"},
+                        {AggOp::Concurrency, "", "concurrency"},
+                        {AggOp::Utilization, "", "utilization"},
+                        {AggOp::Active, "", "active"},
+                    });
             };
-            REQUIRE(!scan::is_row_query(build()));
+            REQUIRE(!views::detail::scan::is_row_query(build()));
             dataframe::DataFrame legacy = collect_groupmap(build());
             dataframe::DataFrame engine = collect_engine(build());
             check_match(legacy, engine, "name");
@@ -119,19 +122,23 @@ TEST_SUITE("View") {
         // a global switch. Both paths must agree.
         auto run_both_scaled = [&](std::uint64_t mem_budget) {
             auto build = [&] {
-                scan::ScanPlan v =
-                    scan::from_file(dstd::String(gz), dstd::String(idx));
-                if (mem_budget) v = scan::memory_budget(v, mem_budget);
-                return scan::agg(scan::group_by(scan::time_scale(v, 0.001),
-                                                {GroupKey::name()}),
-                                 {
-                                     {AggOp::Busy, "", "busy"},
-                                     {AggOp::Active, "", "active"},
-                                     {AggOp::Sum, "dur", "sum_dur"},
-                                     {AggOp::Mean, "dur", "mean_dur"},
-                                 });
+                views::detail::scan::ScanPlan v =
+                    views::detail::scan::from_file(dstd::String(gz),
+                                                   dstd::String(idx));
+                if (mem_budget)
+                    v = views::detail::scan::memory_budget(v, mem_budget);
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::time_scale(v, 0.001),
+                        {GroupKey::name()}),
+                    {
+                        {AggOp::Busy, "", "busy"},
+                        {AggOp::Active, "", "active"},
+                        {AggOp::Sum, "dur", "sum_dur"},
+                        {AggOp::Mean, "dur", "mean_dur"},
+                    });
             };
-            REQUIRE(!scan::is_row_query(build()));
+            REQUIRE(!views::detail::scan::is_row_query(build()));
             check_match(collect_groupmap(build()), collect_engine(build()),
                         "name");
         };
@@ -166,21 +173,22 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto build = [&](std::uint64_t mem) {
-            scan::ScanPlan v =
-                scan::from_file(dstd::String(gz), dstd::String(idx));
-            if (mem) v = scan::memory_budget(v, mem);
-            return scan::agg(v, {
-                                    {AggOp::Count, "", "n"},
-                                    {AggOp::Sum, "dur", "sum_dur"},
-                                    {AggOp::Mean, "dur", "mean_dur"},
-                                    {AggOp::Min, "dur", "min_dur"},
-                                    {AggOp::Max, "dur", "max_dur"},
-                                    {AggOp::Var, "dur", "var_dur"},
-                                    {AggOp::Std, "dur", "std_dur"},
-                                    {AggOp::Pct, "dur", "p90_dur", "", 0.9},
-                                    {AggOp::ArgMax, "name", "top_name", "dur"},
-                                    {AggOp::SetUnion, "cat", "cats"},
-                                });
+            views::detail::scan::ScanPlan v = views::detail::scan::from_file(
+                dstd::String(gz), dstd::String(idx));
+            if (mem) v = views::detail::scan::memory_budget(v, mem);
+            return views::detail::scan::agg(
+                v, {
+                       {AggOp::Count, "", "n"},
+                       {AggOp::Sum, "dur", "sum_dur"},
+                       {AggOp::Mean, "dur", "mean_dur"},
+                       {AggOp::Min, "dur", "min_dur"},
+                       {AggOp::Max, "dur", "max_dur"},
+                       {AggOp::Var, "dur", "var_dur"},
+                       {AggOp::Std, "dur", "std_dur"},
+                       {AggOp::Pct, "dur", "p90_dur", "", 0.9},
+                       {AggOp::ArgMax, "name", "top_name", "dur"},
+                       {AggOp::SetUnion, "cat", "cats"},
+                   });
         };
         // A global result is a single keyless row, so pair the one row
         // directly.
@@ -201,27 +209,31 @@ TEST_SUITE("View") {
             }
         };
         SUBCASE("in-memory") {
-            cmp_one(groupmap_oracle(build(0)), engine_collect(build(0)));
+            cmp_one(gmoracle::groupmap_oracle(build(0)),
+                    engine_collect(build(0)));
         }
         SUBCASE("forced spill") {
-            cmp_one(groupmap_oracle(build(128)), engine_collect(build(128)));
+            cmp_one(gmoracle::groupmap_oracle(build(128)),
+                    engine_collect(build(128)));
         }
         // A bare .agg() with no explicit specs is a global count.
         SUBCASE("bare count") {
             auto q = [&] {
-                return scan::agg(
-                    scan::from_file(dstd::String(gz), dstd::String(idx)),
+                return views::detail::scan::agg(
+                    views::detail::scan::from_file(dstd::String(gz),
+                                                   dstd::String(idx)),
                     dstd::Vector<AggSpec>{});
             };
-            cmp_one(groupmap_oracle(q()), engine_collect(q()));
+            cmp_one(gmoracle::groupmap_oracle(q()), engine_collect(q()));
         }
         SUBCASE("global histogram") {
             auto q = [&] {
-                return scan::agg(
-                    scan::from_file(dstd::String(gz), dstd::String(idx)),
+                return views::detail::scan::agg(
+                    views::detail::scan::from_file(dstd::String(gz),
+                                                   dstd::String(idx)),
                     {{AggOp::Hist, "dur", "h"}});
             };
-            dataframe::DataFrame a = groupmap_oracle(q());
+            dataframe::DataFrame a = gmoracle::groupmap_oracle(q());
             dataframe::DataFrame b = engine_collect(q());
             REQUIRE(a.num_rows() == 1);
             REQUIRE(b.num_rows() == 1);
@@ -239,10 +251,12 @@ TEST_SUITE("View") {
         // columns.
         SUBCASE("global auto numeric metrics") {
             auto q = [&] {
-                return scan::agg_numeric_args(
-                    scan::from_file(dstd::String(gz), dstd::String(idx)));
+                return views::detail::scan::agg_numeric_args(
+                    views::detail::scan::from_file(dstd::String(gz),
+                                                   dstd::String(idx)));
             };
-            frames_equal(groupmap_oracle(q()), engine_collect(q()), {});
+            frames_equal(gmoracle::groupmap_oracle(q()), engine_collect(q()),
+                         {});
         }
     }
 
@@ -264,10 +278,13 @@ TEST_SUITE("View") {
             return base.group_by({GroupKey::cat(), GroupKey::name()})
                 .agg(specs);
         };
-        const dataframe::DataFrame fresh = engine_collect(scan::agg(
-            scan::group_by(scan::from_file(dstd::String(gz), dstd::String(idx)),
-                           {GroupKey::cat(), GroupKey::name()}),
-            specs));
+        const dataframe::DataFrame fresh =
+            engine_collect(views::detail::scan::agg(
+                views::detail::scan::group_by(
+                    views::detail::scan::from_file(dstd::String(gz),
+                                                   dstd::String(idx)),
+                    {GroupKey::cat(), GroupKey::name()}),
+                specs));
 
         // Lone aggregation branch: run_session routes it through the engine.
         SUBCASE("lone branch") {
@@ -287,10 +304,11 @@ TEST_SUITE("View") {
             run.execute().get();
             frames_equal(*d, fresh, {"cat", "name"});
             frames_equal(*d2,
-                         engine_collect(scan::agg(
-                             scan::group_by(scan::from_file(dstd::String(gz),
-                                                            dstd::String(idx)),
-                                            {GroupKey::pid()}),
+                         engine_collect(views::detail::scan::agg(
+                             views::detail::scan::group_by(
+                                 views::detail::scan::from_file(
+                                     dstd::String(gz), dstd::String(idx)),
+                                 {GroupKey::pid()}),
                              {{AggOp::Count, "", "n"}})),
                          {"pid"});
         }
@@ -320,12 +338,14 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto q = [&] {
-            return scan::agg(
-                scan::group_by(
-                    scan::from_file(dstd::String(gz), dstd::String(idx)),
+            return views::detail::scan::agg(
+                views::detail::scan::group_by(
+                    views::detail::scan::from_file(dstd::String(gz),
+                                                   dstd::String(idx)),
                     {GroupKey::rank()}),
                 {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
         };
-        frames_equal(groupmap_oracle(q()), engine_collect(q()), {"rank"});
+        frames_equal(gmoracle::groupmap_oracle(q()), engine_collect(q()),
+                     {"rank"});
     }
 }

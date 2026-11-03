@@ -12,17 +12,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::CmpOp;
-using dftracer::utils::dataframe::dictionary_encode;
-using dftracer::utils::dataframe::Encoding;
-using dftracer::utils::dataframe::eval;
-using dftracer::utils::dataframe::eval_many;
-using dftracer::utils::dataframe::Expr;
-using dftracer::utils::dataframe::expr_cmp;
-using dftracer::utils::dataframe::expr_col;
-using dftracer::utils::dataframe::Scalar;
-using dftracer::utils::dataframe::Series;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

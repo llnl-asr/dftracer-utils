@@ -13,10 +13,7 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::trace::EventRecord;
-using dftracer::utils::trace::PARSE_BATCH_BYTES;
-using dftracer::utils::trace::parse_buffer;
-using dftracer::utils::trace::strip_array_delimiters;
+using namespace dftracer::utils::trace;
 
 namespace {
 

@@ -11,8 +11,7 @@
 #include <latch>
 
 using namespace dftracer::utils;
-using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
-using dftracer::utils::utilities::fileio::compress::GzipMemberDecompressor;
+using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -55,7 +54,7 @@ TEST_SUITE("libdeflate_gzip") {
         for (int t = 0; t < THREADS; ++t)
             threads.emplace_back([&, t] {
                 start.arrive_and_wait();
-                GzipMemberDecompressor dec;
+                fileio::compress::GzipMemberDecompressor dec;
                 auto out =
                     dec.decompress_member(MEMBER, sizeof(MEMBER), want.size());
                 ok[static_cast<std::size_t>(t)] =
@@ -66,8 +65,8 @@ TEST_SUITE("libdeflate_gzip") {
     }
 
     TEST_CASE("round-trips a single member") {
-        GzipMemberCompressor comp;
-        GzipMemberDecompressor dec;
+        fileio::compress::GzipMemberCompressor comp;
+        fileio::compress::GzipMemberDecompressor dec;
         REQUIRE(comp.valid());
         REQUIRE(dec.valid());
 
@@ -84,8 +83,8 @@ TEST_SUITE("libdeflate_gzip") {
     }
 
     TEST_CASE("decodes concatenated members independently via in_bytes") {
-        GzipMemberCompressor comp;
-        GzipMemberDecompressor dec;
+        fileio::compress::GzipMemberCompressor comp;
+        fileio::compress::GzipMemberDecompressor dec;
 
         const auto a = make_payload(2000, 1);
         const auto b = make_payload(3000, 2);
@@ -123,8 +122,8 @@ TEST_SUITE("libdeflate_gzip") {
     }
 
     TEST_CASE("round-trips an empty payload") {
-        GzipMemberCompressor comp;
-        GzipMemberDecompressor dec;
+        fileio::compress::GzipMemberCompressor comp;
+        fileio::compress::GzipMemberDecompressor dec;
         auto member = comp.compress_member(nullptr, 0);
         REQUIRE(member.has_value());
         auto out = dec.decompress_member(member->data(), member->size(), 0);
@@ -133,8 +132,8 @@ TEST_SUITE("libdeflate_gzip") {
     }
 
     TEST_CASE("fails cleanly when the output buffer is too small") {
-        GzipMemberCompressor comp;
-        GzipMemberDecompressor dec;
+        fileio::compress::GzipMemberCompressor comp;
+        fileio::compress::GzipMemberDecompressor dec;
         const auto payload = make_payload(1024, 9);
         auto member = comp.compress_member(payload.data(), payload.size());
         REQUIRE(member.has_value());
@@ -146,7 +145,7 @@ TEST_SUITE("libdeflate_gzip") {
     }
 
     TEST_CASE("rejects non-gzip input") {
-        GzipMemberDecompressor dec;
+        fileio::compress::GzipMemberDecompressor dec;
         const dstd::Vector<std::uint8_t> junk(64, 0xAB);
         dstd::Vector<std::uint8_t> out(256);
         auto r =
@@ -158,7 +157,7 @@ TEST_SUITE("libdeflate_gzip") {
         const auto payload = make_payload(std::size_t{8} << 20, 7);
         const std::size_t before = root_live();
         {
-            GzipMemberCompressor comp(1);
+            fileio::compress::GzipMemberCompressor comp(1);
             dstd::Vector<std::uint8_t> member;
             REQUIRE(comp.compress_member_into(member, payload.data(),
                                               payload.size()));

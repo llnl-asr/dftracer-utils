@@ -30,7 +30,6 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
-namespace memory = dftracer::utils::memory;
 
 namespace {
 

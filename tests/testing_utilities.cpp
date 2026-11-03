@@ -75,7 +75,6 @@ size_t mb_to_b(double mb) { return static_cast<std::size_t>(mb * 1024 * 1024); }
 namespace dftu_utils_test {
 bool build_index(const dstd::String& gz, const dstd::String& index_dir,
                  std::size_t checkpoint_size) {
-    using dftracer::utils::Runtime;
     bool ok = false;
     Runtime rt(4);
     auto task = dftracer::utils::coro::with_scope(
@@ -170,7 +169,6 @@ bool compress_file_to_gzip(const dstd::String& input_file,
 bool compress_file_to_gzip_multimember(const dstd::String& input_file,
                                        const dstd::String& output_file,
                                        std::size_t member_bytes) {
-    using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
     if (member_bytes == 0) member_bytes = 4 * 1024 * 1024;
 
     auto text = dstd::fs::read_file(input_file);
@@ -179,7 +177,7 @@ bool compress_file_to_gzip_multimember(const dstd::String& input_file,
     dftu_utils_test::FileOut output(output_file);
     if (!output.is_open()) return false;
 
-    GzipMemberCompressor comp;
+    utilities::fileio::compress::GzipMemberCompressor comp;
     if (!comp.valid()) return false;
 
     // Accumulate whole lines so member boundaries land on newlines, matching
@@ -582,19 +580,15 @@ int compress_file_to_gzip_c(const char* input_file, const char* output_file) {
 
 namespace dftu_utils_test {
 
-namespace dfs_impl = dstd::fs;
-using dstd::Path;
-using dstd::PathView;
-
-dstd::Vector<ListedEntry> list_dir(PathView dir) {
+dstd::Vector<ListedEntry> list_dir(dstd::PathView dir) {
     dstd::Vector<ListedEntry> out;
-    auto handle = dfs_impl::Dir::open(dir);
+    auto handle = dstd::fs::Dir::open(dir);
     if (!handle) return out;
     auto entries = handle->entries();
     if (!entries) return out;
     for (const auto& e : *entries) {
         ListedEntry item;
-        item.path = Path(dir) / e.name;
+        item.path = dstd::Path(dir) / e.name;
         auto st = handle->stat(e.name);
         if (!st) continue;
         item.kind = st->kind;
@@ -604,25 +598,26 @@ dstd::Vector<ListedEntry> list_dir(PathView dir) {
     return out;
 }
 
-dstd::Vector<ListedEntry> walk_dir(PathView dir) {
+dstd::Vector<ListedEntry> walk_dir(dstd::PathView dir) {
     dstd::Vector<ListedEntry> out;
     bool at_root = true;
-    auto walked = dfs_impl::walk(dir, [&](PathView p, dfs_impl::FileKind kind) {
-        if (at_root) {
-            at_root = false;
-            return dfs_impl::WalkAction::Continue;
-        }
-        ListedEntry item;
-        item.path = Path(p);
-        item.kind = kind;
-        if (kind == dfs_impl::FileKind::File) {
-            auto st = dfs_impl::stat(p);
-            if (!st) return dfs_impl::WalkAction::Continue;
-            item.size = st->size;
-        }
-        out.push_back(std::move(item));
-        return dfs_impl::WalkAction::Continue;
-    });
+    auto walked =
+        dstd::fs::walk(dir, [&](dstd::PathView p, dstd::fs::FileKind kind) {
+            if (at_root) {
+                at_root = false;
+                return dstd::fs::WalkAction::Continue;
+            }
+            ListedEntry item;
+            item.path = dstd::Path(p);
+            item.kind = kind;
+            if (kind == dstd::fs::FileKind::File) {
+                auto st = dstd::fs::stat(p);
+                if (!st) return dstd::fs::WalkAction::Continue;
+                item.size = st->size;
+            }
+            out.push_back(std::move(item));
+            return dstd::fs::WalkAction::Continue;
+        });
     if (!walked) out.clear();
     std::sort(out.begin(), out.end(),
               [](const ListedEntry& a, const ListedEntry& b) {

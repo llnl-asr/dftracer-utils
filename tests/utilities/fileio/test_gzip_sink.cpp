@@ -14,8 +14,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::python::GzipSink;
-
 namespace {
 
 // Inflates a multi-member gzip; returns the bytes and each member's last byte.
@@ -61,7 +59,7 @@ TEST_CASE("GzipSink - pieces split mid-line") {
     }
     expected += "{\"unterminated\":1}";
     {
-        GzipSink sink(path, 6);
+        python::GzipSink sink(path, 6);
         for (std::size_t off = 0; off < expected.size(); off += 7777) {
             sink.write(dstd::StringView(expected).substr(off, 7777));
         }

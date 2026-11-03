@@ -13,15 +13,11 @@
 
 using namespace dftracer::utils;
 
-namespace df = dftracer::utils::dataframe;
-using dftracer::utils::duql::FoldAgg;
-using dftracer::utils::duql::FoldOp;
-using dftracer::utils::duql::GroupFold;
 using Cells = dstd::Vector<dstd::Optional<dstd::String>>;
 
 namespace {
 
-df::Series strs(const Cells& cells) {
+dataframe::Series strs(const Cells& cells) {
     dstd::Vector<dstd::StringView> v;
     dstd::Vector<std::uint8_t> valid((cells.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < cells.size(); ++i) {
@@ -29,15 +25,16 @@ df::Series strs(const Cells& cells) {
                                 : dstd::StringView());
         if (cells[i]) valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     }
-    return df::Series::strings(v, valid.data());
+    return dataframe::Series::strings(v, valid.data());
 }
 
-df::Series ints(const dstd::Vector<std::int64_t>& v) {
-    return df::Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
+dataframe::Series ints(const dstd::Vector<std::int64_t>& v) {
+    return dataframe::Series::flat_i64(v.data(),
+                                       static_cast<std::int64_t>(v.size()));
 }
 
-df::DataFrame batch(df::Series k, df::Series v) {
-    df::DataFrame f;
+dataframe::DataFrame batch(dataframe::Series k, dataframe::Series v) {
+    dataframe::DataFrame f;
     f.names = {"k", "v"};
     f.columns.push_back(std::move(k));
     f.columns.push_back(std::move(v));
@@ -45,26 +42,26 @@ df::DataFrame batch(df::Series k, df::Series v) {
 }
 
 template <class... Batches>
-df::DataFrame fold(df::DataType key_type, Batches... bs) {
-    FoldAgg a;
-    a.op = FoldOp::CountDistinct;
+dataframe::DataFrame fold(dataframe::DataType key_type, Batches... bs) {
+    duql::FoldAgg a;
+    a.op = duql::FoldOp::CountDistinct;
     a.in = 1;
-    a.type = df::scalar(df::TypeId::Int64);
-    GroupFold g({key_type}, {a});
+    a.type = dataframe::scalar(dataframe::TypeId::Int64);
+    duql::GroupFold g({key_type}, {a});
     (g.add(std::move(bs)), ...);
     return g.finish({"k", "d"});
 }
 
-dstd::Vector<std::int64_t> counts(const df::DataFrame& f) {
-    const df::Series& d = f.columns[1];
+dstd::Vector<std::int64_t> counts(const dataframe::DataFrame& f) {
+    const dataframe::Series& d = f.columns[1];
     return {d.data<std::int64_t>(), d.data<std::int64_t>() + d.length()};
 }
 
 }  // namespace
 
 TEST_CASE("count_distinct by a string key keeps first-seen order and nulls") {
-    const df::DataFrame out =
-        fold(df::scalar(df::TypeId::String),
+    const dataframe::DataFrame out =
+        fold(dataframe::scalar(dataframe::TypeId::String),
              batch(strs({"a", "b", "a", dstd::nullopt, "b", "a"}),
                    strs({"x", "y", "x", "z", dstd::nullopt, "w"})),
              batch(strs({"c", dstd::nullopt, "a", "b"}),
@@ -78,8 +75,8 @@ TEST_CASE("count_distinct by a string key keeps first-seen order and nulls") {
 }
 
 TEST_CASE("a string that spells the null key is its own group") {
-    const df::DataFrame out =
-        fold(df::scalar(df::TypeId::String),
+    const dataframe::DataFrame out =
+        fold(dataframe::scalar(dataframe::TypeId::String),
              batch(strs({dstd::String(1, '\0'), dstd::nullopt, ""}),
                    strs({"p", "q", "r"})));
     REQUIRE(out.num_rows() == 3);
@@ -87,8 +84,8 @@ TEST_CASE("a string that spells the null key is its own group") {
 }
 
 TEST_CASE("count_distinct over a JSON column reads values, not text") {
-    const df::DataFrame out =
-        fold(df::scalar(df::TypeId::String),
+    const dataframe::DataFrame out =
+        fold(dataframe::scalar(dataframe::TypeId::String),
              batch(strs({"a", "a", "a", "a"}),
                    strs({"1", "1.0", "\"1\"", dstd::nullopt}).as_json()));
     REQUIRE(out.num_rows() == 1);
@@ -96,8 +93,8 @@ TEST_CASE("count_distinct over a JSON column reads values, not text") {
 }
 
 TEST_CASE("count_distinct by an integer key takes the general path") {
-    const df::DataFrame out = fold(
-        df::scalar(df::TypeId::Int64),
+    const dataframe::DataFrame out = fold(
+        dataframe::scalar(dataframe::TypeId::Int64),
         batch(ints({2, 1, 2, 1, 3}), strs({"a", "a", "a", "b", dstd::nullopt})),
         batch(ints({3, 2}), strs({"c", "b"})));
     REQUIRE(out.num_rows() == 3);
@@ -109,14 +106,14 @@ TEST_CASE("count_distinct by an integer key takes the general path") {
 }
 
 TEST_CASE("a JSON batch and a plain batch share groups and distinct values") {
-    const df::DataFrame mixed = fold(
-        df::scalar(df::TypeId::String),
+    const dataframe::DataFrame mixed = fold(
+        dataframe::scalar(dataframe::TypeId::String),
         batch(strs({"a", "a\"b", "a", dstd::nullopt}),
               strs({"x", "q\"r", "x", "z"})),
         batch(strs({"\"a\"", "\"a\\\"b\"", dstd::nullopt, "\"c\""}).as_json(),
               strs({"\"x\"", "\"q\\\"r\"", "\"z\"", "\"x\""}).as_json()));
-    const df::DataFrame plain =
-        fold(df::scalar(df::TypeId::String),
+    const dataframe::DataFrame plain =
+        fold(dataframe::scalar(dataframe::TypeId::String),
              batch(strs({"a", "a\"b", "a", dstd::nullopt}),
                    strs({"x", "q\"r", "x", "z"})),
              batch(strs({"a", "a\"b", dstd::nullopt, "c"}),
@@ -130,8 +127,8 @@ TEST_CASE("a JSON batch and a plain batch share groups and distinct values") {
 }
 
 TEST_CASE("a JSON number and the same text stay distinct") {
-    const df::DataFrame out =
-        fold(df::scalar(df::TypeId::String),
+    const dataframe::DataFrame out =
+        fold(dataframe::scalar(dataframe::TypeId::String),
              batch(strs({"5", "\"5\"", "5"}).as_json(),
                    strs({"5", "\"5\"", "\"5\""}).as_json()),
              batch(strs({"5", "5"}), strs({"5", "7"})));

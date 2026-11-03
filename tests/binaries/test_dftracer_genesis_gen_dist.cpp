@@ -18,8 +18,6 @@
 
 using namespace dftracer::utils;
 
-using dftu_utils_test::ScopedTestDir;
-
 namespace {
 
 dstd::String binary() {
@@ -144,7 +142,7 @@ int run(const dstd::Vector<dstd::String>& args, dstd::String* out = nullptr) {
 TEST_CASE("a truncated run is skipped and the others are written") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_trunc");
+    dftu_utils_test::ScopedTestDir d("gen_dist_trunc");
     write_run(d.path() / "root", "good");
     const dstd::Path bad = write_run(d.path() / "root", "bad");
     REQUIRE(dstd::fs::resize_file(bad, dstd::fs::file_size(bad).value() / 2)
@@ -161,7 +159,7 @@ TEST_CASE("a truncated run is skipped and the others are written") {
 TEST_CASE("the output path must end with .pfw.gz") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_ext");
+    dftu_utils_test::ScopedTestDir d("gen_dist_ext");
     write_run(d.path(), "a");
     CHECK(run({d.str(), "-o", d.file("out.jsonl")}) != 0);
     CHECK_FALSE(dstd::fs::exists(d.file("out.jsonl")).value());
@@ -171,7 +169,7 @@ TEST_CASE(
     "output holds the same lines every time and concatenates like one run") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_det");
+    dftu_utils_test::ScopedTestDir d("gen_dist_det");
     write_run(d.path() / "a", "x");
     write_run(d.path() / "b", "y");
     const dstd::String a = dstd::String(d.file("a"));
@@ -200,7 +198,7 @@ TEST_CASE(
 TEST_CASE("members follow the member size, not the run") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_member");
+    dftu_utils_test::ScopedTestDir d("gen_dist_member");
     write_wide_run(d.path() / "root", "w", 300);
     const dstd::String root = dstd::String(d.file("root"));
     constexpr std::size_t MEMBER = 2048;
@@ -222,11 +220,9 @@ TEST_CASE("members follow the member size, not the run") {
 }
 
 TEST_CASE("records carry the run id and resolve run keys through the index") {
-    namespace ix = dftracer::utils::index;
-    using dftracer::utils::trace::views::View;
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_run_dict");
+    dftu_utils_test::ScopedTestDir d("gen_dist_run_dict");
     write_wide_run(d.path() / "root", "x", 20);
     write_wide_run(d.path() / "root", "y", 20);
     const dstd::String out = d.file("out.pfw.gz");
@@ -244,16 +240,18 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     }
     REQUIRE(records > 0);
 
-    ix::IndexerOptions o;
+    index::IndexerOptions o;
     o.index_dir = d.str();
-    auto indexer = ix::Indexer::open({dstd::String(dstd::StringView(out))}, o);
+    auto indexer =
+        index::Indexer::open({dstd::String(dstd::StringView(out))}, o);
     indexer.build();
     REQUIRE(indexer.files().size() == 1);
     CHECK(indexer.files()[0].schema == "genesis");
 
     const dstd::String index_path = d.file(".dftindex");
     auto rows = [&](const dstd::String& q) {
-        return View::from_file(dstd::String(out), dstd::String(index_path))
+        return trace::views::View::from_file(dstd::String(out),
+                                             dstd::String(index_path))
             .duql(q)
             .collect()
             .get()
@@ -266,7 +264,8 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     CHECK(rows("run -> runs.nodes == 1") == records);
     CHECK(rows(R"(run -> runs.papi_set == "set1")") == records);
 
-    const auto df = View::from_file(dstd::String(out), dstd::String(index_path))
+    const auto df = trace::views::View::from_file(dstd::String(out),
+                                                  dstd::String(index_path))
                         .duql(
                             "derive u = run -> runs.unique_input | select "
                             "path, u")
@@ -279,11 +278,11 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
         CHECK((v == "x" || v == "y"));
     }
 
-    const auto runs =
-        View::from_file(dstd::String(out), dstd::String(index_path))
-            .duql("from runs | where true")
-            .collect()
-            .get();
+    const auto runs = trace::views::View::from_file(dstd::String(out),
+                                                    dstd::String(index_path))
+                          .duql("from runs | where true")
+                          .collect()
+                          .get();
     CHECK(runs.num_rows() == 2);
     for (const char* name :
          {"run", "app", "system", "unique_input", "nodes", "ppn", "papi_set",
@@ -293,27 +292,26 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     }
 
     CHECK(rows(R"(gtype == "run")") == 0);
-    const auto run_records =
-        View::from_file(dstd::String(out), dstd::String(index_path))
-            .duql(R"(from all | where gtype == "run")")
-            .collect()
-            .get();
+    const auto run_records = trace::views::View::from_file(
+                                 dstd::String(out), dstd::String(index_path))
+                                 .duql(R"(from all | where gtype == "run")")
+                                 .collect()
+                                 .get();
     CHECK(run_records.num_rows() == 2);
     CHECK(run_records.column_index("summary.ok") >= 0);
 }
 
 TEST_CASE("a dftracer trace is still detected as dftracer") {
-    namespace ix = dftracer::utils::index;
-    ScopedTestDir d("gen_dist_detect_dft");
+    dftu_utils_test::ScopedTestDir d("gen_dist_detect_dft");
     const dstd::String trace = d.file("t.pfw.gz");
     dftu_utils_test::write_gz_trace(
         trace, R"({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
                R"("ts":1,"dur":5,"ph":"X"})"
                "\n");
-    ix::IndexerOptions o;
+    index::IndexerOptions o;
     o.index_dir = d.str();
     auto indexer =
-        ix::Indexer::open({dstd::String(dstd::StringView(trace))}, o);
+        index::Indexer::open({dstd::String(dstd::StringView(trace))}, o);
     indexer.build();
     REQUIRE(indexer.files().size() == 1);
     CHECK(indexer.files()[0].schema == "dftracer");
@@ -322,7 +320,7 @@ TEST_CASE("a dftracer trace is still detected as dftracer") {
 TEST_CASE("a run over its share is still written") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_retry");
+    dftu_utils_test::ScopedTestDir d("gen_dist_retry");
     const dstd::Path root = d.path() / "root";
     for (int i = 0; i < 6; ++i) write_run(root, "small" + dstd::to_string(i));
     // About 25 MB of path text: over the state of a 70 MB share, so the run
@@ -346,7 +344,7 @@ TEST_CASE("a run over its share is still written") {
 TEST_CASE("the run and func records follow every counter record") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_layout");
+    dftu_utils_test::ScopedTestDir d("gen_dist_layout");
     for (const dstd::String input : {"a", "b", "c"}) {
         const dstd::Path dir =
             d.path() / "root" / "app" / "sys" / input / "nodes_1" / "ppn_1";
@@ -392,7 +390,7 @@ TEST_CASE("the run and func records follow every counter record") {
 TEST_CASE("the shards of a sweep hold each run once") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_shard");
+    dftu_utils_test::ScopedTestDir d("gen_dist_shard");
     const dstd::Path root = d.path() / "root";
     for (int i = 0; i < 5; ++i) write_run(root, "in" + dstd::to_string(i));
     const dstd::Path off = root / "app" / "sys" / "off" / "nodes_1" / "ppn_1";
@@ -426,7 +424,7 @@ TEST_CASE("the shards of a sweep hold each run once") {
 TEST_CASE("a shard outside i/N with 0 <= i < N is refused") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_bad_shard");
+    dftu_utils_test::ScopedTestDir d("gen_dist_bad_shard");
     write_run(d.path() / "root", "in");
     for (const char* bad : {"2/2", "0/0", "1", "a/2", "1/2/3", "-1/2", "/2"}) {
         CAPTURE(bad);
@@ -438,7 +436,7 @@ TEST_CASE("a shard outside i/N with 0 <= i < N is refused") {
 TEST_CASE("the thread count does not change the output") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
-    ScopedTestDir d("gen_dist_threads");
+    dftu_utils_test::ScopedTestDir d("gen_dist_threads");
     const dstd::Path dir =
         d.path() / "root" / "app" / "sys" / "in" / "nodes_1" / "ppn_4";
     dstd::fs::create_directories(dir / "compacted").has_value();

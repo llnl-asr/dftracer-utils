@@ -85,9 +85,9 @@ static void populate_test_idx(const dstd::String& index_path,
                                     file_cat_bloom.num_entries());
 
     dftracer::utils::index::put_path(
-        writer, dftu_utils_test::IndexExtension::Bloom, "name");
+        writer, index::store::IndexExtension::Bloom, "name");
     dftracer::utils::index::put_path(
-        writer, dftu_utils_test::IndexExtension::Bloom, "cat");
+        writer, index::store::IndexExtension::Bloom, "cat");
     dftu_utils_test::mark_built(writer);
     dftu_utils_test::commit_test_build(writer);
 }
@@ -287,7 +287,7 @@ TEST_SUITE("ViewPlannerUtility") {
             dftu_utils_test::put_chunk_bloom(writer, 0, "fhash", blob,
                                              fhash_bloom.num_entries());
             dftracer::utils::index::put_path(
-                writer, dftu_utils_test::IndexExtension::Bloom, "fhash");
+                writer, index::store::IndexExtension::Bloom, "fhash");
             dftu_utils_test::mark_built(writer);
             dftu_utils_test::commit_test_build(writer);
         }

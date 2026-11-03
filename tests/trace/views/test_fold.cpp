@@ -24,12 +24,11 @@ using namespace dftu_utils_test;
 using namespace test_view_common;
 
 using namespace dftracer::utils::trace::views::detail;
-using dstd::StringIntern;
 
 namespace {
 
-FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
-                             bool needs_args,
+FoldEvent extract_fold_event(simdjson::dom::element root,
+                             dstd::StringIntern& intern, bool needs_args,
                              const dstd::Vector<dstd::String>* extra = nullptr,
                              bool capture_schema = false) {
     FoldEvent ev;
@@ -80,7 +79,7 @@ TEST_SUITE("Fold") {
     // produced them. Extract from A, then reuse the SAME parser on B (which
     // invalidates A's buffer), and A must still resolve correctly.
     TEST_CASE("an extracted event outlives the parser buffer") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         simdjson::dom::parser parser;
 
         dstd::String a = padded(
@@ -116,7 +115,7 @@ TEST_SUITE("Fold") {
     }
 
     TEST_CASE("args are captured only when asked, fhash always") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String line = padded(
             R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"fhash":"fh1","size":4096,"mode":"r"}})");
@@ -153,7 +152,7 @@ TEST_SUITE("Fold") {
     // Integer args are kept as int64, not double, so a value above 2^53
     // survives exactly; a fractional value stays a double.
     TEST_CASE("integer args wider than 2^53 keep exact precision") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         simdjson::dom::parser parser;
         // 2^53 + 1 is the smallest positive integer a double cannot represent.
         dstd::String line = padded(
@@ -201,7 +200,7 @@ TEST_SUITE("Fold") {
         ViewDefinition vdef;
         vdef.include_metadata = false;
 
-        StringIntern intern;
+        dstd::StringIntern intern;
         CountingFold cf;
         std::array<Fold*, 1> folds{&cf};
         auto stats = fuse(plan, vdef, folds, intern).get();
@@ -242,9 +241,9 @@ TEST_SUITE("Fold") {
         // A minimal dictionary fold: collects (type -> {name -> value}) from
         // metadata FoldEvents.
         struct DictProbe : Fold {
-            const StringIntern* in;
+            const dstd::StringIntern* in;
             dstd::Map<dstd::String, dstd::Pair<dstd::String, dstd::String>> got;
-            explicit DictProbe(const StringIntern& i) : in(&i) {}
+            explicit DictProbe(const dstd::StringIntern& i) : in(&i) {}
             bool accepts(const ScanShape&) const override { return true; }
             bool needs_args() const override { return true; }
             dstd::UniquePtr<Fold> slice() const override {
@@ -288,7 +287,7 @@ TEST_SUITE("Fold") {
         ViewDefinition vdef;
         vdef.include_metadata = true;
 
-        StringIntern intern;
+        dstd::StringIntern intern;
         DictProbe probe(intern);
         std::array<Fold*, 1> folds{&probe};
         fuse(plan, vdef, folds, intern).get();
@@ -305,7 +304,7 @@ TEST_SUITE("Fold") {
     // record type is name_id, and args carries the registered name and its hash
     // value. Confirm they survive extraction so the fold need not re-parse.
     TEST_CASE("a metadata event's type, name and value are captured") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String line = padded(
             R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"hh9","name":"/data/x.bin","value":"fh7"}})");
@@ -336,7 +335,7 @@ TEST_SUITE("Fold") {
     }
 
     TEST_CASE("absent fields stay at their sentinels") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         simdjson::dom::parser parser;
         // No cat, no args.
         dstd::String line =
@@ -346,15 +345,15 @@ TEST_SUITE("Fold") {
         REQUIRE_FALSE(r.error());
         FoldEvent e = extract_fold_event(r.value_unsafe(), intern, true);
 
-        CHECK(e.cat_id == StringIntern::NO_ID);
-        CHECK(e.fhash_id == StringIntern::NO_ID);
-        CHECK(e.hhash_id == StringIntern::NO_ID);
+        CHECK(e.cat_id == dstd::StringIntern::NO_ID);
+        CHECK(e.fhash_id == dstd::StringIntern::NO_ID);
+        CHECK(e.hhash_id == dstd::StringIntern::NO_ID);
         CHECK_FALSE(e.has_dur);
         CHECK(e.args.empty());
     }
 
     TEST_CASE("nested and array args flatten to dotted keys, bools to 0/1") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String line = padded(
             R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"args":{"dur":{"p99":7000},"hosts":["a","b"],"ok":true,"no":false,"nil":null,"x":[{"y":1.5}]}})");
@@ -381,7 +380,7 @@ TEST_SUITE("Fold") {
     }
 
     TEST_CASE("an extra field without the args. prefix resolves under args") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String line = padded(
             R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"dur":42,"args":{"dur":{"p99":7000},"type":"arg"}})");
@@ -400,7 +399,7 @@ TEST_SUITE("Fold") {
     }
 
     TEST_CASE("schema leaves list every array element") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String line = padded(
             R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"args":{"hosts":["a","b","c"]}})");
@@ -419,7 +418,7 @@ TEST_SUITE("Fold") {
 
     TEST_CASE(
         "a reused buffer slot decodes as a fresh event and keeps capacity") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String wide = padded(
             R"({"ph":"X","name":"read","cat":"POSIX","pid":7,"tid":9,"ts":100,"dur":5,"args":{"a":1,"b":2,"c":"x","d":null,"e":true,"f":3.5}})");

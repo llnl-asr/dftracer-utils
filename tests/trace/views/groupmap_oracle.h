@@ -48,23 +48,6 @@
 
 namespace gmoracle {
 
-namespace detail = dftracer::utils::trace::views::detail;
-namespace dataframe = dftracer::utils::dataframe;
-using detail::AggSchema;
-using detail::GROUP_SEP;
-using detail::SET_SEP;
-using detail::ViewPlan;
-using dftracer::utils::dataframe::FieldNum;
-using dftracer::utils::dataframe::FieldStat;
-using dftracer::utils::dataframe::FieldStatDomain;
-using dftracer::utils::dstd::StringIntern;
-using dftracer::utils::trace::RecordPhase;
-using dftracer::utils::trace::views::AggOp;
-using dftracer::utils::trace::views::AggSpec;
-using dftracer::utils::trace::views::GroupKey;
-using dftracer::utils::trace::views::ViewDefinition;
-namespace stats = dftracer::utils::dataframe;
-
 struct ArgMaxState {
     double by = 0;
     dftracer::utils::dstd::String repr;
@@ -74,14 +57,18 @@ struct ArgMaxState {
 struct AggAccum {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     std::uint64_t count = 0;
-    dftracer::utils::dstd::Vector<FieldStat> fields;
+    dftracer::utils::dstd::Vector<dftracer::utils::dataframe::FieldStat> fields;
     dftracer::utils::dstd::Vector<ArgMaxState> argmax;
-    dftracer::utils::dstd::Vector<stats::DDSketch> sketches;
+    dftracer::utils::dstd::Vector<dftracer::utils::dataframe::DDSketch>
+        sketches;
     dftracer::utils::dstd::Vector<
         dftracer::utils::dstd::Set<dftracer::utils::dstd::String>>
         sets;
-    dftracer::utils::dstd::Map<dftracer::utils::dstd::String, FieldStat> dyn;
-    dftracer::utils::dstd::Map<dftracer::utils::dstd::String, stats::DDSketch>
+    dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
+                               dftracer::utils::dataframe::FieldStat>
+        dyn;
+    dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
+                               dftracer::utils::dataframe::DDSketch>
         dyn_sketches;
     dftracer::utils::dstd::HashMap<std::uint64_t, std::int64_t> occ_deltas;
     std::uint64_t occ_cell_us = 0;
@@ -97,38 +84,39 @@ using GroupMap =
 inline constexpr dftracer::utils::dstd::StringView NULL_KEY{"\0", 1};
 
 template <class Src, class Out>
-void append_group_dim(Out& out, const Src& src, const GroupKey& gk) {
+void append_group_dim(Out& out, const Src& src,
+                      const dftracer::utils::trace::views::GroupKey& gk) {
     dftracer::utils::dstd::String d;
     switch (gk.kind) {
-        case GroupKey::Kind::Name:
+        case dftracer::utils::trace::views::GroupKey::Kind::Name:
             src.append_value(d, "name");
             break;
-        case GroupKey::Kind::Cat: {
+        case dftracer::utils::trace::views::GroupKey::Kind::Cat: {
             const std::size_t start = d.size();
             src.append_value(d, "cat");
             ::dftracer::utils::common::detail::lower_ascii(d, start);
             break;
         }
-        case GroupKey::Kind::Pid:
+        case dftracer::utils::trace::views::GroupKey::Kind::Pid:
             src.append_value(d, "pid");
             break;
-        case GroupKey::Kind::Tid:
+        case dftracer::utils::trace::views::GroupKey::Kind::Tid:
             src.append_value(d, "tid");
             break;
-        case GroupKey::Kind::Fhash:
+        case dftracer::utils::trace::views::GroupKey::Kind::Fhash:
             if (!src.append_arg(d, "fhash")) d += NULL_KEY;
             break;
-        case GroupKey::Kind::FilePath:
-        case GroupKey::Kind::FileName:
+        case dftracer::utils::trace::views::GroupKey::Kind::FilePath:
+        case dftracer::utils::trace::views::GroupKey::Kind::FileName:
             src.append_arg(d, "fhash");
             break;
-        case GroupKey::Kind::Hhash:
+        case dftracer::utils::trace::views::GroupKey::Kind::Hhash:
             if (!src.append_arg(d, "hhash")) d += NULL_KEY;
             break;
-        case GroupKey::Kind::HostName:
+        case dftracer::utils::trace::views::GroupKey::Kind::HostName:
             src.append_arg(d, "hhash");
             break;
-        case GroupKey::Kind::IoCat: {
+        case dftracer::utils::trace::views::GroupKey::Kind::IoCat: {
             char buf[8];
             char* p = dftracer::utils::dstd::to_chars_i64(
                 buf, buf + sizeof(buf),
@@ -137,19 +125,19 @@ void append_group_dim(Out& out, const Src& src, const GroupKey& gk) {
             d.append(buf, static_cast<std::size_t>(p - buf));
             break;
         }
-        case GroupKey::Kind::AccPat:
+        case dftracer::utils::trace::views::GroupKey::Kind::AccPat:
             d.push_back('0');
             break;
-        case GroupKey::Kind::Rank:
+        case dftracer::utils::trace::views::GroupKey::Kind::Rank:
             src.append_value(d, "pid");
             break;
-        case GroupKey::Kind::Arg:
+        case dftracer::utils::trace::views::GroupKey::Kind::Arg:
             if (!src.append_arg(d, gk.arg)) d += NULL_KEY;
             break;
-        case GroupKey::Kind::Field:
+        case dftracer::utils::trace::views::GroupKey::Kind::Field:
             if (!src.append_value(d, gk.arg)) d += NULL_KEY;
             break;
-        case GroupKey::Kind::Expr:
+        case dftracer::utils::trace::views::GroupKey::Kind::Expr:
             // The oracle predates computed keys; no parity case uses one.
             break;
     }
@@ -157,8 +145,8 @@ void append_group_dim(Out& out, const Src& src, const GroupKey& gk) {
 }
 
 template <class Src>
-dftracer::utils::dstd::String group_dim_str(const Src& src,
-                                            const GroupKey& gk) {
+dftracer::utils::dstd::String group_dim_str(
+    const Src& src, const dftracer::utils::trace::views::GroupKey& gk) {
     dftracer::utils::dstd::String s;
     append_group_dim(s, src, gk);
     return s;
@@ -166,29 +154,33 @@ dftracer::utils::dstd::String group_dim_str(const Src& src,
 
 template <class Src>
 void fold_numeric_args_t(AggAccum& a, const Src& src, bool want_sketch) {
-    namespace agg = dftracer::utils::index::schemas::dft::agg;
     auto feed = [&](dftracer::utils::dstd::StringView key, double num) {
         a.dyn[dftracer::utils::dstd::String(key)].add(num);
         if (want_sketch)
             a.dyn_sketches[dftracer::utils::dstd::String(key)].add(num);
     };
-    if (auto sz = detail::derived_size_t(src)) feed("size", *sz);
-    src.for_each_numeric_arg(
-        [&](dftracer::utils::dstd::StringView key, double num) {
-            if (agg::is_reserved_arg(key) || agg::is_preagg_suffix(key)) return;
-            feed(key, num);
-        });
+    if (auto sz = dftracer::utils::trace::views::detail::derived_size_t(src))
+        feed("size", *sz);
+    src.for_each_numeric_arg([&](dftracer::utils::dstd::StringView key,
+                                 double num) {
+        if (dftracer::utils::index::schemas::dft::agg::is_reserved_arg(key) ||
+            dftracer::utils::index::schemas::dft::agg::is_preagg_suffix(key))
+            return;
+        feed(key, num);
+    });
 }
 
 template <class Src>
-void fold_event_over(GroupMap& map, const Src& src, const ViewPlan& plan,
-                     dftracer::utils::dstd::String& keybuf) {
-    const AggSchema& sch = *plan.schema;
+void fold_event_over(
+    GroupMap& map, const Src& src,
+    const dftracer::utils::trace::views::detail::ViewPlan& plan,
+    dftracer::utils::dstd::String& keybuf) {
+    const dftracer::utils::trace::views::detail::AggSchema& sch = *plan.schema;
     keybuf.clear();
     std::int64_t bucket = 0;
     const bool has_bucket = plan.time_bucket_us > 0;
     if (has_bucket) {
-        auto ts = detail::agg_field_t(src, "ts");
+        auto ts = dftracer::utils::trace::views::detail::agg_field_t(src, "ts");
         if (!ts) return;
         const auto interval = static_cast<double>(plan.time_bucket_us);
         const auto w = static_cast<std::int64_t>(plan.time_bucket_us);
@@ -199,11 +191,11 @@ void fold_event_over(GroupMap& map, const Src& src, const ViewPlan& plan,
         char b[24];
         char* p = dftracer::utils::dstd::to_chars_i64(b, b + sizeof(b), bucket);
         keybuf.append(b, static_cast<std::size_t>(p - b));
-        keybuf += GROUP_SEP;
+        keybuf += dftracer::utils::trace::views::detail::GROUP_SEP;
     }
     for (const auto& gk : plan.group_by) {
         append_group_dim(keybuf, src, gk);
-        keybuf += GROUP_SEP;
+        keybuf += dftracer::utils::trace::views::detail::GROUP_SEP;
     }
 
     auto it = map.find(keybuf);
@@ -244,7 +236,8 @@ void fold_event_over(GroupMap& map, const Src& src, const ViewPlan& plan,
     }
 
     for (std::size_t fi = 0; fi < sch.fields.size(); ++fi) {
-        auto v = detail::agg_field_typed_t(src, sch.fields[fi]);
+        auto v = dftracer::utils::trace::views::detail::agg_field_typed_t(
+            src, sch.fields[fi]);
         if (!v) continue;
         const int sk = sch.field_sketch[fi];
         if (sch.field_scaled[fi] && plan.time_scale != 1.0) {
@@ -260,7 +253,8 @@ void fold_event_over(GroupMap& map, const Src& src, const ViewPlan& plan,
     for (std::size_t i = 0; i < plan.agg.size(); ++i) {
         const int slot = sch.spec_argmax[i];
         if (slot < 0) continue;
-        auto by = detail::agg_field_t(src, plan.agg[i].by);
+        auto by = dftracer::utils::trace::views::detail::agg_field_t(
+            src, plan.agg[i].by);
         if (!by) continue;
         auto& am = a.argmax[slot];
         if (!am.has || *by > am.by) {
@@ -279,9 +273,10 @@ void fold_event_over(GroupMap& map, const Src& src, const ViewPlan& plan,
     if (plan.auto_numeric_metrics) fold_numeric_args_t(a, src, sch.dyn_sketch);
 }
 
-inline void merge_accum(AggAccum& da, const AggAccum& sa,
-                        const ViewPlan& plan) {
-    const AggSchema& sch = *plan.schema;
+inline void merge_accum(
+    AggAccum& da, const AggAccum& sa,
+    const dftracer::utils::trace::views::detail::ViewPlan& plan) {
+    const dftracer::utils::trace::views::detail::AggSchema& sch = *plan.schema;
     if (da.count == 0) {
         da.keys = sa.keys;
         da.fields.resize(sch.fields.size());
@@ -315,8 +310,9 @@ inline void merge_accum(AggAccum& da, const AggAccum& sa,
     }
 }
 
-inline void merge_maps(GroupMap& dst, const GroupMap& src,
-                       const ViewPlan& plan) {
+inline void merge_maps(
+    GroupMap& dst, const GroupMap& src,
+    const dftracer::utils::trace::views::detail::ViewPlan& plan) {
     for (const auto& [k, sa] : src) merge_accum(dst[k], sa, plan);
 }
 
@@ -333,12 +329,13 @@ struct HarvestMaps {
     dftracer::utils::dstd::HashMap<std::uint64_t, dftracer::utils::dstd::String>
         rank;   // pid -> rank
     dftracer::utils::dstd::String resolve(
-        GroupKey::Kind kind, const dftracer::utils::dstd::String& v) const {
-        if (kind == GroupKey::Kind::FilePath) {
+        dftracer::utils::trace::views::GroupKey::Kind kind,
+        const dftracer::utils::dstd::String& v) const {
+        if (kind == dftracer::utils::trace::views::GroupKey::Kind::FilePath) {
             auto it = fpath.find(v);
             return it != fpath.end() ? it->second : v;
         }
-        if (kind == GroupKey::Kind::FileName) {
+        if (kind == dftracer::utils::trace::views::GroupKey::Kind::FileName) {
             auto it = fpath.find(v);
             const dftracer::utils::dstd::String& p =
                 it != fpath.end() ? it->second : v;
@@ -347,11 +344,11 @@ struct HarvestMaps {
                        ? p
                        : p.substr(slash + 1);
         }
-        if (kind == GroupKey::Kind::HostName) {
+        if (kind == dftracer::utils::trace::views::GroupKey::Kind::HostName) {
             auto it = host.find(v);
             return it != host.end() ? it->second : v;
         }
-        if (kind == GroupKey::Kind::Rank) {
+        if (kind == dftracer::utils::trace::views::GroupKey::Kind::Rank) {
             auto it = rank.find(
                 dftracer::utils::dstd::from_chars<std::uint64_t>(v).value());
             return it != rank.end() ? it->second : v;
@@ -360,18 +357,25 @@ struct HarvestMaps {
     }
 };
 
-inline void resolve_group_keys(GroupMap& map, const ViewPlan& plan,
-                               const HarvestMaps& maps) {
+inline void resolve_group_keys(
+    GroupMap& map, const dftracer::utils::trace::views::detail::ViewPlan& plan,
+    const HarvestMaps& maps) {
     const bool needs_resolve = std::any_of(
         plan.group_by.begin(), plan.group_by.end(), [](const auto& g) {
-            return g.kind == GroupKey::Kind::FilePath ||
-                   g.kind == GroupKey::Kind::FileName ||
-                   g.kind == GroupKey::Kind::HostName ||
-                   g.kind == GroupKey::Kind::Rank;
+            return g.kind == dftracer::utils::trace::views::GroupKey::Kind::
+                                 FilePath ||
+                   g.kind == dftracer::utils::trace::views::GroupKey::Kind::
+                                 FileName ||
+                   g.kind == dftracer::utils::trace::views::GroupKey::Kind::
+                                 HostName ||
+                   g.kind ==
+                       dftracer::utils::trace::views::GroupKey::Kind::Rank;
         });
     const bool any_transform = std::any_of(
-        plan.group_by.begin(), plan.group_by.end(),
-        [](const auto& g) { return g.transform != GroupKey::Transform::None; });
+        plan.group_by.begin(), plan.group_by.end(), [](const auto& g) {
+            return g.transform !=
+                   dftracer::utils::trace::views::GroupKey::Transform::None;
+        });
     if (!needs_resolve && !any_transform) return;
     const std::size_t off = plan.time_bucket_us > 0 ? 1 : 0;
     GroupMap out;
@@ -383,14 +387,14 @@ inline void resolve_group_keys(GroupMap& map, const ViewPlan& plan,
             if (idx >= accum.keys.size()) continue;
             dftracer::utils::dstd::String v =
                 maps.resolve(plan.group_by[j].kind, std::move(accum.keys[idx]));
-            accum.keys[idx] =
-                dftracer::utils::dstd::String(detail::apply_group_transform(
+            accum.keys[idx] = dftracer::utils::dstd::String(
+                dftracer::utils::trace::views::detail::apply_group_transform(
                     plan.group_by[j], dftracer::utils::dstd::String(v)));
         }
         newkey.clear();
         for (const auto& part : accum.keys) {
             newkey += part;
-            newkey += GROUP_SEP;
+            newkey += dftracer::utils::trace::views::detail::GROUP_SEP;
         }
         merge_accum(out[newkey], accum, plan);
     }
@@ -430,171 +434,191 @@ inline OccSummary occupancy_summary(const AggAccum& a) {
     return o;
 }
 
-inline double finalize_value(const AggAccum& a, const ViewPlan& plan,
-                             std::size_t i) {
-    const AggSchema& sch = *plan.schema;
+inline double finalize_value(
+    const AggAccum& a,
+    const dftracer::utils::trace::views::detail::ViewPlan& plan,
+    std::size_t i) {
+    const dftracer::utils::trace::views::detail::AggSchema& sch = *plan.schema;
     const auto& spec = plan.agg[i];
     const int fi = sch.spec_field[i];
-    const FieldStat* fs = fi >= 0 ? &a.fields[fi] : nullptr;
+    const dftracer::utils::dataframe::FieldStat* fs =
+        fi >= 0 ? &a.fields[fi] : nullptr;
     const double N = static_cast<double>(a.count);
     switch (spec.op) {
-        case AggOp::Count:
+        case dftracer::utils::trace::views::AggOp::Count:
             return spec.field.empty() ? N
                                       : (fs ? static_cast<double>(fs->n) : 0.0);
-        case AggOp::Sum:
+        case dftracer::utils::trace::views::AggOp::Sum:
             return fs ? fs->sum : 0.0;
-        case AggOp::Min:
+        case dftracer::utils::trace::views::AggOp::Min:
             return fs ? fs->min : 0.0;
-        case AggOp::Max:
+        case dftracer::utils::trace::views::AggOp::Max:
             return fs ? fs->max : 0.0;
-        case AggOp::SumSq:
+        case dftracer::utils::trace::views::AggOp::SumSq:
             return fs ? fs->sumsq() : 0.0;
-        case AggOp::Mean:
+        case dftracer::utils::trace::views::AggOp::Mean:
             return fs ? fs->mean() : 0.0;
-        case AggOp::Var:
+        case dftracer::utils::trace::views::AggOp::Var:
             return fs ? fs->variance(true) : 0.0;
-        case AggOp::Std:
+        case dftracer::utils::trace::views::AggOp::Std:
             return fs ? fs->stddev(true) : 0.0;
-        case AggOp::Pct: {
+        case dftracer::utils::trace::views::AggOp::Pct: {
             const int sk = fi >= 0 ? sch.field_sketch[fi] : -1;
             return sk >= 0 ? a.sketches[sk].quantile(spec.q) : 0.0;
         }
-        case AggOp::Skew:
+        case dftracer::utils::trace::views::AggOp::Skew:
             return fs ? fs->skewness() : 0.0;
-        case AggOp::Kurt:
+        case dftracer::utils::trace::views::AggOp::Kurt:
             return fs ? fs->kurtosis() : 0.0;
-        case AggOp::ArgMax:
-        case AggOp::Hist:
-        case AggOp::SetUnion:
+        case dftracer::utils::trace::views::AggOp::ArgMax:
+        case dftracer::utils::trace::views::AggOp::Hist:
+        case dftracer::utils::trace::views::AggOp::SetUnion:
             return 0.0;
-        case AggOp::Busy:
+        case dftracer::utils::trace::views::AggOp::Busy:
             return static_cast<double>(occupancy_summary(a).busy);
-        case AggOp::Concurrency: {
+        case dftracer::utils::trace::views::AggOp::Concurrency: {
             const OccSummary o = occupancy_summary(a);
             return o.busy ? static_cast<double>(o.total) /
                                 static_cast<double>(o.busy)
                           : 0.0;
         }
-        case AggOp::Utilization: {
+        case dftracer::utils::trace::views::AggOp::Utilization: {
             const OccSummary o = occupancy_summary(a);
             return (o.busy && o.span) ? static_cast<double>(o.busy) /
                                             static_cast<double>(o.span)
                                       : 0.0;
         }
-        case AggOp::Active:
+        case dftracer::utils::trace::views::AggOp::Active:
             return static_cast<double>(occupancy_summary(a).active);
     }
     return 0.0;
 }
 
-inline FieldNum finalize_value_typed(const AggAccum& a, const ViewPlan& plan,
-                                     std::size_t i) {
-    const AggSchema& sch = *plan.schema;
+inline dftracer::utils::dataframe::FieldNum finalize_value_typed(
+    const AggAccum& a,
+    const dftracer::utils::trace::views::detail::ViewPlan& plan,
+    std::size_t i) {
+    const dftracer::utils::trace::views::detail::AggSchema& sch = *plan.schema;
     const auto& spec = plan.agg[i];
     const int fi = sch.spec_field[i];
-    const FieldStat* fs = fi >= 0 ? &a.fields[fi] : nullptr;
-    auto exact = [&](std::int64_t bits, double dbl) -> FieldNum {
-        if (!fs) return FieldNum::of(dbl);
+    const dftracer::utils::dataframe::FieldStat* fs =
+        fi >= 0 ? &a.fields[fi] : nullptr;
+    auto exact = [&](std::int64_t bits,
+                     double dbl) -> dftracer::utils::dataframe::FieldNum {
+        if (!fs) return dftracer::utils::dataframe::FieldNum::of(dbl);
         switch (fs->domain) {
-            case FieldStatDomain::I64:
-                return FieldNum::of(bits);
-            case FieldStatDomain::U64:
-                return FieldNum::of(std::bit_cast<std::uint64_t>(bits));
+            case dftracer::utils::dataframe::FieldStatDomain::I64:
+                return dftracer::utils::dataframe::FieldNum::of(bits);
+            case dftracer::utils::dataframe::FieldStatDomain::U64:
+                return dftracer::utils::dataframe::FieldNum::of(
+                    std::bit_cast<std::uint64_t>(bits));
             default:
-                return FieldNum::of(dbl);
+                return dftracer::utils::dataframe::FieldNum::of(dbl);
         }
     };
     switch (spec.op) {
-        case AggOp::Count:
-            return FieldNum::of(static_cast<std::int64_t>(
-                spec.field.empty() ? a.count : (fs ? fs->n : 0)));
-        case AggOp::Sum:
-            return fs ? exact(fs->esum, fs->sum) : FieldNum::of(0.0);
-        case AggOp::Min:
-            return fs ? exact(fs->emin, fs->min) : FieldNum::of(0.0);
-        case AggOp::Max:
-            return fs ? exact(fs->emax, fs->max) : FieldNum::of(0.0);
+        case dftracer::utils::trace::views::AggOp::Count:
+            return dftracer::utils::dataframe::FieldNum::of(
+                static_cast<std::int64_t>(
+                    spec.field.empty() ? a.count : (fs ? fs->n : 0)));
+        case dftracer::utils::trace::views::AggOp::Sum:
+            return fs ? exact(fs->esum, fs->sum)
+                      : dftracer::utils::dataframe::FieldNum::of(0.0);
+        case dftracer::utils::trace::views::AggOp::Min:
+            return fs ? exact(fs->emin, fs->min)
+                      : dftracer::utils::dataframe::FieldNum::of(0.0);
+        case dftracer::utils::trace::views::AggOp::Max:
+            return fs ? exact(fs->emax, fs->max)
+                      : dftracer::utils::dataframe::FieldNum::of(0.0);
         default:
-            return FieldNum::of(finalize_value(a, plan, i));
+            return dftracer::utils::dataframe::FieldNum::of(
+                finalize_value(a, plan, i));
     }
 }
 
-inline dftracer::utils::dstd::String finalize_set(const AggAccum& a,
-                                                  const ViewPlan& plan,
-                                                  std::size_t i) {
+inline dftracer::utils::dstd::String finalize_set(
+    const AggAccum& a,
+    const dftracer::utils::trace::views::detail::ViewPlan& plan,
+    std::size_t i) {
     const int si = plan.schema->spec_set[i];
     if (si < 0 || static_cast<std::size_t>(si) >= a.sets.size()) return {};
     dftracer::utils::dstd::String out;
     for (const auto& v : a.sets[si]) {
-        if (!out.empty()) out.push_back(SET_SEP);
+        if (!out.empty())
+            out.push_back(dftracer::utils::trace::views::detail::SET_SEP);
         out += v;
     }
     return out;
 }
 
-inline dftracer::utils::dstd::Vector<stats::HistogramBin> finalize_hist(
-    const AggAccum& a, const ViewPlan& plan, std::size_t i) {
-    const AggSchema& sch = *plan.schema;
+inline dftracer::utils::dstd::Vector<dftracer::utils::dataframe::HistogramBin>
+finalize_hist(const AggAccum& a,
+              const dftracer::utils::trace::views::detail::ViewPlan& plan,
+              std::size_t i) {
+    const dftracer::utils::trace::views::detail::AggSchema& sch = *plan.schema;
     const int fi = sch.spec_field[i];
     const int sk = fi >= 0 ? sch.field_sketch[fi] : -1;
     if (sk < 0) return {};
     return a.sketches[sk].bins();
 }
 
-inline double reduce_dyn(const FieldStat& fs, AggOp op, double) {
+inline double reduce_dyn(const dftracer::utils::dataframe::FieldStat& fs,
+                         dftracer::utils::trace::views::AggOp op, double) {
     switch (op) {
-        case AggOp::Count:
+        case dftracer::utils::trace::views::AggOp::Count:
             return static_cast<double>(fs.n);
-        case AggOp::Sum:
+        case dftracer::utils::trace::views::AggOp::Sum:
             return fs.sum;
-        case AggOp::Min:
+        case dftracer::utils::trace::views::AggOp::Min:
             return fs.n ? fs.min : 0.0;
-        case AggOp::Max:
+        case dftracer::utils::trace::views::AggOp::Max:
             return fs.n ? fs.max : 0.0;
-        case AggOp::SumSq:
+        case dftracer::utils::trace::views::AggOp::SumSq:
             return fs.sumsq();
-        case AggOp::Mean:
+        case dftracer::utils::trace::views::AggOp::Mean:
             return fs.mean();
-        case AggOp::Var:
+        case dftracer::utils::trace::views::AggOp::Var:
             return fs.variance(true);
-        case AggOp::Std:
+        case dftracer::utils::trace::views::AggOp::Std:
             return fs.stddev(true);
-        case AggOp::Skew:
+        case dftracer::utils::trace::views::AggOp::Skew:
             return fs.skewness();
-        case AggOp::Kurt:
+        case dftracer::utils::trace::views::AggOp::Kurt:
             return fs.kurtosis();
         default:
             return 0.0;
     }
 }
 
-inline dataframe::DataFrame to_batch(const GroupMap& map,
-                                     const ViewPlan& plan) {
+inline dftracer::utils::dataframe::DataFrame to_batch(
+    const GroupMap& map,
+    const dftracer::utils::trace::views::detail::ViewPlan& plan) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> group_cols,
         value_cols, text_cols, hist_cols;
     if (plan.time_bucket_us > 0) group_cols.push_back("time_bucket");
     for (const auto& gk : plan.group_by)
-        group_cols.push_back(
-            dftracer::utils::dstd::String(detail::group_col_name(gk)));
+        group_cols.push_back(dftracer::utils::dstd::String(
+            dftracer::utils::trace::views::detail::group_col_name(gk)));
     const bool count_col = plan.agg.empty();
     if (count_col) {
         value_cols.push_back("count");
     } else {
         for (const auto& spec : plan.agg) {
-            if (spec.op == AggOp::ArgMax || spec.op == AggOp::SetUnion)
-                text_cols.push_back(
-                    dftracer::utils::dstd::String(detail::agg_col_name(spec)));
-            else if (spec.op == AggOp::Hist)
-                hist_cols.push_back(
-                    dftracer::utils::dstd::String(detail::agg_col_name(spec)));
+            if (spec.op == dftracer::utils::trace::views::AggOp::ArgMax ||
+                spec.op == dftracer::utils::trace::views::AggOp::SetUnion)
+                text_cols.push_back(dftracer::utils::dstd::String(
+                    dftracer::utils::trace::views::detail::agg_col_name(spec)));
+            else if (spec.op == dftracer::utils::trace::views::AggOp::Hist)
+                hist_cols.push_back(dftracer::utils::dstd::String(
+                    dftracer::utils::trace::views::detail::agg_col_name(spec)));
             else
-                value_cols.push_back(
-                    dftracer::utils::dstd::String(detail::agg_col_name(spec)));
+                value_cols.push_back(dftracer::utils::dstd::String(
+                    dftracer::utils::trace::views::detail::agg_col_name(spec)));
         }
     }
     struct DynCol {
         dftracer::utils::dstd::String key;
-        AggSpec spec;
+        dftracer::utils::trace::views::AggSpec spec;
     };
     dftracer::utils::dstd::Vector<DynCol> dyn_cols;
     if (plan.auto_numeric_metrics) {
@@ -604,23 +628,26 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
         }
         if (plan.numeric_arg_aggs.empty()) {
             for (const auto& n : names) {
-                dyn_cols.push_back({n, AggSpec(AggOp::Mean)});
+                dyn_cols.push_back(
+                    {n, dftracer::utils::trace::views::AggSpec(
+                            dftracer::utils::trace::views::AggOp::Mean)});
                 value_cols.push_back(n);
             }
         } else {
             for (const auto& n : names)
                 for (const auto& spec : plan.numeric_arg_aggs) {
                     dyn_cols.push_back({n, spec});
-                    value_cols.push_back(
-                        dftracer::utils::dstd::String(detail::dyn_col_name(
+                    value_cols.push_back(dftracer::utils::dstd::String(
+                        dftracer::utils::trace::views::detail::dyn_col_name(
                             spec, dftracer::utils::dstd::String(n))));
                 }
         }
     }
     bool occ_cell_col = false;
     for (const auto& spec : plan.agg)
-        if (spec.op == AggOp::Busy || spec.op == AggOp::Concurrency ||
-            spec.op == AggOp::Utilization) {
+        if (spec.op == dftracer::utils::trace::views::AggOp::Busy ||
+            spec.op == dftracer::utils::trace::views::AggOp::Concurrency ||
+            spec.op == dftracer::utils::trace::views::AggOp::Utilization) {
             occ_cell_col = true;
             break;
         }
@@ -631,7 +658,8 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>>
         gk(group_cols.size());
     for (auto& v : gk) v.reserve(ng);
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Vector<FieldNum>>
+    dftracer::utils::dstd::Vector<
+        dftracer::utils::dstd::Vector<dftracer::utils::dataframe::FieldNum>>
         vcells(value_cols.size());
     for (auto& v : vcells) v.reserve(ng);
     dftracer::utils::dstd::Vector<
@@ -645,23 +673,25 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
     };
     dftracer::utils::dstd::Vector<HistBuild> hvals(hist_cols.size());
 
-    const AggSchema& sch = detail::ensure_schema(plan);
+    const dftracer::utils::trace::views::detail::AggSchema& sch =
+        dftracer::utils::trace::views::detail::ensure_schema(plan);
     for (const auto& entry : map) {
         const auto& a = entry.second;
         for (std::size_t i = 0; i < group_cols.size(); ++i)
             gk[i].push_back(a.keys[i]);
         std::size_t vc = 0, ti = 0, hi = 0;
         if (count_col) {
-            vcells[vc++].push_back(
-                FieldNum::of(static_cast<std::int64_t>(a.count)));
+            vcells[vc++].push_back(dftracer::utils::dataframe::FieldNum::of(
+                static_cast<std::int64_t>(a.count)));
         } else {
             for (std::size_t i = 0; i < plan.agg.size(); ++i) {
-                const AggOp op = plan.agg[i].op;
-                if (op == AggOp::ArgMax) {
+                const dftracer::utils::trace::views::AggOp op = plan.agg[i].op;
+                if (op == dftracer::utils::trace::views::AggOp::ArgMax) {
                     tvals[ti++].push_back(a.argmax[sch.spec_argmax[i]].repr);
-                } else if (op == AggOp::SetUnion) {
+                } else if (op ==
+                           dftracer::utils::trace::views::AggOp::SetUnion) {
                     tvals[ti++].push_back(finalize_set(a, plan, i));
-                } else if (op == AggOp::Hist) {
+                } else if (op == dftracer::utils::trace::views::AggOp::Hist) {
                     auto bins = finalize_hist(a, plan, i);
                     auto& h = hvals[hi++];
                     for (const auto& b : bins) {
@@ -677,21 +707,21 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
         }
         for (const auto& dc : dyn_cols) {
             double v = 0.0;
-            if (dc.spec.op == AggOp::Pct) {
+            if (dc.spec.op == dftracer::utils::trace::views::AggOp::Pct) {
                 auto it = a.dyn_sketches.find(dc.key);
                 if (it != a.dyn_sketches.end())
                     v = it->second.quantile(dc.spec.q);
             } else if (auto it = a.dyn.find(dc.key); it != a.dyn.end()) {
                 v = reduce_dyn(it->second, dc.spec.op, dc.spec.q);
             }
-            vcells[vc++].push_back(FieldNum::of(v));
+            vcells[vc++].push_back(dftracer::utils::dataframe::FieldNum::of(v));
         }
         if (occ_cell_col)
-            vcells[vc++].push_back(
-                FieldNum::of(static_cast<std::int64_t>(sch.occ_cell_us)));
+            vcells[vc++].push_back(dftracer::utils::dataframe::FieldNum::of(
+                static_cast<std::int64_t>(sch.occ_cell_us)));
     }
 
-    dataframe::DataFrame batch;
+    dftracer::utils::dataframe::DataFrame batch;
     const std::int64_t nrows = static_cast<std::int64_t>(ng);
     for (std::size_t i = 0; i < group_cols.size(); ++i) {
         batch.names.push_back(group_cols[i]);
@@ -704,38 +734,42 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
                 views[r] = {};
             else
                 vbits[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
-        batch.columns.push_back(dataframe::Series::strings(
+        batch.columns.push_back(dftracer::utils::dataframe::Series::strings(
             dftracer::utils::dstd::Span<
                 const dftracer::utils::dstd::StringView>(views),
             vbits.data()));
     }
     auto build_value_column =
-        [&](const dftracer::utils::dstd::Vector<FieldNum>& cells) {
-            FieldStatDomain dom =
-                cells.empty() ? FieldStatDomain::F64 : cells[0].domain;
+        [&](const dftracer::utils::dstd::Vector<
+            dftracer::utils::dataframe::FieldNum>& cells) {
+            dftracer::utils::dataframe::FieldStatDomain dom =
+                cells.empty() ? dftracer::utils::dataframe::FieldStatDomain::F64
+                              : cells[0].domain;
             for (const auto& c : cells)
                 if (c.domain != dom) {
-                    dom = FieldStatDomain::F64;
+                    dom = dftracer::utils::dataframe::FieldStatDomain::F64;
                     break;
                 }
-            if (dom == FieldStatDomain::I64) {
+            if (dom == dftracer::utils::dataframe::FieldStatDomain::I64) {
                 dftracer::utils::dstd::Vector<std::int64_t> v;
                 v.reserve(cells.size());
                 for (const auto& c : cells) v.push_back(c.i);
-                return dataframe::Series::flat(dataframe::TypeId::Int64,
-                                               v.data(), nrows);
+                return dftracer::utils::dataframe::Series::flat(
+                    dftracer::utils::dataframe::TypeId::Int64, v.data(), nrows);
             }
-            if (dom == FieldStatDomain::U64) {
+            if (dom == dftracer::utils::dataframe::FieldStatDomain::U64) {
                 dftracer::utils::dstd::Vector<std::uint64_t> v;
                 v.reserve(cells.size());
                 for (const auto& c : cells) v.push_back(c.u);
-                return dataframe::Series::flat(dataframe::TypeId::Uint64,
-                                               v.data(), nrows);
+                return dftracer::utils::dataframe::Series::flat(
+                    dftracer::utils::dataframe::TypeId::Uint64, v.data(),
+                    nrows);
             }
             dftracer::utils::dstd::Vector<double> v;
             v.reserve(cells.size());
             for (const auto& c : cells) v.push_back(c.as_double());
-            return dataframe::Series::flat_f64(v.data(), nrows);
+            return dftracer::utils::dataframe::Series::flat_f64(v.data(),
+                                                                nrows);
         };
     for (std::size_t i = 0; i < value_cols.size(); ++i) {
         batch.names.push_back(value_cols[i]);
@@ -743,41 +777,50 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
     }
     for (std::size_t i = 0; i < text_cols.size(); ++i) {
         batch.names.push_back(text_cols[i]);
-        batch.columns.push_back(dataframe::Series::strings(tvals[i]));
+        batch.columns.push_back(
+            dftracer::utils::dataframe::Series::strings(tvals[i]));
     }
     for (std::size_t i = 0; i < hist_cols.size(); ++i) {
         auto& h = hvals[i];
         const auto n = static_cast<std::int64_t>(h.lo.size());
-        dftracer::utils::dstd::Vector<dataframe::Series> fields;
-        fields.push_back(dataframe::Series::flat(dataframe::TypeId::Float64,
-                                                 h.lo.data(), n));
-        fields.push_back(dataframe::Series::flat(dataframe::TypeId::Float64,
-                                                 h.hi.data(), n));
-        fields.push_back(dataframe::Series::flat(dataframe::TypeId::Uint64,
-                                                 h.cnt.data(), n));
-        dataframe::Series st = dataframe::Series::structs({"lo", "hi", "count"},
-                                                          std::move(fields));
+        dftracer::utils::dstd::Vector<dftracer::utils::dataframe::Series>
+            fields;
+        fields.push_back(dftracer::utils::dataframe::Series::flat(
+            dftracer::utils::dataframe::TypeId::Float64, h.lo.data(), n));
+        fields.push_back(dftracer::utils::dataframe::Series::flat(
+            dftracer::utils::dataframe::TypeId::Float64, h.hi.data(), n));
+        fields.push_back(dftracer::utils::dataframe::Series::flat(
+            dftracer::utils::dataframe::TypeId::Uint64, h.cnt.data(), n));
+        dftracer::utils::dataframe::Series st =
+            dftracer::utils::dataframe::Series::structs({"lo", "hi", "count"},
+                                                        std::move(fields));
         batch.names.push_back(hist_cols[i]);
-        batch.columns.push_back(dataframe::Series::list(h.off, std::move(st)));
+        batch.columns.push_back(
+            dftracer::utils::dataframe::Series::list(h.off, std::move(st)));
     }
     return batch;
 }
 
 // A minimal returning fold over the fused scan (no spill), reproducing the old
 // AggFold's per-event/phase/rank handling.
-inline bool plan_wants_names(const ViewPlan& plan) {
-    return std::any_of(plan.group_by.begin(), plan.group_by.end(),
-                       [](const GroupKey& g) {
-                           return g.kind == GroupKey::Kind::FilePath ||
-                                  g.kind == GroupKey::Kind::FileName ||
-                                  g.kind == GroupKey::Kind::HostName;
-                       });
+inline bool plan_wants_names(
+    const dftracer::utils::trace::views::detail::ViewPlan& plan) {
+    return std::any_of(
+        plan.group_by.begin(), plan.group_by.end(),
+        [](const dftracer::utils::trace::views::GroupKey& g) {
+            return g.kind == dftracer::utils::trace::views::GroupKey::Kind::
+                                 FilePath ||
+                   g.kind == dftracer::utils::trace::views::GroupKey::Kind::
+                                 FileName ||
+                   g.kind ==
+                       dftracer::utils::trace::views::GroupKey::Kind::HostName;
+        });
 }
 
 // pid -> rank from a PR metadata event ({"name":"PR","pid":P,
 // "args":{"name":"rank","value":"N"}}); others are ignored.
 inline void harvest_pr_rank(
-    const detail::FoldEvent& ev,
+    const dftracer::utils::trace::views::detail::FoldEvent& ev,
     const dftracer::utils::dstd::StringIntern& intern,
     dftracer::utils::dstd::HashMap<std::uint64_t,
                                    dftracer::utils::dstd::String>& ranks) {
@@ -799,40 +842,52 @@ inline void harvest_pr_rank(
         ranks[ev.pid] = dftracer::utils::dstd::String(rank);
 }
 
-class OracleAggFold : public detail::Fold {
+class OracleAggFold : public dftracer::utils::trace::views::detail::Fold {
    public:
-    OracleAggFold(const ViewPlan& plan, const StringIntern& intern)
+    OracleAggFold(const dftracer::utils::trace::views::detail::ViewPlan& plan,
+                  const dftracer::utils::dstd::StringIntern& intern)
         : plan_(&plan),
           intern_(&intern),
-          phase_target_(detail::agg_phase_target(plan)),
-          want_ranks_(std::any_of(plan.group_by.begin(), plan.group_by.end(),
-                                  [](const GroupKey& g) {
-                                      return g.kind == GroupKey::Kind::Rank;
-                                  })),
+          phase_target_(
+              dftracer::utils::trace::views::detail::agg_phase_target(plan)),
+          want_ranks_(std::any_of(
+              plan.group_by.begin(), plan.group_by.end(),
+              [](const dftracer::utils::trace::views::GroupKey& g) {
+                  return g.kind ==
+                         dftracer::utils::trace::views::GroupKey::Kind::Rank;
+              })),
           want_names_(plan_wants_names(plan)) {}
 
-    bool accepts(const detail::ScanShape&) const override { return true; }
+    bool accepts(const dftracer::utils::trace::views::detail::ScanShape&)
+        const override {
+        return true;
+    }
     bool needs_args() const override { return true; }
     dftracer::utils::dstd::UniquePtr<Fold> slice() const override {
         return dftracer::utils::dstd::make_unique<OracleAggFold>(*plan_,
                                                                  *intern_);
     }
-    void step(const detail::FoldBatch& batch) override {
+    void step(const dftracer::utils::trace::views::detail::FoldBatch& batch)
+        override {
         for (const auto& ev : batch.events) {
-            if (ev.phase == RecordPhase::Metadata) {
+            if (ev.phase == dftracer::utils::trace::RecordPhase::Metadata) {
                 if (want_ranks_) harvest_pr_rank(ev, *intern_, ranks_);
                 if (want_names_) harvest_name(ev);
-                if (phase_target_ != RecordPhase::Metadata) continue;
+                if (phase_target_ !=
+                    dftracer::utils::trace::RecordPhase::Metadata)
+                    continue;
             }
-            if (phase_target_ != RecordPhase::Unknown &&
+            if (phase_target_ != dftracer::utils::trace::RecordPhase::Unknown &&
                 ev.phase != phase_target_)
                 continue;
-            detail::PodSource src(ev, *intern_);
+            dftracer::utils::trace::views::detail::PodSource src(ev, *intern_);
             fold_event_over(map_, src, *plan_, keybuf_);
         }
     }
-    void seal_unit(const detail::ScanUnit&) override {}
-    void drop_unit(const detail::ScanUnit&) override {}
+    void seal_unit(
+        const dftracer::utils::trace::views::detail::ScanUnit&) override {}
+    void drop_unit(
+        const dftracer::utils::trace::views::detail::ScanUnit&) override {}
     void merge(Fold& other) override {
         auto& o = static_cast<OracleAggFold&>(other);
         merge_maps(map_, o.map_, *plan_);
@@ -845,7 +900,7 @@ class OracleAggFold : public detail::Fold {
         o.maps_.host.clear();
     }
     dftracer::utils::coro::CoroTask<bool> finalize(
-        const detail::CoverageSet&) override {
+        const dftracer::utils::trace::views::detail::CoverageSet&) override {
         co_return true;
     }
     GroupMap& map() { return map_; }
@@ -863,8 +918,9 @@ class OracleAggFold : public detail::Fold {
     // FH/HH records ({"name":"FH","args":{"name":<path>,"value":<hash>}}) give
     // the hash -> path/host maps the resolved group keys need, harvested from
     // the trace itself so the oracle needs no built index name table.
-    void harvest_name(const detail::FoldEvent& ev) {
-        if (ev.name_id == StringIntern::NO_ID) return;
+    void harvest_name(
+        const dftracer::utils::trace::views::detail::FoldEvent& ev) {
+        if (ev.name_id == dftracer::utils::dstd::StringIntern::NO_ID) return;
         const dftracer::utils::dstd::StringView rec =
             intern_->resolve(ev.name_id);
         dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
@@ -891,9 +947,9 @@ class OracleAggFold : public detail::Fold {
                 dftracer::utils::dstd::String(name);
     }
 
-    const ViewPlan* plan_;
-    const StringIntern* intern_;
-    RecordPhase phase_target_;
+    const dftracer::utils::trace::views::detail::ViewPlan* plan_;
+    const dftracer::utils::dstd::StringIntern* intern_;
+    dftracer::utils::trace::RecordPhase phase_target_;
     bool want_ranks_ = false;
     bool want_names_ = false;
     GroupMap map_;
@@ -907,8 +963,10 @@ class OracleAggFold : public detail::Fold {
 // from the trace's own FH/HH/PR metadata, materialize via to_batch, then apply
 // the plan's post-ops. A pure scan with self-contained name resolution, so it
 // is a genuine reference for the engine collect.
-inline dataframe::DataFrame groupmap_oracle(const detail::scan::ScanPlan& v) {
-    ViewPlan plan = detail::resolve_bucket_origin(*v);
+inline dftracer::utils::dataframe::DataFrame groupmap_oracle(
+    const dftracer::utils::trace::views::detail::scan::ScanPlan& v) {
+    dftracer::utils::trace::views::detail::ViewPlan plan =
+        dftracer::utils::trace::views::detail::resolve_bucket_origin(*v);
     // Scan through throwaway index paths so the oracle never builds or mutates
     // the engine's index (which would make the engine see non-fresh files and
     // skip its bootstrap). The oracle resolves names from harvested metadata,
@@ -932,32 +990,40 @@ inline dataframe::DataFrame groupmap_oracle(const detail::scan::ScanPlan& v) {
         plan.files[i].index_path =
             it->second + "/idx_" + dftracer::utils::dstd::to_string(i);
     plan.resolver.reset();
-    detail::ensure_schema(plan);
-    ViewDefinition vdef = detail::make_vdef(plan, /*for_aggregation=*/true);
+    dftracer::utils::trace::views::detail::ensure_schema(plan);
+    dftracer::utils::trace::views::ViewDefinition vdef =
+        dftracer::utils::trace::views::detail::make_vdef(
+            plan, /*for_aggregation=*/true);
     // Keep the FH/HH/PR metadata records so the fold can build its own name and
     // rank maps for resolved group keys.
     if (plan_wants_names(plan) ||
         std::any_of(
             plan.group_by.begin(), plan.group_by.end(),
-            [](const GroupKey& g) { return g.kind == GroupKey::Kind::Rank; })) {
+            [](const dftracer::utils::trace::views::GroupKey& g) {
+                return g.kind ==
+                       dftracer::utils::trace::views::GroupKey::Kind::Rank;
+            })) {
         vdef.include_metadata = true;
         vdef.filter_metadata = false;
     }
     static dftracer::utils::Runtime rt;
-    dataframe::DataFrame result;
+    dftracer::utils::dataframe::DataFrame result;
     rt.block_on(dftracer::utils::coro::named(
         "groupmap-oracle",
         dftracer::utils::coro::with_scope(
             [&](dftracer::utils::coro::Scope&)
                 -> dftracer::utils::coro::CoroTask<void> {
-                StringIntern intern;
+                dftracer::utils::dstd::StringIntern intern;
                 OracleAggFold agg(plan, intern);
-                std::array<detail::Fold*, 1> folds{&agg};
-                co_await detail::fuse(plan, vdef, folds, intern);
+                std::array<dftracer::utils::trace::views::detail::Fold*, 1>
+                    folds{&agg};
+                co_await dftracer::utils::trace::views::detail::fuse(
+                    plan, vdef, folds, intern);
                 resolve_group_keys(agg.map(), plan, agg.maps());
                 result = to_batch(agg.map(), plan);
             })));
-    return detail::apply_agg_post_ops(std::move(result), plan);
+    return dftracer::utils::trace::views::detail::apply_agg_post_ops(
+        std::move(result), plan);
 }
 
 }  // namespace gmoracle

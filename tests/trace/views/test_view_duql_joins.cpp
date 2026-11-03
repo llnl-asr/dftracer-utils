@@ -24,8 +24,6 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 using namespace test_view_common;
 
-namespace df = dftracer::utils::dataframe;
-
 namespace {
 
 struct NullSink : ExportSink {
@@ -79,28 +77,28 @@ View view_of(const dstd::String& gz) {
         dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-df::DataFrame frame(const View& v) {
-    df::DataFrame f = run(v.lazy().collect());
+dataframe::DataFrame frame(const View& v) {
+    dataframe::DataFrame f = run(v.lazy().collect());
     for (auto& c : f.columns)
         if (!c.is_flat()) c = c.materialize();
     return f;
 }
 
 // Row `r` of column `name` as text: `null`, a string, or a number.
-dstd::String cell(const df::DataFrame& f, std::int64_t r,
+dstd::String cell(const dataframe::DataFrame& f, std::int64_t r,
                   dstd::StringView name) {
     const auto i = bcol(f, name);
     REQUIRE(i >= 0);
     const auto& c = f.columns[static_cast<std::size_t>(i)];
     if (c.is_null(r)) return "null";
-    if (c.type() == df::TypeId::String) return bstr(f, r, name);
+    if (c.type() == dataframe::TypeId::String) return bstr(f, r, name);
     const double d = bnum(f, r, name);
     if (d == static_cast<double>(static_cast<long long>(d)))
         return dstd::to_string(static_cast<long long>(d));
     return dstd::to_string(d);
 }
 
-dstd::Vector<dstd::String> column(const df::DataFrame& f,
+dstd::Vector<dstd::String> column(const dataframe::DataFrame& f,
                                   dstd::StringView name) {
     dstd::Vector<dstd::String> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
@@ -1324,7 +1322,7 @@ TEST_SUITE("View duql joins") {
     }
 
     // Column `name` of `f` in the order of column `i`; `i` itself sorted.
-    static dstd::Vector<dstd::String> by_i(const df::DataFrame& f,
+    static dstd::Vector<dstd::String> by_i(const dataframe::DataFrame& f,
                                            const dstd::String& name) {
         dstd::Vector<dstd::Pair<long, dstd::String>> rows;
         const auto ids = column(f, "i");

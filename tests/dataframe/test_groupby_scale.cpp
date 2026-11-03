@@ -18,14 +18,7 @@
 #include <random>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::AggOp;
-using dftracer::utils::dataframe::AggSpec;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
-
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -184,9 +177,9 @@ dstd::Vector<AggSpec> specs_with_arg_max() {
 DataFrame reference(const dstd::Vector<const Series*>& keys, const Input& in,
                     const dstd::Vector<dstd::String>& key_names,
                     dstd::Vector<AggSpec> with = specs()) {
-    df::AggStatePtr st = df::agg_new(std::move(with));
-    df::agg_accumulate(*st, keys, in.values());
-    return df::agg_finalize(*st, key_names);
+    dataframe::AggStatePtr st = dataframe::agg_new(std::move(with));
+    dataframe::agg_accumulate(*st, keys, in.values());
+    return dataframe::agg_finalize(*st, key_names);
 }
 
 // Every column equal to the fold (floats to 1e-9 relative, the order of float
@@ -302,22 +295,25 @@ bool bit_equal(const DataFrame& a, const DataFrame& b, dstd::String* why) {
 void expect_deterministic(const dstd::Vector<const Series*>& keys,
                           const Input& in, const dstd::Vector<AggSpec>& with,
                           const dstd::Vector<dstd::String>& names) {
-    const DataFrame first = df::group_agg(keys, in.values(), with, names);
+    const DataFrame first =
+        dataframe::group_agg(keys, in.values(), with, names);
     dstd::String why;
     for (int run = 0; run < REPEATS; ++run) {
-        const DataFrame again = df::group_agg(keys, in.values(), with, names);
+        const DataFrame again =
+            dataframe::group_agg(keys, in.values(), with, names);
         INFO("run " << run << ": " << why);
         REQUIRE(bit_equal(first, again, &why));
     }
-    df::set_parallel_backend(nullptr, nullptr);  // serial
-    const DataFrame serial = df::group_agg(keys, in.values(), with, names);
-    df::install_runtime_parallel_backend();
+    dataframe::set_parallel_backend(nullptr, nullptr);  // serial
+    const DataFrame serial =
+        dataframe::group_agg(keys, in.values(), with, names);
+    dataframe::install_runtime_parallel_backend();
     INFO("serial: " << why);
     REQUIRE(bit_equal(first, serial, &why));
 }
 
 struct Backend {
-    Backend() { df::install_runtime_parallel_backend(); }
+    Backend() { dataframe::install_runtime_parallel_backend(); }
 } backend;
 
 }  // namespace
@@ -325,8 +321,9 @@ struct Backend {
 TEST_CASE("many groups on a long string key equal the one-thread fold") {
     const Input& in = input();
     const dstd::Vector<const Series*> keys{&in.skey, &in.tkey};
-    DataFrame got = df::group_agg(keys, in.values(), specs(), {"proc", "t"});
-    REQUIRE(df::parallel_backend_installed());
+    DataFrame got =
+        dataframe::group_agg(keys, in.values(), specs(), {"proc", "t"});
+    REQUIRE(dataframe::parallel_backend_installed());
     CHECK(got.num_rows() > in.groups * 2 / 3);
     expect_equal(got, reference(keys, in, {"proc", "t"}), {"p50_x"});
 }
@@ -334,7 +331,8 @@ TEST_CASE("many groups on a long string key equal the one-thread fold") {
 TEST_CASE("many groups on an integer key equal the one-thread fold") {
     const Input& in = input();
     const dstd::Vector<const Series*> keys{&in.bkey, &in.tkey};
-    DataFrame got = df::group_agg(keys, in.values(), specs(), {"big", "t"});
+    DataFrame got =
+        dataframe::group_agg(keys, in.values(), specs(), {"big", "t"});
     CHECK(got.num_rows() > in.groups * 2 / 3);
     expect_equal(got, reference(keys, in, {"big", "t"}), {"p50_x"});
 }
@@ -342,7 +340,8 @@ TEST_CASE("many groups on an integer key equal the one-thread fold") {
 TEST_CASE("null keys form one group and equal the one-thread fold") {
     const Input& in = input();
     const dstd::Vector<const Series*> keys{&in.nkey, &in.tkey};
-    DataFrame got = df::group_agg(keys, in.values(), specs(), {"proc", "t"});
+    DataFrame got =
+        dataframe::group_agg(keys, in.values(), specs(), {"proc", "t"});
     expect_equal(got, reference(keys, in, {"proc", "t"}), {"p50_x"});
     // the null string key is one group per time bucket, not one per partition
     std::int64_t nulls = 0;
@@ -358,7 +357,7 @@ TEST_CASE("a float key keeps the existing path and still equals the fold") {
         fk[i] = static_cast<double>(i % (in.groups / 3)) * 0.25;
     Series fkey = Series::flat_f64(fk.data(), in.rows);
     const dstd::Vector<const Series*> keys{&fkey};
-    DataFrame got = df::group_agg(keys, in.values(), specs(), {"f"});
+    DataFrame got = dataframe::group_agg(keys, in.values(), specs(), {"f"});
     // The quantile sketch is left out: its 128 collapsing bins make a merge of
     // per-thread partial sketches differ from one sketch run to run (a
     // separate, existing limitation).
@@ -368,8 +367,8 @@ TEST_CASE("a float key keeps the existing path and still equals the fold") {
 TEST_CASE("arg_max over many groups equals the fold, the first row on a tie") {
     const Input& in = input();
     const dstd::Vector<const Series*> keys{&in.skey, &in.tkey};
-    DataFrame got =
-        df::group_agg(keys, in.values(), specs_with_arg_max(), {"proc", "t"});
+    DataFrame got = dataframe::group_agg(keys, in.values(),
+                                         specs_with_arg_max(), {"proc", "t"});
     // The sketch quantile is left out for the reason given above.
     expect_equal(got, reference(keys, in, {"proc", "t"}, specs_with_arg_max()),
                  {"p50_x"});
@@ -407,7 +406,7 @@ TEST_CASE("the group-by of many groups equals the serial one-pass sum") {
     // by-key driver keeps that order, so its sums are the fold's bits.
     const Input& in = input();
     const dstd::Vector<const Series*> keys{&in.bkey};
-    DataFrame got = df::group_agg(keys, in.values(), specs(), {"big"});
+    DataFrame got = dataframe::group_agg(keys, in.values(), specs(), {"big"});
     DataFrame ref = reference(keys, in, {"big"});
     dstd::String why;
     // Only the columns whose bits do not depend on how partials merge.
@@ -462,14 +461,14 @@ void expect_in_place_equals_stitch(const dstd::Vector<const Series*>& keys,
                                    const dstd::Vector<AggSpec>& with,
                                    const dstd::Vector<dstd::String>& names,
                                    bool in_place) {
-    const std::uint64_t before = df::agg_in_place_finalizes();
-    const DataFrame got = df::group_agg(keys, in.values(), with, names);
-    CHECK((df::agg_in_place_finalizes() > before) == in_place);
+    const std::uint64_t before = dataframe::agg_in_place_finalizes();
+    const DataFrame got = dataframe::group_agg(keys, in.values(), with, names);
+    CHECK((dataframe::agg_in_place_finalizes() > before) == in_place);
     REQUIRE(setenv("DFTRACER_UTILS_GROUPBY_STITCH", "1", 1) == 0);
-    const std::uint64_t mid = df::agg_in_place_finalizes();
-    const DataFrame ref = df::group_agg(keys, in.values(), with, names);
+    const std::uint64_t mid = dataframe::agg_in_place_finalizes();
+    const DataFrame ref = dataframe::group_agg(keys, in.values(), with, names);
     unsetenv("DFTRACER_UTILS_GROUPBY_STITCH");
-    CHECK(df::agg_in_place_finalizes() == mid);
+    CHECK(dataframe::agg_in_place_finalizes() == mid);
     CHECK(got.num_rows() > 1000);
     dstd::String why;
     INFO(why);

@@ -15,8 +15,6 @@
 
 using namespace dftracer::utils;
 
-using dstd::StringIntern;
-
 // DomSource must reproduce a raw top-then-args simdjson extraction
 // byte-for-byte (the same contract the old view_aggregate helpers gave), so the
 // hot-path rewire is identical by construction.
@@ -24,8 +22,8 @@ using namespace dftracer::utils::trace::views::detail;
 
 namespace {
 
-FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
-                             bool needs_args,
+FoldEvent extract_fold_event(simdjson::dom::element root,
+                             dstd::StringIntern& intern, bool needs_args,
                              const dstd::Vector<dstd::String>* extra = nullptr,
                              bool capture_schema = false) {
     FoldEvent ev;
@@ -161,7 +159,7 @@ TEST_SUITE("EventSource") {
             p, buf,
             R"({"ph":"X","name":"read","cat":"POSIX","pid":42,"tid":7,"ts":100,"dur":9,"args":{"fhash":"fh1","hhash":"hh2","ret":4096,"rate":1.5,"path":"/x"}})");
 
-        StringIntern intern;
+        dstd::StringIntern intern;
         FoldEvent ev = extract_fold_event(root, intern, /*needs_args=*/true);
         DomSource dom(root);
         PodSource pod(ev, intern);
@@ -207,7 +205,7 @@ TEST_SUITE("EventSource") {
             p, buf,
             R"({"ph":"X","name":"rdma_send","pid":9,"args":{"cqe.raw_ns":2850744041253792,"ibv.qp":4712,"mlx5.op":"SEND"}})");
 
-        StringIntern intern;
+        dstd::StringIntern intern;
         FoldEvent ev = extract_fold_event(root, intern, /*needs_args=*/true);
         DomSource dom(root);
         PodSource pod(ev, intern);

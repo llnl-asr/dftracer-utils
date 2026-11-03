@@ -98,8 +98,6 @@ inline dftracer::utils::dstd::Vector<HistBin> hist_bins(
     return out;
 }
 
-using gmoracle::groupmap_oracle;
-
 // The engine collect path (run_collect_via_engine + post-ops), the production
 // aggregation path every aggregating View collect takes.
 inline dftracer::utils::dataframe::DataFrame engine_collect(
@@ -208,7 +206,7 @@ inline dftracer::utils::dataframe::DataFrame collect_engine_plan(
 }
 inline dftracer::utils::dataframe::DataFrame collect_groupmap_plan(
     const dftracer::utils::trace::views::detail::scan::ScanPlan& v) {
-    return groupmap_oracle(v);
+    return gmoracle::groupmap_oracle(v);
 }
 
 inline void check_match(const dftracer::utils::dataframe::DataFrame& a0,

@@ -27,15 +27,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-namespace df = dftracer::utils::dataframe;
-using df::DataFrame;
-using df::Series;
-using df::TypeId;
-using df::WINDOW_UNBOUNDED;
-using df::WindowColumn;
-using df::WindowFrameMode;
-using df::WindowFunc;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -110,7 +102,7 @@ Series tag_lists() {
 DataFrame win(const DataFrame& in, const dstd::Vector<dstd::String>& part,
               const dstd::Vector<dstd::String>& order,
               const dstd::Vector<WindowColumn>& specs) {
-    return df::window(in, part, order, specs);
+    return dataframe::window(in, part, order, specs);
 }
 
 WindowColumn spec(WindowFunc func, dstd::Optional<dstd::String> value,
@@ -1602,7 +1594,7 @@ TEST_CASE("window - ABI range frames equal the C++ range results") {
                                fc.following, DFTU_WINDOW_FRAME_RANGE,
                                0.0,          nullptr};
             const DataFrame via_abi =
-                win(in, {"p"}, {"o"}, {df::window_column(abi)});
+                win(in, {"p"}, {"o"}, {dataframe::window_column(abi)});
             const DataFrame want =
                 win(in, {"p"}, {"o"},
                     {frame_spec(func, "v", "r", fc.preceding, fc.following,
@@ -1610,7 +1602,7 @@ TEST_CASE("window - ABI range frames equal the C++ range results") {
             CHECK(same(via_abi, want, func));
             abi.param.frame.mode = DFTU_WINDOW_FRAME_ROWS;
             const DataFrame rows =
-                win(in, {"p"}, {"o"}, {df::window_column(abi)});
+                win(in, {"p"}, {"o"}, {dataframe::window_column(abi)});
             const DataFrame rows_want =
                 win(in, {"p"}, {"o"},
                     {frame_spec(func, "v", "r", fc.preceding, fc.following,
@@ -2271,7 +2263,7 @@ TEST_CASE("window - ABI new frame functions equal the C++ results") {
             const Series col(dftu_dataframe_column(got, "r"));
             REQUIRE(col.valid());
             const DataFrame want =
-                win(in, {"p"}, {"o"}, {df::window_column(abi)});
+                win(in, {"p"}, {"o"}, {dataframe::window_column(abi)});
             CHECK(keys_of(col) == keys_of(want.column("r")));
             CHECK(col.type() == want.column("r").type());
             dftu_dataframe_free(got);
@@ -2401,7 +2393,7 @@ TEST_CASE("lag and lead read the row `offset` back or ahead in the partition") {
         specs.push_back(
             offset_spec(WindowFunc::Lead, "v", "lead" + dstd::to_string(n), n));
     }
-    const DataFrame out = df::window(frame, {"k"}, {"ord"}, specs);
+    const DataFrame out = dataframe::window(frame, {"k"}, {"ord"}, specs);
     const auto start_of = [&](std::size_t r) { return r < 4 ? 0 : 4; };
     const auto size_of = [&](std::size_t r) { return r < 4 ? 4 : 3; };
     for (std::int64_t n : offsets) {

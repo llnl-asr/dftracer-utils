@@ -29,23 +29,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-namespace store = dftracer::utils::store;
-
-using dftracer::utils::Runtime;
-using dftracer::utils::TypedTaskHandle;
-using dstd::ByteView;
-using store::Batch;
-using store::FoldKind;
-using store::NamespaceSpec;
-using store::ScopeKey;
-using store::ScopeState;
-using store::engine::NamespaceId;
-using store::engine::ScanCursor;
-using store::engine::SkippedFile;
-using store::engine::Snapshot;
-using store::engine::Writer;
-using store::engine::WriterErrc;
-using store::engine::WriterOptions;
+using namespace dftracer::utils::store;
 
 constexpr int CHILDREN = 8;
 constexpr int RUNTIME_THREADS = 4;
@@ -81,11 +65,11 @@ constexpr int FOLD_KEYS = 2;
 constexpr int DURABLE_BATCHES = SANITIZED ? 4 : 20;
 constexpr int SHARED_BATCHES = SANITIZED ? 2 : 5;
 
-ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::String to_std(ByteView bytes) {
+dstd::String to_std(dstd::ByteView bytes) {
     return dstd::String(reinterpret_cast<const char*>(bytes.data()),
                         bytes.size());
 }
@@ -240,9 +224,10 @@ struct ScanDump {
     }
 };
 
-ScanDump dump_namespace(const Snapshot& snapshot, const NamespaceSpec& spec) {
+ScanDump dump_namespace(const engine::Snapshot& snapshot,
+                        const NamespaceSpec& spec) {
     ScanDump dump;
-    ScanCursor cursor = snapshot.scan_all(spec, {}, {});
+    engine::ScanCursor cursor = snapshot.scan_all(spec, {}, {});
     while (!cursor.at_end()) {
         auto value = cursor.value();
         REQUIRE(value.has_value());
@@ -310,18 +295,19 @@ std::size_t count_data_files(const dstd::String& root) {
     return count;
 }
 
-dstd::String skipped_report(const Snapshot& snapshot) {
+dstd::String skipped_report(const engine::Snapshot& snapshot) {
     dstd::String out;
-    for (const SkippedFile& file : snapshot.skipped()) {
+    for (const engine::SkippedFile& file : snapshot.skipped()) {
         out += "skipped " + dstd::String(file.name) + ": " +
                dstd::String(file.error.message()) + "\n";
     }
     return out;
 }
 
-void check_shared_scope(const Snapshot& snapshot, const NamespaceSpec& sum,
-                        int round) {
-    ScanCursor cursor = snapshot.scan(sum, file_scope(SHARED_SCOPE), {});
+void check_shared_scope(const engine::Snapshot& snapshot,
+                        const NamespaceSpec& sum, int round) {
+    engine::ScanCursor cursor =
+        snapshot.scan(sum, file_scope(SHARED_SCOPE), {});
     dstd::Map<dstd::String, dstd::String> rows;
     dstd::String duplicate;
     while (!cursor.at_end()) {
@@ -344,7 +330,7 @@ void check_shared_scope(const Snapshot& snapshot, const NamespaceSpec& sum,
     }
 }
 
-void check_states(const Snapshot& snapshot, const NamespaceSpec& raw,
+void check_states(const engine::Snapshot& snapshot, const NamespaceSpec& raw,
                   const NamespaceSpec& sum, const NamespaceSpec& durable) {
     for (int child = 0; child < CHILDREN; ++child) {
         for (int file = 0; file < RAW_SCOPES; ++file) {
@@ -359,9 +345,9 @@ void check_states(const Snapshot& snapshot, const NamespaceSpec& raw,
 }
 
 void check_root(const dstd::String& root, int round) {
-    auto opened = Snapshot::open(root);
+    auto opened = engine::Snapshot::open(root);
     REQUIRE(opened.has_value());
-    const Snapshot& snapshot = *opened;
+    const engine::Snapshot& snapshot = *opened;
 
     CHECK_MESSAGE(snapshot.skipped().size() == 0, skipped_report(snapshot));
     CHECK(count_data_files(root) == static_cast<std::size_t>(CHILDREN * round));
@@ -394,9 +380,9 @@ void check_root(const dstd::String& root, int round) {
 }
 
 struct Namespaces {
-    NamespaceId raw;
-    NamespaceId sum;
-    NamespaceId durable;
+    engine::NamespaceId raw;
+    engine::NamespaceId sum;
+    engine::NamespaceId durable;
 };
 
 /// What the child reports for a failing workload. The child never returns into
@@ -413,20 +399,20 @@ struct ChildFailure {
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_retrying(
-    Writer& writer, Batch batch, int attempts) {
+    engine::Writer& writer, Batch batch, int attempts) {
     for (int attempt = 0; attempt < attempts; ++attempt) {
         auto committed = writer.commit(std::move(batch));
         if (committed.has_value() ||
-            !committed.error().is_code(WriterErrc::Busy)) {
+            !committed.error().is_code(engine::WriterErrc::Busy)) {
             co_return committed;
         }
         co_await writer.space();
     }
     co_return dstd::Unexpected<dstd::Error>(
-        dstd::Error(WriterErrc::Busy, "the writer made no progress"));
+        dstd::Error(engine::WriterErrc::Busy, "the writer made no progress"));
 }
 
-coro::CoroTask<int> run_workload(Writer& writer, const Namespaces& ids,
+coro::CoroTask<int> run_workload(engine::Writer& writer, const Namespaces& ids,
                                  int child, int round, ChildFailure& failure) {
     for (int batch = 0; batch < RAW_BATCHES; ++batch) {
         const int file = batch % RAW_SCOPES;
@@ -517,7 +503,7 @@ void run_child(const dstd::String& root, int child, int round,
     if (got < 0) child_fail("barrier read failed");
     (void)::close(barrier_read);
 
-    WriterOptions options;
+    engine::WriterOptions options;
     options.extent_size = EXTENT_BYTES;
     options.extent_quota_bytes = EXTENT_QUOTA_BYTES;
     options.commit_bytes = std::uint64_t{1} << 20;
@@ -525,11 +511,11 @@ void run_child(const dstd::String& root, int child, int round,
     options.host = dstd::String("proc");
     options.label = dstd::String("round" + dstd::to_string(round));
 
-    auto created = Writer::create(root, *runtime.executor(), options);
+    auto created = engine::Writer::create(root, *runtime.executor(), options);
     if (!created.has_value()) {
         child_fail("create: " + dstd::String(created.error().message()));
     }
-    dstd::UniquePtr<Writer> writer = std::move(*created);
+    dstd::UniquePtr<engine::Writer> writer = std::move(*created);
 
     auto raw = writer->add_namespace(put_spec("proc.raw"));
     if (!raw.has_value()) child_fail("add proc.raw");

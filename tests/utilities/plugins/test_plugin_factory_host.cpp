@@ -27,14 +27,8 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::plugins::NamedResult;
-using dftracer::utils::plugins::PluginRun;
-using dftracer::utils::plugins::Plugins;
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
-using test_plugin_common::index_trace;
-using test_plugin_common::result_text;
-using test_plugin_common::run_set;
 
 #ifndef FACTORY_REGISTERS_OP_PLUGIN_PATH
 #error "FACTORY_REGISTERS_OP_PLUGIN_PATH must be defined by CMake"
@@ -65,13 +59,15 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env,
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dstd::fs::remove(pfw);
 
-    return index_trace(gz);
+    return test_plugin_common::index_trace(gz);
 }
 
 }  // namespace
 
 TEST_CASE("an op registered by the factory is live before the scan") {
-    auto set = Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
+    auto set = plugins::Plugins::builder()
+                   .add(FACTORY_REGISTERS_OP_PLUGIN_PATH)
+                   .build();
     INFO((set.has_value() ? dstd::String{}
                           : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
@@ -84,7 +80,8 @@ TEST_CASE("an op registered by the factory is live before the scan") {
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
     View view = View::from_files({make_trace(env, "regop")});
-    PluginRun run = run_set(*set, view, "factory-host");
+    plugins::PluginRun run =
+        test_plugin_common::run_set(*set, view, "factory-host");
 
     auto it = run.results.results().find("doubled_rows");
     REQUIRE(it != run.results.results().end());
@@ -96,7 +93,9 @@ TEST_CASE("an op registered by the factory is live before the scan") {
 }
 
 TEST_CASE("describe() lists the ops a plugin's factory registered") {
-    auto set = Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
+    auto set = plugins::Plugins::builder()
+                   .add(FACTORY_REGISTERS_OP_PLUGIN_PATH)
+                   .build();
     INFO((set.has_value() ? dstd::String{}
                           : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
@@ -116,8 +115,9 @@ TEST_CASE(
     "an op registered by a destroyed plugin is gone from the registry, and "
     "the plugin can be reloaded") {
     {
-        auto set =
-            Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
+        auto set = plugins::Plugins::builder()
+                       .add(FACTORY_REGISTERS_OP_PLUGIN_PATH)
+                       .build();
         INFO((set.has_value() ? dstd::String{}
                               : dstd::String(set.error().message())));
         REQUIRE(set.has_value());
@@ -131,8 +131,9 @@ TEST_CASE(
     // Reloading the same plugin must not be refused as an existing
     // registration (a stale entry would otherwise trip "no silent
     // shadowing").
-    auto set2 =
-        Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
+    auto set2 = plugins::Plugins::builder()
+                    .add(FACTORY_REGISTERS_OP_PLUGIN_PATH)
+                    .build();
     INFO((set2.has_value() ? dstd::String{}
                            : dstd::String(set2.error().message())));
     REQUIRE(set2.has_value());
@@ -140,7 +141,8 @@ TEST_CASE(
 }
 
 TEST_CASE("the scan-time host refuses to register an op") {
-    auto set = Plugins::builder().add(SCAN_REGISTERS_OP_PLUGIN_PATH).build();
+    auto set =
+        plugins::Plugins::builder().add(SCAN_REGISTERS_OP_PLUGIN_PATH).build();
     INFO((set.has_value() ? dstd::String{}
                           : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
@@ -148,7 +150,8 @@ TEST_CASE("the scan-time host refuses to register an op") {
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
     View view = View::from_files({make_trace(env, "scanreg")});
-    PluginRun run = run_set(*set, view, "factory-host");
+    plugins::PluginRun run =
+        test_plugin_common::run_set(*set, view, "factory-host");
 
     // The plugin records whether register_op said no from on_batch.
     auto it = run.results.results().find("scan_register_refused");
@@ -164,7 +167,7 @@ TEST_CASE("the scan-time host refuses to register an op") {
 }
 
 TEST_CASE("the C++ builder registers a fold, an op and a state at once") {
-    auto set = Plugins::builder().add(BUILDER_PLUGIN_PATH).build();
+    auto set = plugins::Plugins::builder().add(BUILDER_PLUGIN_PATH).build();
     INFO((set.has_value() ? dstd::String{}
                           : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
@@ -174,19 +177,22 @@ TEST_CASE("the C++ builder registers a fold, an op and a state at once") {
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
     View view = View::from_files({make_trace(env, "builder")});
-    PluginRun run = run_set(*set, view, "factory-host");
+    plugins::PluginRun run =
+        test_plugin_common::run_set(*set, view, "factory-host");
 
     // The fold half and the registered-state half of the same factory.
-    CHECK(result_text(run, "builder_plugin.rows") == dstd::to_string(EVENTS));
+    CHECK(test_plugin_common::result_text(run, "builder_plugin.rows") ==
+          dstd::to_string(EVENTS));
     std::uint64_t want_dur = 0;
     for (int i = 0; i < EVENTS; ++i)
         want_dur += static_cast<std::uint64_t>(10 + i);
-    CHECK(result_text(run, "builder_plugin.total_dur") ==
+    CHECK(test_plugin_common::result_text(run, "builder_plugin.total_dur") ==
           dstd::to_string(want_dur));
 }
 
 TEST_CASE("a factory reaching past the registration surface fails the load") {
-    auto set = Plugins::builder().add(FACTORY_ESCAPES_PLUGIN_PATH).build();
+    auto set =
+        plugins::Plugins::builder().add(FACTORY_ESCAPES_PLUGIN_PATH).build();
 
     REQUIRE_FALSE(set.has_value());
     CHECK(set.error().message().find(DFTU_SVC_IO) != dstd::String::npos);

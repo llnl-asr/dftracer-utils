@@ -41,11 +41,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace layout = dftracer::utils::index::store::layout;
-using dataframe::FieldStat;
-using index::Indexer;
-using index::IndexerOptions;
+using namespace dftracer::utils::index;
 
 namespace {
 
@@ -101,7 +97,7 @@ IndexerOptions options(dstd::StringView index_dir) {
     o.index_dir = dstd::String(index_dir);
     o.checkpoint_size = CHECKPOINT_SIZE;
     o.parallelism = 4;
-    agg::AggregationConfig c;
+    schemas::dft::agg::AggregationConfig c;
     c.time_interval_us = INTERVAL_US;
     c.compute_percentiles = true;
     o.aggregation = c;
@@ -118,7 +114,7 @@ double build_seconds(const dstd::Vector<dstd::String>& files,
 }
 
 struct Stored {
-    dstd::Map<Key, agg::AggPartial> merged;
+    dstd::Map<Key, schemas::dft::agg::AggPartial> merged;
     std::size_t count = 0;
     dstd::Set<std::uint32_t> chunks;
 };
@@ -135,16 +131,16 @@ index::FileRef file_of(const index::Snapshot& snapshot, dstd::StringView path) {
 
 Stored read_partials(const index::Snapshot& snapshot,
                      const index::FileRef& file,
-                     const agg::AggInternTable& dictionary) {
+                     const schemas::dft::agg::AggInternTable& dictionary) {
     Stored out;
     common::unwrap(index::for_each_agg_partial(
         snapshot, file,
         [&](std::uint32_t chunk, std::uint32_t cat, std::uint32_t name,
-            std::uint32_t, std::uint32_t, agg::PartialKind,
+            std::uint32_t, std::uint32_t, schemas::dft::agg::PartialKind,
             dstd::Span<const std::uint8_t> bytes) {
             ++out.count;
             out.chunks.insert(chunk);
-            auto p = agg::AggPartial::deserialize(
+            auto p = schemas::dft::agg::AggPartial::deserialize(
                 dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()));
             REQUIRE(p.has_value());
             const Key key{dstd::String(dictionary.intern.resolve(cat)),
@@ -156,7 +152,8 @@ Stored read_partials(const index::Snapshot& snapshot,
 }
 
 // A sketch answers near the rank, within its relative accuracy.
-void check_quantiles(const agg::AggPartial& p, const agg::QuantileStore& q,
+void check_quantiles(const schemas::dft::agg::AggPartial& p,
+                     const schemas::dft::agg::QuantileStore& q,
                      dstd::Vector<double> truth) {
     REQUIRE(q.count() == truth.size());
     std::sort(truth.begin(), truth.end());
@@ -191,7 +188,7 @@ dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
         dstd::String(file), dstd::String(index_dir)));
     const auto snapshot = open_index(index_path);
     const auto stored_file = file_of(snapshot, file);
-    auto dictionary = agg::make_intern_table();
+    auto dictionary = schemas::dft::agg::make_intern_table();
     common::unwrap(index::agg_dictionary(snapshot, *dictionary));
     const auto text = [&](std::uint32_t id) {
         return dstd::String(dictionary->intern.resolve(id));
@@ -200,7 +197,8 @@ dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
     common::unwrap(index::for_each_agg_partial(
         snapshot, stored_file,
         [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
-            std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
+            std::uint32_t host, std::uint32_t extra,
+            schemas::dft::agg::PartialKind kind,
             dstd::Span<const std::uint8_t> bytes) {
             rows.emplace("p " + dstd::to_string(chunk) + " " + text(cat) + " " +
                              text(name) + " " + text(host) + " " + text(extra) +
@@ -210,7 +208,7 @@ dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
         }));
     common::unwrap(index::for_each_agg_chunk_columns(
         snapshot, stored_file,
-        [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+        [&](std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block) {
             dstd::String value;
             value += common::str_cat(block.rows);
             for (const auto* locals :
@@ -279,10 +277,10 @@ TEST_SUITE("AggPartialsStore") {
         const auto index_path = dstd::String(
             trace::internal::determine_index_path(files[0], index_dir));
         const auto snapshot = open_index(index_path);
-        auto dictionary = agg::make_intern_table();
+        auto dictionary = schemas::dft::agg::make_intern_table();
         common::unwrap(index::agg_dictionary(snapshot, *dictionary));
 
-        dstd::Map<Key, agg::AggPartial> all;
+        dstd::Map<Key, schemas::dft::agg::AggPartial> all;
         std::size_t stored = 0;
         std::size_t bound = 0;
         for (int n = 0; n < FILES; ++n) {
@@ -334,7 +332,7 @@ TEST_SUITE("AggPartialsStore") {
         dstd::Vector<std::size_t> before;
         {
             const auto snapshot = open_index(index_path);
-            auto dictionary = agg::make_intern_table();
+            auto dictionary = schemas::dft::agg::make_intern_table();
             common::unwrap(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
                 before.push_back(
@@ -348,12 +346,13 @@ TEST_SUITE("AggPartialsStore") {
         // The empty copy of each file replaces its whole tier.
         {
             auto target = common::unwrap(index::Index::open(index_path));
-            const auto config = common::unwrap(
-                agg::tier::read_config(common::unwrap(target.snapshot())));
+            const auto config =
+                common::unwrap(schemas::dft::agg::tier::read_config(
+                    common::unwrap(target.snapshot())));
             REQUIRE(config);
             auto old = *config;
             old.params_hash ^= 1;
-            agg::tier::write_config(target, old);
+            schemas::dft::agg::tier::write_config(target, old);
 
             const auto snapshot = open_index(index_path);
             dstd::Vector<dstd::String> logical;
@@ -382,7 +381,7 @@ TEST_SUITE("AggPartialsStore") {
         }
         {
             const auto snapshot = open_index(index_path);
-            auto dictionary = agg::make_intern_table();
+            auto dictionary = schemas::dft::agg::make_intern_table();
             common::unwrap(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files)
                 CHECK(read_partials(snapshot, file_of(snapshot, f), *dictionary)
@@ -392,7 +391,7 @@ TEST_SUITE("AggPartialsStore") {
         build_seconds(files, index_dir);
 
         const auto rebuilt = open_index(index_path);
-        auto dictionary = agg::make_intern_table();
+        auto dictionary = schemas::dft::agg::make_intern_table();
         common::unwrap(index::agg_dictionary(rebuilt, *dictionary));
         for (std::size_t i = 0; i < files.size(); ++i)
             CHECK(
@@ -414,7 +413,7 @@ TEST_SUITE("AggPartialsStore") {
         dstd::Vector<std::size_t> before;
         {
             const auto snapshot = open_index(index_path);
-            auto dictionary = agg::make_intern_table();
+            auto dictionary = schemas::dft::agg::make_intern_table();
             common::unwrap(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
                 before.push_back(
@@ -432,14 +431,14 @@ TEST_SUITE("AggPartialsStore") {
                         .get()
                         .has_value());
 
-            namespace kv = dftracer::utils::store;
-            auto store = kv::Store::open(index_path + "/store");
+            auto store =
+                dftracer::utils::store::Store::open(index_path + "/store");
             REQUIRE(store.has_value());
             auto ns =
                 store->ns(index::ext_spec(index::store::IndexExtension::Agg));
             REQUIRE(ns.has_value());
-            dstd::String old_key(1,
-                                 static_cast<char>(layout::agg_kind::PARTIAL));
+            dstd::String old_key(
+                1, static_cast<char>(index::store::layout::agg_kind::PARTIAL));
             old_key.append(12, '\0');
             const dstd::String old_value = "old";
             const auto snapshot = open_index(index_path);
@@ -448,9 +447,9 @@ TEST_SUITE("AggPartialsStore") {
                 snapshot, file, index::store::IndexExtension::Agg);
             REQUIRE(state.has_value());
             const dstd::Vector<index::SourceStat> sources{file.stat()};
-            kv::Batch batch = store->batch(
+            dftracer::utils::store::Batch batch = store->batch(
                 *ns,
-                kv::ScopeKey::file(
+                dftracer::utils::store::ScopeKey::file(
                     index::store::internal::get_logical_path(files[0])),
                 state->params_hash, &sources);
             batch.put(dstd::ByteView(old_key), dstd::ByteView(old_value));
@@ -462,8 +461,9 @@ TEST_SUITE("AggPartialsStore") {
         }
         {
             const auto snapshot = open_index(index_path);
-            CHECK_FALSE(common::unwrap(agg::tier::read_config(snapshot)));
-            auto dictionary = agg::make_intern_table();
+            CHECK_FALSE(
+                common::unwrap(schemas::dft::agg::tier::read_config(snapshot)));
+            auto dictionary = schemas::dft::agg::make_intern_table();
             common::unwrap(index::agg_dictionary(snapshot, *dictionary));
             CHECK_THROWS(read_partials(snapshot, file_of(snapshot, files[0]),
                                        *dictionary));
@@ -472,8 +472,8 @@ TEST_SUITE("AggPartialsStore") {
         build_seconds(files, index_dir);
 
         const auto rebuilt = open_index(index_path);
-        CHECK(common::unwrap(agg::tier::read_config(rebuilt)));
-        auto dictionary = agg::make_intern_table();
+        CHECK(common::unwrap(schemas::dft::agg::tier::read_config(rebuilt)));
+        auto dictionary = schemas::dft::agg::make_intern_table();
         common::unwrap(index::agg_dictionary(rebuilt, *dictionary));
         for (std::size_t i = 0; i < files.size(); ++i)
             CHECK(
@@ -490,13 +490,14 @@ TEST_SUITE("AggPartialsStore") {
         const dstd::String held = env.get_dir() + "/held";
         const dstd::String through = env.get_dir() + "/through";
 
-        const auto run_bytes = agg::g_agg_run_bytes.exchange(UINT64_MAX);
+        const auto run_bytes =
+            schemas::dft::agg::g_agg_run_bytes.exchange(UINT64_MAX);
         build_seconds(files, held);
-        const auto runs = agg::g_agg_runs_staged.load();
+        const auto runs = schemas::dft::agg::g_agg_runs_staged.load();
         // Each closed chunk fills a run.
-        agg::g_agg_run_bytes.store(1);
+        schemas::dft::agg::g_agg_run_bytes.store(1);
         build_seconds(files, through);
-        CHECK(agg::g_agg_runs_staged.load() > runs);
+        CHECK(schemas::dft::agg::g_agg_runs_staged.load() > runs);
         for (const auto& f : files) {
             const auto rows = agg_rows(f, held);
             CHECK_FALSE(rows.empty());
@@ -506,13 +507,13 @@ TEST_SUITE("AggPartialsStore") {
         // A changed file rebuilt through its staged write keeps none of the
         // rows it had.
         write_trace(env.get_dir(), 0, durations, /*salt=*/37);
-        const auto rebuilt = agg::g_agg_runs_staged.load();
+        const auto rebuilt = schemas::dft::agg::g_agg_runs_staged.load();
         build_seconds(files, through);
-        CHECK(agg::g_agg_runs_staged.load() > rebuilt);
-        agg::g_agg_run_bytes.store(UINT64_MAX);
+        CHECK(schemas::dft::agg::g_agg_runs_staged.load() > rebuilt);
+        schemas::dft::agg::g_agg_run_bytes.store(UINT64_MAX);
         const dstd::String fresh = env.get_dir() + "/fresh";
         build_seconds(files, fresh);
-        agg::g_agg_run_bytes.store(run_bytes);
+        schemas::dft::agg::g_agg_run_bytes.store(run_bytes);
         CHECK(agg_rows(files[0], through) != agg_rows(files[0], held));
         for (const auto& f : files)
             check_rows(agg_rows(f, through), agg_rows(f, fresh));
@@ -563,13 +564,14 @@ TEST_SUITE("AggPartialsStore") {
         REQUIRE(env_dir.has_value());
         const dstd::String dir(*env_dir);
         const auto files = crash_files(dir);
-        agg::g_agg_run_bytes.store(1);
+        schemas::dft::agg::g_agg_run_bytes.store(1);
         std::atomic<bool> done{false};
         dstd::Thread build([&] {
             build_seconds(files, dir + "/idx");
             done.store(true);
         });
-        while (agg::g_agg_runs_staged.load() < CRASH_RUNS && !done.load())
+        while (schemas::dft::agg::g_agg_runs_staged.load() < CRASH_RUNS &&
+               !done.load())
             std::this_thread::yield();
         ::_exit(done.load() ? 1 : 0);
     }

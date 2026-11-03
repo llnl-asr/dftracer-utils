@@ -26,15 +26,8 @@ using namespace dftracer::utils;
 
 #ifdef REFERENCE_PLUGIN_PATH
 
-using dftracer::utils::CoroScope;
-using dftracer::utils::Runtime;
-using dftracer::utils::plugins::ConfigTree;
-using dftracer::utils::plugins::PluginRun;
-using dftracer::utils::plugins::Plugins;
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
-using test_plugin_common::index_trace;
-using test_plugin_common::result_text;
 
 namespace {
 
@@ -53,14 +46,14 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dstd::fs::remove(pfw);
-    return index_trace(gz);
+    return test_plugin_common::index_trace(gz);
 }
 
 // One worker: the plugin's checks write into a process-global status table
 // that is not synchronized, since every worker would compute the same
 // deterministic value for a given check.
-PluginRun run_single(const Plugins& set, const View& view) {
-    PluginRun out;
+plugins::PluginRun run_single(const plugins::Plugins& set, const View& view) {
+    plugins::PluginRun out;
     Runtime rt(1);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
         auto run = co_await set.run(view);
@@ -73,7 +66,7 @@ PluginRun run_single(const Plugins& set, const View& view) {
     return out;
 }
 
-int32_t reference_ok(PluginRun& run) {
+int32_t reference_ok(plugins::PluginRun& run) {
     auto it = run.results.results().find("reference_ok");
     REQUIRE(it != run.results.results().end());
     const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
@@ -86,7 +79,7 @@ int32_t reference_ok(PluginRun& run) {
 // The reference plugin's tier-2 register_state result: dur summed across
 // every event by the plugin's own dur_sum_update/dur_sum_merge, finalized on
 // the merged master fold.
-std::uint64_t reference_dur_sum(PluginRun& run) {
+std::uint64_t reference_dur_sum(plugins::PluginRun& run) {
     auto it = run.results.results().find("reference_plugin.dur_sum");
     REQUIRE(it != run.results.results().end());
     const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
@@ -111,19 +104,20 @@ TEST_CASE("reference_plugin: every service reports OK") {
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
 
-    auto set = Plugins::builder()
+    auto set = plugins::Plugins::builder()
                    .add(REFERENCE_PLUGIN_PATH,
-                        ConfigTree::from_json_string(R"({"workdir": ")" +
-                                                     env.get_dir() + R"("})"))
+                        plugins::ConfigTree::from_json_string(
+                            R"({"workdir": ")" + env.get_dir() + R"("})"))
                    .build();
     INFO((set.has_value() ? dstd::String{}
                           : dstd::String(set.error().message())));
     REQUIRE(set.has_value());
 
     View view = View::from_files({make_trace(env)});
-    PluginRun run = run_single(*set, view);
+    plugins::PluginRun run = run_single(*set, view);
 
-    const dstd::String report = result_text(run, "reference_report");
+    const dstd::String report =
+        test_plugin_common::result_text(run, "reference_report");
     INFO(report);
     CHECK(reference_ok(run) == 1);
     CHECK(report.find("FAIL") == dstd::String::npos);
@@ -135,9 +129,9 @@ TEST_CASE("reference_plugin: a forced-missing service fails loudly") {
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
 
-    auto set = Plugins::builder()
+    auto set = plugins::Plugins::builder()
                    .add(REFERENCE_PLUGIN_PATH,
-                        ConfigTree::from_json_string(
+                        plugins::ConfigTree::from_json_string(
                             R"({"workdir": ")" + env.get_dir() +
                             R"(", "force_missing": "dftu.svc.agg@1"})"))
                    .build();
@@ -146,9 +140,10 @@ TEST_CASE("reference_plugin: a forced-missing service fails loudly") {
     REQUIRE(set.has_value());
 
     View view = View::from_files({make_trace(env)});
-    PluginRun run = run_single(*set, view);
+    plugins::PluginRun run = run_single(*set, view);
 
-    const dstd::String report = result_text(run, "reference_report");
+    const dstd::String report =
+        test_plugin_common::result_text(run, "reference_report");
     INFO(report);
     CHECK(reference_ok(run) == 0);
     CHECK(report.find("agg: MISSING") != dstd::String::npos);

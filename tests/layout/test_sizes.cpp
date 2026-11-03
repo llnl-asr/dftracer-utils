@@ -22,8 +22,6 @@
 
 using namespace dftracer::utils;
 
-namespace df = dftracer::utils::dataframe;
-
 namespace {
 
 template <class T, std::size_t SIZE, std::size_t ALIGN>
@@ -54,11 +52,11 @@ constexpr std::size_t RECORD_ITEM_BUDGET = 72;
 constexpr std::size_t FILE_STAT_BUDGET = 40;
 
 static_assert(within<dftu_series, SERIES_BUDGET, 8>());
-static_assert(within<df::DataType, DATA_TYPE_BUDGET, 8>());
-static_assert(within<df::Field, FIELD_BUDGET, 8>());
-static_assert(within<df::Morsel, MORSEL_BUDGET, 8>());
-static_assert(within<df::AggSpec, AGG_SPEC_BUDGET, 8>());
-static_assert(within<df::WindowColumn, WINDOW_COLUMN_BUDGET, 8>());
+static_assert(within<dataframe::DataType, DATA_TYPE_BUDGET, 8>());
+static_assert(within<dataframe::Field, FIELD_BUDGET, 8>());
+static_assert(within<dataframe::Morsel, MORSEL_BUDGET, 8>());
+static_assert(within<dataframe::AggSpec, AGG_SPEC_BUDGET, 8>());
+static_assert(within<dataframe::WindowColumn, WINDOW_COLUMN_BUDGET, 8>());
 static_assert(within<dftracer::utils::trace::views::detail::FoldEvent,
                      FOLD_EVENT_BUDGET, 8>());
 static_assert(within<dftracer::utils::duql::TLookup, LOOKUP_BUDGET, 8>());
@@ -73,11 +71,11 @@ static_assert(within<dstd::fs::FileStat, FILE_STAT_BUDGET, 8>());
 
 TEST_CASE("the layout budgets hold") {
     CHECK(sizeof(dftu_series) <= SERIES_BUDGET);
-    CHECK(sizeof(df::DataType) <= DATA_TYPE_BUDGET);
-    CHECK(sizeof(df::Field) <= FIELD_BUDGET);
-    CHECK(sizeof(df::Morsel) <= MORSEL_BUDGET);
-    CHECK(sizeof(df::AggSpec) <= AGG_SPEC_BUDGET);
-    CHECK(sizeof(df::WindowColumn) <= WINDOW_COLUMN_BUDGET);
+    CHECK(sizeof(dataframe::DataType) <= DATA_TYPE_BUDGET);
+    CHECK(sizeof(dataframe::Field) <= FIELD_BUDGET);
+    CHECK(sizeof(dataframe::Morsel) <= MORSEL_BUDGET);
+    CHECK(sizeof(dataframe::AggSpec) <= AGG_SPEC_BUDGET);
+    CHECK(sizeof(dataframe::WindowColumn) <= WINDOW_COLUMN_BUDGET);
     CHECK(sizeof(dftracer::utils::trace::views::detail::FoldEvent) <=
           FOLD_EVENT_BUDGET);
     CHECK(sizeof(dftracer::utils::duql::TLookup) <= LOOKUP_BUDGET);

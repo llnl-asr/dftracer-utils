@@ -21,25 +21,21 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::plugins::Host;
-using dftracer::utils::plugins::PluginFold;
-using dstd::StringIntern;
-
 namespace {
 
 struct TrivialSlice {
     explicit TrivialSlice(const dftracer::utils::plugins::Config&) {}
-    void step(const dftu_dataframe*, Host) {}
+    void step(const dftu_dataframe*, plugins::Host) {}
     void merge(TrivialSlice&) {}
-    void finalize(Host) {}
+    void finalize(plugins::Host) {}
 };
 
 struct HostFixture {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    dstd::UniquePtr<PluginFold> fold =
-        dstd::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<plugins::PluginFold> fold =
+        dstd::make_unique<plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     ~HostFixture() {
         fold.reset();
@@ -51,7 +47,7 @@ struct HostFixture {
 
 TEST_CASE("plugin ops: run_op runs a registered column op by name") {
     HostFixture fx;
-    Host h{&fx.host()};
+    plugins::Host h{&fx.host()};
 
     const std::int64_t a_vals[] = {1, 2, 3};
     const std::int64_t b_vals[] = {10, 20, 30};
@@ -76,7 +72,7 @@ TEST_CASE("plugin ops: run_op runs a registered column op by name") {
 
 TEST_CASE("plugin ops: run_op reports unknown names and bad arity") {
     HostFixture fx;
-    Host h{&fx.host()};
+    plugins::Host h{&fx.host()};
 
     CHECK(h.run_op("dftu.test.nonexistent_op", {}) == nullptr);
 
@@ -116,7 +112,7 @@ TEST_CASE("plugin ops: unknown op and a failed op are distinguishable") {
 
 TEST_CASE("plugin ops: find_op resolves a built-in by name") {
     HostFixture fx;
-    Host h{&fx.host()};
+    plugins::Host h{&fx.host()};
 
     const dftu_op_desc* desc = h.find_op("dftu.series.add");
     REQUIRE(desc);

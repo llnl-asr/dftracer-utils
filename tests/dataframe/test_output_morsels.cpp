@@ -319,7 +319,6 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("an elementwise column op runs one morsel at a time") {
-        using dftracer::utils::dataframe::OpArgs;
         const DataFrame df = ints({"t", "v"}, 6000, 5000);
         dftu_scalar five{};
         five.kind = DFTU_SCALAR_TAG_I64;
@@ -363,7 +362,6 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("a frame op over an input with no rows gets typed columns") {
-        using dftracer::utils::dataframe::OpArgs;
         const DataFrame none = ints({"t", "v"}, 0, 7);
         dftu_scalar zero{};
         zero.kind = DFTU_SCALAR_TAG_I64;
@@ -444,7 +442,6 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("a whole-column op under a budget sees the whole input") {
-        using dftracer::utils::dataframe::OpArgs;
         DataFrame df = ints({"t"}, 6000, 5000);
         dstd::Vector<double> f(6000);
         for (std::size_t i = 0; i < f.size(); ++i)
@@ -470,7 +467,6 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("a running or positional column op runs one morsel at a time") {
-        using dftracer::utils::dataframe::OpArgs;
         constexpr std::int64_t ROWS = 6000;
         // Int64 with nulls in runs (a leading run, a run across a morsel
         // edge), Int32 and Float64.
@@ -557,7 +553,6 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("with_column of a column runs one morsel at a time") {
-        using dftracer::utils::dataframe::OpArgs;
         const DataFrame df = ints({"t", "v"}, 6000, 5000);
         const DataFrame extra = ints({"w"}, 6000, 77);
         for (const char* name : {"w", "v"}) {
@@ -579,7 +574,6 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("frame ops with a lazy twin or a lazy form do not collect") {
-        using dftracer::utils::dataframe::OpArgs;
         const DataFrame df = ints({"t", "v", "w"}, 6000, 100);
         const auto streamed = [](const LazyFrame& lf) {
             return lf.explain().find("frame_op") == dstd::String::npos;

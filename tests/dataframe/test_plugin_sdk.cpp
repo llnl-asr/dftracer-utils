@@ -25,17 +25,17 @@
 #include <utility>
 
 using namespace dftracer::utils;
-namespace df = dftracer::utils::dataframe;
-namespace pl = dftracer::utils::plugins;
 
 namespace {
 
-df::DataFrame run(dftracer::utils::coro::CoroTask<df::DataFrame> t) {
+dataframe::DataFrame run(
+    dftracer::utils::coro::CoroTask<dataframe::DataFrame> t) {
     return dftracer::utils::default_runtime().submit(std::move(t)).get();
 }
 
-dstd::Vector<std::int64_t> ints(const df::DataFrame& f, const char* name) {
-    const df::Series& c = f.column(name);
+dstd::Vector<std::int64_t> ints(const dataframe::DataFrame& f,
+                                const char* name) {
+    const dataframe::Series& c = f.column(name);
     const std::int64_t* p = c.data<std::int64_t>();
     return {p, p + c.length()};
 }
@@ -60,30 +60,30 @@ class RangeSource {
 
     dstd::Vector<dstd::String> names() const { return {"id", "val"}; }
 
-    void schema(pl::SchemaBuilder& b) const {
+    void schema(plugins::SchemaBuilder& b) const {
         b.add("id", DFTU_TYPE_INT64, false);
         b.add("val", DFTU_TYPE_INT64, false);
     }
 
     class Cursor {
        public:
-        Cursor(pl::OwnedFrame f, bool fail, dstd::SharedPtr<Counters> c)
+        Cursor(plugins::OwnedFrame f, bool fail, dstd::SharedPtr<Counters> c)
             : f_(std::move(f)), fail_(fail), c_(std::move(c)) {}
         Cursor(const Cursor&) = delete;
         ~Cursor() { ++c_->cursors_destroyed; }
-        dstd::Optional<pl::OwnedFrame> next(std::int64_t) {
+        dstd::Optional<plugins::OwnedFrame> next(std::int64_t) {
             if (fail_) throw std::runtime_error("range cursor broke");
             if (!f_) return dstd::nullopt;
             return std::move(f_);
         }
 
        private:
-        pl::OwnedFrame f_;
+        plugins::OwnedFrame f_;
         bool fail_;
         dstd::SharedPtr<Counters> c_;
     };
 
-    pl::ScanResult<Cursor> scan(const pl::ScanView& req) const {
+    plugins::ScanResult<Cursor> scan(const plugins::ScanView& req) const {
         dstd::Vector<std::int64_t> ids, vals;
         for (std::int64_t i = lo_; i < hi_; ++i) {
             ids.push_back(i);
@@ -108,14 +108,14 @@ class RangeSource {
             cols.push_back(
                 dftu_series_new_flat(DFTU_TYPE_INT64, vals.data(), n, nullptr));
         }
-        pl::OwnedFrame f(dftu_dataframe_new(
+        plugins::OwnedFrame f(dftu_dataframe_new(
             names.data(), cols.data(), static_cast<std::int32_t>(cols.size())));
         return {dstd::make_unique<Cursor>(std::move(f), fail_, c_), {}};
     }
 
     // `id > k` (and `id >= k`) narrows the range exactly.
-    dstd::Optional<pl::Applied<RangeSource>> apply_filter(
-        pl::ExprView pred) const {
+    dstd::Optional<plugins::Applied<RangeSource>> apply_filter(
+        plugins::ExprView pred) const {
         auto cmp = pred.as_compare();
         if (!cmp || cmp->column != 0 || cmp->rhs.kind != DFTU_SCALAR_TAG_I64)
             return dstd::nullopt;
@@ -128,24 +128,24 @@ class RangeSource {
             return dstd::nullopt;
         if (lo <= lo_) return dstd::nullopt;
         ++c_->filters_absorbed;
-        return pl::Applied<RangeSource>{
+        return plugins::Applied<RangeSource>{
             dstd::make_unique<RangeSource>(c_, lo, hi_, fail_),
-            pl::Apply::Exact};
+            plugins::Apply::Exact};
     }
 
-    dstd::Optional<pl::Applied<RangeSource>> apply_limit(std::int64_t offset,
-                                                         std::int64_t n) const {
+    dstd::Optional<plugins::Applied<RangeSource>> apply_limit(
+        std::int64_t offset, std::int64_t n) const {
         const std::int64_t lo = lo_ + offset;
         const std::int64_t hi = std::min(hi_, lo + n);
         if (lo == lo_ && hi == hi_) return dstd::nullopt;
-        return pl::Applied<RangeSource>{
+        return plugins::Applied<RangeSource>{
             dstd::make_unique<RangeSource>(c_, lo, hi, fail_),
-            pl::Apply::Exact};
+            plugins::Apply::Exact};
     }
 
     // Records the offer of an inner join on id, then leaves it to the engine.
-    dstd::Optional<pl::Applied<RangeSource>> apply_join(
-        const pl::JoinView<RangeSource>& j) const {
+    dstd::Optional<plugins::Applied<RangeSource>> apply_join(
+        const plugins::JoinView<RangeSource>& j) const {
         if (j.how != DFTU_JOIN_INNER || j.left_on.size() != 1 ||
             j.left_on[0] != "id" || j.right_on[0] != "id")
             return dstd::nullopt;
@@ -162,15 +162,15 @@ class RangeSource {
 
 // A root source for the test: the adapter's self and the host Source over it.
 struct Root {
-    const dftu_source_vt* vt = pl::source_vtable<RangeSource>();
+    const dftu_source_vt* vt = plugins::source_vtable<RangeSource>();
     void* self;
-    dstd::SharedPtr<df::Source> source;
+    dstd::SharedPtr<dataframe::Source> source;
 
     Root(dstd::SharedPtr<Counters> c, std::int64_t lo, std::int64_t hi,
          bool fail = false)
-        : self(pl::make_source_self(
+        : self(plugins::make_source_self(
               dstd::make_unique<RangeSource>(std::move(c), lo, hi, fail))),
-          source(df::make_provider_source(*vt, self)) {}
+          source(dataframe::make_provider_source(*vt, self)) {}
     ~Root() {
         source.reset();
         vt->destroy(self);
@@ -181,7 +181,7 @@ struct Root {
 
 TEST_SUITE("plugin SDK source") {
     TEST_CASE("the vtable carries the optional slots the class provides") {
-        const dftu_source_vt* vt = pl::source_vtable<RangeSource>();
+        const dftu_source_vt* vt = plugins::source_vtable<RangeSource>();
         CHECK(vt->schema_types != nullptr);
         CHECK(vt->apply != nullptr);
     }
@@ -189,11 +189,11 @@ TEST_SUITE("plugin SDK source") {
     TEST_CASE("a plain scan reads every row with typed columns") {
         auto c = dstd::make_shared<Counters>();
         Root r(c, 0, 5);
-        df::LazyFrame lf = df::LazyFrame::scan(r.source);
-        df::Schema s = r.source->schema();
+        dataframe::LazyFrame lf = dataframe::LazyFrame::scan(r.source);
+        dataframe::Schema s = r.source->schema();
         REQUIRE(s.fields.size() == 2);
-        CHECK(s.fields[0].type.id == df::TypeId::Int64);
-        df::DataFrame f = run(lf.collect());
+        CHECK(s.fields[0].type.id == dataframe::TypeId::Int64);
+        dataframe::DataFrame f = run(lf.collect());
         CHECK(ints(f, "id") == dstd::Vector<std::int64_t>{0, 1, 2, 3, 4});
     }
 
@@ -201,11 +201,12 @@ TEST_SUITE("plugin SDK source") {
         auto c = dstd::make_shared<Counters>();
         {
             Root r(c, 0, 10);
-            df::LazyFrame lf = df::LazyFrame::scan(r.source)
-                                   .filter(df::col(0) > std::int64_t{4})
-                                   .head(3);
+            dataframe::LazyFrame lf =
+                dataframe::LazyFrame::scan(r.source)
+                    .filter(dataframe::col(0) > std::int64_t{4})
+                    .head(3);
             CHECK(lf.explain() == "scan [id, val]");
-            df::DataFrame f = run(lf.collect());
+            dataframe::DataFrame f = run(lf.collect());
             CHECK(ints(f, "id") == dstd::Vector<std::int64_t>{5, 6, 7});
             CHECK(ints(f, "val") == dstd::Vector<std::int64_t>{50, 60, 70});
             CHECK(c->filters_absorbed >= 1);
@@ -216,8 +217,8 @@ TEST_SUITE("plugin SDK source") {
     TEST_CASE("an untranslatable filter stays with the engine") {
         auto c = dstd::make_shared<Counters>();
         Root r(c, 0, 10);
-        df::LazyFrame lf =
-            df::LazyFrame::scan(r.source).filter(df::col(1) > std::int64_t{60});
+        dataframe::LazyFrame lf = dataframe::LazyFrame::scan(r.source).filter(
+            dataframe::col(1) > std::int64_t{60});
         CHECK(lf.explain().find("filter") != dstd::String::npos);
         CHECK(ints(run(lf.collect()), "id") ==
               dstd::Vector<std::int64_t>{7, 8, 9});
@@ -228,9 +229,10 @@ TEST_SUITE("plugin SDK source") {
         auto c = dstd::make_shared<Counters>();
         Root left(c, 0, 5);
         Root right(c, 3, 8);
-        df::LazyFrame lf = df::LazyFrame::scan(left.source)
-                               .join(df::LazyFrame::scan(right.source), {"id"});
-        df::DataFrame f = run(lf.collect());
+        dataframe::LazyFrame lf =
+            dataframe::LazyFrame::scan(left.source)
+                .join(dataframe::LazyFrame::scan(right.source), {"id"});
+        dataframe::DataFrame f = run(lf.collect());
         CHECK(c->joins_absorbed >= 1);
         CHECK(ints(f, "id") == dstd::Vector<std::int64_t>{3, 4});
     }
@@ -238,7 +240,7 @@ TEST_SUITE("plugin SDK source") {
     TEST_CASE("a cursor exception surfaces as a scan error") {
         auto c = dstd::make_shared<Counters>();
         Root r(c, 0, 3, true);
-        CHECK_THROWS_WITH(run(df::LazyFrame::scan(r.source).collect()),
+        CHECK_THROWS_WITH(run(dataframe::LazyFrame::scan(r.source).collect()),
                           doctest::Contains("range cursor broke"));
     }
 }
@@ -252,18 +254,18 @@ class DoubleVal {
    public:
     explicit DoubleVal(OpenMode mode) : mode_(mode) {}
 
-    void output_schema(const pl::SchemaView& in, const pl::OpArgs&,
-                       pl::SchemaBuilder& out) const {
+    void output_schema(const plugins::SchemaView& in, const plugins::OpArgs&,
+                       plugins::SchemaBuilder& out) const {
         in.copy_all(out);
     }
 
     class Cursor {
        public:
-        explicit Cursor(dstd::Optional<pl::InputCursor> in)
+        explicit Cursor(dstd::Optional<plugins::InputCursor> in)
             : in_(std::move(in)) {}
-        dstd::Optional<pl::OwnedFrame> next(std::int64_t max_rows) {
+        dstd::Optional<plugins::OwnedFrame> next(std::int64_t max_rows) {
             if (!in_) return dstd::nullopt;
-            dstd::Optional<pl::OwnedFrame> f = in_->next(max_rows);
+            dstd::Optional<plugins::OwnedFrame> f = in_->next(max_rows);
             if (!f) return dstd::nullopt;
             dftu_series* id = dftu_dataframe_column(f->get(), "id");
             dftu_series* val = dftu_dataframe_column(f->get(), "val");
@@ -277,15 +279,15 @@ class DoubleVal {
                 id, dftu_series_new_flat(DFTU_TYPE_INT64, doubled.data(), n,
                                          nullptr)};
             dftu_series_free(val);
-            return pl::OwnedFrame(dftu_dataframe_new(names, cols, 2));
+            return plugins::OwnedFrame(dftu_dataframe_new(names, cols, 2));
         }
 
        private:
-        dstd::Optional<pl::InputCursor> in_;
+        dstd::Optional<plugins::InputCursor> in_;
     };
 
-    dstd::UniquePtr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
-                                 std::uint64_t) const {
+    dstd::UniquePtr<Cursor> open(plugins::InputCursor in,
+                                 const plugins::OpArgs&, std::uint64_t) const {
         if (mode_ == OpenMode::Throw) throw std::runtime_error("no open");
         if (mode_ == OpenMode::DropInput)
             return dstd::make_unique<Cursor>(dstd::nullopt);
@@ -299,10 +301,10 @@ class DoubleVal {
 struct RegisteredNode {
     dstd::String name;
     RegisteredNode(dstd::String n, OpenMode mode) : name(std::move(n)) {
-        REQUIRE(dftu_node_register(
-                    name.c_str(), pl::node_vtable<DoubleVal>(),
-                    pl::make_node_self(dstd::make_unique<DoubleVal>(mode))) ==
-                0);
+        REQUIRE(
+            dftu_node_register(name.c_str(), plugins::node_vtable<DoubleVal>(),
+                               plugins::make_node_self(
+                                   dstd::make_unique<DoubleVal>(mode))) == 0);
     }
     ~RegisteredNode() { dftu_node_unregister(name.c_str()); }
 };
@@ -315,10 +317,10 @@ TEST_SUITE("plugin SDK node") {
         RegisteredNode node("sdk.double", OpenMode::Normal);
         {
             Root r(c, 0, 4);
-            df::LazyFrame lf =
-                df::LazyFrame::scan(r.source).op("sdk.double", df::OpArgs{});
+            dataframe::LazyFrame lf = dataframe::LazyFrame::scan(r.source).op(
+                "sdk.double", dataframe::OpArgs{});
             CHECK(lf.explain().find("op sdk.double") != dstd::String::npos);
-            df::DataFrame f = run(lf.collect());
+            dataframe::DataFrame f = run(lf.collect());
             CHECK(ints(f, "id") == dstd::Vector<std::int64_t>{0, 1, 2, 3});
             CHECK(ints(f, "val") == dstd::Vector<std::int64_t>{0, 20, 40, 60});
         }
@@ -330,10 +332,11 @@ TEST_SUITE("plugin SDK node") {
         RegisteredNode node("sdk.double_throw", OpenMode::Throw);
         {
             Root r(c, 0, 4);
-            CHECK_THROWS_WITH(run(df::LazyFrame::scan(r.source)
-                                      .op("sdk.double_throw", df::OpArgs{})
-                                      .collect()),
-                              doctest::Contains("sdk.double_throw"));
+            CHECK_THROWS_WITH(
+                run(dataframe::LazyFrame::scan(r.source)
+                        .op("sdk.double_throw", dataframe::OpArgs{})
+                        .collect()),
+                doctest::Contains("sdk.double_throw"));
         }
         CHECK(c->cursors_destroyed == 1);
     }
@@ -343,9 +346,10 @@ TEST_SUITE("plugin SDK node") {
         RegisteredNode node("sdk.double_drop", OpenMode::DropInput);
         {
             Root r(c, 0, 4);
-            df::DataFrame f = run(df::LazyFrame::scan(r.source)
-                                      .op("sdk.double_drop", df::OpArgs{})
-                                      .collect());
+            dataframe::DataFrame f =
+                run(dataframe::LazyFrame::scan(r.source)
+                        .op("sdk.double_drop", dataframe::OpArgs{})
+                        .collect());
             CHECK(f.num_rows() == 0);
         }
         CHECK(c->cursors_destroyed == 1);
@@ -357,29 +361,29 @@ TEST_SUITE("plugin sdk batch strings") {
         const dstd::Vector<dstd::StringView> cats{"POSIX", "", "STDIO",
                                                   "POSIX"};
         const std::uint8_t cat_valid = 0b1101;
-        df::Series cat =
-            df::Series::strings(dstd::Span<const dstd::StringView>(cats),
-                                &cat_valid)
+        dataframe::Series cat =
+            dataframe::Series::strings(dstd::Span<const dstd::StringView>(cats),
+                                       &cat_valid)
                 .dictionary_encode();
-        REQUIRE(cat.encoding() == df::Encoding::Dictionary);
+        REQUIRE(cat.encoding() == dataframe::Encoding::Dictionary);
 
         const dstd::Vector<dstd::StringView> names{"a", "open",  "b", "read",
                                                    "c", "write", "d", "close"};
         const std::uint8_t keep_odd = 0b10101010;
-        const df::Series mask =
-            df::Series::flat(df::TypeId::Bool, &keep_odd, 8);
-        df::Series name =
-            df::Series::strings(dstd::Span<const dstd::StringView>(names))
-                .filter(mask);
-        REQUIRE(name.encoding() == df::Encoding::Selection);
+        const dataframe::Series mask =
+            dataframe::Series::flat(dataframe::TypeId::Bool, &keep_odd, 8);
+        dataframe::Series name = dataframe::Series::strings(
+                                     dstd::Span<const dstd::StringView>(names))
+                                     .filter(mask);
+        REQUIRE(name.encoding() == dataframe::Encoding::Selection);
         REQUIRE(name.length() == 4);
 
         const char* col_names[] = {"cat", "name"};
         dftu_series* cols[] = {cat.release(), name.release()};
-        pl::OwnedFrame f(dftu_dataframe_new(col_names, cols, 2));
+        plugins::OwnedFrame f(dftu_dataframe_new(col_names, cols, 2));
         REQUIRE(f.get() != nullptr);
 
-        const pl::Batch batch(f.get());
+        const plugins::Batch batch(f.get());
         REQUIRE(batch.size() == 4);
         CHECK(batch[0].cat() == "POSIX");
         CHECK(batch[1].cat().empty());
@@ -414,16 +418,16 @@ TEST_SUITE("plugin sdk batch strings") {
         const std::int64_t sizes[1] = {
             static_cast<std::int64_t>(long_row.size())};
         dftu_series* name = dftu_series_new_string_view(
-            static_cast<dftu_dtype>(df::TypeId::String), views, 3, &valid, bufs,
-            sizes, 1, nullptr, nullptr);
+            static_cast<dftu_dtype>(dataframe::TypeId::String), views, 3,
+            &valid, bufs, sizes, 1, nullptr, nullptr);
         REQUIRE(name != nullptr);
 
         const char* col_names[] = {"name"};
         dftu_series* cols[] = {name};
-        pl::OwnedFrame f(dftu_dataframe_new(col_names, cols, 1));
+        plugins::OwnedFrame f(dftu_dataframe_new(col_names, cols, 1));
         REQUIRE(f.get() != nullptr);
 
-        const pl::Batch batch(f.get());
+        const plugins::Batch batch(f.get());
         REQUIRE(batch.size() == 3);
         CHECK(batch[0].name() == "open");
         CHECK(batch[1].name().empty());

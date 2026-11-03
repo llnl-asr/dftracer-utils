@@ -21,15 +21,7 @@
 #include <stdexcept>
 
 using namespace dftracer::utils;
-
-namespace df = dftracer::utils::dataframe;
-namespace duql = dftracer::utils::duql;
-using df::ArithOp;
-using df::CmpOp;
-using df::ConvertOp;
-using df::Expr;
-using df::Series;
-using df::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -127,7 +119,7 @@ Opt<dstd::String> as_strs(const Series& s) {
 }
 
 Series run(const Expr& e, const dstd::Vector<const Series*>& in) {
-    return df::eval(e, in);
+    return dataframe::eval(e, in);
 }
 
 dftu_scalar si(std::int64_t v) {
@@ -156,18 +148,18 @@ dftu_scalar ss(dstd::StringView v) {
     return s;
 }
 
-Expr c0() { return df::expr_col(0); }
-Expr c1() { return df::expr_col(1); }
+Expr c0() { return dataframe::expr_col(0); }
+Expr c1() { return dataframe::expr_col(1); }
 
 Opt<std::int64_t> arith_i(ArithOp op, const Series& a, const Series& b) {
-    return as_ints(run(df::expr_arith(op, c0(), c1()), {&a, &b}));
+    return as_ints(run(dataframe::expr_arith(op, c0(), c1()), {&a, &b}));
 }
 Opt<double> arith_d(ArithOp op, const Series& a, const Series& b) {
-    return as_dbls(run(df::expr_arith(op, c0(), c1()), {&a, &b}));
+    return as_dbls(run(dataframe::expr_arith(op, c0(), c1()), {&a, &b}));
 }
 
 Opt<bool> cmp_col(CmpOp op, const Series& a, dftu_scalar rhs) {
-    return as_bools(run(df::expr_cmp(op, c0(), rhs), {&a}));
+    return as_bools(run(dataframe::expr_cmp(op, c0(), rhs), {&a}));
 }
 
 }  // namespace
@@ -228,33 +220,34 @@ TEST_CASE("arith mixes Uint64, narrow integers and literals") {
     CHECK(arith_i(ArithOp::Add, a, b) == Opt<std::int64_t>{127, 1});
 
     const Series c = ints({5, 6});
-    CHECK(as_ints(
-              run(df::expr_arith(ArithOp::Sub, df::lit(std::int64_t{10}), c0()),
-                  {&c})) == Opt<std::int64_t>{5, 4});
-    CHECK(as_dbls(run(df::expr_arith(ArithOp::Add, c0(), df::lit(0.5)),
-                      {&c})) == Opt<double>{5.5, 6.5});
+    CHECK(as_ints(run(dataframe::expr_arith(
+                          ArithOp::Sub, dataframe::lit(std::int64_t{10}), c0()),
+                      {&c})) == Opt<std::int64_t>{5, 4});
+    CHECK(as_dbls(run(
+              dataframe::expr_arith(ArithOp::Add, c0(), dataframe::lit(0.5)),
+              {&c})) == Opt<double>{5.5, 6.5});
 
     const Series s = strs({"a", "b"});
-    CHECK_THROWS_AS(run(df::expr_arith(ArithOp::Add, c0(), c0()), {&s}),
+    CHECK_THROWS_AS(run(dataframe::expr_arith(ArithOp::Add, c0(), c0()), {&s}),
                     std::invalid_argument);
 }
 
 TEST_CASE("neg nulls INT64_MIN and a uint64 past it") {
     const Series a = ints({5, I64_MIN, dstd::nullopt});
-    CHECK(as_ints(run(df::expr_neg(c0()), {&a})) ==
+    CHECK(as_ints(run(dataframe::expr_neg(c0()), {&a})) ==
           Opt<std::int64_t>{-5, dstd::nullopt, dstd::nullopt});
     const Series u = uints({std::uint64_t{1} << 63, U64_MAX});
-    CHECK(as_ints(run(df::expr_neg(c0()), {&u})) ==
+    CHECK(as_ints(run(dataframe::expr_neg(c0()), {&u})) ==
           Opt<std::int64_t>{I64_MIN, dstd::nullopt});
     const Series d = dbls({1.5});
-    CHECK(as_dbls(run(df::expr_neg(c0()), {&d})) == Opt<double>{-1.5});
+    CHECK(as_dbls(run(dataframe::expr_neg(c0()), {&d})) == Opt<double>{-1.5});
 }
 
 TEST_CASE("cmp_expr compares integers and doubles exactly") {
     const Series i = ints({9007199254740993, 2, 3, dstd::nullopt, 1});
     const Series d = dbls({9007199254740992.0, 2.0, 2.5, 1.0, NaN});
     auto cmp = [&](CmpOp op, const Expr& a, const Expr& b) {
-        return as_bools(run(df::expr_cmp_expr(op, a, b), {&i, &d}));
+        return as_bools(run(dataframe::expr_cmp_expr(op, a, b), {&i, &d}));
     };
     CHECK(cmp(CmpOp::Gt, c0(), c1()) ==
           Opt<bool>{true, false, true, dstd::nullopt, dstd::nullopt});
@@ -265,21 +258,23 @@ TEST_CASE("cmp_expr compares integers and doubles exactly") {
 
     const Series u = uints({U64_MAX, 0});
     const Series s = ints({-1, 0});
-    CHECK(as_bools(run(df::expr_cmp_expr(CmpOp::Gt, c0(), c1()), {&u, &s})) ==
-          Opt<bool>{true, false});
+    CHECK(as_bools(run(dataframe::expr_cmp_expr(CmpOp::Gt, c0(), c1()),
+                       {&u, &s})) == Opt<bool>{true, false});
 }
 
 TEST_CASE("cmp_expr orders strings bytewise and false before true") {
     const Series a = strs({"a", "B", "\xc3\xa9", dstd::nullopt});
     const Series b = strs({"b", "a", "z", "x"});
-    CHECK(as_bools(run(df::expr_cmp_expr(CmpOp::Lt, c0(), c1()), {&a, &b})) ==
+    CHECK(as_bools(
+              run(dataframe::expr_cmp_expr(CmpOp::Lt, c0(), c1()), {&a, &b})) ==
           Opt<bool>{true, true, false, dstd::nullopt});
     const Series x = bools({false, true, true});
     const Series y = bools({true, false, true});
-    CHECK(as_bools(run(df::expr_cmp_expr(CmpOp::Lt, c0(), c1()), {&x, &y})) ==
-          Opt<bool>{true, false, false});
-    CHECK_THROWS_AS(run(df::expr_cmp_expr(CmpOp::Eq, c0(), c1()), {&a, &x}),
-                    std::invalid_argument);
+    CHECK(as_bools(run(dataframe::expr_cmp_expr(CmpOp::Lt, c0(), c1()),
+                       {&x, &y})) == Opt<bool>{true, false, false});
+    CHECK_THROWS_AS(
+        run(dataframe::expr_cmp_expr(CmpOp::Eq, c0(), c1()), {&a, &x}),
+        std::invalid_argument);
 }
 
 TEST_CASE("expr_cmp against a scalar is exact across integer and double") {
@@ -325,113 +320,116 @@ TEST_CASE("expr_cmp against a scalar is exact across integer and double") {
 TEST_CASE("coalesce takes the first present operand in order") {
     const Series a = ints({dstd::nullopt, 2, dstd::nullopt});
     const Series b = ints({1, 7, dstd::nullopt});
-    CHECK(as_ints(run(df::expr_coalesce({c0(), c1(), df::lit(std::int64_t{9})}),
+    CHECK(as_ints(run(dataframe::expr_coalesce(
+                          {c0(), c1(), dataframe::lit(std::int64_t{9})}),
                       {&a, &b})) == Opt<std::int64_t>{1, 2, 9});
-    CHECK(as_ints(run(df::expr_coalesce({c1(), c0()}), {&a, &b})) ==
+    CHECK(as_ints(run(dataframe::expr_coalesce({c1(), c0()}), {&a, &b})) ==
           Opt<std::int64_t>{1, 7, dstd::nullopt});
 
     const Series d = dbls({0.5, 0.25, dstd::nullopt});
-    CHECK(as_dbls(run(df::expr_coalesce({c0(), c1()}), {&a, &d})) ==
+    CHECK(as_dbls(run(dataframe::expr_coalesce({c0(), c1()}), {&a, &d})) ==
           Opt<double>{0.5, 2.0, dstd::nullopt});
 
     const Series u = uints({U64_MAX, dstd::nullopt});
     const Series i = ints({1, 2});
-    CHECK(as_ints(run(df::expr_coalesce({c0(), c1()}), {&u, &i})) ==
+    CHECK(as_ints(run(dataframe::expr_coalesce({c0(), c1()}), {&u, &i})) ==
           Opt<std::int64_t>{dstd::nullopt, 2});
 
     const Series s = strs({dstd::nullopt, "x"});
     const Series t = strs({"y", "z"});
-    CHECK(as_strs(run(df::expr_coalesce({c0(), c1()}), {&s, &t})) ==
+    CHECK(as_strs(run(dataframe::expr_coalesce({c0(), c1()}), {&s, &t})) ==
           Opt<dstd::String>{"y", "x"});
-    CHECK_THROWS_AS(run(df::expr_coalesce({c0(), c1()}), {&s, &i}),
+    CHECK_THROWS_AS(run(dataframe::expr_coalesce({c0(), c1()}), {&s, &i}),
                     std::invalid_argument);
-    CHECK_THROWS_AS(df::expr_coalesce({}), std::invalid_argument);
+    CHECK_THROWS_AS(dataframe::expr_coalesce({}), std::invalid_argument);
 }
 
 TEST_CASE("least and greatest are null when any operand is null") {
     const Series a = ints({3, dstd::nullopt, 5});
     const Series b = ints({4, 1, 2});
-    CHECK(as_ints(run(df::expr_extreme({c0(), c1()}, true), {&a, &b})) ==
+    CHECK(as_ints(run(dataframe::expr_extreme({c0(), c1()}, true), {&a, &b})) ==
           Opt<std::int64_t>{3, dstd::nullopt, 2});
-    CHECK(as_ints(run(
-              df::expr_extreme({c0(), c1(), df::lit(std::int64_t{4})}, false),
-              {&a, &b})) == Opt<std::int64_t>{4, dstd::nullopt, 5});
+    CHECK(as_ints(run(dataframe::expr_extreme(
+                          {c0(), c1(), dataframe::lit(std::int64_t{4})}, false),
+                      {&a, &b})) == Opt<std::int64_t>{4, dstd::nullopt, 5});
 
     const Series u = uints({U64_MAX});
     const Series i = ints({-1});
-    CHECK(as_ints(run(df::expr_extreme({c0(), c1()}, true), {&u, &i})) ==
+    CHECK(as_ints(run(dataframe::expr_extreme({c0(), c1()}, true), {&u, &i})) ==
           Opt<std::int64_t>{-1});
-    CHECK(as_ints(run(df::expr_extreme({c0(), c1()}, false), {&u, &i})) ==
-          Opt<std::int64_t>{dstd::nullopt});
+    CHECK(as_ints(run(dataframe::expr_extreme({c0(), c1()}, false),
+                      {&u, &i})) == Opt<std::int64_t>{dstd::nullopt});
 
     const Series big = ints({9007199254740993});
     const Series d = dbls({9007199254740992.0});
-    CHECK(as_dbls(run(df::expr_extreme({c0(), c1()}, true), {&big, &d})) ==
-          Opt<double>{9007199254740992.0});
+    CHECK(as_dbls(run(dataframe::expr_extreme({c0(), c1()}, true),
+                      {&big, &d})) == Opt<double>{9007199254740992.0});
     const Series nan = dbls({NaN});
-    CHECK(as_dbls(run(df::expr_extreme({c0(), c1()}, true), {&d, &nan})) ==
-          Opt<double>{dstd::nullopt});
+    CHECK(as_dbls(run(dataframe::expr_extreme({c0(), c1()}, true),
+                      {&d, &nan})) == Opt<double>{dstd::nullopt});
 
     const Series s = strs({"b", "B"});
     const Series t = strs({"a", "a"});
-    CHECK(as_strs(run(df::expr_extreme({c0(), c1()}, true), {&s, &t})) ==
+    CHECK(as_strs(run(dataframe::expr_extreme({c0(), c1()}, true), {&s, &t})) ==
           Opt<dstd::String>{"a", "B"});
 }
 
 TEST_CASE("concat joins strings and is null when any operand is null") {
     const Series a = strs({"a", dstd::nullopt, ""});
     const Series b = strs({"b", "c", "d"});
-    CHECK(as_strs(run(df::expr_concat({c0(), c1(), df::expr_lit_str("!")}),
-                      {&a, &b})) ==
-          Opt<dstd::String>{"ab!", dstd::nullopt, "d!"});
+    CHECK(
+        as_strs(run(
+            dataframe::expr_concat({c0(), c1(), dataframe::expr_lit_str("!")}),
+            {&a, &b})) == Opt<dstd::String>{"ab!", dstd::nullopt, "d!"});
     const Series i = ints({1, 2, 3});
-    CHECK_THROWS_AS(run(df::expr_concat({c0(), c1()}), {&a, &i}),
+    CHECK_THROWS_AS(run(dataframe::expr_concat({c0(), c1()}), {&a, &i}),
                     std::invalid_argument);
 }
 
 TEST_CASE("round is half away from zero and keeps integers") {
     const Series d = dbls({2.5, -2.5, 1.2345, 15.0, dstd::nullopt});
-    CHECK(as_dbls(run(df::expr_round(c0(), 0), {&d})) ==
+    CHECK(as_dbls(run(dataframe::expr_round(c0(), 0), {&d})) ==
           Opt<double>{3.0, -3.0, 1.0, 15.0, dstd::nullopt});
-    CHECK(as_dbls(run(df::expr_round(c0(), 2), {&d}))[2] ==
+    CHECK(as_dbls(run(dataframe::expr_round(c0(), 2), {&d}))[2] ==
           dstd::Optional<double>(1.23));
-    CHECK(as_dbls(run(df::expr_round(c0(), -1), {&d})) ==
+    CHECK(as_dbls(run(dataframe::expr_round(c0(), -1), {&d})) ==
           Opt<double>{0.0, -0.0, 0.0, 20.0, dstd::nullopt});
-    CHECK(as_dbls(run(df::expr_round(c0(), 400), {&d})) ==
+    CHECK(as_dbls(run(dataframe::expr_round(c0(), 400), {&d})) ==
           Opt<double>{dstd::nullopt, dstd::nullopt, dstd::nullopt,
                       dstd::nullopt, dstd::nullopt});
 
     const dstd::Vector<std::int32_t> n32{1234, -1250};
     const Series i32 = Series::flat(TypeId::Int32, n32.data(), 2);
-    const Series same = run(df::expr_round(c0(), 2), {&i32});
+    const Series same = run(dataframe::expr_round(c0(), 2), {&i32});
     CHECK(same.type() == TypeId::Int32);
-    CHECK(as_ints(run(df::expr_round(c0(), -2), {&i32})) ==
+    CHECK(as_ints(run(dataframe::expr_round(c0(), -2), {&i32})) ==
           Opt<std::int64_t>{1200, -1300});
 }
 
 TEST_CASE("log and pow give null instead of NaN") {
     const Series a = dbls({std::exp(1.0), 0.0, -1.0, dstd::nullopt});
-    CHECK(as_dbls(run(df::expr_log(c0()), {&a})) ==
+    CHECK(as_dbls(run(dataframe::expr_log(c0()), {&a})) ==
           Opt<double>{1.0, dstd::nullopt, dstd::nullopt, dstd::nullopt});
     const Series x = dbls({-8.0, 2.0, 0.0});
     const Series y = dbls({1.0 / 3.0, 10.0, -1.0});
-    CHECK(as_dbls(run(df::expr_pow(c0(), c1()), {&x, &y})) ==
+    CHECK(as_dbls(run(dataframe::expr_pow(c0(), c1()), {&x, &y})) ==
           Opt<double>{dstd::nullopt, 1024.0,
                       std::numeric_limits<double>::infinity()});
     const Series i = ints({2});
-    CHECK(as_dbls(run(df::expr_pow(c0(), df::lit(std::int64_t{3})), {&i})) ==
-          Opt<double>{8.0});
+    CHECK(
+        as_dbls(run(dataframe::expr_pow(c0(), dataframe::lit(std::int64_t{3})),
+                    {&i})) == Opt<double>{8.0});
 }
 
 TEST_CASE("substr counts UTF-8 characters") {
     const Series s = strs({"h\xc3\xa9llo", "ab", dstd::nullopt});
-    CHECK(as_strs(run(df::expr_str_substr(c0(), 1, 3), {&s})) ==
+    CHECK(as_strs(run(dataframe::expr_str_substr(c0(), 1, 3), {&s})) ==
           Opt<dstd::String>{"\xc3\xa9ll", "b", dstd::nullopt});
-    CHECK(as_strs(run(df::expr_str_substr(c0(), 2, -1), {&s})) ==
+    CHECK(as_strs(run(dataframe::expr_str_substr(c0(), 2, -1), {&s})) ==
           Opt<dstd::String>{"llo", "", dstd::nullopt});
-    CHECK(as_strs(run(df::expr_str_substr(c0(), 10, 2), {&s})) ==
+    CHECK(as_strs(run(dataframe::expr_str_substr(c0(), 10, 2), {&s})) ==
           Opt<dstd::String>{"", "", dstd::nullopt});
-    CHECK(as_strs(run(df::expr_str_substr(c0(), -1, 2), {&s})) ==
+    CHECK(as_strs(run(dataframe::expr_str_substr(c0(), -1, 2), {&s})) ==
           Opt<dstd::String>{dstd::nullopt, dstd::nullopt, dstd::nullopt});
 }
 
@@ -439,25 +437,25 @@ TEST_CASE("str_pattern runs a compiled duql pattern; a work limit is null") {
     const Series s = strs({"hello", "HELLO", "world", dstd::nullopt});
     auto ilike = duql::compile_like("HE%", true, dstd::nullopt);
     REQUIRE(ilike);
-    CHECK(as_bools(run(df::expr_str_pattern(c0(), *ilike), {&s})) ==
+    CHECK(as_bools(run(dataframe::expr_str_pattern(c0(), *ilike), {&s})) ==
           Opt<bool>{true, true, false, dstd::nullopt});
     auto icontains = duql::compile_contains("LL", true);
     REQUIRE(icontains);
-    CHECK(as_bools(run(df::expr_str_pattern(c0(), *icontains), {&s})) ==
+    CHECK(as_bools(run(dataframe::expr_str_pattern(c0(), *icontains), {&s})) ==
           Opt<bool>{true, true, false, dstd::nullopt});
 
     const Series hard = strs({dstd::String(10000, 'a') + "!", "AAA"});
     auto iregex = duql::compile_regex("^(a|aa)+$", true);
     REQUIRE(iregex);
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
-    CHECK(as_bools(run(df::expr_str_pattern(c0(), *iregex), {&hard})) ==
+    CHECK(as_bools(run(dataframe::expr_str_pattern(c0(), *iregex), {&hard})) ==
           Opt<bool>{false, true});
 #else
-    CHECK(as_bools(run(df::expr_str_pattern(c0(), *iregex), {&hard})) ==
+    CHECK(as_bools(run(dataframe::expr_str_pattern(c0(), *iregex), {&hard})) ==
           Opt<bool>{dstd::nullopt, true});
 #endif
 
-    CHECK_THROWS_AS(run(df::expr_str_pattern(c0(), nullptr), {&s}),
+    CHECK_THROWS_AS(run(dataframe::expr_str_pattern(c0(), nullptr), {&s}),
                     std::invalid_argument);
 }
 
@@ -465,47 +463,48 @@ TEST_CASE("str_extract returns a capture group or null") {
     const Series s = strs({"12-34", "x", dstd::nullopt});
     auto re = duql::compile_regex("(\\d+)-(\\d+)", false);
     REQUIRE(re);
-    CHECK(as_strs(run(df::expr_str_extract(c0(), *re, 2), {&s})) ==
+    CHECK(as_strs(run(dataframe::expr_str_extract(c0(), *re, 2), {&s})) ==
           Opt<dstd::String>{"34", dstd::nullopt, dstd::nullopt});
-    CHECK(as_strs(run(df::expr_str_extract(c0(), *re, 0), {&s})) ==
+    CHECK(as_strs(run(dataframe::expr_str_extract(c0(), *re, 0), {&s})) ==
           Opt<dstd::String>{"12-34", dstd::nullopt, dstd::nullopt});
-    CHECK_THROWS_AS(run(df::expr_str_extract(c0(), *re, 3), {&s}),
+    CHECK_THROWS_AS(run(dataframe::expr_str_extract(c0(), *re, 3), {&s}),
                     std::invalid_argument);
 
     const Series hard = strs({dstd::String(10000, 'a') + "!"});
     auto slow = duql::compile_regex("^(a|aa)+$", false);
     REQUIRE(slow);
-    CHECK(as_strs(run(df::expr_str_extract(c0(), *slow, 1), {&hard})) ==
+    CHECK(as_strs(run(dataframe::expr_str_extract(c0(), *slow, 1), {&hard})) ==
           Opt<dstd::String>{dstd::nullopt});
 }
 
 TEST_CASE("string predicates take a column needle") {
     const Series s = strs({"hello", "hello", "", "abc", dstd::nullopt, "x"});
     const Series n = strs({"he", "lo", "", "bc", "a", dstd::nullopt});
-    using P = df::StrPredOp;
-    CHECK(as_bools(run(df::expr_str_pred_col(P::StartsWith, c0(), c1()),
+    using P = dataframe::StrPredOp;
+    CHECK(as_bools(run(dataframe::expr_str_pred_col(P::StartsWith, c0(), c1()),
                        {&s, &n})) ==
           Opt<bool>{true, false, true, false, dstd::nullopt, dstd::nullopt});
-    CHECK(as_bools(
-              run(df::expr_str_pred_col(P::EndsWith, c0(), c1()), {&s, &n})) ==
+    CHECK(as_bools(run(dataframe::expr_str_pred_col(P::EndsWith, c0(), c1()),
+                       {&s, &n})) ==
           Opt<bool>{false, true, true, true, dstd::nullopt, dstd::nullopt});
-    CHECK(as_bools(
-              run(df::expr_str_pred_col(P::Contains, c0(), c1()), {&s, &n})) ==
+    CHECK(as_bools(run(dataframe::expr_str_pred_col(P::Contains, c0(), c1()),
+                       {&s, &n})) ==
           Opt<bool>{true, true, true, true, dstd::nullopt, dstd::nullopt});
     const Series longer = strs({"hello world", "a", "", "abcd", "q", "x"});
-    CHECK(as_bools(run(df::expr_str_pred_col(P::Contains, c0(), c1()),
+    CHECK(as_bools(run(dataframe::expr_str_pred_col(P::Contains, c0(), c1()),
                        {&s, &longer})) ==
           Opt<bool>{false, false, true, false, dstd::nullopt, true});
     for (P op : {P::Contains, P::StartsWith, P::EndsWith}) {
-        CHECK(
-            as_bools(run(df::expr_str_pred_col(op, c0(), df::expr_lit_str("l")),
-                         {&s})) ==
-            as_bools(run(df::expr_str_pred(op, c0(), "l"), {&s})));
+        CHECK(as_bools(run(dataframe::expr_str_pred_col(
+                               op, c0(), dataframe::expr_lit_str("l")),
+                           {&s})) ==
+              as_bools(run(dataframe::expr_str_pred(op, c0(), "l"), {&s})));
     }
-    CHECK_THROWS_AS(df::expr_str_pred_col(P::Like, c0(), c1()),
+    CHECK_THROWS_AS(dataframe::expr_str_pred_col(P::Like, c0(), c1()),
                     std::invalid_argument);
-    CHECK(df::infer_type(df::expr_str_pred_col(P::Contains, c0(), c1()),
-                         {s.data_type(), n.data_type()})
+    CHECK(dataframe::infer_type(
+              dataframe::expr_str_pred_col(P::Contains, c0(), c1()),
+              {s.data_type(), n.data_type()})
               .id == TypeId::Bool);
 }
 
@@ -513,19 +512,22 @@ TEST_CASE("replace takes column from and to") {
     const Series s = strs({"aXbXc", "abc", "aaa", "abc", dstd::nullopt, "xyz"});
     const Series from = strs({"X", "", "aa", "b", "a", dstd::nullopt});
     const Series to = strs({"--", "Z", "Q", "", "a", "a"});
-    CHECK(as_strs(run(df::expr_str_replace_col(c0(), c1(), df::expr_col(2)),
+    CHECK(as_strs(run(dataframe::expr_str_replace_col(c0(), c1(),
+                                                      dataframe::expr_col(2)),
                       {&s, &from, &to})) ==
           Opt<dstd::String>{"a--b--c", "abc", "Qa", "ac", dstd::nullopt,
                             dstd::nullopt});
-    CHECK(
-        as_strs(run(df::expr_str_replace_col(c0(), df::expr_lit_str("b"), c1()),
-                    {&s, &to})) ==
-        Opt<dstd::String>{"aX--Xc", "aZc", "aaa", "ac", dstd::nullopt, "xyz"});
-    CHECK(
-        as_strs(run(df::expr_str_replace_col(c0(), df::expr_lit_str("a"),
-                                             df::expr_lit_str("\xc3\xa9")),
-                    {&s})) ==
-        as_strs(run(df::expr_str_replace(c0(), "a", "\xc3\xa9", true), {&s})));
+    CHECK(as_strs(run(dataframe::expr_str_replace_col(
+                          c0(), dataframe::expr_lit_str("b"), c1()),
+                      {&s, &to})) == Opt<dstd::String>{"aX--Xc", "aZc", "aaa",
+                                                       "ac", dstd::nullopt,
+                                                       "xyz"});
+    CHECK(as_strs(run(dataframe::expr_str_replace_col(
+                          c0(), dataframe::expr_lit_str("a"),
+                          dataframe::expr_lit_str("\xc3\xa9")),
+                      {&s})) ==
+          as_strs(run(dataframe::expr_str_replace(c0(), "a", "\xc3\xa9", true),
+                      {&s})));
 }
 
 TEST_CASE("substr takes column start and length") {
@@ -533,52 +535,53 @@ TEST_CASE("substr takes column start and length") {
         strs({"h\xc3\xa9llo", "abc", "abc", "abc", dstd::nullopt, "abc"});
     const Series start = ints({1, 0, -1, 10, 0, dstd::nullopt});
     const Series len = ints({3, -1, 2, 2, 1, 1});
-    CHECK(as_strs(run(df::expr_str_substr_col(c0(), c1(), nullptr),
+    CHECK(as_strs(run(dataframe::expr_str_substr_col(c0(), c1(), nullptr),
                       {&s, &start})) ==
           Opt<dstd::String>{"\xc3\xa9llo", "abc", dstd::nullopt, "",
                             dstd::nullopt, dstd::nullopt});
-    const Expr l = df::expr_col(2);
-    CHECK(as_strs(run(df::expr_str_substr_col(c0(), c1(), &l),
+    const Expr l = dataframe::expr_col(2);
+    CHECK(as_strs(run(dataframe::expr_str_substr_col(c0(), c1(), &l),
                       {&s, &start, &len})) ==
           Opt<dstd::String>{"\xc3\xa9ll", dstd::nullopt, dstd::nullopt, "",
                             dstd::nullopt, dstd::nullopt});
-    const Expr lit_len = df::lit(std::int64_t{2});
-    CHECK(as_strs(run(df::expr_str_substr_col(c0(), c1(), &lit_len),
+    const Expr lit_len = dataframe::lit(std::int64_t{2});
+    CHECK(as_strs(run(dataframe::expr_str_substr_col(c0(), c1(), &lit_len),
                       {&s, &start})) ==
           Opt<dstd::String>{"\xc3\xa9l", "ab", dstd::nullopt, "", dstd::nullopt,
                             dstd::nullopt});
     const Series fl = dbls({1.0, 1.0, 1.0, 1.0, 1.0, 1.0});
-    CHECK(
-        as_strs(run(df::expr_str_substr_col(c0(), c1(), nullptr), {&s, &fl})) ==
-        Opt<dstd::String>{dstd::nullopt, dstd::nullopt, dstd::nullopt,
-                          dstd::nullopt, dstd::nullopt, dstd::nullopt});
+    CHECK(as_strs(run(dataframe::expr_str_substr_col(c0(), c1(), nullptr),
+                      {&s, &fl})) ==
+          Opt<dstd::String>{dstd::nullopt, dstd::nullopt, dstd::nullopt,
+                            dstd::nullopt, dstd::nullopt, dstd::nullopt});
 }
 
 TEST_CASE("round takes a column of digits") {
     const Series d = dbls({2.5, -2.5, 1.2345, 15.0, dstd::nullopt, 7.5, 1.5});
     const Series dg = ints({0, 0, 2, -1, 1, dstd::nullopt, 400});
-    CHECK(as_dbls(run(df::expr_round_col(c0(), c1()), {&d, &dg})) ==
+    CHECK(as_dbls(run(dataframe::expr_round_col(c0(), c1()), {&d, &dg})) ==
           Opt<double>{3.0, -3.0, 1.23, 20.0, dstd::nullopt, dstd::nullopt,
                       dstd::nullopt});
     const Series n = ints({1234, -1250, 15, 15, dstd::nullopt, 15, 15});
     const Series dg2 = ints({2, -2, 0, -1, 0, 0, 400});
-    CHECK(as_ints(run(df::expr_round_col(c0(), c1()), {&n, &dg2})) ==
+    CHECK(as_ints(run(dataframe::expr_round_col(c0(), c1()), {&n, &dg2})) ==
           Opt<std::int64_t>{1234, -1300, 15, 20, dstd::nullopt, 15, 15});
     const Series fd = dbls({0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
-    CHECK(as_ints(run(df::expr_round_col(c0(), c1()), {&n, &fd})) ==
+    CHECK(as_ints(run(dataframe::expr_round_col(c0(), c1()), {&n, &fd})) ==
           Opt<std::int64_t>(7, dstd::nullopt));
     const std::uint64_t big = std::uint64_t{1} << 63;
     const Series u =
         uints({big + 2048, big + 2048, U64_MAX, 15, dstd::nullopt});
     const Series ud = ints({0, -2, -1, -1, 0});
     const auto ur = read<std::uint64_t>(
-        run(df::expr_round_col(c0(), c1()), {&u, &ud}), TypeId::Uint64);
+        run(dataframe::expr_round_col(c0(), c1()), {&u, &ud}), TypeId::Uint64);
     CHECK(ur == Opt<std::uint64_t>{big + 2048, dstd::nullopt, dstd::nullopt, 20,
                                    dstd::nullopt});
-    CHECK(as_dbls(run(df::expr_round_col(c0(), df::lit(std::int64_t{2})),
-                      {&d})) == as_dbls(run(df::expr_round(c0(), 2), {&d})));
-    CHECK(df::infer_type(df::expr_round_col(c0(), c1()),
-                         {n.data_type(), dg2.data_type()})
+    CHECK(as_dbls(run(
+              dataframe::expr_round_col(c0(), dataframe::lit(std::int64_t{2})),
+              {&d})) == as_dbls(run(dataframe::expr_round(c0(), 2), {&d})));
+    CHECK(dataframe::infer_type(dataframe::expr_round_col(c0(), c1()),
+                                {n.data_type(), dg2.data_type()})
               .id == TypeId::Int64);
 }
 
@@ -588,14 +591,16 @@ TEST_CASE("extract takes a column of groups") {
     const Series g = ints({2, 0, 3, -1, 1, 1, dstd::nullopt});
     auto re = duql::compile_regex("(\\d+)-(\\d+)", false);
     REQUIRE(re);
-    CHECK(as_strs(run(df::expr_str_extract_col(c0(), *re, c1()), {&s, &g})) ==
+    CHECK(as_strs(run(dataframe::expr_str_extract_col(c0(), *re, c1()),
+                      {&s, &g})) ==
           Opt<dstd::String>{"34", "12-34", dstd::nullopt, dstd::nullopt,
                             dstd::nullopt, dstd::nullopt, dstd::nullopt});
-    CHECK(as_strs(run(
-              df::expr_str_extract_col(c0(), *re, df::lit(std::int64_t{1})),
-              {&s})) == as_strs(run(df::expr_str_extract(c0(), *re, 1), {&s})));
+    CHECK(as_strs(run(dataframe::expr_str_extract_col(
+                          c0(), *re, dataframe::lit(std::int64_t{1})),
+                      {&s})) ==
+          as_strs(run(dataframe::expr_str_extract(c0(), *re, 1), {&s})));
     CHECK_THROWS_AS(
-        run(df::expr_str_extract_col(c0(), nullptr, c1()), {&s, &g}),
+        run(dataframe::expr_str_extract_col(c0(), nullptr, c1()), {&s, &g}),
         std::invalid_argument);
 }
 
@@ -607,8 +612,8 @@ TEST_CASE("str_regex_replace substitutes groups and keeps nulls") {
     auto sub = duql::compile_substitution(**re, "${op}#$2$$");
     REQUIRE(sub);
     const Opt<dstd::String> want{"open#17$", "none", dstd::nullopt, "/a//b"};
-    CHECK(as_strs(run(df::expr_str_regex_replace(c0(), *re, *sub), {&s})) ==
-          want);
+    CHECK(as_strs(run(dataframe::expr_str_regex_replace(c0(), *re, *sub),
+                      {&s})) == want);
     CHECK(as_strs(Series{dftu_series_str_regex_replace(
               s.handle(), pat.data(), static_cast<std::int32_t>(pat.size()),
               "${op}#$2$$", 10)}) == want);
@@ -624,8 +629,9 @@ TEST_CASE("str_regex_replace substitutes groups and keeps nulls") {
     dftu_expr_free(e);
     dftu_expr_free(col);
 
-    CHECK_THROWS_AS(run(df::expr_str_regex_replace(c0(), nullptr, *sub), {&s}),
-                    std::invalid_argument);
+    CHECK_THROWS_AS(
+        run(dataframe::expr_str_regex_replace(c0(), nullptr, *sub), {&s}),
+        std::invalid_argument);
     CHECK_FALSE(duql::compile_substitution(**re, "$3"));
     CHECK_FALSE(duql::compile_substitution(**re, "$x"));
     CHECK_FALSE(s.str_regex_replace("(", "x").valid());
@@ -634,59 +640,60 @@ TEST_CASE("str_regex_replace substitutes groups and keeps nulls") {
 TEST_CASE("convert to int parses, truncates and nulls the unknown") {
     const Series s = strs({"42", "-7", "3.9", "abc", "1e3",
                            "99999999999999999999", "", dstd::nullopt});
-    CHECK(as_ints(run(df::expr_convert(ConvertOp::Int, c0()), {&s})) ==
+    CHECK(as_ints(run(dataframe::expr_convert(ConvertOp::Int, c0()), {&s})) ==
           Opt<std::int64_t>{42, -7, 3, dstd::nullopt, 1000, dstd::nullopt,
                             dstd::nullopt, dstd::nullopt});
     const Series d = dbls({2.9, -2.9, NaN, 1e300});
-    CHECK(as_ints(run(df::expr_convert(ConvertOp::Int, c0()), {&d})) ==
+    CHECK(as_ints(run(dataframe::expr_convert(ConvertOp::Int, c0()), {&d})) ==
           Opt<std::int64_t>{2, -2, dstd::nullopt, dstd::nullopt});
     const Series b = bools({true, false, dstd::nullopt});
-    CHECK(as_ints(run(df::expr_convert(ConvertOp::Int, c0()), {&b})) ==
+    CHECK(as_ints(run(dataframe::expr_convert(ConvertOp::Int, c0()), {&b})) ==
           Opt<std::int64_t>{1, 0, dstd::nullopt});
     const Series u = uints({U64_MAX, 5});
-    CHECK(as_ints(run(df::expr_convert(ConvertOp::Int, c0()), {&u})) ==
+    CHECK(as_ints(run(dataframe::expr_convert(ConvertOp::Int, c0()), {&u})) ==
           Opt<std::int64_t>{dstd::nullopt, 5});
 }
 
 TEST_CASE("convert to float parses and nulls NaN") {
     const Series s = strs({"1.5", "x", "nan", "inf"});
-    CHECK(as_dbls(run(df::expr_convert(ConvertOp::Float, c0()), {&s})) ==
+    CHECK(as_dbls(run(dataframe::expr_convert(ConvertOp::Float, c0()), {&s})) ==
           Opt<double>{1.5, dstd::nullopt, dstd::nullopt,
                       std::numeric_limits<double>::infinity()});
     const Series i = ints({-3, dstd::nullopt});
-    CHECK(as_dbls(run(df::expr_convert(ConvertOp::Float, c0()), {&i})) ==
+    CHECK(as_dbls(run(dataframe::expr_convert(ConvertOp::Float, c0()), {&i})) ==
           Opt<double>{-3.0, dstd::nullopt});
     const Series b = bools({true});
-    CHECK(as_dbls(run(df::expr_convert(ConvertOp::Float, c0()), {&b})) ==
+    CHECK(as_dbls(run(dataframe::expr_convert(ConvertOp::Float, c0()), {&b})) ==
           Opt<double>{1.0});
 }
 
 TEST_CASE("convert to string and json write duql's text forms") {
     const Series i = ints({-5, dstd::nullopt});
-    CHECK(as_strs(run(df::expr_convert(ConvertOp::String, c0()), {&i})) ==
-          Opt<dstd::String>{"-5", dstd::nullopt});
-    CHECK(as_strs(run(df::expr_convert(ConvertOp::Json, c0()), {&i})) ==
+    CHECK(as_strs(run(dataframe::expr_convert(ConvertOp::String, c0()),
+                      {&i})) == Opt<dstd::String>{"-5", dstd::nullopt});
+    CHECK(as_strs(run(dataframe::expr_convert(ConvertOp::Json, c0()), {&i})) ==
           Opt<dstd::String>{"-5", "null"});
 
     const Series d = dbls({0.1, 1.0, 1e21, NaN});
-    CHECK(as_strs(run(df::expr_convert(ConvertOp::String, c0()), {&d})) ==
-          Opt<dstd::String>{"0.1", "1", "1e+21", dstd::nullopt});
-    CHECK(as_strs(run(df::expr_convert(ConvertOp::Json, c0()), {&d})) ==
+    CHECK(
+        as_strs(run(dataframe::expr_convert(ConvertOp::String, c0()), {&d})) ==
+        Opt<dstd::String>{"0.1", "1", "1e+21", dstd::nullopt});
+    CHECK(as_strs(run(dataframe::expr_convert(ConvertOp::Json, c0()), {&d})) ==
           Opt<dstd::String>{"0.1", "1", "1e+21", "null"});
 
     const Series b = bools({true, false});
-    CHECK(as_strs(run(df::expr_convert(ConvertOp::String, c0()), {&b})) ==
-          Opt<dstd::String>{"true", "false"});
+    CHECK(as_strs(run(dataframe::expr_convert(ConvertOp::String, c0()),
+                      {&b})) == Opt<dstd::String>{"true", "false"});
 
     const Series s = strs({"a\"b\n", dstd::nullopt});
-    CHECK(as_strs(run(df::expr_convert(ConvertOp::Json, c0()), {&s})) ==
+    CHECK(as_strs(run(dataframe::expr_convert(ConvertOp::Json, c0()), {&s})) ==
           Opt<dstd::String>{"\"a\\\"b\\n\"", "null"});
-    CHECK(as_strs(run(df::expr_convert(ConvertOp::String, c0()), {&s})) ==
-          Opt<dstd::String>{"a\"b\n", dstd::nullopt});
+    CHECK(as_strs(run(dataframe::expr_convert(ConvertOp::String, c0()),
+                      {&s})) == Opt<dstd::String>{"a\"b\n", dstd::nullopt});
 
     const Series u = uints({U64_MAX});
-    CHECK(as_strs(run(df::expr_convert(ConvertOp::String, c0()), {&u})) ==
-          Opt<dstd::String>{"18446744073709551615"});
+    CHECK(as_strs(run(dataframe::expr_convert(ConvertOp::String, c0()),
+                      {&u})) == Opt<dstd::String>{"18446744073709551615"});
 }
 
 namespace {
@@ -708,73 +715,77 @@ TEST_CASE("list functions") {
         make_list({0, 3, 3, 3, 5}, ints({1, 2, 3, 4, dstd::nullopt}),
                   {true, true, false, true});
     REQUIRE(l.valid());
-    CHECK(as_ints(run(df::expr_list_len(c0()), {&l})) ==
+    CHECK(as_ints(run(dataframe::expr_list_len(c0()), {&l})) ==
           Opt<std::int64_t>{3, 0, dstd::nullopt, 2});
-    CHECK(as_ints(run(df::expr_list_get(c0(), 0), {&l})) ==
+    CHECK(as_ints(run(dataframe::expr_list_get(c0(), 0), {&l})) ==
           Opt<std::int64_t>{1, dstd::nullopt, dstd::nullopt, 4});
-    CHECK(as_ints(run(df::expr_list_get(c0(), -1), {&l})) ==
+    CHECK(as_ints(run(dataframe::expr_list_get(c0(), -1), {&l})) ==
           Opt<std::int64_t>{3, dstd::nullopt, dstd::nullopt, dstd::nullopt});
-    CHECK(as_ints(run(df::expr_list_get(c0(), -4), {&l})) ==
+    CHECK(as_ints(run(dataframe::expr_list_get(c0(), -4), {&l})) ==
           Opt<std::int64_t>{dstd::nullopt, dstd::nullopt, dstd::nullopt,
                             dstd::nullopt});
-    CHECK(as_ints(run(df::expr_list_get(c0(), 5), {&l})) ==
+    CHECK(as_ints(run(dataframe::expr_list_get(c0(), 5), {&l})) ==
           Opt<std::int64_t>{dstd::nullopt, dstd::nullopt, dstd::nullopt,
                             dstd::nullopt});
-    CHECK(as_ints(run(df::expr_list_sum(c0()), {&l})) ==
+    CHECK(as_ints(run(dataframe::expr_list_sum(c0()), {&l})) ==
           Opt<std::int64_t>{6, 0, dstd::nullopt, dstd::nullopt});
-    CHECK(as_bools(run(df::expr_list_contains(c0(), si(2)), {&l})) ==
+    CHECK(as_bools(run(dataframe::expr_list_contains(c0(), si(2)), {&l})) ==
           Opt<bool>{true, false, dstd::nullopt, false});
-    CHECK(as_bools(run(df::expr_list_contains(c0(), sf(4.0)), {&l})) ==
+    CHECK(as_bools(run(dataframe::expr_list_contains(c0(), sf(4.0)), {&l})) ==
           Opt<bool>{false, false, dstd::nullopt, true});
-    CHECK(as_bools(run(df::expr_list_contains(c0(), ss("1")), {&l})) ==
+    CHECK(as_bools(run(dataframe::expr_list_contains(c0(), ss("1")), {&l})) ==
           Opt<bool>{false, false, dstd::nullopt, false});
 
     const Series big = make_list({0, 2}, ints({I64_MAX, 1}), {true});
-    CHECK(as_ints(run(df::expr_list_sum(c0()), {&big})) ==
+    CHECK(as_ints(run(dataframe::expr_list_sum(c0()), {&big})) ==
           Opt<std::int64_t>{dstd::nullopt});
 
     const Series fl =
         make_list({0, 2, 3}, dbls({0.5, 0.25, NaN}), {true, true});
-    CHECK(as_dbls(run(df::expr_list_sum(c0()), {&fl})) ==
+    CHECK(as_dbls(run(dataframe::expr_list_sum(c0()), {&fl})) ==
           Opt<double>{0.75, dstd::nullopt});
 
     const Series sl = make_list({0, 1, 1}, strs({"a"}), {true, true});
-    CHECK(as_ints(run(df::expr_list_sum(c0()), {&sl})) ==
+    CHECK(as_ints(run(dataframe::expr_list_sum(c0()), {&sl})) ==
           Opt<std::int64_t>{dstd::nullopt, 0});
-    CHECK(as_bools(run(df::expr_list_contains(c0(), ss("a")), {&sl})) ==
+    CHECK(as_bools(run(dataframe::expr_list_contains(c0(), ss("a")), {&sl})) ==
           Opt<bool>{true, false});
 
     const Series i = ints({1});
-    CHECK_THROWS_AS(run(df::expr_list_len(c0()), {&i}), std::invalid_argument);
+    CHECK_THROWS_AS(run(dataframe::expr_list_len(c0()), {&i}),
+                    std::invalid_argument);
 }
 
 TEST_CASE("literals broadcast to a column of their type") {
     const Series i = ints({1, 2});
-    CHECK(as_strs(run(df::expr_lit_str("x"), {&i})) ==
+    CHECK(as_strs(run(dataframe::expr_lit_str("x"), {&i})) ==
           Opt<dstd::String>{"x", "x"});
-    CHECK(as_bools(run(df::expr_lit_bool(true), {&i})) ==
+    CHECK(as_bools(run(dataframe::expr_lit_bool(true), {&i})) ==
           Opt<bool>{true, true});
-    CHECK(as_ints(run(df::expr_lit_null(TypeId::Int64), {&i})) ==
+    CHECK(as_ints(run(dataframe::expr_lit_null(TypeId::Int64), {&i})) ==
           Opt<std::int64_t>{dstd::nullopt, dstd::nullopt});
-    CHECK(as_ints(run(df::expr_arith(ArithOp::Add, c0(),
-                                     df::expr_lit_null(TypeId::Int64)),
-                      {&i})) ==
-          Opt<std::int64_t>{dstd::nullopt, dstd::nullopt});
-    CHECK_THROWS_AS(run(df::expr_lit_null(TypeId::List), {&i}),
+    CHECK(as_ints(run(
+              dataframe::expr_arith(ArithOp::Add, c0(),
+                                    dataframe::expr_lit_null(TypeId::Int64)),
+              {&i})) == Opt<std::int64_t>{dstd::nullopt, dstd::nullopt});
+    CHECK_THROWS_AS(run(dataframe::expr_lit_null(TypeId::List), {&i}),
                     std::invalid_argument);
 }
 
 TEST_CASE("infer_type agrees with the node types") {
-    const dstd::Vector<df::DataType> in{df::scalar(TypeId::Int32),
-                                        df::scalar(TypeId::Float64)};
-    CHECK(df::infer_type(df::expr_arith(ArithOp::Add, c0(), c0()), in).id ==
-          TypeId::Int64);
-    CHECK(df::infer_type(df::expr_arith(ArithOp::Div, c0(), c0()), in).id ==
-          TypeId::Float64);
-    CHECK(df::infer_type(df::expr_extreme({c0(), c1()}, true), in).id ==
-          TypeId::Float64);
-    CHECK(df::infer_type(df::expr_convert(ConvertOp::Json, c0()), in).id ==
-          TypeId::String);
+    const dstd::Vector<dataframe::DataType> in{
+        dataframe::scalar(TypeId::Int32), dataframe::scalar(TypeId::Float64)};
+    CHECK(dataframe::infer_type(dataframe::expr_arith(ArithOp::Add, c0(), c0()),
+                                in)
+              .id == TypeId::Int64);
+    CHECK(dataframe::infer_type(dataframe::expr_arith(ArithOp::Div, c0(), c0()),
+                                in)
+              .id == TypeId::Float64);
+    CHECK(dataframe::infer_type(dataframe::expr_extreme({c0(), c1()}, true), in)
+              .id == TypeId::Float64);
+    CHECK(dataframe::infer_type(dataframe::expr_convert(ConvertOp::Json, c0()),
+                                in)
+              .id == TypeId::String);
 }
 
 TEST_CASE("C ABI builders") {
@@ -829,7 +840,7 @@ TEST_CASE("kernels run across evaluation chunks") {
 TEST_CASE("string kernels run across evaluation chunks") {
     constexpr std::int64_t N = 200000;
     const Series s = strs(Opt<dstd::String>(N, dstd::String("h\xc3\xa9y")));
-    const auto sub = as_strs(run(df::expr_str_substr(c0(), 1, 1), {&s}));
+    const auto sub = as_strs(run(dataframe::expr_str_substr(c0(), 1, 1), {&s}));
     CHECK(sub.front() == dstd::Optional<dstd::String>("\xc3\xa9"));
     CHECK(sub.back() == dstd::Optional<dstd::String>("\xc3\xa9"));
 }
@@ -844,10 +855,10 @@ constexpr std::int64_t NS_PER_H = 3600 * NS_PER_S;
 constexpr std::int64_t NS_PER_D = 86400 * NS_PER_S;
 
 Opt<std::int64_t> part(const Series& s, std::int32_t p, std::int64_t unit) {
-    return as_ints(run(df::expr_date_part(c0(), p, unit), {&s}));
+    return as_ints(run(dataframe::expr_date_part(c0(), p, unit), {&s}));
 }
 Opt<dstd::String> fmt(const Series& s, dstd::StringView f, std::int64_t unit) {
-    return as_strs(run(df::expr_format_time(c0(), f, unit), {&s}));
+    return as_strs(run(dataframe::expr_format_time(c0(), f, unit), {&s}));
 }
 
 }  // namespace
@@ -978,40 +989,42 @@ TEST_CASE("format_time directives on fixed instants in every unit") {
 TEST_CASE("date_part and format_time: types, CSE and refusals") {
     const Series i = ints({1'700'000'000'123'456});
     const Series s = strs({"x"});
-    for (const Expr& e : {df::expr_date_part(c0(), DFTU_DT_HOUR, 1000),
-                          df::expr_format_time(c0(), "%F", 1000)}) {
+    for (const Expr& e : {dataframe::expr_date_part(c0(), DFTU_DT_HOUR, 1000),
+                          dataframe::expr_format_time(c0(), "%F", 1000)}) {
         CHECK_THROWS_AS(run(e, {&s}), std::invalid_argument);
     }
-    CHECK(df::infer_type(df::expr_date_part(c0(), DFTU_DT_HOUR, 1000),
-                         {i.data_type()})
+    CHECK(dataframe::infer_type(
+              dataframe::expr_date_part(c0(), DFTU_DT_HOUR, 1000),
+              {i.data_type()})
               .id == TypeId::Int64);
-    CHECK(
-        df::infer_type(df::expr_format_time(c0(), "%F", 1000), {i.data_type()})
-            .id == TypeId::String);
-    CHECK_THROWS_AS(df::expr_date_part(c0(), 99, 1000), std::invalid_argument);
-    CHECK_THROWS_AS(df::expr_date_part(c0(), DFTU_DT_IS_LEAP_YEAR, 1000),
+    CHECK(dataframe::infer_type(dataframe::expr_format_time(c0(), "%F", 1000),
+                                {i.data_type()})
+              .id == TypeId::String);
+    CHECK_THROWS_AS(dataframe::expr_date_part(c0(), 99, 1000),
                     std::invalid_argument);
-    CHECK_THROWS_AS(df::expr_date_part(c0(), DFTU_DT_HOUR, 0),
+    CHECK_THROWS_AS(dataframe::expr_date_part(c0(), DFTU_DT_IS_LEAP_YEAR, 1000),
                     std::invalid_argument);
-    CHECK_THROWS_AS(df::expr_format_time(c0(), "%Q", 1000),
+    CHECK_THROWS_AS(dataframe::expr_date_part(c0(), DFTU_DT_HOUR, 0),
                     std::invalid_argument);
-    CHECK_THROWS_AS(df::expr_format_time(c0(), "%Y%", 1000),
+    CHECK_THROWS_AS(dataframe::expr_format_time(c0(), "%Q", 1000),
                     std::invalid_argument);
-    CHECK_THROWS_AS(df::expr_format_time(c0(), "%F", -5),
+    CHECK_THROWS_AS(dataframe::expr_format_time(c0(), "%Y%", 1000),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(dataframe::expr_format_time(c0(), "%F", -5),
                     std::invalid_argument);
 
     // The same field of two units and two formats must not share a slot.
-    const Expr both =
-        df::expr_concat({df::expr_format_time(c0(), "%H", 1000),
-                         df::expr_format_time(c0(), "%M", 1000),
-                         df::expr_format_time(c0(), "%H", NS_PER_S)});
+    const Expr both = dataframe::expr_concat(
+        {dataframe::expr_format_time(c0(), "%H", 1000),
+         dataframe::expr_format_time(c0(), "%M", 1000),
+         dataframe::expr_format_time(c0(), "%H", NS_PER_S)});
     CHECK(as_strs(run(both, {&i})) ==
           Opt<dstd::String>{"22"
                             "13" +
                             *fmt(i, "%H", NS_PER_S)[0]});
-    const Expr sum = df::expr_arith(
-        ArithOp::Add, df::expr_date_part(c0(), DFTU_DT_YEAR, 1000),
-        df::expr_date_part(c0(), DFTU_DT_YEAR, NS_PER_S));
+    const Expr sum = dataframe::expr_arith(
+        ArithOp::Add, dataframe::expr_date_part(c0(), DFTU_DT_YEAR, 1000),
+        dataframe::expr_date_part(c0(), DFTU_DT_YEAR, NS_PER_S));
     CHECK(as_ints(run(sum, {&i})) ==
           Opt<std::int64_t>{*part(i, DFTU_DT_YEAR, 1000)[0] +
                             *part(i, DFTU_DT_YEAR, NS_PER_S)[0]});

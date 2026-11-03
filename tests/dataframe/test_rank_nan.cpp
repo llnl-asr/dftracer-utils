@@ -9,9 +9,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::RankMethod;
-using dftracer::utils::dataframe::Series;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

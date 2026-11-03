@@ -29,26 +29,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::Agg;
-using dftracer::utils::dataframe::agg_argmax;
-using dftracer::utils::dataframe::agg_mean;
-using dftracer::utils::dataframe::agg_sum;
-using dftracer::utils::dataframe::AggExprSpec;
-using dftracer::utils::dataframe::col;
-using dftracer::utils::dataframe::Cursor;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::eval;
-using dftracer::utils::dataframe::Expr;
-using dftracer::utils::dataframe::GroupAgg;
-using dftracer::utils::dataframe::GroupwiseOp;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::Morsel;
-using dftracer::utils::dataframe::OpArgs;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::Source;
-using dftracer::utils::dataframe::TypeId;
-using dstd::StringIntern;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -202,7 +183,7 @@ dstd::Vector<const Series*> ptrs(const DataFrame& df) {
 // the reconcile-by-name path of drain_to_frame.
 class RaggedCursor : public Cursor {
    public:
-    explicit RaggedCursor(dstd::SharedPtr<StringIntern> intern)
+    explicit RaggedCursor(dstd::SharedPtr<dstd::StringIntern> intern)
         : intern_(std::move(intern)) {}
 
     coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
@@ -237,7 +218,7 @@ class RaggedCursor : public Cursor {
 
    private:
     int step_ = 0;
-    dstd::SharedPtr<StringIntern> intern_;
+    dstd::SharedPtr<dstd::StringIntern> intern_;
 };
 
 class RaggedSource : public Source {
@@ -251,7 +232,7 @@ class RaggedSource : public Source {
     }
     dftracer::utils::dataframe::ScanResult scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
-        auto intern = dstd::make_shared<StringIntern>();
+        auto intern = dstd::make_shared<dstd::StringIntern>();
         dftracer::utils::dataframe::ScanResult r;
         r.cursor = dstd::make_unique<RaggedCursor>(std::move(intern));
         r.filters.assign(req.filters.size(),
@@ -592,8 +573,6 @@ TEST_SUITE("lazyframe") {
     }
 
     TEST_CASE("group_by dyn resident collect() matches the streaming path") {
-        using dftracer::utils::dataframe::AggDynSpec;
-        using dftracer::utils::dataframe::AggOp;
         dstd::Vector<std::int64_t> g{0, 0, 1, 1};
         dstd::Vector<double> x{1, 2, 3, 4};
         dstd::Vector<double> y{10, 20, 30, 40};
@@ -632,8 +611,6 @@ TEST_SUITE("lazyframe") {
     }
 
     TEST_CASE("group_by dyn that spills gives every part all dyn columns") {
-        using dftracer::utils::dataframe::AggDynSpec;
-        using dftracer::utils::dataframe::AggOp;
         constexpr std::int64_t N = 4000;
         // arg.z has values only in the last rows, so only the last flushes of
         // the spill see the name; every part must still carry sum_z.
@@ -1853,8 +1830,6 @@ TEST_SUITE("lazyframe") {
     }
 
     TEST_CASE("native group transforms equal the composed window plan") {
-        using dftracer::utils::dataframe::composed_group_transform;
-        using dftracer::utils::dataframe::RankMethod;
         const std::int64_t n = 300;
         const double nan = std::numeric_limits<double>::quiet_NaN();
         const double inf = std::numeric_limits<double>::infinity();
@@ -1996,8 +1971,6 @@ TEST_SUITE("lazyframe") {
     }
 
     TEST_CASE("native group transforms: empty, one row, float keys, overflow") {
-        using dftracer::utils::dataframe::composed_group_transform;
-        using dftracer::utils::dataframe::RankMethod;
         const double nan = std::numeric_limits<double>::quiet_NaN();
         auto frame = [&](dstd::Vector<double> k, dstd::Vector<std::int64_t> v) {
             const auto n = static_cast<std::int64_t>(k.size());
@@ -2056,9 +2029,6 @@ TEST_SUITE("lazyframe") {
 
     TEST_CASE(
         "window op and native transform fail with the same overflow text") {
-        using dftracer::utils::dataframe::RankMethod;
-        using dftracer::utils::dataframe::WindowColumn;
-        using dftracer::utils::dataframe::WindowFunc;
         const std::int64_t big = std::numeric_limits<std::int64_t>::max();
         const std::int64_t small = std::numeric_limits<std::int64_t>::min();
         const std::uint64_t ubig = std::numeric_limits<std::uint64_t>::max();
@@ -2114,9 +2084,6 @@ TEST_SUITE("lazyframe") {
 
     TEST_CASE(
         "a spilled group transform groups one numeric key without strings") {
-        using dftracer::utils::dataframe::composed_group_transform;
-        using dftracer::utils::dataframe::native_transform_single_key_rows;
-        using dftracer::utils::dataframe::RankMethod;
         const double nan = std::numeric_limits<double>::quiet_NaN();
         const double inf = std::numeric_limits<double>::infinity();
         const std::int64_t n = 2000;
@@ -2276,7 +2243,6 @@ TEST_SUITE("lazyframe") {
             df.columns.push_back(Series::flat(TypeId::Int32, u.data(), n));
             return df;
         };
-        using dftracer::utils::dataframe::RankMethod;
         struct Case {
             GroupwiseOp op;
             std::int64_t n;
@@ -2848,11 +2814,6 @@ TEST_SUITE("lazyframe") {
 
     TEST_CASE(
         "InMemorySource projection pushdown returns only wanted columns") {
-        using dftracer::utils::dataframe::InMemorySource;
-        using dftracer::utils::dataframe::Pushed;
-        using dftracer::utils::dataframe::ScanRequest;
-        using dftracer::utils::dataframe::ScanResult;
-
         InMemorySource src(make_df());  // columns a, b
         CHECK(src.names() == dstd::Vector<dstd::String>{"a", "b"});
 
@@ -2877,11 +2838,6 @@ TEST_SUITE("lazyframe") {
     }
 
     TEST_CASE("InMemorySource schema() round-trips a nested Struct column") {
-        using dftracer::utils::dataframe::Field;
-        using dftracer::utils::dataframe::InMemorySource;
-        using dftracer::utils::dataframe::Schema;
-        using dftracer::utils::dataframe::TypeId;
-
         dstd::Vector<std::int64_t> lo{1, 2};
         dstd::Vector<double> hi{1.5, 2.5};
         dstd::Vector<Series> fields;

@@ -13,17 +13,16 @@
 #include <utility>
 
 using namespace dftracer::utils;
-namespace store = dftracer::utils::index::store;
-namespace views = dftracer::utils::trace::views::detail;
-using index::extensions::BloomFold;
+using namespace dftracer::utils::index;
 
 namespace {
 
 using Leaves = dstd::Vector<dstd::Pair<std::uint32_t, std::uint8_t>>;
 
-constexpr auto INT = static_cast<std::uint8_t>(store::PathType::Int);
-constexpr auto STR = static_cast<std::uint8_t>(store::PathType::String);
-constexpr auto NUL = static_cast<std::uint8_t>(store::PathType::NullValue);
+constexpr auto INT = static_cast<std::uint8_t>(index::store::PathType::Int);
+constexpr auto STR = static_cast<std::uint8_t>(index::store::PathType::String);
+constexpr auto NUL =
+    static_cast<std::uint8_t>(index::store::PathType::NullValue);
 
 struct Fixture {
     dstd::StringIntern intern;
@@ -44,9 +43,9 @@ struct Fixture {
             order.push_back((i % 7 == 0 ? i / 7 : i / 50) % shapes.size());
     }
 
-    dstd::Vector<views::FoldEvent> events(std::size_t from,
-                                          std::size_t to) const {
-        dstd::Vector<views::FoldEvent> out(to - from);
+    dstd::Vector<trace::views::detail::FoldEvent> events(std::size_t from,
+                                                         std::size_t to) const {
+        dstd::Vector<trace::views::detail::FoldEvent> out(to - from);
         for (std::size_t i = from; i < to; ++i) {
             out[i - from].phase = trace::RecordPhase::Unknown;
             out[i - from].schema_leaves.assign(shapes[order[i]].begin(),
@@ -55,12 +54,12 @@ struct Fixture {
         return out;
     }
 
-    dstd::Map<dstd::String, store::PathStat> expected() const {
-        dstd::Map<std::uint32_t, store::PathStat> by_id;
+    dstd::Map<dstd::String, index::store::PathStat> expected() const {
+        dstd::Map<std::uint32_t, index::store::PathStat> by_id;
         for (std::size_t s : order)
             for (const auto& [id, tag] : shapes[s])
                 index::extensions::observe_catalog_path(by_id[id], tag);
-        dstd::Map<dstd::String, store::PathStat> out;
+        dstd::Map<dstd::String, index::store::PathStat> out;
         for (const auto& [id, stat] : by_id)
             out.emplace(dstd::String(intern.resolve(id)), stat);
         return out;
@@ -73,21 +72,22 @@ struct Fixture {
     }
 };
 
-void feed(BloomFold& fold, const dstd::Vector<views::FoldEvent>& events,
-          const views::ScanUnit& unit) {
-    fold.step(views::FoldBatch{events, unit});
+void feed(extensions::BloomFold& fold,
+          const dstd::Vector<trace::views::detail::FoldEvent>& events,
+          const trace::views::detail::ScanUnit& unit) {
+    fold.step(trace::views::detail::FoldBatch{events, unit});
 }
 
-dstd::Map<dstd::String, store::PathStat> catalog_of(BloomFold& fold,
-                                                    const dstd::String& file) {
-    dstd::Map<dstd::String, store::PathStat> out;
+dstd::Map<dstd::String, index::store::PathStat> catalog_of(
+    extensions::BloomFold& fold, const dstd::String& file) {
+    dstd::Map<dstd::String, index::store::PathStat> out;
     for (const auto& [path, stat] : fold.file_catalog(file))
         out.emplace(dstd::String(path), stat);
     return out;
 }
 
-void check_same(const dstd::Map<dstd::String, store::PathStat>& got,
-                const dstd::Map<dstd::String, store::PathStat>& want) {
+void check_same(const dstd::Map<dstd::String, index::store::PathStat>& got,
+                const dstd::Map<dstd::String, index::store::PathStat>& want) {
     REQUIRE(got.size() == want.size());
     for (const auto& [path, stat] : want) {
         CAPTURE(path);
@@ -99,8 +99,8 @@ void check_same(const dstd::Map<dstd::String, store::PathStat>& got,
     }
 }
 
-views::ScanUnit unit_of(std::uint64_t checkpoint) {
-    views::ScanUnit u;
+trace::views::detail::ScanUnit unit_of(std::uint64_t checkpoint) {
+    trace::views::detail::ScanUnit u;
     u.file_path = "/t/a.pfw.gz";
     u.index_path = "/t/a.idx";
     u.checkpoint_idx = checkpoint;
@@ -111,7 +111,7 @@ views::ScanUnit unit_of(std::uint64_t checkpoint) {
 
 TEST_CASE("catalog observations follow the distinct pairs, not the events") {
     Fixture fx;
-    BloomFold fold(fx.intern);
+    extensions::BloomFold fold(fx.intern);
     const std::size_t half = fx.order.size() / 2;
     feed(fold, fx.events(0, half), unit_of(0));
     feed(fold, fx.events(half, fx.order.size()), unit_of(1));
@@ -123,12 +123,12 @@ TEST_CASE("catalog observations follow the distinct pairs, not the events") {
 
 TEST_CASE("merged slices give the catalog of one fold") {
     Fixture fx;
-    BloomFold a(fx.intern);
+    extensions::BloomFold a(fx.intern);
     auto b = a.slice();
     const std::size_t third = fx.order.size() / 3;
     feed(a, fx.events(0, third), unit_of(0));
-    feed(static_cast<BloomFold&>(*b), fx.events(third, fx.order.size()),
-         unit_of(1));
+    feed(static_cast<extensions::BloomFold&>(*b),
+         fx.events(third, fx.order.size()), unit_of(1));
     a.merge(*b);
 
     check_same(catalog_of(a, "/t/a.pfw.gz"), fx.expected());

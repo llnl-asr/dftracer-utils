@@ -22,14 +22,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::CoroScope;
-using dftracer::utils::make_task;
-using dftracer::utils::Pipeline;
-using dftracer::utils::PipelineConfig;
-using dftracer::utils::Runtime;
-namespace tg = dftracer::utils::task_graph;
-namespace u = dftracer::utils::utilities;
-
 namespace {
 
 // Plain async ops: callables of shape I -> coro::CoroTask<O>. One is a struct,
@@ -63,7 +55,7 @@ auto stringify = [](int x) -> coro::CoroTask<dstd::String> {
 TEST_SUITE("compose") {
     TEST_CASE("pipe (|) chains ops, run on the runtime") {
         Runtime rt;
-        auto pipeline = u::op(Doubler{}) | u::op(stringify);
+        auto pipeline = utilities::op(Doubler{}) | utilities::op(stringify);
         dstd::String out;
         rt.block_on(coro::named("pipe", [&]() -> coro::CoroTask<void> {
             out = co_await pipeline(21);
@@ -73,7 +65,7 @@ TEST_SUITE("compose") {
 
     TEST_CASE("all (&&) fans out, yields a tuple") {
         Runtime rt;
-        auto fan = u::op(Doubler{}) && u::op(stringify);
+        auto fan = utilities::op(Doubler{}) && utilities::op(stringify);
         dstd::Tuple<int, dstd::String> out;
         rt.block_on(coro::named("all", [&]() -> coro::CoroTask<void> {
             out = co_await fan(21);
@@ -95,7 +87,7 @@ TEST_SUITE("compose") {
             second_started.store(true);
             co_return x;
         };
-        auto both = u::op(first) && u::op(second);
+        auto both = utilities::op(first) && utilities::op(second);
         dstd::Tuple<bool, int> out;
         rt.block_on(coro::named("all", [&]() -> coro::CoroTask<void> {
             out = co_await both(7);
@@ -108,7 +100,7 @@ TEST_SUITE("compose") {
         Runtime rt;
         auto fast = [](int x) -> coro::CoroTask<int> { co_return x + 1; };
         auto slow = [](int x) -> coro::CoroTask<int> { co_return x + 1000; };
-        auto race = u::op(fast) || u::op(slow);
+        auto race = utilities::op(fast) || utilities::op(slow);
         int out = -1;
         rt.block_on(coro::named("any", [&]() -> coro::CoroTask<void> {
             out = co_await race(41);
@@ -141,7 +133,7 @@ TEST_SUITE("compose") {
 
     TEST_CASE("map lifts an op over a vector, concurrently") {
         Runtime rt;
-        auto doubled = u::map(Doubler{});
+        auto doubled = utilities::map(Doubler{});
         dstd::Vector<int> out;
         rt.block_on(coro::named("map", [&]() -> coro::CoroTask<void> {
             // GCC 12.1 rejects a braced list inside co_await.
@@ -154,8 +146,8 @@ TEST_SUITE("compose") {
     TEST_CASE("map | fold is parallel map-reduce (what BatchProcessor did)") {
         Runtime rt;
         auto sum_of_doubles =
-            u::map(Doubler{}) |
-            u::fold(0, [](int acc, int x) { return acc + x; });
+            utilities::map(Doubler{}) |
+            utilities::fold(0, [](int acc, int x) { return acc + x; });
         int out = -1;
         rt.block_on(coro::named("mapreduce", [&]() -> coro::CoroTask<void> {
             dstd::Vector<int> in{1, 2, 3, 4};
@@ -167,13 +159,13 @@ TEST_SUITE("compose") {
     TEST_CASE("a compose op drops straight into the real task_graph DAG") {
         // A plain compose pipeline used as a graph node, run through the
         // actual scheduler.
-        auto pipe = u::op(Doubler{}) | u::op([](int x) -> coro::CoroTask<int> {
-                        co_return x + 1;
-                    });
+        auto pipe = utilities::op(Doubler{}) |
+                    utilities::op(
+                        [](int x) -> coro::CoroTask<int> { co_return x + 1; });
 
         auto source = make_task(
             [](CoroScope&) -> coro::CoroTask<int> { co_return 20; }, "src");
-        auto graph = tg::TaskGraph::builder({.name = "compose_in_dag"});
+        auto graph = task_graph::TaskGraph::builder({.name = "compose_in_dag"});
         auto wrapped = graph.wrap<int>(source);
         auto mapped =
             graph.map<int>(wrapped,

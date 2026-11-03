@@ -18,7 +18,6 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using dftu_utils_test::run_coro;
 
 TEST_SUITE("CoroSemaphore") {
     TEST_CASE("never exceeds capacity under contention") {
@@ -27,7 +26,7 @@ TEST_SUITE("CoroSemaphore") {
         std::atomic<std::int64_t> peak{0};
         const int n = 64;
 
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<coro::CoroTask<void>> tasks;
             for (int i = 0; i < n; ++i) {
                 // Sizes 10..40 so several fit at once but not all.
@@ -62,7 +61,7 @@ TEST_SUITE("CoroSemaphore") {
         coro::CoroSemaphore sem(50);
         std::atomic<bool> done{false};
 
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             // 200 > capacity 50: clamps to capacity and runs once idle.
             co_await sem.acquire(200);
             done.store(true);
@@ -78,7 +77,7 @@ TEST_SUITE("CoroSemaphore") {
         std::atomic<int> completed{0};
         const int n = 100;
 
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<coro::CoroTask<void>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(
@@ -108,7 +107,8 @@ TEST_SUITE("CoroSemaphore") {
         std::atomic<bool> finished{false};
 
         dstd::Thread worker([&] {
-            run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            dftu_utils_test::run_coro([&](coro::Scope&)
+                                          -> coro::CoroTask<void> {
                 co_await sem.acquire(10);  // take all capacity
                 dstd::Thread releaser([&sem] {
                     // No Executor::current() here.

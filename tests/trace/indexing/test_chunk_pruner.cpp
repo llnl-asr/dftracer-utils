@@ -16,9 +16,6 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::extensions;
 using namespace dftracer::utils::index::plan;
-using dftracer::utils::duql::Query;
-
-using dftracer::utils::index::gzip::GzipMemberRecord;
 
 // `members` replaces the base member of the same index, or adds a new one.
 // `name_file_bloom` adds the file-level "name" bloom that the tier-0 file skip
@@ -26,7 +23,7 @@ using dftracer::utils::index::gzip::GzipMemberRecord;
 // a file without blooms must stay unpruned.
 static void populate_test_idx(
     const dstd::String& index_path, const dstd::String& file_path,
-    const dstd::Vector<GzipMemberRecord>& members = {},
+    const dstd::Vector<index::gzip::GzipMemberRecord>& members = {},
     bool name_file_bloom = false) {
     auto index = dftu_utils_test::open_test_index(index_path);
     auto writer = dftu_utils_test::register_test_file(
@@ -56,7 +53,7 @@ static void populate_test_idx(
 
         for (const char* path : {"cat", "name", "dur"})
             dftracer::utils::index::put_path(
-                writer, dftu_utils_test::IndexExtension::Bloom, path);
+                writer, index::store::IndexExtension::Bloom, path);
     }
 
     {
@@ -106,12 +103,12 @@ static void populate_test_idx(
     }
     // Two data events per chunk, one line each, so the statistics describe
     // every record and all-match proofs (NOT) are allowed.
-    dstd::Vector<GzipMemberRecord> all;
+    dstd::Vector<index::gzip::GzipMemberRecord> all;
     for (std::uint64_t ckpt = 0; ckpt < 3; ++ckpt) {
         dftracer::utils::index::schemas::dft::ChunkStatistics stats;
         stats.total_events = 2;
         dftracer::utils::index::put_chunk_statistics(writer, ckpt, stats);
-        all.push_back(GzipMemberRecord{
+        all.push_back(index::gzip::GzipMemberRecord{
             .member_idx = ckpt,
             .c_offset = ckpt * 100,
             .c_size = 100,
@@ -149,7 +146,7 @@ static void populate_test_idx(
 static ChunkPrunerOutput run_pruner(const dstd::String& index_path,
                                     const dstd::String& file_path,
                                     const char* query_str) {
-    auto q = Query::from_string(query_str);
+    auto q = duql::Query::from_string(query_str);
     REQUIRE(q.has_value());
 
     ChunkPrunerInput input{index_path, file_path, std::move(*q), nullptr};
@@ -304,7 +301,7 @@ TEST_SUITE("ChunkPruner") {
         // Chunk 1 holds a third line (a metadata record, say) that has no
         // cat, so `not cat == "STDIO"` may match it.
         populate_test_idx(index_path, file_path,
-                          {GzipMemberRecord{
+                          {index::gzip::GzipMemberRecord{
                               .member_idx = 1,
                               .c_offset = 100,
                               .c_size = 100,
@@ -329,7 +326,7 @@ TEST_SUITE("ChunkPruner") {
         // Member 3 holds only metadata records, so the index has no
         // statistics or bloom rows for it.
         populate_test_idx(index_path, file_path,
-                          {GzipMemberRecord{
+                          {index::gzip::GzipMemberRecord{
                               .member_idx = 3,
                               .c_offset = 300,
                               .c_size = 100,

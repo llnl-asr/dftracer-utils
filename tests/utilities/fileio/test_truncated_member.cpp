@@ -11,12 +11,12 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-namespace gz = dftracer::utils::utilities::fileio::compress;
+using namespace dftracer::utils::utilities;
 
 namespace {
 
 dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
-    gz::GzipMemberCompressor c;
+    fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
     REQUIRE(n.has_value());
@@ -56,7 +56,8 @@ TEST_CASE("a complete member keeps all output") {
     const auto text = lines(500);
     const auto comp = gzip(text);
     dstd::Vector<std::uint8_t> out;
-    auto keep = gz::decode_truncated_member(comp.data(), comp.size(), out);
+    auto keep = fileio::compress::decode_truncated_member(comp.data(),
+                                                          comp.size(), out);
     REQUIRE(keep.has_value());
     CHECK(*keep == text.size());
     CHECK(dstd::String(out.begin(), out.begin() + *keep) == text);
@@ -72,7 +73,8 @@ TEST_CASE("a cut member keeps the complete lines of the prefix") {
             comp.begin() + static_cast<std::ptrdiff_t>(
                                static_cast<double>(comp.size()) * frac));
         dstd::Vector<std::uint8_t> out;
-        auto keep = gz::decode_truncated_member(cut.data(), cut.size(), out);
+        auto keep = fileio::compress::decode_truncated_member(cut.data(),
+                                                              cut.size(), out);
         REQUIRE(keep.has_value());
         const auto kept_lines = static_cast<std::size_t>(
             std::count(out.begin(), out.begin() + *keep, '\n'));
@@ -89,7 +91,8 @@ TEST_CASE("a cut inside the first line keeps nothing") {
     const auto comp = gzip(text + "\n");
     dstd::Vector<std::uint8_t> cut(comp.begin(), comp.begin() + 40);
     dstd::Vector<std::uint8_t> out;
-    auto keep = gz::decode_truncated_member(cut.data(), cut.size(), out);
+    auto keep =
+        fileio::compress::decode_truncated_member(cut.data(), cut.size(), out);
     REQUIRE(keep.has_value());
     CHECK(*keep == 0);
 }
@@ -99,5 +102,6 @@ TEST_CASE("invalid deflate data is not recovered") {
     std::fill(comp.begin() + 10, comp.end(), 0xFF);  // reserved block type
     dstd::Vector<std::uint8_t> out;
     CHECK_FALSE(
-        gz::decode_truncated_member(comp.data(), comp.size(), out).has_value());
+        fileio::compress::decode_truncated_member(comp.data(), comp.size(), out)
+            .has_value());
 }

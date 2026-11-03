@@ -45,10 +45,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::Runtime;
-using dftracer::utils::plugins::PluginFold;
-using dstd::StringIntern;
-
 namespace {
 
 struct TrivialSlice {
@@ -61,11 +57,11 @@ struct TrivialSlice {
 // Owns a PluginFold plus its trivial backing plugin, exposing the wired host.
 // The fold references the plugin, so it must be destroyed before the plugin.
 struct HostFixture {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    dstd::UniquePtr<PluginFold> fold =
-        dstd::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<plugins::PluginFold> fold =
+        dstd::make_unique<plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     dftu_str intern_str(const char* s) {
         return host().intern(host().h, s,
@@ -84,8 +80,6 @@ std::uint64_t file_size(const dstd::String& path) {
                : 0;
 }
 
-namespace dfti = dftracer::utils::trace::internal;
-
 }  // namespace
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
@@ -94,14 +88,16 @@ TEST_CASE("plugin host: arrow_write_ipc writes a non-empty IPC file") {
     HostFixture fx;
     dftu_plugin_host& host = fx.host();
 
-    namespace dfd = dftracer::utils::dataframe;
     const std::uint64_t ts0[3] = {500, 501, 502};
-    dfd::DataFrame df;
+    dataframe::DataFrame df;
     df.names = {"cat", "name", "ts"};
-    df.columns.push_back(dfd::Series::strings({"STDIO", "STDIO", "STDIO"}));
-    df.columns.push_back(dfd::Series::strings({"fwrite", "fwrite", "fwrite"}));
-    df.columns.push_back(dfd::Series::flat(dfd::TypeId::Uint64, ts0, 3));
-    dfd::OwnedArrow owned = df.to_arrow();
+    df.columns.push_back(
+        dataframe::Series::strings({"STDIO", "STDIO", "STDIO"}));
+    df.columns.push_back(
+        dataframe::Series::strings({"fwrite", "fwrite", "fwrite"}));
+    df.columns.push_back(
+        dataframe::Series::flat(dataframe::TypeId::Uint64, ts0, 3));
+    dataframe::OwnedArrow owned = df.to_arrow();
     REQUIRE(owned);
 
     const auto* arrow = static_cast<const dftu_svc_arrow*>(

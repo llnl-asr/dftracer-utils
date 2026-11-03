@@ -33,8 +33,7 @@ using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 
-namespace scan = dftracer::utils::trace::views::detail::scan;
-namespace scan_detail = dftracer::utils::trace::views::detail;
+using namespace dftracer::utils::trace;
 
 namespace {
 
@@ -79,10 +78,12 @@ int child_main(const dstd::String& mode, const dstd::String& gz) {
         key.transform = GroupKey::Transform::Bucket;
         key.transform_args = {"category_1"};
     }
-    scan::ScanPlan plan = scan::agg(
-        scan::group_by(
-            scan::memory_budget(
-                scan::from_file(dstd::String(gz), dstd::String(idx)), BUDGET),
+    views::detail::scan::ScanPlan plan = views::detail::scan::agg(
+        views::detail::scan::group_by(
+            views::detail::scan::memory_budget(
+                views::detail::scan::from_file(dstd::String(gz),
+                                               dstd::String(idx)),
+                BUDGET),
             {key}),
         {{AggOp::Sum, "dur", "sum_dur"}});
     static dftracer::utils::Runtime rt;
@@ -92,7 +93,7 @@ int child_main(const dstd::String& mode, const dstd::String& gz) {
         dftracer::utils::coro::with_scope(
             [&](dftracer::utils::coro::Scope&)
                 -> dftracer::utils::coro::CoroTask<void> {
-                auto df = co_await scan_detail::run_collect_via_engine(*plan);
+                auto df = co_await views::detail::run_collect_via_engine(*plan);
                 rows = df.num_rows();
             })));
     std::printf("rows=%lld\n", static_cast<long long>(rows));

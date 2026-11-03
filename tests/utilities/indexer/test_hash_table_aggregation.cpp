@@ -16,16 +16,13 @@
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-using dftracer::utils::index::build::resolve_and_build_index;
-using dftracer::utils::index::build::ResolveAndBuildInput;
-using dftu_utils_test::run_coro;
+using namespace dftracer::utils::utilities;
 
 namespace {
 
 void write_single_member(const dstd::String& path,
                          const dstd::String& content) {
-    using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
-    GzipMemberCompressor comp;
+    fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
     dstd::String ofs;
@@ -66,7 +63,7 @@ TEST_SUITE("hash_table_aggregation") {
         const dstd::String index_dir = dstd::String((dir / "idx").str());
         write_single_member(gz, make_trace_with_fh(50));
 
-        ResolveAndBuildInput input;
+        index::build::ResolveAndBuildInput input;
         input.directory = dir.str();
         input.index_dir = index_dir;
         input.require_checkpoints = true;
@@ -74,8 +71,8 @@ TEST_SUITE("hash_table_aggregation") {
         input.build_bloom = false;
 
         dstd::String index_path;
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto res = co_await resolve_and_build_index(input);
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto res = co_await index::build::resolve_and_build_index(input);
             index_path = res.index_path;
             co_return;
         });

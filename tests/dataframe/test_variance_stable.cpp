@@ -17,12 +17,7 @@
 #include <random>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::FieldStat;
-using dftracer::utils::dataframe::Series;
-
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -117,7 +112,7 @@ TEST_CASE("a large offset keeps the standard deviation") {
     Series s = Series::flat_f64(v.data(), static_cast<std::int64_t>(N));
     CHECK(rel(s.stddev(), ref.sd) < 1e-9);
     CHECK(rel(s.variance(), ref.var) < 1e-9);
-    FieldStat simd = df::field_stat_reduce(s);
+    FieldStat simd = dataframe::field_stat_reduce(s);
     CHECK(rel(simd.stddev(), ref.sd) < 1e-9);
     FieldStat scalar;  // the per-value path of a nullable column or a group
     for (double x : v) scalar.add(x);
@@ -143,7 +138,7 @@ TEST_CASE("an integer column with a large offset") {
     }
     const double ref_sd = exact_std(iv);
     Series s = Series::flat_i64(iv.data(), static_cast<std::int64_t>(N));
-    FieldStat simd = df::field_stat_reduce(s);
+    FieldStat simd = dataframe::field_stat_reduce(s);
     CHECK(rel(simd.stddev(), ref_sd) < 1e-9);
     FieldStat scalar;
     for (std::int64_t x : iv) scalar.add(x);
@@ -154,7 +149,7 @@ TEST_CASE("skewness and kurtosis keep their digits with an offset") {
     const auto v = normal(1e9, 1.0, N, 3);
     const Ref ref = two_pass(v);
     Series s = Series::flat_f64(v.data(), static_cast<std::int64_t>(N));
-    FieldStat simd = df::field_stat_reduce(s);
+    FieldStat simd = dataframe::field_stat_reduce(s);
     CHECK_MESSAGE(close(simd.skewness(), ref.skew), simd.skewness()
                                                         << " vs " << ref.skew);
     CHECK_MESSAGE(close(simd.kurtosis(), ref.kurt), simd.kurtosis()
@@ -216,9 +211,9 @@ TEST_CASE("partitions merge to the one-pass value for any split") {
         700'001, 900'000, static_cast<std::int64_t>(N)};
     dstd::Vector<FieldStat> parts;
     for (std::size_t i = 0; i + 1 < cuts.size(); ++i)
-        parts.push_back(cuts[i] == cuts[i + 1]
-                            ? FieldStat{}
-                            : df::field_stat_reduce(s, cuts[i], cuts[i + 1]));
+        parts.push_back(cuts[i] == cuts[i + 1] ? FieldStat{}
+                                               : dataframe::field_stat_reduce(
+                                                     s, cuts[i], cuts[i + 1]));
     FieldStat left_to_right;
     for (const auto& p : parts) left_to_right.merge(p);
     CHECK(left_to_right.n == N);
@@ -266,9 +261,10 @@ TEST_CASE("every group keeps its own accuracy at different offsets") {
     Series x =
         Series::flat_f64(vals.data(), static_cast<std::int64_t>(vals.size()));
     dstd::Vector<const Series*> inputs = {&k, &x};
-    DataFrame r = df::group_agg_expr(
-        df::expr_col(0),
-        {df::agg_std(df::expr_col(1), "s"), df::agg_var(df::expr_col(1), "v")},
+    DataFrame r = dataframe::group_agg_expr(
+        dataframe::expr_col(0),
+        {dataframe::agg_std(dataframe::expr_col(1), "s"),
+         dataframe::agg_var(dataframe::expr_col(1), "v")},
         inputs, "g");
     REQUIRE(r.num_rows() == static_cast<std::int64_t>(G));
     const std::int64_t* gk = r.column("g").data<std::int64_t>();
@@ -295,8 +291,9 @@ TEST_CASE("a group-by over one group with a large offset") {
     Series k = Series::flat_i64(keys.data(), static_cast<std::int64_t>(N));
     Series x = Series::flat_f64(v.data(), static_cast<std::int64_t>(N));
     dstd::Vector<const Series*> inputs = {&k, &x};
-    DataFrame r = df::group_agg_expr(
-        df::expr_col(0), {df::agg_std(df::expr_col(1), "s")}, inputs, "g");
+    DataFrame r = dataframe::group_agg_expr(
+        dataframe::expr_col(0),
+        {dataframe::agg_std(dataframe::expr_col(1), "s")}, inputs, "g");
     REQUIRE(r.num_rows() == 1);
     CHECK(rel(r.column("s").data<double>()[0], ref.sd) < 1e-9);
 }

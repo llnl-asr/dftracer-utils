@@ -15,29 +15,7 @@
 #include <stdexcept>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::DataType;
-using dftracer::utils::dataframe::eval;
-using dftracer::utils::dataframe::Expr;
-using dftracer::utils::dataframe::expr_as_col_is_in;
-using dftracer::utils::dataframe::expr_as_col_str_pred;
-using dftracer::utils::dataframe::expr_col;
-using dftracer::utils::dataframe::expr_is_in;
-using dftracer::utils::dataframe::expr_is_null;
-using dftracer::utils::dataframe::expr_lower;
-using dftracer::utils::dataframe::expr_not;
-using dftracer::utils::dataframe::expr_remap_cols;
-using dftracer::utils::dataframe::expr_str_find;
-using dftracer::utils::dataframe::expr_str_len;
-using dftracer::utils::dataframe::expr_str_map;
-using dftracer::utils::dataframe::expr_str_pred;
-using dftracer::utils::dataframe::expr_str_replace;
-using dftracer::utils::dataframe::expr_str_slice;
-using dftracer::utils::dataframe::infer_type;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::StrMapOp;
-using dftracer::utils::dataframe::StrPredOp;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -244,10 +222,6 @@ TEST_SUITE("expr string ops") {
     }
 
     TEST_CASE("select picks per row and promotes its arms") {
-        using dftracer::utils::dataframe::CmpOp;
-        using dftracer::utils::dataframe::expr_cmp;
-        using dftracer::utils::dataframe::expr_lit;
-        using dftracer::utils::dataframe::expr_select;
         dstd::Vector<std::int64_t> xv{1, 5, 3, 9};
         dstd::Vector<std::uint8_t> valid{0x0D};  // row 1 null
         Series x = Series::flat_i64(xv.data(), 4, valid.data());

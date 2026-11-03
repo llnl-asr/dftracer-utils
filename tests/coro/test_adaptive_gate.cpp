@@ -18,7 +18,6 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using dftu_utils_test::run_coro;
 
 namespace {
 
@@ -129,7 +128,7 @@ TEST_SUITE("AdaptiveGate") {
         Concurrency c;
         const int n = 64;
 
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<coro::CoroTask<int>> tasks;
             for (int i = 0; i < n; ++i)
                 tasks.push_back(
@@ -150,7 +149,7 @@ TEST_SUITE("AdaptiveGate") {
         const int phase = 24;
         std::size_t lowest = 8;
 
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             for (const auto t : {std::chrono::microseconds(100),
                                  std::chrono::microseconds(5000),
                                  std::chrono::microseconds(100)}) {
@@ -176,7 +175,7 @@ TEST_SUITE("AdaptiveGate") {
         Concurrency c;
         int after = 0;
 
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             bool threw = false;
             try {
                 co_await throwing_unit(gate);

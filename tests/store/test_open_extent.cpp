@@ -35,7 +35,7 @@ using namespace dftracer::utils;
 namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
-    static void reopen_read_only(DataFileWriter& writer,
+    static void reopen_read_only(engine::DataFileWriter& writer,
                                  const dstd::String& path) {
         if (writer.fd_ >= 0) ::close(writer.fd_);
         writer.fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
@@ -46,17 +46,7 @@ struct DataFileWriterTestHook {
 
 namespace {
 
-namespace store = dftracer::utils::store;
-namespace io = dftracer::utils::io;
-
-using dftracer::utils::Runtime;
-using dstd::ByteView;
-using store::engine::DataFileWriter;
-using store::engine::ExtentSegment;
-using store::engine::ExtentWriter;
-using store::engine::SegmentBuilder;
-using store::engine::SegmentView;
-using store::engine::WrittenExtent;
+using namespace dftracer::utils::store;
 
 constexpr std::uint32_t FOUR_KIB = 4096;
 constexpr std::uint32_t SIXTY_FOUR_KIB = 64 * 1024;
@@ -79,9 +69,9 @@ struct TempDir {
 struct Collector {
     std::mutex mutex;
     std::condition_variable cv;
-    dstd::Vector<WrittenExtent> extents;
+    dstd::Vector<engine::WrittenExtent> extents;
 
-    void add(WrittenExtent&& extent) {
+    void add(engine::WrittenExtent&& extent) {
         {
             std::lock_guard<std::mutex> lock(mutex);
             extents.push_back(std::move(extent));
@@ -95,13 +85,13 @@ struct Collector {
                            [&] { return extents.size() >= count; });
     }
 
-    dstd::Vector<WrittenExtent> take() {
+    dstd::Vector<engine::WrittenExtent> take() {
         std::lock_guard<std::mutex> lock(mutex);
         return std::move(extents);
     }
 };
 
-void collect_written(void* context, WrittenExtent&& extent) {
+void collect_written(void* context, engine::WrittenExtent&& extent) {
     static_cast<Collector*>(context)->add(std::move(extent));
 }
 
@@ -213,9 +203,9 @@ dstd::Vector<std::uint8_t> make_segment(std::uint32_t id,
         value[i] = static_cast<std::uint8_t>((id + i) & 0xFFU);
     }
     if (value.size() >= sizeof key) write_id(value.data(), id);
-    SegmentBuilder builder;
-    builder.add(ByteView(key, sizeof(key)),
-                ByteView(value.data(), value.size()));
+    engine::SegmentBuilder builder;
+    builder.add(dstd::ByteView(key, sizeof(key)),
+                dstd::ByteView(value.data(), value.size()));
     auto sealed = builder.seal(nullptr, nullptr, nullptr);
     REQUIRE(sealed.has_value());
     return dstd::Vector<std::uint8_t>(sealed->begin(), sealed->end());
@@ -259,8 +249,8 @@ dstd::Vector<std::uint8_t> read_range(int fd, std::uint64_t offset,
     return bytes;
 }
 
-dstd::Vector<std::uint8_t> read_extent_raw(int fd,
-                                           const WrittenExtent& extent) {
+dstd::Vector<std::uint8_t> read_extent_raw(
+    int fd, const engine::WrittenExtent& extent) {
     const dstd::Vector<std::uint8_t> stored =
         read_range(fd, extent.offset, extent.length);
     CHECK(store::engine::crc32(0, stored.data(), stored.size()) == extent.crc);
@@ -269,12 +259,13 @@ dstd::Vector<std::uint8_t> read_extent_raw(int fd,
     return dstd::Vector<std::uint8_t>(bytes.begin(), bytes.end());
 }
 
-void check_extent_layout(dstd::Vector<WrittenExtent>& extents,
+void check_extent_layout(dstd::Vector<engine::WrittenExtent>& extents,
                          std::uint32_t extent_size) {
-    std::sort(extents.begin(), extents.end(),
-              [](const WrittenExtent& a, const WrittenExtent& b) {
-                  return a.offset < b.offset;
-              });
+    std::sort(
+        extents.begin(), extents.end(),
+        [](const engine::WrittenExtent& a, const engine::WrittenExtent& b) {
+            return a.offset < b.offset;
+        });
     for (std::size_t i = 0; i < extents.size(); ++i) {
         CHECK(extents[i].offset % store::engine::EXTENT_ALIGN_BYTES == 0);
         CHECK(extents[i].length % FOUR_KIB == 0);
@@ -288,21 +279,22 @@ void check_extent_layout(dstd::Vector<WrittenExtent>& extents,
     }
 }
 
-void check_extents_on_disk(int fd, const dstd::Vector<WrittenExtent>& extents,
+void check_extents_on_disk(int fd,
+                           const dstd::Vector<engine::WrittenExtent>& extents,
                            dstd::Vector<int>& seen) {
-    for (const WrittenExtent& extent : extents) {
+    for (const engine::WrittenExtent& extent : extents) {
         const dstd::Vector<std::uint8_t> bytes = read_extent_raw(fd, extent);
         std::uint64_t previous_end = 0;
-        for (const ExtentSegment& segment : extent.segments) {
+        for (const engine::ExtentSegment& segment : extent.segments) {
             CHECK(segment.offset_in_extent >= previous_end);
             previous_end = segment.offset_in_extent + segment.length;
             CHECK(previous_end <= bytes.size());
-            const ByteView view(bytes.data() + segment.offset_in_extent,
-                                segment.length);
-            auto opened = SegmentView::open(view);
+            const dstd::ByteView view(bytes.data() + segment.offset_in_extent,
+                                      segment.length);
+            auto opened = engine::SegmentView::open(view);
             REQUIRE(opened.has_value());
             CHECK(opened->entry_count() == 1);
-            auto cursor = opened->lower_bound(ByteView{});
+            auto cursor = opened->lower_bound(dstd::ByteView{});
             REQUIRE(!cursor.at_end());
             const auto entry = cursor.entry();
             REQUIRE(entry.key().size() == 8);
@@ -319,8 +311,9 @@ void check_extents_on_disk(int fd, const dstd::Vector<WrittenExtent>& extents,
     }
 }
 
-ExtentSegment segment_info(std::uint32_t copy_id, std::uint64_t entry_count) {
-    ExtentSegment info;
+engine::ExtentSegment segment_info(std::uint32_t copy_id,
+                                   std::uint64_t entry_count) {
+    engine::ExtentSegment info;
     info.copy_id = copy_id;
     info.entry_count = entry_count;
     return info;
@@ -336,26 +329,27 @@ TEST_CASE("store open extent: one thread fills one namespace") {
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file = DataFileWriter::create(file_path.str(), SIXTY_FOUR_KIB, "host",
-                                       "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), SIXTY_FOUR_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
     CHECK(file->fd() >= 0);
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), SIXTY_FOUR_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(),
+                                SIXTY_FOUR_KIB, &collect_written, &collector);
 
     constexpr std::uint32_t SEGMENTS = 1000;
     for (std::uint32_t id = 0; id < SEGMENTS; ++id) {
         const dstd::Vector<std::uint8_t> bytes = make_segment(id, 400);
-        auto appended = writer.append(1, ByteView(bytes.data(), bytes.size()),
-                                      segment_info(7, 1), nullptr);
+        auto appended =
+            writer.append(1, dstd::ByteView(bytes.data(), bytes.size()),
+                          segment_info(7, 1), nullptr);
         REQUIRE(appended.has_value());
     }
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(!extents.empty());
     check_extent_layout(extents, SIXTY_FOUR_KIB);
 
@@ -377,13 +371,13 @@ TEST_CASE("store open extent: many threads across three namespaces") {
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file = DataFileWriter::create(file_path.str(), SIXTY_FOUR_KIB, "host",
-                                       "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), SIXTY_FOUR_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), SIXTY_FOUR_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(),
+                                SIXTY_FOUR_KIB, &collect_written, &collector);
 
     constexpr std::uint32_t THREADS = 16;
     constexpr std::uint32_t PER_THREAD = 2000;
@@ -398,7 +392,7 @@ TEST_CASE("store open extent: many threads across three namespaces") {
                 const std::uint32_t namespace_id = id % NAMESPACES;
                 const dstd::Vector<std::uint8_t> bytes = make_segment(id, 40);
                 auto appended = writer.append(
-                    namespace_id, ByteView(bytes.data(), bytes.size()),
+                    namespace_id, dstd::ByteView(bytes.data(), bytes.size()),
                     segment_info(namespace_id + 1, 1), nullptr);
                 if (!appended) ++failures;
             }
@@ -410,7 +404,7 @@ TEST_CASE("store open extent: many threads across three namespaces") {
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(!extents.empty());
     check_extent_layout(extents, SIXTY_FOUR_KIB);
 
@@ -424,9 +418,9 @@ TEST_CASE("store open extent: many threads across three namespaces") {
     }
     ::close(fd);
 
-    for (const WrittenExtent& extent : extents) {
+    for (const engine::WrittenExtent& extent : extents) {
         const std::uint32_t namespace_id = extent.segments.front().copy_id - 1;
-        for (const ExtentSegment& segment : extent.segments) {
+        for (const engine::ExtentSegment& segment : extent.segments) {
             CHECK(segment.copy_id == namespace_id + 1);
         }
     }
@@ -440,27 +434,27 @@ TEST_CASE("store open extent: a segment of three extents is written alone") {
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector);
 
     const std::size_t length = 3U * EIGHT_KIB;
     const dstd::Vector<std::uint8_t> payload = make_segment_of(11, length);
     REQUIRE(payload.size() == length);
     REQUIRE(writer
-                .append(1, ByteView(payload.data(), payload.size()),
+                .append(1, dstd::ByteView(payload.data(), payload.size()),
                         segment_info(1, 5), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
-    const WrittenExtent& extent = extents.front();
+    const engine::WrittenExtent& extent = extents.front();
     CHECK(extent.offset % store::engine::EXTENT_ALIGN_BYTES == 0);
     CHECK(extent.length % FOUR_KIB == 0);
     REQUIRE(extent.segments.size() == 1);
@@ -484,13 +478,13 @@ TEST_CASE(
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector);
 
     const std::size_t first =
         EIGHT_KIB - store::engine::EXTENT_HEADER_BYTES - 64;
@@ -504,25 +498,25 @@ TEST_CASE(
     int context_b = 0;
     int context_c = 0;
     REQUIRE(writer
-                .append(1, ByteView(a.data(), a.size()), segment_info(1, 1),
-                        &context_a)
+                .append(1, dstd::ByteView(a.data(), a.size()),
+                        segment_info(1, 1), &context_a)
                 .has_value());
     REQUIRE(writer
-                .append(1, ByteView(b.data(), b.size()), segment_info(1, 1),
-                        &context_b)
+                .append(1, dstd::ByteView(b.data(), b.size()),
+                        segment_info(1, 1), &context_b)
                 .has_value());
     REQUIRE(writer
-                .append(1, ByteView(c.data(), c.size()), segment_info(1, 1),
-                        &context_c)
+                .append(1, dstd::ByteView(c.data(), c.size()),
+                        segment_info(1, 1), &context_c)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     check_extent_layout(extents, EIGHT_KIB);
     REQUIRE(extents.size() == 2);
 
-    const WrittenExtent& full = extents[0];
+    const engine::WrittenExtent& full = extents[0];
     REQUIRE(full.segments.size() == 2);
     CHECK(full.segments[0].offset_in_extent == 0);
     CHECK(full.segments[0].length == first);
@@ -533,7 +527,7 @@ TEST_CASE(
     CHECK(full.contexts[0] == &context_a);
     CHECK(full.contexts[1] == &context_b);
 
-    const WrittenExtent& rest = extents[1];
+    const engine::WrittenExtent& rest = extents[1];
     REQUIRE(rest.segments.size() == 1);
     CHECK(rest.segments[0].offset_in_extent == 0);
     CHECK(rest.segments[0].length == c.size());
@@ -560,20 +554,20 @@ TEST_CASE("store open extent: a failed write latches and reports no extent") {
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
     store::engine::DataFileWriterTestHook::reopen_read_only(
         *file, dstd::String(file_path.str()));
 
     Collector collector;
     std::atomic<std::size_t> discarded{0};
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector, &count_discarded);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector, &count_discarded);
 
     const dstd::Vector<std::uint8_t> payload = make_segment(1, 1024);
     REQUIRE(writer
-                .append(1, ByteView(payload.data(), payload.size()),
+                .append(1, dstd::ByteView(payload.data(), payload.size()),
                         segment_info(1, 1), &discarded)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
@@ -584,8 +578,9 @@ TEST_CASE("store open extent: a failed write latches and reports no extent") {
     CHECK(collector.take().empty());
     CHECK(discarded.load() == 1);
 
-    auto later = writer.append(21, ByteView(payload.data(), payload.size()),
-                               segment_info(1, 1), nullptr);
+    auto later =
+        writer.append(21, dstd::ByteView(payload.data(), payload.size()),
+                      segment_info(1, 1), nullptr);
     REQUIRE_FALSE(later.has_value());
     CHECK(later.error().is(dstd::Condition::Io));
     auto sealed = writer.seal_all();
@@ -602,20 +597,21 @@ TEST_CASE(
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
     std::atomic<std::size_t> discarded{0};
     {
-        ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                            &collect_written, &collector, &count_discarded);
+        engine::ExtentWriter writer(*file, backend, *runtime.executor(),
+                                    EIGHT_KIB, &collect_written, &collector,
+                                    &count_discarded);
         constexpr std::uint32_t SEGMENTS = 3;
         for (std::uint32_t id = 0; id < SEGMENTS; ++id) {
             const dstd::Vector<std::uint8_t> bytes = make_segment(id, 120);
             REQUIRE(writer
-                        .append(1, ByteView(bytes.data(), bytes.size()),
+                        .append(1, dstd::ByteView(bytes.data(), bytes.size()),
                                 segment_info(1, 1), &discarded)
                         .has_value());
         }
@@ -629,8 +625,8 @@ TEST_CASE(
     "store open extent: the file hands out aligned ranges from one counter") {
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file = DataFileWriter::create(file_path.str(), SIXTY_FOUR_KIB, "host",
-                                       "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), SIXTY_FOUR_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     CHECK(file->reserve_range(10, FOUR_KIB) == FOUR_KIB);
@@ -639,13 +635,14 @@ TEST_CASE(
     CHECK(file->reserve_range(20, FOUR_KIB) == SIXTY_FOUR_KIB + FOUR_KIB);
 
     const dstd::Vector<std::uint8_t> payload = make_payload(4, 512);
-    auto extent = file->append_extent(ByteView(payload.data(), payload.size()));
+    auto extent =
+        file->append_extent(dstd::ByteView(payload.data(), payload.size()));
     REQUIRE(extent.has_value());
     // An extent starts at the next 4 KiB after the file end, not at the next
     // extent size, and its stored form fills whole 4 KiB blocks.
     CHECK(extent->offset == SIXTY_FOUR_KIB + 2 * FOUR_KIB);
     CHECK(extent->length == FOUR_KIB);
-    auto big = file->append_big(ByteView(payload.data(), payload.size()));
+    auto big = file->append_big(dstd::ByteView(payload.data(), payload.size()));
     REQUIRE(big.has_value());
     CHECK(big->offset == SIXTY_FOUR_KIB + 3 * FOUR_KIB);
 }
@@ -658,13 +655,13 @@ TEST_CASE("store open extent: stress a small extent from many threads") {
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector);
 
     constexpr std::uint32_t THREADS = 32;
     constexpr std::uint32_t PER_THREAD = 1563;
@@ -677,7 +674,7 @@ TEST_CASE("store open extent: stress a small extent from many threads") {
                 const std::uint32_t id = t * PER_THREAD + i;
                 const dstd::Vector<std::uint8_t> bytes = make_segment(id, 80);
                 auto appended =
-                    writer.append(1, ByteView(bytes.data(), bytes.size()),
+                    writer.append(1, dstd::ByteView(bytes.data(), bytes.size()),
                                   segment_info(1, 1), nullptr);
                 if (!appended) ++failures;
             }
@@ -689,7 +686,7 @@ TEST_CASE("store open extent: stress a small extent from many threads") {
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(!extents.empty());
     check_extent_layout(extents, EIGHT_KIB);
 
@@ -710,24 +707,24 @@ TEST_CASE("store open extent: a short write is finished with resubmissions") {
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector);
 
     const dstd::Vector<std::uint8_t> bytes = make_segment(3, 200);
     REQUIRE(writer
-                .append(1, ByteView(bytes.data(), bytes.size()),
+                .append(1, dstd::ByteView(bytes.data(), bytes.size()),
                         segment_info(1, 1), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
     CHECK(backend.completions() > 1);
 
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
     CHECK(extents.front().length == FOUR_KIB);
 
@@ -745,24 +742,24 @@ TEST_CASE("store open extent: an interrupted write is retried in full") {
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector);
 
     const dstd::Vector<std::uint8_t> bytes = make_segment(4, 300);
     REQUIRE(writer
-                .append(1, ByteView(bytes.data(), bytes.size()),
+                .append(1, dstd::ByteView(bytes.data(), bytes.size()),
                         segment_info(1, 1), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
     CHECK(backend.completions() > 1);
 
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
@@ -779,17 +776,17 @@ TEST_CASE("store open extent: a zero write result latches an Io error") {
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector);
 
     const dstd::Vector<std::uint8_t> bytes = make_segment(5, 128);
     REQUIRE(writer
-                .append(1, ByteView(bytes.data(), bytes.size()),
+                .append(1, dstd::ByteView(bytes.data(), bytes.size()),
                         segment_info(1, 1), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
@@ -806,24 +803,24 @@ TEST_CASE("store open extent: an extent write needs the backend flush") {
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector);
 
     const dstd::Vector<std::uint8_t> bytes = make_segment(6, 96);
     REQUIRE(writer
-                .append(1, ByteView(bytes.data(), bytes.size()),
+                .append(1, dstd::ByteView(bytes.data(), bytes.size()),
                         segment_info(1, 1), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(collector.wait_for(1, EXTENT_WRITE_DEADLINE));
     REQUIRE(writer.wait_idle().has_value());
 
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
     CHECK(extents.front().length == FOUR_KIB);
 
@@ -844,25 +841,25 @@ TEST_CASE(
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector);
 
     const dstd::Vector<std::uint8_t> payload = make_segment_of(11, EIGHT_KIB);
     REQUIRE(payload.size() == EIGHT_KIB);
     REQUIRE(writer
-                .append(1, ByteView(payload.data(), payload.size()),
+                .append(1, dstd::ByteView(payload.data(), payload.size()),
                         segment_info(1, 5), nullptr)
                 .has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
-    const WrittenExtent& extent = extents.front();
+    const engine::WrittenExtent& extent = extents.front();
     CHECK(extent.offset % store::engine::EXTENT_ALIGN_BYTES == 0);
     CHECK(extent.length % FOUR_KIB == 0);
     REQUIRE(extent.segments.size() == 1);
@@ -885,13 +882,13 @@ TEST_CASE("store open extent: appends concurrent with seal_all land once") {
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector);
 
     constexpr std::uint32_t APPENDERS = 8;
     constexpr std::uint32_t SEALERS = 2;
@@ -906,7 +903,7 @@ TEST_CASE("store open extent: appends concurrent with seal_all land once") {
                 const std::uint32_t id = t * PER_THREAD + i;
                 const dstd::Vector<std::uint8_t> bytes = make_segment(id, 40);
                 auto appended =
-                    writer.append(1, ByteView(bytes.data(), bytes.size()),
+                    writer.append(1, dstd::ByteView(bytes.data(), bytes.size()),
                                   segment_info(1, 1), nullptr);
                 if (!appended) ++failures;
             }
@@ -929,7 +926,7 @@ TEST_CASE("store open extent: appends concurrent with seal_all land once") {
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(!extents.empty());
     check_extent_layout(extents, EIGHT_KIB);
 
@@ -953,29 +950,29 @@ TEST_CASE(
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector);
 
     const dstd::Vector<std::uint8_t> first = make_segment(1, 300);
     const dstd::Vector<std::uint8_t> second = make_segment(2, 300);
     REQUIRE(writer
-                .append(1, ByteView(first.data(), first.size()),
+                .append(1, dstd::ByteView(first.data(), first.size()),
                         segment_info(1, 1), nullptr)
                 .has_value());
     REQUIRE(store::engine::ExtentWriterTestHook::seal_in_place(writer, 1));
     REQUIRE(writer
-                .append(1, ByteView(second.data(), second.size()),
+                .append(1, dstd::ByteView(second.data(), second.size()),
                         segment_info(1, 1), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 2);
     check_extent_layout(extents, EIGHT_KIB);
     REQUIRE(extents[0].segments.size() == 1);
@@ -1000,17 +997,17 @@ TEST_CASE("store open extent: sealing an empty extent holds no buffer") {
 
     TempDir dir;
     const dstd::Path file_path = dir.path / "data.dfs";
-    auto file =
-        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
+    auto file = engine::DataFileWriter::create(file_path.str(), EIGHT_KIB,
+                                               "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
-    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                        &collect_written, &collector);
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                                &collect_written, &collector);
 
     const dstd::Vector<std::uint8_t> bytes = make_segment(7, 120);
     REQUIRE(writer
-                .append(1, ByteView(bytes.data(), bytes.size()),
+                .append(1, dstd::ByteView(bytes.data(), bytes.size()),
                         segment_info(1, 1), nullptr)
                 .has_value());
 
@@ -1023,7 +1020,7 @@ TEST_CASE("store open extent: sealing an empty extent holds no buffer") {
     CHECK(store::engine::ExtentWriterTestHook::retired_extents(writer) <= 2);
 
     REQUIRE(writer.wait_idle().has_value());
-    dstd::Vector<WrittenExtent> extents = collector.take();
+    dstd::Vector<engine::WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);

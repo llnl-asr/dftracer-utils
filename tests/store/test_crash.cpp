@@ -37,12 +37,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-namespace store = dftracer::utils::store;
-namespace io_fault = store::engine::io_fault;
-
-using dftracer::utils::Runtime;
-using dftracer::utils::TaskHandle;
-using dstd::ByteView;
+using namespace dftracer::utils::store;
 
 constexpr std::uint32_t EXTENT_BYTES = 4 * 1024;
 constexpr std::uint64_t COMMIT_BYTES = 4 * 1024;
@@ -89,11 +84,11 @@ constexpr bool SANITIZED = false;
 constexpr bool SANITIZED = false;
 #endif
 
-ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::String to_std(ByteView bytes) {
+dstd::String to_std(dstd::ByteView bytes) {
     return dstd::String(reinterpret_cast<const char*>(bytes.data()),
                         bytes.size());
 }
@@ -437,19 +432,19 @@ Dumped dump_snapshot(const store::engine::Snapshot& snapshot,
     return out;
 }
 
-bool is_sync(const io_fault::Event& event) {
-    return event.type == io_fault::Event::Type::Sync;
+bool is_sync(const engine::io_fault::Event& event) {
+    return event.type == engine::io_fault::Event::Type::Sync;
 }
 
-std::uint64_t whole_length(const io_fault::Event& event) {
+std::uint64_t whole_length(const engine::io_fault::Event& event) {
     return is_sync(event) ? 0 : event.length;
 }
 
 /// The bytes one event wrote: an extent's range of the finished file, because a
 /// extent is never rewritten, or the bytes the log copied.
-const std::uint8_t* event_bytes(const io_fault::Event& event,
+const std::uint8_t* event_bytes(const engine::io_fault::Event& event,
                                 const dstd::String& final_bytes) {
-    if (event.kind == io_fault::WriteKind::Extent) {
+    if (event.kind == engine::io_fault::WriteKind::Extent) {
         return reinterpret_cast<const std::uint8_t*>(final_bytes.data()) +
                event.offset;
     }
@@ -460,7 +455,8 @@ const std::uint8_t* event_bytes(const io_fault::Event& event,
 /// event's length except for a torn write and for a write that did not happen.
 dstd::String render_image(
     const dstd::Vector<dstd::Pair<std::size_t, std::uint64_t>>& applied,
-    const dstd::Vector<io_fault::Event>& log, const dstd::String& final_bytes) {
+    const dstd::Vector<engine::io_fault::Event>& log,
+    const dstd::String& final_bytes) {
     std::uint64_t end = 0;
     for (const auto& one : applied) {
         end = std::max(end, log[one.first].offset + one.second);
@@ -468,7 +464,7 @@ dstd::String render_image(
     dstd::String image(static_cast<std::size_t>(end), '\0');
     for (const auto& one : applied) {
         if (one.second == 0) continue;
-        const io_fault::Event& event = log[one.first];
+        const engine::io_fault::Event& event = log[one.first];
         const std::uint8_t* data = event_bytes(event, final_bytes);
         if (data == nullptr) continue;
         std::memcpy(image.data() + event.offset, data,
@@ -479,7 +475,7 @@ dstd::String render_image(
 
 /// The index one past the last sync below `k`: every write at or after it is
 /// unsynced, and every write below it was issued before that sync.
-std::size_t unsynced_from(const dstd::Vector<io_fault::Event>& log,
+std::size_t unsynced_from(const dstd::Vector<engine::io_fault::Event>& log,
                           std::size_t k) {
     for (std::size_t i = k; i > 0; --i) {
         if (is_sync(log[i - 1])) return i;
@@ -489,7 +485,7 @@ std::size_t unsynced_from(const dstd::Vector<io_fault::Event>& log,
 
 /// The end of the only bytes a header rewrite changes: its tail fields. A
 /// prefix that covers them leaves the whole new header, crc included.
-std::uint64_t header_tail_end(const io_fault::Event& event) {
+std::uint64_t header_tail_end(const engine::io_fault::Event& event) {
     const std::uint64_t size = event.bytes.size();
     if (size < 48) return size;
     const std::uint8_t* data = event.bytes.data();
@@ -499,8 +495,9 @@ std::uint64_t header_tail_end(const io_fault::Event& event) {
     return at + 16 <= size ? at + 16 : size;
 }
 
-std::uint64_t torn_prefix(const io_fault::Event& event, std::mt19937_64& rng) {
-    if (event.kind == io_fault::WriteKind::Header) {
+std::uint64_t torn_prefix(const engine::io_fault::Event& event,
+                          std::mt19937_64& rng) {
+    if (event.kind == engine::io_fault::WriteKind::Header) {
         const std::uint64_t end = header_tail_end(event);
         return end == 0 ? 0 : rng() % end;
     }
@@ -515,7 +512,7 @@ std::size_t records_below(const dstd::Vector<std::size_t>& record_at,
         record_at.begin());
 }
 
-std::size_t last_write_below(const dstd::Vector<io_fault::Event>& log,
+std::size_t last_write_below(const dstd::Vector<engine::io_fault::Event>& log,
                              std::size_t k) {
     for (std::size_t i = k; i > 0; --i) {
         if (!is_sync(log[i - 1])) return i - 1;
@@ -523,12 +520,12 @@ std::size_t last_write_below(const dstd::Vector<io_fault::Event>& log,
     return k;
 }
 
-dstd::String log_text(const dstd::Vector<io_fault::Event>& log) {
+dstd::String log_text(const dstd::Vector<engine::io_fault::Event>& log) {
     static const char* const KINDS[] = {"header", "record",  "big",
                                         "footer", "trailer", "extent"};
     dstd::String out;
     for (std::size_t i = 0; i < log.size(); ++i) {
-        const io_fault::Event& event = log[i];
+        const engine::io_fault::Event& event = log[i];
         out += dstd::to_string(i);
         out += ' ';
         if (is_sync(event)) {
@@ -570,16 +567,16 @@ struct CrashModel {
     dstd::Set<std::uint32_t> durable_copies;
 };
 
-CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
+CrashModel build_model(const dstd::Vector<engine::io_fault::Event>& log,
                        const dstd::Vector<std::size_t>& record_at,
                        const dstd::String& final_bytes) {
     CrashModel model;
     dstd::Map<std::uint64_t, std::size_t> extent_event;
     dstd::Map<std::uint64_t, std::size_t> big_event;
     for (std::size_t i = 0; i < log.size(); ++i) {
-        if (log[i].kind == io_fault::WriteKind::Extent) {
+        if (log[i].kind == engine::io_fault::WriteKind::Extent) {
             extent_event[log[i].offset] = i;
-        } else if (log[i].kind == io_fault::WriteKind::Big) {
+        } else if (log[i].kind == engine::io_fault::WriteKind::Big) {
             big_event[log[i].offset] = i;
         }
     }
@@ -591,9 +588,9 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
 
     model.copies.resize(record_at.size());
     for (std::size_t c = 0; c < record_at.size(); ++c) {
-        const io_fault::Event& event = log[record_at[c]];
+        const engine::io_fault::Event& event = log[record_at[c]];
         auto record = store::engine::decode_record(
-            ByteView{event.bytes.data(), event.bytes.size()});
+            dstd::ByteView{event.bytes.data(), event.bytes.size()});
         REQUIRE(record.has_value());
         REQUIRE(record->sequence == c + 1);
         for (const store::engine::RecordItem& item : record->items) {
@@ -625,7 +622,7 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
                 dstd::Vector<std::uint8_t> raw(stored_at,
                                                stored_at + extent->length);
                 REQUIRE(store::engine::decode_extent(raw).has_value());
-                const ByteView bytes{raw.data(), raw.size()};
+                const dstd::ByteView bytes{raw.data(), raw.size()};
                 for (const store::engine::ExtentSegment& segment :
                      extent->segments) {
                     model.extents[extent->sequence].emplace_back(
@@ -634,7 +631,7 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
                         segment.offset_in_extent, segment.length));
                     REQUIRE(view.has_value());
                     store::engine::SegmentView::Cursor cursor =
-                        view->lower_bound(ByteView{});
+                        view->lower_bound(dstd::ByteView{});
                     while (!cursor.at_end()) {
                         const store::engine::SegmentView::Entry found =
                             cursor.entry();
@@ -791,7 +788,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     // Record what the writer issues from here on. Create() wrote the header
     // before this, so no image carries it and every image that carries a
     // header carries a rewrite.
-    io_fault::start(WriterTestHook::file(*writer).fd());
+    engine::io_fault::start(WriterTestHook::file(*writer).fd());
 
     auto sums = writer->add_namespace(fold_spec("sums", FoldKind::SumI64));
     auto durable = writer->add_namespace(durable_spec("durable"));
@@ -837,7 +834,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     }
 
     REQUIRE(close_writer(*writer).has_value());
-    const dstd::Vector<io_fault::Event> log = io_fault::stop();
+    const dstd::Vector<engine::io_fault::Event> log = engine::io_fault::stop();
 
     const dstd::String file_name = dstd::String(writer->name());
     const dstd::String final_bytes = read_bytes(dir.file(file_name));
@@ -847,21 +844,23 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     dstd::Vector<std::size_t> header_at;
     std::size_t syncs = 0;
     for (std::size_t i = 0; i < log.size(); ++i) {
-        const io_fault::Event& event = log[i];
+        const engine::io_fault::Event& event = log[i];
         if (is_sync(event)) {
             ++syncs;
             continue;
         }
         REQUIRE(event.offset + event.length <= final_bytes.size());
-        if (event.kind == io_fault::WriteKind::Record) record_at.push_back(i);
-        if (event.kind == io_fault::WriteKind::Header) header_at.push_back(i);
+        if (event.kind == engine::io_fault::WriteKind::Record)
+            record_at.push_back(i);
+        if (event.kind == engine::io_fault::WriteKind::Header)
+            header_at.push_back(i);
     }
 
     std::size_t extents = 0;
     std::size_t bigs = 0;
-    for (const io_fault::Event& event : log) {
-        if (event.kind == io_fault::WriteKind::Extent) ++extents;
-        if (event.kind == io_fault::WriteKind::Big) ++bigs;
+    for (const engine::io_fault::Event& event : log) {
+        if (event.kind == engine::io_fault::WriteKind::Extent) ++extents;
+        if (event.kind == engine::io_fault::WriteKind::Big) ++bigs;
     }
     std::printf(
         "crash log: events=%zu records=%zu headers=%zu extents=%zu bigs=%zu "
@@ -916,8 +915,8 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             // Every extent of the log and every big value of it: a write no
             // applied record names cannot change a dump, and both are written
             // once and never rewritten.
-            if (log[i].kind == io_fault::WriteKind::Extent ||
-                log[i].kind == io_fault::WriteKind::Big) {
+            if (log[i].kind == engine::io_fault::WriteKind::Extent ||
+                log[i].kind == engine::io_fault::WriteKind::Big) {
                 applied.emplace_back(i, whole_length(log[i]));
             }
         }
@@ -1093,7 +1092,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
                                      i == tear ? keep : whole_length(log[i]));
             }
             const bool torn_header =
-                log[tear].kind == io_fault::WriteKind::Header;
+                log[tear].kind == engine::io_fault::WriteKind::Header;
             // A prefix below the crc field leaves the previous header, crc and
             // all, and below the tail fields it leaves the new crc over the old
             // tail. Only a prefix that covers the crc field makes the header
@@ -1115,14 +1114,15 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             dstd::Vector<dstd::Pair<std::size_t, std::uint64_t>> kept;
             kept.reserve(k);
             for (std::size_t i = 0; i < k; ++i) {
-                const io_fault::Event& event = log[i];
+                const engine::io_fault::Event& event = log[i];
                 const bool droppable = !is_sync(event) && i >= from;
                 if (droppable && (rng() % 2) == 0) {
                     dropped[i] = 1;
-                    if (event.kind == io_fault::WriteKind::Extent) {
+                    if (event.kind == engine::io_fault::WriteKind::Extent) {
                         dropped_extent = true;
                     }
-                    if (event.kind == io_fault::WriteKind::Big) ++big_dropped;
+                    if (event.kind == engine::io_fault::WriteKind::Big)
+                        ++big_dropped;
                     continue;
                 }
                 kept.emplace_back(i, whole_length(event));
@@ -1165,7 +1165,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             std::size_t highest_header = 0;
             bool inverted = false;
             for (const std::size_t i : order) {
-                if (log[i].kind == io_fault::WriteKind::Header &&
+                if (log[i].kind == engine::io_fault::WriteKind::Header &&
                     !is_sync(log[i])) {
                     if (highest_header > i) inverted = true;
                     highest_header = std::max(highest_header, i);

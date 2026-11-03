@@ -18,16 +18,11 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::fileio;
-using dftu_utils_test::run_coro;
-using line_format::JsonEscape;
-using line_format::JsonLineFormat;
-using line_format::LineFormat;
-using line_format::PlainEscape;
-using line_format::raw;
 
 namespace {
 
-template <line_format::FixedString Fmt, class E = PlainEscape, class... A>
+template <line_format::FixedString Fmt, class E = line_format::PlainEscape,
+          class... A>
 dstd::String fmt_ct(const A&... a) {
     const auto v = line_format::view<Fmt>();
     dstd::String out(line_format::max_line_bytes<E>(v, a...), '\0');
@@ -35,7 +30,7 @@ dstd::String fmt_ct(const A&... a) {
     return out;
 }
 
-template <class E = PlainEscape, class... A>
+template <class E = line_format::PlainEscape, class... A>
 dstd::String fmt_rt(dstd::StringView f, const A&... a) {
     auto lf = line_format::BasicLineFormat<E>::parse(f);
     REQUIRE(lf.has_value());
@@ -60,9 +55,8 @@ dstd::String gunzip_all(const dstd::String& path) {
 template <class T>
 concept CtOne = requires(GzipLineWriter& w, T v) { w.append_fmt<"{}">(v); };
 template <class T>
-concept RtOne = requires(GzipLineWriter& w, const LineFormat& f, T v) {
-    w.append_fmt(f, v);
-};
+concept RtOne = requires(GzipLineWriter& w, const line_format::LineFormat& f,
+                         T v) { w.append_fmt(f, v); };
 enum class Color { Red };
 
 static_assert(CtOne<int> && CtOne<std::uint64_t> && CtOne<bool> &&
@@ -73,9 +67,10 @@ template <class T>
 concept JsonCtOne =
     requires(GzipLineWriter& w, T v) { w.append_json<"{}">(v); };
 template <class T>
-concept JsonRtOne = requires(GzipLineWriter& w, const JsonLineFormat& f, T v) {
-    w.append_json(f, v);
-};
+concept JsonRtOne =
+    requires(GzipLineWriter& w, const line_format::JsonLineFormat& f, T v) {
+        w.append_json(f, v);
+    };
 static_assert(JsonCtOne<int> && JsonCtOne<dstd::String> && JsonRtOne<bool> &&
               JsonRtOne<line_format::Raw>);
 static_assert(!JsonCtOne<char> && !JsonCtOne<int*> && !JsonCtOne<Color> &&
@@ -95,11 +90,15 @@ template <class... A>
 concept ProducerOneHole =
     requires(GzipLineWriter::Producer& p, A... a) { p.append_fmt<"{}">(a...); };
 template <class... A>
-concept PlainRtOnJson = requires(GzipLineWriter& w, const JsonLineFormat& f,
-                                 A... a) { w.append_fmt(f, a...); };
+concept PlainRtOnJson =
+    requires(GzipLineWriter& w, const line_format::JsonLineFormat& f, A... a) {
+        w.append_fmt(f, a...);
+    };
 template <class... A>
-concept JsonRtOnPlain = requires(GzipLineWriter& w, const LineFormat& f,
-                                 A... a) { w.append_json(f, a...); };
+concept JsonRtOnPlain =
+    requires(GzipLineWriter& w, const line_format::LineFormat& f, A... a) {
+        w.append_json(f, a...);
+    };
 template <class... A>
 concept CtNewline =
     requires(GzipLineWriter& w, A... a) { w.append_fmt<"x\n">(a...); };
@@ -125,47 +124,49 @@ TEST_CASE("line_format - values and escapes") {
     CHECK(fmt_ct<"{} {}">(true, false) == "true false\n");
     CHECK(fmt_ct<"{} {} {}">(2.5, 0.1f, 1e300) == "2.5 0.1 1e+300\n");
     CHECK(fmt_ct<"\"{}\"">(dstd::StringView("a\"b\\c")) == "\"a\"b\\c\"\n");
-    CHECK(fmt_ct<"\"{}\"", JsonEscape>(dstd::StringView("a\"b\\c\n\t\x01")) ==
-          "\"a\\\"b\\\\c\\n\\t\\u0001\"\n");
-    CHECK(fmt_ct<"{}", JsonEscape>(raw("a\"b")) == "a\"b\n");
-    CHECK(fmt_rt<JsonEscape>("{}", "q\"") == "q\\\"\n");
+    CHECK(fmt_ct<"\"{}\"", line_format::JsonEscape>(dstd::StringView(
+              "a\"b\\c\n\t\x01")) == "\"a\\\"b\\\\c\\n\\t\\u0001\"\n");
+    CHECK(fmt_ct<"{}", line_format::JsonEscape>(line_format::raw("a\"b")) ==
+          "a\"b\n");
+    CHECK(fmt_rt<line_format::JsonEscape>("{}", "q\"") == "q\\\"\n");
     CHECK(fmt_rt("{}", "q\"") == "q\"\n");
     CHECK(fmt_ct<"{}{}{}">(dstd::String("s"), "lit", (const char*)"p") ==
           "slitp\n");
-    CHECK(fmt_ct<"{}">(raw("a\"b")) == "a\"b\n");
+    CHECK(fmt_ct<"{}">(line_format::raw("a\"b")) == "a\"b\n");
     CHECK(fmt_ct<"{}">(std::numeric_limits<std::int64_t>::min()) ==
           "-9223372036854775808\n");
 }
 
 TEST_CASE("line_format - raw literal JSON with object braces") {
-    CHECK(fmt_ct<R"({"name":"{}","ts":{},"dur":{}})", JsonEscape>(
+    CHECK(fmt_ct<R"({"name":"{}","ts":{},"dur":{}})", line_format::JsonEscape>(
               "a\"b", 5, 7) == "{\"name\":\"a\\\"b\",\"ts\":5,\"dur\":7}\n");
-    CHECK(fmt_ct<R"({"args":{{}},"v":{}})", JsonEscape>(raw("1")) ==
-          "{\"args\":{},\"v\":1}\n");
+    CHECK(fmt_ct<R"({"args":{{}},"v":{}})", line_format::JsonEscape>(
+              line_format::raw("1")) == "{\"args\":{},\"v\":1}\n");
     CHECK(fmt_ct<"{{}} {} {{}}">(1) == "{} 1 {}\n");
 }
 
 TEST_CASE("line_format - run-time form equals compile-time form") {
 #define F R"({"a":{{}},"n":"{}","k":{},"x":{},"b":{}})"
-    CHECK(fmt_rt<JsonEscape>(F, "q\"", 7, 2.5, true) ==
-          fmt_ct<F, JsonEscape>("q\"", 7, 2.5, true));
+    CHECK(fmt_rt<line_format::JsonEscape>(F, "q\"", 7, 2.5, true) ==
+          fmt_ct<F, line_format::JsonEscape>("q\"", 7, 2.5, true));
 #undef F
-    CHECK(fmt_rt("{{}}{}", raw("r")) == fmt_ct<"{{}}{}">(raw("r")));
+    CHECK(fmt_rt("{{}}{}", line_format::raw("r")) ==
+          fmt_ct<"{{}}{}">(line_format::raw("r")));
     CHECK(fmt_rt("x") == "x\n");
     CHECK(fmt_rt("") == "\n");
 }
 
 TEST_CASE("line_format - run-time parse errors") {
     for (const char* bad : {"a\n", "\n", "a\r", "{}\n{}"}) {
-        auto r = LineFormat::parse(bad);
+        auto r = line_format::LineFormat::parse(bad);
         REQUIRE_FALSE(r.has_value());
         CHECK(r.error().is_code(common::ErrorCode::InvalidArgument));
-        auto j = JsonLineFormat::parse(bad);
+        auto j = line_format::JsonLineFormat::parse(bad);
         REQUIRE_FALSE(j.has_value());
         CHECK(j.error().is_code(common::ErrorCode::InvalidArgument));
     }
-    CHECK(LineFormat::parse("a {\n}").has_value() == false);
-    CHECK(LineFormat::parse("a { } {x}").has_value());
+    CHECK(line_format::LineFormat::parse("a {\n}").has_value() == false);
+    CHECK(line_format::LineFormat::parse("a { } {x}").has_value());
 }
 
 TEST_CASE("line_format - writer output equals hand-built lines") {
@@ -174,7 +175,8 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
     const dstd::Path& dir = scoped.path();
     const dstd::String p1 = dstd::String((dir / "ordered.gz").str());
     const dstd::String p2 = dstd::String((dir / "producer.gz").str());
-    auto lf = JsonLineFormat::parse(R"({"id":{},"n":"{}","v":{}})");
+    auto lf =
+        line_format::JsonLineFormat::parse(R"({"id":{},"n":"{}","v":{}})");
     REQUIRE(lf.has_value());
     dstd::String want;
     for (int i = 0; i < 500; ++i)
@@ -183,7 +185,7 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
                 "}\n";
 
     bool bad_count = false, null_arg = false;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         GzipWriterOptions o;
         o.member_size = 1024;
         auto w = co_await GzipLineWriter::open(p1, std::move(o));

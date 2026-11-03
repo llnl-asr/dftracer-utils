@@ -13,13 +13,7 @@
 #include <stdexcept>
 
 using namespace dftracer::utils;
-
-namespace df = dftracer::utils::dataframe;
-using df::AggOp;
-using df::AggSpec;
-using df::DataFrame;
-using df::Series;
-using df::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -131,8 +125,8 @@ void check_same(const DataFrame& a, const DataFrame& b) {
 
 TEST_CASE("extended aggregate ops produce the exact expected values") {
     Sample s;
-    DataFrame r = df::group_agg(s.keys, s.values, all_specs(),
-                                dstd::Vector<dstd::String>{"k"});
+    DataFrame r = dataframe::group_agg(s.keys, s.values, all_specs(),
+                                       dstd::Vector<dstd::String>{"k"});
     REQUIRE(r.num_rows() == 2);
     const std::int64_t g0 = row_of(r, "k", 0);
     const std::int64_t g1 = row_of(r, "k", 1);
@@ -191,34 +185,36 @@ TEST_CASE("extended aggregate ops produce the exact expected values") {
 
 TEST_CASE("extended aggregate ops round-trip through serialize/deserialize") {
     Sample s;
-    auto st = df::agg_new(all_specs());
-    df::agg_accumulate(*st, s.keys, s.values);
-    const DataFrame direct = df::agg_finalize(*st, "k");
-    auto back = df::agg_deserialize(df::agg_serialize(*st));
-    check_same(direct, df::agg_finalize(*back, "k"));
+    auto st = dataframe::agg_new(all_specs());
+    dataframe::agg_accumulate(*st, s.keys, s.values);
+    const DataFrame direct = dataframe::agg_finalize(*st, "k");
+    auto back = dataframe::agg_deserialize(dataframe::agg_serialize(*st));
+    check_same(direct, dataframe::agg_finalize(*back, "k"));
 }
 
 TEST_CASE(
     "extended aggregate ops merge two partials into the one-pass result") {
     Sample s;
-    auto whole = df::agg_new(all_specs());
-    df::agg_accumulate(*whole, s.keys, s.values);
+    auto whole = dataframe::agg_new(all_specs());
+    dataframe::agg_accumulate(*whole, s.keys, s.values);
 
-    auto lo = df::agg_new(all_specs());
-    df::agg_accumulate(*lo, s.keys, s.values, 0, 4);
-    auto hi = df::agg_new(all_specs());
-    df::agg_accumulate(*hi, s.keys, s.values, 4, 8);
-    df::agg_merge(*lo, *hi);
+    auto lo = dataframe::agg_new(all_specs());
+    dataframe::agg_accumulate(*lo, s.keys, s.values, 0, 4);
+    auto hi = dataframe::agg_new(all_specs());
+    dataframe::agg_accumulate(*hi, s.keys, s.values, 4, 8);
+    dataframe::agg_merge(*lo, *hi);
 
-    check_same(df::agg_finalize(*whole, "k"), df::agg_finalize(*lo, "k"));
+    check_same(dataframe::agg_finalize(*whole, "k"),
+               dataframe::agg_finalize(*lo, "k"));
 
     // Merging in the other order must land on the same state.
-    auto hi2 = df::agg_new(all_specs());
-    df::agg_accumulate(*hi2, s.keys, s.values, 4, 8);
-    auto lo2 = df::agg_new(all_specs());
-    df::agg_accumulate(*lo2, s.keys, s.values, 0, 4);
-    df::agg_merge(*hi2, *lo2);
-    check_same(df::agg_finalize(*whole, "k"), df::agg_finalize(*hi2, "k"));
+    auto hi2 = dataframe::agg_new(all_specs());
+    dataframe::agg_accumulate(*hi2, s.keys, s.values, 4, 8);
+    auto lo2 = dataframe::agg_new(all_specs());
+    dataframe::agg_accumulate(*lo2, s.keys, s.values, 0, 4);
+    dataframe::agg_merge(*hi2, *lo2);
+    check_same(dataframe::agg_finalize(*whole, "k"),
+               dataframe::agg_finalize(*hi2, "k"));
 }
 
 // Two ArgMin specs naming one `by` column share a slot, so both report the
@@ -240,22 +236,24 @@ TEST_CASE("ArgMin specs sharing a by column return one whole row") {
         AggSpec{AggOp::ArgMin, 2, "min_alt", 0.0, 1},
     };
 
-    auto whole = df::agg_new(specs);
-    df::agg_accumulate(*whole, keys, values);
-    DataFrame r = df::agg_finalize(*whole, "k");
+    auto whole = dataframe::agg_new(specs);
+    dataframe::agg_accumulate(*whole, keys, values);
+    DataFrame r = dataframe::agg_finalize(*whole, "k");
     REQUIRE(r.num_rows() == 1);
     CHECK(dstd::String(r.column("min_name").string_at(0)) == "a");
     CHECK(dstd::String(r.column("min_alt").string_at(0)) == "Z");
 
     // The shared row survives a split accumulate + merge and a round-trip.
-    auto lo = df::agg_new(specs);
-    df::agg_accumulate(*lo, keys, values, 0, 1);
-    auto hi = df::agg_new(specs);
-    df::agg_accumulate(*hi, keys, values, 1, 3);
-    df::agg_merge(*lo, *hi);
-    check_same(r, df::agg_finalize(*lo, "k"));
+    auto lo = dataframe::agg_new(specs);
+    dataframe::agg_accumulate(*lo, keys, values, 0, 1);
+    auto hi = dataframe::agg_new(specs);
+    dataframe::agg_accumulate(*hi, keys, values, 1, 3);
+    dataframe::agg_merge(*lo, *hi);
+    check_same(r, dataframe::agg_finalize(*lo, "k"));
     check_same(
-        r, df::agg_finalize(*df::agg_deserialize(df::agg_serialize(*lo)), "k"));
+        r,
+        dataframe::agg_finalize(
+            *dataframe::agg_deserialize(dataframe::agg_serialize(*lo)), "k"));
 }
 
 // A tied `by` keeps the row seen first, matching the View fold the two engines
@@ -276,9 +274,9 @@ TEST_CASE("ArgMin breaks a by tie on the first row seen") {
         AggSpec{AggOp::ArgMin, 2, "min_alt", 0.0, 1},
     };
 
-    auto st = df::agg_new(specs);
-    df::agg_accumulate(*st, keys, values);
-    DataFrame r = df::agg_finalize(*st, "k");
+    auto st = dataframe::agg_new(specs);
+    dataframe::agg_accumulate(*st, keys, values);
+    DataFrame r = dataframe::agg_finalize(*st, "k");
     REQUIRE(r.num_rows() == 1);
     CHECK(dstd::String(r.column("min_name").string_at(0)) == "b");
     CHECK(dstd::String(r.column("min_alt").string_at(0)) == "B");
@@ -292,8 +290,8 @@ TEST_CASE("ArgMin and ArgMax on one by column keep separate extremes") {
         AggSpec{AggOp::ArgMin, VC_NAME, "lo", 0.0, VC_BY},
         AggSpec{AggOp::ArgMax, VC_NAME, "hi", 0.0, VC_BY},
     };
-    DataFrame r =
-        df::group_agg(s.keys, s.values, specs, dstd::Vector<dstd::String>{"k"});
+    DataFrame r = dataframe::group_agg(s.keys, s.values, specs,
+                                       dstd::Vector<dstd::String>{"k"});
     const std::int64_t g0 = row_of(r, "k", 0);
     const std::int64_t g1 = row_of(r, "k", 1);
     CHECK(dstd::String(r.column("lo").string_at(g0)) == "c");
@@ -314,10 +312,10 @@ TEST_CASE("Distinct estimates and Sample bounds beyond k") {
     Series sv = Series::strings(v);
     const dstd::Vector<const Series*> keys{&sk};
     const dstd::Vector<const Series*> values{&sv};
-    DataFrame r = df::group_agg(keys, values,
-                                {AggSpec{AggOp::Distinct, 0, "d", 256.0},
-                                 AggSpec{AggOp::Sample, 0, "s", 16.0}},
-                                dstd::Vector<dstd::String>{"k"});
+    DataFrame r = dataframe::group_agg(keys, values,
+                                       {AggSpec{AggOp::Distinct, 0, "d", 256.0},
+                                        AggSpec{AggOp::Sample, 0, "s", 16.0}},
+                                       dstd::Vector<dstd::String>{"k"});
     REQUIRE(r.num_rows() == 1);
     const std::int64_t est = r.column("d").data<std::int64_t>()[0];
     CHECK(est > n / 2);
@@ -337,9 +335,9 @@ TEST_CASE("a null key is its own group and stays null in the result") {
     dstd::Vector<const Series*> values{&y};
     dstd::Vector<AggSpec> specs{AggSpec{AggOp::Sum, 0, "sum"}};
 
-    auto st = df::agg_new(specs);
-    df::agg_accumulate(*st, keys, values);
-    DataFrame r = df::agg_finalize(*st, "k");
+    auto st = dataframe::agg_new(specs);
+    dataframe::agg_accumulate(*st, keys, values);
+    DataFrame r = dataframe::agg_finalize(*st, "k");
     REQUIRE(r.num_rows() == 3);
     const Series rk = r.column("k");
     const Series rs = r.column("sum");
@@ -357,14 +355,14 @@ TEST_CASE("a null key is its own group and stays null in the result") {
     CHECK(rs.data<double>()[present_row(0)] == doctest::Approx(7.0));
 
     // The null flag survives serialize, merge and the seed-side split.
-    auto back = df::agg_deserialize(df::agg_serialize(*st));
-    check_same(r, df::agg_finalize(*back, "k"));
-    auto lo = df::agg_new(specs);
-    df::agg_accumulate(*lo, keys, values, 0, 2);
-    auto hi = df::agg_new(specs);
-    df::agg_accumulate(*hi, keys, values, 2, 4);
-    df::agg_merge(*lo, *hi);
-    check_same(r, df::agg_finalize(*lo, "k"));
+    auto back = dataframe::agg_deserialize(dataframe::agg_serialize(*st));
+    check_same(r, dataframe::agg_finalize(*back, "k"));
+    auto lo = dataframe::agg_new(specs);
+    dataframe::agg_accumulate(*lo, keys, values, 0, 2);
+    auto hi = dataframe::agg_new(specs);
+    dataframe::agg_accumulate(*hi, keys, values, 2, 4);
+    dataframe::agg_merge(*lo, *hi);
+    check_same(r, dataframe::agg_finalize(*lo, "k"));
 }
 
 TEST_CASE("group_agg_expr reads a value column in a view encoding") {
@@ -383,10 +381,11 @@ TEST_CASE("group_agg_expr reads a value column in a view encoding") {
     const std::int64_t kv[2] = {7, 7};
     Series k = Series::flat_i64(kv, 2);
     dstd::Vector<const Series*> inputs{&k, &xs, &y};
-    DataFrame r = df::group_agg_expr(
-        df::col(0),
-        {df::agg_sum(df::col(1), "sx"), df::agg_sum(df::col(2), "sy")}, inputs,
-        "k");
+    DataFrame r =
+        dataframe::group_agg_expr(dataframe::col(0),
+                                  {dataframe::agg_sum(dataframe::col(1), "sx"),
+                                   dataframe::agg_sum(dataframe::col(2), "sy")},
+                                  inputs, "k");
     REQUIRE(r.num_rows() == 1);
     CHECK(r.column("sx").data<double>()[0] == doctest::Approx(1.0));
     CHECK(r.column("sy").data<double>()[0] == doctest::Approx(4.0));
@@ -397,9 +396,9 @@ TEST_CASE("agg_deserialize survives mutated and truncated blobs") {
     // mutation is either decoded or refused with an exception, never read
     // past the blob or crashed on.
     Sample s;
-    auto st = df::agg_new(all_specs());
-    df::agg_accumulate(*st, s.keys, s.values);
-    const dstd::String blob = df::agg_serialize(*st);
+    auto st = dataframe::agg_new(all_specs());
+    dataframe::agg_accumulate(*st, s.keys, s.values);
+    const dstd::String blob = dataframe::agg_serialize(*st);
     REQUIRE(blob.size() > 64);
     std::uint64_t x = 0x9e3779b97f4a7c15ULL;
     auto next = [&]() {
@@ -416,9 +415,9 @@ TEST_CASE("agg_deserialize survives mutated and truncated blobs") {
             m[next() % m.size()] = static_cast<char>(next() & 0xff);
         if (round % 5 == 0) m.resize(next() % m.size());
         try {
-            auto back = df::agg_deserialize(m);
+            auto back = dataframe::agg_deserialize(m);
             if (back) {
-                df::agg_finalize(*back, "k");
+                dataframe::agg_finalize(*back, "k");
                 ++decoded;
             } else {
                 ++refused;

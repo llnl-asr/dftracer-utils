@@ -19,9 +19,7 @@
 #include <random>
 
 using namespace dftracer::utils;
-using dftracer::utils::utilities::reader::internal::ReaderInflater;
-using dftu_utils_test::run_coro;
-namespace gz = dftracer::utils::utilities::fileio::compress;
+using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -40,7 +38,7 @@ dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
 }
 
 dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
-    gz::GzipMemberCompressor c;
+    fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
     REQUIRE(n.has_value());
@@ -67,8 +65,8 @@ dstd::String read_all(const dstd::String& path) {
     REQUIRE(fd >= 0);
     dstd::String out;
     bool ok = false;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        ReaderInflater inf;
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        reader::internal::ReaderInflater inf;
         off_t offset = 0;
         if (!co_await inf.initialize(fd, offset)) co_return;
         dstd::Vector<unsigned char> buf(1 << 20);
@@ -91,8 +89,8 @@ dstd::String read_members(const dstd::String& path) {
     REQUIRE(fd >= 0);
     const auto size = static_cast<std::uint64_t>(::lseek(fd, 0, SEEK_END));
     dstd::String out;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto gen = gz::decode_gzip_members(fd, size);
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto gen = fileio::compress::decode_gzip_members(fd, size);
         while (auto part = co_await gen.next()) out.append(*part);
     });
     ::close(fd);
@@ -178,11 +176,12 @@ TEST_SUITE("ReaderInflater") {
         const auto text = hex_lines(12u << 20, 7);
         TempFile f(gzip(text));
         dstd::Optional<index::gzip::GzipBuildArtifacts> arts;
-        run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
-            index::gzip::CheckpointIndexer::VisitorList none;
-            arts = co_await index::gzip::build_gzip_index_artifacts(
-                f.path, 32u << 20, none, &scope);
-        });
+        dftu_utils_test::run_coro(
+            [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                index::gzip::CheckpointIndexer::VisitorList none;
+                arts = co_await index::gzip::build_gzip_index_artifacts(
+                    f.path, 32u << 20, none, &scope);
+            });
         REQUIRE(arts.has_value());
         CHECK(arts->total_uc_size == text.size());
         CHECK(arts->total_lines == static_cast<std::uint64_t>(std::count(

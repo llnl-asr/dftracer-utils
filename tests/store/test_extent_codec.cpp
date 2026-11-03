@@ -21,17 +21,11 @@ using namespace dftracer::utils;
 
 namespace {
 
-namespace store = dftracer::utils::store;
-
-using dstd::ByteView;
-using dstd::read_u32_le;
-using dstd::write_u32_le;
-
 constexpr std::size_t ALIGN = 4096;
 constexpr std::uint32_t PAGE =
     static_cast<std::uint32_t>(store::engine::PAGE_BYTES);
 
-ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
@@ -66,11 +60,11 @@ std::size_t entry_at(std::size_t i) {
 /// Writes the header crc of a stored extent again after a change to its
 /// table, so the check under test is the one that refuses it.
 void reseal(dstd::Vector<std::uint8_t>& stored) {
-    const std::uint32_t count = read_u32_le(stored.data());
+    const std::uint32_t count = dstd::read_u32_le(stored.data());
     std::uint32_t crc = store::engine::crc32(0, stored.data(), 8);
     crc = store::engine::crc32(crc, stored.data() + 12,
                                store::engine::EXTENT_HEADER_BYTES - 12);
-    write_u32_le(
+    dstd::write_u32_le(
         stored.data() + 8,
         store::engine::crc32(crc, stored.data() + entry_at(0),
                              count * store::engine::EXTENT_TABLE_ENTRY_BYTES));
@@ -176,8 +170,8 @@ TEST_SUITE("store extent codec") {
             view_of(raw), dstd::Span<const std::uint32_t>(starts), ALIGN);
         REQUIRE(stored.has_value());
         CHECK(stored->size() % ALIGN == 0);
-        CHECK(read_u32_le(stored->data()) == 2);
-        CHECK(read_u32_le(stored->data() + 4) == raw.size());
+        CHECK(dstd::read_u32_le(stored->data()) == 2);
+        CHECK(dstd::read_u32_le(stored->data() + 4) == raw.size());
 
         auto pages = store::engine::ExtentPages::open(view_of(*stored));
         REQUIRE(pages.has_value());
@@ -270,21 +264,22 @@ TEST_SUITE("store extent codec") {
         }
         SUBCASE("a table entry out of bounds") {
             dstd::Vector<std::uint8_t> bad = stored;
-            write_u32_le(bad.data() + entry_at(0) + 8,
-                         static_cast<std::uint32_t>(bad.size()));
+            dstd::write_u32_le(bad.data() + entry_at(0) + 8,
+                               static_cast<std::uint32_t>(bad.size()));
             reseal(bad);
             CHECK(refuses(bad));
         }
         SUBCASE("raw ranges that are not contiguous") {
             dstd::Vector<std::uint8_t> bad = stored;
-            write_u32_le(bad.data() + entry_at(1), PAGE + 1);
+            dstd::write_u32_le(bad.data() + entry_at(1), PAGE + 1);
             reseal(bad);
             CHECK(refuses(bad));
         }
         SUBCASE("a page crc that does not match") {
             dstd::Vector<std::uint8_t> bad = stored;
-            write_u32_le(bad.data() + entry_at(0) + 16,
-                         read_u32_le(bad.data() + entry_at(0) + 16) ^ 1U);
+            dstd::write_u32_le(
+                bad.data() + entry_at(0) + 16,
+                dstd::read_u32_le(bad.data() + entry_at(0) + 16) ^ 1U);
             reseal(bad);
             CHECK(refuses(bad));
         }
@@ -308,7 +303,7 @@ TEST_SUITE("store extent codec") {
         }
         SUBCASE("a page longer than a page") {
             dstd::Vector<std::uint8_t> bad = stored;
-            write_u32_le(bad.data() + entry_at(0) + 4, PAGE + 1);
+            dstd::write_u32_le(bad.data() + entry_at(0) + 4, PAGE + 1);
             reseal(bad);
             CHECK(refuses(bad));
         }
@@ -323,13 +318,13 @@ TEST_SUITE("store extent codec") {
         const dstd::Vector<std::uint8_t>& stored = *encoded;
 
         const std::size_t head = store::engine::ExtentPages::table_length(
-            ByteView{stored.data(), store::engine::EXTENT_HEADER_BYTES});
+            dstd::ByteView{stored.data(), store::engine::EXTENT_HEADER_BYTES});
         CHECK(head == entry_at(3));
-        CHECK(store::engine::ExtentPages::table_length(ByteView{
+        CHECK(store::engine::ExtentPages::table_length(dstd::ByteView{
                   stored.data(), store::engine::EXTENT_HEADER_BYTES - 1}) == 0);
 
         auto table = store::engine::ExtentPages::open_table(
-            ByteView{stored.data(), head}, stored.size());
+            dstd::ByteView{stored.data(), head}, stored.size());
         REQUIRE(table.has_value());
         REQUIRE(table->size() == 3);
         CHECK(table->raw_length() == raw.size());
@@ -341,23 +336,23 @@ TEST_SUITE("store extent codec") {
             dstd::Vector<std::uint8_t> page(entry.raw_length);
             REQUIRE(store::engine::ExtentPages::decode_page(
                         entry,
-                        ByteView{stored.data() + entry.stored_offset,
-                                 entry.stored_length},
+                        dstd::ByteView{stored.data() + entry.stored_offset,
+                                       entry.stored_length},
                         page.data())
                         .has_value());
             CHECK(std::equal(page.begin(), page.end(),
                              raw.begin() + entry.raw_offset));
             CHECK_FALSE(store::engine::ExtentPages::decode_page(
                             entry,
-                            ByteView{stored.data() + entry.stored_offset,
-                                     entry.stored_length - 1U},
+                            dstd::ByteView{stored.data() + entry.stored_offset,
+                                           entry.stored_length - 1U},
                             page.data())
                             .has_value());
         }
 
         const store::engine::PageEntry& last = table->entry(2);
         CHECK_FALSE(store::engine::ExtentPages::open_table(
-                        ByteView{stored.data(), head},
+                        dstd::ByteView{stored.data(), head},
                         last.stored_offset + last.stored_length - 1U)
                         .has_value());
     }
@@ -462,19 +457,20 @@ TEST_SUITE("store extent codec") {
         CHECK_FALSE(store::engine::decode_meta(view_of(unknown)).has_value());
 
         auto longer = stored;
-        write_u32_le(longer.data() + 1,
-                     static_cast<std::uint32_t>(repeated.size() + 1));
+        dstd::write_u32_le(longer.data() + 1,
+                           static_cast<std::uint32_t>(repeated.size() + 1));
         CHECK_FALSE(store::engine::decode_meta(view_of(longer)).has_value());
 
         auto huge = stored;
-        write_u32_le(huge.data() + 1, store::engine::EXTENT_MAX_RAW_BYTES + 1U);
+        dstd::write_u32_le(huge.data() + 1,
+                           store::engine::EXTENT_MAX_RAW_BYTES + 1U);
         CHECK_FALSE(store::engine::decode_meta(view_of(huge)).has_value());
 
         auto cut = stored;
         cut.resize(cut.size() - 1);
         CHECK_FALSE(store::engine::decode_meta(view_of(cut)).has_value());
 
-        CHECK_FALSE(store::engine::decode_meta(ByteView{}).has_value());
+        CHECK_FALSE(store::engine::decode_meta(dstd::ByteView{}).has_value());
     }
 
     TEST_CASE("an extent compressed with a dictionary names it and needs it") {
@@ -602,7 +598,7 @@ TEST_SUITE("store extent codec") {
             view_of(raw), starts_of({{0, PAGE}}, PAGE), ALIGN);
         REQUIRE(stored.has_value());
         auto stray = *stored;
-        write_u32_le(stray.data() + 24, 7U);
+        dstd::write_u32_le(stray.data() + 24, 7U);
         reseal(stray);
         CHECK_FALSE(
             store::engine::ExtentPages::open(view_of(stray)).has_value());

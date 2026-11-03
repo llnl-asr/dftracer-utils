@@ -27,17 +27,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-namespace df = dftracer::utils::dataframe;
-using df::Agg;
-using df::AggOp;
-using df::AggSpec;
-using df::DataFrame;
-using df::DDSketch;
-using df::GroupAgg;
-using df::LazyFrame;
-using df::Series;
-using df::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -93,11 +83,12 @@ dstd::Vector<GroupAgg> quantile_aggs() {
 Series large_copy(const Series& s) {
     auto* w = new dftu_series();
     w->type = TypeId::LargeString;
-    w->encoding = df::Encoding::Flat;
+    w->encoding = dataframe::Encoding::Flat;
     w->length = s.length();
     const auto n = static_cast<std::size_t>(s.length());
-    w->offsets = df::new_buffer((n + 1) * sizeof(std::int64_t));
-    auto* off = reinterpret_cast<std::int64_t*>(df::writable(w->offsets));
+    w->offsets = dataframe::new_buffer((n + 1) * sizeof(std::int64_t));
+    auto* off =
+        reinterpret_cast<std::int64_t*>(dataframe::writable(w->offsets));
     dstd::String bytes;
     dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
     off[0] = 0;
@@ -111,12 +102,13 @@ Series large_copy(const Series& s) {
         }
         off[i + 1] = static_cast<std::int64_t>(bytes.size());
     }
-    w->data = df::new_buffer(bytes.size());
+    w->data = dataframe::new_buffer(bytes.size());
     if (!bytes.empty())
-        std::memcpy(df::writable(w->data), bytes.data(), bytes.size());
+        std::memcpy(dataframe::writable(w->data), bytes.data(), bytes.size());
     if (w->null_count > 0) {
-        w->validity = df::new_buffer(valid.size());
-        std::memcpy(df::writable(w->validity), valid.data(), valid.size());
+        w->validity = dataframe::new_buffer(valid.size());
+        std::memcpy(dataframe::writable(w->validity), valid.data(),
+                    valid.size());
     }
     return Series{w};
 }
@@ -137,7 +129,7 @@ LazyFrame scan(const DataFrame& d) {
     copy.names = d.names;
     for (const Series& c : d.columns) copy.columns.push_back(c.share());
     return LazyFrame::scan(
-        dstd::make_shared<df::InMemorySource>(std::move(copy)));
+        dstd::make_shared<dataframe::InMemorySource>(std::move(copy)));
 }
 
 // Group 0 and 1 hold valid sketches only. Group 2 mixes valid cells with a
@@ -253,23 +245,23 @@ TEST_CASE("sketch_quantile: the agg state merges and round-trips") {
     const Series s = f.frame.column("s");
     const std::int64_t n = f.frame.num_rows();
     const std::int64_t half = n / 2;
-    auto a = df::agg_new(specs);
-    auto b = df::agg_new(specs);
+    auto a = dataframe::agg_new(specs);
+    auto b = dataframe::agg_new(specs);
     const dstd::Vector<const Series*> keys{&k};
     const dstd::Vector<const Series*> values{&s};
-    df::agg_accumulate(*a, keys, values, 0, half);
-    df::agg_accumulate(*b, keys, values, half, n);
-    auto b2 = df::agg_deserialize(df::agg_serialize(*b));
+    dataframe::agg_accumulate(*a, keys, values, 0, half);
+    dataframe::agg_accumulate(*b, keys, values, half, n);
+    auto b2 = dataframe::agg_deserialize(dataframe::agg_serialize(*b));
     REQUIRE(b2);
-    df::agg_merge(*a, *b2);
-    df::agg_sort_groups(*a);
+    dataframe::agg_merge(*a, *b2);
+    dataframe::agg_sort_groups(*a);
 
-    auto whole = df::agg_new(specs);
-    df::agg_accumulate(*whole, keys, values);
-    df::agg_sort_groups(*whole);
+    auto whole = dataframe::agg_new(specs);
+    dataframe::agg_accumulate(*whole, keys, values);
+    dataframe::agg_sort_groups(*whole);
 
-    const DataFrame got = df::agg_finalize(*a, "k");
-    const DataFrame want = df::agg_finalize(*whole, "k");
+    const DataFrame got = dataframe::agg_finalize(*a, "k");
+    const DataFrame want = dataframe::agg_finalize(*whole, "k");
     REQUIRE(got.num_rows() == 4);
     REQUIRE(want.num_rows() == 4);
     for (const char* name : {"p50", "p99"}) {

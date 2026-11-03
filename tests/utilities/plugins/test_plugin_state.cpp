@@ -34,18 +34,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::Runtime;
-using dftracer::utils::plugins::NamedResultRegistry;
-using dftracer::utils::plugins::PluginFold;
-using dftracer::utils::plugins::RegisteredState;
-using dftracer::utils::plugins::StateRegistry;
-using dftracer::utils::trace::RecordPhase;
-using dstd::StringIntern;
-namespace views = dftracer::utils::trace::views;
-using views::detail::FoldBatch;
-using views::detail::FoldEvent;
-using views::detail::ScanUnit;
-
 namespace {
 
 constexpr const char* STATE_NAME = "state_test.by_name";
@@ -199,12 +187,13 @@ dftu_plugin state_only_plugin() {
     return p;
 }
 
-FoldEvent evt(StringIntern& intern, const dstd::String& name,
-              std::uint64_t dur) {
-    FoldEvent fe;
+trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
+                                    const dstd::String& name,
+                                    std::uint64_t dur) {
+    trace::views::detail::FoldEvent fe;
     fe.cat_id = intern.get_or_insert("POSIX");
     fe.name_id = intern.get_or_insert(name);
-    fe.phase = RecordPhase::Complete;
+    fe.phase = trace::RecordPhase::Complete;
     fe.pid = 1;
     fe.tid = 1;
     fe.ts = dur;
@@ -215,9 +204,9 @@ FoldEvent evt(StringIntern& intern, const dstd::String& name,
 
 // GROUPS distinct names, each seen once per slice, so every total depends on
 // the cross-slice merge as well as on any spill.
-dstd::Vector<dstd::Vector<FoldEvent>> slices(StringIntern& intern,
-                                             int n_slices) {
-    dstd::Vector<dstd::Vector<FoldEvent>> out(
+dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> slices(
+    dstd::StringIntern& intern, int n_slices) {
+    dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> out(
         static_cast<std::size_t>(n_slices));
     for (int s = 0; s < n_slices; ++s)
         for (int i = 0; i < GROUPS; ++i)
@@ -227,10 +216,10 @@ dstd::Vector<dstd::Vector<FoldEvent>> slices(StringIntern& intern,
     return out;
 }
 
-void finalize_now(PluginFold& f) {
+void finalize_now(plugins::PluginFold& f) {
     Runtime rt(1);
     rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  co_await f.finalize(views::detail::CoverageSet{});
+                  co_await f.finalize(trace::views::detail::CoverageSet{});
               }),
               "fin")
         .wait();
@@ -244,21 +233,25 @@ struct RunResult {
 };
 
 RunResult run_state(bool spillable, std::uint64_t budget, int n_slices) {
-    StateRegistry registry{
-        RegisteredState{STATE_NAME, make_desc(spillable), nullptr}};
+    plugins::StateRegistry registry{
+        plugins::RegisteredState{STATE_NAME, make_desc(spillable), nullptr}};
     dftu_plugin p = state_only_plugin();
-    StringIntern intern;
-    NamedResultRegistry named;
-    PluginFold master(&p, intern, nullptr, &named, "state_test", budget,
-                      &registry);
-    for (const dstd::Vector<FoldEvent>& evs : slices(intern, n_slices)) {
+    dstd::StringIntern intern;
+    plugins::NamedResultRegistry named;
+    plugins::PluginFold master(&p, intern, nullptr, &named, "state_test",
+                               budget, &registry);
+    for (const dstd::Vector<trace::views::detail::FoldEvent>& evs :
+         slices(intern, n_slices)) {
         auto slice = master.slice();
-        auto* pf = static_cast<PluginFold*>(slice.get());
-        ScanUnit unit{};
+        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        trace::views::detail::ScanUnit unit{};
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
-            pf->step(FoldBatch{
-                dstd::Span<const FoldEvent>(evs.data() + at, n), unit, {}});
+            pf->step(trace::views::detail::FoldBatch{
+                dstd::Span<const trace::views::detail::FoldEvent>(
+                    evs.data() + at, n),
+                unit,
+                {}});
         }
         master.merge(*pf);
     }
@@ -340,18 +333,22 @@ dftu_plugin growing_plugin(bool reclaimable) {
 
 SliceRun run_slice(bool reclaimable, std::uint64_t budget, int n_slices) {
     dftu_plugin p = growing_plugin(reclaimable);
-    StringIntern intern;
-    NamedResultRegistry named;
-    PluginFold master(&p, intern, nullptr, &named, "slice_test", budget,
-                      nullptr);
-    for (const dstd::Vector<FoldEvent>& evs : slices(intern, n_slices)) {
+    dstd::StringIntern intern;
+    plugins::NamedResultRegistry named;
+    plugins::PluginFold master(&p, intern, nullptr, &named, "slice_test",
+                               budget, nullptr);
+    for (const dstd::Vector<trace::views::detail::FoldEvent>& evs :
+         slices(intern, n_slices)) {
         auto slice = master.slice();
-        auto* pf = static_cast<PluginFold*>(slice.get());
-        ScanUnit unit{};
+        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        trace::views::detail::ScanUnit unit{};
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
-            pf->step(FoldBatch{
-                dstd::Span<const FoldEvent>(evs.data() + at, n), unit, {}});
+            pf->step(trace::views::detail::FoldBatch{
+                dstd::Span<const trace::views::detail::FoldEvent>(
+                    evs.data() + at, n),
+                unit,
+                {}});
         }
         master.merge(*pf);
     }

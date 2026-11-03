@@ -15,14 +15,13 @@
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-namespace kinds = dftracer::utils::index::extensions::kinds;
-using dftracer::utils::index::extensions::ChunkDimensionStats;
-using dftracer::utils::index::store::IndexExtension;
+using namespace dftracer::utils::index;
 
 namespace {
 
-ChunkDimensionStats dim(dstd::String name, dstd::Vector<dstd::String> values) {
-    ChunkDimensionStats ds;
+extensions::ChunkDimensionStats dim(dstd::String name,
+                                    dstd::Vector<dstd::String> values) {
+    extensions::ChunkDimensionStats ds;
     ds.dimension = std::move(name);
     ds.value_type = "string";
     for (const auto& v : values) ds.observe(v);
@@ -71,8 +70,9 @@ dstd::Vector<std::uint64_t> prune(const dstd::String& index,
 
 TEST_SUITE("index kinds") {
     TEST_CASE("payloads round-trip and reject garbage") {
-        kinds::Zone zone{"uint", "3", "9", 5, 4, dstd::nullopt};
-        auto z = kinds::decode_zone(kinds::encode_zone(zone));
+        extensions::kinds::Zone zone{"uint", "3", "9", 5, 4, dstd::nullopt};
+        auto z = extensions::kinds::decode_zone(
+            extensions::kinds::encode_zone(zone));
         REQUIRE(z.has_value());
         CHECK(z->value_type == "uint");
         CHECK(z->min == "3");
@@ -80,10 +80,11 @@ TEST_SUITE("index kinds") {
         CHECK(z->observed == 5);
         CHECK(z->present == 4);
         CHECK_FALSE(z->histogram.has_value());
-        CHECK_FALSE(kinds::decode_zone("\x01").has_value());
+        CHECK_FALSE(extensions::kinds::decode_zone("\x01").has_value());
 
-        kinds::CountsGranule over{7, dstd::nullopt};
-        auto c = kinds::decode_counts(kinds::encode_counts(over));
+        extensions::kinds::CountsGranule over{7, dstd::nullopt};
+        auto c = extensions::kinds::decode_counts(
+            extensions::kinds::encode_counts(over));
         REQUIRE(c.has_value());
         CHECK(c->observed == 7);
         CHECK_FALSE(c->compressed.has_value());
@@ -91,10 +92,11 @@ TEST_SUITE("index kinds") {
         index::extensions::ScalableBloomFilter bf(16, 0.01);
         bf.add("x");
         auto blob = bf.serialize();
-        auto b = kinds::decode_bloom(kinds::encode_bloom(blob, 1));
+        auto b = extensions::kinds::decode_bloom(
+            extensions::kinds::encode_bloom(blob, 1));
         REQUIRE(b.has_value());
         CHECK(b->possibly_contains("x"));
-        CHECK_FALSE(kinds::decode_bloom("short").has_value());
+        CHECK_FALSE(extensions::kinds::decode_bloom("short").has_value());
     }
 
     TEST_CASE("each kind answers only the leaves it can") {

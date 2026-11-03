@@ -31,10 +31,6 @@
 #include <utility>
 
 using namespace dftracer::utils;
-namespace build = dftracer::utils::index::build;
-namespace istore = dftracer::utils::index::store;
-namespace scan = dftracer::utils::utilities::filesystem;
-namespace views = dftracer::utils::trace::views;
 
 namespace {
 
@@ -63,16 +59,16 @@ dstd::String write_small_trace(const dstd::String& dir, int n) {
     return dftu_utils_test::write_gz_trace(dir + name, out);
 }
 
-dstd::Vector<scan::FileEntry> scan_dir(dstd::StringView dir) {
-    dstd::Vector<scan::FileEntry> entries;
+dstd::Vector<utilities::filesystem::FileEntry> scan_dir(dstd::StringView dir) {
+    dstd::Vector<utilities::filesystem::FileEntry> entries;
     Runtime rt(4);
-    auto task =
-        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-            scan::PatternDirectoryScannerUtility scanner;
-            const scan::PatternDirectoryScannerUtilityInput input(
-                dir, dstd::Vector<dstd::String>{".pfw"}, true);
-            entries = co_await scanner(scope, input);
-        });
+    auto task = coro::with_scope([&](coro::Scope& scope)
+                                     -> coro::CoroTask<void> {
+        utilities::filesystem::PatternDirectoryScannerUtility scanner;
+        const utilities::filesystem::PatternDirectoryScannerUtilityInput input(
+            dir, dstd::Vector<dstd::String>{".pfw"}, true);
+        entries = co_await scanner(scope, input);
+    });
     rt.submit(std::move(task), "scan-dir").wait();
     rt.shutdown();
     return entries;
@@ -80,15 +76,17 @@ dstd::Vector<scan::FileEntry> scan_dir(dstd::StringView dir) {
 
 // The scan as the CLIs run it, from a coroutine that get() drives on the main
 // thread.
-coro::CoroTask<dstd::Vector<scan::FileEntry>> cli_scan_task(dstd::String dir) {
-    auto entries = scan::scan_on_pool<scan::PatternDirectoryScannerUtility>(
+coro::CoroTask<dstd::Vector<utilities::filesystem::FileEntry>> cli_scan_task(
+    dstd::String dir) {
+    auto entries = utilities::filesystem::scan_on_pool<
+        utilities::filesystem::PatternDirectoryScannerUtility>(
         WORKERS, 2,
-        scan::PatternDirectoryScannerUtilityInput(
+        utilities::filesystem::PatternDirectoryScannerUtilityInput(
             std::move(dir), dstd::Vector<dstd::String>{".pfw"}, true, false));
     co_return entries;
 }
 
-dstd::Vector<scan::FileEntry> cli_scan(dstd::StringView dir) {
+dstd::Vector<utilities::filesystem::FileEntry> cli_scan(dstd::StringView dir) {
     return cli_scan_task(dstd::String(dir)).get();
 }
 
@@ -114,16 +112,16 @@ dstd::String view_index_root(const dstd::String& file,
 
 void cold_count(const dstd::Vector<dstd::String>& files,
                 const dstd::String& index_dir) {
-    dstd::Vector<views::ViewFile> view_files;
+    dstd::Vector<trace::views::ViewFile> view_files;
     for (const auto& f : files) {
-        views::ViewFile vf;
+        trace::views::ViewFile vf;
         vf.file_path = f;
         vf.index_path = view_index_root(f, index_dir);
         view_files.push_back(std::move(vf));
     }
-    const auto view = views::View::from_files(std::move(view_files))
-                          .group_by({views::GroupKey::name()})
-                          .agg({{views::AggOp::Count, "", "n"}});
+    const auto view = trace::views::View::from_files(std::move(view_files))
+                          .group_by({trace::views::GroupKey::name()})
+                          .agg({{trace::views::AggOp::Count, "", "n"}});
     default_runtime().block_on(coro::named(
         "serial-stages-view",
         [&]() -> coro::CoroTask<void> { (void)co_await view.collect(); }()));
@@ -168,9 +166,10 @@ TEST_SUITE("SerialStages") {
         for (const auto& e : dftu_utils_test::list_dir(dir + "/sub"))
             expected.push_back(dstd::String(e.path.str()));
 
-        const auto before = scan::scan_stat_batches().load();
+        const auto before = utilities::filesystem::scan_stat_batches().load();
         const auto entries = scan_dir(dir);
-        const auto batches = scan::scan_stat_batches().load() - before;
+        const auto batches =
+            utilities::filesystem::scan_stat_batches().load() - before;
 
         REQUIRE(entries.size() == expected.size());
         CHECK(entries.size() == SCAN_FILES + NESTED_FILES);
@@ -194,15 +193,15 @@ TEST_SUITE("SerialStages") {
                 dir + (i % 2 ? "/a/f" : "/b/f") + dstd::to_string(i) + ".pfw",
                 static_cast<std::size_t>(i) + 1);
 
-        scan::scan_stat_threads().clear();
+        utilities::filesystem::scan_stat_threads().clear();
         // A CLI drives its run coroutine with get() on the main thread, with
         // no executor running there but the main run loop.
         const auto entries = cli_scan(dir);
 
         CHECK(entries.size() == SCAN_FILES);
-        CHECK(scan::scan_stat_threads().count() >= 1);
-        CHECK_FALSE(
-            scan::scan_stat_threads().contains(dstd::Thread::current_id()));
+        CHECK(utilities::filesystem::scan_stat_threads().count() >= 1);
+        CHECK_FALSE(utilities::filesystem::scan_stat_threads().contains(
+            dstd::Thread::current_id()));
     }
 
     TEST_CASE("a bootstrap that fails midway marks only complete files") {
@@ -225,7 +224,7 @@ TEST_SUITE("SerialStages") {
             ++marked;
             INFO("file " << f);
             CHECK(dftracer::utils::index::extension_current(
-                snapshot, *file, istore::IndexExtension::Members));
+                snapshot, *file, index::store::IndexExtension::Members));
             const auto meta = dftu_utils_test::index_take(
                 dftracer::utils::index::file_metadata(snapshot, *file));
             REQUIRE(meta.has_value());
@@ -235,7 +234,7 @@ TEST_SUITE("SerialStages") {
                             .empty());
             CHECK(dftu_utils_test::pruning_tier_current(snapshot, *file));
             CHECK(dftracer::utils::index::extension_state(
-                      snapshot, *file, istore::IndexExtension::Profile)
+                      snapshot, *file, index::store::IndexExtension::Profile)
                       .has_value());
         }
         MESSAGE("marked " << marked << " of " << files.size());

@@ -16,12 +16,7 @@
 #include <cstring>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Series;
-using dstd::Condition;
-namespace duql = dftracer::utils::duql;
-namespace dataframe = dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 int bit_at(const Series& mask, int i) {
@@ -132,7 +127,7 @@ TEST_SUITE("query vec_mask") {
             dataframe::evaluate_mask(q->root(), b);
         } catch (const dftracer::utils::common::DFTUtilsException& e) {
             threw = true;
-            CHECK(e.condition() == Condition::Unsupported);
+            CHECK(e.condition() == dstd::Condition::Unsupported);
             CHECK(e.domain() == duql::ERROR_DOMAIN.id);
         }
         CHECK(threw);
@@ -174,7 +169,6 @@ TEST_SUITE("query vec_mask") {
     }
 
     TEST_CASE("Kleene and/or/not truth table") {
-        using dataframe::TypeId;
         // a = TTT FFF NNN, b = TFN TFN TFN; null slots carry data 1.
         dstd::Vector<std::uint8_t> ad{0b11000111, 0b1};
         dstd::Vector<std::uint8_t> av{0b00111111, 0b0};

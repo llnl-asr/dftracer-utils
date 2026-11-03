@@ -22,13 +22,8 @@
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
 
-using dftracer::utils::plugins::PluginRun;
-using dftracer::utils::plugins::Plugins;
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
-using test_plugin_common::index_trace;
-using test_plugin_common::result_text;
-using test_plugin_common::run_set;
 
 #ifndef CONFIG_KEYS_PLUGIN_PATH
 #error "CONFIG_KEYS_PLUGIN_PATH must be defined by CMake"
@@ -53,7 +48,7 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dstd::fs::remove(pfw);
 
-    return index_trace(gz);
+    return test_plugin_common::index_trace(gz);
 }
 
 }  // namespace
@@ -61,7 +56,7 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
 TEST_CASE(
     "add(path, json) builds config from only the public header and the "
     "plugin receives it") {
-    auto set = Plugins::builder()
+    auto set = plugins::Plugins::builder()
                    .add(CONFIG_KEYS_PLUGIN_PATH,
                         dstd::String(R"({"label": "rows", "stride": 3})"))
                    .build();
@@ -72,16 +67,18 @@ TEST_CASE(
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
     View view = View::from_files({make_trace(env)});
-    PluginRun run = run_set(*set, view, "public-config");
+    plugins::PluginRun run =
+        test_plugin_common::run_set(*set, view, "public-config");
 
     // rows = NUM_EVENTS * stride; a wrong stride (the config default is 1)
     // would report NUM_EVENTS instead.
-    CHECK(dstd::StringView(result_text(run, "config_keys_plugin.rows")) ==
+    CHECK(dstd::StringView(test_plugin_common::result_text(
+              run, "config_keys_plugin.rows")) ==
           dstd::to_string(NUM_EVENTS * 3));
 }
 
 TEST_CASE("add(path, json) fails at build(), not at add()") {
-    Plugins::Builder builder = Plugins::builder();
+    plugins::Plugins::Builder builder = plugins::Plugins::builder();
     REQUIRE_NOTHROW(
         builder.add(CONFIG_KEYS_PLUGIN_PATH, dstd::String("{not json")));
 

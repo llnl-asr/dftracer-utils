@@ -20,8 +20,6 @@ using namespace dftracer::utils;
 
 namespace {
 
-namespace store = dftracer::utils::store;
-
 constexpr std::uint32_t ONE_MIB = 1U << 20;
 constexpr std::uint32_t FOUR_MIB = 4U << 20;
 constexpr std::uint32_t SIXTEEN_MIB = 16U << 20;

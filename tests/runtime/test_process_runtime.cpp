@@ -17,12 +17,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::configure_default_runtime;
-using dftracer::utils::default_runtime;
-using dftracer::utils::default_runtime_shared;
-using dftracer::utils::Runtime;
-using dftracer::utils::TaskHandle;
-
 namespace {
 
 struct Concurrency {

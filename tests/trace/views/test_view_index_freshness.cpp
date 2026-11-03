@@ -22,7 +22,6 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 
 using namespace test_view_common;
-namespace st = dftracer::utils::index::store;
 
 namespace {
 
@@ -167,7 +166,7 @@ TEST_SUITE("ViewIndexFreshness") {
         REQUIRE(
             dstd::fs::set_mtime_ns(gz, before + 10'000'000'000ULL).has_value());
         const auto want = static_cast<std::uint64_t>(
-            st::internal::get_file_modification_time(gz));
+            index::store::internal::get_file_modification_time(gz));
 
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == MEMBER_EVENTS);
         const auto snapshot = dftu_utils_test::index_snapshot(
@@ -203,7 +202,7 @@ TEST_SUITE("ViewIndexFreshness") {
         const auto other = dftu_utils_test::require_indexed_file(snapshot, f2);
         CHECK(other.stat().mtime ==
               static_cast<std::uint64_t>(
-                  st::internal::get_file_modification_time(f2)));
+                  index::store::internal::get_file_modification_time(f2)));
         CHECK(rows(dir_view(d2, root), R"(cat == "C")") == MEMBER_EVENTS);
         CHECK(count_by(by_cat(dir_view(d2, root)), "c") == MEMBER_EVENTS);
     }

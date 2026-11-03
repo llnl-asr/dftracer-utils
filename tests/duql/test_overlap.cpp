@@ -11,7 +11,6 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-namespace df = dftracer::utils::dataframe;
 using namespace dftracer::utils::duql;
 
 namespace {
@@ -46,13 +45,13 @@ Table random_table(Rng& rng, int n, int keys, int span, int max_dur) {
     return t;
 }
 
-df::Series column(const dstd::Vector<std::int64_t>& v,
-                  const dstd::Vector<std::uint8_t>& ok) {
+dataframe::Series column(const dstd::Vector<std::int64_t>& v,
+                         const dstd::Vector<std::uint8_t>& ok) {
     dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (ok[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
-    return df::Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
-                                bits.data());
+    return dataframe::Series::flat_i64(
+        v.data(), static_cast<std::int64_t>(v.size()), bits.data());
 }
 
 OverlapColumns columns_of(const Table& t) {
@@ -146,15 +145,15 @@ TEST_CASE("overlap compares doubles and scaled durations") {
     const double start[] = {0.5, 3.0};
     const double dur[] = {1.0, 1.0};
     OverlapColumns side;
-    side.keys.push_back(
-        df::Series::flat_i64(dstd::Vector<std::int64_t>{1, 1}.data(), 2));
-    side.start = df::Series::flat_f64(start, 2);
-    side.duration = df::Series::flat_f64(dur, 2);
+    side.keys.push_back(dataframe::Series::flat_i64(
+        dstd::Vector<std::int64_t>{1, 1}.data(), 2));
+    side.start = dataframe::Series::flat_f64(start, 2);
+    side.duration = dataframe::Series::flat_f64(dur, 2);
     const std::int64_t one = 1, at = 1, len = 3000;
     OverlapColumns rows;
-    rows.keys.push_back(df::Series::flat_i64(&one, 1));
-    rows.start = df::Series::flat_i64(&at, 1);
-    rows.duration = df::Series::flat_i64(&len, 1);
+    rows.keys.push_back(dataframe::Series::flat_i64(&one, 1));
+    rows.start = dataframe::Series::flat_i64(&at, 1);
+    rows.duration = dataframe::Series::flat_i64(&len, 1);
     rows.scale = 0.001;  // 3000 ns is 3 in the unit of the start
     const auto m = overlap_matches(rows, side);
     CHECK(m.rows == dstd::Vector<std::int64_t>{0, 1});

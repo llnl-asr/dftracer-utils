@@ -15,12 +15,7 @@
 #include <random>
 
 using namespace dftracer::utils;
-
-namespace df = dftracer::utils::dataframe;
-using df::AggOp;
-using df::AggSpec;
-using df::DataFrame;
-using df::Series;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -121,8 +116,8 @@ DataFrame one_group(const dstd::Vector<double>& x,
     Series k = Series::flat_i64(keys.data(), n);
     Series sy = Series::flat_f64(y.data(), n);
     Series sx = Series::flat_f64(x.data(), n);
-    return df::group_agg({&k}, {&sy, &sx}, all_specs(),
-                         dstd::Vector<dstd::String>{"g"});
+    return dataframe::group_agg({&k}, {&sy, &sx}, all_specs(),
+                                dstd::Vector<dstd::String>{"g"});
 }
 
 }  // namespace
@@ -170,8 +165,8 @@ TEST_CASE("every group keeps its own accuracy at different offsets") {
     Series k = Series::flat_i64(keys.data(), n);
     Series sy = Series::flat_f64(y.data(), n);
     Series sx = Series::flat_f64(x.data(), n);
-    DataFrame r = df::group_agg({&k}, {&sy, &sx}, all_specs(),
-                                dstd::Vector<dstd::String>{"g"});
+    DataFrame r = dataframe::group_agg({&k}, {&sy, &sx}, all_specs(),
+                                       dstd::Vector<dstd::String>{"g"});
     REQUIRE(r.num_rows() == 2);
     const std::int64_t* g = r.column("g").data<std::int64_t>();
     check_against(r, two_pass(x0, y0), g[0] == 0 ? 0 : 1);
@@ -191,20 +186,20 @@ TEST_CASE("partitions merge to the one-pass value for any split") {
     const dstd::Vector<const Series*> vc = {&sy, &sx};
     const std::int64_t cuts[] = {0, 90000, 90001, 250000, n};
     auto part = [&](int i) {
-        auto st = df::agg_new(all_specs());
-        df::agg_accumulate(*st, kc, vc, cuts[i], cuts[i + 1]);
+        auto st = dataframe::agg_new(all_specs());
+        dataframe::agg_accumulate(*st, kc, vc, cuts[i], cuts[i + 1]);
         return st;
     };
     // Left to right, then the two halves merged separately and joined.
     auto a = part(0);
-    for (int i = 1; i < 4; ++i) df::agg_merge(*a, *part(i));
-    check_against(df::agg_finalize(*a, G), ref);
+    for (int i = 1; i < 4; ++i) dataframe::agg_merge(*a, *part(i));
+    check_against(dataframe::agg_finalize(*a, G), ref);
 
     auto b = part(3), c = part(0);
-    df::agg_merge(*b, *part(2));
-    df::agg_merge(*c, *part(1));
-    df::agg_merge(*b, *c);
-    check_against(df::agg_finalize(*b, G), ref);
+    dataframe::agg_merge(*b, *part(2));
+    dataframe::agg_merge(*c, *part(1));
+    dataframe::agg_merge(*b, *c);
+    check_against(dataframe::agg_finalize(*b, G), ref);
 }
 
 TEST_CASE("a serialized partial reads back to the same values") {
@@ -217,11 +212,11 @@ TEST_CASE("a serialized partial reads back to the same values") {
     Series sx = Series::flat_f64(x.data(), n);
     const dstd::Vector<const Series*> kc = {&k};
     const dstd::Vector<const Series*> vc = {&sy, &sx};
-    auto st = df::agg_new(all_specs());
-    df::agg_accumulate(*st, kc, vc);
-    auto back = df::agg_deserialize(df::agg_serialize(*st));
-    DataFrame a = df::agg_finalize(*st, G);
-    DataFrame b = df::agg_finalize(*back, G);
+    auto st = dataframe::agg_new(all_specs());
+    dataframe::agg_accumulate(*st, kc, vc);
+    auto back = dataframe::agg_deserialize(dataframe::agg_serialize(*st));
+    DataFrame a = dataframe::agg_finalize(*st, G);
+    DataFrame b = dataframe::agg_finalize(*back, G);
     for (const char* name : {"corr", "covar_pop", "covar_samp", "regr_slope",
                              "regr_intercept", "regr_r2"})
         CHECK(at(a, name) == at(b, name));

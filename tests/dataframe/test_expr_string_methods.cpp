@@ -18,20 +18,7 @@
 #include <stdexcept>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::DataType;
-using dftracer::utils::dataframe::eval;
-using dftracer::utils::dataframe::Expr;
-using dftracer::utils::dataframe::expr_cast;
-using dftracer::utils::dataframe::expr_col;
-using dftracer::utils::dataframe::expr_list_get;
-using dftracer::utils::dataframe::expr_str_fn;
-using dftracer::utils::dataframe::expr_str_map;
-using dftracer::utils::dataframe::infer_type;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::StrFn;
-using dftracer::utils::dataframe::StrMapOp;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

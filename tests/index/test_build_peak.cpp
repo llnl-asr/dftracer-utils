@@ -21,8 +21,6 @@
 #include <thread>
 
 using namespace dftracer::utils;
-namespace build = dftracer::utils::index::build;
-namespace store = dftracer::utils::index::store;
 
 namespace {
 
@@ -60,15 +58,17 @@ std::size_t peak_live(const dstd::Vector<dstd::String>& files,
         }
     });
     const auto base = memory::Manager::get().stats().live;
-    build::IndexBuildBatchResult result;
+    index::build::IndexBuildBatchResult result;
     {
         Runtime rt(1);
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+            auto config =
+                dstd::make_shared<index::build::IndexBuildBatchConfig>();
             config->file_paths.assign(files.begin(), files.end());
             config->index_dir = index_dir;
             config->parallelism = 1;
-            result = co_await build::BatchBuilder::process(std::move(config));
+            result =
+                co_await index::build::BatchBuilder::process(std::move(config));
         });
         rt.submit(std::move(task), "build-peak").wait();
         rt.shutdown();

@@ -18,10 +18,6 @@
 #include <stdexcept>
 
 using namespace dftracer::utils;
-using dftracer::utils::index::gzip::GzipBuildArtifacts;
-using dftracer::utils::index::gzip::GzipMemberRecord;
-using dftu_utils_test::run_coro;
-namespace gz = dftracer::utils::utilities::fileio::compress;
 
 namespace {
 
@@ -40,7 +36,7 @@ dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
 }
 
 dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
-    gz::GzipMemberCompressor c;
+    utilities::fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
     REQUIRE(n.has_value());
@@ -78,9 +74,9 @@ class Recorder : public index::build::IndexVisitor {
     }
 };
 
-GzipBuildArtifacts build(const dstd::String& path, Recorder* rec) {
-    dstd::Optional<GzipBuildArtifacts> arts;
-    run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
+index::gzip::GzipBuildArtifacts build(const dstd::String& path, Recorder* rec) {
+    dstd::Optional<index::gzip::GzipBuildArtifacts> arts;
+    dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         index::gzip::CheckpointIndexer::VisitorList visitors;
         if (rec) visitors.emplace_back(*rec);
         arts = co_await index::gzip::build_gzip_index_artifacts(
@@ -90,7 +86,8 @@ GzipBuildArtifacts build(const dstd::String& path, Recorder* rec) {
     return *arts;
 }
 
-void check_same(const GzipBuildArtifacts& a, const GzipBuildArtifacts& b) {
+void check_same(const index::gzip::GzipBuildArtifacts& a,
+                const index::gzip::GzipBuildArtifacts& b) {
     CHECK(a.total_lines == b.total_lines);
     CHECK(a.total_uc_size == b.total_uc_size);
     CHECK(a.truncated == b.truncated);
@@ -98,8 +95,8 @@ void check_same(const GzipBuildArtifacts& a, const GzipBuildArtifacts& b) {
     REQUIRE(a.members.size() == b.members.size());
     for (std::size_t i = 0; i < a.members.size(); ++i) {
         CAPTURE(i);
-        const GzipMemberRecord& x = a.members[i];
-        const GzipMemberRecord& y = b.members[i];
+        const index::gzip::GzipMemberRecord& x = a.members[i];
+        const index::gzip::GzipMemberRecord& y = b.members[i];
         CHECK(x.c_offset == y.c_offset);
         CHECK(x.c_size == y.c_size);
         CHECK(x.uc_offset == y.uc_offset);
@@ -176,7 +173,7 @@ TEST_SUITE("index pass without visitors") {
         const dstd::String tail = hex_lines(100u << 10, 2);
         dstd::String text = hex_lines(CKPT + (200u << 10), 0);
         dstd::Vector<std::uint8_t> comp = gzip(text);
-        gz::GzipMemberCompressor stored(0);
+        utilities::fileio::compress::GzipMemberCompressor stored(0);
         const dstd::String mid = head + fake + tail;
         dstd::Vector<std::uint8_t> m(stored.bound(mid.size()));
         auto n = stored.compress(mid.data(), mid.size(), m.data(), m.size());
@@ -220,16 +217,17 @@ TEST_SUITE("index pass without visitors") {
         TempFile f(comp);
         Thrower thrower;
         bool threw = false;
-        run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
-            index::gzip::CheckpointIndexer::VisitorList visitors;
-            visitors.emplace_back(thrower);
-            try {
-                co_await index::gzip::build_gzip_index_artifacts(
-                    f.path, CKPT, visitors, &scope);
-            } catch (const std::runtime_error& e) {
-                threw = dstd::String(e.what()) == "bad chunk";
-            }
-        });
+        dftu_utils_test::run_coro(
+            [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                index::gzip::CheckpointIndexer::VisitorList visitors;
+                visitors.emplace_back(thrower);
+                try {
+                    co_await index::gzip::build_gzip_index_artifacts(
+                        f.path, CKPT, visitors, &scope);
+                } catch (const std::runtime_error& e) {
+                    threw = dstd::String(e.what()) == "bad chunk";
+                }
+            });
         CHECK(threw);
     }
 

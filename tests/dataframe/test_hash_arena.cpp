@@ -22,18 +22,17 @@
 #include <utility>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::lazy_internal::HashArena;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
-bool put(HashArena& a, std::uint64_t hash, const dstd::String& key) {
+bool put(lazy_internal::HashArena& a, std::uint64_t hash,
+         const dstd::String& key) {
     return a.insert(hash, key.data(), static_cast<std::uint32_t>(key.size()));
 }
 
-bool has(const HashArena& a, std::uint64_t hash, const dstd::String& key) {
+bool has(const lazy_internal::HashArena& a, std::uint64_t hash,
+         const dstd::String& key) {
     return a.contains(hash, key.data(), static_cast<std::uint32_t>(key.size()));
 }
 
@@ -41,7 +40,7 @@ bool has(const HashArena& a, std::uint64_t hash, const dstd::String& key) {
 
 TEST_SUITE("hash arena") {
     TEST_CASE("keys with one hash are told apart by their bytes") {
-        HashArena a;
+        lazy_internal::HashArena a;
         constexpr std::uint64_t H = 42;
         CHECK(put(a, H, "abcd"));
         CHECK(put(a, H, "abce"));  // same hash, same length, other bytes
@@ -57,7 +56,7 @@ TEST_SUITE("hash arena") {
     }
 
     TEST_CASE("many colliding keys all stay distinct and findable") {
-        HashArena a;
+        lazy_internal::HashArena a;
         for (int i = 0; i < 200; ++i)
             CHECK(put(a, 7, "k" + dstd::to_string(i)));
         for (int i = 0; i < 200; ++i) {
@@ -96,7 +95,7 @@ TEST_SUITE("hash arena") {
             dftracer::utils::memory::Manager::get().root().child("arena");
         REQUIRE(pool);
         {
-            HashArena a(*pool);
+            lazy_internal::HashArena a(*pool);
             for (int i = 0; i < 5000; ++i)
                 CHECK(put(a, static_cast<std::uint64_t>(i) * 2654435761u,
                           "key" + dstd::to_string(i)));
@@ -111,7 +110,7 @@ TEST_SUITE("hash arena") {
         dftracer::utils::memory::PoolHandle pool =
             dftracer::utils::memory::Manager::get().root().child("grow");
         REQUIRE(pool);
-        HashArena a(*pool);
+        lazy_internal::HashArena a(*pool);
         // About 80 bytes a record, with enough keys to fill the 64 KiB to 1 MiB
         // chunks and start the next ones.
         constexpr int KEYS = 40000;
@@ -148,7 +147,7 @@ TEST_SUITE("hash arena") {
     }
 
     TEST_CASE("the table doubles while small and grows four times over after") {
-        HashArena a;
+        lazy_internal::HashArena a;
         std::uint64_t at = 0;
         int large = 0;
         bool bounded = true;
@@ -160,7 +159,7 @@ TEST_SUITE("hash arena") {
             REQUIRE(put(a, ++at, key));
             bounded = bounded && a.bytes() <= bound;
             if (a.table_buckets() == before || before == 0) continue;
-            if (before < HashArena::GROWTH_FROM) {
+            if (before < lazy_internal::HashArena::GROWTH_FROM) {
                 CHECK(a.table_buckets() == 2 * before);
             } else {
                 CHECK(a.table_buckets() == 4 * before);
@@ -180,7 +179,7 @@ TEST_SUITE("hash arena") {
         dftracer::utils::memory::PoolHandle pool =
             dftracer::utils::memory::Manager::get().root().child("small");
         REQUIRE(pool);
-        HashArena a(*pool);
+        lazy_internal::HashArena a(*pool);
         for (std::uint64_t i = 0; i < 57000; ++i) {
             const dstd::String key = dstd::to_string(i * 2654435761u);
             REQUIRE(put(a, i * 0x9e3779b97f4a7c15ULL, key));
@@ -190,7 +189,7 @@ TEST_SUITE("hash arena") {
     }
 
     TEST_CASE("bytes_after bounds what the inserts leave") {
-        HashArena a;
+        lazy_internal::HashArena a;
         std::uint64_t at = 0;
         for (int round = 0; round < 20; ++round) {
             const std::size_t keys = 1u << (round % 12);

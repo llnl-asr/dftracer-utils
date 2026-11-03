@@ -17,7 +17,6 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using dftu_utils_test::run_coro;
 
 TEST_SUITE("AsyncOnce") {
     TEST_CASE("runs the producer once for concurrent callers") {
@@ -26,7 +25,7 @@ TEST_SUITE("AsyncOnce") {
         const int n = 32;
         dstd::Vector<dstd::SharedPtr<int>> results(n);
 
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<coro::CoroTask<dstd::SharedPtr<int>>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(
@@ -51,7 +50,7 @@ TEST_SUITE("AsyncOnce") {
         coro::AsyncOnce<int> once;
         std::atomic<int> calls{0};
 
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             int a = co_await once.get([&]() -> coro::CoroTask<int> {
                 calls.fetch_add(1, std::memory_order_relaxed);
                 co_return 7;

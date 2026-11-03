@@ -12,11 +12,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::field::F;
-using dftracer::utils::dataframe::field::FieldExpr;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -42,24 +38,25 @@ int bit_at(const Series& mask, int i) {
 
 TEST_SUITE("unified field F") {
     TEST_CASE("comparison serializes to a pushable query") {
-        auto q = (F("dur") > 1000).to_duql();
+        auto q = (field::F("dur") > 1000).to_duql();
         CHECK(q.to_string() == "dur > 1000");
 
-        auto q2 = ((F("cat") == "io") && (F("dur") >= 100)).to_duql();
+        auto q2 =
+            ((field::F("cat") == "io") && (field::F("dur") >= 100)).to_duql();
         CHECK(q2.references("cat"));
         CHECK(q2.references("dur"));
     }
 
     TEST_CASE("string-match and membership push down") {
-        CHECK((F("name").like("read%")).to_duql().references("name"));
-        CHECK((F("cat").in(dstd::Vector<dstd::String>{"io", "net"}))
+        CHECK((field::F("name").like("read%")).to_duql().references("name"));
+        CHECK((field::F("cat").in(dstd::Vector<dstd::String>{"io", "net"}))
                   .to_duql()
                   .references("cat"));
     }
 
     TEST_CASE("comparison also evaluates in memory to a mask") {
         DataFrame df = make_frame();
-        Series mask = (F("dur") > 100).apply(df);
+        Series mask = (field::F("dur") > 100).apply(df);
         REQUIRE(mask.type() == dftracer::utils::dataframe::TypeId::Bool);
         REQUIRE(mask.length() == 4);
         CHECK(bit_at(mask, 0) == 0);  // 50
@@ -70,7 +67,7 @@ TEST_SUITE("unified field F") {
 
     TEST_CASE("arithmetic value expression evaluates on a frame") {
         DataFrame df = make_frame();
-        Series out = (F("a") + F("b")).apply(df);
+        Series out = (field::F("a") + field::F("b")).apply(df);
         REQUIRE(out.length() == 4);
         const std::int64_t* v = out.data<std::int64_t>();
         CHECK(v[0] == 11);
@@ -81,7 +78,7 @@ TEST_SUITE("unified field F") {
 
     TEST_CASE("numeric primitive evaluates on a frame") {
         DataFrame df = make_frame();
-        Series out = F("b").ilog2().apply(df);
+        Series out = field::F("b").ilog2().apply(df);
         const std::int64_t* v = out.data<std::int64_t>();
         // ilog2(10)=3, ilog2(20)=4, ilog2(30)=4, ilog2(40)=5.
         CHECK(v[0] == 3);
@@ -92,7 +89,7 @@ TEST_SUITE("unified field F") {
 
     TEST_CASE("non-pushable predicate raises on to_duql but applies") {
         DataFrame df = make_frame();
-        FieldExpr non_pushable = (F("a") + F("b")) > 3;
+        field::FieldExpr non_pushable = (field::F("a") + field::F("b")) > 3;
         CHECK_THROWS_AS(non_pushable.to_duql(),
                         dftracer::utils::common::DFTUtilsException);
 
@@ -103,15 +100,15 @@ TEST_SUITE("unified field F") {
 
     TEST_CASE("filter-only predicate raises on apply") {
         DataFrame df = make_frame();
-        CHECK_THROWS_AS(F("cat").like("i%").apply(df),
+        CHECK_THROWS_AS(field::F("cat").like("i%").apply(df),
                         dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_AS((F("cat") == "io").apply(df),
+        CHECK_THROWS_AS((field::F("cat") == "io").apply(df),
                         dftracer::utils::common::DFTUtilsException);
     }
 
     TEST_CASE("missing column raises on apply") {
         DataFrame df = make_frame();
-        CHECK_THROWS_AS(F("missing").apply(df),
+        CHECK_THROWS_AS(field::F("missing").apply(df),
                         dftracer::utils::common::DFTUtilsException);
     }
 }

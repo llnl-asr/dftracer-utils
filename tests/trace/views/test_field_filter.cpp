@@ -13,14 +13,12 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 using namespace test_view_common;
 
-using dftracer::utils::dataframe::field::F;
-
 TEST_SUITE("View unified F filter") {
     TEST_CASE("F predicate pushes down like the query DSL") {
         const auto& s = shared_trace();
         StringSink sink;
         auto stats = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-                         .filter(F("cat") == "POSIX")
+                         .filter(dataframe::field::F("cat") == "POSIX")
                          .sink_json(sink)
                          .get();
 
@@ -36,7 +34,7 @@ TEST_SUITE("View unified F filter") {
         StringSink sink;
         // POSIX dur is 10..39, STDIO dur is 20..39; dur >= 30 keeps a subset.
         View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-            .filter(F("dur") >= 30)
+            .filter(dataframe::field::F("dur") >= 30)
             .sink_json(sink)
             .get();
         CHECK(sink.lines().size() > 0);
@@ -92,13 +90,13 @@ TEST_SUITE("View unified F filter") {
 
         StringSink pos;
         View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-            .filter(F("dur") >= 30)
+            .filter(dataframe::field::F("dur") >= 30)
             .sink_json(pos)
             .get();
 
         StringSink neg;
         View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-            .filter(!(F("dur") >= 30))
+            .filter(!(dataframe::field::F("dur") >= 30))
             .sink_json(neg)
             .get();
 
@@ -116,7 +114,8 @@ TEST_SUITE("View unified F filter") {
     TEST_CASE("non-pushable F predicate raises at filter") {
         const auto& s = shared_trace();
         View base = View::from_file(dstd::String(s.gz), dstd::String(s.idx));
-        CHECK_THROWS_AS(base.filter((F("dur") + F("ts")) > 3),
+        CHECK_THROWS_AS(base.filter((dataframe::field::F("dur") +
+                                     dataframe::field::F("ts")) > 3),
                         dftracer::utils::common::DFTUtilsException);
     }
 }

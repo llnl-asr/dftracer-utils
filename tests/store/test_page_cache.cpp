@@ -16,8 +16,6 @@ using namespace dftracer::utils;
 
 namespace {
 
-namespace store = dftracer::utils::store;
-
 constexpr std::size_t PAGE = 32 * 1024;
 
 dstd::SharedPtr<dstd::RawBuffer<std::uint8_t>> page_of(std::uint8_t fill) {

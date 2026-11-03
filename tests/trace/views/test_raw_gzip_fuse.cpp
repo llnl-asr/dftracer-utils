@@ -45,11 +45,6 @@ using namespace test_view_common;
 using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::extensions;
-using dftu_utils_test::run_coro;
-using dstd::StringIntern;
-namespace dataframe = dftracer::utils::dataframe;
-
-namespace gzi = dftracer::utils::index::gzip;
 
 namespace {
 
@@ -142,7 +137,7 @@ TEST_SUITE("RawGzipFuse") {
         {
             ViewPlan rp = count_plan(gz, ref_idx);
             ensure_schema(rp);
-            StringIntern intern;
+            dstd::StringIntern intern;
             gmoracle::OracleAggFold a(rp, intern);
             std::array<Fold*, 1> folds{&a};
             ViewDefinition vd = make_vdef(rp, /*for_aggregation=*/true);
@@ -157,7 +152,7 @@ TEST_SUITE("RawGzipFuse") {
             dstd::String(determine_index_path(gz, env.get_dir() + "/onei"));
         ViewPlan pp = count_plan(gz, idx);
         ensure_schema(pp);
-        StringIntern intern;
+        dstd::StringIntern intern;
         gmoracle::OracleAggFold agg(pp, intern);
         BloomFold bloom(intern);
         RowSetFold dict(intern,
@@ -168,12 +163,12 @@ TEST_SUITE("RawGzipFuse") {
                                dstd::String(dstd::StringView(gz)),
                                dstd::String(dstd::StringView(idx)));
 
-        gzi::GzipBuildArtifacts arts;
-        run_coro(
+        index::gzip::GzipBuildArtifacts arts;
+        dftu_utils_test::run_coro(
             [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
                 dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
                 vl.emplace_back(driver);
-                auto a = co_await gzi::build_gzip_index_artifacts(
+                auto a = co_await index::gzip::build_gzip_index_artifacts(
                     gz,
                     dftracer::utils::index::gzip::CheckpointIndexer::
                         DEFAULT_CHECKPOINT_SIZE,
@@ -396,7 +391,8 @@ namespace {
 // not depend on the order the intern assigned ids in.
 class RecordingFold final : public Fold {
    public:
-    explicit RecordingFold(const StringIntern& intern) : intern_(&intern) {}
+    explicit RecordingFold(const dstd::StringIntern& intern)
+        : intern_(&intern) {}
     bool accepts(const ScanShape&) const override { return true; }
     dstd::UniquePtr<Fold> slice() const override {
         return dstd::make_unique<RecordingFold>(*intern_);
@@ -417,7 +413,7 @@ class RecordingFold final : public Fold {
     dstd::Vector<dstd::String> log;
 
    private:
-    const StringIntern* intern_;
+    const dstd::StringIntern* intern_;
 };
 
 // `members` gzip members of `events` events each; every fifth member ends
@@ -458,18 +454,18 @@ dstd::String write_multi_member(const dstd::String& dir, int members = 40,
 dstd::Vector<dstd::String> record_index_pass(const dstd::String& gz,
                                              const dstd::String& idx,
                                              std::size_t workers) {
-    StringIntern intern;
+    dstd::StringIntern intern;
     RecordingFold rec(intern);
     std::array<Fold*, 1> folds{&rec};
     IndexFoldDriver driver(intern, folds, dstd::String(dstd::StringView(gz)),
                            dstd::String(dstd::StringView(idx)));
     dftracer::utils::index::build::ParseGate gate(nullptr, workers);
     if (workers > 1) driver.set_parse_gate(gate);
-    run_coro(
+    dftu_utils_test::run_coro(
         [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
             dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
             vl.emplace_back(driver);
-            auto a = co_await gzi::build_gzip_index_artifacts(
+            auto a = co_await index::gzip::build_gzip_index_artifacts(
                 gz,
                 dftracer::utils::index::gzip::CheckpointIndexer::
                     DEFAULT_CHECKPOINT_SIZE,
@@ -545,7 +541,7 @@ TEST_CASE("a fold that throws while parsing ahead ends the index pass") {
     TestEnvironment env(10);
     REQUIRE(env.is_valid());
     const dstd::String gz = write_multi_member(env.get_dir());
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftracer::utils::index::extensions::BloomFold bloom(intern);
     ThrowingFold thrower;
     std::array<Fold*, 2> folds{&bloom, &thrower};
@@ -555,12 +551,12 @@ TEST_CASE("a fold that throws while parsing ahead ends the index pass") {
     dftracer::utils::index::build::ParseGate gate(nullptr, 8);
     driver.set_parse_gate(gate);
     bool threw = false;
-    run_coro(
+    dftu_utils_test::run_coro(
         [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
             dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
             vl.emplace_back(driver);
             try {
-                co_await gzi::build_gzip_index_artifacts(
+                co_await index::gzip::build_gzip_index_artifacts(
                     gz,
                     dftracer::utils::index::gzip::CheckpointIndexer::
                         DEFAULT_CHECKPOINT_SIZE,

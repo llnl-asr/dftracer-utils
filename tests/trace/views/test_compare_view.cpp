@@ -13,7 +13,7 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 
 using namespace test_view_common;
-namespace comparator = dftracer::utils::trace::comparator;
+using namespace dftracer::utils::trace;
 
 namespace {
 

@@ -42,7 +42,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-namespace plan = dftracer::utils::index::plan;
+using namespace dftracer::utils::index;
 
 namespace {
 
@@ -596,19 +596,19 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     CHECK(a.size() == b.size());
     CHECK(a == b);
 
-    using trace::views::AggOp;
-    using trace::views::GroupKey;
     const auto summary = [&](const dstd::String& index_path) {
         const auto df = trace::views::View::from_files(
                             {{dstd::String(trace), dstd::String(index_path)}})
-                            .group_by({GroupKey::cat(), GroupKey::name(),
-                                       GroupKey::pid(), GroupKey::tid()})
-                            .agg({{AggOp::Count, "", "n"},
-                                  {AggOp::Sum, "dur", "dsum"},
-                                  {AggOp::Min, "dur", "dmin"},
-                                  {AggOp::Max, "dur", "dmax"},
-                                  {AggOp::Min, "ts", "tmin"},
-                                  {AggOp::Max, "ts", "tmax"}})
+                            .group_by({trace::views::GroupKey::cat(),
+                                       trace::views::GroupKey::name(),
+                                       trace::views::GroupKey::pid(),
+                                       trace::views::GroupKey::tid()})
+                            .agg({{trace::views::AggOp::Count, "", "n"},
+                                  {trace::views::AggOp::Sum, "dur", "dsum"},
+                                  {trace::views::AggOp::Min, "dur", "dmin"},
+                                  {trace::views::AggOp::Max, "dur", "dmax"},
+                                  {trace::views::AggOp::Min, "ts", "tmin"},
+                                  {trace::views::AggOp::Max, "ts", "tmax"}})
                             .collect()
                             .get();
         dstd::Map<dstd::String, dstd::Vector<double>> rows;

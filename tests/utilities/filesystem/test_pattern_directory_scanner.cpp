@@ -30,10 +30,9 @@ static dstd::Vector<FileEntry> run_scan(Scanner& scanner, const Input& input) {
 }
 
 // Helper to create a test directory structure
-using dftu_utils_test::ScopedTestDir;
 
 TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
-    ScopedTestDir fixture("dftracer_test_pattern_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Scan with no patterns - match all files") {
@@ -90,7 +89,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
-    ScopedTestDir fixture("dftracer_test_pattern_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Extension pattern - single extension") {
@@ -178,7 +177,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Recursive Scanning") {
-    ScopedTestDir fixture("dftracer_test_pattern_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Recursive scan with pattern") {
@@ -234,7 +233,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Recursive Scanning") {
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Directory Filtering") {
-    ScopedTestDir fixture("dftracer_test_pattern_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Directories are not matched") {
@@ -272,7 +271,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Directory Filtering") {
 TEST_CASE(
     "PatternDirectoryScannerUtility - PatternDirectoryScannerUtilityInput "
     "Builder") {
-    ScopedTestDir fixture("dftracer_test_pattern_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_pattern_scanner");
 
     SUBCASE("Builder pattern - from_path") {
         auto input =
@@ -322,7 +321,7 @@ TEST_CASE(
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
-    ScopedTestDir fixture("dftracer_test_pattern_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Empty pattern string") {
@@ -428,7 +427,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Performance") {
-    ScopedTestDir fixture("dftracer_test_pattern_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Many files with pattern matching") {
@@ -469,7 +468,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Performance") {
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Real World Scenarios") {
-    ScopedTestDir fixture("dftracer_test_pattern_scanner");
+    dftu_utils_test::ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = dstd::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("DFTracer files - .pfw and .pfw.gz") {

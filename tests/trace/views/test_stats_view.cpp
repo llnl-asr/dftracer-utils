@@ -20,13 +20,13 @@ using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
 
 using namespace test_view_common;
-namespace stats = dftracer::utils::trace::statistics;
+using namespace dftracer::utils::trace;
 
 // Run a StatsView collection on a Runtime (StatsView is async - no blocking).
-static stats::ViewStats run_stats(const stats::StatsView& sv,
-                                  stats::StatNeeds needs = {}) {
+static statistics::ViewStats run_stats(const statistics::StatsView& sv,
+                                       statistics::StatNeeds needs = {}) {
     dftracer::utils::Runtime rt;
-    stats::ViewStats result;
+    statistics::ViewStats result;
     rt.block_on(coro::named(
         "stats",
         coro::with_scope(
@@ -109,8 +109,8 @@ TEST_SUITE("stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        stats::ViewStats s = run_stats(
-            stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
+        statistics::ViewStats s = run_stats(statistics::StatsView::from_file(
+            dstd::String(gz), dstd::String(idx)));
 
         CHECK(s.total_events == 50);
         CHECK(s.category_counts.size() == 2);
@@ -136,10 +136,10 @@ TEST_SUITE("stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        stats::ViewStats s = run_stats(
-            stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
+        statistics::ViewStats s = run_stats(statistics::StatsView::from_file(
+            dstd::String(gz), dstd::String(idx)));
         dftracer::utils::index::schemas::dft::ChunkStatistics cs;
-        stats::fill_chunk_statistics(cs, s);
+        statistics::fill_chunk_statistics(cs, s);
 
         CHECK(cs.total_events == 50);
         CHECK(cs.category_counts.size() == 2);
@@ -159,8 +159,8 @@ TEST_SUITE("stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        stats::ViewStats cold = run_stats(
-            stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
+        statistics::ViewStats cold = run_stats(statistics::StatsView::from_file(
+            dstd::String(gz), dstd::String(idx)));
 
         // Persist the rollups, then read them back.
         dftracer::utils::Runtime rt;
@@ -168,12 +168,12 @@ TEST_SUITE("stats via View") {
             "materialize",
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
-                    co_await stats::StatsView::from_file(dstd::String(gz),
-                                                         dstd::String(idx))
+                    co_await statistics::StatsView::from_file(dstd::String(gz),
+                                                              dstd::String(idx))
                         .materialize();
                 })));
-        stats::ViewStats warm = run_stats(
-            stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
+        statistics::ViewStats warm = run_stats(statistics::StatsView::from_file(
+            dstd::String(gz), dstd::String(idx)));
 
         CHECK(warm.total_events == cold.total_events);
         CHECK(warm.category_counts.size() == cold.category_counts.size());
@@ -329,8 +329,8 @@ TEST_SUITE("stats via View") {
         (void)dstd::fs::remove(pfw);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        stats::ViewStats s = run_stats(
-            stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
+        statistics::ViewStats s = run_stats(statistics::StatsView::from_file(
+            dstd::String(gz), dstd::String(idx)));
         dstd::Map<dstd::String, std::uint64_t> m;
         for (auto& [k, v] : s.pid_tid_counts) m[dstd::String(k)] = v;
         CHECK(m.count("1000:5000") == 1);

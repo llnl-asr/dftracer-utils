@@ -29,7 +29,6 @@ using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;
-namespace spill = dftracer::utils::dataframe::spill;
 
 namespace {
 

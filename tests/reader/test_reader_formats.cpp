@@ -18,7 +18,6 @@ using namespace dftracer::utils;
 using namespace dftu_utils_test;
 using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
-using dftracer::utils::index::store::IndexerError;
 
 dstd::String format_name(Format format);
 
@@ -79,7 +78,7 @@ TEST_CASE_TEMPLATE("Indexer creation and destruction", FormatType, GZIPFormat) {
         CHECK_THROWS_AS(
             CheckpointIndexerFactory::create(
                 "/nonexistent/file.gz", fixture.get_index_file(), 1024 * 1024),
-            IndexerError);
+            index::store::IndexerError);
     }
 }
 

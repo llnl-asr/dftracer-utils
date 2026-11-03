@@ -30,11 +30,7 @@
 #include <iterator>
 
 using namespace dftracer::utils;
-using dftracer::utils::index::IndexedFile;
-using dftracer::utils::index::Indexer;
-using dftracer::utils::index::IndexerOptions;
-using dftracer::utils::index::IndexStatus;
-using dftu_utils_test::TestEnvironment;
+using namespace dftracer::utils::index;
 
 namespace {
 
@@ -75,7 +71,7 @@ void touch_later(dstd::PathView path) {
 TEST_SUITE("Indexer") {
     TEST_CASE("open expands a directory to its trace files") {
         Runtime rt(2);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const dstd::Path dir = dstd::Path(env.get_dir()) / "traces";
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         (void)dstd::fs::write_file(dstd::PathView(dir / "a.pfw.gz"), "x");
@@ -109,7 +105,7 @@ TEST_SUITE("Indexer") {
 
     TEST_CASE("open and status write nothing") {
         Runtime rt(2);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(20);
         auto ix = Indexer::open({dstd::String(dstd::StringView(trace))},
                                 with_runtime(rt));
@@ -124,7 +120,7 @@ TEST_SUITE("Indexer") {
 
     TEST_CASE("a root holding only caches is no index") {
         Runtime rt(2);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(30);
         CHECK(Indexer::open({dstd::String(dstd::StringView(trace))},
                             with_runtime(rt))
@@ -152,7 +148,7 @@ TEST_SUITE("Indexer") {
 
     TEST_CASE("build indexes only what is missing or stale") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
         const auto b = env.create_dft_test_gzip_file(40);
         auto ix = Indexer::open({dstd::String(dstd::StringView(a)),
@@ -190,7 +186,7 @@ TEST_SUITE("Indexer") {
 
     TEST_CASE("status stats the files when it runs, not when open ran") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
         CHECK(
             Indexer::open({dstd::String(dstd::StringView(a))}, with_runtime(rt))
@@ -212,7 +208,7 @@ TEST_SUITE("Indexer") {
 
     TEST_CASE("a missing bloom tier is added") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
         auto no_bloom = with_runtime(rt);
         no_bloom.bloom.reset();
@@ -231,7 +227,7 @@ TEST_SUITE("Indexer") {
 
     TEST_CASE("a changed bloom setting rebuilds the tier") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
         auto first = with_runtime(rt);
         first.bloom->fields = {"size"};
@@ -257,7 +253,7 @@ TEST_SUITE("Indexer") {
 
     TEST_CASE("rebuild re-indexes every file") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
         const auto b = env.create_dft_test_gzip_file(30);
         auto ix = Indexer::open({dstd::String(dstd::StringView(a)),
@@ -272,8 +268,8 @@ TEST_SUITE("Indexer") {
 
     TEST_CASE("async and blocking forms agree") {
         Runtime rt(4);
-        TestEnvironment env_a(10);
-        TestEnvironment env_b(10);
+        dftu_utils_test::TestEnvironment env_a(10);
+        dftu_utils_test::TestEnvironment env_b(10);
         const auto a = env_a.create_dft_test_gzip_file(25);
         const auto b =
             dstd::Path(env_b.get_dir()) / dstd::PathView(a).filename();
@@ -314,7 +310,7 @@ TEST_SUITE("Indexer") {
     TEST_CASE("an unreadable trace fails the build and names the file") {
         if (geteuid() == 0) return;  // root reads every file
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto good = env.create_dft_test_gzip_file(30);
         const auto locked = env.create_dft_test_gzip_file(30);
         REQUIRE(dstd::fs::set_permissions(locked, 0).has_value());
@@ -339,7 +335,7 @@ TEST_SUITE("Indexer") {
     }
 
     TEST_CASE("the indexing guide example runs") {
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(20);
         using namespace dftracer::utils::index;
 
@@ -438,8 +434,8 @@ Indexed indexed(const dstd::String& trace) {
     return r;
 }
 
-dstd::String multimember_trace(TestEnvironment& env, int events,
-                               const dstd::String& name) {
+dstd::String multimember_trace(dftu_utils_test::TestEnvironment& env,
+                               int events, const dstd::String& name) {
     const auto plain = env.create_dft_test_file(events);
     const dstd::String gz((dstd::Path(env.get_dir()) / name).str());
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
@@ -453,7 +449,7 @@ dstd::String multimember_trace(TestEnvironment& env, int events,
 TEST_SUITE("Truncated") {
     TEST_CASE("a cut trace keeps the complete lines of its cut member") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         for (double frac : {0.05, 0.5, 0.9, 0.99}) {
             CAPTURE(frac);
@@ -480,7 +476,7 @@ TEST_SUITE("Truncated") {
 
     TEST_CASE("a cut trace whose tail reads as a 4 GiB ISIZE stays small") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
             full,
@@ -510,7 +506,7 @@ TEST_SUITE("Truncated") {
 
     TEST_CASE("a cut single-member trace is not empty") {
         Runtime rt(2);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = env.create_dft_test_gzip_file(3000);
         const auto cut = write_prefix(
             full,
@@ -527,7 +523,7 @@ TEST_SUITE("Truncated") {
 
     TEST_CASE("a complete trace is unchanged") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         Indexer::open({dstd::String(dstd::StringView(full))}, with_runtime(rt))
             .build();
@@ -541,7 +537,7 @@ TEST_SUITE("Truncated") {
 
     TEST_CASE("a corrupt last member is neither recovered nor reported") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto ref = zlib_prefix(full);
         REQUIRE(ref.member_starts.size() > 1);
@@ -565,7 +561,7 @@ TEST_SUITE("Truncated") {
 
     TEST_CASE("a cut trace completed later is re-indexed and cleared") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const dstd::String path(
             (dstd::Path(env.get_dir()) / "live.pfw.gz").str());
@@ -586,7 +582,7 @@ TEST_SUITE("Truncated") {
 
     TEST_CASE("readers return the recovered lines of a cut trace") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
             full,
@@ -620,7 +616,7 @@ TEST_SUITE("Truncated") {
 
     TEST_CASE("status and files report the cut trace") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
             full,

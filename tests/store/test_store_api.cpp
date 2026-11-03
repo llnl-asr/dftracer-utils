@@ -26,25 +26,13 @@ using namespace dftracer::utils;
 
 namespace {
 
-namespace store = dftracer::utils::store;
+using namespace dftracer::utils::store;
 
-using dstd::ByteView;
-using store::Batch;
-using store::Cursor;
-using store::FoldKind;
-using store::Namespace;
-using store::NamespaceSpec;
-using store::Publish;
-using store::ScopeKey;
-using store::ScopeState;
-using store::SourceStat;
-using store::Store;
-
-ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(const dstd::String& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::String to_std(ByteView bytes) {
+dstd::String to_std(dstd::ByteView bytes) {
     return dstd::String(reinterpret_cast<const char*>(bytes.data()),
                         bytes.size());
 }
@@ -195,12 +183,13 @@ TEST_SUITE("store api") {
         REQUIRE(run(store.flush()).has_value());
 
         const dstd::String c = "c", missing = "zz", a = "a";
-        const dstd::Vector<ByteView> keys{view_of(c), view_of(missing),
-                                          view_of(a)};
+        const dstd::Vector<dstd::ByteView> keys{view_of(c), view_of(missing),
+                                                view_of(a)};
         auto snapshot = store.snapshot();
         REQUIRE(snapshot.has_value());
         auto values = snapshot->multi_get(
-            ns, scope, dstd::Span<const ByteView>(keys.data(), keys.size()));
+            ns, scope,
+            dstd::Span<const dstd::ByteView>(keys.data(), keys.size()));
         REQUIRE(values.has_value());
         REQUIRE(values->size() == 3);
         REQUIRE((*values)[0].has_value());
@@ -252,8 +241,8 @@ TEST_SUITE("store api") {
         auto declared = snapshot->namespaces();
         REQUIRE(declared.has_value());
         REQUIRE(declared->size() == 1);
-        CHECK(to_std(ByteView{declared->front().name.data(),
-                              declared->front().name.size()}) ==
+        CHECK(to_std(dstd::ByteView{declared->front().name.data(),
+                                    declared->front().name.size()}) ==
               "dftu.test.scan");
     }
 

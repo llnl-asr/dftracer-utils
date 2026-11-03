@@ -11,11 +11,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Series;
-
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -27,9 +23,10 @@ struct Fixture {
     Series g = Series::strings(dstd::Span<const dstd::StringView>(keys));
     Series x = Series::flat_f64(xs.data(), 4, valid.data());
 
-    DataFrame run(dstd::Vector<df::AggExprSpec> specs) {
+    DataFrame run(dstd::Vector<dataframe::AggExprSpec> specs) {
         dstd::Vector<const Series*> inputs = {&g, &x};
-        return df::group_agg_expr(df::expr_col(0), specs, inputs, "g");
+        return dataframe::group_agg_expr(dataframe::expr_col(0), specs, inputs,
+                                         "g");
     }
 };
 
@@ -37,7 +34,8 @@ struct Fixture {
 
 TEST_CASE("count of a column skips nulls per group") {
     Fixture f;
-    DataFrame r = f.run({df::agg_count_valid(df::expr_col(1), "n")});
+    DataFrame r =
+        f.run({dataframe::agg_count_valid(dataframe::expr_col(1), "n")});
     REQUIRE(r.num_rows() == 2);
     CHECK(r.column("n").data<std::int64_t>()[0] == 2);  // a: 1.0, null, 3.0
     CHECK(r.column("n").data<std::int64_t>()[1] == 1);  // b: 5.0
@@ -50,9 +48,9 @@ TEST_CASE("count of a column of nulls is 0") {
     Series g = Series::strings(dstd::Span<const dstd::StringView>(keys));
     Series x = Series::flat_f64(xs.data(), 2, valid.data());
     dstd::Vector<const Series*> inputs = {&g, &x};
-    DataFrame r = df::group_agg_expr(
-        df::expr_col(0), {df::agg_count_valid(df::expr_col(1), "n")}, inputs,
-        "g");
+    DataFrame r = dataframe::group_agg_expr(
+        dataframe::expr_col(0),
+        {dataframe::agg_count_valid(dataframe::expr_col(1), "n")}, inputs, "g");
     REQUIRE(r.num_rows() == 1);
     CHECK(r.column("n").data<std::int64_t>()[0] == 0);
     CHECK(x.count() == 0);
@@ -60,7 +58,7 @@ TEST_CASE("count of a column of nulls is 0") {
 
 TEST_CASE("count with no column still counts rows") {
     Fixture f;
-    DataFrame r = f.run({df::agg_count("n")});
+    DataFrame r = f.run({dataframe::agg_count("n")});
     REQUIRE(r.num_rows() == 2);
     CHECK(r.column("n").data<std::int64_t>()[0] == 3);
     CHECK(r.column("n").data<std::int64_t>()[1] == 1);
@@ -68,9 +66,10 @@ TEST_CASE("count with no column still counts rows") {
 
 TEST_CASE("sum over count equals mean when the column has nulls") {
     Fixture f;
-    DataFrame r = f.run({df::agg_sum(df::expr_col(1), "s"),
-                         df::agg_count_valid(df::expr_col(1), "n"),
-                         df::agg_mean(df::expr_col(1), "m")});
+    DataFrame r =
+        f.run({dataframe::agg_sum(dataframe::expr_col(1), "s"),
+               dataframe::agg_count_valid(dataframe::expr_col(1), "n"),
+               dataframe::agg_mean(dataframe::expr_col(1), "m")});
     REQUIRE(r.num_rows() == 2);
     const double* s = r.column("s").data<double>();
     const double* m = r.column("m").data<double>();

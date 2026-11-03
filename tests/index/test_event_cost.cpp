@@ -25,11 +25,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-namespace build = dftracer::utils::index::build;
-namespace cost = dftracer::utils::index::event_cost;
-namespace store = dftracer::utils::index::store;
-namespace ext = dftracer::utils::index::extensions;
-namespace ix = dftracer::utils::index;
+using namespace dftracer::utils::index;
 
 namespace {
 
@@ -78,13 +74,14 @@ dstd::String write_trace(const dstd::String& dir) {
 
 void build_one(const dstd::String& file, const dstd::String& index_dir) {
     Runtime rt(4);
-    build::IndexBuildBatchResult result;
+    index::build::IndexBuildBatchResult result;
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = dstd::make_shared<build::IndexBuildBatchConfig>();
+        auto config = dstd::make_shared<index::build::IndexBuildBatchConfig>();
         config->file_paths = {dstd::String(dstd::StringView(file))};
         config->index_dir = index_dir;
         config->parallelism = 4;
-        result = co_await build::BatchBuilder::process(std::move(config));
+        result =
+            co_await index::build::BatchBuilder::process(std::move(config));
     });
     rt.submit(std::move(task), "event-cost").wait();
     rt.shutdown();
@@ -98,9 +95,9 @@ TEST_SUITE("IndexEventCost") {
         "schema leaf paths are interned per record shape, not per event") {
         dftu_utils_test::TestEnvironment env(10);
         const dstd::String file = write_trace(env.get_dir());
-        const auto before = cost::g_leaf_path_interns.load();
+        const auto before = event_cost::g_leaf_path_interns.load();
         build_one(file, env.get_dir() + "/idx");
-        const auto interns = cost::g_leaf_path_interns.load() - before;
+        const auto interns = event_cost::g_leaf_path_interns.load() - before;
         MESSAGE("leaf path interns: " << interns << " for " << EVENTS
                                       << " events");
         CHECK(interns > 0);
@@ -111,16 +108,16 @@ TEST_SUITE("IndexEventCost") {
     TEST_CASE("chunk statistics find known keys by interned id") {
         dftu_utils_test::TestEnvironment env(10);
         const dstd::String file = write_trace(env.get_dir());
-        const auto before = cost::g_stats_string_lookups.load();
+        const auto before = event_cost::g_stats_string_lookups.load();
         build_one(file, env.get_dir() + "/idx");
-        const auto lookups = cost::g_stats_string_lookups.load() - before;
+        const auto lookups = event_cost::g_stats_string_lookups.load() - before;
         MESSAGE("statistics string lookups: " << lookups << " for " << EVENTS
                                               << " events");
         CHECK(lookups * MIN_REDUCTION < std::uint64_t{EVENTS});
     }
 
     TEST_CASE("a bloom insert computes its hashes once") {
-        ext::ScalableBloomFilter bloom(64, 0.01);
+        extensions::ScalableBloomFilter bloom(64, 0.01);
         constexpr std::size_t DISTINCT = 500;
         for (std::size_t i = 0; i < DISTINCT; ++i)
             bloom.add("value_" + dstd::to_string(i));
@@ -134,7 +131,7 @@ TEST_SUITE("IndexEventCost") {
     }
 
     TEST_CASE("statistics found by slot equal statistics found by string") {
-        using Stats = ix::schemas::dft::ChunkStatistics;
+        using Stats = index::schemas::dft::ChunkStatistics;
         constexpr const char* NAMES[] = {"read", "write", "open", "close",
                                          "seek", "stat",  "sync"};
         constexpr const char* CATS[] = {"POSIX", "STDIO", "APP"};

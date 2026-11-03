@@ -17,10 +17,7 @@
 #include <initializer_list>
 
 using namespace dftracer::utils;
-
-using dftracer::utils::dataframe::op_at;
-using dftracer::utils::dataframe::op_count;
-using dftracer::utils::dataframe::OpKind;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 

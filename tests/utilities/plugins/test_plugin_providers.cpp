@@ -18,16 +18,15 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::plugins::Plugins;
-
 #ifndef PROVIDER_FIXTURE_PLUGIN_PATH
 #error "PROVIDER_FIXTURE_PLUGIN_PATH must be defined by CMake"
 #endif
 
 namespace {
 
-dstd::Optional<Plugins> load_fixture() {
-    auto result = Plugins::Builder().add(PROVIDER_FIXTURE_PLUGIN_PATH).build();
+dstd::Optional<plugins::Plugins> load_fixture() {
+    auto result =
+        plugins::Plugins::Builder().add(PROVIDER_FIXTURE_PLUGIN_PATH).build();
     REQUIRE(result.has_value());
     return std::move(result).value();
 }
@@ -67,7 +66,7 @@ dstd::Vector<std::int64_t> read_i64_column(const dftu_dataframe* df,
 }  // namespace
 
 TEST_CASE("a registered provider backs a LazyFrame that collects its rows") {
-    dstd::Optional<Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::Plugins> plugins = load_fixture();
 
     dftu_lazyframe* lf = dftu_lazyframe_from_provider("provider_fixture.rows");
     REQUIRE(lf);
@@ -85,7 +84,7 @@ TEST_CASE("a registered provider backs a LazyFrame that collects its rows") {
 }
 
 TEST_CASE("an op chained on the provider's LazyFrame composes correctly") {
-    dstd::Optional<Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::Plugins> plugins = load_fixture();
 
     dftu_lazyframe* lf = dftu_lazyframe_from_provider("provider_fixture.rows");
     REQUIRE(lf);
@@ -103,7 +102,7 @@ TEST_CASE("an op chained on the provider's LazyFrame composes correctly") {
 }
 
 TEST_CASE("register_provider refuses a dftu.-prefixed and a duplicate name") {
-    dstd::Optional<Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::Plugins> plugins = load_fixture();
     FixtureAccessors fx;
     REQUIRE(fx.handle);
     auto gate_ok = fx.sym<int (*)()>("provider_fixture_gate_ok");
@@ -112,7 +111,7 @@ TEST_CASE("register_provider refuses a dftu.-prefixed and a duplicate name") {
 }
 
 TEST_CASE("a cursor failing mid-stream surfaces as a collect failure") {
-    dstd::Optional<Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::Plugins> plugins = load_fixture();
     FixtureAccessors fx;
     REQUIRE(fx.handle);
     auto next_calls = fx.sym<int (*)()>("provider_fixture_failing_next_calls");
@@ -131,7 +130,7 @@ TEST_CASE("a cursor failing mid-stream surfaces as a collect failure") {
 }
 
 TEST_CASE("source and cursor destroy are each called exactly once per scan") {
-    dstd::Optional<Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::Plugins> plugins = load_fixture();
     FixtureAccessors fx;
     REQUIRE(fx.handle);
     auto cursor_destroys =
@@ -158,7 +157,7 @@ TEST_CASE("a provider is gone once the loading plugin set is destroyed") {
     const int before = source_destroys();
 
     {
-        dstd::Optional<Plugins> plugins = load_fixture();
+        dstd::Optional<plugins::Plugins> plugins = load_fixture();
         dftu_lazyframe* lf =
             dftu_lazyframe_from_provider("provider_fixture.rows");
         CHECK(lf);
@@ -179,7 +178,7 @@ TEST_CASE("a C++ SDK source absorbs a filter and is freed with the plugin") {
     const int filters_before = filters();
 
     {
-        dstd::Optional<Plugins> plugins = load_fixture();
+        dstd::Optional<plugins::Plugins> plugins = load_fixture();
         dftu_lazyframe* lf =
             dftu_lazyframe_from_provider("provider_fixture.sdk");
         REQUIRE(lf);
@@ -209,7 +208,7 @@ TEST_CASE("a C++ SDK source absorbs a filter and is freed with the plugin") {
 
 TEST_CASE("a C++ SDK node runs over a provider and leaves with the plugin") {
     {
-        dstd::Optional<Plugins> plugins = load_fixture();
+        dstd::Optional<plugins::Plugins> plugins = load_fixture();
         dftu_lazyframe* lf =
             dftu_lazyframe_from_provider("provider_fixture.sdk");
         REQUIRE(lf);

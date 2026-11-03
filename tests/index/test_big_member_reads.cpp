@@ -36,15 +36,6 @@
 #include <thread>
 
 using namespace dftracer::utils;
-using dftracer::utils::index::gzip::GzipIndexer;
-using dftracer::utils::index::gzip::GzipMemberRecord;
-using dftracer::utils::index::gzip::GzipRecordKind;
-using dftracer::utils::utilities::reader::internal::GzipReader;
-using dftracer::utils::utilities::reader::internal::MemberDecodeCache;
-using dftracer::utils::utilities::reader::internal::ReaderInflater;
-using dftu_utils_test::run_coro;
-namespace gz = dftracer::utils::utilities::fileio::compress;
-namespace views = dftracer::utils::trace::views;
 
 namespace {
 
@@ -103,7 +94,7 @@ Trace short_lines(std::size_t bytes, std::uint32_t seed) {
 }
 
 dstd::Vector<std::uint8_t> member(const dstd::String& text) {
-    gz::GzipMemberCompressor c;
+    utilities::fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
     REQUIRE(n.has_value());
@@ -192,8 +183,8 @@ std::size_t inflate_mismatches(
     REQUIRE(fd >= 0);
     std::size_t at = 0, bad = 0;
     bool ok = false;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        ReaderInflater inf;
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        utilities::reader::internal::ReaderInflater inf;
         inf.set_member_bound(BOUND_BYTES);
         if (cache != nullptr) inf.set_cache(cache, 7);
         if (heads != nullptr) inf.set_index_hint(*heads);
@@ -222,8 +213,9 @@ std::size_t members_lines(const dstd::String& path) {
     REQUIRE(fd >= 0);
     const auto size = static_cast<std::uint64_t>(::lseek(fd, 0, SEEK_END));
     std::size_t lines = 0;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto gen = gz::decode_gzip_members(fd, size, BOUND_BYTES);
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto gen = utilities::fileio::compress::decode_gzip_members(
+            fd, size, BOUND_BYTES);
         while (auto part = co_await gen.next())
             lines += static_cast<std::size_t>(
                 std::count(part->begin(), part->end(), '\n'));
@@ -233,20 +225,20 @@ std::size_t members_lines(const dstd::String& path) {
 }
 
 struct Indexed {
-    dstd::SharedPtr<GzipIndexer> indexer;
+    dstd::SharedPtr<index::gzip::GzipIndexer> indexer;
     Indexed(const dstd::String& path, const dstd::String& index_path,
             std::uint64_t ckpt = CKPT) {
-        indexer = dstd::make_shared<GzipIndexer>(
+        indexer = dstd::make_shared<index::gzip::GzipIndexer>(
             dstd::String(dstd::StringView(path)),
             dstd::String(dstd::StringView(index_path)), ckpt, true);
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await indexer->build_async();
         });
     }
     dstd::String read_lines(std::size_t first, std::size_t last) {
-        GzipReader reader(indexer);
+        utilities::reader::internal::GzipReader reader(indexer);
         dstd::String out;
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             out = co_await reader.read_lines_async(first, last);
         });
         return out;
@@ -268,9 +260,10 @@ std::uint64_t bytes_read_by_process() {
 
 std::size_t newlines_before(const dstd::String& text, std::size_t at);
 
-dstd::String read_line_bytes(const dstd::SharedPtr<GzipIndexer>& indexer,
-                             std::size_t from) {
-    GzipReader reader(indexer);
+dstd::String read_line_bytes(
+    const dstd::SharedPtr<index::gzip::GzipIndexer>& indexer,
+    std::size_t from) {
+    utilities::reader::internal::GzipReader reader(indexer);
     auto stream = reader.stream(
         utilities::reader::internal::StreamConfig()
             .stream_type(utilities::reader::internal::StreamType::LineBytes)
@@ -278,7 +271,7 @@ dstd::String read_line_bytes(const dstd::SharedPtr<GzipIndexer>& indexer,
             .from(from)
             .to(reader.get_max_bytes()));
     dstd::String out;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         dstd::Vector<char> buf(1u << 20);
         while (true) {
             const auto n = co_await stream->read_async(buf.data(), buf.size());
@@ -303,18 +296,18 @@ std::size_t newlines_before(const dstd::String& text, std::size_t at) {
         std::count(text.begin(), text.begin() + static_cast<long>(at), '\n'));
 }
 
-views::ViewFile view_file(const dstd::String& gz_path,
-                          const dstd::String& dir) {
+trace::views::ViewFile view_file(const dstd::String& gz_path,
+                                 const dstd::String& dir) {
     REQUIRE(dftu_utils_test::build_index(gz_path, dir, CKPT));
-    views::ViewFile f;
+    trace::views::ViewFile f;
     f.file_path = gz_path;
     f.index_path = trace::internal::determine_index_path(gz_path, dir);
     f.checkpoint_size = CKPT;
     return f;
 }
 
-std::size_t count_reads(const views::ViewFile& f) {
-    auto df = views::View::from_files({f})
+std::size_t count_reads(const trace::views::ViewFile& f) {
+    auto df = trace::views::View::from_files({f})
                   .duql(R"(name == "read" | agg { n = count() })")
                   .lazy()
                   .collect()
@@ -365,7 +358,7 @@ TEST_SUITE("BigMemberReads") {
         REQUIRE(pieces.size() > 16);
         std::size_t restarts = 0;
         for (const auto& p : pieces)
-            restarts += p.kind == GzipRecordKind::Restart;
+            restarts += p.kind == index::gzip::GzipRecordKind::Restart;
         CHECK(restarts > 16);
         CHECK(big.indexer->get_num_lines() == many.indexer->get_num_lines());
 
@@ -404,7 +397,7 @@ TEST_SUITE("BigMemberReads") {
         const auto pieces = big.indexer->get_members();
         std::size_t restarts = 0;
         for (const auto& p : pieces)
-            restarts += p.kind == GzipRecordKind::Restart;
+            restarts += p.kind == index::gzip::GzipRecordKind::Restart;
         REQUIRE(restarts >= 4);
         CHECK(big.indexer->get_num_lines() == fx.trace.lines);
 
@@ -435,7 +428,7 @@ TEST_SUITE("BigMemberReads") {
             Indexed ix(dir + "/t.gz", dir + "/idx");
             const auto pieces = ix.indexer->get_members();
             for (const auto& p : pieces) {
-                if (p.kind != GzipRecordKind::Restart) continue;
+                if (p.kind != index::gzip::GzipRecordKind::Restart) continue;
                 const std::size_t at = static_cast<std::size_t>(p.uc_offset);
                 const bool newline_before = t.text[at - 1] == '\n';
                 // The folds count a line in the piece where it ends.
@@ -460,7 +453,8 @@ TEST_SUITE("BigMemberReads") {
         Files big(BIG_BYTES, 4, "g");
         auto count = [](const dstd::String& path) {
             std::size_t n = 0;
-            run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            dftu_utils_test::run_coro([&](coro::Scope&)
+                                          -> coro::CoroTask<void> {
                 auto lines =
                     utilities::fileio::lines::sources::async_streaming_gz_lines(
                         dstd::String(path));
@@ -518,7 +512,8 @@ TEST_SUITE("BigMemberReads") {
 
         dstd::Vector<std::uint64_t> heads{big_offset};
         for (const bool hinted : {false, true}) {
-            MemberDecodeCache cache(std::size_t{64} << 20);
+            utilities::reader::internal::MemberDecodeCache cache(std::size_t{64}
+                                                                 << 20);
             CAPTURE(hinted);
             CHECK(inflate_mismatches(path, text, &cache,
                                      hinted ? &heads : nullptr) == 0);
@@ -542,7 +537,7 @@ TEST_SUITE("BigMemberReads") {
             write_file(dir + "/t.gz", bytes);
             Indexed ix(dir + "/t.gz", dir + "/idx");
             for (const auto& p : ix.indexer->get_members()) {
-                if (p.kind != GzipRecordKind::Restart) continue;
+                if (p.kind != index::gzip::GzipRecordKind::Restart) continue;
                 const std::size_t at = static_cast<std::size_t>(p.uc_offset);
                 const std::size_t nl = t.text.find('\n', at);
                 if (nl == dstd::String::npos || nl < at + 2) continue;
@@ -573,7 +568,7 @@ TEST_SUITE("BigMemberReads") {
         const auto pieces = big.indexer->get_members();
         REQUIRE(pieces.size() > 16);
         const auto& last = pieces.back();
-        REQUIRE(last.kind == GzipRecordKind::Restart);
+        REQUIRE(last.kind == index::gzip::GzipRecordKind::Restart);
         const std::size_t first =
             static_cast<std::size_t>(last.first_line_num) + 3;
         REQUIRE(first + 3 < fx.trace.lines);
@@ -599,7 +594,7 @@ TEST_SUITE("BigMemberReads") {
         const auto pieces = ix.indexer->get_members();
         REQUIRE(pieces.size() >= 3);
         const auto& last = pieces.back();
-        CHECK(last.kind == GzipRecordKind::Restart);
+        CHECK(last.kind == index::gzip::GzipRecordKind::Restart);
         CHECK(ix.indexer->get_max_bytes() == t.text.size());
         CHECK(ix.indexer->get_num_lines() ==
               newlines_before(t.text, t.text.size()));

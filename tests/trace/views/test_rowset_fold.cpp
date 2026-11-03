@@ -25,14 +25,11 @@ using namespace test_view_common;
 
 using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::extensions;
-namespace ix = dftracer::utils::index;
-namespace df = dftracer::utils::dataframe;
-using dstd::StringIntern;
 
 namespace {
 
-FoldEvent extract_fold_event(simdjson::dom::element root, StringIntern& intern,
-                             bool needs_args,
+FoldEvent extract_fold_event(simdjson::dom::element root,
+                             dstd::StringIntern& intern, bool needs_args,
                              const dstd::Vector<dstd::String>* extra = nullptr,
                              bool capture_schema = false) {
     FoldEvent ev;
@@ -47,7 +44,7 @@ dstd::String padded(dstd::String s) {
 }
 
 dstd::Vector<FoldEvent> fold_events_of(const dstd::Vector<dstd::String>& lines,
-                                       StringIntern& intern) {
+                                       dstd::StringIntern& intern) {
     dstd::Vector<FoldEvent> out;
     simdjson::dom::parser parser;
     for (const auto& l : lines) {
@@ -84,23 +81,24 @@ dstd::String write_trace(TestEnvironment& env,
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     (void)dstd::fs::remove(pfw);
-    if (build) ix::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
+    if (build)
+        index::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
     return gz;
 }
 
 // Row `r` of `f` as text, column by column.
-dstd::String row_text(const df::DataFrame& f, std::int64_t r) {
+dstd::String row_text(const dataframe::DataFrame& f, std::int64_t r) {
     dstd::String out;
     for (std::size_t c = 0; c < f.columns.size(); ++c) {
-        const df::Series col = f.columns[c].materialize();
+        const dataframe::Series col = f.columns[c].materialize();
         out += f.names[c] + "=";
         if (col.is_null(r))
             out += "null";
-        else if (col.type() == df::TypeId::String)
+        else if (col.type() == dataframe::TypeId::String)
             out += col.string_at(r);
-        else if (col.type() == df::TypeId::Int64)
+        else if (col.type() == dataframe::TypeId::Int64)
             out += dstd::to_string(col.data<std::int64_t>()[r]);
-        else if (col.type() == df::TypeId::Uint64)
+        else if (col.type() == dataframe::TypeId::Uint64)
             out += dstd::to_string(col.data<std::uint64_t>()[r]);
         else
             out += "?";
@@ -109,14 +107,14 @@ dstd::String row_text(const df::DataFrame& f, std::int64_t r) {
     return out;
 }
 
-dstd::Vector<dstd::String> rows_of(const df::DataFrame& f) {
+dstd::Vector<dstd::String> rows_of(const dataframe::DataFrame& f) {
     dstd::Vector<dstd::String> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out.push_back(row_text(f, r));
     return out;
 }
 
-bool interned(const StringIntern& intern, dstd::StringView text) {
+bool interned(const dstd::StringIntern& intern, dstd::StringView text) {
     for (std::size_t i = 0; i < intern.entry_count(); ++i)
         if (intern.resolve(intern.entry_id(i)) == text) return true;
     return false;
@@ -127,26 +125,29 @@ bool interned(const StringIntern& intern, dstd::StringView text) {
 TEST_SUITE("RowSetFold") {
     TEST_CASE("the built-in sources index their lookup row sets") {
         dstd::Vector<dstd::String> names;
-        for (const auto& r : ix::indexed_rowsets(ix::get_schema("dftracer")))
+        for (const auto& r :
+             index::indexed_rowsets(index::get_schema("dftracer")))
             names.emplace_back(r.name);
         CHECK(names ==
               dstd::Vector<dstd::String>{"files", "hosts", "strings", "ranks"});
         names.clear();
-        for (const auto& r : ix::indexed_rowsets(ix::get_schema("genesis")))
+        for (const auto& r :
+             index::indexed_rowsets(index::get_schema("genesis")))
             names.emplace_back(r.name);
         CHECK(names.back() == "runs");
-        CHECK(ix::indexed_rowsets(ix::get_schema("generic")).empty());
+        CHECK(index::indexed_rowsets(index::get_schema("generic")).empty());
     }
 
     TEST_CASE("a row set that aggregates or reads another is not indexed") {
-        const auto& s = ix::register_schema(
+        const auto& s = index::register_schema(
             "id: rs_mixed\nsource: |\n"
             "  big = where x > 1 | select x, y;\n"
             "  counts = where x > 1 | group y { n = count() };\n"
             "  keyed = where y in (from big | select y)\n",
             "test");
         dstd::Vector<dstd::String> names;
-        for (const auto& r : ix::indexed_rowsets(s)) names.emplace_back(r.name);
+        for (const auto& r : index::indexed_rowsets(s))
+            names.emplace_back(r.name);
         CHECK(names == dstd::Vector<dstd::String>{"big"});
     }
 
@@ -154,14 +155,14 @@ TEST_SUITE("RowSetFold") {
         TestEnvironment env(10);
         const dstd::String gz = write_trace(env, trace_lines());
         const auto ixr =
-            ix::Indexer::open({dstd::String(dstd::StringView(gz))});
+            index::Indexer::open({dstd::String(dstd::StringView(gz))});
         const View v = View::from_file(
             dstd::String(gz),
             dstd::String(dstd::String(determine_index_path(gz, ""))));
         for (const char* name : {"files", "hosts", "strings", "ranks"}) {
             CAPTURE(name);
-            const df::DataFrame stored = ixr.rowset(name);
-            const df::DataFrame scanned =
+            const dataframe::DataFrame stored = ixr.rowset(name);
+            const dataframe::DataFrame scanned =
                 run(v.duql(dstd::String("from ") + name + " | where true")
                         .collect());
             CHECK(rows_of(stored) == rows_of(scanned));
@@ -183,11 +184,11 @@ TEST_SUITE("RowSetFold") {
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"depth":1,"count":2})");
         const dstd::String gz = write_trace(env, lines);
         const auto ixr =
-            ix::Indexer::open({dstd::String(dstd::StringView(gz))});
+            index::Indexer::open({dstd::String(dstd::StringView(gz))});
         const View v = View::from_file(
             dstd::String(gz),
             dstd::String(dstd::String(determine_index_path(gz, ""))));
-        const df::DataFrame stored = ixr.rowset("runs");
+        const dataframe::DataFrame stored = ixr.rowset("runs");
         CHECK(rows_of(stored) ==
               rows_of(run(v.duql("from runs | where true").collect())));
         REQUIRE(stored.num_rows() == 2);
@@ -210,18 +211,18 @@ TEST_SUITE("RowSetFold") {
                 .agg({{AggOp::Count, "", "n"}});
         for (int touch = 0; touch < 2; ++touch) {
             CAPTURE(touch);
-            const df::DataFrame f = v.collect().get();
+            const dataframe::DataFrame f = v.collect().get();
             CHECK(rows_of(f) == dstd::Vector<dstd::String>{"gtype=func;n=30;"});
         }
     }
 
     TEST_CASE("a distinct row set keeps each row once across units") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         auto lines = trace_lines();
         lines.push_back(lines[0]);
         auto events = fold_events_of(lines, intern);
         RowSetFold fold(intern,
-                        ix::indexed_rowsets(ix::get_schema("dftracer")));
+                        index::indexed_rowsets(index::get_schema("dftracer")));
         ScanUnit unit;
         unit.file_path = "x";
         for (int i = 0; i < 2; ++i) {
@@ -232,10 +233,10 @@ TEST_SUITE("RowSetFold") {
     }
 
     TEST_CASE("a fold over budget keeps no rows") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         auto events = fold_events_of(trace_lines(), intern);
-        RowSetFold fold(intern, ix::indexed_rowsets(ix::get_schema("dftracer")),
-                        16);
+        RowSetFold fold(
+            intern, index::indexed_rowsets(index::get_schema("dftracer")), 16);
         ScanUnit unit;
         unit.file_path = "x";
         fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
@@ -245,10 +246,10 @@ TEST_SUITE("RowSetFold") {
     }
 
     TEST_CASE("a dropped unit leaves no rows") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         auto events = fold_events_of(trace_lines(), intern);
         RowSetFold fold(intern,
-                        ix::indexed_rowsets(ix::get_schema("dftracer")));
+                        index::indexed_rowsets(index::get_schema("dftracer")));
         ScanUnit unit;
         unit.file_path = "x";
         fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
@@ -263,10 +264,10 @@ TEST_SUITE("RowSetFold") {
         const dstd::String line =
             R"({"gtype":"func","run":"ab","path":"main;f","ts":1,)"
             R"("dur":{"sketch":"UNIQUE_SKETCH_BLOB","count":2}})";
-        const auto& genesis = ix::get_schema("genesis");
+        const auto& genesis = index::get_schema("genesis");
         for (const bool skip : {true, false}) {
             CAPTURE(skip);
-            StringIntern intern;
+            dstd::StringIntern intern;
             simdjson::dom::parser parser;
             dstd::String buf = padded(line);
             auto doc = parser.parse(buf.data(), line.size(), false);
@@ -297,16 +298,16 @@ TEST_SUITE("RowSetFold") {
                 dstd::to_string(i) + R"(","count":2}})");
         const dstd::String gz = write_trace(env, lines);
         const auto ixr =
-            ix::Indexer::open({dstd::String(dstd::StringView(gz))});
+            index::Indexer::open({dstd::String(dstd::StringView(gz))});
         const View v = View::from_file(
             dstd::String(gz),
             dstd::String(dstd::String(determine_index_path(gz, ""))));
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             v.duql("where dur.sketch == \"SK7\" | select path, dur.count")
                 .collect()
                 .get();
         REQUIRE(f.num_rows() == 1);
-        const df::DataFrame all =
+        const dataframe::DataFrame all =
             v.duql("where dur.sketch in [\"SK7\", \"SK8\", \"SK99\"]")
                 .group_by({GroupKey::field("gtype")})
                 .agg({{AggOp::Count, "", "n"}})

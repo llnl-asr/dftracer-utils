@@ -30,7 +30,6 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::fileio;
-using dftu_utils_test::run_coro;
 
 namespace {
 
@@ -62,7 +61,7 @@ Written write_all(const dstd::String& path, GzipWriterOptions o,
     Written w;
     std::mutex mu;
     o.on_member = [&](const MemberInfo& m) { w.members.push_back(m); };
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto wr = co_await GzipLineWriter::open(path, std::move(o));
         REQUIRE(wr.has_value());
         for (auto& p : pieces) {
@@ -83,7 +82,7 @@ Written write_all(const dstd::String& path, GzipWriterOptions o,
 dstd::Vector<index::gzip::GzipMemberRecord> index_of(const dstd::String& path) {
     const dstd::String path_std(path);
     dstd::Optional<index::gzip::GzipBuildArtifacts> arts;
-    run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         index::gzip::CheckpointIndexer::VisitorList none;
         arts = co_await index::gzip::build_gzip_index_artifacts(
             path_std, 32u << 20, none, &scope);
@@ -318,7 +317,7 @@ TEST_CASE("GzipLineWriter - errors") {
             if (idx == 3) throw std::runtime_error("boom");
         };
         bool saw_error = false;
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             auto wr = co_await GzipLineWriter::open(dstd::String(path.str()),
                                                     std::move(o));
             REQUIRE(wr.has_value());
@@ -343,7 +342,7 @@ TEST_CASE("GzipLineWriter - errors") {
         chmod(dir.c_str(), 0555);
         const dstd::String path((dir / "t.pfw.gz").str());
         bool failed = false;
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             // Named: GCC 12 destroys a temporary built inside co_await twice.
             GzipWriterOptions defaults;
             auto wr = co_await GzipLineWriter::open(dstd::String(path),
@@ -391,7 +390,7 @@ TEST_CASE("GzipLineWriter - destroying without close aborts") {
     o.member_size = 500;
     o.part_size = 2000;
     o.workers = 3;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         {
             auto wr =
                 co_await GzipLineWriter::open(dstd::String(base), std::move(o));
@@ -417,7 +416,7 @@ TEST_CASE("GzipLineWriter - destroying without close aborts") {
 TEST_CASE("GzipLineWriter - a moved writer closes once") {
     auto path = dftu_utils_test::make_unique_test_path("glw_move.pfw.gz");
     dstd::String all;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         GzipWriterOptions o;
         o.member_size = 300;
         auto wr = co_await GzipLineWriter::open(dstd::String(path.str()),
@@ -478,7 +477,7 @@ TEST_CASE("GzipLineWriter - close(tail) without a newline") {
     o.member_size = 1000;
     o.workers = 2;
     dstd::String all;
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto wr = co_await GzipLineWriter::open(dstd::String(path.str()),
                                                 std::move(o));
         REQUIRE(wr.has_value());
@@ -659,7 +658,7 @@ TEST_CASE("GzipLineWriter - append_with equals append") {
     o2.member_size = 500;
     o2.workers = 2;
     write_all(dstd::String(a.str()), std::move(o), pieces);
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto wr =
             co_await GzipLineWriter::open(dstd::String(b.str()), std::move(o2));
         REQUIRE(wr.has_value());
@@ -690,7 +689,7 @@ TEST_CASE("GzipLineWriter - unordered mode") {
     GzipWriterOptions bad;
     bad.ordered = false;
     bad.on_member = [](const MemberInfo&) {};
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto r = co_await GzipLineWriter::open(dstd::String(path.str()),
                                                std::move(bad));
         CHECK(!r.has_value());
@@ -713,7 +712,7 @@ TEST_CASE("GzipLineWriter - unordered mode") {
         for (std::size_t i = 0; i < PER; ++i)
             expect.insert(line(p * 1000 + i, i % 30));
     WriteSummary sum;
-    run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         auto wr = co_await GzipLineWriter::open(dstd::String(path.str()),
                                                 std::move(o));
         REQUIRE(wr.has_value());
@@ -782,7 +781,7 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
     dstd::MultiSet<dstd::String> expect;
     for (std::size_t p = 0; p < PRODUCERS; ++p)
         for (std::size_t i = 0; i < PER; ++i) expect.insert(mk(p, i));
-    run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         auto wr = co_await GzipLineWriter::open(dstd::String(path.str()),
                                                 std::move(o));
         REQUIRE(wr.has_value());
@@ -836,7 +835,7 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
 
 TEST_CASE("GzipLineWriter - producer refused when ordered, close needs flush") {
     auto path = dftu_utils_test::make_unique_test_path("glw_prod2.pfw.gz");
-    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         GzipWriterOptions o;
         auto wr = co_await GzipLineWriter::open(dstd::String(path.str()),
                                                 std::move(o));
@@ -899,7 +898,7 @@ TEST_CASE("GzipLineWriter - producers stay within the memory budget") {
     std::uint64_t expect_lines = PRODUCERS * PER;
     const std::size_t memory_budget = o.memory_budget;
     WriteSummary sum;
-    run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
+    dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         auto wr = co_await GzipLineWriter::open(dstd::String(path.str()),
                                                 std::move(o));
         REQUIRE(wr.has_value());

@@ -27,7 +27,7 @@ using namespace test_view_common;
 
 namespace {
 
-namespace scan = dftracer::utils::trace::views::detail::scan;
+using namespace dftracer::utils::trace;
 
 dstd::String cache_of(const dstd::String& gz) {
     return dstd::String(determine_index_path(gz, ""));
@@ -189,16 +189,18 @@ TEST_SUITE("QueryCache") {
         const auto gz = indexed_trace(env);
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto plan = [&](const dstd::String& q) {
-            return scan::agg(
-                scan::group_by(scan::filter(scan::from_file(dstd::String(gz),
-                                                            dstd::String(idx)),
-                                            duql::parse_or_throw(q)),
-                               {GroupKey::cat()}),
+            return views::detail::scan::agg(
+                views::detail::scan::group_by(
+                    views::detail::scan::filter(
+                        views::detail::scan::from_file(dstd::String(gz),
+                                                       dstd::String(idx)),
+                        duql::parse_or_throw(q)),
+                    {GroupKey::cat()}),
                 {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
         auto materialize = [&](const dstd::String& q) {
-            return canon(
-                run(scan::collect_frame(scan::materialize(plan(q), 0, 0))));
+            return canon(run(views::detail::scan::collect_frame(
+                views::detail::scan::materialize(plan(q), 0, 0))));
         };
         const auto a = materialize("dur >= 0");
         const auto one = rollup_sigs(gz);

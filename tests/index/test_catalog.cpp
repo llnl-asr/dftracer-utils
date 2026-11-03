@@ -24,11 +24,6 @@
 #include <random>
 
 using namespace dftracer::utils;
-namespace istore = dftracer::utils::index::store;
-using istore::ColumnType;
-using istore::IndexExtension;
-using istore::PathStat;
-using istore::PathType;
 
 namespace {
 
@@ -128,8 +123,8 @@ dstd::Vector<dstd::String> zonemap_paths(const Indexed& t) {
     const auto snapshot = dftu_utils_test::index_snapshot(t.index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, t.trace);
     dstd::Vector<dstd::String> out;
-    for (const auto& path : dftu_utils_test::index_take(
-             index::paths(snapshot, file, IndexExtension::Zonemap)))
+    for (const auto& path : dftu_utils_test::index_take(index::paths(
+             snapshot, file, index::store::IndexExtension::Zonemap)))
         out.emplace_back(path.data(), path.size());
     return out;
 }
@@ -144,8 +139,8 @@ dstd::Map<std::uint64_t, index::extensions::kinds::Zone> zones_of(
     const auto snapshot = dftu_utils_test::index_snapshot(t.index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, t.trace);
     dstd::Map<std::uint64_t, index::extensions::kinds::Zone> out;
-    for (auto& [chunk, bytes] : dftu_utils_test::index_take(
-             index::granules(snapshot, file, IndexExtension::Zonemap, path))) {
+    for (auto& [chunk, bytes] : dftu_utils_test::index_take(index::granules(
+             snapshot, file, index::store::IndexExtension::Zonemap, path))) {
         auto zone = index::extensions::kinds::decode_zone(
             dstd::StringView(bytes.data(), bytes.size()));
         REQUIRE(zone);
@@ -174,11 +169,11 @@ void check_full_scan(const Indexed& t, const dstd::String& index_dir,
     }
 }
 
-dstd::Map<dstd::String, PathStat> catalog_of(const dstd::String& trace,
-                                             dstd::StringView index_path) {
+dstd::Map<dstd::String, index::store::PathStat> catalog_of(
+    const dstd::String& trace, dstd::StringView index_path) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
-    dstd::Map<dstd::String, PathStat> out;
+    dstd::Map<dstd::String, index::store::PathStat> out;
     for (auto& [path, stat] :
          dftu_utils_test::index_take(index::catalog(snapshot, file)))
         out.emplace(dstd::String(path.data(), path.size()), stat);
@@ -186,12 +181,12 @@ dstd::Map<dstd::String, PathStat> catalog_of(const dstd::String& trace,
 }
 
 // The column types of the file's catalog, without the "args." prefix.
-dstd::Map<dstd::String, ColumnType> column_types(const dstd::String& trace,
-                                                 dstd::StringView index_path) {
+dstd::Map<dstd::String, index::store::ColumnType> column_types(
+    const dstd::String& trace, dstd::StringView index_path) {
     constexpr dstd::StringView ARGS = "args.";
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
-    dstd::Map<dstd::String, ColumnType> out;
+    dstd::Map<dstd::String, index::store::ColumnType> out;
     for (auto& [name, t] : dftu_utils_test::index_take(
              index::file_column_types(snapshot, file))) {
         dstd::StringView path(name.data(), name.size());
@@ -205,34 +200,35 @@ dstd::Map<dstd::String, ColumnType> column_types(const dstd::String& trace,
 
 TEST_SUITE("PathCatalog") {
     TEST_CASE("join follows the lattice") {
-        using P = PathType;
-        CHECK(istore::join(P::Int, P::Double) == P::Double);
-        CHECK(istore::join(P::Int, P::Uint) == P::Uint);
-        CHECK(istore::join(P::Uint, P::Double) == P::Double);
-        CHECK(istore::join(P::Int, P::String) == P::Mixed);
-        CHECK(istore::join(P::Bool, P::Int) == P::Mixed);
-        CHECK(istore::join(P::NullValue, P::String) == P::String);
-        CHECK(istore::join(P::Mixed, P::NullValue) == P::Mixed);
+        using P = index::store::PathType;
+        CHECK(index::store::join(P::Int, P::Double) == P::Double);
+        CHECK(index::store::join(P::Int, P::Uint) == P::Uint);
+        CHECK(index::store::join(P::Uint, P::Double) == P::Double);
+        CHECK(index::store::join(P::Int, P::String) == P::Mixed);
+        CHECK(index::store::join(P::Bool, P::Int) == P::Mixed);
+        CHECK(index::store::join(P::NullValue, P::String) == P::String);
+        CHECK(index::store::join(P::Mixed, P::NullValue) == P::Mixed);
         const P all[] = {P::NullValue, P::Bool,   P::Int,  P::Uint,
                          P::Double,    P::String, P::Mixed};
         for (P a : all)
             for (P b : all) {
-                CHECK(istore::join(a, b) == istore::join(b, a));
+                CHECK(index::store::join(a, b) == index::store::join(b, a));
                 for (P c : all)
-                    CHECK(istore::join(istore::join(a, b), c) ==
-                          istore::join(a, istore::join(b, c)));
+                    CHECK(index::store::join(index::store::join(a, b), c) ==
+                          index::store::join(a, index::store::join(b, c)));
             }
     }
 
     TEST_CASE("a catalog record round-trips") {
-        const PathStat s{PathType::Uint, 0x0c, 123456789012ULL};
-        auto back = istore::layout::decode_path_stat(
-            istore::layout::encode_path_stat(s));
+        const index::store::PathStat s{index::store::PathType::Uint, 0x0c,
+                                       123456789012ULL};
+        auto back = index::store::layout::decode_path_stat(
+            index::store::layout::encode_path_stat(s));
         REQUIRE(back);
         CHECK(back->type == s.type);
         CHECK(back->seen == s.seen);
         CHECK(back->count == s.count);
-        CHECK_FALSE(istore::layout::decode_path_stat("x"));
+        CHECK_FALSE(index::store::layout::decode_path_stat("x"));
     }
 
     TEST_CASE("the catalog lists every data path with its type and count") {
@@ -249,17 +245,17 @@ TEST_SUITE("PathCatalog") {
             REQUIRE_MESSAGE(cat.count(key), p);
             return cat.at(key).type;
         };
-        CHECK(type_of("args.size") == PathType::Int);
-        CHECK(type_of("args.ratio") == PathType::Double);
-        CHECK(type_of("args.flag") == PathType::Bool);
-        CHECK(type_of("args.big") == PathType::Uint);
-        CHECK(type_of("args.io.off") == PathType::Int);
-        CHECK(type_of("args.io.mode") == PathType::String);
-        CHECK(type_of("args.hosts.0") == PathType::String);
-        CHECK(type_of("args.hosts.1") == PathType::String);
-        CHECK(type_of("args.mix") == PathType::Mixed);
-        CHECK(type_of("args.nul") == PathType::NullValue);
-        CHECK(type_of("type") == PathType::String);
+        CHECK(type_of("args.size") == index::store::PathType::Int);
+        CHECK(type_of("args.ratio") == index::store::PathType::Double);
+        CHECK(type_of("args.flag") == index::store::PathType::Bool);
+        CHECK(type_of("args.big") == index::store::PathType::Uint);
+        CHECK(type_of("args.io.off") == index::store::PathType::Int);
+        CHECK(type_of("args.io.mode") == index::store::PathType::String);
+        CHECK(type_of("args.hosts.0") == index::store::PathType::String);
+        CHECK(type_of("args.hosts.1") == index::store::PathType::String);
+        CHECK(type_of("args.mix") == index::store::PathType::Mixed);
+        CHECK(type_of("args.nul") == index::store::PathType::NullValue);
+        CHECK(type_of("type") == index::store::PathType::String);
         CHECK(cat.at("args.size").count == 200);
         CHECK(cat.at("args.nul").count == 0);
         CHECK(cat.at("args.retry").count == 1);
@@ -289,8 +285,8 @@ TEST_SUITE("PathCatalog") {
         const auto cat = catalog_of(trace, st.index_path);
         REQUIRE(cat.count("args.tags"));
         REQUIRE(cat.count("args.opts"));
-        CHECK(cat.at("args.tags").type == PathType::Array);
-        CHECK(cat.at("args.opts").type == PathType::Object);
+        CHECK(cat.at("args.tags").type == index::store::PathType::Array);
+        CHECK(cat.at("args.opts").type == index::store::PathType::Object);
         CHECK(cat.at("args.tags").count == 1);
         CHECK(cat.at("args.opts").count == 1);
         const auto cols = column_types(trace, st.index_path);
@@ -308,15 +304,15 @@ TEST_SUITE("PathCatalog") {
                                  options(idx))
                 .build();
         const auto cols = column_types(trace, st.index_path);
-        CHECK(cols.at("size") == ColumnType::Int64);
-        CHECK(cols.at("flag") == ColumnType::Int64);
-        CHECK(cols.at("ratio") == ColumnType::Float64);
-        CHECK(cols.at("big") == ColumnType::Float64);
-        CHECK(cols.at("io.off") == ColumnType::Int64);
-        CHECK(cols.at("hosts.1") == ColumnType::String);
-        CHECK(cols.at("mix") == ColumnType::Json);
-        CHECK(cols.at("retry") == ColumnType::Int64);
-        CHECK(cols.at("type") == ColumnType::String);
+        CHECK(cols.at("size") == index::store::ColumnType::Int64);
+        CHECK(cols.at("flag") == index::store::ColumnType::Int64);
+        CHECK(cols.at("ratio") == index::store::ColumnType::Float64);
+        CHECK(cols.at("big") == index::store::ColumnType::Float64);
+        CHECK(cols.at("io.off") == index::store::ColumnType::Int64);
+        CHECK(cols.at("hosts.1") == index::store::ColumnType::String);
+        CHECK(cols.at("mix") == index::store::ColumnType::Json);
+        CHECK(cols.at("retry") == index::store::ColumnType::Int64);
+        CHECK(cols.at("type") == index::store::ColumnType::String);
         CHECK_FALSE(cols.count("nul"));
     }
 
@@ -590,8 +586,8 @@ TEST_SUITE("Absence") {
         const auto snapshot = dftu_utils_test::index_snapshot(t.index_path);
         const auto file =
             dftu_utils_test::require_indexed_file(snapshot, trace);
-        const auto blooms = dftu_utils_test::index_take(
-            index::granules(snapshot, file, IndexExtension::Bloom, "m"));
+        const auto blooms = dftu_utils_test::index_take(index::granules(
+            snapshot, file, index::store::IndexExtension::Bloom, "m"));
         REQUIRE(blooms.size() > 1);
         const index::extensions::ScalableBloomFilter configured(1024, 0.01);
         const index::extensions::ScalableBloomFilter three(4, 0.01);

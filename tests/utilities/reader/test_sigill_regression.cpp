@@ -20,14 +20,7 @@
 #include <cstring>
 
 using namespace dftracer::utils;
-using dftracer::utils::index::gzip::GzipIndexer;
-using dftracer::utils::utilities::reader::internal::GzipReader;
-using dftracer::utils::utilities::reader::internal::RangeType;
-using dftracer::utils::utilities::reader::internal::StreamConfig;
-using dftracer::utils::utilities::reader::internal::StreamType;
-using dftu_utils_test::run_coro;
-using dftu_utils_test::ScopedTestDir;
-namespace gz = dftracer::utils::utilities::fileio::compress;
+using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -63,22 +56,22 @@ TEST_SUITE("sigill_regression") {
         "sigill_regression: a line stream restarts decompression on "
         "recycled coroutine frames") {
         const auto text = numbered_lines(1u << 20);
-        gz::GzipMemberCompressor c;
+        fileio::compress::GzipMemberCompressor c;
         dstd::Vector<std::uint8_t> comp(c.bound(text.size()));
         auto n = c.compress(text.data(), text.size(), comp.data(), comp.size());
         REQUIRE(n.has_value());
         comp.resize(*n);
 
-        ScopedTestDir dir("sigill");
+        dftu_utils_test::ScopedTestDir dir("sigill");
         const dstd::String gz_path = dir.file("t.gz");
         std::FILE* f = std::fopen(gz_path.c_str(), "wb");
         REQUIRE(f != nullptr);
         REQUIRE(std::fwrite(comp.data(), 1, comp.size(), f) == comp.size());
         std::fclose(f);
-        auto indexer = dstd::make_shared<GzipIndexer>(
+        auto indexer = dstd::make_shared<index::gzip::GzipIndexer>(
             dstd::String(dstd::StringView(gz_path)),
             dstd::String(dstd::StringView(dir.file("idx"))), 1u << 20, true);
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await indexer->build_async();
         });
 
@@ -87,15 +80,15 @@ TEST_SUITE("sigill_regression") {
 
         dirty_frame_pool();
 
-        GzipReader reader(indexer);
-        auto stream =
-            reader.stream(StreamConfig()
-                              .stream_type(StreamType::MultiLinesBytes)
-                              .range_type(RangeType::ByteRange)
-                              .from(start)
-                              .to(reader.get_max_bytes()));
+        reader::internal::GzipReader reader(indexer);
+        auto stream = reader.stream(
+            reader::internal::StreamConfig()
+                .stream_type(reader::internal::StreamType::MultiLinesBytes)
+                .range_type(reader::internal::RangeType::ByteRange)
+                .from(start)
+                .to(reader.get_max_bytes()));
         dstd::String out;
-        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<char> buf(1u << 20);
             while (true) {
                 const auto got =

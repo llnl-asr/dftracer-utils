@@ -37,7 +37,6 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::task_graph;
 using ExtractInput = trace::ChunkExtractorUtilityInput;
 using ExtractResult = trace::ChunkExtractorUtilityOutput;
-// keep std: Task decodes a vector input parameter only as std::vector
 using ExtractChunksOutput = std::vector<ExtractResult>;
 
 class SplitArgParse : public binaries::ArgParse {
@@ -116,9 +115,7 @@ struct FileGroup {
     double ratio = 1.0;
 };
 
-// keep std: Task decodes a vector input parameter only as std::vector
 using FileGroups = std::vector<FileGroup>;
-// keep std: TaskGraph::reduce hands the reducer a std::vector
 using FileProbes = std::vector<FileProbe>;
 
 constexpr std::uint64_t RATIO_SAMPLE_BYTES = 1 << 20;

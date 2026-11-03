@@ -13,7 +13,6 @@ namespace dftracer::utils::dstd {
 
 using String =
     std::basic_string<char, std::char_traits<char>, memory::Allocator<char>>;
-// keep std: defines dstd::StringView and its hash
 using StringView = std::string_view;
 
 }  // namespace dftracer::utils::dstd
@@ -21,11 +20,9 @@ using StringView = std::string_view;
 /// libstdc++ before 13 hashes only a std::string with std::allocator (LWG
 /// 3705). The value matches std::hash<std::string> for the same text.
 template <>
-// keep std: defines dstd::StringView and its hash
 struct std::hash<dftracer::utils::dstd::String> {
     std::size_t operator()(
         const dftracer::utils::dstd::String& s) const noexcept {
-        // keep std: defines dstd::StringView and its hash
         return std::hash<std::string_view>{}(s);
     }
 };

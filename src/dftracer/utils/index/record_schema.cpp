@@ -714,7 +714,6 @@ void check_keys(const YAML::Node& map, std::initializer_list<const char*> keys,
                 const dstd::String& where, const dstd::String& source) {
     if (!map.IsMap()) spec_error(source, where + " must be a mapping");
     for (const auto& kv : map) {
-        // keep std: yaml-cpp converts to std::string
         const auto text = kv.first.as<std::string>();
         const dstd::String key(text.data(), text.size());
         if (std::none_of(keys.begin(), keys.end(),
@@ -726,7 +725,6 @@ void check_keys(const YAML::Node& map, std::initializer_list<const char*> keys,
 dstd::String text_of(const YAML::Node& n, const dstd::String& key,
                      const dstd::String& source) {
     if (!n.IsScalar()) spec_error(source, key + " must be a string");
-    // keep std: yaml-cpp converts to std::string
     const auto text = n.as<std::string>();
     return dstd::String(text.data(), text.size());
 }
@@ -860,7 +858,6 @@ const RecordSchema& register_into(Registry& reg, dstd::StringView text,
                                   const dstd::String& source) {
     YAML::Node spec;
     try {
-        // keep std: YAML::Load takes std::string
         spec = YAML::Load(std::string(text));
     } catch (const YAML::Exception& e) {
         spec_error(source, e.what());

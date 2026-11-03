@@ -8,11 +8,9 @@ namespace dftracer::utils::dstd {
 
 /// One of several types, stored inline. It allocates nothing.
 template <class... Ts>
-// keep std: defines dstd::Variant
 using Variant = std::variant<Ts...>;
 
 /// The empty alternative, for a Variant that may hold nothing.
-// keep std: defines dstd::Variant
 using Monostate = std::monostate;
 
 }  // namespace dftracer::utils::dstd

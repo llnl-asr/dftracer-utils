@@ -204,7 +204,6 @@ TEST_CASE("concurrent external adds lose no bytes") {
     ExternalSlot external = attach_external("test");
     constexpr int THREADS = 8;
     constexpr int ROUNDS = 10000;
-    // keep std: memory tests link only memory
     std::vector<std::thread> threads;
     for (int t = 0; t < THREADS; ++t)
         threads.emplace_back([&external, t] {
@@ -215,14 +214,12 @@ TEST_CASE("concurrent external adds lose no bytes") {
                 external.add(-1, kind);
             }
         });
-    // keep std: memory tests link only memory
     for (std::thread& t : threads) t.join();
     CHECK(external.bytes() == std::size_t{2} * THREADS * ROUNDS);
 }
 
 TEST_CASE("external slots are listed by name and freed on detach") {
     ExternalSlot a = attach_external("index memtables");
-    // keep std: memory tests link only memory
     ExternalSlot b = attach_external(std::string(100, 'x'));
     a.set(3);
     b.set(4);
@@ -231,7 +228,6 @@ TEST_CASE("external slots are listed by name and freed on detach") {
         if (e.name == "index memtables") {
             CHECK(e.bytes == 3);
             ++seen;
-            // keep std: memory tests link only memory
         } else if (e.name == std::string(47, 'x')) {
             CHECK(e.bytes == 4);
             ++seen;
@@ -246,7 +242,6 @@ TEST_CASE("external slots are listed by name and freed on detach") {
 }
 
 TEST_CASE("the external table fills and frees") {
-    // keep std: memory tests link only memory
     std::vector<ExternalSlot> slots;
     for (std::size_t i = 0; i < EXTERNAL_SLOTS; ++i) {
         slots.push_back(attach_external("slot"));
@@ -264,7 +259,6 @@ TEST_CASE("the hard cap throws and try_allocate returns null") {
     CHECK_THROWS_AS(allocate(128 * MIB, 16), std::bad_alloc);
     CHECK(try_allocate(128 * MIB, 16) == nullptr);
 
-    // keep std: memory tests link only memory
     std::vector<void*> blocks;
     while (void* p = try_allocate(8 * MIB, 16)) {
         blocks.push_back(p);

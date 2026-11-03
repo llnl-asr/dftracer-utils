@@ -67,9 +67,7 @@ struct Throws {
 
 }  // namespace
 
-// keep std: test name and size check against the std twin
 static_assert(sizeof(dstd::Vector<int>) == sizeof(std::vector<int>));
-// keep std: test name and size check against the std twin
 static_assert(sizeof(dstd::String) == sizeof(std::string));
 static_assert(std::is_same_v<dstd::StringView, dstd::StringView>);
 static_assert(std::is_same_v<dstd::Span<const int>, dstd::Span<const int>>);
@@ -79,7 +77,6 @@ static_assert(
 static_assert(!std::is_convertible_v<dstd::UniquePtr<PlainDerived>,
                                      dstd::UniquePtr<PlainBase>>);
 
-// keep std: test name and size check against the std twin
 TEST_CASE("Vector copies, moves and grows like std::vector") {
     dstd::Vector<int> v{1, 2, 3};
     for (int i = 4; i <= 1000; ++i) v.push_back(i);
@@ -107,7 +104,6 @@ TEST_CASE("Vector copies, moves and grows like std::vector") {
     CHECK(view[9] == 10);
 }
 
-// keep std: test name and size check against the std twin
 TEST_CASE("String behaves as std::string and keeps the small buffer") {
     memory::PoolHandle pool = root().child("strings");
     memory::detail::Scope s{*pool};
@@ -164,7 +160,6 @@ TEST_CASE("HashMap copies, moves, grows and finds like a hash map") {
     CHECK_FALSE(set.contains(10));
 }
 
-// keep std: test name and size check against the std twin
 TEST_CASE("HashMap with String keys finds by std::string_view") {
     dstd::HashMap<dstd::String, int> m;
     m.emplace("alpha", 1);
@@ -250,7 +245,6 @@ TEST_CASE("Hash covers enums, pairs and tuples") {
     CHECK(seen.size() == 2);
 }
 
-// keep std: test name and size check against the std twin
 TEST_CASE("Map and Set keep their order like std::map and std::set") {
     dstd::Map<dstd::String, int> m;
     m["b"] = 2;
@@ -272,7 +266,6 @@ TEST_CASE("Map and Set keep their order like std::map and std::set") {
     CHECK(set.count(3) == 1);
 }
 
-// keep std: test name and size check against the std twin
 TEST_CASE("Deque grows at both ends like std::deque") {
     dstd::Deque<int> d;
     for (int i = 0; i < 5000; ++i) {

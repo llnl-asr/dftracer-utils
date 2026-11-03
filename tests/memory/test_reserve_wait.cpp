@@ -30,7 +30,6 @@ struct Budget {
 struct Wake {
     std::atomic<int> calls{0};
     int id = 0;
-    // keep std: memory tests link only memory
     std::vector<int>* log = nullptr;
 };
 
@@ -42,7 +41,6 @@ void on_resume(void* context) noexcept {
 
 struct Waiter {
     Waiter(Pool& pool, std::size_t bytes, int id = 0,
-           // keep std: memory tests link only memory
            std::vector<int>* log = nullptr) {
         wake.id = id;
         wake.log = log;
@@ -104,7 +102,6 @@ TEST_CASE("waiters are granted first in, first out") {
     REQUIRE(r1);
     REQUIRE(r2);
 
-    // keep std: memory tests link only memory
     std::vector<int> log;
     log.reserve(8);
     Waiter w1(*wait, 32 * MIB, 1, &log);
@@ -113,13 +110,11 @@ TEST_CASE("waiters are granted first in, first out") {
     CHECK(w2.node->push() == Status::Pending);
 
     r1.release();
-    // keep std: memory tests link only memory
     CHECK(log == std::vector<int>{1});
     CHECK(w1.node->state() == WaitState::Granted);
     CHECK(w2.node->state() == WaitState::Waiting);
 
     r2.release();
-    // keep std: memory tests link only memory
     CHECK(log == std::vector<int>{1, 2});
     CHECK(w2.node->state() == WaitState::Granted);
     CHECK(root().reserved() == 64 * MIB);
@@ -136,9 +131,7 @@ namespace {
 
 struct PushInside {
     Wake wake;
-    // keep std: memory tests link only memory
     std::vector<ReserveWait*> nodes;
-    // keep std: memory tests link only memory
     std::vector<Status> pushed;
 };
 
@@ -157,7 +150,6 @@ TEST_CASE("pushes that land while a grant runs are granted by arrival") {
     Reservation held = PoolAccess::reserve(*h, 64 * MIB);
     REQUIRE(held);
 
-    // keep std: memory tests link only memory
     std::vector<int> log;
     log.reserve(8);
     PushInside inside;
@@ -173,10 +165,8 @@ TEST_CASE("pushes that land while a grant runs are granted by arrival") {
     CHECK(first->push() == Status::Pending);
 
     held.release();
-    // keep std: memory tests link only memory
     CHECK(inside.pushed == std::vector<Status>{Status::Pending, Status::Pending,
                                                Status::Pending});
-    // keep std: memory tests link only memory
     CHECK(log == std::vector<int>{0, 1, 2, 3});
     first->drop();
 }
@@ -192,7 +182,6 @@ TEST_CASE("the grant stops at the first waiter that does not fit") {
     REQUIRE(r1);
     REQUIRE(r2);
 
-    // keep std: memory tests link only memory
     std::vector<int> log;
     log.reserve(8);
     Waiter w1(*big, 48 * MIB, 1, &log);
@@ -206,7 +195,6 @@ TEST_CASE("the grant stops at the first waiter that does not fit") {
     CHECK(root().reserved() == 32 * MIB);
 
     r2.release();
-    // keep std: memory tests link only memory
     CHECK(log == std::vector<int>{1, 2});
     CHECK(root().reserved() == 56 * MIB);
 }
@@ -343,7 +331,6 @@ TEST_CASE("no lost wakeup when a release races a push") {
         std::atomic<bool> ready{false};
         std::atomic<bool> go{false};
         Status pushed = Status::Pending;
-        // keep std: memory tests link only memory
         std::thread pusher([&] {
             ready.store(true, std::memory_order_release);
             while (!go.load(std::memory_order_acquire)) {
@@ -369,7 +356,6 @@ TEST_CASE("many threads reserve, wait, cancel and release") {
     constexpr int THREADS = 8;
     constexpr int ROUNDS = 300;
     constexpr std::size_t SIZES[] = {4 * MIB, 8 * MIB, 16 * MIB, 24 * MIB};
-    // keep std: memory tests link only memory
     std::vector<PoolHandle> pools;
     for (int t = 0; t < THREADS; ++t) pools.push_back(root().child("t"));
 
@@ -378,7 +364,6 @@ TEST_CASE("many threads reserve, wait, cancel and release") {
     std::atomic<int> resumed{0};
     std::atomic<int> cancelled{0};
     std::atomic<int> bad{0};
-    // keep std: memory tests link only memory
     std::vector<std::thread> threads;
     for (int t = 0; t < THREADS; ++t) {
         threads.emplace_back([&, t] {
@@ -437,7 +422,6 @@ TEST_CASE("many threads reserve, wait, cancel and release") {
             }
         });
     }
-    // keep std: memory tests link only memory
     for (std::thread& th : threads) th.join();
     CHECK(bad.load() == 0);
     CHECK(self.load() + resumed.load() + cancelled.load() == waits.load());

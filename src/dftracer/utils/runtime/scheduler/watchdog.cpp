@@ -266,14 +266,13 @@ void Watchdog::trigger_timeout(dstd::StringView reason) {
 
     if (timeout_callback_) {
         // The pipeline callback, deleted later, takes a std::string.
-        timeout_callback_(std::string(reason));  // keep std: pipeline edge
+        timeout_callback_(std::string(reason));
     }
 }
 
 void Watchdog::trigger_warning(dstd::StringView task_name, int64_t elapsed_ms) {
     if (warning_callback_) {
-        warning_callback_(std::string(task_name),  // keep std: pipeline edge
-                          elapsed_ms);
+        warning_callback_(std::string(task_name), elapsed_ms);
     }
 }
 

@@ -325,8 +325,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     /// Submit a DAG task for execution. parent_task_id tracks the parent, or
     /// -1 for a root task.
     void submit_task(dstd::SharedPtr<Task> task,
-                     dstd::SharedPtr<std::any> input,  // keep std: Task API
-                     TaskOwner* owner,
+                     dstd::SharedPtr<std::any> input, TaskOwner* owner,
                      common::TaskIndex parent_task_id = -1) override;
 
     common::TaskIndex current_worker_task_id() const override;
@@ -376,10 +375,9 @@ class ThreadPoolExecutor final : public TaskExecutor {
     /// Create a Coro that executes a Task with full bookkeeping. The returned
     /// Coro is at initial_suspend: the caller must set the executor on the
     /// promise and enqueue via release().
-    coro::detail::Coro run_task(
-        dstd::SharedPtr<Task> task,
-        dstd::SharedPtr<std::any> input,  // keep std: Task API
-        TaskOwner* owner);
+    coro::detail::Coro run_task(dstd::SharedPtr<Task> task,
+                                dstd::SharedPtr<std::any> input,
+                                TaskOwner* owner);
 
     /// The completion hook a tracked coro's promise calls.
     static void on_tracked_task_complete(void* owner,

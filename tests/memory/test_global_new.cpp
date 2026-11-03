@@ -115,17 +115,13 @@ void find_at_peak(void* context, const detail::DebugSiteTotal& total) noexcept {
 }  // namespace
 
 TEST_SUITE("GlobalNew") {
-    // keep std: memory tests link only memory
     TEST_CASE("a std::vector is served and counted by the heap") {
         check_served(1000 * sizeof(int),
-                     // keep std: memory tests link only memory
                      [] { return std::make_unique<std::vector<int>>(1000); });
     }
 
-    // keep std: memory tests link only memory
     TEST_CASE("a std::string past the small string size is counted") {
         check_served(200, [] {
-            // keep std: memory tests link only memory
             return std::make_unique<std::string>(std::string(200, 'x'));
         });
     }
@@ -176,7 +172,6 @@ TEST_SUITE("GlobalNew") {
     TEST_CASE("global new bytes are not counted again as external bytes") {
         const std::size_t external = Manager::get().stats().external;
         const std::size_t base = live();
-        // keep std: memory tests link only memory
         auto block = std::make_unique<std::vector<char>>(BIG_BYTES);
         CHECK(live() >= base + BIG_BYTES);
         CHECK(Manager::get().stats().external == external);

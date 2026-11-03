@@ -27,7 +27,6 @@ bool aligned(const void* p, std::size_t align) {
 struct ReleaseLog {
     int calls = 0;
     void* context = nullptr;
-    // keep std: memory tests link only memory
     std::thread::id thread;
 };
 
@@ -120,7 +119,6 @@ TEST_CASE("assigning over the last reference frees the old block") {
 
 TEST_CASE("a borrowed block calls its release once with its context") {
     g_log = {};
-    // keep std: memory tests link only memory
     std::vector<std::uint8_t> foreign(MIB, 7);
     int context = 0;
     PoolHandle pool = root().child("borrowed");
@@ -210,7 +208,6 @@ TEST_CASE("a block dropped last on another thread is freed") {
         }
         BlockRef copy = block;
         block.reset();
-        // keep std: memory tests link only memory
         std::thread([ref = std::move(copy)]() mutable { ref.reset(); }).join();
         CHECK(pool->live() == 0);
         CHECK(pool->blocks() == 0);
@@ -229,9 +226,7 @@ TEST_CASE("a borrowed block released on another thread runs release there") {
         block =
             Block::borrow(foreign, sizeof(foreign), record_release, &context);
     }
-    // keep std: memory tests link only memory
     std::thread::id other;
-    // keep std: memory tests link only memory
     std::thread th([view = BufferView(std::move(block))]() mutable {
         view = BufferView();
     });
@@ -270,7 +265,6 @@ TEST_CASE("an owned block is charged its whole allocation") {
         BlockRef copy = block;
         block.reset();
         CHECK(pool->live() == expected);
-        // keep std: memory tests link only memory
         std::thread([ref = std::move(copy)]() mutable { ref.reset(); }).join();
         CHECK(pool->live() == 0);
         CHECK(pool->blocks() == 0);

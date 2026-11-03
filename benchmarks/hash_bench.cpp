@@ -15,7 +15,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-// keep std: the old dstd::StringHash went through this vendored hash
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <algorithm>
@@ -38,7 +37,6 @@ constexpr int DEFAULT_REPS = 7;
 
 struct Wyhash {
     std::uint64_t operator()(dstd::StringView s) const {
-        // keep std: the old dstd::StringHash went through this vendored hash
         return ankerl::unordered_dense::hash<dstd::StringView>{}(s);
     }
 };

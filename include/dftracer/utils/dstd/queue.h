@@ -11,12 +11,10 @@
 namespace dftracer::utils::dstd {
 
 template <class T>
-// keep std: defines dstd::Queue
 using Queue = std::queue<T, Deque<T>>;
 
 /// The largest element by `Compare` is on top, as in std::priority_queue.
 template <class T, class Compare = std::less<T>>
-// keep std: defines dstd::Queue
 using PriorityQueue = std::priority_queue<T, Vector<T>, Compare>;
 
 }  // namespace dftracer::utils::dstd

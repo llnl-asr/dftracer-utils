@@ -20,7 +20,6 @@ namespace {
 constexpr std::size_t MIB = std::size_t{1} << 20;
 constexpr const char* PREFIX = "dftracer-utils memory: peak=";
 
-// keep std: fresh_process::Result holds a std::string
 bool read_peak(const std::string& output, std::size_t& peak) {
     std::size_t at = output.find(PREFIX);
     if (at == output.npos) return false;

@@ -7,7 +7,6 @@
 namespace dftracer::utils::dstd {
 
 template <class... Ts>
-// keep std: defines dstd::Tuple
 using Tuple = std::tuple<Ts...>;
 
 }  // namespace dftracer::utils::dstd

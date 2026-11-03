@@ -326,9 +326,7 @@ TEST_CASE("Task - tap() for logging without transformation") {
         make_task([](CoroScope&) -> CoroTask<int> { co_return 123; }, "Source");
 
     auto task2 = task1->tap(
-        // keep std: the Task API passes std::any
         [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
-            // keep std: the Task API passes std::any
             int value = std::any_cast<int>(input);
             log.push_back(value);
             co_return;
@@ -361,9 +359,7 @@ TEST_CASE("Task - Complex chaining with tap and then") {
     auto pipeline_task =
         task1
             ->tap(
-                // keep std: the Task API passes std::any
                 [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
-                    // keep std: the Task API passes std::any
                     int val = std::any_cast<int>(input);
                     log.push_back("tap1: " + dstd::to_string(val));
                     co_return;
@@ -372,9 +368,7 @@ TEST_CASE("Task - Complex chaining with tap and then") {
             ->then([](CoroScope&, int x) -> CoroTask<int> { co_return x + 7; },
                    "Add7")
             ->tap(
-                // keep std: the Task API passes std::any
                 [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
-                    // keep std: the Task API passes std::any
                     int val = std::any_cast<int>(input);
                     log.push_back("tap2: " + dstd::to_string(val));
                     co_return;
@@ -383,9 +377,7 @@ TEST_CASE("Task - Complex chaining with tap and then") {
             ->then([](CoroScope&, int x) -> CoroTask<int> { co_return x * 10; },
                    "Multiply10")
             ->tap(
-                // keep std: the Task API passes std::any
                 [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
-                    // keep std: the Task API passes std::any
                     int val = std::any_cast<int>(input);
                     log.push_back("tap3: " + dstd::to_string(val));
                     co_return;
@@ -690,11 +682,8 @@ TEST_CASE("Task - operator& parallel composition") {
     auto output = pipeline.execute();
 
     // Combined result is a tuple wrapped in std::any
-    // keep std: the Task API passes std::any
     auto result = combined->get<dstd::Tuple<std::any, std::any>>();
-    // keep std: the Task API passes std::any
     int val1 = std::any_cast<int>(std::get<0>(result));
-    // keep std: the Task API passes std::any
     int val2 = std::any_cast<int>(std::get<1>(result));
 
     CHECK(val1 == 20);

@@ -1114,7 +1114,6 @@ int main(int argc, char** argv) {
                 final_task = verify_task;
             }
 
-            // keep std: Pipeline::set_source takes std::vector
             pipeline.set_source(std::vector<dstd::SharedPtr<Task>>(
                 rank_tasks.begin(), rank_tasks.end()));
             pipeline.set_destination(final_task);

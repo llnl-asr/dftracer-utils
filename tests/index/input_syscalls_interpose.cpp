@@ -36,9 +36,7 @@ std::mutex& counts_mutex() {
     return *m;
 }
 
-// keep std: the interposer library links no dstd
 std::map<std::pair<int, std::string>, unsigned long>& counts() {
-    // keep std: the interposer library links no dstd
     static auto* c = new std::map<std::pair<int, std::string>, unsigned long>();
     return *c;
 }
@@ -50,7 +48,6 @@ void record(CallClass cls, const char* path) {
     t_in_hook = true;
     {
         std::lock_guard<std::mutex> lock(counts_mutex());
-        // keep std: the interposer library links no dstd
         ++counts()[{static_cast<int>(cls), std::string(path)}];
     }
 #ifdef __linux__

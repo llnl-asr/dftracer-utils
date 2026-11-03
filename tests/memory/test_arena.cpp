@@ -39,7 +39,6 @@ struct HardCap {
     ~HardCap() { configure(Config{}); }
 };
 
-// keep std: memory tests link only memory
 std::vector<int> g_destroyed;
 
 struct Tracked {
@@ -75,7 +74,6 @@ TEST_CASE("allocations bump through a chunk and keep their alignment") {
 
 TEST_CASE("chunks grow from 64 KiB to 4 MiB and then stay at 4 MiB") {
     Arena arena{root(), "growth"};
-    // keep std: memory tests link only memory
     std::vector<std::size_t> sizes;
     std::size_t held = 0;
     while (sizes.size() < 9) {
@@ -87,7 +85,6 @@ TEST_CASE("chunks grow from 64 KiB to 4 MiB and then stay at 4 MiB") {
             CHECK(arena.pool().blocks() == sizes.size());
         }
     }
-    // keep std: memory tests link only memory
     const std::vector<std::size_t> expected = {64 * KIB,  128 * KIB, 256 * KIB,
                                                512 * KIB, 1 * MIB,   2 * MIB,
                                                4 * MIB,   4 * MIB,   4 * MIB};
@@ -167,18 +164,15 @@ TEST_CASE("the destructor list runs newest first, once per object") {
         CHECK(*plain == 42);
         CHECK(g_destroyed.empty());
         arena.reset();
-        // keep std: memory tests link only memory
         CHECK(g_destroyed == std::vector<int>{4, 3, 2, 1, 0});
 
         arena.make_destroyed<Tracked>(10);
         arena.make_destroyed<Tracked>(11);
         arena.release();
-        // keep std: memory tests link only memory
         CHECK(g_destroyed == std::vector<int>{4, 3, 2, 1, 0, 11, 10});
 
         arena.make_destroyed<Tracked>(20);
     }
-    // keep std: memory tests link only memory
     CHECK(g_destroyed == std::vector<int>{4, 3, 2, 1, 0, 11, 10, 20});
 }
 
@@ -194,7 +188,6 @@ TEST_CASE("an object a destructor puts on the list is destroyed too") {
     arena.make_destroyed<Tracked>(1);
     arena.make_destroyed<Spawner>(arena);
     arena.reset();
-    // keep std: memory tests link only memory
     CHECK(g_destroyed == std::vector<int>{1, 99});
 }
 
@@ -230,7 +223,6 @@ TEST_CASE("a vector with ArenaAllocator takes its storage from the arena") {
     Arena arena{root(), "vector"};
     Arena other{root(), "other"};
     {
-        // keep std: memory tests link only memory
         std::vector<int, ArenaAllocator<int>> v{ArenaAllocator<int>{arena}};
         for (int i = 0; i < 10000; ++i) v.push_back(i);
         bool intact = true;

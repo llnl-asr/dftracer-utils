@@ -370,9 +370,7 @@ void overlay_selector(const YAML::Node& root, const char* key,
                       EventSelector& sel) {
     const auto node = root[key];
     if (!node || !node.IsMap()) return;
-    // keep std: yaml-cpp converts to std::string
     if (const auto cat = node["cat"]) sel.cat = cat.as<std::string>();
-    // keep std: yaml-cpp converts to std::string
     if (const auto name = node["name"]) sel.name = name.as<std::string>();
 }
 
@@ -381,8 +379,7 @@ void overlay_selector(const YAML::Node& root, const char* key,
 void load_event_map(dstd::StringView path, TraceLoaderOptions& options) {
     YAML::Node root;
     try {
-        root = YAML::LoadFile(
-            std::string(path));  // keep std: yaml-cpp uses std::string
+        root = YAML::LoadFile(std::string(path));
     } catch (const YAML::Exception& e) {
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,

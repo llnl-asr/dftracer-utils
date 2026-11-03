@@ -185,7 +185,6 @@ class AggState;  // opaque, mergeable partial group state (defined in agg.cpp)
 struct AggStateDeleter {
     void operator()(AggState* p) const noexcept;
 };
-// keep std: dstd::UniquePtr takes no custom deleter, AggState is incomplete
 using AggStatePtr = std::unique_ptr<AggState, AggStateDeleter>;
 
 /// A fresh partial for `specs`, grouping by N key columns. `dyn` (optional)

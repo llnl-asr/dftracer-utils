@@ -28,7 +28,6 @@ dstd::Path in(const dftu_utils_test::ScopedTestDir& dir,
 }
 
 dstd::String read_text(const dstd::Path& path) {
-    // keep std: independent of dstd::fs::read_file
     std::ifstream stream(path.c_str(), std::ios::binary);
     return dstd::String(std::istreambuf_iterator<char>(stream),
                         std::istreambuf_iterator<char>());

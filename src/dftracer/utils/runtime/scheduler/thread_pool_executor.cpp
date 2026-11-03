@@ -972,10 +972,9 @@ TaskProgress ThreadPoolExecutor::build_task_progress_tree(
 // Phase 3: Coro-based task execution
 // ============================================================================
 
-coro::detail::Coro ThreadPoolExecutor::run_task(
-    dstd::SharedPtr<Task> task,
-    dstd::SharedPtr<std::any> input,  // keep std: as the Task API wants
-    TaskOwner* owner) {
+coro::detail::Coro ThreadPoolExecutor::run_task(dstd::SharedPtr<Task> task,
+                                                dstd::SharedPtr<std::any> input,
+                                                TaskOwner* owner) {
     // Get worker context from TLS (set by worker_thread at start).
     auto* context = static_cast<WorkerContext*>(get_current_worker_context());
 
@@ -1041,7 +1040,6 @@ coro::detail::Coro ThreadPoolExecutor::run_task(
                     // PromiseBase), so the normal PromiseBase propagation in
                     // CoroTask::await_suspend doesn't fire.
                     coro_task.handle().promise().set_executor(this);
-                    // keep std: Task API
                     std::any result = co_await std::move(coro_task);
 
                     task->set_result(std::move(result));
@@ -1157,10 +1155,10 @@ coro::detail::Coro ThreadPoolExecutor::run_task(
     co_return;
 }
 
-void ThreadPoolExecutor::submit_task(
-    dstd::SharedPtr<Task> task,
-    dstd::SharedPtr<std::any> input,  // keep std: as the Task API wants
-    TaskOwner* owner, common::TaskIndex parent_task_id) {
+void ThreadPoolExecutor::submit_task(dstd::SharedPtr<Task> task,
+                                     dstd::SharedPtr<std::any> input,
+                                     TaskOwner* owner,
+                                     common::TaskIndex parent_task_id) {
     // Register in task registry
     {
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);

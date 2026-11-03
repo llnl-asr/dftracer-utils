@@ -192,10 +192,9 @@ class TaskExecutor : public coro::Executor {
     /// worker that ends it, so `owner` must outlive the task. A task whose
     /// owner is stopping before it starts does not run. It ends with an
     /// Interrupted error, as does a queued task that shutdown() destroys.
-    virtual void submit_task(
-        dstd::SharedPtr<Task> task,
-        dstd::SharedPtr<std::any> input,  // keep std: as the Task API wants
-        TaskOwner* owner, common::TaskIndex parent_task_id = -1) = 0;
+    virtual void submit_task(dstd::SharedPtr<Task> task,
+                             dstd::SharedPtr<std::any> input, TaskOwner* owner,
+                             common::TaskIndex parent_task_id = -1) = 0;
     virtual common::TaskIndex enqueue_tracked(
         coro::detail::Coro coro, dstd::StringView name,
         dstd::SharedPtr<std::atomic<common::TaskIndex>> tid_out = nullptr) = 0;

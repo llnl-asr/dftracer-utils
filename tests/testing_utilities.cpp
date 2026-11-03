@@ -35,7 +35,7 @@ namespace {
 // the memory exit check.
 struct RememberedPaths {
     std::mutex mutex;
-    std::vector<std::string> paths;  // keep std: outlives the exit check
+    std::vector<std::string> paths;
     pid_t owner = ::getpid();
 };
 

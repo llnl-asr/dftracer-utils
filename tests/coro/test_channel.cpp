@@ -1180,7 +1180,6 @@ TEST_CASE("Channel - Multiple producers, multiple consumers (blocking)") {
     Pipeline pipeline(config);
 
     // Combine all producers and consumers as source tasks
-    // keep std: Pipeline::set_source takes a std::vector
     std::vector<dstd::SharedPtr<Task>> all_tasks;
     all_tasks.insert(all_tasks.end(), producers.begin(), producers.end());
     all_tasks.insert(all_tasks.end(), consumers.begin(), consumers.end());
@@ -1258,7 +1257,6 @@ TEST_CASE(
     Pipeline pipeline(config);
 
     // Combine all producers and consumers as source tasks
-    // keep std: Pipeline::set_source takes a std::vector
     std::vector<dstd::SharedPtr<Task>> all_tasks;
     all_tasks.insert(all_tasks.end(), producers.begin(), producers.end());
     all_tasks.insert(all_tasks.end(), consumers.begin(), consumers.end());

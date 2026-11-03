@@ -141,7 +141,6 @@ double elapsed_ns(Clock::time_point start, Clock::time_point end) {
 
 template <class A>
 Outcome small_case(std::size_t size, bool lifo, const Scale &scale) {
-    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<void *> blocks(scale.batch);
     auto start = Clock::now();
     for (std::size_t rep = 0; rep < scale.reps; ++rep) {
@@ -168,7 +167,6 @@ template <class A>
 Outcome medium_free_case(const Scale &scale) {
     double total_ns = 0;
     std::size_t frees = 0;
-    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<void *> blocks(scale.medium_count);
     for (int rep = 0; rep < 8; ++rep) {
         for (auto &b : blocks) {
@@ -226,11 +224,9 @@ void consume(Ring &ring, std::size_t blocks) {
 
 template <class A>
 Outcome cross_case(std::size_t pairs, const Scale &scale) {
-    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<Ring> rings(pairs);
     std::atomic<std::size_t> ready{0};
     std::atomic<bool> go{false};
-    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<std::thread> threads;
     auto body = [&](bool producer, std::size_t pair) {
         ready.fetch_add(1);
@@ -259,10 +255,8 @@ struct Step {
     std::uint32_t size;
 };
 
-// keep std: scaffolding must not allocate from the heap under measurement
 std::vector<Step> mixed_trace(const Scale &scale) {
     std::mt19937_64 rng(SEED);
-    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<Step> trace;
     trace.reserve(scale.mixed_steps);
     for (std::size_t i = 0; i < scale.mixed_steps; ++i) {
@@ -285,11 +279,8 @@ std::vector<Step> mixed_trace(const Scale &scale) {
 
 template <class A>
 Outcome mixed_case(const Scale &scale) {
-    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<Step> trace = mixed_trace(scale);
-    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<void *> live(scale.mixed_slots, nullptr);
-    // keep std: scaffolding must not allocate from the heap under measurement
     std::vector<std::uint32_t> sizes(scale.mixed_slots, 0);
     auto start = Clock::now();
     for (const Step &step : trace) {

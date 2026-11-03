@@ -86,14 +86,12 @@ constexpr uint32_t BUILTIN_COUNT =
 // Host ops register during static initialization, before the executable's
 // memory exit check, so this registry stays on std types the check cannot see.
 struct UserOp {
-    // keep std: registered at static init, before the exit check
     std::string name;
     dftu_op_desc desc;
 };
 
 struct UserOps {
     std::mutex mutex;
-    // keep std: registered at static init, before the exit check
     std::vector<std::unique_ptr<UserOp>> ops;
 };
 
@@ -101,7 +99,6 @@ std::mutex& reg_mutex() {
     return dftracer::utils::dstd::Singleton<UserOps>::get().mutex;
 }
 
-// keep std: registered at static init, before the exit check
 std::vector<std::unique_ptr<UserOp>>& user_ops() {
     return dftracer::utils::dstd::Singleton<UserOps>::get().ops;
 }
@@ -332,8 +329,7 @@ int dftu_op_register(const dftu_op_desc* desc) {
     if (!desc || !desc->name) return 1;
     std::lock_guard<std::mutex> lock(reg_mutex());
     if (find_locked(desc->name)) return 1;  // no silent shadowing
-    auto rec =
-        std::make_unique<UserOp>();  // keep std: registered at static init
+    auto rec = std::make_unique<UserOp>();
     rec->name = desc->name;
     rec->desc = *desc;
     rec->desc.name = rec->name.c_str();

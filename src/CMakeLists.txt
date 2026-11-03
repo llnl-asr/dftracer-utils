@@ -257,6 +257,9 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_source.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_plan_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_duql.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_duql_analyze.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_duql_sides.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_duql_sources.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_aggregate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_agg_engine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_agg_partials.cpp

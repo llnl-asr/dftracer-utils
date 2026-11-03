@@ -160,42 +160,7 @@ incrementally or off a set of values.
    double p99 = sketch.quantile(0.99);   // NaN on an empty sketch
    // sketch.merge(other), sketch.bins(), sketch.serialize()
 
-``DistinctSketch`` (``BasicDistinctSketch<Precision=13>``) - a mergeable
-HyperLogLog distinct-count sketch with the sparse form and 64-bit hash of
-Heule, Nunkesser and Hall (EDBT 2013) and linear counting in place of the
-HyperLogLog++ empirical bias correction, for counting a dimension left out of a
-grouping key without keeping every value:
-
-.. code-block:: cpp
-
-   #include <dftracer/utils/dataframe/distinct_sketch.h>
-
-   using namespace dftracer::utils::dataframe;
-
-   DistinctSketch sketch;              // 8192 registers, ~1.15% std error dense
-   for (auto h : file_hashes) sketch.add_hash(h);   // pre-hashed (fhash/hhash)
-   sketch.add("libc.so");              // or hash a raw string
-   std::uint64_t distinct = sketch.estimate();
-   // sketch.merge_from(other)
-
-It stays sparse (and exact) below ``REGISTERS / 4`` distinct values, then
-promotes to a dense register array; two sketches only merge at the same
-``Precision``.
-
-``Log2Histogram`` - fixed power-of-two bins with an ASCII/block renderer:
-
-.. code-block:: cpp
-
-   #include <dftracer/utils/dataframe/log2_histogram.h>
-
-   using namespace dftracer::utils::dataframe;
-
-   Log2Histogram hist;
-   hist.add(size_bytes);
-   double p90 = hist.approx_percentile(0.90);
-   std::string chart = hist.render_ascii(40, "bytes");
-
-These are C++ / native primitives. Python exposes the aggregate-level percentiles
+This is a C++ / native primitive. Python exposes the aggregate-level percentiles
 and ``Series`` reducers above rather than the sketch objects; for a fitted
 distribution from Python, collect the values and fit them with SciPy.
 

@@ -150,9 +150,7 @@ spill instead of scaling threads further:
 
 Check a footprint before committing to a run with ``memory_budget_advice`` -
 it tells you whether a required byte footprint fits and how many nodes to
-spread it across if not. Full detail, including the C++-only
-``compute_memory_budget``/``estimate_per_file_bytes`` helpers:
-:doc:`../runtime/memory-budget`.
+spread it across if not. See :doc:`../runtime/memory-budget` for the full detail.
 
 5. When to materialize instead of re-scanning
 ----------------------------------------------------

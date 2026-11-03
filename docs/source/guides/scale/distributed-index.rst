@@ -97,8 +97,7 @@ when ``index_path`` is empty or neither ``directory`` nor
 The build runs in four steps.
 
 1. Each worker builds its files as a complete index root at
-   ``<index_path>/shards/<worker>``, staging the build on node-local disk with
-   the scratch helpers in ``dftracer/utils/common/scratch.h`` when
+   ``<index_path>/shards/<worker>``, staging the build on node-local disk when
    ``<index_path>`` is a network filesystem,
    and falling back to building in place when there is no node-local scratch.
 2. The coordinator writes ``<index_path>/shards.json`` once every task

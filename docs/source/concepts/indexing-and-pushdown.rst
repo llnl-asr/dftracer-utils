@@ -41,7 +41,7 @@ duration, and the type each field reads as. Two are built in. ``dftracer``
 requires ``ph`` and ``name`` and keeps the tuned dftracer event decoder.
 ``generic`` declares nothing: its records are decoded to every scalar leaf
 by exact path, so any NDJSON can be indexed. Other formats extend one of
-them in a spec file, a Python class or a C++ class, so a new format needs no
+them in a spec file or a Python class, so a new format needs no
 decoder code; its records decode as its parent's do, with each declared
 field converted to its type and the role fields giving the time, duration
 and lane that trace operations read.

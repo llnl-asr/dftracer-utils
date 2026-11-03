@@ -135,49 +135,22 @@ memory (auto-detected and cgroup-aware when you pass ``0`` or omit it). It
 returns whether the footprint fits, the peak it expects, and how many nodes
 would spread that peak under the available limit.
 
-.. tab-set::
+.. code-block:: python
 
-   .. tab-item:: C++
+   from dftracer.utils.dftracer_utils_ext import memory_budget_advice
 
-      .. code-block:: cpp
-
-         #include <dftracer/utils/common/memory_budget.h>
-         using namespace dftracer::utils;
-
-         MemoryBudgetAdvice advice =
-             memory_budget_advice(/*required_bytes=*/40ull * 1024 * 1024 * 1024);
-
-         if (!advice.fits) {
-             std::cerr << format_memory_budget_warning(advice) << '\n';
-             // advice.suggested_nodes: nodes to spread the peak under available
-         }
-
-   .. tab-item:: Python
-
-      .. code-block:: python
-
-         from dftracer.utils.dftracer_utils_ext import memory_budget_advice
-
-         advice = memory_budget_advice(required_bytes=40 * 1024**3)
-         # dict: fits, required_bytes, peak_bytes, available_bytes,
-         #       suggested_nodes, warning
-         if not advice["fits"]:
-             print(advice["warning"])
-             print("spread across", advice["suggested_nodes"], "nodes")
+   advice = memory_budget_advice(required_bytes=40 * 1024**3)
+   # dict: fits, required_bytes, peak_bytes, available_bytes,
+   #       suggested_nodes, warning
+   if not advice["fits"]:
+       print(advice["warning"])
+       print("spread across", advice["suggested_nodes"], "nodes")
 
 The returned advice carries ``fits`` (peak within available), ``required_bytes``
 (what you passed), ``peak_bytes`` (required times a peak factor),
-``available_bytes`` (what it judged against), and ``suggested_nodes``. The C++
-struct is ``MemoryBudgetAdvice``; the Python function returns the same fields as
-a dict plus a ``warning`` string (empty when it fits).
-
-.. note::
-
-   ``compute_memory_budget`` and ``estimate_per_file_bytes`` (same C++ header)
-   compute a budget and a per-file estimate from a list of file sizes. They are
-   C++-only; the viewer calls ``compute_memory_budget`` internally to pick a
-   default. Only ``memory_budget_advice`` is exposed as a standalone Python
-   function.
+``available_bytes`` (what it judged against), and ``suggested_nodes``. The Python
+function returns these fields as a dict plus a ``warning`` string (empty when it
+fits).
 
 What the budget counts
 ----------------------

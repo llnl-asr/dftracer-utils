@@ -23,7 +23,6 @@ set(_dirs
     src/dftracer/utils/coro
     include/dftracer/utils/runtime
     src/dftracer/utils/runtime
-    include/dftracer/utils/store
     src/dftracer/utils/store
     include/dftracer/utils/json
     src/dftracer/utils/json

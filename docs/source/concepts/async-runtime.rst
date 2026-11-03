@@ -56,7 +56,7 @@ by default:
 - ``scope.spawn(...)`` launches a child coroutine and returns a
   ``SpawnFuture<T>`` - ignore it for fire-and-forget, or ``co_await`` it to
   join that specific child.
-- ``dftracer::utils::io::read``/``write``/``open``/``close`` (``runtime/io/ops.h``)
+- ``dftracer::utils::io::read``/``write``/``open``/``close``
   are the async I/O surface: free functions that submit to the executor's io
   backend and suspend, rather than blocking. They need no ``CoroScope``
   argument - inside an executor worker they suspend on the configured

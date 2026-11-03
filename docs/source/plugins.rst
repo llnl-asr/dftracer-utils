@@ -841,8 +841,6 @@ A host utility is reached as a named op instead
 (``Host::run_op("dftu.hash.fnv1a", {column})``, ``DFTU_SVC_OPS``). Every
 ``dftu_svc_coro`` combinator has an SDK method (``spawn`` / ``then`` / ``all``
 / ``any`` / ``run_blocking``), so async composition needs no raw ABI.
-See :doc:`guides/plugins/compose-ops` for composing reusable typed ops inside a
-plugin.
 
 10. duql filters against events (DFTU_SVC_DUQL)
 -----------------------------------------------
@@ -1285,9 +1283,6 @@ that covers it:
    * - ``Host::io()`` (typed ``Io``)
      - ``DFTU_SVC_IO``
      - `9. Async work and I/O`_
-   * - typed compose ops (``dftracer::utils::plugins::make_op`` / ``run``)
-     - ``DFTU_SVC_COMPOSE``
-     - :doc:`guides/plugins/compose-ops`
    * - ``Host::duql_compile`` / ``duql_matches``
      - ``DFTU_SVC_DUQL``
      - `10. duql filters against events (DFTU_SVC_DUQL)`_

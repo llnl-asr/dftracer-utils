@@ -1,4 +1,4 @@
-:description: Write a small reusable async transform and pipe it with | && ||, either as a core C++ callable or as a plugin op against the C ABI.
+:description: Write a small reusable async transform and pipe it with | && ||, either as a core C++ callable or as a Python op.
 
 Author a compose op
 =====================
@@ -7,8 +7,7 @@ Author a compose op
    :class: goal
 
    Write a small, reusable async transform and pipe it with others, either
-   inside the core library (a plain C++ callable) or from a plugin working
-   against the stable C ABI (a typed, trivially-copyable value transform). This
+   inside the core library (a plain C++ callable) or in Python (``@jit.op``). This
    is the how-to for the model :doc:`../../concepts/compose` explains; read that
    first for why the model looks like this.
 
@@ -38,68 +37,10 @@ submit it straight to a :doc:`Runtime <../../concepts/async-runtime>` -
 :doc:`../../concepts/compose` for ``&&``/``||`` and the scope-injection
 pattern for an op that needs a ``CoroScope``.
 
-In a plugin: a typed Op over the C ABI
----------------------------------------------
+In a plugin: a host op
+-----------------------
 
-A plugin cannot pass a C++ lambda across the shared-library boundary, so
-``include/dftracer/utils/plugins/compose.h`` gives plugin authors a
-compile-time-typed ``Op<In, Out>`` instead: values cross as bytes (``In`` and
-``Out`` must be trivially copyable), and a mismatched pipe is a compile
-error rather than a runtime null.
-
-Build a leaf with ``make_op``, giving it a host (from your plugin's ``Host h``)
-and a plain ``Out(const In&)`` callable:
-
-.. code-block:: cpp
-
-   #include <dftracer/utils/plugins/compose.h>
-
-   dftracer::utils::plugins::Op<std::int64_t, std::int64_t> a =
-       dftracer::utils::plugins::make_op<std::int64_t, std::int64_t>(
-           h, [](std::int64_t x) { return x * 2; });
-   dftracer::utils::plugins::Op<std::int64_t, std::int64_t> b =
-       dftracer::utils::plugins::make_op<std::int64_t, std::int64_t>(
-           h, [](std::int64_t x) { return x + 10; });
-
-Pipe with ``|`` - it type-checks that the middle type chains - and run it with
-``dftracer::utils::plugins::run``, which returns a ``Composed`` you ``co_await``:
-
-.. code-block:: cpp
-
-   std::int64_t in = 5, out = 0;
-   int rc = -1;
-   co_await dftracer::utils::plugins::run(a | b, in, out, rc);
-   // out == 20, rc == 0 on success
-
-``run`` needs a coroutine to suspend in, so call it from a slice's async
-finalize hook (``Task on_finalize(Host h)``, detected automatically by
-``make_plugin<Slice>`` when your slice defines it):
-
-.. code-block:: cpp
-
-   struct MySlice {
-       explicit MySlice(const dftracer::utils::plugins::Config&) {}
-       void step(const dftracer::utils::plugins::Batch&, dftracer::utils::plugins::Host) {}
-       void merge(MySlice&) {}
-
-       dftracer::utils::plugins::Task on_finalize(dftracer::utils::plugins::Host h) {
-           auto a = dftracer::utils::plugins::make_op<std::int64_t, std::int64_t>(
-               h, [](std::int64_t x) { return x * 2; });
-           auto b = dftracer::utils::plugins::make_op<std::int64_t, std::int64_t>(
-               h, [](std::int64_t x) { return x + 10; });
-           std::int64_t in = 5, out = 0;
-           int rc = -1;
-           co_await dftracer::utils::plugins::run(a | b, in, out, rc);
-           h.log(DFTU_LOG_INFO, ("result=" + std::to_string(out)).c_str());
-       }
-   };
-
-   extern "C" DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
-       (void)h;
-       return dftracer::utils::plugins::make_plugin<MySlice>(config);
-   }
-
-A host-provided utility is a named op instead: run it through
+A host-provided utility is a named op: run it through
 ``DFTU_SVC_OPS`` (``Host::run_op("dftu.hash.fnv1a", {column})``) on a column the
 plugin already holds. See :doc:`../../plugins` for the plugin lifecycle.
 
@@ -107,8 +48,7 @@ In Python: ``@jit.op``
 ------------------------
 
 ``jit.op`` (``dftracer.utils.jit``) turns a single-argument, single-expression
-Python function into the same ``In -> Out`` compose leaf, mirroring the C++
-typed ``Op<In, Out>``. The body must be one ``return`` of arithmetic on the
+Python function into the ``In -> Out`` compose leaf. The body must be one ``return`` of arithmetic on the
 argument; anything else raises ``JitOpError`` at decoration time.
 
 .. code-block:: python

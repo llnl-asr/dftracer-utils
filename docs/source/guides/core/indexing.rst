@@ -410,8 +410,8 @@ Describe your own record format
 A record schema declares the typed fields of a format: the fields a record
 must hold (detection), the fields that play the time, duration and entity
 roles (trace operations), and the fields indexed past the path budget.
-Declare it as a YAML or JSON file, a Python class or a C++ class; all three
-give the same schema (see :doc:`../../reference/record-schema`):
+Declare it as a YAML or JSON file or as a Python class.
+Both give the same schema (see :doc:`../../reference/record-schema`):
 
 .. tab-set::
 
@@ -450,28 +450,6 @@ give the same schema (see :doc:`../../reference/record-schema`):
              tags: Optional[Json]
 
       The class registers the schema when Python defines it.
-
-   .. tab-item:: C++
-
-      .. code-block:: cpp
-
-         #include <dftracer/utils/index/schema_class.h>
-
-         namespace ix = dftracer::utils::index;
-
-         struct AccessLog {
-             static constexpr std::string_view id = "access_log";
-             ix::Field<std::string, "remote_addr"> remote_addr;
-             ix::Field<std::int64_t, "status"> status;
-             ix::Field<std::int64_t, "ts_ms", ix::TimeRole<ix::TimeUnit::Ms>>
-                 ts_ms;
-             ix::Field<double, "request_time",
-                       ix::DurationRole<ix::TimeUnit::S>> request_time;
-             ix::Field<std::string, "upstream", ix::AlwaysIndex> upstream;
-             ix::Field<std::optional<ix::Json>, "tags"> tags;
-         };
-
-         ix::register_schema<AccessLog>("myapp");
 
 List a path, such as a unique blob, under ``index: {never_index: [...]}`` to keep it out of the index while queries still read it.
 

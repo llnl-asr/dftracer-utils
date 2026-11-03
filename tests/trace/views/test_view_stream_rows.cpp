@@ -4,7 +4,9 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -97,8 +99,8 @@ std::string create_args_trace(TestEnvironment& env, const std::string& name,
 
 std::set<std::string> arg_columns(const dataframe::DataFrame& df) {
     std::set<std::string> out;
-    for (const std::string& n : df.names)
-        if (n.rfind("args.", 0) == 0) out.insert(n);
+    for (const dstd::String& n : df.names)
+        if (n.rfind("args.", 0) == 0) out.insert(std::string(n));
     return out;
 }
 
@@ -174,7 +176,8 @@ TEST_SUITE("trace scan - streaming row query") {
         dataframe::Schema declared = ViewSource(plan_b).schema();
         std::set<std::string> declared_args;
         for (const auto& f : declared.fields)
-            if (f.name.rfind("args.", 0) == 0) declared_args.insert(f.name);
+            if (f.name.rfind("args.", 0) == 0)
+                declared_args.insert(std::string(f.name));
         CHECK(declared_args == only_b);
     }
 
@@ -365,7 +368,7 @@ TEST_SUITE("trace scan - streaming row query") {
             scan::from_file(dstd::String(s.gz), dstd::String(s.idx));
         auto src = std::make_shared<ViewSource>(v);
 
-        const std::vector<std::string> names = src->names();
+        const dstd::Vector<dstd::String> names = src->names();
         int di = -1;
         for (int i = 0; i < static_cast<int>(names.size()); ++i)
             if (names[i] == "dur") di = i;
@@ -401,7 +404,7 @@ TEST_SUITE("trace scan - streaming row query") {
             scan::from_file(dstd::String(s.gz), dstd::String(s.idx));
         auto src = std::make_shared<ViewSource>(v);
 
-        const std::vector<std::string> names = src->names();
+        const dstd::Vector<dstd::String> names = src->names();
         int di = -1;
         for (int i = 0; i < static_cast<int>(names.size()); ++i)
             if (names[i] == "dur") di = i;
@@ -435,7 +438,7 @@ TEST_SUITE("trace scan - streaming row query") {
             scan::from_file(dstd::String(s.gz), dstd::String(s.idx));
         auto src = std::make_shared<ViewSource>(v);
 
-        const std::vector<std::string> names = src->names();
+        const dstd::Vector<dstd::String> names = src->names();
         int ni = -1;
         for (int i = 0; i < static_cast<int>(names.size()); ++i)
             if (names[i] == "name") ni = i;
@@ -514,7 +517,7 @@ TEST_SUITE("trace scan - streaming row query") {
             scan::from_file(dstd::String(s.gz), dstd::String(s.idx));
         auto src = std::make_shared<ViewSource>(v);
 
-        const std::vector<std::string> names = src->names();
+        const dstd::Vector<dstd::String> names = src->names();
         int di = -1, ti = -1;
         for (int i = 0; i < static_cast<int>(names.size()); ++i) {
             if (names[i] == "dur") di = i;

@@ -5,14 +5,12 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/hash/hash.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <string>
-#include <string_view>
 #include <type_traits>
-#include <vector>
 
 namespace dftracer::utils::dataframe::detail {
 
@@ -41,9 +39,9 @@ class Fingerprint {
         bytes(s.data(), s.size());
     }
 
-    void strs(const std::vector<std::string>& v) noexcept {
+    void strs(const dstd::Vector<dstd::String>& v) noexcept {
         pod(static_cast<std::uint64_t>(v.size()));
-        for (const std::string& s : v) str(s);
+        for (const dstd::String& s : v) str(s);
     }
 
     void scalar(const dftu_scalar& v) noexcept {

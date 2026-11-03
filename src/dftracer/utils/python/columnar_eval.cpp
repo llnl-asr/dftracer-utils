@@ -13,6 +13,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_scalar_helpers.h>
@@ -20,10 +21,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dataframe = dftracer::utils::dataframe;
 
@@ -82,7 +80,7 @@ bool py_values_series(PyObject* list, dataframe::Series* out) {
         if (PyBool_Check(v) || !PyLong_Check(v)) all_int = false;
     }
     if (all_str) {
-        std::vector<std::string> values;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> values;
         values.reserve(static_cast<std::size_t>(n));
         for (Py_ssize_t i = 0; i < n; ++i) {
             dftracer::utils::dstd::StringView s;
@@ -97,7 +95,7 @@ bool py_values_series(PyObject* list, dataframe::Series* out) {
         return true;
     }
     if (all_int) {
-        std::vector<std::int64_t> values;
+        dftracer::utils::dstd::Vector<std::int64_t> values;
         values.reserve(static_cast<std::size_t>(n));
         for (Py_ssize_t i = 0; i < n; ++i) {
             values.push_back(static_cast<std::int64_t>(
@@ -126,7 +124,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
         PyErr_SetString(PyExc_TypeError, "ast must be a list");
         return false;
     }
-    std::vector<dataframe::Expr> stack;
+    dftracer::utils::dstd::Vector<dataframe::Expr> stack;
     Py_ssize_t n = PyList_GET_SIZE(ast);
     for (Py_ssize_t k = 0; k < n; ++k) {
         PyObject* t = PyList_GET_ITEM(ast, k);
@@ -405,7 +403,7 @@ PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     PyObject* seq = PySequence_Fast(cols_obj, "columns must be a sequence");
     if (!seq) return nullptr;
     Py_ssize_t nc = PySequence_Fast_GET_SIZE(seq);
-    std::vector<const dataframe::Series*> inputs;
+    dftracer::utils::dstd::Vector<const dataframe::Series*> inputs;
     inputs.reserve(static_cast<std::size_t>(nc));
     for (Py_ssize_t i = 0; i < nc; ++i) {
         const dataframe::Series* c =
@@ -438,7 +436,8 @@ PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     PyObject* aseq = PySequence_Fast(asts_obj, "asts must be a sequence");
     if (!aseq) return nullptr;
     Py_ssize_t ne = PySequence_Fast_GET_SIZE(aseq);
-    std::vector<dataframe::Expr> roots(static_cast<std::size_t>(ne));
+    dftracer::utils::dstd::Vector<dataframe::Expr> roots(
+        static_cast<std::size_t>(ne));
     for (Py_ssize_t i = 0; i < ne; ++i) {
         if (!build_expr(PySequence_Fast_GET_ITEM(aseq, i),
                         &roots[static_cast<std::size_t>(i)])) {
@@ -451,7 +450,7 @@ PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     PyObject* seq = PySequence_Fast(cols_obj, "columns must be a sequence");
     if (!seq) return nullptr;
     Py_ssize_t nc = PySequence_Fast_GET_SIZE(seq);
-    std::vector<const dataframe::Series*> inputs;
+    dftracer::utils::dstd::Vector<const dataframe::Series*> inputs;
     inputs.reserve(static_cast<std::size_t>(nc));
     for (Py_ssize_t i = 0; i < nc; ++i) {
         const dataframe::Series* c =
@@ -466,7 +465,7 @@ PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     Py_DECREF(seq);
 
     try {
-        std::vector<dataframe::Series> outs =
+        dftracer::utils::dstd::Vector<dataframe::Series> outs =
             dataframe::eval_many(roots, inputs);
         PyObject* list = PyList_New(static_cast<Py_ssize_t>(outs.size()));
         if (!list) return nullptr;

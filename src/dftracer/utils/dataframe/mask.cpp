@@ -168,7 +168,7 @@ dataframe::Series field_mask(const dataframe::DataFrame& b,
 dataframe::Series leaf_mask(const ExprLeaf& leaf,
                             const dataframe::DataFrame& b) {
     dstd::Vector<VectorColumn> cols;
-    std::vector<const dataframe::Series*> inputs;
+    dstd::Vector<const dataframe::Series*> inputs;
     cols.reserve(b.columns.size());
     inputs.reserve(b.columns.size());
     for (std::size_t i = 0; i < b.columns.size(); ++i) {
@@ -180,7 +180,7 @@ dataframe::Series leaf_mask(const ExprLeaf& leaf,
     for_each_term(*leaf.term, [&](const Term& t) {
         if (const auto* q = std::get_if<TQuant>(&t.node)) quants.push_back(q);
     });
-    std::vector<dataframe::Series> truths;
+    dstd::Vector<dataframe::Series> truths;
     truths.reserve(quants.size());
     for (const TQuant* q : quants) {
         auto t = quantify(*q, inputs, cols, FRAME_ARGS_FALLBACK);

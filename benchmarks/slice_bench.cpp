@@ -46,6 +46,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -67,9 +69,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <thread>
-#include <vector>
 
 namespace df = dftracer::utils::dataframe;
 
@@ -145,32 +145,34 @@ double elapsed_ns(Clock::time_point start, Clock::time_point end) {
     return std::chrono::duration<double, std::nano>(end - start).count();
 }
 
-std::vector<std::int64_t> random_i64(std::size_t n, std::int64_t mod,
-                                     std::uint64_t seed) {
+dftracer::utils::dstd::Vector<std::int64_t> random_i64(std::size_t n,
+                                                       std::int64_t mod,
+                                                       std::uint64_t seed) {
     std::mt19937_64 rng(seed);
-    std::vector<std::int64_t> out(n);
+    dftracer::utils::dstd::Vector<std::int64_t> out(n);
     for (auto& v : out) v = static_cast<std::int64_t>(rng() % mod);
     return out;
 }
 
-std::vector<double> random_f64(std::size_t n, std::uint64_t seed) {
+dftracer::utils::dstd::Vector<double> random_f64(std::size_t n,
+                                                 std::uint64_t seed) {
     std::mt19937_64 rng(seed);
     std::uniform_real_distribution<double> dist(0.0, 1000.0);
-    std::vector<double> out(n);
+    dftracer::utils::dstd::Vector<double> out(n);
     for (auto& v : out) v = dist(rng);
     return out;
 }
 
 Series int_column(std::int64_t rows) {
-    std::vector<std::int64_t> values =
+    dftracer::utils::dstd::Vector<std::int64_t> values =
         random_i64(static_cast<std::size_t>(rows), 1 << 30, SEED);
     return Series::flat_i64(values.data(), rows);
 }
 
 // Every seventh row null.
-std::vector<std::uint8_t> sparse_validity(std::int64_t rows) {
-    std::vector<std::uint8_t> bits(static_cast<std::size_t>((rows + 7) / 8),
-                                   0xFF);
+dftracer::utils::dstd::Vector<std::uint8_t> sparse_validity(std::int64_t rows) {
+    dftracer::utils::dstd::Vector<std::uint8_t> bits(
+        static_cast<std::size_t>((rows + 7) / 8), 0xFF);
     for (std::int64_t i = 0; i < rows; i += 7) {
         bits[static_cast<std::size_t>(i / 8)] &=
             static_cast<std::uint8_t>(~(1u << (i % 8)));
@@ -180,19 +182,22 @@ std::vector<std::uint8_t> sparse_validity(std::int64_t rows) {
 
 Series string_column(std::int64_t rows) {
     std::mt19937_64 rng(SEED + 1);
-    std::vector<std::string> values(static_cast<std::size_t>(rows));
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> values(
+        static_cast<std::size_t>(rows));
     for (auto& v : values) {
-        v = "row-" + std::to_string(rng() % 1000000) + "-" +
-            std::to_string(rng() % 100);
+        v = "row-" + dftracer::utils::dstd::to_string(rng() % 1000000) + "-" +
+            dftracer::utils::dstd::to_string(rng() % 100);
     }
     return Series::strings(values);
 }
 
-std::vector<std::int64_t> offsets(std::int64_t rows, std::int64_t len,
-                                  std::int64_t step, std::int64_t shift) {
+dftracer::utils::dstd::Vector<std::int64_t> offsets(std::int64_t rows,
+                                                    std::int64_t len,
+                                                    std::int64_t step,
+                                                    std::int64_t shift) {
     std::mt19937_64 rng(SEED + 2);
     std::int64_t slots = (rows - len - shift) / step;
-    std::vector<std::int64_t> out(OFFSET_TABLE);
+    dftracer::utils::dstd::Vector<std::int64_t> out(OFFSET_TABLE);
     for (auto& o : out) {
         o = static_cast<std::int64_t>(rng() %
                                       static_cast<std::uint64_t>(slots)) *
@@ -202,7 +207,8 @@ std::vector<std::int64_t> offsets(std::int64_t rows, std::int64_t len,
     return out;
 }
 
-double slice_loop(const Series& col, const std::vector<std::int64_t>& at,
+double slice_loop(const Series& col,
+                  const dftracer::utils::dstd::Vector<std::int64_t>& at,
                   std::int64_t len, std::size_t ops) {
     std::int64_t rows = 0;
     auto start = Clock::now();
@@ -263,9 +269,10 @@ double slice_string(const Scale& s) {
 }
 
 double slice_nullable(const Scale& s, std::int64_t shift) {
-    std::vector<std::int64_t> values =
+    dftracer::utils::dstd::Vector<std::int64_t> values =
         random_i64(static_cast<std::size_t>(s.big_rows), 1 << 30, SEED);
-    std::vector<std::uint8_t> validity = sparse_validity(s.big_rows);
+    dftracer::utils::dstd::Vector<std::uint8_t> validity =
+        sparse_validity(s.big_rows);
     Series col = Series::flat_i64(values.data(), s.big_rows, validity.data());
     values = {};
     auto at = offsets(s.big_rows, s.slice_len, 8, shift);
@@ -276,8 +283,9 @@ DataFrame wide_frame(std::int64_t rows, bool nullable) {
     DataFrame frame;
     frame.names = {"i", "f", "s"};
     frame.columns.push_back(int_column(rows));
-    std::vector<double> f = random_f64(static_cast<std::size_t>(rows), SEED);
-    std::vector<std::uint8_t> validity;
+    dftracer::utils::dstd::Vector<double> f =
+        random_f64(static_cast<std::size_t>(rows), SEED);
+    dftracer::utils::dstd::Vector<std::uint8_t> validity;
     if (nullable) validity = sparse_validity(rows);
     frame.columns.push_back(
         Series::flat_f64(f.data(), rows, nullable ? validity.data() : nullptr));
@@ -302,7 +310,7 @@ double head_tail(const Scale& s) {
 
 double filter_half(const Scale& s) {
     Series col = int_column(s.big_rows);
-    std::vector<std::uint8_t> bits(
+    dftracer::utils::dstd::Vector<std::uint8_t> bits(
         static_cast<std::size_t>((s.big_rows + 7) / 8), 0x55);
     Series mask = Series::flat(TypeId::Bool, bits.data(), s.big_rows);
     std::int64_t rows = 0;
@@ -324,7 +332,7 @@ double concat_slices(const Scale& s) {
         s.string_rows / static_cast<std::int64_t>(s.concat_parts);
     auto at = offsets(s.string_rows, len, 1, 0);
     const char* names[] = {"i", "s"};
-    std::vector<dftu_dataframe*> parts(s.concat_parts);
+    dftracer::utils::dstd::Vector<dftu_dataframe*> parts(s.concat_parts);
     std::int64_t rows = 0;
     auto start = Clock::now();
     for (std::size_t rep = 0; rep < s.concat_ops; ++rep) {
@@ -368,11 +376,12 @@ double arrow_round_trip(const Scale& s) {
 DataFrame key_frame(std::int64_t rows, std::int64_t groups) {
     DataFrame frame;
     frame.names = {"k", "g", "v"};
-    std::vector<std::int64_t> k =
+    dftracer::utils::dstd::Vector<std::int64_t> k =
         random_i64(static_cast<std::size_t>(rows), 1 << 30, SEED);
-    std::vector<std::int64_t> g =
+    dftracer::utils::dstd::Vector<std::int64_t> g =
         random_i64(static_cast<std::size_t>(rows), groups, SEED + 3);
-    std::vector<double> v = random_f64(static_cast<std::size_t>(rows), SEED);
+    dftracer::utils::dstd::Vector<double> v =
+        random_f64(static_cast<std::size_t>(rows), SEED);
     frame.columns.push_back(Series::flat_i64(k.data(), rows));
     frame.columns.push_back(Series::flat_i64(g.data(), rows));
     frame.columns.push_back(Series::flat_f64(v.data(), rows));
@@ -397,7 +406,8 @@ double sort_by(const Scale& s) {
 
 double group_by_sum(const Scale& s) {
     DataFrame frame = key_frame(s.op_rows, 10000);
-    std::vector<df::GroupAgg> aggs{{df::Agg::Sum, "v", "sum_v"}};
+    dftracer::utils::dstd::Vector<df::GroupAgg> aggs{
+        {df::Agg::Sum, "v", "sum_v"}};
     return repeat_op(s.group_reps, [&] {
         DataFrame out = frame.group_by("g", aggs);
         check(out.num_rows() > 0 && out.num_rows() <= 10000, "group rows");
@@ -415,14 +425,14 @@ double unique_rows(const Scale& s) {
 
 double join_inner(const Scale& s) {
     auto rows = static_cast<std::size_t>(s.op_rows);
-    std::vector<std::int64_t> left_keys(rows);
+    dftracer::utils::dstd::Vector<std::int64_t> left_keys(rows);
     std::iota(left_keys.begin(), left_keys.end(), 0);
-    std::vector<std::int64_t> right_keys = left_keys;
+    dftracer::utils::dstd::Vector<std::int64_t> right_keys = left_keys;
     std::shuffle(left_keys.begin(), left_keys.end(), std::mt19937_64(SEED));
     std::shuffle(right_keys.begin(), right_keys.end(),
                  std::mt19937_64(SEED + 1));
-    std::vector<double> lv = random_f64(rows, SEED);
-    std::vector<double> rv = random_f64(rows, SEED + 1);
+    dftracer::utils::dstd::Vector<double> lv = random_f64(rows, SEED);
+    dftracer::utils::dstd::Vector<double> rv = random_f64(rows, SEED + 1);
     DataFrame left;
     left.names = {"k", "lv"};
     left.columns.push_back(Series::flat_i64(left_keys.data(), s.op_rows));
@@ -432,18 +442,20 @@ double join_inner(const Scale& s) {
     right.columns.push_back(Series::flat_i64(right_keys.data(), s.op_rows));
     right.columns.push_back(Series::flat_f64(rv.data(), s.op_rows));
     return repeat_op(s.join_reps, [&] {
-        DataFrame out = left.join(right, std::vector<std::string>{"k"});
+        DataFrame out = left.join(
+            right,
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"k"});
         check(out.num_rows() == s.op_rows, "join rows");
     });
 }
 
 struct Case {
-    std::string name;
+    dftracer::utils::dstd::String name;
     std::function<double(const Scale&)> run;
 };
 
-std::vector<Case> make_cases() {
-    std::vector<Case> cases{
+dftracer::utils::dstd::Vector<Case> make_cases() {
+    dftracer::utils::dstd::Vector<Case> cases{
         {"slice int64", slice_int64},
         {"slice depth 4", slice_depth4},
         {"slice string", slice_string},
@@ -465,7 +477,7 @@ std::vector<Case> make_cases() {
     return cases;
 }
 
-double median(std::vector<double> values) {
+double median(dftracer::utils::dstd::Vector<double> values) {
     std::sort(values.begin(), values.end());
     return values[values.size() / 2];
 }
@@ -476,7 +488,8 @@ struct ChildResult {
 };
 
 dftracer::utils::dstd::Optional<ChildResult> run_child(
-    const std::string& binary, const std::string& name) {
+    const dftracer::utils::dstd::String& binary,
+    const dftracer::utils::dstd::String& name) {
     int fds[2];
     if (::pipe(fds) != 0) return dftracer::utils::dstd::nullopt;
     pid_t pid = ::fork();
@@ -489,7 +502,7 @@ dftracer::utils::dstd::Optional<ChildResult> run_child(
         ::_exit(127);
     }
     ::close(fds[1]);
-    std::string out;
+    dftracer::utils::dstd::String out;
     char buffer[256];
     ssize_t n;
     while ((n = ::read(fds[0], buffer, sizeof(buffer))) > 0) {
@@ -512,14 +525,18 @@ dftracer::utils::dstd::Optional<ChildResult> run_child(
     return ChildResult{ns, rss_bytes / static_cast<double>(MIB)};
 }
 
-int drive(const std::string& self, const std::string& against, int rounds,
-          const std::string& label) {
-    std::vector<Case> cases = make_cases();
-    std::vector<std::string> sides;
+int drive(const dftracer::utils::dstd::String& self,
+          const dftracer::utils::dstd::String& against, int rounds,
+          const dftracer::utils::dstd::String& label) {
+    dftracer::utils::dstd::Vector<Case> cases = make_cases();
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> sides;
     if (!against.empty()) sides.push_back(against);
     sides.push_back(self);
-    std::vector<std::vector<std::vector<double>>> ns(
-        sides.size(), std::vector<std::vector<double>>(cases.size()));
+    dftracer::utils::dstd::Vector<
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::Vector<double>>>
+        ns(sides.size(),
+           dftracer::utils::dstd::Vector<dftracer::utils::dstd::Vector<double>>(
+               cases.size()));
     auto rss = ns;
     std::printf("slice_bench label=\"%s\" rounds=%d hw=%u\n", label.c_str(),
                 rounds, std::thread::hardware_concurrency());
@@ -582,7 +599,7 @@ int smoke() {
     return failures == 0 ? 0 : 1;
 }
 
-int run_one(const std::string& name) {
+int run_one(const dftracer::utils::dstd::String& name) {
     for (const Case& c : make_cases()) {
         if (c.name != name) continue;
         try {
@@ -611,8 +628,8 @@ int main(int argc, char** argv) {
     if (first == "--smoke" && argc == 2) return smoke();
     if (first == "--case" && argc == 3) return run_one(argv[2]);
     int rounds = DEFAULT_ROUNDS;
-    std::string label;
-    std::string against;
+    dftracer::utils::dstd::String label;
+    dftracer::utils::dstd::String against;
     for (int i = 1; i < argc; i += 2) {
         dftracer::utils::dstd::StringView flag = argv[i];
         if (i + 1 >= argc) return usage();

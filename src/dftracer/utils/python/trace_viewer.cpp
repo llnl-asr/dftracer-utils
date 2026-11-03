@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -21,6 +22,7 @@
 #include <dftracer/utils/python/gzip_sink.h>
 #include <dftracer/utils/python/lazyframe.h>
 #include <dftracer/utils/python/plugin_host.h>
+#include <dftracer/utils/python/py_agg_helpers.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_list_helpers.h>
@@ -44,9 +46,7 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace {
 
@@ -66,7 +66,7 @@ PyObject* str_list_dstd(
     return list;
 }
 
-dftracer::utils::dstd::String DS(const std::string& v) {
+dftracer::utils::dstd::String DS(const dftracer::utils::dstd::String& v) {
     return dftracer::utils::dstd::String(v.data(), v.size());
 }
 
@@ -173,11 +173,14 @@ class FileSink : public views::ExportSink {
 
 // "fn(key)" or "fn(key, 'a', 'b')" -> transform + inner key text; false when
 // `t` is not a call, leaving `t` to parse as a plain key.
-bool split_transform(const std::string& t, GroupKey::Transform& tf,
-                     std::vector<std::string>& targs, std::string& inner) {
+bool split_transform(
+    const dftracer::utils::dstd::String& t, GroupKey::Transform& tf,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& targs,
+    dftracer::utils::dstd::String& inner) {
     const auto lp = t.find('(');
-    if (lp == std::string::npos || t.back() != ')') return false;
-    const std::string fn = t.substr(0, lp);
+    if (lp == dftracer::utils::dstd::String::npos || t.back() != ')')
+        return false;
+    const dftracer::utils::dstd::String fn = t.substr(0, lp);
     if (fn == "dirname")
         tf = GroupKey::Transform::Dirname;
     else if (fn == "basename")
@@ -188,8 +191,8 @@ bool split_transform(const std::string& t, GroupKey::Transform& tf,
         tf = GroupKey::Transform::Bucket;
     else
         return false;
-    std::vector<std::string> parts;
-    std::string cur;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> parts;
+    dftracer::utils::dstd::String cur;
     for (char ch : t.substr(lp + 1, t.size() - lp - 2)) {
         if (ch == ',') {
             parts.push_back(cur);
@@ -199,10 +202,12 @@ bool split_transform(const std::string& t, GroupKey::Transform& tf,
         }
     }
     parts.push_back(cur);
-    auto trim = [](const std::string& x) {
+    auto trim = [](const dftracer::utils::dstd::String& x) {
         const auto b = x.find_first_not_of(" \t'\"");
         const auto e = x.find_last_not_of(" \t'\"");
-        return b == std::string::npos ? std::string() : x.substr(b, e - b + 1);
+        return b == dftracer::utils::dstd::String::npos
+                   ? dftracer::utils::dstd::String()
+                   : x.substr(b, e - b + 1);
     };
     inner = trim(parts[0]);
     for (std::size_t i = 1; i < parts.size(); ++i)
@@ -213,11 +218,11 @@ bool split_transform(const std::string& t, GroupKey::Transform& tf,
 // name | cat | pid | tid | fhash | hhash | io_cat | acc_pat | rank |
 // file_path | file_name | host_name | arg:<key> | any other field, each
 // optionally wrapped in a transform call.
-GroupKey parse_group_key(const std::string& s) {
-    std::string t = s;
+GroupKey parse_group_key(const dftracer::utils::dstd::String& s) {
+    dftracer::utils::dstd::String t = s;
     GroupKey::Transform tf = GroupKey::Transform::None;
-    std::vector<std::string> targs;
-    std::string inner;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> targs;
+    dftracer::utils::dstd::String inner;
     if (split_transform(t, tf, targs, inner)) t = inner;
     GroupKey out;
     if (t == "name")
@@ -256,17 +261,18 @@ GroupKey parse_group_key(const std::string& s) {
 // "count" | "op:field" | "argmax:field:by" | "pct:field:q" | "pNN:field".
 // "count" is the group row count; "count:field" counts the rows where the
 // field is present.
-dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(const std::string& t) {
+dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(
+    const dftracer::utils::dstd::String& t) {
     auto c1 = t.find(':');
-    std::string op = t.substr(0, c1);
-    std::string field, by;
-    if (c1 != std::string::npos) {
-        std::string rest = t.substr(c1 + 1);
+    dftracer::utils::dstd::String op = t.substr(0, c1);
+    dftracer::utils::dstd::String field, by;
+    if (c1 != dftracer::utils::dstd::String::npos) {
+        dftracer::utils::dstd::String rest = t.substr(c1 + 1);
         auto c2 = rest.find(':');
         field = rest.substr(0, c2);
-        if (c2 != std::string::npos) by = rest.substr(c2 + 1);
+        if (c2 != dftracer::utils::dstd::String::npos) by = rest.substr(c2 + 1);
     }
-    const std::string occ = field.empty() ? "dur" : field;
+    const dftracer::utils::dstd::String occ = field.empty() ? "dur" : field;
     if (op == "count") return AggSpec(AggOp::Count, DS(field), "", "");
     if (op == "sum") return AggSpec(AggOp::Sum, DS(field));
     if (op == "sumsq") return AggSpec(AggOp::SumSq, DS(field));
@@ -287,7 +293,7 @@ dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(const std::string& t) {
     if (op == "active") return AggSpec(AggOp::Active, DS(occ));
     if (op == "pct")
         return AggSpec(AggOp::Pct, DS(field), "", "",
-                       by.empty() ? 0.0 : std::stod(by));
+                       by.empty() ? 0.0 : py::parse_double(by));
     if (op.size() >= 2 && op[0] == 'p') {
         double denom = 1.0;
         for (std::size_t i = 1; i < op.size(); ++i) {
@@ -296,7 +302,7 @@ dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(const std::string& t) {
             denom *= 10.0;
         }
         return AggSpec(AggOp::Pct, DS(field), DS(op + "_" + field), "",
-                       std::stod(op.substr(1)) / denom);
+                       py::parse_double(op.substr(1)) / denom);
     }
     return dftracer::utils::dstd::nullopt;
 }
@@ -374,13 +380,13 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(
             args, kwds, "O|O", const_cast<char**>(kwlist), &files, &index_obj))
         return -1;
-    std::string index_dir;
+    dftracer::utils::dstd::String index_dir;
     if (index_obj && index_obj != Py_None) {
         const char* s = as_utf8(index_obj);
         if (!s) return -1;
         index_dir = s;
     }
-    std::vector<std::string> paths;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
     dftracer::utils::dstd::Optional<dftracer::utils::dstd::String> dir;
     if (PyUnicode_Check(files)) {
         const char* path = PyUnicode_AsUTF8(files);
@@ -409,7 +415,7 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
     } else {
         dftracer::utils::dstd::Vector<views::ViewFile> vfiles;
         vfiles.reserve(paths.size());
-        for (const std::string& p : paths) {
+        for (const dftracer::utils::dstd::String& p : paths) {
             const auto index_path =
                 dftracer::utils::trace::internal::determine_index_path(
                     p, index_dir);
@@ -548,7 +554,7 @@ PyObject* tv_explain_duql(PyObject* self, PyObject* args) {
 }
 
 PyObject* tv_select(PyObject* self, PyObject* arg) {
-    std::vector<std::string> names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
     if (!py::parse_string_seq(arg, "select expects a sequence of names", names))
         return nullptr;
     return build(self, [&](const View& t) {
@@ -561,7 +567,7 @@ PyObject* tv_select(PyObject* self, PyObject* arg) {
 PyObject* tv_phase(PyObject* self, PyObject* arg) {
     const char* s = as_utf8(arg);
     if (!s) return nullptr;
-    const std::string t(s);
+    const dftracer::utils::dstd::String t(s);
     Phase ph;
     if (t == "events")
         ph = Phase::Events;
@@ -646,7 +652,7 @@ PyObject* tv_time_unit(PyObject* self, PyObject* arg) {
     namespace trace = dftracer::utils::trace;
     const char* s = as_utf8(arg);
     if (!s) return nullptr;
-    const std::string t(s);
+    const dftracer::utils::dstd::String t(s);
     trace::TimeMetric target;
     if (t == "ns")
         target = trace::TimeMetric::Ns;
@@ -760,8 +766,9 @@ PyObject* tv_schema_tree(PyObject* self, PyObject*) {
 }
 
 PyObject* tv_time_metric(PyObject* self, PyObject*) {
-    std::string s(dftracer::utils::trace::time_metric_to_string(
-        tv_of(self).time_metric()));
+    dftracer::utils::dstd::String s(
+        dftracer::utils::trace::time_metric_to_string(
+            tv_of(self).time_metric()));
     ::dftracer::utils::common::detail::lower_ascii(s);
     return PyUnicode_FromString(s.c_str());
 }
@@ -839,7 +846,7 @@ PyObject* tv_sink_json(PyObject* self, PyObject* arg) {
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
         return nullptr;
     }
-    auto sink = std::make_shared<FileSink>(f);
+    auto sink = dftracer::utils::dstd::make_shared<FileSink>(f);
     return guarded([&] {
         return py::wrap_lazyframe(LazyFrame(
             tv_of(self).sink_json(sink, views::LAZY).plans().front()));
@@ -935,11 +942,11 @@ PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
         return nullptr;
     }
     if (aggregates) {
-        std::unique_ptr<views::ExportSink> sink;
+        dftracer::utils::dstd::UniquePtr<views::ExportSink> sink;
         if (compress) {
             try {
-                sink = std::make_unique<dftracer::utils::python::GzipSink>(
-                    path, level);
+                sink = dftracer::utils::dstd::make_unique<
+                    dftracer::utils::python::GzipSink>(path, level);
             } catch (const std::exception& e) {
                 py::set_typed_py_error(e);
                 return nullptr;
@@ -950,7 +957,7 @@ PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
                 PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
                 return nullptr;
             }
-            sink = std::make_unique<FileSink>(f);
+            sink = dftracer::utils::dstd::make_unique<FileSink>(f);
         }
         const bool ok =
             run_on(runtime_arg, [&] { return t.sink_counters(*sink); }, stats);
@@ -972,7 +979,7 @@ PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 PyObject* tv_merge_partials(PyObject* self, PyObject* arg) {
-    std::vector<std::string> owned;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> owned;
     if (!py::parse_bytes_seq(arg, "merge_partials expects a sequence", owned))
         return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
@@ -991,7 +998,7 @@ PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
     if (!PyArg_ParseTupleAndKeywords(
             args, kwds, "O|O", const_cast<char**>(kwlist), &arg, &runtime_arg))
         return nullptr;
-    std::vector<std::string> owned;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> owned;
     if (!py::parse_bytes_seq(arg, "materialize_partials expects a sequence",
                              owned))
         return nullptr;
@@ -1079,7 +1086,7 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
 }
 
 PyObject* merge_flamegraph_partials_py(PyObject*, PyObject* arg) {
-    std::vector<std::string> owned;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> owned;
     if (!py::parse_bytes_seq(
             arg, "merge_flamegraph_partials expects a sequence", owned))
         return nullptr;

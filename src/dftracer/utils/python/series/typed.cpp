@@ -7,7 +7,6 @@
 
 #include <cstdint>
 #include <exception>
-#include <string>
 #include <utility>
 
 namespace dftracer::utils::python::series_detail {
@@ -35,8 +34,8 @@ Series flat_copy(const Series& s) {
 }  // namespace
 
 Series retype_series(const Series& s, TypeId type, dataframe::TimeUnit unit,
-                     const std::string& zone, int precision, int scale,
-                     int width) {
+                     const dftracer::utils::dstd::String& zone, int precision,
+                     int scale, int width) {
     Series flat = flat_copy(s);
     const auto from_width = dataframe::byte_width(flat.type());
     const auto to_width = dataframe::byte_width(type, width);
@@ -128,7 +127,8 @@ PyObject* Series_to_bytes(PyObject* self, PyObject*) {
         dataframe::DataFrame f;
         f.names.emplace_back("v");
         f.columns.push_back(a->share());
-        const std::string bytes = dataframe::frame_to_native(f);
+        const dftracer::utils::dstd::String bytes =
+            dataframe::frame_to_native(f);
         return PyBytes_FromStringAndSize(bytes.data(),
                                          static_cast<Py_ssize_t>(bytes.size()));
     } catch (const std::exception& e) {
@@ -155,8 +155,8 @@ PyObject* series_from_bytes(PyObject*, PyObject* obj) {
     Py_buffer view;
     if (PyObject_GetBuffer(obj, &view, PyBUF_SIMPLE) < 0) return nullptr;
     auto f = dataframe::frame_from_native(
-        dstd::StringView(static_cast<const char*>(view.buf),
-                         static_cast<std::size_t>(view.len)));
+        dftracer::utils::dstd::StringView(static_cast<const char*>(view.buf),
+                                          static_cast<std::size_t>(view.len)));
     PyBuffer_Release(&view);
     if (!f || f->columns.size() != 1) {
         PyErr_SetString(PyExc_ValueError,

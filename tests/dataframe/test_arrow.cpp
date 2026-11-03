@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/abi.h>
@@ -33,8 +32,8 @@ constexpr const char* VIEW_LONG_B = "another quite long string value";
 struct ViewFixture {
     std::uint8_t views[4 * 16] = {};
     std::uint8_t validity = 0b0111;
-    std::string blob_a = VIEW_LONG_A;
-    std::string blob_b = VIEW_LONG_B;
+    dftracer::utils::dstd::String blob_a = VIEW_LONG_A;
+    dftracer::utils::dstd::String blob_b = VIEW_LONG_B;
     const void* bufs[2] = {blob_a.data(), blob_b.data()};
     std::int64_t sizes[2] = {static_cast<std::int64_t>(blob_a.size()),
                              static_cast<std::int64_t>(blob_b.size())};
@@ -44,8 +43,8 @@ struct ViewFixture {
         ++static_cast<ViewFixture*>(ctx)->released;
     }
 
-    void put(int row, const std::string& s, std::int32_t index,
-             std::int32_t offset) {
+    void put(int row, const dftracer::utils::dstd::String& s,
+             std::int32_t index, std::int32_t offset) {
         std::uint8_t* v = views + row * 16;
         const auto size = static_cast<std::int32_t>(s.size());
         std::memset(v, 0, 16);
@@ -82,7 +81,7 @@ TEST_SUITE("dataframe_arrow_public") {
             Series s = f.make();
             REQUIRE(s.valid());
             OwnedArrow a = s.to_arrow();
-            CHECK(std::string(a.schema()->format) == "vu");
+            CHECK(dftracer::utils::dstd::String(a.schema()->format) == "vu");
             CHECK(a.array()->n_buffers == 5);
             CHECK(a.array()->buffers[1] == s.handle()->data.data());
             CHECK(a.array()->buffers[2] == f.blob_a.data());
@@ -110,7 +109,7 @@ TEST_SUITE("dataframe_arrow_public") {
         Series s = f.make(TypeId::Binary);
         REQUIRE(s.valid());
         OwnedArrow a = s.to_arrow();
-        CHECK(std::string(a.schema()->format) == "vz");
+        CHECK(dftracer::utils::dstd::String(a.schema()->format) == "vz");
         Series back = Series::from_arrow(a.schema(), a.array());
         REQUIRE(back.valid());
         CHECK(back.type() == TypeId::Binary);
@@ -171,7 +170,8 @@ TEST_SUITE("dataframe_arrow_public") {
         {
             Series dict{col};
             OwnedArrow a = dict.to_arrow();
-            CHECK(std::string(a.schema()->dictionary->format) == "vu");
+            CHECK(dftracer::utils::dstd::String(
+                      a.schema()->dictionary->format) == "vu");
             CHECK(a.array()->dictionary->n_buffers == 5);
             Series back = Series::from_arrow(a.schema(), a.array());
             REQUIRE(back.valid());
@@ -186,7 +186,7 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Series round-trips through the public Arrow bridge") {
-        std::vector<std::int64_t> vals = {10, 20, 30, 40};
+        dftracer::utils::dstd::Vector<std::int64_t> vals = {10, 20, 30, 40};
         Series s = Series::flat_i64(vals.data(),
                                     static_cast<std::int64_t>(vals.size()));
 
@@ -214,8 +214,8 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("DataFrame round-trips schema, columns, and values") {
-        std::vector<std::int64_t> ints = {1, 2, 3};
-        std::vector<double> reals = {1.5, 2.5, 3.5};
+        dftracer::utils::dstd::Vector<std::int64_t> ints = {1, 2, 3};
+        dftracer::utils::dstd::Vector<double> reals = {1.5, 2.5, 3.5};
 
         DataFrame df;
         df.names = {"id", "value"};
@@ -296,9 +296,9 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Struct column round-trips through the Arrow bridge") {
-        std::vector<std::int64_t> a = {10, 20, 30};
-        std::vector<double> b = {1.5, 2.5, 3.5};
-        std::vector<Series> fields;
+        dftracer::utils::dstd::Vector<std::int64_t> a = {10, 20, 30};
+        dftracer::utils::dstd::Vector<double> b = {1.5, 2.5, 3.5};
+        dftracer::utils::dstd::Vector<Series> fields;
         fields.push_back(Series::flat_i64(a.data(), 3));
         fields.push_back(Series::flat_f64(b.data(), 3));
         Series st = Series::structs({"a", "b"}, std::move(fields));
@@ -325,7 +325,8 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Importing a sliced string array keeps the slice's rows") {
-        std::vector<dftracer::utils::dstd::StringView> v = {"a", "", "c", "d"};
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> v = {
+            "a", "", "c", "d"};
         const std::uint8_t valid = 0b1101;
         Series s = Series::strings(v, &valid);
         OwnedArrow a = s.to_arrow();
@@ -341,7 +342,7 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Importing a sliced bool array keeps the slice's bits") {
-        std::vector<std::uint8_t> bits(3, 0);
+        dftracer::utils::dstd::Vector<std::uint8_t> bits(3, 0);
         for (int i = 0; i < 20; ++i)
             if (i % 4 == 0)
                 bits[i / 8] |= static_cast<std::uint8_t>(1 << (i % 8));
@@ -390,7 +391,7 @@ TEST_SUITE("dataframe_arrow_public") {
         df.names = {"s"};
         df.columns.push_back(
             Series::strings({"a", "b", "a", "a"}).dictionary_encode());
-        std::vector<std::uint8_t> bytes;
+        dftracer::utils::dstd::Vector<std::uint8_t> bytes;
         CHECK_NOTHROW(bytes = df.to_ipc());
         CHECK_FALSE(bytes.empty());
     }

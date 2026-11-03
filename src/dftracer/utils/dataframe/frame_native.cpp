@@ -15,7 +15,7 @@ constexpr char MAGIC[4] = {'D', 'F', 'T', 'N'};
 constexpr std::uint32_t VERSION = 0;
 
 template <class T>
-void put(std::string& out, T v) {
+void put(dstd::String& out, T v) {
     out.append(reinterpret_cast<const char*>(&v), sizeof v);
 }
 
@@ -29,13 +29,13 @@ bool take(const std::uint8_t*& p, const std::uint8_t* end, T& v) {
 
 }  // namespace
 
-std::string frame_to_native(const DataFrame& f) {
-    std::string out(MAGIC, sizeof MAGIC);
+dstd::String frame_to_native(const DataFrame& f) {
+    dstd::String out(MAGIC, sizeof MAGIC);
     put<std::uint32_t>(out, VERSION);
     put<std::int64_t>(out, f.num_rows());
     put<std::uint32_t>(out, static_cast<std::uint32_t>(f.columns.size()));
     for (std::size_t c = 0; c < f.columns.size(); ++c) {
-        const std::string& name = f.names[c];
+        const dstd::String& name = f.names[c];
         put<std::uint32_t>(out, static_cast<std::uint32_t>(name.size()));
         out += name;
         spill::put_series(out, f.columns[c]);

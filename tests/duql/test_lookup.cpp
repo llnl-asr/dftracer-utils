@@ -4,6 +4,8 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
@@ -15,7 +17,6 @@
 
 #include <memory>
 #include <string>
-#include <vector>
 
 namespace df = dftracer::utils::dataframe;
 using namespace dftracer::utils::duql;
@@ -24,12 +25,13 @@ namespace {
 
 // The runs table {run, app}: 1 laghos, 2 amg, 2 amg.
 dftracer::utils::dstd::SharedPtr<const df::DataFrame> runs() {
-    auto f = std::make_shared<df::DataFrame>();
+    auto f = dftracer::utils::dstd::make_shared<df::DataFrame>();
     const std::int64_t ids[] = {1, 2, 2};
     f->names = {"run", "app"};
     f->columns.push_back(df::Series::flat_i64(ids, 3));
-    f->columns.push_back(
-        df::Series::strings(std::vector<std::string>{"laghos", "amg", "amg"}));
+    f->columns.push_back(df::Series::strings(
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+            "laghos", "amg", "amg"}));
     return f;
 }
 
@@ -79,12 +81,13 @@ TEST_CASE("lookups evaluate on JSON and flattened records") {
 }
 
 TEST_CASE("an arrow's conflicting values fail in a value position") {
-    auto f = std::make_shared<df::DataFrame>();
+    auto f = dftracer::utils::dstd::make_shared<df::DataFrame>();
     const std::int64_t ids[] = {1, 1};
     f->names = {"run", "app"};
     f->columns.push_back(df::Series::flat_i64(ids, 2));
-    f->columns.push_back(
-        df::Series::strings(std::vector<std::string>{"laghos", "amg"}));
+    f->columns.push_back(df::Series::strings(
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"laghos",
+                                                                     "amg"}));
     auto p = compile_program(
         "let runs = where run > 0; where (run -> runs.app) ?? \"\" == \"amg\"",
         {}, nullptr);
@@ -154,8 +157,8 @@ TEST_CASE("a joined sub-query term leaves the scan filter") {
     CHECK(p->main.filter_text.find("not") ==
           dftracer::utils::dstd::String::npos);
     CHECK(p->main.stages.size() == 2);
-    std::vector<const TLookup*> joins;
-    std::vector<const TLookup*> sets;
+    dftracer::utils::dstd::Vector<const TLookup*> joins;
+    dftracer::utils::dstd::Vector<const TLookup*> sets;
     for_each_pipeline_term(p->main, [&](const Term& t) {
         if (const auto* l = std::get_if<TLookup>(&t.node)) {
             if (joined(*l)) joins.push_back(l);
@@ -171,7 +174,7 @@ TEST_CASE("a joined sub-query term leaves the scan filter") {
 TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     // pid 1: (ts 10, dur 5) (20, 9) (20, 1) (30, null) (null, 100);
     // pid 2: (15, 7).
-    auto side = std::make_shared<df::DataFrame>();
+    auto side = dftracer::utils::dstd::make_shared<df::DataFrame>();
     const std::int64_t dur[] = {5, 9, 1, 0, 100, 7};
     const std::int64_t pid[] = {1, 1, 1, 1, 1, 2};
     const std::int64_t ts[] = {10, 20, 20, 30, 0, 15};
@@ -187,7 +190,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
         REQUIRE_MESSAGE(p.has_value(), (p ? dftracer::utils::dstd::String()
                                           : p.error().format()));
         dftracer::utils::dstd::SharedPtr<Program> program =
-            std::make_shared<Program>(std::move(*p));
+            dftracer::utils::dstd::make_shared<Program>(std::move(*p));
         const TLookup* found = nullptr;
         for_each_pipeline_term(program->main, [&](const Term& t) {
             if (const auto* l = std::get_if<TLookup>(&t.node)) {
@@ -219,7 +222,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const df::Series k = df::Series::flat_i64(opid, 6);
     const df::Series a = df::Series::flat_i64(lo, 6);
     const df::Series b = df::Series::flat_i64(hi, 6, hi_valid);
-    const std::vector<const df::Series*> keys = {&k, &a, &b};
+    const dftracer::utils::dstd::Vector<const df::Series*> keys = {&k, &a, &b};
     auto band = [&](const dftracer::utils::dstd::String& agg) {
         const auto [bp, bl] = lookup_of(
             "derive v = (from data | where pid == ^.pid and ts between ^.lo "
@@ -228,16 +231,16 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
         return lookup_column(*bl, keys, 6);
     };
     auto ints = [](const df::Series& s) {
-        std::vector<std::string> out;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
         for (std::int64_t r = 0; r < s.length(); ++r)
             out.push_back(
                 s.is_null(r)
                     ? "null"
-                    : std::to_string(
+                    : dftracer::utils::dstd::to_string(
                           s.cast(df::TypeId::Int64).data<std::int64_t>()[r]));
         return out;
     };
-    using V = std::vector<std::string>;
+    using V = dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>;
     CHECK(ints(band("count()")) == V{"3", "3", "0", "1", "0", "0"});
     CHECK(ints(band("count(dur)")) == V{"3", "2", "0", "1", "0", "0"});
     CHECK(ints(band("sum(dur)")) == V{"15", "10", "null", "7", "null", "null"});

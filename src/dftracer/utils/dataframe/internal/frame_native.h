@@ -7,8 +7,6 @@
 #include <dftracer/utils/dstd/string.h>
 
 #include <optional>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::dataframe {
 
@@ -17,7 +15,7 @@ namespace dftracer::utils::dataframe {
 /// flag, time unit, time zone, decimal and fixed size, and a list or struct
 /// column its children). Machine byte order: for stores that stay on one
 /// host.
-std::string frame_to_native(const DataFrame& f);
+dstd::String frame_to_native(const DataFrame& f);
 
 /// The frame `frame_to_native` wrote, or nullopt when `bytes` is another
 /// format or version, is truncated, or holds a column that does not decode.

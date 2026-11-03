@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/arrow_bridge.h>
+#include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/common/logging.h>
@@ -13,7 +14,6 @@
 #include <cstring>
 #include <memory>
 #include <stdexcept>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 namespace {
@@ -188,12 +188,12 @@ bool from_arrow_type(const ArrowSchemaView& view, TypeId& out) {
 /// Keeps a column's buffers (and, for a selection, its base) alive for as long
 /// as an exported ArrowArray references them, and owns the array's buffer list.
 struct ExportedArray {
-    std::vector<BufferView> keep;
+    dstd::Vector<BufferView> keep;
     dstd::SharedPtr<dftu_series> child_keep;
-    std::vector<dstd::SharedPtr<dftu_series>> children_keep;
+    dstd::Vector<dstd::SharedPtr<dftu_series>> children_keep;
     const void* buffers[3];
-    std::vector<const void*> view_buffers;
-    std::vector<std::int64_t> view_sizes;
+    dstd::Vector<const void*> view_buffers;
+    dstd::Vector<std::int64_t> view_sizes;
 };
 
 bool is_varwidth(TypeId t) {
@@ -584,10 +584,10 @@ void to_arrow(const Series& col, ArrowSchema* schema, ArrowArray* array) {
     export_array(*c, array);
 }
 
-std::vector<ArrowArray> to_arrow_batches(const Series& st,
-                                         ArrowSchema* schema) {
+dstd::Vector<ArrowArray> to_arrow_batches(const Series& st,
+                                          ArrowSchema* schema) {
     const dftu_series* c = st.handle();
-    std::vector<ArrowArray> out;
+    dstd::Vector<ArrowArray> out;
     bool per_chunk = c != nullptr && c->type == TypeId::Struct &&
                      c->num_fields() > 0 && !c->validity.block();
     std::size_t nchunks = 0;
@@ -721,7 +721,7 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
         const std::int64_t n_blobs = arr->n_buffers - 3;
         const auto* sizes =
             static_cast<const std::int64_t*>(arr->buffers[arr->n_buffers - 1]);
-        auto blobs = std::make_shared<std::vector<BufferView>>();
+        auto blobs = dstd::make_shared<dstd::Vector<BufferView>>();
         for (std::int64_t k = 0; k < n_blobs; ++k)
             blobs->push_back(
                 borrow_buffer(static_cast<std::uint8_t*>(

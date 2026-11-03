@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
-
-#include <string>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -18,14 +17,14 @@ namespace comparator = dftracer::utils::trace::comparator;
 
 namespace {
 
-std::size_t col(const dataframe::DataFrame& b, const std::string& name) {
+std::size_t col(const dataframe::DataFrame& b, const dstd::String& name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return i;
-    throw std::runtime_error("no column: " + name);
+    throw std::runtime_error(("no column: " + name).c_str());
 }
 
 // Row index whose group-key (column 0) string equals `cat`.
-std::int64_t row_of(const dataframe::DataFrame& b, const std::string& cat) {
+std::int64_t row_of(const dataframe::DataFrame& b, const dstd::String& cat) {
     for (std::int64_t i = 0; i < b.num_rows(); ++i)
         if (b.columns[0].string_at(i) == cat) return i;
     return -1;
@@ -44,8 +43,8 @@ TEST_SUITE("CompareView") {
         REQUIRE(var_env.is_valid());
         std::string base_gz = create_mixed_trace(base_env, 30, 20);
         std::string var_gz = create_mixed_trace(var_env, 40, 20);
-        std::string base_idx = std::string(determine_index_path(base_gz, ""));
-        std::string var_idx = std::string(determine_index_path(var_gz, ""));
+        dstd::String base_idx = dstd::String(determine_index_path(base_gz, ""));
+        dstd::String var_idx = dstd::String(determine_index_path(var_gz, ""));
 
         dftracer::utils::Runtime rt;
         dataframe::DataFrame result;

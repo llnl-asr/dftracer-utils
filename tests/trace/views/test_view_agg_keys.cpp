@@ -438,9 +438,9 @@ TEST_SUITE("View") {
                 scan::collect(build()).collect().get();
                 dataframe::DataFrame legacy = collect_groupmap_plan(build());
                 dataframe::DataFrame engine = collect_engine_plan(build());
-                std::vector<std::string> keys = {"time_bucket"};
-                keys.insert(keys.end(), extra_key_cols.begin(),
-                            extra_key_cols.end());
+                dstd::Vector<dstd::String> keys = {"time_bucket"};
+                for (const std::string& k : extra_key_cols)
+                    keys.emplace_back(k);
                 check_match_multi(legacy, engine, keys);
             };
 

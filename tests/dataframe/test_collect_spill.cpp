@@ -9,8 +9,11 @@
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -22,9 +25,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils::dataframe;
 
@@ -40,9 +41,9 @@ DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
 
 struct SpillDirVar {
     dftracer::utils::dstd::Path dir;
-    explicit SpillDirVar(const std::string& name) {
+    explicit SpillDirVar(const dftracer::utils::dstd::String& name) {
         dir = dftracer::utils::dstd::fs::temp_directory() /
-              (name + "_" + std::to_string(::getpid()));
+              (name + "_" + dftracer::utils::dstd::to_string(::getpid()));
         REQUIRE(dftracer::utils::dstd::fs::remove_all(dir).has_value());
         REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
         ::setenv(DIR_VAR, dir.c_str(), 1);
@@ -62,14 +63,14 @@ struct SpillDirVar {
 };
 
 DataFrame make_frame() {
-    std::vector<std::int64_t> i64;
-    std::vector<double> f64;
-    std::vector<std::uint8_t> bits((N + 7) / 8, 0);
-    std::vector<std::uint8_t> valid((N + 7) / 8, 0);
-    std::vector<std::uint8_t> sv((N + 7) / 8, 0);
-    std::vector<std::string> text, json;
-    std::vector<std::int32_t> offs{0};
-    std::vector<std::int64_t> inner;
+    dftracer::utils::dstd::Vector<std::int64_t> i64;
+    dftracer::utils::dstd::Vector<double> f64;
+    dftracer::utils::dstd::Vector<std::uint8_t> bits((N + 7) / 8, 0);
+    dftracer::utils::dstd::Vector<std::uint8_t> valid((N + 7) / 8, 0);
+    dftracer::utils::dstd::Vector<std::uint8_t> sv((N + 7) / 8, 0);
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> text, json;
+    dftracer::utils::dstd::Vector<std::int32_t> offs{0};
+    dftracer::utils::dstd::Vector<std::int64_t> inner;
     for (std::int64_t i = 0; i < N; ++i) {
         i64.push_back(i * 37 - 100);
         f64.push_back(static_cast<double>(i) * 1.5);
@@ -78,12 +79,15 @@ DataFrame make_frame() {
         if (i % 5 != 2)
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         if (i % 7 != 3) sv[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        text.push_back(i % 7 == 3 ? "" : "name-" + std::to_string(i % 11));
-        json.push_back("{\"k\":" + std::to_string(i) + "}");
+        text.push_back(
+            i % 7 == 3 ? ""
+                       : "name-" + dftracer::utils::dstd::to_string(i % 11));
+        json.push_back("{\"k\":" + dftracer::utils::dstd::to_string(i) + "}");
         inner.push_back(i);
         offs.push_back(static_cast<std::int32_t>(inner.size()));
     }
-    std::vector<dftracer::utils::dstd::StringView> tv(text.begin(), text.end());
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> tv(
+        text.begin(), text.end());
     DataFrame df;
     df.names = {"i", "f", "b", "s", "j", "l"};
     df.columns.push_back(Series::flat_i64(i64.data(), N, valid.data()));
@@ -100,22 +104,23 @@ LazyFrame lazy_of(const DataFrame& df, std::uint64_t budget) {
     DataFrame copy;
     copy.names = df.names;
     for (const Series& c : df.columns) copy.columns.push_back(c.share());
-    return LazyFrame::scan(std::make_shared<InMemorySource>(std::move(copy)))
+    return LazyFrame::scan(dftracer::utils::dstd::make_shared<InMemorySource>(
+                               std::move(copy)))
         .memory_budget(budget);
 }
 
-std::string cell(const Series& s, std::int64_t i) {
+dftracer::utils::dstd::String cell(const Series& s, std::int64_t i) {
     if (s.is_null(i)) return "<null>";
     switch (s.type()) {
         case TypeId::Int64:
-            return std::to_string(s.data<std::int64_t>()[i]);
+            return dftracer::utils::dstd::to_string(s.data<std::int64_t>()[i]);
         case TypeId::Float64:
-            return std::to_string(s.data<double>()[i]);
+            return dftracer::utils::dstd::to_string(s.data<double>()[i]);
         case TypeId::Bool:
             return ((s.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1) ? "T"
                                                                      : "F";
         default:
-            return std::string(s.string_at(i));
+            return dftracer::utils::dstd::String(s.string_at(i));
     }
 }
 
@@ -219,17 +224,18 @@ TEST_SUITE("collect spill") {
             try {
                 fn();
             } catch (const std::exception& e) {
-                return std::string(e.what());
+                return dftracer::utils::dstd::String(e.what());
             }
-            return std::string();
+            return dftracer::utils::dstd::String();
         };
-        const std::string collect_msg =
+        const dftracer::utils::dstd::String collect_msg =
             msg_of([&] { run(lazy_of(df, 1).collect(MORSEL)); });
-        CHECK(collect_msg.find(bad.str()) != std::string::npos);
-        CHECK(collect_msg.find(DIR_VAR) != std::string::npos);
-        const std::string dir_msg =
+        CHECK(collect_msg.find(bad.str()) !=
+              dftracer::utils::dstd::String::npos);
+        CHECK(collect_msg.find(DIR_VAR) != dftracer::utils::dstd::String::npos);
+        const dftracer::utils::dstd::String dir_msg =
             msg_of([] { dftracer::utils::dataframe::spill::Dir d; });
-        CHECK(dir_msg.find(bad.str()) != std::string::npos);
-        CHECK(dir_msg.find(DIR_VAR) != std::string::npos);
+        CHECK(dir_msg.find(bad.str()) != dftracer::utils::dstd::String::npos);
+        CHECK(dir_msg.find(DIR_VAR) != dftracer::utils::dstd::String::npos);
     }
 }

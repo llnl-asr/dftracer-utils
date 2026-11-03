@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_DSTD_TRANSPARENT_STRING_HASH_H
 #define DFTRACER_UTILS_DSTD_TRANSPARENT_STRING_HASH_H
 
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstddef>
@@ -32,21 +34,15 @@ struct TransparentStringEqual {
 };
 
 template <typename V>
-using StringViewMap =
-    ankerl::unordered_dense::map<std::string, V, TransparentStringHash,
-                                 TransparentStringEqual>;
+using StringViewMap = HashMap<String, V>;
 
-/// Keyed by std::string_view rather than an owned std::string. The caller MUST
+/// Keyed by std::string_view rather than an owned String. The caller MUST
 /// ensure every key outlives the map (e.g. views into an interned pool); a
 /// transient view will dangle. Unlike StringViewMap it stores no key copies.
 template <typename V>
-using InternedStringViewMap =
-    ankerl::unordered_dense::map<std::string_view, V, TransparentStringHash,
-                                 TransparentStringEqual>;
+using InternedStringViewMap = HashMap<std::string_view, V>;
 
-using StringViewSet =
-    ankerl::unordered_dense::set<std::string, TransparentStringHash,
-                                 TransparentStringEqual>;
+using StringViewSet = HashSet<String>;
 
 }  // namespace dftracer::utils::dstd
 

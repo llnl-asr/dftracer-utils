@@ -10,9 +10,9 @@ constexpr char BASE64_CHARS[] =
 
 }  // namespace
 
-std::string base64_encode(const void* data, std::size_t len) {
+String base64_encode(const void* data, std::size_t len) {
     auto* bytes = static_cast<const unsigned char*>(data);
-    std::string out;
+    String out;
     out.reserve(4 * ((len + 2) / 3));
     for (std::size_t i = 0; i < len; i += 3) {
         unsigned val = static_cast<unsigned>(bytes[i]) << 16;
@@ -26,7 +26,7 @@ std::string base64_encode(const void* data, std::size_t len) {
     return out;
 }
 
-bool base64_decode_into(std::string_view sv, std::string& out) {
+bool base64_decode_into(StringView sv, String& out) {
     static constexpr unsigned char DEC_TABLE[256] = {
         // clang-format off
         64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
@@ -71,9 +71,9 @@ bool base64_decode_into(std::string_view sv, std::string& out) {
     return true;
 }
 
-std::optional<std::string> base64_decode(std::string_view sv) {
-    std::string out;
-    if (!base64_decode_into(sv, out)) return std::nullopt;
+Optional<String> base64_decode(StringView sv) {
+    String out;
+    if (!base64_decode_into(sv, out)) return nullopt;
     return out;
 }
 

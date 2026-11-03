@@ -47,8 +47,7 @@ struct ChunkDimensionStats {
 
     /// Skips the hash lookup when the same value is observed back-to-back.
     /// Not copied/moved: a copy would point into the original's nodes.
-    // keep std: the keys of StringViewMap are std::string
-    const std::string* last_key_ = nullptr;
+    const dstd::String* last_key_ = nullptr;
     std::uint64_t* last_counter_ = nullptr;
 
     ChunkDimensionStats() = default;

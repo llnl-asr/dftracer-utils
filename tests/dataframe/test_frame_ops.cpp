@@ -6,7 +6,10 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -15,9 +18,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dfm = dftracer::utils::dataframe;
 using dftracer::utils::dataframe::DataFrame;
@@ -26,18 +27,19 @@ using dftracer::utils::dataframe::Series;
 
 namespace {
 
-Series i64s(const std::vector<std::int64_t>& v) {
+Series i64s(const dftracer::utils::dstd::Vector<std::int64_t>& v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
 using I = dftracer::utils::dstd::Optional<std::int64_t>;
 const I NI = dftracer::utils::dstd::nullopt;
 
-std::vector<I> i64_col(const DataFrame& df, const std::string& name) {
+dftracer::utils::dstd::Vector<I> i64_col(
+    const DataFrame& df, const dftracer::utils::dstd::String& name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
-    std::vector<I> out;
+    dftracer::utils::dstd::Vector<I> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
             out.emplace_back(dftracer::utils::dstd::nullopt);
@@ -58,8 +60,8 @@ DataFrame make_events() {
 }
 
 dftu_dataframe* to_abi(const DataFrame& df) {
-    std::vector<const char*> names;
-    std::vector<dftu_series*> cols;
+    dftracer::utils::dstd::Vector<const char*> names;
+    dftracer::utils::dstd::Vector<dftu_series*> cols;
     for (std::size_t i = 0; i < df.names.size(); ++i) {
         names.push_back(df.names[i].c_str());
         cols.push_back(df.columns[i].share().release());
@@ -72,7 +74,7 @@ dftu_dataframe* to_abi(const DataFrame& df) {
 
 TEST_SUITE("frame ops") {
     TEST_CASE("window: row_number, running_sum and lag by name") {
-        std::vector<dfm::WindowColumn> specs(3);
+        dftracer::utils::dstd::Vector<dfm::WindowColumn> specs(3);
         specs[0].func = dfm::WindowFunc::RowNumber;
         specs[0].out = "rn";
         specs[1].func = dfm::WindowFunc::RunningSum;
@@ -83,11 +85,15 @@ TEST_SUITE("frame ops") {
         specs[2].params.offset = 1;
         specs[2].out = "prev";
         DataFrame out = dfm::window(make_events(), {"pid"}, {"ts"}, specs);
-        CHECK(out.names == std::vector<std::string>{"pid", "ts", "dur", "rn",
-                                                    "cum", "prev"});
-        CHECK(i64_col(out, "rn") == std::vector<I>{1, 2, 3, 1});
-        CHECK(i64_col(out, "cum") == std::vector<I>{1, 3, 6, 4});
-        CHECK(i64_col(out, "prev") == std::vector<I>{NI, 1, 2, NI});
+        CHECK(out.names ==
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "pid", "ts", "dur", "rn", "cum", "prev"});
+        CHECK(i64_col(out, "rn") ==
+              dftracer::utils::dstd::Vector<I>{1, 2, 3, 1});
+        CHECK(i64_col(out, "cum") ==
+              dftracer::utils::dstd::Vector<I>{1, 3, 6, 4});
+        CHECK(i64_col(out, "prev") ==
+              dftracer::utils::dstd::Vector<I>{NI, 1, 2, NI});
         specs[1].set_value("nope");
         CHECK_THROWS_AS(dfm::window(make_events(), {"pid"}, {"ts"}, specs),
                         std::out_of_range);
@@ -102,13 +108,17 @@ TEST_SUITE("frame ops") {
         DataFrame locf =
             dfm::gap_fill(df, {"pid"}, "ts", 10, {"v"}, dfm::GapFillMode::Locf,
                           dftracer::utils::dstd::nullopt);
-        CHECK(i64_col(locf, "ts") == std::vector<I>{0, 10, 20, 30});
-        CHECK(i64_col(locf, "v") == std::vector<I>{100, 110, 110, 130});
+        CHECK(i64_col(locf, "ts") ==
+              dftracer::utils::dstd::Vector<I>{0, 10, 20, 30});
+        CHECK(i64_col(locf, "v") ==
+              dftracer::utils::dstd::Vector<I>{100, 110, 110, 130});
         DataFrame ranged =
             dfm::gap_fill(df, {"pid"}, "ts", 10, {"v"}, dfm::GapFillMode::None,
                           std::make_pair<std::int64_t, std::int64_t>(0, 40));
-        CHECK(i64_col(ranged, "ts") == std::vector<I>{0, 10, 20, 30, 40});
-        CHECK(i64_col(ranged, "v") == std::vector<I>{100, 110, NI, 130, NI});
+        CHECK(i64_col(ranged, "ts") ==
+              dftracer::utils::dstd::Vector<I>{0, 10, 20, 30, 40});
+        CHECK(i64_col(ranged, "v") ==
+              dftracer::utils::dstd::Vector<I>{100, 110, NI, 130, NI});
     }
 
     TEST_CASE(
@@ -127,16 +137,21 @@ TEST_SUITE("frame ops") {
         DataFrame out =
             dfm::asof(left, right, "ts", {"pid"}, dfm::AsofDirection::Backward,
                       dftracer::utils::dstd::nullopt);
-        CHECK(out.names == std::vector<std::string>{"pid", "ts", "x", "y"});
-        CHECK(i64_col(out, "x") == std::vector<I>{1, 2, 3});
-        CHECK(i64_col(out, "y") == std::vector<I>{50, 200, NI});
+        CHECK(out.names ==
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "pid", "ts", "x", "y"});
+        CHECK(i64_col(out, "x") == dftracer::utils::dstd::Vector<I>{1, 2, 3});
+        CHECK(i64_col(out, "y") ==
+              dftracer::utils::dstd::Vector<I>{50, 200, NI});
         DataFrame tight = dfm::asof(left, right, "ts", {"pid"},
                                     dfm::AsofDirection::Backward, 3);
-        CHECK(i64_col(tight, "y") == std::vector<I>{NI, NI, NI});
+        CHECK(i64_col(tight, "y") ==
+              dftracer::utils::dstd::Vector<I>{NI, NI, NI});
         DataFrame fwd =
             dfm::asof(left, right, "ts", {"pid"}, dfm::AsofDirection::Forward,
                       dftracer::utils::dstd::nullopt);
-        CHECK(i64_col(fwd, "y") == std::vector<I>{200, NI, 500});
+        CHECK(i64_col(fwd, "y") ==
+              dftracer::utils::dstd::Vector<I>{200, NI, 500});
     }
 
     TEST_CASE("interval: point in [lo, hi], outer keeps the unmatched point") {
@@ -150,18 +165,23 @@ TEST_SUITE("frame ops") {
         right.columns.push_back(i64s({1, 2}));
         DataFrame inner =
             dfm::interval(left, right, "p", "lo", "hi", {}, false);
-        CHECK(inner.names == std::vector<std::string>{"p", "tag"});
-        CHECK(i64_col(inner, "p") == std::vector<I>{5, 15});
-        CHECK(i64_col(inner, "tag") == std::vector<I>{1, 2});
+        CHECK(inner.names ==
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "p", "tag"});
+        CHECK(i64_col(inner, "p") == dftracer::utils::dstd::Vector<I>{5, 15});
+        CHECK(i64_col(inner, "tag") == dftracer::utils::dstd::Vector<I>{1, 2});
         DataFrame outer = dfm::interval(left, right, "p", "lo", "hi", {}, true);
-        CHECK(i64_col(outer, "p") == std::vector<I>{5, 15, 99});
-        CHECK(i64_col(outer, "tag") == std::vector<I>{1, 2, NI});
+        CHECK(i64_col(outer, "p") ==
+              dftracer::utils::dstd::Vector<I>{5, 15, 99});
+        CHECK(i64_col(outer, "tag") ==
+              dftracer::utils::dstd::Vector<I>{1, 2, NI});
     }
 
     TEST_CASE("the four ops as lazy plan steps through frame_op") {
         auto scan = [](DataFrame df) {
             return dfm::LazyFrame::scan(
-                std::make_shared<dfm::InMemorySource>(std::move(df)));
+                dftracer::utils::dstd::make_shared<dfm::InMemorySource>(
+                    std::move(df)));
         };
         auto run = [](dftracer::utils::coro::CoroTask<DataFrame> t) {
             return dftracer::utils::default_runtime()
@@ -183,8 +203,10 @@ TEST_SUITE("frame ops") {
         CHECK(plan.schema().empty());
         DataFrame w = run(plan.collect(1));
         CHECK(w.names ==
-              std::vector<std::string>{"pid", "ts", "dur", "rn", "cum"});
-        CHECK(i64_col(w, "cum") == std::vector<I>{1, 3, 6, 4});
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "pid", "ts", "dur", "rn", "cum"});
+        CHECK(i64_col(w, "cum") ==
+              dftracer::utils::dstd::Vector<I>{1, 3, 6, 4});
 
         OpArgs aarg;
         aarg.str(2, "ts")
@@ -195,7 +217,8 @@ TEST_SUITE("frame ops") {
             run(scan(make_events())
                     .frame_op("dftu.frame.asof", aarg, {scan(make_events())})
                     .collect(1));
-        CHECK(i64_col(a, "dur_right") == std::vector<I>{1, 2, 3, 4});
+        CHECK(i64_col(a, "dur_right") ==
+              dftracer::utils::dstd::Vector<I>{1, 2, 3, 4});
     }
 
     TEST_CASE("C ABI and registry: the four ops are registered and run") {
@@ -226,7 +249,8 @@ TEST_SUITE("frame ops") {
         dftu_dataframe* w = dftu_op_run_frame(window_op, fin, 1, warg);
         REQUIRE(w);
         CHECK(dftu_dataframe_num_columns(w) == 5);
-        CHECK(std::string(dftu_dataframe_column_name(w, 4)) == "cum");
+        CHECK(dftracer::utils::dstd::String(dftu_dataframe_column_name(w, 4)) ==
+              "cum");
         CHECK(dftu_dataframe_num_rows(w) == 4);
         dftu_dataframe* direct =
             dftu_dataframe_window(ev, pid, 1, ts, 1, specs, 2);
@@ -268,7 +292,8 @@ TEST_SUITE("frame ops") {
         dftu_dataframe* a = dftu_op_run_frame(asof_op, pair, 2, aarg);
         REQUIRE(a);
         CHECK(dftu_dataframe_num_rows(a) == 4);
-        CHECK(std::string(dftu_dataframe_column_name(a, 3)) == "dur_right");
+        CHECK(dftracer::utils::dstd::String(dftu_dataframe_column_name(a, 3)) ==
+              "dur_right");
         dftu_dataframe_free(a);
         CHECK(dftu_dataframe_asof(ev, ev, "ts", pid, 1,
                                   static_cast<dftu_asof_direction>(3),

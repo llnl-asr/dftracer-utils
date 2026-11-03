@@ -3,11 +3,12 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/abi.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <vector>
 
 using dftracer::utils::dataframe::Agg;
 using dftracer::utils::dataframe::DataFrame;
@@ -477,8 +478,9 @@ TEST_SUITE("op_registry") {
         cppDf.names = {"k", "v"};
         cppDf.columns.emplace_back(kCol);
         cppDf.columns.emplace_back(vCol);
-        DataFrame viaCpp = cppDf.group_by(std::vector<std::string>{"k"},
-                                          {GroupAgg{Agg::Sum, "v", "total"}});
+        DataFrame viaCpp = cppDf.group_by(
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"k"},
+            {GroupAgg{Agg::Sum, "v", "total"}});
         REQUIRE(static_cast<std::int64_t>(viaCpp.num_rows()) ==
                 dftu_dataframe_num_rows(viaRegistry));
 

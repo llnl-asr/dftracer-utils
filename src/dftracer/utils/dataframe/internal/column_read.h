@@ -10,7 +10,6 @@
 #include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
-#include <string_view>
 
 // Read one FLAT numeric cell widened to a common type, dispatching on the
 // column's TypeId. Shared by every kernel that needs a domain-agnostic value

@@ -27,10 +27,8 @@ namespace dftracer::utils::plugins {
 // without limit; it holds the spilled runs and drains them at finalize.
 struct AggAccum {
     dstd::String name;
-    // keep std: dataframe::AggSpiller::drain takes std::vector<std::string>
-    std::vector<std::string> key_names;
-    // keep std: dataframe::agg_accumulate reads these as std::string
-    std::vector<std::string> value_names;
+    dstd::Vector<dstd::String> key_names;
+    dstd::Vector<dstd::String> value_names;
     dataframe::AggStatePtr state;
     dataframe::AggSpiller spiller;
 };

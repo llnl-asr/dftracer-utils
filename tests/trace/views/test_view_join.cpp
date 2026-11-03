@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
 
@@ -13,18 +14,20 @@ namespace dataframe = dftracer::utils::dataframe;
 
 namespace {
 
-std::int64_t col_of(const dataframe::DataFrame& b, const std::string& name) {
+std::int64_t col_of(const dataframe::DataFrame& b,
+                    const dftracer::utils::dstd::String& name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return static_cast<std::int64_t>(i);
     return -1;
 }
-std::int64_t row_of(const dataframe::DataFrame& b, const std::string& key) {
+std::int64_t row_of(const dataframe::DataFrame& b,
+                    const dftracer::utils::dstd::String& key) {
     for (std::int64_t i = 0; i < b.num_rows(); ++i)
         if (b.columns[0].string_at(i) == key) return i;
     return -1;
 }
-double num(const dataframe::DataFrame& b, const std::string& col,
-           std::int64_t row) {
+double num(const dataframe::DataFrame& b,
+           const dftracer::utils::dstd::String& col, std::int64_t row) {
     const dataframe::Series& c =
         b.columns[static_cast<std::size_t>(col_of(b, col))];
     switch (c.type()) {
@@ -36,8 +39,8 @@ double num(const dataframe::DataFrame& b, const std::string& col,
             return c.data<double>()[row];
     }
 }
-bool is_null(const dataframe::DataFrame& b, const std::string& col,
-             std::int64_t row) {
+bool is_null(const dataframe::DataFrame& b,
+             const dftracer::utils::dstd::String& col, std::int64_t row) {
     return b.columns[static_cast<std::size_t>(col_of(b, col))].is_null(row);
 }
 
@@ -48,7 +51,8 @@ TEST_SUITE("ViewJoin") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // 30 posix, 20 stdio
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dftracer::utils::dstd::String idx =
+            dftracer::utils::dstd::String(determine_index_path(gz, ""));
 
         auto left = View::from_file(dftracer::utils::dstd::String(gz),
                                     dftracer::utils::dstd::String(idx))

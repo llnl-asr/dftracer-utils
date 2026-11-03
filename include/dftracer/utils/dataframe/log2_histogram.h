@@ -2,9 +2,10 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_LOG2_HISTOGRAM_H
 #define DFTRACER_UTILS_DATAFRAME_LOG2_HISTOGRAM_H
 
+#include <dftracer/utils/dstd/string.h>
+
 #include <array>
 #include <cstdint>
-#include <string>
 
 namespace dftracer::utils::dataframe {
 
@@ -26,13 +27,13 @@ class Log2Histogram {
     void add(std::uint64_t value, std::uint64_t count = 1);
     void merge(const Log2Histogram& other);
     double approx_percentile(double p) const;
-    std::string render_ascii(std::size_t max_width,
-                             const std::string& unit) const;
-    std::string render_blocks(std::size_t max_width, const std::string& unit,
-                              const std::string& indent = "      ") const;
-    std::string to_json() const;
-    std::string to_json_detailed() const;
-    static Log2Histogram from_json(const std::string& json);
+    dstd::String render_ascii(std::size_t max_width,
+                              const dstd::String& unit) const;
+    dstd::String render_blocks(std::size_t max_width, const dstd::String& unit,
+                               const dstd::String& indent = "      ") const;
+    dstd::String to_json() const;
+    dstd::String to_json_detailed() const;
+    static Log2Histogram from_json(const dstd::String& json);
 
     std::uint64_t total_count() const { return total_count_; }
     const std::array<std::uint64_t, NUM_BINS>& bins() const { return bins_; }

@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
@@ -39,9 +40,6 @@
 #include <chrono>
 #include <cstdio>
 #include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -185,7 +183,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     self->stats_share = stats_share;
     self->auto_max_distinct = static_cast<std::size_t>(auto_max_distinct);
     if (bloom_fields_obj != Py_None) {
-        std::vector<std::string> check;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> check;
         if (!dftracer::utils::python::parse_string_seq(
                 bloom_fields_obj, "bloom_fields must be a sequence of str",
                 check))
@@ -205,7 +203,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     self->false_positive_rate = false_positive_rate;
     self->expected_entries = static_cast<std::size_t>(expected_entries);
     if (extensions_obj != Py_None) {
-        std::vector<std::string> check;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> check;
         if (!dftracer::utils::python::parse_string_seq(
                 extensions_obj, "extensions must be a sequence of str", check))
             return -1;
@@ -276,8 +274,9 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
 
 // The args fields the bloom tier covers, as the index names them. False with
 // a Python error set when bloom_fields holds a non-str.
-static bool requested_bloom_fields(IndexerObject* self,
-                                   dstd::Vector<dstd::String>& out) {
+static bool requested_bloom_fields(
+    IndexerObject* self,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& out) {
     if (!self->bloom_fields) {
         out.clear();
         return true;
@@ -286,7 +285,7 @@ static bool requested_bloom_fields(IndexerObject* self,
     if (!dftracer::utils::python::parse_string_seq(
             self->bloom_fields, "bloom_fields must be a sequence of str", out))
         return false;
-    for (dstd::String& f : out) f = extra_dimension_name(f);
+    for (dftracer::utils::dstd::String& f : out) f = extra_dimension_name(f);
     return true;
 }
 
@@ -315,8 +314,8 @@ static AggregationConfig build_aggregation_config(IndexerObject* self) {
     return config;
 }
 
-static dstd::Optional<dftracer::utils::index::IndexerOptions> indexer_options(
-    IndexerObject* self) {
+static dftracer::utils::dstd::Optional<dftracer::utils::index::IndexerOptions>
+indexer_options(IndexerObject* self) {
     dftracer::utils::index::IndexerOptions o;
     const char* index_dir = as_utf8(self->index_dir);
     o.index_dir = index_dir ? index_dir : "";
@@ -335,7 +334,8 @@ static dstd::Optional<dftracer::utils::index::IndexerOptions> indexer_options(
         return o;
     }
     auto& b = *o.bloom;
-    if (!requested_bloom_fields(self, b.fields)) return dstd::nullopt;
+    if (!requested_bloom_fields(self, b.fields))
+        return dftracer::utils::dstd::nullopt;
     b.required = self->require_bloom;
     b.false_positive_rate = self->false_positive_rate;
     b.path_budget = self->path_budget;
@@ -347,14 +347,15 @@ static dstd::Optional<dftracer::utils::index::IndexerOptions> indexer_options(
         !dftracer::utils::python::parse_string_seq(
             self->extensions, "extensions must be a sequence of str",
             o.extensions))
-        return dstd::nullopt;
+        return dftracer::utils::dstd::nullopt;
     return o;
 }
 
-static dstd::Vector<dstd::String> indexer_paths(IndexerObject* self) {
+static dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
+indexer_paths(IndexerObject* self) {
     const char* directory = as_utf8(self->directory);
     if (directory && directory[0] != '\0') return {directory};
-    dstd::Vector<dstd::String> paths;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
     if (self->files && PyList_Check(self->files)) {
         Py_ssize_t n = PyList_Size(self->files);
         for (Py_ssize_t i = 0; i < n; i++) {
@@ -414,7 +415,8 @@ static bool run_indexer(IndexerObject* self, IndexerCall call,
     });
 }
 
-static PyObject* string_list(const dstd::Vector<dstd::String>& items) {
+static PyObject* string_list(
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& items) {
     PyObject* list = PyList_New(static_cast<Py_ssize_t>(items.size()));
     if (!list) return nullptr;
     for (std::size_t i = 0; i < items.size(); ++i) {
@@ -483,7 +485,7 @@ static PyObject* Indexer_ensure_indexed(IndexerObject* self,
 
 static PyObject* Indexer_manifest(IndexerObject* self,
                                   PyObject* Py_UNUSED(ignored)) {
-    std::string json;
+    dftracer::utils::dstd::String json;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
             json = dftracer::utils::index::to_json(ix.manifest());
         }))
@@ -495,7 +497,7 @@ static PyObject* Indexer_manifest(IndexerObject* self,
 static PyObject* Indexer_explain(IndexerObject* self, PyObject* args) {
     const char* query = nullptr;
     if (!PyArg_ParseTuple(args, "s", &query)) return nullptr;
-    std::string json;
+    dftracer::utils::dstd::String json;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
             json = dftracer::utils::index::to_json(ix.explain(query));
         }))
@@ -536,7 +538,7 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
 
     // Determine index path using BatchIndexer's index_dir setting
     const char* index_dir = as_utf8(self->index_dir);
-    dstd::String index_path =
+    dftracer::utils::dstd::String index_path =
         dftracer::utils::trace::internal::determine_index_path(
             file_path, index_dir ? index_dir : "");
 
@@ -572,7 +574,7 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
             PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
             return nullptr;
         }
-        indexer->handle = new dstd::SharedPtr<
+        indexer->handle = new dftracer::utils::dstd::SharedPtr<
             dftracer::utils::index::gzip::CheckpointIndexer>(std::move(native));
     } catch (const std::exception& e) {
         Py_DECREF((PyObject*)indexer);
@@ -583,17 +585,18 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
     return (PyObject*)indexer;
 }
 
-static dstd::Optional<std::string> resolve_index_path(IndexerObject* self) {
+static dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>
+resolve_index_path(IndexerObject* self) {
     PyObject* status = Indexer_resolve(self, nullptr);
-    if (!status) return dstd::nullopt;
+    if (!status) return dftracer::utils::dstd::nullopt;
     PyObject* obj = PyDict_GetItemString(status, "index_path");
     const char* path = obj ? as_utf8(obj) : nullptr;
     if (!path || path[0] == '\0') {
         Py_DECREF(status);
         PyErr_SetString(PyExc_RuntimeError, "No index path available");
-        return dstd::nullopt;
+        return dftracer::utils::dstd::nullopt;
     }
-    std::string result(path);
+    dftracer::utils::dstd::String result(path);
     Py_DECREF(status);
     return result;
 }
@@ -612,17 +615,19 @@ static PyObject* Indexer_rowset(IndexerObject* self, PyObject* args) {
 namespace {
 
 // The PID of a "pid:tid" key of a pid:tid count map.
-std::uint64_t pid_of(dstd::StringView key) {
+std::uint64_t pid_of(dftracer::utils::dstd::StringView key) {
     const std::size_t colon = key.find(':');
-    const dstd::StringView digits =
-        colon == dstd::StringView::npos ? key : key.substr(0, colon);
+    const dftracer::utils::dstd::StringView digits =
+        colon == dftracer::utils::dstd::StringView::npos ? key
+                                                         : key.substr(0, colon);
     std::uint64_t pid = 0;
     std::from_chars(digits.data(), digits.data() + digits.size(), pid);
     return pid;
 }
 
 using PidSet = ankerl::unordered_dense::set<std::uint64_t>;
-using PidsByPath = ankerl::unordered_dense::map<std::string, PidSet>;
+using PidsByPath =
+    ankerl::unordered_dense::map<dftracer::utils::dstd::String, PidSet>;
 
 // The distinct PIDs the index recorded for one file.
 PidSet file_pids(const dftracer::utils::index::Snapshot& snapshot,
@@ -636,13 +641,13 @@ PidSet file_pids(const dftracer::utils::index::Snapshot& snapshot,
 }
 
 // Every indexed file with its PID set, keyed by the path the index names it by.
-PidsByPath all_file_pids(const std::string& index_path) {
+PidsByPath all_file_pids(const dftracer::utils::dstd::String& index_path) {
     const auto snapshot = dftracer::utils::common::unwrap(
         dftracer::utils::index::plan::open_snapshot(index_path));
     PidsByPath out;
     for (const auto& file : dftracer::utils::common::unwrap(snapshot.files())) {
         const auto path = file.path();
-        out.emplace(std::string(path.data(), path.size()),
+        out.emplace(dftracer::utils::dstd::String(path.data(), path.size()),
                     file_pids(snapshot, file));
     }
     return out;
@@ -691,7 +696,7 @@ static PyObject* Indexer_query_file_pids(IndexerObject* self, PyObject* args) {
 
     auto idx_opt = resolve_index_path(self);
     if (!idx_opt) return nullptr;
-    std::string index_path = std::move(*idx_opt);
+    dftracer::utils::dstd::String index_path = std::move(*idx_opt);
 
     PidSet pids;
     if (!run_blocking_r(
@@ -714,7 +719,7 @@ static PyObject* Indexer_query_all_file_pids(IndexerObject* self,
                                              PyObject* Py_UNUSED(ignored)) {
     auto idx_opt = resolve_index_path(self);
     if (!idx_opt) return nullptr;
-    std::string index_path = std::move(*idx_opt);
+    dftracer::utils::dstd::String index_path = std::move(*idx_opt);
 
     PidsByPath all_pids;
     if (!run_blocking_r([&] { return all_file_pids(index_path); }, all_pids))
@@ -726,7 +731,7 @@ static PyObject* Indexer_query_file_info(IndexerObject* self,
                                          PyObject* Py_UNUSED(ignored)) {
     auto idx_opt = resolve_index_path(self);
     if (!idx_opt) return nullptr;
-    std::string index_path = std::move(*idx_opt);
+    dftracer::utils::dstd::String index_path = std::move(*idx_opt);
 
     PidsByPath all_pids;
     if (!run_blocking_r([&] { return all_file_pids(index_path); }, all_pids))

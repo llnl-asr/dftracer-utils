@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -24,7 +22,7 @@ constexpr std::uint8_t HAS_ECARRY = 0x80;
 constexpr std::uint64_t MIN_DYN_CELL_BYTES = 7;
 
 template <class T>
-void put(std::string& s, T v) {
+void put(dstd::String& s, T v) {
     s.append(reinterpret_cast<const char*>(&v), sizeof(T));
 }
 // A FieldStat is written field by field, never as a raw copy, which would write
@@ -73,14 +71,14 @@ void stat_from_words(const std::uint64_t (&w)[STAT_WORDS], FieldStat& f) {
     f.cm4 = word_double(w[11]);
 }
 
-void put_head(std::string& s, const FieldStat& f) {
+void put_head(dstd::String& s, const FieldStat& f) {
     put(s, static_cast<std::uint8_t>(static_cast<std::uint8_t>(f.domain) |
                                      (f.ecarry ? HAS_ECARRY : 0)));
     if (f.ecarry) put(s, f.ecarry);
 }
 
 // The layout of a stored blob: the first four words, the head, the other eight.
-void put_full(std::string& s, const FieldStat& f) {
+void put_full(dstd::String& s, const FieldStat& f) {
     std::uint64_t w[STAT_WORDS];
     stat_words(f, w);
     for (std::size_t i = 0; i < 4; ++i) put(s, w[i]);
@@ -90,7 +88,7 @@ void put_full(std::string& s, const FieldStat& f) {
 
 // The head, a 16-bit mask of the nonzero words and only those words: most
 // states leave the higher moments at zero.
-void put_compact(std::string& s, const FieldStat& f) {
+void put_compact(dstd::String& s, const FieldStat& f) {
     put_head(s, f);
     std::uint64_t w[STAT_WORDS];
     stat_words(f, w);
@@ -102,13 +100,13 @@ void put_compact(std::string& s, const FieldStat& f) {
         if (w[i]) put(s, w[i]);
 }
 
-void put_stat(std::string& s, const FieldStat& f, bool compact) {
+void put_stat(dstd::String& s, const FieldStat& f, bool compact) {
     if (compact)
         put_compact(s, f);
     else
         put_full(s, f);
 }
-void put_bytes(std::string& s, dstd::StringView b) {
+void put_bytes(dstd::String& s, dstd::StringView b) {
     put(s, static_cast<std::uint64_t>(b.size()));
     s.append(b);
 }
@@ -160,10 +158,10 @@ struct Reader {
         stat_from_words(w, f);
         return f;
     }
-    std::string get_bytes() {
+    dstd::String get_bytes() {
         std::uint64_t n = get<std::uint64_t>();
         count(n);
-        std::string r(p, n);
+        dstd::String r(p, n);
         p += n;
         return r;
     }
@@ -194,9 +192,9 @@ constexpr char COMPACT_MAGIC[4] = {'D', 'F', 'T', 'C'};
 constexpr char DYN_FULL_MAGIC[4] = {'D', 'F', 'T', 'F'};
 constexpr char DYN_LIGHT_MAGIC[4] = {'D', 'F', 'T', 'E'};
 
-std::string agg_serialize(const AggState& st_in, bool compact) {
+dstd::String agg_serialize(const AggState& st_in, bool compact) {
     const AggState& st = settled(st_in);
-    std::string s;
+    dstd::String s;
     if (compact) s.append(COMPACT_MAGIC, sizeof(COMPACT_MAGIC));
     put(s, static_cast<std::uint32_t>(st.specs.size()));
     put(s, static_cast<std::uint32_t>(st.nkeys));
@@ -216,8 +214,8 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
                                              ? st.key_time_unit[k]
                                              : TimeUnit::Micro));
     for (std::size_t k = 0; k < st.nkeys; ++k)
-        put_bytes(
-            s, k < st.key_timezone.size() ? st.key_timezone[k] : std::string());
+        put_bytes(s, k < st.key_timezone.size() ? st.key_timezone[k]
+                                                : dstd::String());
     for (std::size_t k = 0; k < st.nkeys; ++k)
         put(s, k < st.key_byte_width.size() ? st.key_byte_width[k]
                                             : std::int32_t{0});
@@ -246,7 +244,7 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
     put(s, ng);
     for (std::size_t k = 0; k < st.nkeys; ++k) {
         if (st.key_is_bytes[k])
-            for (const std::string& v : st.skey_cols[k]) put_bytes(s, v);
+            for (const dstd::String& v : st.skey_cols[k]) put_bytes(s, v);
         else
             for (std::int64_t v : st.ikey_cols[k]) put(s, v);
         for (std::uint8_t v : st.nkey_cols[k]) put(s, v);
@@ -258,11 +256,11 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
         for (std::uint64_t b : st.fl_last) put(s, b);
         for (std::int64_t x : st.fl_first_idx) put(s, x);
         for (std::int64_t x : st.fl_last_idx) put(s, x);
-        for (const std::string& v : st.fl_first_s) put_bytes(s, v);
-        for (const std::string& v : st.fl_last_s) put_bytes(s, v);
+        for (const dstd::String& v : st.fl_first_s) put_bytes(s, v);
+        for (const dstd::String& v : st.fl_last_s) put_bytes(s, v);
     }
     if (st.has_sketch) {
-        std::vector<std::uint8_t> blob;
+        dstd::Vector<std::uint8_t> blob;
         for (const DDSketch& sk : st.sketches) {
             sk.serialize_into(blob);
             put(s, static_cast<std::uint32_t>(blob.size()));
@@ -270,7 +268,7 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
         }
     }
     if (st.has_msk) {
-        std::vector<std::uint8_t> blob;
+        dstd::Vector<std::uint8_t> blob;
         for (const MergeSketch& sk : st.msk) {
             sk.serialize_into(blob);
             put(s, static_cast<std::uint32_t>(blob.size()));
@@ -281,13 +279,13 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
     if (st.has_arg) {
         for (double b : st.arg_by) put(s, b);
         for (char h : st.arg_has) put(s, static_cast<std::uint8_t>(h));
-        for (const std::string& r : st.arg_repr) put_bytes(s, r);
+        for (const dstd::String& r : st.arg_repr) put_bytes(s, r);
     }
     put(s, static_cast<std::uint8_t>(st.has_set ? 1 : 0));
     if (st.has_set) {
         for (const AggState::StringSet& gset : st.sets) {
             put(s, static_cast<std::uint32_t>(gset.size()));
-            std::vector<dstd::StringView> sorted(gset.begin(), gset.end());
+            dstd::Vector<dstd::StringView> sorted(gset.begin(), gset.end());
             std::sort(sorted.begin(), sorted.end());
             for (const dstd::StringView v : sorted) put_bytes(s, v);
         }
@@ -357,7 +355,7 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
             }
         }
         if (st.dyn_has_sketch) {
-            std::vector<std::uint8_t> blob;
+            dstd::Vector<std::uint8_t> blob;
             for (std::int64_t g = 0; g < ng; ++g) {
                 const dstd::Vector<DynSketchCell>& cells =
                     st.dyn_sketch[static_cast<std::size_t>(g)];
@@ -426,7 +424,7 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
     return s;
 }
 
-AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
+AggStatePtr agg_deserialize(const dstd::String& blob, bool compact) {
     Reader r{blob.data(), blob.data() + blob.size()};
     const bool marked =
         blob.size() >= sizeof(COMPACT_MAGIC) &&
@@ -683,7 +681,7 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
         st->dyn_names.reserve(nnames);
         st->dyn_domain.reserve(nnames);
         for (std::uint32_t i = 0; i < nnames; ++i) {
-            const std::string name = r.get_bytes();
+            const dstd::String name = r.get_bytes();
             const auto dom =
                 static_cast<FieldStatDomain>(r.get<std::uint8_t>());
             if (dom > FieldStatDomain::F64) Reader::truncated();
@@ -825,7 +823,7 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
         for (std::size_t i = 0; i < sz; ++i) {
             const std::uint32_t cnt = r.get<std::uint32_t>();
             for (std::uint32_t j = 0; j < cnt; ++j) {
-                std::string v = r.get_bytes();
+                dstd::String v = r.get_bytes();
                 st->ss_counters[i].emplace(std::move(v),
                                            r.get<std::uint64_t>());
             }

@@ -6,7 +6,9 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/arg_type.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -19,9 +21,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -63,16 +63,16 @@ dstd::Vector<FoldEvent> make_events(StringIntern& intern) {
 }
 
 struct Built {
-    std::vector<std::string> names;
-    std::vector<df::Series> columns;
+    dstd::Vector<dstd::String> names;
+    dstd::Vector<df::Series> columns;
 };
 
 coro::CoroTask<Built> run_step(StringIntern& intern_ref,
                                dstd::SharedPtr<StringIntern> intern,
                                dstd::Vector<FoldEvent> events) {
     (void)intern_ref;
-    auto channel = std::make_shared<coro::Channel<df::Morsel>>(4);
-    auto budget = std::make_shared<coro::CoroSemaphore>(1ull << 30);
+    auto channel = dstd::make_shared<coro::Channel<df::Morsel>>(4);
+    auto budget = dstd::make_shared<coro::CoroSemaphore>(1ull << 30);
     StreamRowFold fold(channel, budget, intern, {}, 1.0, false, false, nullptr,
                        nullptr, true);
     ScanUnit unit;
@@ -131,7 +131,7 @@ void check_equal(const Built& got, const df::DataFrame& want) {
 
 TEST_SUITE("RowBuild") {
     TEST_CASE("a batch whose events are all kept builds the copied frame") {
-        auto intern = std::make_shared<StringIntern>();
+        auto intern = dstd::make_shared<StringIntern>();
         const auto events = make_events(*intern);
         const df::DataFrame want = build_row_frame(copy_events(events), *intern,
                                                    {}, 1.0, /*by_path=*/true);
@@ -140,7 +140,7 @@ TEST_SUITE("RowBuild") {
     }
 
     TEST_CASE("a filtered batch builds exactly the kept events") {
-        auto intern = std::make_shared<StringIntern>();
+        auto intern = dstd::make_shared<StringIntern>();
         auto events = make_events(*intern);
         dstd::Vector<FoldEvent> kept;
         for (std::size_t i = 0; i < events.size(); ++i) {
@@ -160,14 +160,14 @@ TEST_SUITE("RowBuild") {
     }
 
     TEST_CASE("a batch with no kept event sends nothing") {
-        auto intern = std::make_shared<StringIntern>();
+        auto intern = dstd::make_shared<StringIntern>();
         auto events = make_events(*intern);
         for (auto& ev : events) ev.phase = RecordPhase::Unknown;
         CHECK(stepped(intern, std::move(events)).columns.empty());
     }
 
     TEST_CASE("the value-kind mask rule gives the sequential rule's type") {
-        const std::vector<FoldEvent::ArgValue> alphabet = {
+        const dstd::Vector<FoldEvent::ArgValue> alphabet = {
             1.5, std::int64_t{-3}, std::int64_t{7}, std::uint64_t{1} << 63,
             std::uint32_t{5}};
         std::size_t checked = 0;

@@ -63,8 +63,7 @@ index::schemas::dft::MergedStatisticsResult decode_file_scalar_stats_value(
     auto duration_histogram = cursor.str();
     if (!duration_histogram.empty()) {
         stats.duration_histogram = dataframe::Log2Histogram::from_json(
-            // keep std: Log2Histogram::from_json takes std::string
-            std::string(duration_histogram));
+            dstd::String(duration_histogram));
     }
 
     result.num_chunks = cursor.u64();

@@ -6,13 +6,13 @@
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -36,9 +36,9 @@ DataFrame run(coro::CoroTask<DataFrame> t) {
 }
 
 DataFrame make_df() {
-    std::vector<std::int64_t> a{1, 2, 3, 4, 5, 6};
-    std::vector<std::int64_t> b{10, 20, 30, 40, 50, 60};
-    std::vector<std::int64_t> c{7, 7, 8, 8, 9, 9};
+    dstd::Vector<std::int64_t> a{1, 2, 3, 4, 5, 6};
+    dstd::Vector<std::int64_t> b{10, 20, 30, 40, 50, 60};
+    dstd::Vector<std::int64_t> c{7, 7, 8, 8, 9, 9};
     DataFrame df;
     df.names = {"a", "b", "c"};
     df.columns.push_back(Series::flat_i64(a.data(), 6));
@@ -47,14 +47,14 @@ DataFrame make_df() {
     return df;
 }
 
-std::vector<LazyFrame> sample_plans(const LazyFrame& base) {
+dstd::Vector<LazyFrame> sample_plans(const LazyFrame& base) {
     return {
         base,
         base.with_column("d", col(0) + col(1)).filter(col(0) > std::int64_t{2}),
         base.filter(col(0) > std::int64_t{2}).select({"a"}),
         base.sort_by("b", true).filter(col(1) > std::int64_t{15}),
         base.filter(col(2) > std::int64_t{7})
-            .group_by(std::vector<std::string>{"c"},
+            .group_by(dstd::Vector<dstd::String>{"c"},
                       {{dftracer::utils::dataframe::Agg::Sum, "a", "sum_a"}})
             .sort_by("c"),
         base.select({"b", "a"}).filter(col(1) > std::int64_t{1}),
@@ -71,11 +71,11 @@ TEST_SUITE("lazy_plan") {
         CHECK(PLAN_PIPELINE[0] == PlanRule::PredicatePushdown);
         CHECK(PLAN_PIPELINE[1] == PlanRule::ProjectionPushdown);
         CHECK(PLAN_PIPELINE[2] == PlanRule::SourceAbsorption);
-        CHECK(std::string(plan_rule_name(PlanRule::SourceAbsorption)) ==
+        CHECK(dstd::String(plan_rule_name(PlanRule::SourceAbsorption)) ==
               "source_absorption");
-        CHECK(std::string(plan_rule_name(PlanRule::PredicatePushdown)) ==
+        CHECK(dstd::String(plan_rule_name(PlanRule::PredicatePushdown)) ==
               "predicate_pushdown");
-        CHECK(std::string(plan_rule_name(PlanRule::ProjectionPushdown)) ==
+        CHECK(dstd::String(plan_rule_name(PlanRule::ProjectionPushdown)) ==
               "projection_pushdown");
     }
 
@@ -121,7 +121,7 @@ TEST_SUITE("lazy_plan") {
                            .filter(col(0) > std::int64_t{3});
         LazyFrame moved = apply_plan_rule(lf, PlanRule::PredicatePushdown);
         CHECK(plan_fingerprint(moved) != plan_fingerprint(lf));
-        const std::string plan = moved.explain();
+        const dstd::String plan = moved.explain();
         CHECK(plan.find("filter") < plan.find("with_column"));
         CHECK(plan_fingerprint(apply_plan_rule(
                   lf, PlanRule::ProjectionPushdown)) == plan_fingerprint(lf));
@@ -187,7 +187,7 @@ TEST_SUITE("lazy_plan") {
         LazyFrame inner = base.concat(base.filter(col(0) > std::int64_t{1}));
         LazyFrame root =
             base.join(inner, {"a"}).filter(col(0) > std::int64_t{2});
-        std::vector<dstd::Pair<std::uint64_t, int>> seen;
+        dstd::Vector<dstd::Pair<std::uint64_t, int>> seen;
         visit_plan(root, [&](const LazyFrame& lf, int depth) {
             seen.emplace_back(plan_fingerprint(lf), depth);
         });

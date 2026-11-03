@@ -1,22 +1,20 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <numeric>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
 namespace {
 // Reorders `v` (blocks of `stride` elements per group) into `perm` order.
 template <class Vec>
-void permute_blocks(Vec& v, const std::vector<std::int64_t>& perm,
+void permute_blocks(Vec& v, const dstd::Vector<std::int64_t>& perm,
                     std::size_t stride) {
     if (stride == 0 || v.empty()) return;
     Vec tmp(v.size());
@@ -32,7 +30,7 @@ void permute_blocks(Vec& v, const std::vector<std::int64_t>& perm,
 void agg_sort_groups(AggState& st) {
     const std::int64_t ng = st.ngroups();
     if (ng <= 1) return;
-    std::vector<std::int64_t> perm(static_cast<std::size_t>(ng));
+    dstd::Vector<std::int64_t> perm(static_cast<std::size_t>(ng));
     std::iota(perm.begin(), perm.end(), std::int64_t{0});
     std::sort(perm.begin(), perm.end(), [&](std::int64_t x, std::int64_t y) {
         return agg_key_cmp(st, x, st, y) < 0;
@@ -40,7 +38,7 @@ void agg_sort_groups(AggState& st) {
     agg_permute_groups(st, perm);
 }
 
-void agg_permute_groups(AggState& st, const std::vector<std::int64_t>& perm) {
+void agg_permute_groups(AggState& st, const dstd::Vector<std::int64_t>& perm) {
     st.settle_light();
     const std::int64_t ng = st.ngroups();
     for (std::size_t k = 0; k < st.nkeys; ++k) {
@@ -96,14 +94,14 @@ void agg_permute_groups(AggState& st, const std::vector<std::int64_t>& perm) {
     st.fast_slots.clear();
     st.fast_words.clear();
     st.fast_hash.clear();
-    std::vector<std::int64_t> at(static_cast<std::size_t>(ng));
+    dstd::Vector<std::int64_t> at(static_cast<std::size_t>(ng));
     for (std::size_t i = 0; i < at.size(); ++i)
         at[static_cast<std::size_t>(perm[i])] = static_cast<std::int64_t>(i);
     auto renumber = [&](std::int64_t g) {
         return g < 0 ? g : at[static_cast<std::size_t>(g)];
     };
     for (auto& [h, g] : st.key_buckets) g = renumber(g);
-    std::vector<std::int64_t> next(at.size());
+    dstd::Vector<std::int64_t> next(at.size());
     for (std::size_t i = 0; i < at.size(); ++i)
         next[i] =
             renumber(st.next_in_bucket[static_cast<std::size_t>(perm[i])]);
@@ -111,7 +109,7 @@ void agg_permute_groups(AggState& st, const std::vector<std::int64_t>& perm) {
 }
 
 AggStatePtr agg_extract_groups(const AggState& st_in,
-                               const std::vector<std::int64_t>& groups) {
+                               const dstd::Vector<std::int64_t>& groups) {
     const AggState& st = settled(st_in);
     AggStatePtr out(new AggState());
     out->specs = st.specs;
@@ -310,9 +308,9 @@ void agg_seed_begin(AggState& st, std::size_t nkeys) {
     st.inited = true;
 }
 
-void agg_seed_group(AggState& st, const std::vector<std::string>& str_keys,
-                    const std::vector<bool>& null_keys, std::uint64_t count,
-                    const std::vector<AggSeedValue>& values) {
+void agg_seed_group(AggState& st, const dstd::Vector<dstd::String>& str_keys,
+                    const dstd::Vector<bool>& null_keys, std::uint64_t count,
+                    const dstd::Vector<AggSeedValue>& values) {
     if (!st.inited) agg_seed_begin(st, str_keys.size());
     for (const AggSpec& sp : st.specs)
         if (!agg_op_seedable(sp.op))

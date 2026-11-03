@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 namespace dftracer::utils::dataframe {
 
@@ -19,9 +22,9 @@ namespace {
 // reported via out_names().
 class PivotCursor : public Cursor {
    public:
-    PivotCursor(std::unique_ptr<Cursor> in, std::uint64_t budget,
-                std::vector<std::string> sch, std::string index, std::string on,
-                std::string values, std::string agg)
+    PivotCursor(dstd::UniquePtr<Cursor> in, std::uint64_t budget,
+                dstd::Vector<dstd::String> sch, dstd::String index,
+                dstd::String on, dstd::String values, dstd::String agg)
         : first_(std::move(in)),
           spool_(budget / share::SPOOL),
           budget_(budget),
@@ -61,7 +64,7 @@ class PivotCursor : public Cursor {
                 if (!ahead_) eof_ = true;
             }
             if (!m && pending_rows_ == 0) co_return dstd::nullopt;
-            std::vector<Series> idx, on, val;
+            dstd::Vector<Series> idx, on, val;
             if (pending_rows_ > 0) {
                 idx.push_back(pending_[0].share());
                 on.push_back(pending_[1].share());
@@ -84,10 +87,10 @@ class PivotCursor : public Cursor {
             const std::int64_t n = ic.length();
             std::int64_t done = n;
             if (ahead_) {
-                std::vector<Series> one;
+                dstd::Vector<Series> one;
                 one.push_back(ic.share());
-                const std::string last = row_key(one, n - 1);
-                std::vector<Series> next_idx;
+                const dstd::String last = row_key(one, n - 1);
+                dstd::Vector<Series> next_idx;
                 next_idx.push_back(ahead_->columns[0].share());
                 if (row_key(next_idx, 0) == last) {
                     done = n - 1;
@@ -97,7 +100,7 @@ class PivotCursor : public Cursor {
             const std::int64_t rest = n - done;
             pending_.clear();
             if (rest > 0) {
-                std::vector<std::int64_t> tail(static_cast<std::size_t>(rest));
+                dstd::Vector<std::int64_t> tail(static_cast<std::size_t>(rest));
                 std::iota(tail.begin(), tail.end(), done);
                 pending_.push_back(ic.take(tail));
                 pending_.push_back(oc.take(tail));
@@ -109,12 +112,12 @@ class PivotCursor : public Cursor {
         }
     }
 
-    dstd::Optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
         return produced_;
     }
 
    private:
-    int idx_of(const std::string& name) const {
+    int idx_of(const dstd::String& name) const {
         auto it = std::find(sch_.begin(), sch_.end(), name);
         return it == sch_.end() ? -1 : static_cast<int>(it - sch_.begin());
     }
@@ -124,8 +127,8 @@ class PivotCursor : public Cursor {
         const int ci = require_col(sch_, on_, "pivot");
         const int vi = require_col(sch_, values_, "pivot");
 
-        ankerl::unordered_dense::set<std::string> seen;
-        std::vector<Series> distinct;
+        ankerl::unordered_dense::set<dstd::String> seen;
+        dstd::Vector<Series> distinct;
         for (;;) {
             auto m = co_await first_->next(max_rows);
             if (!m) break;
@@ -133,11 +136,11 @@ class PivotCursor : public Cursor {
             const Series& oc = m->columns[static_cast<std::size_t>(ci)];
             const Series& vc = m->columns[static_cast<std::size_t>(vi)];
             distinct_into(oc, seen, distinct);
-            std::vector<std::int64_t> keep;
+            dstd::Vector<std::int64_t> keep;
             keep.reserve(static_cast<std::size_t>(m->rows));
             for (std::int64_t i = 0; i < m->rows; ++i)
                 if (!ic.is_null(i)) keep.push_back(i);
-            std::vector<Series> cols;
+            dstd::Vector<Series> cols;
             if (static_cast<std::int64_t>(keep.size()) == m->rows) {
                 cols.push_back(ic.share());
                 cols.push_back(oc.share());
@@ -160,7 +163,7 @@ class PivotCursor : public Cursor {
                 ? Series{}
                 : concat_columns(column_ptrs(distinct)).unique().materialize();
         const std::int64_t C = uniq_col_.length();
-        std::vector<Series> one;
+        dstd::Vector<Series> one;
         one.push_back(uniq_col_.share());
         for (std::int64_t c = 0; c < C; ++c)
             col_of_.emplace(row_key(one, c), c);
@@ -168,17 +171,18 @@ class PivotCursor : public Cursor {
         for (std::int64_t c = 0; c < C; ++c)
             produced_.push_back(cell_to_string(uniq_col_, c));
 
-        const std::string i_name = "__dftu_pivot_index__";
-        const std::string o_name = "__dftu_pivot_on__";
-        const std::string v_name = "__dftu_pivot_value__";
+        const dstd::String i_name = "__dftu_pivot_index__";
+        const dstd::String o_name = "__dftu_pivot_on__";
+        const dstd::String v_name = "__dftu_pivot_value__";
         auto grouped = make_group_by(
-            spool_.reader(), std::vector<std::string>{i_name, o_name, v_name},
-            std::vector<std::string>{i_name, o_name},
-            std::vector<GroupAgg>{GroupAgg{agg_from_string(agg_), v_name, "v"}},
+            spool_.reader(), dstd::Vector<dstd::String>{i_name, o_name, v_name},
+            dstd::Vector<dstd::String>{i_name, o_name},
+            dstd::Vector<GroupAgg>{
+                GroupAgg{agg_from_string(agg_), v_name, "v"}},
             budget_ / share::SPOOL);
         sorted_ = make_sort_merge(
-            std::move(grouped), std::vector<std::string>{i_name, o_name, "v"},
-            std::vector<std::string>{i_name}, std::vector<bool>{false},
+            std::move(grouped), dstd::Vector<dstd::String>{i_name, o_name, "v"},
+            dstd::Vector<dstd::String>{i_name}, dstd::Vector<bool>{false},
             budget_ / share::SPOOL);
         built_ = true;
     }
@@ -188,14 +192,14 @@ class PivotCursor : public Cursor {
     Morsel widen(const Series& ic, const Series& oc, const Series& vc,
                  std::int64_t rows) const {
         const std::int64_t C = static_cast<std::int64_t>(col_of_.size());
-        std::vector<Series> ione, cone;
+        dstd::Vector<Series> ione, cone;
         ione.push_back(ic.share());
         cone.push_back(oc.share());
-        std::vector<std::int64_t> first_row;
-        std::vector<std::int64_t> cell_src;
-        std::string prev;
+        dstd::Vector<std::int64_t> first_row;
+        dstd::Vector<std::int64_t> cell_src;
+        dstd::String prev;
         for (std::int64_t i = 0; i < rows; ++i) {
-            std::string key = row_key(ione, i);
+            dstd::String key = row_key(ione, i);
             if (first_row.empty() || key != prev) {
                 first_row.push_back(i);
                 cell_src.resize(cell_src.size() + static_cast<std::size_t>(C),
@@ -212,7 +216,7 @@ class PivotCursor : public Cursor {
         DataFrame out;
         out.names.push_back(index_);
         out.columns.push_back(ic.take(first_row).materialize());
-        std::vector<std::int64_t> ti(R);
+        dstd::Vector<std::int64_t> ti(R);
         for (std::int64_t c = 0; c < C; ++c) {
             for (std::size_t r = 0; r < R; ++r)
                 ti[r] = cell_src[r * static_cast<std::size_t>(C) +
@@ -225,11 +229,11 @@ class PivotCursor : public Cursor {
 
     // Append the first-occurrence non-null cells of `col` to `chunks`.
     static void distinct_into(const Series& col,
-                              ankerl::unordered_dense::set<std::string>& seen,
-                              std::vector<Series>& chunks) {
-        std::vector<Series> one;
+                              ankerl::unordered_dense::set<dstd::String>& seen,
+                              dstd::Vector<Series>& chunks) {
+        dstd::Vector<Series> one;
         one.push_back(col.share());
-        std::vector<std::int64_t> keep;
+        dstd::Vector<std::int64_t> keep;
         for (std::int64_t i = 0; i < col.length(); ++i)
             if (!col.is_null(i) && seen.insert(row_key(one, i)).second)
                 keep.push_back(i);
@@ -237,33 +241,33 @@ class PivotCursor : public Cursor {
     }
 
     Governor gov_{"pivot"};
-    std::unique_ptr<Cursor> first_, sorted_;
+    dstd::UniquePtr<Cursor> first_, sorted_;
     spill::Spool spool_;
     std::uint64_t budget_;
-    std::vector<std::string> sch_;
-    std::string index_, on_, values_, agg_;
+    dstd::Vector<dstd::String> sch_;
+    dstd::String index_, on_, values_, agg_;
     bool built_ = false;
     bool eof_ = false;
     Series uniq_col_;
-    ankerl::unordered_dense::map<std::string, std::int64_t> col_of_;
-    std::vector<Series> pending_;
+    ankerl::unordered_dense::map<dstd::String, std::int64_t> col_of_;
+    dstd::Vector<Series> pending_;
     std::int64_t pending_rows_ = 0;
     dstd::Optional<Morsel> ahead_;
-    std::vector<std::string> produced_;
+    dstd::Vector<dstd::String> produced_;
 };
 
 }  // namespace
 
 namespace lazy_internal {
 
-std::unique_ptr<Cursor> make_pivot(std::unique_ptr<Cursor> in,
+dstd::UniquePtr<Cursor> make_pivot(dstd::UniquePtr<Cursor> in,
                                    std::uint64_t budget,
-                                   std::vector<std::string> sch,
-                                   std::string index, std::string on,
-                                   std::string values, std::string agg) {
-    return std::make_unique<PivotCursor>(std::move(in), budget, std::move(sch),
-                                         std::move(index), std::move(on),
-                                         std::move(values), std::move(agg));
+                                   dstd::Vector<dstd::String> sch,
+                                   dstd::String index, dstd::String on,
+                                   dstd::String values, dstd::String agg) {
+    return dstd::make_unique<PivotCursor>(std::move(in), budget, std::move(sch),
+                                          std::move(index), std::move(on),
+                                          std::move(values), std::move(agg));
 }
 
 }  // namespace lazy_internal

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <atomic>
 
@@ -54,7 +56,7 @@ std::int64_t scalar_to_i64(const dftu_scalar& s) {
 // op over the whole column. Every other column passes through shared.
 class ColumnScanCursor : public Cursor {
    public:
-    ColumnScanCursor(std::unique_ptr<Cursor> in, std::vector<Field> in_fields,
+    ColumnScanCursor(dstd::UniquePtr<Cursor> in, dstd::Vector<Field> in_fields,
                      std::size_t column, const dftu_op_desc* op, Carry carry,
                      std::int64_t keep, std::int64_t shift)
         : in_(std::move(in)),
@@ -92,7 +94,7 @@ class ColumnScanCursor : public Cursor {
         const std::int64_t held = carry_.valid() ? carry_.length() : 0;
         Series whole;
         if (held > 0) {
-            const std::vector<const Series*> parts{&carry_, &col};
+            const dstd::Vector<const Series*> parts{&carry_, &col};
             whole = concat_columns(parts);
         } else {
             whole = col.share();
@@ -126,8 +128,8 @@ class ColumnScanCursor : public Cursor {
         return std::move(m);
     }
 
-    std::unique_ptr<Cursor> in_;
-    std::vector<Field> in_fields_;
+    dstd::UniquePtr<Cursor> in_;
+    dstd::Vector<Field> in_fields_;
     std::size_t column_;
     const dftu_op_desc* op_;
     Carry carry_mode_;
@@ -141,8 +143,8 @@ class ColumnScanCursor : public Cursor {
 // operand column that sit under it.
 class SeriesColumnCursor : public Cursor {
    public:
-    SeriesColumnCursor(std::unique_ptr<Cursor> in,
-                       const std::vector<std::string>& sch, std::string name,
+    SeriesColumnCursor(dstd::UniquePtr<Cursor> in,
+                       const dstd::Vector<dstd::String>& sch, dstd::String name,
                        Series column)
         : in_(std::move(in)), out_names_(sch) {
         const int at = column_index_of(sch, name);
@@ -175,20 +177,20 @@ class SeriesColumnCursor : public Cursor {
         co_return std::move(*m);
     }
 
-    dstd::Optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
         return out_names_;
     }
 
    private:
-    std::unique_ptr<Cursor> in_;
-    std::vector<std::string> out_names_;
+    dstd::UniquePtr<Cursor> in_;
+    dstd::Vector<dstd::String> out_names_;
     DataFrame operand_;
     std::size_t at_ = 0;
     std::int64_t offset_ = 0;
 };
 
-bool static_schema(const std::vector<std::string>& sch,
-                   const std::vector<Field>& in_fields) {
+bool static_schema(const dstd::Vector<dstd::String>& sch,
+                   const dstd::Vector<Field>& in_fields) {
     return !sch.empty() && !has_rest(sch) && in_fields.size() == sch.size();
 }
 
@@ -200,19 +202,19 @@ std::uint64_t column_scan_morsels() {
 
 namespace lazy_internal {
 
-std::unique_ptr<Cursor> make_column_scan(std::unique_ptr<Cursor>& in,
-                                         const std::vector<std::string>& sch,
-                                         const std::vector<Field>& in_fields,
+dstd::UniquePtr<Cursor> make_column_scan(dstd::UniquePtr<Cursor>& in,
+                                         const dstd::Vector<dstd::String>& sch,
+                                         const dstd::Vector<Field>& in_fields,
                                          const OwnedFrameOpArgs& args) {
     if (!static_schema(sch, in_fields) || !args.frames().empty())
         return nullptr;
-    const std::string& series_op = args.strings_at(2).front();
+    const dstd::String& series_op = args.strings_at(2).front();
     const ScanOp* scan =
         std::find_if(std::begin(SCAN_OPS), std::end(SCAN_OPS),
                      [&](const ScanOp& s) { return s.name == series_op; });
     if (scan == std::end(SCAN_OPS) || !args.strings_at(3).front().empty())
         return nullptr;
-    const std::string& column = args.strings_at(1).front();
+    const dstd::String& column = args.strings_at(1).front();
     const int at = column_index_of(sch, column);
     const auto field =
         std::find_if(in_fields.begin(), in_fields.end(),
@@ -232,21 +234,20 @@ std::unique_ptr<Cursor> make_column_scan(std::unique_ptr<Cursor>& in,
     }
     const dftu_op_desc* op = dftu_op_find(series_op.c_str());
     if (!op) return nullptr;
-    return std::make_unique<ColumnScanCursor>(std::move(in), in_fields,
-                                              static_cast<std::size_t>(at), op,
-                                              scan->carry, keep, shift);
+    return dstd::make_unique<ColumnScanCursor>(std::move(in), in_fields,
+                                               static_cast<std::size_t>(at), op,
+                                               scan->carry, keep, shift);
 }
 
-std::unique_ptr<Cursor> make_series_column(std::unique_ptr<Cursor>& in,
-                                           const std::vector<std::string>& sch,
-                                           const std::vector<Field>& in_fields,
-                                           const OwnedFrameOpArgs& args) {
+dstd::UniquePtr<Cursor> make_series_column(
+    dstd::UniquePtr<Cursor>& in, const dstd::Vector<dstd::String>& sch,
+    const dstd::Vector<Field>& in_fields, const OwnedFrameOpArgs& args) {
     if (!static_schema(sch, in_fields) || !args.frames().empty() ||
         !args.series_at(2).valid())
         return nullptr;
-    return std::make_unique<SeriesColumnCursor>(std::move(in), sch,
-                                                args.strings_at(1).front(),
-                                                args.series_at(2).share());
+    return dstd::make_unique<SeriesColumnCursor>(std::move(in), sch,
+                                                 args.strings_at(1).front(),
+                                                 args.series_at(2).share());
 }
 
 }  // namespace lazy_internal

@@ -10,6 +10,9 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <chrono>
@@ -18,7 +21,6 @@
 #include <cstdlib>
 #include <random>
 #include <string>
-#include <vector>
 
 namespace df = dftracer::utils::dataframe;
 using df::DataFrame;
@@ -53,15 +55,16 @@ DataFrame make_frame(std::int64_t n) {
     std::mt19937_64 rng(42);
     std::uniform_real_distribution<double> dist(0.0, 1000.0);
     std::uniform_int_distribution<std::int64_t> by_dist(0, 1000000);
-    std::vector<std::int64_t> key(n), ts(n), by(n);
-    std::vector<double> v(n);
-    std::vector<std::string> s(n);
+    dftracer::utils::dstd::Vector<std::int64_t> key(n), ts(n), by(n);
+    dftracer::utils::dstd::Vector<double> v(n);
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> s(n);
     for (std::int64_t i = 0; i < n; ++i) {
         key[i] = i % PARTITIONS;
         ts[i] = i / PARTITIONS;
         by[i] = by_dist(rng);
         v[i] = dist(rng);
-        s[i] = "str" + std::to_string(rng() % DISTINCT_STRINGS);
+        s[i] =
+            "str" + dftracer::utils::dstd::to_string(rng() % DISTINCT_STRINGS);
     }
     DataFrame d;
     d.names = {"key", "ts", "v", "by", "s"};
@@ -90,8 +93,10 @@ int main(int argc, char** argv) {
     const std::int64_t n = argc > 1 ? std::atoll(argv[1]) : 1000000;
     const int reps = argc > 2 ? std::atoi(argv[2]) : 3;
     const DataFrame frame = make_frame(n);
-    const std::vector<std::string> part = {"key"};
-    const std::vector<std::string> order = {"ts"};
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> part = {
+        "key"};
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> order = {
+        "ts"};
 
     std::printf("rows=%lld reps=%d partitions=%lld\n",
                 static_cast<long long>(n), reps,
@@ -109,9 +114,9 @@ int main(int argc, char** argv) {
                         c.name, mode_name, static_cast<long long>(width));
                     continue;
                 }
-                const std::vector<WindowColumn> specs = {
+                const dftracer::utils::dstd::Vector<WindowColumn> specs = {
                     make_spec(c, mode, width)};
-                std::vector<double> ms;
+                dftracer::utils::dstd::Vector<double> ms;
                 for (int r = 0; r < reps; ++r) {
                     const auto t0 = std::chrono::steady_clock::now();
                     DataFrame out = df::window(frame, part, order, specs);

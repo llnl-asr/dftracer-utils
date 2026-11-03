@@ -8,13 +8,13 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -124,12 +124,12 @@ class Series {
 
     /// Build a FLAT String column from `values` (offsets + concatenated bytes).
     /// Throws std::length_error when the total bytes pass INT32_MAX.
-    static Series strings(const std::vector<std::string>& values) {
-        std::vector<std::int32_t> offsets(values.size() + 1, 0);
+    static Series strings(const dstd::Vector<dstd::String>& values) {
+        dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
         for (const auto& v : values) total += v.size();
         check_string_bytes(total);
-        std::string data;
+        dstd::String data;
         for (std::size_t i = 0; i < values.size(); ++i) {
             data += values[i];
             offsets[i + 1] = static_cast<std::int32_t>(data.size());
@@ -143,11 +143,11 @@ class Series {
     /// contiguous Arrow buffer, without the intermediate std::string vector the
     /// overload above builds.
     static Series strings(dstd::Span<const dstd::StringView> values) {
-        std::vector<std::int32_t> offsets(values.size() + 1, 0);
+        dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
         for (const auto& v : values) total += v.size();
         check_string_bytes(total);
-        std::string data;
+        dstd::String data;
         data.reserve(total);
         for (std::size_t i = 0; i < values.size(); ++i) {
             data.append(values[i].data(), values[i].size());
@@ -162,11 +162,11 @@ class Series {
     /// valid). A null slot contributes no bytes (its offset repeats the prior).
     static Series strings(dstd::Span<const dstd::StringView> values,
                           const std::uint8_t* validity) {
-        std::vector<std::int32_t> offsets(values.size() + 1, 0);
+        dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
         for (const auto& v : values) total += v.size();
         check_string_bytes(total);
-        std::string data;
+        dstd::String data;
         data.reserve(total);
         for (std::size_t i = 0; i < values.size(); ++i) {
             data.append(values[i].data(), values[i].size());
@@ -181,16 +181,16 @@ class Series {
     /// fill a column absent from one part of a schema-union concat.
     static Series nulls(TypeId type, std::int64_t n) {
         if (n < 0) n = 0;
-        std::vector<std::uint8_t> validity(
+        dstd::Vector<std::uint8_t> validity(
             static_cast<std::size_t>((n + 7) / 8), 0);  // every row null
         if (type == TypeId::String || type == TypeId::Binary) {
-            std::vector<std::int32_t> offsets(static_cast<std::size_t>(n) + 1,
-                                              0);
+            dstd::Vector<std::int32_t> offsets(static_cast<std::size_t>(n) + 1,
+                                               0);
             return Series{dftu_series_new_string(static_cast<dftu_dtype>(type),
                                                  offsets.data(), "", n,
                                                  validity.data())};
         }
-        std::vector<std::uint8_t> data(buffer_bytes(type, n), 0);
+        dstd::Vector<std::uint8_t> data(buffer_bytes(type, n), 0);
         return Series{dftu_series_new_flat(static_cast<dftu_dtype>(type),
                                            data.data(), n, validity.data())};
     }
@@ -198,14 +198,14 @@ class Series {
     /// Build a STRUCT column from field `names` and `columns` (each the same
     /// length, aligned to names); takes ownership of the field columns. The
     /// columns are move-only, so pass them in a vector built by move.
-    static Series structs(std::vector<std::string> names,
-                          std::vector<Series> columns) {
-        std::vector<dftu_series*> handles;
-        std::vector<const char*> cnames;
+    static Series structs(dstd::Vector<dstd::String> names,
+                          dstd::Vector<Series> columns) {
+        dstd::Vector<dftu_series*> handles;
+        dstd::Vector<const char*> cnames;
         handles.reserve(columns.size());
         cnames.reserve(names.size());
         for (Series& c : columns) handles.push_back(c.release());
-        for (const std::string& s : names) cnames.push_back(s.c_str());
+        for (const dstd::String& s : names) cnames.push_back(s.c_str());
         return Series{
             dftu_series_new_struct(handles.data(), cnames.data(),
                                    static_cast<std::int32_t>(handles.size()))};
@@ -213,7 +213,7 @@ class Series {
 
     /// Build a LIST column: `offsets` (n+1 entries) index into `values`; takes
     /// ownership of `values`.
-    static Series list(const std::vector<std::int32_t>& offsets,
+    static Series list(const dstd::Vector<std::int32_t>& offsets,
                        Series values) {
         return Series{dftu_series_new_list(
             offsets.data(), static_cast<std::int64_t>(offsets.size()) - 1,
@@ -334,10 +334,10 @@ class Series {
     }
 
     /// Name of Struct field `i`; empty for a List's element or out of range.
-    std::string field_name(std::int64_t i) const {
+    dstd::String field_name(std::int64_t i) const {
         const char* s =
             dftu_series_field_name(handle_, static_cast<std::int32_t>(i));
-        return s ? std::string(s) : std::string();
+        return s ? dstd::String(s) : dstd::String();
     }
 
     /// The full nested @ref DataType, walking `num_children()`/`child()` and
@@ -532,7 +532,7 @@ class Series {
 #endif
 
     Series argsort(bool descending = false) const;
-    Series take(const std::vector<std::int64_t>& indices) const;
+    Series take(const dstd::Vector<std::int64_t>& indices) const;
     Series take(dstd::Span<const std::int64_t> indices) const;
     Series materialize() const;
     /// Keep the rows where the bit-packed Bool `mask` (same length) is true.

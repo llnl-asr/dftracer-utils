@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/timestamp_histogram.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/varint.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstring>
@@ -26,7 +27,7 @@ void TimestampHistogram::add(std::uint64_t timestamp_us) {
 void TimestampHistogram::merge(const TimestampHistogram& other) {
     if (other.bins_.empty()) return;
 
-    std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> merged;
+    dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> merged;
     merged.reserve(bins_.size() + other.bins_.size());
 
     auto a = bins_.begin();
@@ -75,10 +76,10 @@ double TimestampHistogram::selectivity(std::uint64_t ts_start_us,
            static_cast<double>(total_count_);
 }
 
-std::vector<double> TimestampHistogram::expansion_weights(
+dstd::Vector<double> TimestampHistogram::expansion_weights(
     std::uint64_t bucket_start_us, std::uint64_t bucket_end_us,
     std::size_t num_sub_buckets) const {
-    std::vector<double> weights(num_sub_buckets, 0.0);
+    dstd::Vector<double> weights(num_sub_buckets, 0.0);
     if (num_sub_buckets == 0 || bucket_start_us >= bucket_end_us)
         return weights;
 
@@ -108,8 +109,8 @@ std::vector<double> TimestampHistogram::expansion_weights(
     return weights;
 }
 
-std::vector<std::uint8_t> TimestampHistogram::serialize() const {
-    std::vector<std::uint8_t> out;
+dstd::Vector<std::uint8_t> TimestampHistogram::serialize() const {
+    dstd::Vector<std::uint8_t> out;
     out.reserve(bins_.size() * 6 + 16);
 
     dstd::append_varint(out, total_count_);

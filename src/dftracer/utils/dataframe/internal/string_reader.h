@@ -7,14 +7,13 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <numeric>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -104,13 +103,13 @@ inline bool str_at(const dftu_series* c, std::int64_t i,
 /// `nranks` is the number of distinct values. False when `v` is not a
 /// Dictionary with a child.
 inline bool dictionary_ranks(const dftu_series* v,
-                             std::vector<std::int32_t>& per_row,
+                             dstd::Vector<std::int32_t>& per_row,
                              std::int32_t& nranks) {
     if (v->encoding != Encoding::Dictionary || !v->child()) return false;
     const dftu_series* dict = v->child().get();
     const auto k = static_cast<std::size_t>(dict->length);
-    std::vector<dstd::StringView> vals(k);
-    std::vector<std::int32_t> live;
+    dstd::Vector<dstd::StringView> vals(k);
+    dstd::Vector<std::int32_t> live;
     live.reserve(k);
     for (std::size_t j = 0; j < k; ++j)
         if (str_at(dict, static_cast<std::int64_t>(j), vals[j]))
@@ -119,7 +118,7 @@ inline bool dictionary_ranks(const dftu_series* v,
         return vals[static_cast<std::size_t>(a)] <
                vals[static_cast<std::size_t>(b)];
     });
-    std::vector<std::int32_t> code_rank(k, -1);
+    dstd::Vector<std::int32_t> code_rank(k, -1);
     nranks = 0;
     for (std::size_t j = 0; j < live.size(); ++j) {
         if (j > 0 && vals[static_cast<std::size_t>(live[j])] !=
@@ -146,14 +145,14 @@ inline bool dictionary_ranks(const dftu_series* v,
 /// returned once the distinct values pass a quarter of the rows, where a
 /// compare sort is the better path.
 inline bool string_ranks(const dftu_series* v,
-                         std::vector<std::int32_t>& per_row,
+                         dstd::Vector<std::int32_t>& per_row,
                          std::int32_t& nranks) {
     if (v->encoding == Encoding::Dictionary && v->child())
         return dictionary_ranks(v, per_row, nranks);
     const std::int64_t n = v->length;
     const std::int64_t cap = n / 4;
     ankerl::unordered_dense::map<dstd::StringView, std::int32_t> seen;
-    std::vector<dstd::StringView> vals;
+    dstd::Vector<dstd::StringView> vals;
     per_row.resize(static_cast<std::size_t>(n));
     dstd::StringView s;
     for (std::int64_t i = 0; i < n; ++i) {
@@ -172,14 +171,14 @@ inline bool string_ranks(const dftu_series* v,
         }
         per_row[static_cast<std::size_t>(i)] = it->second;
     }
-    std::vector<std::int32_t> by_bytes(vals.size());
+    dstd::Vector<std::int32_t> by_bytes(vals.size());
     std::iota(by_bytes.begin(), by_bytes.end(), 0);
     std::sort(by_bytes.begin(), by_bytes.end(),
               [&](std::int32_t a, std::int32_t b) {
                   return vals[static_cast<std::size_t>(a)] <
                          vals[static_cast<std::size_t>(b)];
               });
-    std::vector<std::int32_t> code_rank(vals.size());
+    dstd::Vector<std::int32_t> code_rank(vals.size());
     for (std::size_t j = 0; j < by_bytes.size(); ++j)
         code_rank[static_cast<std::size_t>(by_bytes[j])] =
             static_cast<std::int32_t>(j);
@@ -191,11 +190,11 @@ inline bool string_ranks(const dftu_series* v,
 
 /// Stable row order by `ranks` (-1 sorts last in both directions): one
 /// histogram pass and one placement pass.
-inline void counting_order(const std::vector<std::int32_t>& ranks,
+inline void counting_order(const dstd::Vector<std::int32_t>& ranks,
                            std::int32_t nranks, bool descending,
                            std::int64_t* order) {
     const auto k = static_cast<std::size_t>(nranks);
-    std::vector<std::int64_t> start(k + 2, 0);
+    dstd::Vector<std::int64_t> start(k + 2, 0);
     auto bucket = [&](std::int32_t r) -> std::size_t {
         return r < 0
                    ? k
@@ -252,7 +251,7 @@ dftu_series* string_mask(const dftu_series* v, Pred pred) {
     constexpr std::int64_t GRAIN = std::int64_t{1} << 15;
     if (v->encoding == Encoding::Dictionary && v->child()) {
         const dftu_series* dict = v->child().get();
-        std::vector<char> hit(static_cast<std::size_t>(dict->length), 0);
+        dstd::Vector<char> hit(static_cast<std::size_t>(dict->length), 0);
         dstd::StringView s;
         for (std::int64_t k = 0; k < dict->length; ++k)
             hit[static_cast<std::size_t>(k)] = str_at(dict, k, s) && pred(s);
@@ -305,8 +304,8 @@ dftu_series* string_int64(const dftu_series* v, Fn fn) {
     dstd::StringView s;
     if (v->encoding == Encoding::Dictionary && v->child()) {
         const dftu_series* dict = v->child().get();
-        std::vector<std::int64_t> per(static_cast<std::size_t>(dict->length),
-                                      0);
+        dstd::Vector<std::int64_t> per(static_cast<std::size_t>(dict->length),
+                                       0);
         for (std::int64_t k = 0; k < dict->length; ++k)
             if (str_at(dict, k, s)) per[static_cast<std::size_t>(k)] = fn(s);
         const auto* codes =

@@ -5,11 +5,11 @@
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
 using dftracer::utils::dataframe::CmpOp;
 using dftracer::utils::dataframe::dictionary_encode;
@@ -38,7 +38,7 @@ TEST_SUITE("expr string comparisons") {
     TEST_CASE(
         "col == string literal masks matching rows, != is the complement") {
         Series cat = Series::strings({"POSIX", "STDIO", "POSIX", "MPIIO"});
-        std::vector<const Series*> in{&cat};
+        dftracer::utils::dstd::Vector<const Series*> in{&cat};
 
         Series eq_mask =
             eval(expr_cmp(CmpOp::Eq, expr_col(0),
@@ -63,9 +63,9 @@ TEST_SUITE("expr string comparisons") {
         "expr_cmp copies a STR rhs; mutating the source buffer afterward "
         "does not change the result") {
         Series cat = Series::strings({"POSIX", "STDIO", "POSIX"});
-        std::vector<const Series*> in{&cat};
+        dftracer::utils::dstd::Vector<const Series*> in{&cat};
 
-        std::string needle = "POSIX";
+        dftracer::utils::dstd::String needle = "POSIX";
         Expr e = expr_cmp(CmpOp::Eq, expr_col(0),
                           dftracer::utils::dataframe::str(needle));
 
@@ -83,11 +83,11 @@ TEST_SUITE("expr string comparisons") {
         "expr_cmp copies a STR rhs; destroying the source string "
         "afterward does not change the result") {
         Series cat = Series::strings({"POSIX", "STDIO", "POSIX"});
-        std::vector<const Series*> in{&cat};
+        dftracer::utils::dstd::Vector<const Series*> in{&cat};
 
         Expr e;
         {
-            std::string needle = "POSIX";
+            dftracer::utils::dstd::String needle = "POSIX";
             e = expr_cmp(CmpOp::Eq, expr_col(0),
                          dftracer::utils::dataframe::str(needle));
         }  // needle destroyed here
@@ -104,8 +104,8 @@ TEST_SUITE("expr string comparisons") {
         Series dict = dictionary_encode(flat);
         REQUIRE(dict.encoding() == Encoding::Dictionary);
 
-        std::vector<const Series*> flat_in{&flat};
-        std::vector<const Series*> dict_in{&dict};
+        dftracer::utils::dstd::Vector<const Series*> flat_in{&flat};
+        dftracer::utils::dstd::Vector<const Series*> dict_in{&dict};
 
         Series flat_mask =
             eval(expr_cmp(CmpOp::Eq, expr_col(0),
@@ -164,14 +164,15 @@ TEST_SUITE("expr string comparisons") {
         "CSE keys on string content: two different literals in one "
         "eval_many stay distinct") {
         Series cat = Series::strings({"POSIX", "STDIO", "POSIX"});
-        std::vector<const Series*> in{&cat};
+        dftracer::utils::dstd::Vector<const Series*> in{&cat};
 
         Expr posix_eq = expr_cmp(CmpOp::Eq, expr_col(0),
                                  dftracer::utils::dataframe::str("POSIX"));
         Expr stdio_eq = expr_cmp(CmpOp::Eq, expr_col(0),
                                  dftracer::utils::dataframe::str("STDIO"));
 
-        std::vector<Series> outs = eval_many({posix_eq, stdio_eq}, in);
+        dftracer::utils::dstd::Vector<Series> outs =
+            eval_many({posix_eq, stdio_eq}, in);
         REQUIRE(outs.size() == 2);
         REQUIRE(outs[0].valid());
         REQUIRE(outs[1].valid());

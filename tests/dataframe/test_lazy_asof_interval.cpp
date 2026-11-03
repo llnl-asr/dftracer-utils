@@ -13,6 +13,8 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -24,8 +26,6 @@
 #include <random>
 #include <span>
 #include <string>
-#include <string_view>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -39,18 +39,18 @@ using df::TypeId;
 namespace {
 
 using I = dstd::Optional<std::int64_t>;
-using S = dstd::Optional<std::string>;
+using S = dstd::Optional<dstd::String>;
 
-std::vector<std::uint8_t> bits_of(const std::vector<bool>& valid) {
-    std::vector<std::uint8_t> bits((valid.size() + 7) / 8, 0);
+dstd::Vector<std::uint8_t> bits_of(const dstd::Vector<bool>& valid) {
+    dstd::Vector<std::uint8_t> bits((valid.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < valid.size(); ++i)
         if (valid[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
     return bits;
 }
 
-Series i64s(const std::vector<I>& v) {
-    std::vector<std::int64_t> d(v.size());
-    std::vector<bool> valid(v.size());
+Series i64s(const dstd::Vector<I>& v) {
+    dstd::Vector<std::int64_t> d(v.size());
+    dstd::Vector<bool> valid(v.size());
     for (std::size_t i = 0; i < v.size(); ++i) {
         valid[i] = v[i].has_value();
         d[i] = v[i].value_or(0);
@@ -61,9 +61,9 @@ Series i64s(const std::vector<I>& v) {
 }
 
 // A null time is a null in half the rows and a NaN in the others.
-Series f64s(const std::vector<I>& v) {
-    std::vector<double> d(v.size());
-    std::vector<bool> valid(v.size());
+Series f64s(const dstd::Vector<I>& v) {
+    dstd::Vector<double> d(v.size());
+    dstd::Vector<bool> valid(v.size());
     for (std::size_t i = 0; i < v.size(); ++i) {
         valid[i] = v[i].has_value() || i % 2 == 0;
         d[i] = v[i] ? static_cast<double>(*v[i]) * 0.5
@@ -75,9 +75,9 @@ Series f64s(const std::vector<I>& v) {
                         static_cast<std::int64_t>(d.size()), bits.data());
 }
 
-Series strs(const std::vector<S>& v) {
-    std::vector<dstd::StringView> views;
-    std::vector<bool> valid(v.size());
+Series strs(const dstd::Vector<S>& v) {
+    dstd::Vector<dstd::StringView> views;
+    dstd::Vector<bool> valid(v.size());
     for (std::size_t i = 0; i < v.size(); ++i) {
         valid[i] = v[i].has_value();
         views.emplace_back(v[i] ? dstd::StringView(*v[i]) : dstd::StringView());
@@ -88,47 +88,47 @@ Series strs(const std::vector<S>& v) {
 }
 
 template <class... Cols>
-DataFrame frame(std::vector<std::string> names, Cols&&... cols) {
+DataFrame frame(dstd::Vector<dstd::String> names, Cols&&... cols) {
     DataFrame out;
     out.names = std::move(names);
     (out.columns.push_back(std::move(cols)), ...);
     return out;
 }
 
-coro::CoroTask<std::vector<DataFrame>> stream_all(LazyFrame lf,
-                                                  std::int64_t max_rows) {
-    std::vector<DataFrame> out;
+coro::CoroTask<dstd::Vector<DataFrame>> stream_all(LazyFrame lf,
+                                                   std::int64_t max_rows) {
+    dstd::Vector<DataFrame> out;
     auto g = lf.stream(max_rows);
     while (auto df = co_await g.next()) out.push_back(std::move(*df));
     co_return out;
 }
 
-std::vector<DataFrame> morsels(const LazyFrame& lf,
-                               std::int64_t max_rows = 1'000'000) {
+dstd::Vector<DataFrame> morsels(const LazyFrame& lf,
+                                std::int64_t max_rows = 1'000'000) {
     return dftracer::utils::default_runtime()
         .submit(stream_all(lf, max_rows))
         .get();
 }
 
-std::vector<std::string> row_keys(const DataFrame& d) {
-    std::vector<Series> cols;
+dstd::Vector<dstd::String> row_keys(const DataFrame& d) {
+    dstd::Vector<Series> cols;
     for (const Series& c : d.columns) cols.push_back(c.materialize());
-    std::vector<std::string> keys;
+    dstd::Vector<dstd::String> keys;
     for (std::int64_t r = 0; r < d.num_rows(); ++r)
         keys.push_back(df::row_key(cols, r));
     return keys;
 }
 
-std::vector<std::string> row_keys(const std::vector<DataFrame>& parts) {
-    std::vector<std::string> keys;
+dstd::Vector<dstd::String> row_keys(const dstd::Vector<DataFrame>& parts) {
+    dstd::Vector<dstd::String> keys;
     for (const DataFrame& p : parts)
-        for (std::string& k : row_keys(p)) keys.push_back(std::move(k));
+        for (dstd::String& k : row_keys(p)) keys.push_back(std::move(k));
     return keys;
 }
 
 // The lazy rows must equal the eager rows in value and order, and the lazy
 // morsels must carry the eager names and types.
-void expect_same(const std::vector<DataFrame>& lazy, const DataFrame& eager) {
+void expect_same(const dstd::Vector<DataFrame>& lazy, const DataFrame& eager) {
     CHECK(row_keys(lazy) == row_keys(eager));
     if (eager.num_rows() == 0) return;
     REQUIRE(!lazy.empty());
@@ -154,16 +154,16 @@ Inputs make_inputs(std::uint32_t seed, std::int64_t nl, std::int64_t nr,
     const auto pick = [&](int n) {
         return static_cast<std::int64_t>(rng() % static_cast<unsigned>(n));
     };
-    const auto key = [&](std::vector<I>& g, std::vector<S>& s) {
+    const auto key = [&](dstd::Vector<I>& g, dstd::Vector<S>& s) {
         const std::int64_t k = pick(8) == 0 ? -1 : pick(4);
         g.push_back(k < 0 ? I{} : I{k});
-        s.push_back(k < 0 ? S{} : S{std::string("k") + std::to_string(k)});
+        s.push_back(k < 0 ? S{} : S{dstd::String("k") + dstd::to_string(k)});
     };
-    const auto time = [&](std::vector<I>& t) {
+    const auto time = [&](dstd::Vector<I>& t) {
         t.push_back(pick(20) == 0 ? I{} : I{pick(60)});
     };
-    std::vector<I> lg, lt, lv, rg, rt, rv, rv2;
-    std::vector<S> ls, rs;
+    dstd::Vector<I> lg, lt, lv, rg, rt, rv, rv2;
+    dstd::Vector<S> ls, rs;
     for (std::int64_t i = 0; i < nl; ++i) {
         key(lg, ls);
         time(lt);
@@ -191,9 +191,10 @@ LazyFrame budgeted(const DataFrame& d, std::uint64_t budget) {
     return d.lazy().memory_budget(budget);
 }
 
-std::vector<DataFrame> run_asof(const Inputs& in, std::uint64_t budget,
-                                const std::vector<std::string>& by,
-                                AsofDirection dir, dstd::Optional<double> tol) {
+dstd::Vector<DataFrame> run_asof(const Inputs& in, std::uint64_t budget,
+                                 const dstd::Vector<dstd::String>& by,
+                                 AsofDirection dir,
+                                 dstd::Optional<double> tol) {
     return morsels(
         budgeted(in.left, budget).asof(in.right.lazy(), "ts", by, dir, tol));
 }
@@ -204,7 +205,7 @@ TEST_CASE("asof matches the eager op over groups, ties, nulls and any order") {
     const AsofDirection dirs[] = {AsofDirection::Backward,
                                   AsofDirection::Forward,
                                   AsofDirection::Nearest};
-    const std::vector<std::vector<std::string>> bys = {{}, {"g"}};
+    const dstd::Vector<dstd::Vector<dstd::String>> bys = {{}, {"g"}};
     const dstd::Optional<double> tols[] = {dstd::nullopt, 0.0, 3.0, 6.5};
     std::uint32_t seed = 1;
     for (const TimeKind kind : {TimeKind::INT, TimeKind::FLOAT}) {
@@ -229,7 +230,7 @@ TEST_CASE("asof matches the eager op over groups, ties, nulls and any order") {
 
 TEST_CASE("asof leaves in several morsels cut by the budget") {
     const Inputs in = make_inputs(99, 4000, 3000, TimeKind::INT, false);
-    const std::vector<DataFrame> parts = run_asof(
+    const dstd::Vector<DataFrame> parts = run_asof(
         in, SMALL_BUDGET, {"g"}, AsofDirection::Backward, dstd::nullopt);
     // Collect-then-eager would hand the whole result over in one morsel.
     CHECK(parts.size() > 4);
@@ -287,12 +288,12 @@ TEST_CASE("interval matches the eager op with overlaps, nulls and outer") {
         const auto pick = [&](int n) {
             return static_cast<std::int64_t>(rng() % static_cast<unsigned>(n));
         };
-        std::vector<I> lg, lp, lv, rg, rlo, rhi, rv;
-        std::vector<S> ls, rs;
-        const auto key = [&](std::vector<I>& g, std::vector<S>& s) {
+        dstd::Vector<I> lg, lp, lv, rg, rlo, rhi, rv;
+        dstd::Vector<S> ls, rs;
+        const auto key = [&](dstd::Vector<I>& g, dstd::Vector<S>& s) {
             const std::int64_t k = pick(8) == 0 ? -1 : pick(3);
             g.push_back(k < 0 ? I{} : I{k});
-            s.push_back(k < 0 ? S{} : S{"k" + std::to_string(k)});
+            s.push_back(k < 0 ? S{} : S{"k" + dstd::to_string(k)});
         };
         for (std::int64_t i = 0; i < 300; ++i) {
             key(lg, ls);
@@ -314,9 +315,9 @@ TEST_CASE("interval matches the eager op with overlaps, nulls and outer") {
                   i64s(rlo), i64s(rhi), i64s(rv));
         for (const bool outer : {false, true})
             for (const bool keyed : {false, true}) {
-                const std::vector<std::string> by =
-                    keyed ? std::vector<std::string>{"g"}
-                          : std::vector<std::string>{};
+                const dstd::Vector<dstd::String> by =
+                    keyed ? dstd::Vector<dstd::String>{"g"}
+                          : dstd::Vector<dstd::String>{};
                 INFO("string_key=" << string_key << " outer=" << outer
                                    << " keyed=" << keyed);
                 const DataFrame eager =
@@ -332,8 +333,8 @@ TEST_CASE("interval matches the eager op with overlaps, nulls and outer") {
 }
 
 TEST_CASE("interval cuts the pairs of one point into morsels") {
-    std::vector<I> point{I{50}, I{500}};
-    std::vector<I> lo, hi, id;
+    dstd::Vector<I> point{I{50}, I{500}};
+    dstd::Vector<I> lo, hi, id;
     for (std::int64_t i = 0; i < 6000; ++i) {
         lo.push_back(I{i % 40});
         hi.push_back(I{100 + i % 7});
@@ -344,7 +345,7 @@ TEST_CASE("interval cuts the pairs of one point into morsels") {
         frame({"lo", "hi", "id"}, i64s(lo), i64s(hi), i64s(id));
     const DataFrame eager =
         df::interval(left, right, "point", "lo", "hi", {}, true);
-    const std::vector<DataFrame> parts =
+    const dstd::Vector<DataFrame> parts =
         morsels(budgeted(left, SMALL_BUDGET)
                     .interval(right.lazy(), "point", "lo", "hi", {}, true));
     CHECK(eager.num_rows() == 6001);
@@ -353,7 +354,7 @@ TEST_CASE("interval cuts the pairs of one point into morsels") {
 }
 
 TEST_CASE("long intervals stay active across many right morsels") {
-    std::vector<I> point, lo, hi, id;
+    dstd::Vector<I> point, lo, hi, id;
     for (std::int64_t i = 0; i < 3000; ++i) point.push_back(I{i});
     for (std::int64_t i = 0; i < 2000; ++i) {
         lo.push_back(I{i / 4});

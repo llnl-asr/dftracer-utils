@@ -12,7 +12,11 @@
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>       // string key hashing
 #include <dftracer/utils/dstd/hash/splitmix64.h>  // row hashing
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <atomic>
@@ -27,7 +31,6 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -59,15 +62,15 @@ Series flat_or_ref(const Series& c, bool key) {
 }
 }  // namespace
 
-AggStatePtr group_agg_state(const std::vector<const Series*>& in_keys,
-                            const std::vector<const Series*>& in_values,
-                            std::vector<AggSpec> specs) {
+AggStatePtr group_agg_state(const dstd::Vector<const Series*>& in_keys,
+                            const dstd::Vector<const Series*>& in_values,
+                            dstd::Vector<AggSpec> specs) {
     // The accumulator reads FLAT columns; a view (a filter's selection, a
     // dictionary) is materialized once here, for every caller.
-    std::vector<Series> owned;
+    dstd::Vector<Series> owned;
     owned.reserve(in_keys.size() + in_values.size());
-    auto flat = [&](const std::vector<const Series*>& cols) {
-        std::vector<const Series*> out;
+    auto flat = [&](const dstd::Vector<const Series*>& cols) {
+        dstd::Vector<const Series*> out;
         out.reserve(cols.size());
         for (const Series* c : cols) {
             if (c->encoding() == Encoding::Flat ||
@@ -80,8 +83,8 @@ AggStatePtr group_agg_state(const std::vector<const Series*>& in_keys,
         }
         return out;
     };
-    const std::vector<const Series*> keys = flat(in_keys);
-    const std::vector<const Series*> values = flat(in_values);
+    const dstd::Vector<const Series*> keys = flat(in_keys);
+    const dstd::Vector<const Series*> values = flat(in_values);
     const std::int64_t n = !keys.empty()     ? keys[0]->length()
                            : !values.empty() ? values[0]->length()
                                              : 0;
@@ -97,7 +100,7 @@ AggStatePtr group_agg_state(const std::vector<const Series*>& in_keys,
     constexpr std::int64_t LANES = 16;
     const std::int64_t chunks = (n + AGG_GRAIN - 1) / AGG_GRAIN;
     const std::int64_t nl = std::min(LANES, chunks);
-    std::vector<AggStatePtr> lanes(static_cast<std::size_t>(nl));
+    dstd::Vector<AggStatePtr> lanes(static_cast<std::size_t>(nl));
     parallel_for(nl, 1, [&](std::int64_t l0, std::int64_t l1) {
         for (std::int64_t l = l0; l < l1; ++l) {
             AggStatePtr st = agg_new(specs);
@@ -118,8 +121,8 @@ namespace {
 // frame first shows them; `first[p]` holds the original first row of each of
 // partition p's groups. Nullopt when no partition has a group.
 dstd::Optional<DataFrame> stitch_in_first_seen_order(
-    std::vector<DataFrame>& parts,
-    std::vector<std::vector<std::int64_t>>& first, std::size_t drop_keys) {
+    dstd::Vector<DataFrame>& parts,
+    dstd::Vector<dstd::Vector<std::int64_t>>& first, std::size_t drop_keys) {
     // A pass whose caller already has the key columns leaves them out: they
     // are not joined and put in order only to be thrown away.
     if (drop_keys != 0)
@@ -132,8 +135,8 @@ dstd::Optional<DataFrame> stitch_in_first_seen_order(
                     d.columns.begin(),
                     d.columns.begin() + static_cast<std::ptrdiff_t>(drop_keys));
             }
-    std::vector<std::size_t> live;
-    std::vector<std::int64_t> first_all;
+    dstd::Vector<std::size_t> live;
+    dstd::Vector<std::int64_t> first_all;
     for (std::size_t p = 0; p < parts.size(); ++p) {
         if (parts[p].columns.empty()) continue;
         live.push_back(p);
@@ -149,7 +152,7 @@ dstd::Optional<DataFrame> stitch_in_first_seen_order(
     DataFrame out;
     const std::size_t ncols = parts[live[0]].columns.size();
     for (std::size_t c = 0; c < ncols; ++c) {
-        std::vector<DataFrame> ones;
+        dstd::Vector<DataFrame> ones;
         ones.reserve(live.size());
         for (const std::size_t p : live) {
             DataFrame one;
@@ -157,7 +160,7 @@ dstd::Optional<DataFrame> stitch_in_first_seen_order(
             one.columns.push_back(std::move(parts[p].columns[c]));
             ones.push_back(std::move(one));
         }
-        std::vector<const DataFrame*> ptrs;
+        dstd::Vector<const DataFrame*> ptrs;
         ptrs.reserve(ones.size());
         for (const DataFrame& one : ones) ptrs.push_back(&one);
         DataFrame cat = concat(ptrs, ConcatHow::Vertical);
@@ -226,15 +229,15 @@ KeyKind key_kind(const AggState& st, std::size_t k) {
 // states untouched, for a shape it does not write: a key that is not a string
 // or a plain integer, a column that is not a flat number, dynamic columns.
 dstd::Optional<DataFrame> finalize_in_place(
-    std::vector<AggStatePtr>& states, const std::vector<std::string>& key_names,
-    std::size_t drop_keys) {
+    dstd::Vector<AggStatePtr>& states,
+    const dstd::Vector<dstd::String>& key_names, std::size_t drop_keys) {
     if constexpr (std::endian::native != std::endian::little)
         return dstd::nullopt;  // the validity words are written as words
     if (common::Env::get("DFTRACER_UTILS_GROUPBY_STITCH"))
         return dstd::nullopt;  // a test switch: the stitch path as the oracle
 
-    std::vector<std::size_t> live;   // partitions that hold groups
-    std::vector<std::int64_t> base;  // first group index of each live one
+    dstd::Vector<std::size_t> live;   // partitions that hold groups
+    dstd::Vector<std::int64_t> base;  // first group index of each live one
     std::int64_t G = 0;
     for (std::size_t p = 0; p < states.size(); ++p) {
         const AggState* st = states[p].get();
@@ -249,7 +252,7 @@ dstd::Optional<DataFrame> finalize_in_place(
 
     // Keys: the same kind in every partition, and a string column's bytes
     // must fit 32-bit offsets.
-    std::vector<KeyKind> kinds;
+    dstd::Vector<KeyKind> kinds;
     if (drop_keys == 0) {
         if (s0.nkeys != key_names.size()) return dstd::nullopt;
         for (std::size_t k = 0; k < s0.nkeys; ++k) {
@@ -261,7 +264,7 @@ dstd::Optional<DataFrame> finalize_in_place(
                 if (st.nkeys != s0.nkeys || key_kind(st, k) != kk)
                     return dstd::nullopt;
                 if (kk == KeyKind::Str)
-                    for (const std::string& v : st.skey_cols[k])
+                    for (const dstd::String& v : st.skey_cols[k])
                         bytes += v.size();
             }
             if (bytes > static_cast<std::uint64_t>(INT32_MAX))
@@ -273,8 +276,8 @@ dstd::Optional<DataFrame> finalize_in_place(
     // The aggregate columns' schema, from the first partition's cells.
     DataFrame piece0 = agg_finalize_values(s0);
     const std::size_t ncols = piece0.columns.size();
-    std::vector<std::size_t> width(ncols);
-    std::vector<TypeId> ctype(ncols);
+    dstd::Vector<std::size_t> width(ncols);
+    dstd::Vector<TypeId> ctype(ncols);
     for (std::size_t c = 0; c < ncols; ++c) {
         const dftu_series* h = piece0.columns[c].handle();
         width[c] = scatter_width(h->type);
@@ -285,9 +288,9 @@ dstd::Optional<DataFrame> finalize_in_place(
     }
 
     // Each group's final row: the rank of its first row among all groups.
-    std::vector<std::int64_t> first_all;
+    dstd::Vector<std::int64_t> first_all;
     first_all.reserve(static_cast<std::size_t>(G));
-    std::vector<std::uint16_t> li_of(static_cast<std::size_t>(G));
+    dstd::Vector<std::uint16_t> li_of(static_cast<std::size_t>(G));
     for (std::size_t li = 0; li < live.size(); ++li) {
         const AggState& st = *states[live[li]];
         first_all.insert(first_all.end(), st.group_first_row.begin(),
@@ -295,13 +298,13 @@ dstd::Optional<DataFrame> finalize_in_place(
         std::fill_n(li_of.begin() + base[li], st.ngroups(),
                     static_cast<std::uint16_t>(li));
     }
-    std::vector<std::int32_t> order(static_cast<std::size_t>(G));
+    dstd::Vector<std::int32_t> order(static_cast<std::size_t>(G));
     std::iota(order.begin(), order.end(), 0);
     std::sort(order.begin(), order.end(), [&](std::int32_t a, std::int32_t b) {
         return first_all[static_cast<std::size_t>(a)] <
                first_all[static_cast<std::size_t>(b)];
     });
-    std::vector<std::int32_t> rank(static_cast<std::size_t>(G));
+    dstd::Vector<std::int32_t> rank(static_cast<std::size_t>(G));
     for (std::int64_t i = 0; i < G; ++i)
         rank[static_cast<std::size_t>(order[static_cast<std::size_t>(i)])] =
             static_cast<std::int32_t>(i);
@@ -315,7 +318,7 @@ dstd::Optional<DataFrame> finalize_in_place(
         auto* h = new dftu_series();
         Series col{h};
         h->length = G;
-        std::vector<std::uint8_t> null_row;  // output row is a null key
+        dstd::Vector<std::uint8_t> null_row;  // output row is a null key
         std::int64_t nulls = 0;
         auto resolve = [&](std::int64_t i, const AggState*& st,
                            std::int64_t& g) {
@@ -347,7 +350,7 @@ dstd::Optional<DataFrame> finalize_in_place(
                     const AggState* st;
                     std::int64_t g;
                     resolve(i, st, g);
-                    const std::string& v =
+                    const dstd::String& v =
                         st->skey_cols[k][static_cast<std::size_t>(g)];
                     if (!v.empty())
                         std::memcpy(bytes + off[i], v.data(), v.size());
@@ -387,12 +390,12 @@ dstd::Optional<DataFrame> finalize_in_place(
     }
 
     // Aggregate columns: allocated once, filled partition by partition.
-    std::vector<dftu_series*> handle(ncols);
-    std::vector<std::uint8_t*> dst(ncols);
+    dstd::Vector<dftu_series*> handle(ncols);
+    dstd::Vector<std::uint8_t*> dst(ncols);
     const auto words = static_cast<std::size_t>((G + 63) / 64);
-    std::vector<std::atomic<std::uint64_t*>> vbits(ncols);
-    std::vector<std::mutex> vmu(ncols);
-    std::vector<std::atomic<std::int64_t>> nulls_of(ncols);
+    dstd::Vector<std::atomic<std::uint64_t*>> vbits(ncols);
+    dstd::Vector<std::mutex> vmu(ncols);
+    dstd::Vector<std::atomic<std::int64_t>> nulls_of(ncols);
     for (std::size_t c = 0; c < ncols; ++c) {
         auto* h = new dftu_series();
         Series col{h};
@@ -493,8 +496,8 @@ dstd::Optional<DataFrame> finalize_in_place(
 // min, max and an integer sum. The packed driver's pages arrive in no fixed
 // order, so it takes only these; a float sum or a mean goes to the by-key
 // driver, which folds a group's rows in row order.
-bool order_free(const std::vector<AggSpec>& specs,
-                const std::vector<const Series*>& values) {
+bool order_free(const dstd::Vector<AggSpec>& specs,
+                const dstd::Vector<const Series*>& values) {
     for (const AggSpec& sp : specs) {
         switch (sp.op) {
             case AggOp::Count:
@@ -535,10 +538,10 @@ bool order_free(const std::vector<AggSpec>& specs,
 // first-seen order. Nullopt when the shape does not pack or the groups
 // are few, where the chunked partials are cheaper than the scatter.
 dstd::Optional<DataFrame> group_agg_partitioned(
-    const std::vector<const Series*>& in_keys,
-    const std::vector<const Series*>& in_values,
-    const std::vector<AggSpec>& specs,
-    const std::vector<std::string>& key_names, std::size_t drop_keys = 0) {
+    const dstd::Vector<const Series*>& in_keys,
+    const dstd::Vector<const Series*>& in_values,
+    const dstd::Vector<AggSpec>& specs,
+    const dstd::Vector<dstd::String>& key_names, std::size_t drop_keys = 0) {
     // Four partitions per thread: tables small enough for the first-level
     // cache, and the final drain's rounds divide the thread count.
     const auto threads = static_cast<std::int64_t>(std::max<std::size_t>(
@@ -559,18 +562,18 @@ dstd::Optional<DataFrame> group_agg_partitioned(
             }
         }))
         return dstd::nullopt;
-    std::vector<Series> owned;
+    dstd::Vector<Series> owned;
     owned.reserve(in_keys.size() + in_values.size());
-    auto flat = [&](const std::vector<const Series*>& cols, bool key) {
-        std::vector<const Series*> out;
+    auto flat = [&](const dstd::Vector<const Series*>& cols, bool key) {
+        dstd::Vector<const Series*> out;
         for (const Series* c : cols) {
             owned.push_back(flat_or_ref(*c, key));
             out.push_back(&owned.back());
         }
         return out;
     };
-    const std::vector<const Series*> keys = flat(in_keys, true);
-    const std::vector<const Series*> values = flat(in_values, false);
+    const dstd::Vector<const Series*> keys = flat(in_keys, true);
+    const dstd::Vector<const Series*> values = flat(in_values, false);
     AggPacked shape;
     AggStatePtr probe = agg_new(specs);
     // Integer keys have the direct table, which the scatter cannot beat.
@@ -586,10 +589,10 @@ dstd::Optional<DataFrame> group_agg_partitioned(
     // busy, so memory is the partial pages plus little.
     struct Partition {
         std::atomic<bool> held{false};  // the state's owner
-        dstd::ConcurrentQueue<std::unique_ptr<std::uint64_t[]>> queue;
+        dstd::ConcurrentQueue<dstd::UniquePtr<std::uint64_t[]>> queue;
         AggStatePtr state;
     };
-    std::vector<Partition> partitions(PARTITIONS);
+    dstd::Vector<Partition> partitions(PARTITIONS);
     for (Partition& part : partitions) part.state = agg_new(specs);
     const std::size_t per_page = AggPages::PAGE_WORDS / shape.stride;
     auto drain = [&](std::size_t p) {
@@ -608,13 +611,13 @@ dstd::Optional<DataFrame> group_agg_partitioned(
         }
         part.held.store(false, std::memory_order_release);
     };
-    using Pages = std::vector<AggPages>;
-    std::vector<std::unique_ptr<Pages>> pool;
+    using Pages = dstd::Vector<AggPages>;
+    dstd::Vector<dstd::UniquePtr<Pages>> pool;
     std::mutex pool_mutex;
     std::atomic<bool> packed{true};
     parallel_for(n, AGG_GRAIN, [&](std::int64_t b, std::int64_t e) {
         if (!packed.load(std::memory_order_relaxed)) return;
-        std::unique_ptr<Pages> pages;
+        dstd::UniquePtr<Pages> pages;
         {
             const std::lock_guard<std::mutex> lock(pool_mutex);
             if (!pool.empty()) {
@@ -622,7 +625,7 @@ dstd::Optional<DataFrame> group_agg_partitioned(
                 pool.pop_back();
             }
         }
-        if (!pages) pages = std::make_unique<Pages>(PARTITIONS);
+        if (!pages) pages = dstd::make_unique<Pages>(PARTITIONS);
         auto full = [&](std::size_t p) {
             for (auto& page : (*pages)[p].release())
                 partitions[p].queue.enqueue(std::move(page));
@@ -636,13 +639,13 @@ dstd::Optional<DataFrame> group_agg_partitioned(
     if (!packed.load()) return dstd::nullopt;
     // The partial pages and whatever is still queued, one partition per
     // task, no holder to wait for.
-    std::vector<AggStatePtr> states(PARTITIONS);
+    dstd::Vector<AggStatePtr> states(PARTITIONS);
     parallel_for(static_cast<std::int64_t>(PARTITIONS), 1,
                  [&](std::int64_t p0, std::int64_t p1) {
                      for (std::int64_t p = p0; p < p1; ++p) {
                          const auto pi = static_cast<std::size_t>(p);
                          drain(pi);
-                         for (const std::unique_ptr<Pages>& pages : pool) {
+                         for (const dstd::UniquePtr<Pages>& pages : pool) {
                              AggPages& rest = (*pages)[pi];
                              if (rest.count > 0)
                                  agg_accumulate_packed(*partitions[pi].state,
@@ -657,8 +660,8 @@ dstd::Optional<DataFrame> group_agg_partitioned(
     if (dstd::Optional<DataFrame> out =
             finalize_in_place(states, key_names, drop_keys))
         return out;
-    std::vector<DataFrame> parts(PARTITIONS);
-    std::vector<std::vector<std::int64_t>> first(PARTITIONS);
+    dstd::Vector<DataFrame> parts(PARTITIONS);
+    dstd::Vector<dstd::Vector<std::int64_t>> first(PARTITIONS);
     parallel_for(static_cast<std::int64_t>(PARTITIONS), 1,
                  [&](std::int64_t p0, std::int64_t p1) {
                      for (std::int64_t p = p0; p < p1; ++p) {
@@ -683,10 +686,10 @@ dstd::Optional<DataFrame> group_agg_partitioned(
 // that depends on the order of rows (arg_max, top-k, space-saving), a small
 // frame or few groups, where the per-thread partials are cheaper.
 dstd::Optional<DataFrame> group_agg_by_key_hash(
-    const std::vector<const Series*>& in_keys,
-    const std::vector<const Series*>& in_values,
-    const std::vector<AggSpec>& specs,
-    const std::vector<std::string>& key_names, std::size_t drop_keys = 0) {
+    const dstd::Vector<const Series*>& in_keys,
+    const dstd::Vector<const Series*>& in_values,
+    const dstd::Vector<AggSpec>& specs,
+    const dstd::Vector<dstd::String>& key_names, std::size_t drop_keys = 0) {
     // Threshold set from benchmarks/groupby_analyzer_bench.py; below it the
     // per-thread partials win.
     constexpr std::int64_t MIN_ROWS = 4 * AGG_GRAIN;
@@ -715,18 +718,18 @@ dstd::Optional<DataFrame> group_agg_by_key_hash(
         if (probe->has_arg || probe->has_lst || probe->has_ss)
             return dstd::nullopt;
     }
-    std::vector<Series> owned;
+    dstd::Vector<Series> owned;
     owned.reserve(in_keys.size() + in_values.size());
-    auto flat = [&](const std::vector<const Series*>& cols, bool key) {
-        std::vector<const Series*> out;
+    auto flat = [&](const dstd::Vector<const Series*>& cols, bool key) {
+        dstd::Vector<const Series*> out;
         for (const Series* c : cols) {
             owned.push_back(flat_or_ref(*c, key));
             out.push_back(&owned.back());
         }
         return out;
     };
-    const std::vector<const Series*> keys = flat(in_keys, true);
-    const std::vector<const Series*> values = flat(in_values, false);
+    const dstd::Vector<const Series*> keys = flat(in_keys, true);
+    const dstd::Vector<const Series*> values = flat(in_values, false);
     std::size_t groups_hint = 0;
     {
         AggStatePtr probe = agg_new(specs);
@@ -747,7 +750,7 @@ dstd::Optional<DataFrame> group_agg_by_key_hash(
     const auto threads = static_cast<std::int64_t>(std::max<std::size_t>(
         2, dftracer::utils::common::hardware_concurrency()));
     const auto PARTITIONS = static_cast<std::size_t>(4 * threads);
-    std::vector<bool> nullable(keys.size());
+    dstd::Vector<bool> nullable(keys.size());
     for (std::size_t j = 0; j < keys.size(); ++j)
         nullable[j] = keys[j]->null_count() > 0;
     constexpr std::uint64_t NULL_KEY =
@@ -755,14 +758,14 @@ dstd::Optional<DataFrame> group_agg_by_key_hash(
 
     DataFrame src;  // the key and value columns, shared, not copied
     for (const Series* c : keys) {
-        src.names.push_back("k" + std::to_string(src.columns.size()));
+        src.names.push_back("k" + dstd::to_string(src.columns.size()));
         src.columns.push_back(c->share());
     }
     for (const Series* c : values) {
-        src.names.push_back("v" + std::to_string(src.columns.size()));
+        src.names.push_back("v" + dstd::to_string(src.columns.size()));
         src.columns.push_back(c->share());
     }
-    std::vector<AggStatePtr> states(PARTITIONS);
+    dstd::Vector<AggStatePtr> states(PARTITIONS);
     for (AggStatePtr& st : states) {
         st = agg_new(specs);
         // An equal share, and a fifth over for the partitions a hash makes
@@ -778,14 +781,14 @@ dstd::Optional<DataFrame> group_agg_by_key_hash(
     constexpr std::int64_t WINDOW = 4;
     const std::int64_t nmorsels = (n + AGG_GRAIN - 1) / AGG_GRAIN;
     struct Bucketed {
-        std::vector<std::uint32_t> rows;  // row - morsel start, by partition
-        std::vector<std::int64_t> off;    // PARTITIONS + 1 offsets into rows
+        dstd::Vector<std::uint32_t> rows;  // row - morsel start, by partition
+        dstd::Vector<std::int64_t> off;    // PARTITIONS + 1 offsets into rows
     };
-    std::vector<Bucketed> win(static_cast<std::size_t>(WINDOW));
+    dstd::Vector<Bucketed> win(static_cast<std::size_t>(WINDOW));
     auto bucket_morsel = [&](std::int64_t m, Bucketed& out) {
         const std::int64_t b = m * AGG_GRAIN;
         const std::int64_t e = std::min(n, b + AGG_GRAIN);
-        std::vector<std::int32_t> bucket(static_cast<std::size_t>(e - b));
+        dstd::Vector<std::int32_t> bucket(static_cast<std::size_t>(e - b));
         out.off.assign(PARTITIONS + 1, 0);
         for (std::int64_t i = b; i < e; ++i) {
             std::uint64_t h = 0;
@@ -808,7 +811,7 @@ dstd::Optional<DataFrame> group_agg_by_key_hash(
         for (std::size_t p = 0; p < PARTITIONS; ++p)
             out.off[p + 1] += out.off[p];
         out.rows.resize(static_cast<std::size_t>(e - b));
-        std::vector<std::int64_t> cur(out.off.begin(), out.off.end() - 1);
+        dstd::Vector<std::int64_t> cur(out.off.begin(), out.off.end() - 1);
         for (std::int64_t i = b; i < e; ++i)
             out.rows[static_cast<std::size_t>(cur[static_cast<std::size_t>(
                 bucket[static_cast<std::size_t>(i - b)])]++)] =
@@ -830,7 +833,7 @@ dstd::Optional<DataFrame> group_agg_by_key_hash(
                         const Bucketed& bk = win[static_cast<std::size_t>(m)];
                         if (bk.off[pi + 1] == bk.off[pi]) continue;
                         const std::int64_t at = (w0 + m) * AGG_GRAIN;
-                        std::vector<std::int64_t> mine;
+                        dstd::Vector<std::int64_t> mine;
                         mine.reserve(static_cast<std::size_t>(bk.off[pi + 1] -
                                                               bk.off[pi]));
                         for (std::int64_t r = bk.off[pi]; r < bk.off[pi + 1];
@@ -838,7 +841,7 @@ dstd::Optional<DataFrame> group_agg_by_key_hash(
                             mine.push_back(
                                 at + bk.rows[static_cast<std::size_t>(r)]);
                         const DataFrame sub = take(src, mine);
-                        std::vector<const Series*> sk, sv;
+                        dstd::Vector<const Series*> sk, sv;
                         for (std::size_t j = 0; j < keys.size(); ++j)
                             sk.push_back(&sub.columns[j]);
                         for (std::size_t j = 0; j < values.size(); ++j)
@@ -853,8 +856,8 @@ dstd::Optional<DataFrame> group_agg_by_key_hash(
     if (dstd::Optional<DataFrame> out =
             finalize_in_place(states, key_names, drop_keys))
         return out;
-    std::vector<DataFrame> parts(PARTITIONS);
-    std::vector<std::vector<std::int64_t>> first(PARTITIONS);
+    dstd::Vector<DataFrame> parts(PARTITIONS);
+    dstd::Vector<dstd::Vector<std::int64_t>> first(PARTITIONS);
     std::atomic<bool> ok{true};
     parallel_for(static_cast<std::int64_t>(PARTITIONS), 1,
                  [&](std::int64_t p0, std::int64_t p1) {
@@ -877,10 +880,10 @@ dstd::Optional<DataFrame> group_agg_by_key_hash(
 
 // `drop_keys` leaves the first columns (the keys) out of the result: a column
 // batch after the first has them already.
-DataFrame group_agg_whole(const std::vector<const Series*>& keys,
-                          const std::vector<const Series*>& values,
-                          std::vector<AggSpec> specs,
-                          const std::vector<std::string>& key_names,
+DataFrame group_agg_whole(const dstd::Vector<const Series*>& keys,
+                          const dstd::Vector<const Series*>& values,
+                          dstd::Vector<AggSpec> specs,
+                          const dstd::Vector<dstd::String>& key_names,
                           std::size_t drop_keys = 0) {
     if (dstd::Optional<DataFrame> out =
             group_agg_partitioned(keys, values, specs, key_names, drop_keys))
@@ -925,7 +928,7 @@ bool one_column_state(AggOp op) {
 // light row's words (count, then sum, min, max as asked, and the three moment
 // words of a variance or standard deviation), or a whole FieldStat when a
 // skew, a kurtosis or a sum of squares needs its higher moments.
-std::int64_t cell_bytes(const std::vector<AggSpec>& specs, std::int32_t col) {
+std::int64_t cell_bytes(const dstd::Vector<AggSpec>& specs, std::int32_t col) {
     bool sum = false, min = false, max = false, mom = false;
     for (const AggSpec& sp : specs) {
         if (sp.value_col != col) continue;
@@ -963,9 +966,10 @@ std::int64_t cell_bytes(const std::vector<AggSpec>& specs, std::int32_t col) {
 // the batch, and the groups come out in first-seen order in every pass.
 // Nullopt when the aggregates, or the number of groups, do not call for it.
 dstd::Optional<DataFrame> group_agg_in_batches(
-    const std::vector<const Series*>& keys,
-    const std::vector<const Series*>& values, const std::vector<AggSpec>& specs,
-    const std::vector<std::string>& key_names) {
+    const dstd::Vector<const Series*>& keys,
+    const dstd::Vector<const Series*>& values,
+    const dstd::Vector<AggSpec>& specs,
+    const dstd::Vector<dstd::String>& key_names) {
     // The state one batch may hold. The passes over the keys grow as columns /
     // batch width.
     constexpr std::int64_t BATCH_STATE_BYTES = 8 << 20;
@@ -975,7 +979,7 @@ dstd::Optional<DataFrame> group_agg_in_batches(
     for (const AggSpec& sp : specs)
         if (!one_column_state(sp.op)) return dstd::nullopt;
     // The value columns the aggregates read, in order of first use.
-    std::vector<std::int32_t> used;
+    dstd::Vector<std::int32_t> used;
     for (const AggSpec& sp : specs)
         if (sp.value_col >= 0 &&
             std::find(used.begin(), used.end(), sp.value_col) == used.end())
@@ -987,16 +991,16 @@ dstd::Optional<DataFrame> group_agg_in_batches(
                      [&](std::int32_t c) { return cell_bytes(specs, c) > 32; }))
         return dstd::nullopt;
     {
-        std::vector<Series> owned;
+        dstd::Vector<Series> owned;
         owned.reserve(keys.size());
-        std::vector<const Series*> ks;
+        dstd::Vector<const Series*> ks;
         for (const Series* c : keys) {
             owned.push_back(flat_or_ref(*c, true));
             ks.push_back(&owned.back());
         }
-        std::vector<Series> owned_values;
+        dstd::Vector<Series> owned_values;
         owned_values.reserve(values.size());
-        std::vector<const Series*> vs;
+        dstd::Vector<const Series*> vs;
         for (const Series* c : values) {
             owned_values.push_back(flat_or_ref(*c, false));
             vs.push_back(&owned_values.back());
@@ -1008,9 +1012,9 @@ dstd::Optional<DataFrame> group_agg_in_batches(
     // One batch: the aggregates over `cols`, reading a values list of those
     // columns alone. Count (no column) rides with the first batch.
     auto run = [&](std::size_t from, std::size_t count, bool with_counts) {
-        const std::vector<std::int32_t> cols(used.begin() + from,
-                                             used.begin() + from + count);
-        std::vector<AggSpec> sub;
+        const dstd::Vector<std::int32_t> cols(used.begin() + from,
+                                              used.begin() + from + count);
+        dstd::Vector<AggSpec> sub;
         for (const AggSpec& sp : specs) {
             AggSpec s = sp;
             if (sp.value_col < 0) {
@@ -1023,15 +1027,15 @@ dstd::Optional<DataFrame> group_agg_in_batches(
             }
             sub.push_back(std::move(s));
         }
-        std::vector<const Series*> vs;
+        dstd::Vector<const Series*> vs;
         for (const std::int32_t c : cols)
             vs.push_back(values[static_cast<std::size_t>(c)]);
         return group_agg_whole(keys, vs, std::move(sub), key_names,
                                from == 0 ? 0 : keys.size());
     };
-    std::vector<std::string> made_names;
-    std::vector<Series> made;
-    std::vector<Series> key_cols;
+    dstd::Vector<dstd::String> made_names;
+    dstd::Vector<Series> made;
+    dstd::Vector<Series> key_cols;
     auto keep = [&](DataFrame& df, bool first) {
         for (std::size_t j = 0; j < df.columns.size(); ++j) {
             if (first && j < keys.size()) {
@@ -1077,14 +1081,14 @@ dstd::Optional<DataFrame> group_agg_in_batches(
 
 }  // namespace
 
-DataFrame group_agg(const std::vector<const Series*>& keys,
-                    const std::vector<const Series*>& values,
-                    std::vector<AggSpec> specs,
-                    const std::vector<std::string>& key_names) {
-    std::vector<Series> joined;
+DataFrame group_agg(const dstd::Vector<const Series*>& keys,
+                    const dstd::Vector<const Series*>& values,
+                    dstd::Vector<AggSpec> specs,
+                    const dstd::Vector<dstd::String>& key_names) {
+    dstd::Vector<Series> joined;
     joined.reserve(keys.size() + values.size());
-    auto flat = [&](const std::vector<const Series*>& in) {
-        std::vector<const Series*> out;
+    auto flat = [&](const dstd::Vector<const Series*>& in) {
+        dstd::Vector<const Series*> out;
         out.reserve(in.size());
         for (const Series* c : in) {
             if (c && c->encoding() == Encoding::Chunked) {
@@ -1095,19 +1099,20 @@ DataFrame group_agg(const std::vector<const Series*>& keys,
         }
         return out;
     };
-    const std::vector<const Series*> flat_keys = flat(keys);
-    const std::vector<const Series*> flat_values = flat(values);
+    const dstd::Vector<const Series*> flat_keys = flat(keys);
+    const dstd::Vector<const Series*> flat_values = flat(values);
     if (dstd::Optional<DataFrame> out =
             group_agg_in_batches(flat_keys, flat_values, specs, key_names))
         return std::move(*out);
     return group_agg_whole(flat_keys, flat_values, std::move(specs), key_names);
 }
 
-DataFrame group_agg(const Series& key, const std::vector<const Series*>& values,
-                    std::vector<AggSpec> specs, const std::string& key_name) {
-    const std::vector<const Series*> keys{&key};
+DataFrame group_agg(const Series& key,
+                    const dstd::Vector<const Series*>& values,
+                    dstd::Vector<AggSpec> specs, const dstd::String& key_name) {
+    const dstd::Vector<const Series*> keys{&key};
     return group_agg(keys, values, std::move(specs),
-                     std::vector<std::string>{key_name});
+                     dstd::Vector<dstd::String>{key_name});
 }
 
 }  // namespace dftracer::utils::dataframe

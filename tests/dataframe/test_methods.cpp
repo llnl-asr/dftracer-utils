@@ -6,7 +6,10 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
 
@@ -17,7 +20,6 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 using dftracer::utils::dataframe::Agg;
 using dftracer::utils::dataframe::DataFrame;
@@ -25,13 +27,15 @@ using dftracer::utils::dataframe::GroupAgg;
 using dftracer::utils::dataframe::Series;
 
 namespace {
-Series i64(std::vector<std::int64_t> v) {
+Series i64(dftracer::utils::dstd::Vector<std::int64_t> v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 // An Int64 column with an Arrow validity bitmap; `valid[i]==0` marks a null.
-Series i64_nullable(std::vector<std::int64_t> v, std::vector<int> valid) {
+Series i64_nullable(dftracer::utils::dstd::Vector<std::int64_t> v,
+                    dftracer::utils::dstd::Vector<int> valid) {
     const std::int64_t n = static_cast<std::int64_t>(v.size());
-    std::vector<std::uint8_t> bitmap(static_cast<std::size_t>((n + 7) / 8), 0);
+    dftracer::utils::dstd::Vector<std::uint8_t> bitmap(
+        static_cast<std::size_t>((n + 7) / 8), 0);
     for (std::int64_t i = 0; i < n; ++i)
         if (valid[static_cast<std::size_t>(i)])
             bitmap[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
@@ -114,14 +118,16 @@ TEST_CASE(
     namespace df = dftracer::utils::dataframe;
     DataFrame b;
     b.names = {"name", "cycles"};
-    b.columns.push_back(
-        Series::strings(std::vector<std::string>{"cpu", "gpu", "cpu", "gpu"}));
+    b.columns.push_back(Series::strings(
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+            "cpu", "gpu", "cpu", "gpu"}));
     // "lots", "few", null, "few": row 2 is null.
     const std::int32_t offsets[5] = {0, 4, 7, 7, 10};
     const std::uint8_t valid[1] = {0x0b};
     b.columns.push_back(Series{dftu_series_new_string(DFTU_TYPE_STRING, offsets,
                                                       "lotsfewfew", 4, valid)});
-    std::vector<const Series*> inputs = {&b.columns[0], &b.columns[1]};
+    dftracer::utils::dstd::Vector<const Series*> inputs = {&b.columns[0],
+                                                           &b.columns[1]};
     const df::Expr cyc = df::expr_col(1);
 
     df::AggExprSpec cnt = df::agg_count("n");
@@ -147,7 +153,7 @@ TEST_CASE(
 
 TEST_CASE("SIMD sketch_bucket_keys matches scalar DDSketch::add") {
     namespace df = dftracer::utils::dataframe;
-    std::vector<double> vals;
+    dftracer::utils::dstd::Vector<double> vals;
     vals.reserve(1000);
     for (int i = 0; i < 1000; ++i)
         vals.push_back(i % 7 == 0 ? 0.0
@@ -157,7 +163,7 @@ TEST_CASE("SIMD sketch_bucket_keys matches scalar DDSketch::add") {
     for (double v : vals) a.add(v);
 
     df::DDSketch b;  // SIMD bulk-key path
-    std::vector<std::int32_t> keys(vals.size());
+    dftracer::utils::dstd::Vector<std::int32_t> keys(vals.size());
     df::sketch_bucket_keys(vals.data(), static_cast<std::int64_t>(vals.size()),
                            b.log_gamma(), keys.data());
     for (std::size_t i = 0; i < keys.size(); ++i) b.add_key(keys[i], vals[i]);
@@ -185,7 +191,7 @@ TEST_CASE("DataFrame group_by pct (DDSketch quantile) is close to exact") {
     // Two keys, each with a known distribution; the sketch p50/p90 should land
     // within the sketch's relative accuracy of the true quantile.
     const std::int64_t per = 4000;
-    std::vector<std::int64_t> k, v;
+    dftracer::utils::dstd::Vector<std::int64_t> k, v;
     k.reserve(static_cast<std::size_t>(2 * per));
     v.reserve(static_cast<std::size_t>(2 * per));
     for (std::int64_t i = 0; i < per; ++i) {
@@ -213,14 +219,14 @@ TEST_CASE("DataFrame group_by pct (DDSketch quantile) is close to exact") {
 
 TEST_CASE("group_agg pct partials serialize / merge round-trip") {
     namespace df = dftracer::utils::dataframe;
-    std::vector<std::int64_t> k(2000), v(2000);
+    dftracer::utils::dstd::Vector<std::int64_t> k(2000), v(2000);
     for (std::int64_t i = 0; i < 2000; ++i) {
         k[static_cast<std::size_t>(i)] = i % 2;
         v[static_cast<std::size_t>(i)] = i;
     }
     Series key = Series::flat_i64(k.data(), 2000);
     Series val = Series::flat_i64(v.data(), 2000);
-    std::vector<const Series*> vals{&val};
+    dftracer::utils::dstd::Vector<const Series*> vals{&val};
 
     auto st = df::agg_new({df::AggSpec{df::AggOp::Pct, 0, "p90", 0.9}});
     df::agg_accumulate(*st, key, vals, 0, 1000);
@@ -228,7 +234,7 @@ TEST_CASE("group_agg pct partials serialize / merge round-trip") {
     df::agg_accumulate(*st2, key, vals, 1000, 2000);
 
     // Round-trip the second partial through serialize before merging.
-    std::string blob = df::agg_serialize(*st2);
+    dftracer::utils::dstd::String blob = df::agg_serialize(*st2);
     auto st2b = df::agg_deserialize(blob);
     df::agg_merge(*st, *st2b);
 
@@ -249,7 +255,7 @@ TEST_CASE("SIMD arg_min/arg_max: earliest tie, matches scalar, null fallback") {
     namespace df = dftracer::utils::dataframe;
     // 200 f64 values; a unique max in the SIMD region and a tied min so the
     // earliest-index tie-break is exercised.
-    std::vector<double> dv(200);
+    dftracer::utils::dstd::Vector<double> dv(200);
     for (int i = 0; i < 200; ++i) dv[static_cast<std::size_t>(i)] = 5.0;
     dv[137] = 99.0;           // unique max
     dv[3] = -1.0;             // first min
@@ -259,7 +265,7 @@ TEST_CASE("SIMD arg_min/arg_max: earliest tie, matches scalar, null fallback") {
     CHECK(s.arg_min() == 3);  // earliest of the tied minima
 
     // Int16 (narrow) exercises the same generic two-pass path.
-    std::vector<std::int16_t> iv(100);
+    dftracer::utils::dstd::Vector<std::int16_t> iv(100);
     for (int i = 0; i < 100; ++i)
         iv[static_cast<std::size_t>(i)] =
             static_cast<std::int16_t>((i * 7) % 50);
@@ -286,7 +292,7 @@ TEST_CASE("SIMD arg_min/arg_max: earliest tie, matches scalar, null fallback") {
 TEST_CASE("SIMD compare covers narrow integer types (Int16/Uint8)") {
     namespace df = dftracer::utils::dataframe;
     // 100 values so the 64-at-a-time SIMD block plus a scalar tail both run.
-    std::vector<std::int16_t> sv(100);
+    dftracer::utils::dstd::Vector<std::int16_t> sv(100);
     for (int i = 0; i < 100; ++i)
         sv[static_cast<std::size_t>(i)] = static_cast<std::int16_t>(i - 40);
     Series s = df::Series::flat(df::TypeId::Int16, sv.data(), 100);
@@ -295,7 +301,7 @@ TEST_CASE("SIMD compare covers narrow integer types (Int16/Uint8)") {
     REQUIRE(kept.length() == 59);  // 1..59 (values i-40 > 0 for i in 41..99)
     CHECK(kept.data<std::int16_t>()[0] == 1);
 
-    std::vector<std::uint8_t> uv(100);
+    dftracer::utils::dstd::Vector<std::uint8_t> uv(100);
     for (int i = 0; i < 100; ++i)
         uv[static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(i);
     Series u = df::Series::flat(df::TypeId::Uint8, uv.data(), 100);
@@ -306,7 +312,8 @@ TEST_CASE("SIMD compare covers narrow integer types (Int16/Uint8)") {
 TEST_CASE("SIMD cast fast paths match static_cast semantics") {
     namespace df = dftracer::utils::dataframe;
     // Values chosen to exercise truncation-toward-zero and sign.
-    std::vector<double> dv{-3.9, -0.5, 0.0, 1.5, 2.9, 1000.25};
+    dftracer::utils::dstd::Vector<double> dv{-3.9, -0.5, 0.0,
+                                             1.5,  2.9,  1000.25};
     Series f64 = df::Series::flat_f64(dv.data(), 6);
 
     // f64 -> i64 (ConvertTo): truncates toward zero like static_cast.
@@ -326,7 +333,7 @@ TEST_CASE("SIMD cast fast paths match static_cast semantics") {
     CHECK(wide.data<double>()[5] == doctest::Approx(1000.25));
 
     // A width-changing integer pair takes the scalar fallback; still correct.
-    std::vector<std::int64_t> lv{1, 2, 300, -5};
+    dftracer::utils::dstd::Vector<std::int64_t> lv{1, 2, 300, -5};
     Series i64 = df::Series::flat_i64(lv.data(), 4);
     Series i8 = i64.cast(df::TypeId::Int8);
     CHECK(i8.data<std::int8_t>()[1] == 2);
@@ -335,7 +342,7 @@ TEST_CASE("SIMD cast fast paths match static_cast semantics") {
 
 TEST_CASE("DataFrame group_by hist emits a list<struct> per group") {
     namespace df = dftracer::utils::dataframe;
-    std::vector<std::int64_t> k, v;
+    dftracer::utils::dstd::Vector<std::int64_t> k, v;
     for (std::int64_t i = 0; i < 1000; ++i) {
         k.push_back(i % 2);
         v.push_back((i % 2 == 0) ? 1 + i % 10 : 100 + i % 10);
@@ -378,8 +385,8 @@ TEST_CASE("group_agg first/last is exact across the parallel-chunk merge") {
     // per-chunk partials merge in an unspecified order, yet first/last must
     // still be the globally first / last value per key.
     const std::int64_t n = (1 << 16) + 5000;
-    std::vector<std::int64_t> k(static_cast<std::size_t>(n));
-    std::vector<std::int64_t> v(static_cast<std::size_t>(n));
+    dftracer::utils::dstd::Vector<std::int64_t> k(static_cast<std::size_t>(n));
+    dftracer::utils::dstd::Vector<std::int64_t> v(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i) {
         k[static_cast<std::size_t>(i)] = i % 3;
         v[static_cast<std::size_t>(i)] = i;  // strictly increasing
@@ -452,7 +459,7 @@ TEST_CASE("DataFrame group_by set_union sorts and joins distinct values") {
     REQUIRE(g.num_rows() == 2);
     const std::int64_t* key = g.column("k").data<std::int64_t>();
     const Series& out = g.column("tags");
-    const std::string sep(1, '\x1e');
+    const dftracer::utils::dstd::String sep(1, '\x1e');
     for (std::int64_t r = 0; r < 2; ++r) {
         if (key[r] == 1)
             CHECK(out.string_at(r) == "posix" + sep + "stdio");
@@ -465,32 +472,35 @@ TEST_CASE("group_agg argmax/sumsq/set_union merge and serialize round-trip") {
     namespace df = dftracer::utils::dataframe;
     // Two chunks accumulated into separate partials, one round-tripped through
     // serialize/deserialize, then merged - must equal one direct accumulation.
-    std::vector<std::int64_t> k(2000), by(2000);
-    std::vector<std::string> names(2000), tags(2000);
+    dftracer::utils::dstd::Vector<std::int64_t> k(2000), by(2000);
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names(2000),
+        tags(2000);
     for (std::int64_t i = 0; i < 2000; ++i) {
         const auto si = static_cast<std::size_t>(i);
         k[si] = i % 2;
         by[si] = (i * 37) % 500;
-        names[si] = "n" + std::to_string(i % 17);
-        tags[si] = "t" + std::to_string(i % 5);
+        names[si] = "n" + dftracer::utils::dstd::to_string(i % 17);
+        tags[si] = "t" + dftracer::utils::dstd::to_string(i % 5);
     }
     Series key = Series::flat_i64(k.data(), 2000);
     Series by_col = Series::flat_i64(by.data(), 2000);
     Series name_col = Series::strings(names);
     Series tag_col = Series::strings(tags);
-    std::vector<const Series*> vals{&name_col, &by_col, &tag_col};
+    dftracer::utils::dstd::Vector<const Series*> vals{&name_col, &by_col,
+                                                      &tag_col};
 
     df::AggSpec argmax_spec{df::AggOp::ArgMax, 0, "am", 0.0, 1};
     df::AggSpec set_spec{df::AggOp::SetUnion, 2, "su"};
     df::AggSpec sumsq_spec{df::AggOp::SumSq, 1, "ssq"};
-    std::vector<df::AggSpec> specs{argmax_spec, set_spec, sumsq_spec};
+    dftracer::utils::dstd::Vector<df::AggSpec> specs{argmax_spec, set_spec,
+                                                     sumsq_spec};
 
     auto st1 = df::agg_new(specs);
     df::agg_accumulate(*st1, key, vals, 0, 1000);
     auto st2 = df::agg_new(specs);
     df::agg_accumulate(*st2, key, vals, 1000, 2000);
 
-    std::string blob = df::agg_serialize(*st2);
+    dftracer::utils::dstd::String blob = df::agg_serialize(*st2);
     auto st2b = df::agg_deserialize(blob);
     df::agg_merge(*st1, *st2b);
     DataFrame merged = df::agg_finalize(*st1, "k");
@@ -518,10 +528,10 @@ TEST_CASE("group_agg_expr argmax/sumsq/set_union via the expression builders") {
     b.columns.push_back(Series::strings({"a", "b", "c", "x", "y"}));
     b.columns.push_back(i64({10, 30, 20, 5, 8}));
     b.columns.push_back(Series::strings({"p", "q", "p", "r", "r"}));
-    std::vector<const Series*> inputs;
+    dftracer::utils::dstd::Vector<const Series*> inputs;
     for (const Series& c : b.columns) inputs.push_back(&c);
 
-    std::vector<df::AggExprSpec> specs{
+    dftracer::utils::dstd::Vector<df::AggExprSpec> specs{
         df::agg_argmax(df::expr_col(1), df::expr_col(2), "argmax_name"),
         df::agg_sumsq(df::expr_col(2), "sumsq_dur"),
         df::agg_set_union(df::expr_col(3), "tags"),
@@ -535,7 +545,7 @@ TEST_CASE("group_agg_expr argmax/sumsq/set_union via the expression builders") {
             CHECK(g.column("sumsq_dur").data<double>()[r] ==
                   doctest::Approx(10.0 * 10 + 30.0 * 30 + 20.0 * 20));
             CHECK(g.column("tags").string_at(r) ==
-                  "p" + std::string(1, '\x1e') + "q");
+                  "p" + dftracer::utils::dstd::String(1, '\x1e') + "q");
         } else {
             CHECK(g.column("argmax_name").string_at(r) == "y");
             CHECK(g.column("sumsq_dur").data<double>()[r] ==
@@ -556,8 +566,8 @@ TEST_CASE(
     DataFrame expected = b.group_by(
         "k", {GroupAgg{Agg::Sum, "v", "s"}, GroupAgg{Agg::Mean, "v", "m"}});
 
-    std::vector<df::AggExprSpec> specs{df::agg_sum(df::expr_col(1), "s"),
-                                       df::agg_mean(df::expr_col(1), "m")};
+    dftracer::utils::dstd::Vector<df::AggExprSpec> specs{
+        df::agg_sum(df::expr_col(1), "s"), df::agg_mean(df::expr_col(1), "m")};
     DataFrame got = b.group_by(df::expr_col(0), specs);
 
     REQUIRE(got.num_rows() == expected.num_rows());
@@ -580,7 +590,8 @@ TEST_CASE("dftu_dataframe opaque C ABI: build, inspect, frame ops") {
     REQUIRE(df != nullptr);
     CHECK(dftu_dataframe_num_rows(df) == 4);
     CHECK(dftu_dataframe_num_columns(df) == 2);
-    CHECK(std::string(dftu_dataframe_column_name(df, 1)) == "val");
+    CHECK(dftracer::utils::dstd::String(dftu_dataframe_column_name(df, 1)) ==
+          "val");
     CHECK(dftu_dataframe_column_name(df, 5) == nullptr);
 
     // sort_by "val" ascending -> id column reorders to [2,4,3,1]
@@ -624,7 +635,7 @@ TEST_CASE("Expr operators build and evaluate a fused expression") {
 
 TEST_CASE("Expr unary math / clip / cast evaluate") {
     namespace df = dftracer::utils::dataframe;
-    std::vector<double> xv{-3.2, 4.7, -1.5, 9.9};
+    dftracer::utils::dstd::Vector<double> xv{-3.2, 4.7, -1.5, 9.9};
     Series x = df::Series::flat_f64(xv.data(), 4);
 
     Series fl = df::eval(df::expr_unary(df::UnaryOp::Floor, df::col(0)), {&x});
@@ -647,7 +658,7 @@ TEST_CASE("Expr unary math / clip / cast evaluate") {
         return df::eval(df::expr_unary(op, df::col(0)), {&in});
     };
 
-    std::vector<double> pv{1.0, 4.0, 9.0, 16.0};
+    dftracer::utils::dstd::Vector<double> pv{1.0, 4.0, 9.0, 16.0};
     Series p = df::Series::flat_f64(pv.data(), 4);
     Series sq = unary(df::UnaryOp::Sqrt, p);
     CHECK(sq.data<double>()[1] == doctest::Approx(2.0));
@@ -666,7 +677,7 @@ TEST_CASE("Expr unary math / clip / cast evaluate") {
 
     // is_nan / is_finite yield a Bool mask over float NaN/inf values.
     const double inf = std::numeric_limits<double>::infinity();
-    std::vector<double> nv{1.0, std::nan(""), inf, 4.0};
+    dftracer::utils::dstd::Vector<double> nv{1.0, std::nan(""), inf, 4.0};
     Series nan_col = df::Series::flat_f64(nv.data(), 4);
     Series isn = unary(df::UnaryOp::IsNan, nan_col);
     CHECK(isn.type() == df::TypeId::Bool);
@@ -781,8 +792,8 @@ TEST_CASE("DataFrame sort_by_multi lexicographic") {
 }
 
 namespace {
-std::vector<std::int64_t> shuffled(std::int64_t n) {
-    std::vector<std::int64_t> v(static_cast<std::size_t>(n));
+dftracer::utils::dstd::Vector<std::int64_t> shuffled(std::int64_t n) {
+    dftracer::utils::dstd::Vector<std::int64_t> v(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
         v[static_cast<std::size_t>(i)] = (i * 389) % n;
     return v;
@@ -791,10 +802,10 @@ std::vector<std::int64_t> shuffled(std::int64_t n) {
 
 TEST_CASE("DataFrame sort_by_multi on a permutation key") {
     const std::int64_t n = 1000;
-    const std::vector<std::int64_t> key = shuffled(n);
-    std::vector<std::int64_t> payload(key.size());
+    const dftracer::utils::dstd::Vector<std::int64_t> key = shuffled(n);
+    dftracer::utils::dstd::Vector<std::int64_t> payload(key.size());
     for (std::size_t i = 0; i < key.size(); ++i) payload[i] = key[i] * 10 + 1;
-    std::vector<std::uint64_t> ukey(key.begin(), key.end());
+    dftracer::utils::dstd::Vector<std::uint64_t> ukey(key.begin(), key.end());
     for (bool desc : {false, true}) {
         INFO(desc);
         for (int u = 0; u < 2; ++u) {
@@ -820,23 +831,26 @@ TEST_CASE("DataFrame sort_by_multi on a permutation key") {
 }
 
 TEST_CASE("DataFrame sort_by_multi on a non-permutation key is stable") {
-    const std::vector<std::vector<std::int64_t>> keys = {
-        {2, 0, 2, 1},   // duplicate
-        {0, 1, 2, 4},   // out of range
-        {0, -1, 2, 1},  // negative
-    };
+    const dftracer::utils::dstd::Vector<
+        dftracer::utils::dstd::Vector<std::int64_t>>
+        keys = {
+            {2, 0, 2, 1},   // duplicate
+            {0, 1, 2, 4},   // out of range
+            {0, -1, 2, 1},  // negative
+        };
     for (const auto& key : keys) {
         DataFrame df;
         df.names = {"k", "p"};
         df.columns.push_back(i64(key));
         df.columns.push_back(i64({10, 11, 12, 13}));
         const DataFrame s = df.sort_by_multi({"k"}, false);
-        std::vector<std::int64_t> want_order = {0, 1, 2, 3};
-        std::stable_sort(want_order.begin(), want_order.end(),
-                         [&](std::int64_t a, std::int64_t b) {
-                             return key[static_cast<std::size_t>(a)] <
-                                    key[static_cast<std::size_t>(b)];
-                         });
+        dftracer::utils::dstd::Vector<std::int64_t> want_order = {0, 1, 2, 3};
+        dftracer::utils::dstd::stable_sort(
+            want_order.begin(), want_order.end(),
+            [&](std::int64_t a, std::int64_t b) {
+                return key[static_cast<std::size_t>(a)] <
+                       key[static_cast<std::size_t>(b)];
+            });
         for (std::size_t i = 0; i < 4; ++i)
             CHECK(s.column("p").data<std::int64_t>()[i] == 10 + want_order[i]);
     }
@@ -858,17 +872,17 @@ TEST_CASE("DataFrame sort_by_multi puts a null key last") {
 TEST_CASE(
     "DataFrame sort_by_multi over mixed keys matches a stable reference") {
     const std::int64_t n = 4000;
-    std::vector<std::int64_t> a(n), id(n);
-    std::vector<std::int32_t> c(n);
-    std::vector<std::string> words(n);
-    std::vector<dftracer::utils::dstd::StringView> views(n);
-    std::vector<std::uint8_t> valid((n + 7) / 8, 0);
-    std::vector<char> is_valid(n);
+    dftracer::utils::dstd::Vector<std::int64_t> a(n), id(n);
+    dftracer::utils::dstd::Vector<std::int32_t> c(n);
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> words(n);
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> views(n);
+    dftracer::utils::dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
+    dftracer::utils::dstd::Vector<char> is_valid(n);
     for (std::int64_t i = 0; i < n; ++i) {
         const auto u = static_cast<std::size_t>(i);
         a[u] = (i * 7919) % 5;
         c[u] = static_cast<std::int32_t>((i * 31) % 4) - 2;
-        words[u] = "w" + std::to_string((i * 13) % 6);
+        words[u] = "w" + dftracer::utils::dstd::to_string((i * 13) % 6);
         views[u] = words[u];
         id[u] = i;
         is_valid[u] = (i % 11) != 0;
@@ -882,23 +896,24 @@ TEST_CASE(
     df.columns.push_back(
         Series::flat(dftracer::utils::dataframe::TypeId::Int32, c.data(), n));
     df.columns.push_back(i64(id));
-    const std::vector<bool> desc{false, true, true};
+    const dftracer::utils::dstd::Vector<bool> desc{false, true, true};
     const DataFrame s = df.sort_by_multi({"a", "w", "c"}, desc);
 
-    std::vector<std::int64_t> want(static_cast<std::size_t>(n));
+    dftracer::utils::dstd::Vector<std::int64_t> want(
+        static_cast<std::size_t>(n));
     std::iota(want.begin(), want.end(), std::int64_t{0});
-    std::stable_sort(want.begin(), want.end(),
-                     [&](std::int64_t x, std::int64_t y) {
-                         const auto ux = static_cast<std::size_t>(x);
-                         const auto uy = static_cast<std::size_t>(y);
-                         if (a[ux] != a[uy]) return a[ux] < a[uy];
-                         if (is_valid[ux] != is_valid[uy])
-                             return is_valid[ux] != 0;  // nulls last
-                         if (is_valid[ux] && words[ux] != words[uy])
-                             return words[ux] > words[uy];
-                         if (c[ux] != c[uy]) return c[ux] > c[uy];
-                         return false;
-                     });
+    dftracer::utils::dstd::stable_sort(
+        want.begin(), want.end(), [&](std::int64_t x, std::int64_t y) {
+            const auto ux = static_cast<std::size_t>(x);
+            const auto uy = static_cast<std::size_t>(y);
+            if (a[ux] != a[uy]) return a[ux] < a[uy];
+            if (is_valid[ux] != is_valid[uy])
+                return is_valid[ux] != 0;  // nulls last
+            if (is_valid[ux] && words[ux] != words[uy])
+                return words[ux] > words[uy];
+            if (c[ux] != c[uy]) return c[ux] > c[uy];
+            return false;
+        });
     const std::int64_t* got = s.column("id").data<std::int64_t>();
     for (std::int64_t i = 0; i < n; ++i)
         REQUIRE(got[i] == want[static_cast<std::size_t>(i)]);
@@ -907,11 +922,11 @@ TEST_CASE(
 TEST_CASE("float keys sort as one total order: NaN last, -0.0 equals 0.0") {
     const double nan = std::numeric_limits<double>::quiet_NaN();
     const double inf = std::numeric_limits<double>::infinity();
-    const std::vector<double> pool = {-1.5, -0.0, 0.0,  2.0,
-                                      nan,  inf,  -inf, 2.0};
+    const dftracer::utils::dstd::Vector<double> pool = {-1.5, -0.0, 0.0,  2.0,
+                                                        nan,  inf,  -inf, 2.0};
     const std::int64_t n = 3000;
-    std::vector<double> f(n);
-    std::vector<std::int64_t> g(n), id(n);
+    dftracer::utils::dstd::Vector<double> f(n);
+    dftracer::utils::dstd::Vector<std::int64_t> g(n), id(n);
     for (std::int64_t i = 0; i < n; ++i) {
         const auto z = static_cast<std::size_t>(i);
         f[z] = pool[static_cast<std::size_t>((i * 5) % 8)];
@@ -931,14 +946,15 @@ TEST_CASE("float keys sort as one total order: NaN last, -0.0 equals 0.0") {
     auto equal = [&](double a, double b) { return !less(a, b) && !less(b, a); };
     for (bool desc : {false, true}) {
         // One key, then two keys with the float first and second.
-        std::vector<std::int64_t> want(static_cast<std::size_t>(n));
+        dftracer::utils::dstd::Vector<std::int64_t> want(
+            static_cast<std::size_t>(n));
         std::iota(want.begin(), want.end(), std::int64_t{0});
-        std::stable_sort(want.begin(), want.end(),
-                         [&](std::int64_t x, std::int64_t y) {
-                             const double a = f[static_cast<std::size_t>(x)];
-                             const double b = f[static_cast<std::size_t>(y)];
-                             return desc ? less(b, a) : less(a, b);
-                         });
+        dftracer::utils::dstd::stable_sort(
+            want.begin(), want.end(), [&](std::int64_t x, std::int64_t y) {
+                const double a = f[static_cast<std::size_t>(x)];
+                const double b = f[static_cast<std::size_t>(y)];
+                return desc ? less(b, a) : less(a, b);
+            });
         const DataFrame one = df.sort_by_multi({"f"}, desc);
         const DataFrame single = df.sort_by("f", desc);
         for (std::int64_t i = 0; i < n; ++i) {
@@ -947,7 +963,7 @@ TEST_CASE("float keys sort as one total order: NaN last, -0.0 equals 0.0") {
             REQUIRE(single.column("id").data<std::int64_t>()[i] ==
                     want[static_cast<std::size_t>(i)]);
         }
-        std::stable_sort(
+        dftracer::utils::dstd::stable_sort(
             want.begin(), want.end(), [&](std::int64_t x, std::int64_t y) {
                 const auto ux = static_cast<std::size_t>(x);
                 const auto uy = static_cast<std::size_t>(y);
@@ -969,8 +985,8 @@ TEST_CASE("DataFrame sort_by_multi per-column direction") {
     df.columns.push_back(i64({9, 8, 7, 6}));
 
     // [false, true]: a asc, b desc -> (1,8),(1,6),(2,9),(2,7).
-    DataFrame mixed =
-        df.sort_by_multi({"a", "b"}, std::vector<bool>{false, true});
+    DataFrame mixed = df.sort_by_multi(
+        {"a", "b"}, dftracer::utils::dstd::Vector<bool>{false, true});
     const std::int64_t* a = mixed.column("a").data<std::int64_t>();
     const std::int64_t* b = mixed.column("b").data<std::int64_t>();
     CHECK(a[0] == 1);
@@ -983,8 +999,8 @@ TEST_CASE("DataFrame sort_by_multi per-column direction") {
     CHECK(b[3] == 7);
 
     // Distinct from [true, true] (both descending).
-    DataFrame both =
-        df.sort_by_multi({"a", "b"}, std::vector<bool>{true, true});
+    DataFrame both = df.sort_by_multi(
+        {"a", "b"}, dftracer::utils::dstd::Vector<bool>{true, true});
     const std::int64_t* a2 = both.column("a").data<std::int64_t>();
     const std::int64_t* b2 = both.column("b").data<std::int64_t>();
     CHECK(a2[0] == 2);
@@ -992,16 +1008,19 @@ TEST_CASE("DataFrame sort_by_multi per-column direction") {
     CHECK_FALSE((a2[0] == a[0] && b2[0] == b[0]));
 
     // A single-flag list broadcasts to every key.
-    DataFrame broadcast = df.sort_by_multi({"a", "b"}, std::vector<bool>{true});
+    DataFrame broadcast =
+        df.sort_by_multi({"a", "b"}, dftracer::utils::dstd::Vector<bool>{true});
     CHECK(broadcast.column("a").data<std::int64_t>()[0] ==
           both.column("a").data<std::int64_t>()[0]);
     CHECK(broadcast.column("b").data<std::int64_t>()[0] ==
           both.column("b").data<std::int64_t>()[0]);
 
-    CHECK_THROWS_AS(df.sort_by_multi({"a", "b"}, std::vector<bool>{}),
-                    std::invalid_argument);
     CHECK_THROWS_AS(
-        df.sort_by_multi({"a", "b"}, std::vector<bool>{true, true, false}),
+        df.sort_by_multi({"a", "b"}, dftracer::utils::dstd::Vector<bool>{}),
+        std::invalid_argument);
+    CHECK_THROWS_AS(
+        df.sort_by_multi(
+            {"a", "b"}, dftracer::utils::dstd::Vector<bool>{true, true, false}),
         std::invalid_argument);
 }
 
@@ -1067,7 +1086,7 @@ TEST_CASE("Ergonomic scalar API: no raw dftu_scalar at the call site") {
     CHECK(bounded.data<std::int64_t>()[1] == 5);
     CHECK(bounded.data<std::int64_t>()[3] == 100);
 
-    std::vector<double> raw = {1.0, 2.0, 3.0};
+    dftracer::utils::dstd::Vector<double> raw = {1.0, 2.0, 3.0};
     Series floats = Series::flat_f64(raw.data(), 3);
     Series filled = floats.fillna(1.5);
     CHECK(filled.length() == 3);
@@ -1178,7 +1197,7 @@ TEST_CASE("DataFrame explode a List column") {
     df.names = {"id", "vals"};
     df.columns.push_back(i64({1, 2, 3}));
     // Lists: [10,20], [], [30]  (row 1 empty -> one null row)
-    std::vector<std::int32_t> offsets = {0, 2, 2, 3};
+    dftracer::utils::dstd::Vector<std::int32_t> offsets = {0, 2, 2, 3};
     Series child = i64({10, 20, 30});
     df.columns.push_back(Series::list(offsets, std::move(child)));
 
@@ -1389,7 +1408,7 @@ TEST_CASE("DataFrame mask throws when a predicate cannot be lowered") {
 TEST_CASE("Bool column take / filter / reverse gather bits, not bytes") {
     using dftracer::utils::dataframe::TypeId;
     // 12 rows so the gather crosses a byte boundary: bit i set iff i % 3 == 0.
-    std::vector<std::uint8_t> bits{0b01001001, 0b00000010};
+    dftracer::utils::dstd::Vector<std::uint8_t> bits{0b01001001, 0b00000010};
     Series b = Series::flat(TypeId::Bool, bits.data(), 12);
     auto bit_at = [](const Series& s, std::int64_t i) {
         return ((s.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1) != 0;
@@ -1466,16 +1485,16 @@ TEST_CASE("column-column arithmetic keeps a null where either side is null") {
 // Bool column's bits around every seam must land exactly, part by part,
 // with no part clobbering its neighbour's bits in the shared byte.
 TEST_CASE("concat keeps the bits at unaligned seams") {
-    std::vector<std::int64_t> v;
-    std::vector<int> ok;
-    std::vector<const DataFrame*> ptrs;
-    std::vector<DataFrame> parts;
+    dftracer::utils::dstd::Vector<std::int64_t> v;
+    dftracer::utils::dstd::Vector<int> ok;
+    dftracer::utils::dstd::Vector<const DataFrame*> ptrs;
+    dftracer::utils::dstd::Vector<DataFrame> parts;
     // Part lengths 3, 5, 11, 2, 7: every seam is unaligned.
     const int lens[5] = {3, 5, 11, 2, 7};
     std::int64_t next = 0;
     for (int len : lens) {
-        std::vector<std::int64_t> pv;
-        std::vector<int> pok;
+        dftracer::utils::dstd::Vector<std::int64_t> pv;
+        dftracer::utils::dstd::Vector<int> pok;
         for (int i = 0; i < len; ++i) {
             pv.push_back(next);
             pok.push_back(next % 3 != 0);  // nulls at every third row
@@ -1500,8 +1519,8 @@ TEST_CASE("concat keeps the bits at unaligned seams") {
     }
     CHECK(x.null_count() == nulls);
     // The same seams through a Bool column: x > 10 per part, then concat.
-    std::vector<DataFrame> bparts;
-    std::vector<const DataFrame*> bptrs;
+    dftracer::utils::dstd::Vector<DataFrame> bparts;
+    dftracer::utils::dstd::Vector<const DataFrame*> bptrs;
     for (const DataFrame& d : parts) {
         DataFrame b;
         b.names = {"m"};

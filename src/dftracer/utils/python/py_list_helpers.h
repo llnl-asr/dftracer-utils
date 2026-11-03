@@ -3,17 +3,18 @@
 #define DFTRACER_UTILS_PYTHON_PY_LIST_HELPERS_H
 
 #include <Python.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
-#include <string>
-#include <vector>
 
 // Append the strings of a Python list to `out`. NULL or None is a no-op
 // success (callers that require the argument reject None before calling). A
 // non-list argument or a non-str item sets TypeError (mentioning `argname`)
 // and returns false; `out` may be partially filled in that case.
-inline bool parse_str_list(PyObject *obj, const char *argname,
-                           std::vector<std::string> &out) {
+inline bool parse_str_list(
+    PyObject *obj, const char *argname,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> &out) {
     if (!obj || obj == Py_None) return true;
     if (!PyList_Check(obj)) {
         PyErr_Format(PyExc_TypeError, "%s must be a list of str", argname);
@@ -36,7 +37,8 @@ inline bool parse_str_list(PyObject *obj, const char *argname,
 
 // New Python list from a vector of strings. NULL with the error set on
 // failure. Each element reference is stolen into the list, so nothing leaks.
-inline PyObject *str_list_from(const std::vector<std::string> &v) {
+inline PyObject *str_list_from(
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> &v) {
     PyObject *list = PyList_New(static_cast<Py_ssize_t>(v.size()));
     if (!list) return nullptr;
     for (std::size_t i = 0; i < v.size(); ++i) {

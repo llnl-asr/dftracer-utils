@@ -4,12 +4,12 @@
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
-#include <vector>
 
 // floordiv, mod and pow (Python semantics: floor toward -inf, a remainder with
 // the divisor's sign, a zero divisor null), ffill / bfill, and the String ->
@@ -287,7 +287,7 @@ dftu_series* fill_along(const dftu_series* in, bool forward) {
     dftu_series* v = dftu_series_materialize(in);
     if (!v) return nullptr;
     const std::int64_t n = v->length;
-    std::vector<std::int64_t> idx(static_cast<std::size_t>(n), -1);
+    dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(n), -1);
     std::int64_t last = -1;
     if (forward) {
         for (std::int64_t i = 0; i < n; ++i) {

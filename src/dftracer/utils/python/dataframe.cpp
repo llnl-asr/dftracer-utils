@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/py_frame_op_helpers.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -44,9 +45,7 @@
 #include <new>
 #include <optional>
 #include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dataframe = dftracer::utils::dataframe;
 
@@ -68,7 +67,7 @@ using dftracer::utils::python::strings_from_str_or_seq;
 // in one zero-copy step.
 struct DataFrameObject {
     PyObject_HEAD Series st;
-    std::vector<std::string> names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
 };
 
 PyTypeObject DataFrameType;
@@ -87,7 +86,9 @@ PyObject* make_dataframe(DataFrame&& b) {
         DataFrameType.tp_alloc(&DataFrameType, 0));
     if (!self) return nullptr;
     new (&self->st) Series(std::move(st));
-    new (&self->names) std::vector<std::string>(std::move(b.names));
+    new (&self->names)
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>(
+            std::move(b.names));
     return reinterpret_cast<PyObject*>(self);
 }
 
@@ -97,7 +98,8 @@ void DataFrame_dealloc(DataFrameObject* self) {
     Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
 }
 
-std::int64_t index_of(const DataFrameObject* self, const std::string& name) {
+std::int64_t index_of(const DataFrameObject* self,
+                      const dftracer::utils::dstd::String& name) {
     for (std::size_t i = 0; i < self->names.size(); ++i)
         if (self->names[i] == name) return static_cast<std::int64_t>(i);
     return -1;
@@ -227,7 +229,8 @@ PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
         if (aggs_obj && aggs_obj != Py_None) {
             if (!parse_seq<dataframe::GroupAgg>(
                     aggs_obj, "aggs must be a sequence of strings", plan.aggs,
-                    [](PyObject* item, std::vector<dataframe::GroupAgg>& o) {
+                    [](PyObject* item,
+                       dftracer::utils::dstd::Vector<dataframe::GroupAgg>& o) {
                         const char* s = PyUnicode_AsUTF8(item);
                         if (!s) return false;
                         o.push_back(group_agg_from_spec(s));
@@ -257,7 +260,7 @@ PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
 PyObject* DataFrame_select(PyObject* self, PyObject* args) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    std::vector<std::string> names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
     Py_ssize_t n = PyTuple_GET_SIZE(args);
     for (Py_ssize_t i = 0; i < n; ++i) {
         const char* s = PyUnicode_AsUTF8(PyTuple_GET_ITEM(args, i));
@@ -278,9 +281,9 @@ PyObject* DataFrame_rename(PyObject* self, PyObject* mapping) {
         PyErr_SetString(PyExc_TypeError, "rename() expects a {old: new} dict");
         return nullptr;
     }
-    std::vector<std::string> new_names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> new_names;
     new_names.reserve(b->names.size());
-    for (const std::string& name : b->names) {
+    for (const dftracer::utils::dstd::String& name : b->names) {
         PyObject* v = PyDict_GetItemString(mapping, name.c_str());
         if (v) {
             const char* s = PyUnicode_AsUTF8(v);
@@ -316,7 +319,7 @@ PyObject* DataFrame_with_column(PyObject* self, PyObject* args) {
 PyObject* DataFrame_take(PyObject* self, PyObject* seq) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    std::vector<std::int64_t> idx;
+    dftracer::utils::dstd::Vector<std::int64_t> idx;
     if (!parse_int_seq(seq, "take() expects a sequence of ints", idx))
         return nullptr;
     return run_batch_op([&] { return to_dataframe(b).take(idx); });
@@ -353,7 +356,9 @@ PyObject* DataFrame_fill_null(PyObject* self, PyObject* value) {
 
 // Read a sequence (or single str) of column names into `out`. Returns false and
 // sets a Python error on a non-string element.
-bool names_from_obj(PyObject* obj, std::vector<std::string>& out) {
+bool names_from_obj(
+    PyObject* obj,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& out) {
     if (PyUnicode_Check(obj)) {
         out.emplace_back(PyUnicode_AsUTF8(obj));
         return true;
@@ -371,7 +376,7 @@ PyObject* DataFrame_unique(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O",
                                      const_cast<char**>(kwlist), &subset_obj))
         return nullptr;
-    std::vector<std::string> subset;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> subset;
     if (subset_obj != Py_None && !names_from_obj(subset_obj, subset))
         return nullptr;
     return run_batch_op(
@@ -389,14 +394,14 @@ PyObject* DataFrame_sort_by_multi(PyObject* self, PyObject* args,
                                      const_cast<char**>(kwlist), &names_obj,
                                      &descending_obj))
         return nullptr;
-    std::vector<std::string> names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
     if (!parse_string_seq(names_obj, "names must be a sequence", names))
         return nullptr;
 
     // `descending` is either a single bool (broadcasts) or a sequence of bool,
     // one per name; a bare Python list is never truthy-coerced (that was the
     // old "any non-empty list sorts descending" bug).
-    std::vector<bool> descending;
+    dftracer::utils::dstd::Vector<bool> descending;
     if (!descending_obj) {
         descending.push_back(false);
     } else if (PyBool_Check(descending_obj) || PyLong_Check(descending_obj)) {
@@ -497,9 +502,9 @@ PyObject* DataFrame_reduce_specs(PyObject* self, PyObject* args) {
     const char* agg = nullptr;
     PyObject* keys_obj = Py_None;
     if (!PyArg_ParseTuple(args, "s|O", &agg, &keys_obj)) return nullptr;
-    std::vector<std::string> keys;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     if (keys_obj != Py_None && !names_from_obj(keys_obj, keys)) return nullptr;
-    std::vector<std::string> specs;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> specs;
     try {
         specs = dftracer::utils::python::reduce_spec_strings(
             dataframe::reduce_specs(to_dataframe(b),
@@ -613,7 +618,7 @@ PyObject* DataFrame_partition_id(PyObject* self, PyObject* args) {
     PyObject* keys_obj = nullptr;
     Py_ssize_t n_parts = 0;
     if (!PyArg_ParseTuple(args, "On", &keys_obj, &n_parts)) return nullptr;
-    std::vector<std::string> keys;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     if (PyUnicode_Check(keys_obj)) {
         keys.emplace_back(PyUnicode_AsUTF8(keys_obj));
     } else if (!parse_string_seq(keys_obj, "keys must be a str or list",
@@ -641,7 +646,7 @@ PyObject* DataFrame_hash_partition(PyObject* self, PyObject* args) {
     Py_ssize_t n_parts = 0;
     if (!PyArg_ParseTuple(args, "On", &keys_obj, &n_parts)) return nullptr;
 
-    std::vector<std::string> keys;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     if (PyUnicode_Check(keys_obj)) {
         keys.emplace_back(PyUnicode_AsUTF8(keys_obj));
     } else if (!parse_string_seq(keys_obj, "keys must be a str or list",
@@ -649,7 +654,7 @@ PyObject* DataFrame_hash_partition(PyObject* self, PyObject* args) {
         return nullptr;
     }
 
-    std::vector<DataFrame> parts;
+    dftracer::utils::dstd::Vector<DataFrame> parts;
     try {
         parts = dataframe::hash_partition(to_dataframe(b), keys,
                                           static_cast<std::int64_t>(n_parts));
@@ -682,15 +687,15 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
     PyObject* key_obj = nullptr;
     PyObject* specs = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &key_obj, &specs)) return nullptr;
-    std::vector<std::string> keys;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     if (!strings_from_str_or_seq(key_obj, keys)) return nullptr;
     PyObject* seq = PySequence_Fast(specs, "specs must be a sequence");
     if (!seq) return nullptr;
 
     DataFrame bat = to_dataframe(b);
-    std::vector<dataframe::Expr> key_exprs;
+    dftracer::utils::dstd::Vector<dataframe::Expr> key_exprs;
     key_exprs.reserve(keys.size());
-    for (const std::string& key : keys) {
+    for (const dftracer::utils::dstd::String& key : keys) {
         std::int32_t ki = -1;
         for (std::size_t i = 0; i < bat.names.size(); ++i)
             if (bat.names[i] == key) {
@@ -706,7 +711,7 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
         key_exprs.push_back(dataframe::expr_col(ki));
     }
 
-    std::vector<dataframe::AggExprSpec> aggs;
+    dftracer::utils::dstd::Vector<dataframe::AggExprSpec> aggs;
     Py_ssize_t ns = PySequence_Fast_GET_SIZE(seq);
     aggs.reserve(static_cast<std::size_t>(ns));
     for (Py_ssize_t i = 0; i < ns; ++i) {
@@ -759,7 +764,7 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
     }
     Py_DECREF(seq);
 
-    std::vector<const Series*> inputs;
+    dftracer::utils::dstd::Vector<const Series*> inputs;
     inputs.reserve(bat.columns.size());
     for (const Series& c : bat.columns) inputs.push_back(&c);
     return run_batch_op([&] {
@@ -816,8 +821,10 @@ PyObject* DataFrame_group_by(PyObject* self, PyObject* args) {
         if (!PyUnicode_Check(a)) break;
         const char* s = PyUnicode_AsUTF8(a);
         if (!s) return nullptr;
-        const std::string sv(s);
-        if (sv == "count" || sv.find(':') != std::string::npos) break;
+        const dftracer::utils::dstd::String sv(s);
+        if (sv == "count" ||
+            sv.find(':') != dftracer::utils::dstd::String::npos)
+            break;
     }
     if (nk == 0) nk = 1;  // args[0] is always at least one key
     bool rest_legacy = n > nk;
@@ -825,14 +832,14 @@ PyObject* DataFrame_group_by(PyObject* self, PyObject* args) {
         rest_legacy = PyUnicode_Check(PyTuple_GET_ITEM(args, i)) != 0;
     if (n == nk || !rest_legacy) return delegate_groupby(self, args, nk);
 
-    std::vector<std::string> keys;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     keys.reserve(static_cast<std::size_t>(nk));
     for (Py_ssize_t i = 0; i < nk; ++i) {
         const char* s = PyUnicode_AsUTF8(PyTuple_GET_ITEM(args, i));
         if (!s) return nullptr;
         keys.emplace_back(s);
     }
-    std::vector<std::string> specs;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> specs;
     specs.reserve(static_cast<std::size_t>(n - nk));
     for (Py_ssize_t i = nk; i < n; ++i) {
         const char* s = PyUnicode_AsUTF8(PyTuple_GET_ITEM(args, i));
@@ -840,9 +847,9 @@ PyObject* DataFrame_group_by(PyObject* self, PyObject* args) {
         specs.emplace_back(s);
     }
     return run_batch_op([&] {
-        std::vector<dataframe::GroupAgg> aggs;
+        dftracer::utils::dstd::Vector<dataframe::GroupAgg> aggs;
         aggs.reserve(specs.size());
-        for (const std::string& spec : specs)
+        for (const dftracer::utils::dstd::String& spec : specs)
             aggs.push_back(group_agg_from_spec(spec));
         return dataframe::group_by(to_dataframe(b), keys, aggs);
     });
@@ -871,8 +878,8 @@ PyObject* DataFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!o) return nullptr;
     dataframe::JoinHow jh;
     if (!join_how_from_str(how, jh)) return nullptr;
-    std::vector<std::string> l;
-    std::vector<std::string> r;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> l;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> r;
     if (!join_keys_from_objs(on, left_on, right_on, jh, l, r)) return nullptr;
     return run_batch_op([&] {
         return dataframe::join(to_dataframe(b), to_dataframe(o), l, r, jh,
@@ -904,7 +911,8 @@ PyObject* DataFrame_unpivot(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(
             args, kwds, "OO", const_cast<char**>(kwlist), &id_obj, &val_obj))
         return nullptr;
-    std::vector<std::string> id_vars, value_vars;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> id_vars,
+        value_vars;
     if (!names_from_obj(id_obj, id_vars)) return nullptr;
     if (!names_from_obj(val_obj, value_vars)) return nullptr;
     return run_batch_op([&] {
@@ -936,15 +944,15 @@ PyObject* DataFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
                                      const_cast<char**>(kwlist), &part, &order,
                                      &specs))
         return nullptr;
-    std::vector<std::string> pcols;
-    std::vector<std::string> ocols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> pcols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ocols;
     if (!parse_string_seq(part, "window: partition_by must be names", pcols) ||
         !parse_string_seq(order, "window: order_by must be names", ocols))
         return nullptr;
     dftracer::utils::python::WindowSpecs parsed;
     if (!dftracer::utils::python::parse_window_specs(specs, parsed))
         return nullptr;
-    std::vector<dataframe::WindowColumn> specv;
+    dftracer::utils::dstd::Vector<dataframe::WindowColumn> specv;
     specv.reserve(parsed.specs.size());
     for (const dftu_window_spec& w : parsed.specs)
         specv.push_back(dataframe::window_column(w));
@@ -973,8 +981,8 @@ PyObject* DataFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!dftracer::utils::python::gap_fill_mode_from_str(mode, &mode_code))
         return nullptr;
     const auto m = static_cast<dataframe::GapFillMode>(mode_code);
-    std::vector<std::string> pcols;
-    std::vector<std::string> vcols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> pcols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> vcols;
     if (!parse_string_seq(part, "gap_fill: partition_by must be names",
                           pcols) ||
         !parse_string_seq(values, "gap_fill: values must be names", vcols))
@@ -1016,7 +1024,7 @@ PyObject* DataFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!dftracer::utils::python::asof_direction_from_str(direction, &dir_code))
         return nullptr;
     const auto dir = static_cast<dataframe::AsofDirection>(dir_code);
-    std::vector<std::string> equi;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> equi;
     if (!parse_string_seq(by, "asof: by must be names", equi)) return nullptr;
     dftracer::utils::dstd::Optional<double> tol;
     if (tol_obj != Py_None) {
@@ -1052,7 +1060,7 @@ PyObject* DataFrame_interval(PyObject* self, PyObject* args, PyObject* kwds) {
         return nullptr;
     DataFrameObject* o = as_dataframe(other);
     if (!o) return nullptr;
-    std::vector<std::string> equi;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> equi;
     if (!parse_string_seq(by, "interval: by must be names", equi))
         return nullptr;
     return run_batch_op([&] {
@@ -1134,7 +1142,7 @@ PyObject* DataFrame_group_by_dynamic(PyObject* self, PyObject* args,
         if (PyUnicode_Check(origin_obj)) {
             const char* s = PyUnicode_AsUTF8(origin_obj);
             if (!s) return nullptr;
-            if (std::string(s) != "min") {
+            if (dftracer::utils::dstd::String(s) != "min") {
                 PyErr_SetString(PyExc_ValueError,
                                 "group_by_dynamic: origin must be an int or "
                                 "\"min\"");
@@ -1146,7 +1154,7 @@ PyObject* DataFrame_group_by_dynamic(PyObject* self, PyObject* args,
             if (origin == -1 && PyErr_Occurred()) return nullptr;
         }
     }
-    std::vector<dataframe::GroupAgg> aggs;
+    dftracer::utils::dstd::Vector<dataframe::GroupAgg> aggs;
     if (aggs_obj && aggs_obj != Py_None && !aggs_from_seq(aggs_obj, aggs))
         return nullptr;
     return run_batch_op([&] {
@@ -1179,7 +1187,7 @@ PyObject* DataFrame_concat(PyObject* self, PyObject* args, PyObject* kwds) {
             return nullptr;
         }
     }
-    std::vector<DataFrame> owned;
+    dftracer::utils::dstd::Vector<DataFrame> owned;
     owned.reserve(1 + static_cast<std::size_t>(PyTuple_GET_SIZE(args)));
     owned.push_back(to_dataframe(b));
     for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(args); ++i) {
@@ -1187,7 +1195,7 @@ PyObject* DataFrame_concat(PyObject* self, PyObject* args, PyObject* kwds) {
         if (!o) return nullptr;
         owned.push_back(to_dataframe(o));
     }
-    std::vector<const DataFrame*> parts;
+    dftracer::utils::dstd::Vector<const DataFrame*> parts;
     parts.reserve(owned.size());
     for (const DataFrame& x : owned) parts.push_back(&x);
     return run_batch_op([&] { return dataframe::concat(parts, how); });
@@ -1275,7 +1283,7 @@ PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
     ArrowSchema schema{};
-    std::vector<ArrowArray> arrays;
+    dftracer::utils::dstd::Vector<ArrowArray> arrays;
     auto drop = [&] {
         if (schema.release) schema.release(&schema);
         for (auto& a : arrays)
@@ -1322,7 +1330,8 @@ PyObject* DataFrame_to_ipc(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
     try {
-        std::vector<std::uint8_t> bytes = to_dataframe(b).to_ipc();
+        dftracer::utils::dstd::Vector<std::uint8_t> bytes =
+            to_dataframe(b).to_ipc();
         return PyBytes_FromStringAndSize(
             reinterpret_cast<const char*>(bytes.data()),
             static_cast<Py_ssize_t>(bytes.size()));
@@ -1339,7 +1348,8 @@ PyObject* DataFrame_to_bytes(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
     try {
-        const std::string bytes = dataframe::frame_to_native(to_dataframe(b));
+        const dftracer::utils::dstd::String bytes =
+            dataframe::frame_to_native(to_dataframe(b));
         return PyBytes_FromStringAndSize(bytes.data(),
                                          static_cast<Py_ssize_t>(bytes.size()));
     } catch (const std::exception& e) {
@@ -1644,7 +1654,7 @@ PyObject* dataframe_from_columns(PyObject* /*self*/, PyObject* args) {
     PyObject* names_obj = nullptr;
     PyObject* series_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &names_obj, &series_obj)) return nullptr;
-    std::vector<std::string> names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
     if (!parse_string_seq(names_obj, "names must be strings", names))
         return nullptr;
     PyObject* seq = PySequence_Fast(series_obj, "series must be a sequence");

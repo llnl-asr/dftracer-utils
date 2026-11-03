@@ -256,7 +256,7 @@ inline dstd::String string_literal(dstd::StringView v) {
 inline dstd::String number_text(double v) {
     if (!std::isfinite(v))
         throw std::invalid_argument("duql: a number must be finite");
-    dstd::String s = dstd::double_string(v);
+    dstd::String s = dstd::double_text(v);
     if (s.find_first_of(".eE") == dstd::String::npos) s += ".0";
     return s;
 }

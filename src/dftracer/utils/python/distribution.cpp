@@ -33,8 +33,6 @@
 #include <cstdint>
 #include <memory>
 #include <new>
-#include <string>
-#include <vector>
 
 using dftracer::utils::Runtime;
 using dftracer::utils::index::build::BatchBuilder;
@@ -379,7 +377,7 @@ static PyObject *write_shard_set_fn(PyObject * /*self*/, PyObject *args) {
     const char *root;
     PyObject *shard_dirs_obj;
     if (!PyArg_ParseTuple(args, "sO", &root, &shard_dirs_obj)) return NULL;
-    std::vector<std::string> shard_dirs;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> shard_dirs;
     if (!parse_string_seq(shard_dirs_obj, "shard_dirs must be a sequence",
                           shard_dirs))
         return NULL;

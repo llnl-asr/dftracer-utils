@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <simdjson.h>
 
 #include <cstddef>
@@ -18,9 +19,7 @@
 #include <exception>
 #include <span>
 #include <string>
-#include <string_view>
 #include <type_traits>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 namespace {
@@ -76,7 +75,7 @@ void cast_from(const void* sv, std::int32_t dtype, void* dv, std::size_t n) {
 bool cast_from_float16(const void* sv, std::int32_t dtype, void* dv,
                        std::size_t n) {
     const auto* h = static_cast<const std::uint16_t*>(sv);
-    std::vector<float> decoded(n);
+    dstd::Vector<float> decoded(n);
     for (std::size_t i = 0; i < n; ++i) decoded[i] = half_to_float(h[i]);
     if (static_cast<TypeId>(dtype) == TypeId::Float16) {
         auto* d = static_cast<std::uint16_t*>(dv);
@@ -138,6 +137,23 @@ bool row_valid(const dftu_series& v, std::int64_t i) {
 // Each row of a FLAT String column parsed as `mid` (Int64 or Float64): the
 // whole row must be the number, surrounding spaces allowed; anything else
 // (and a null) is null.
+// A number with surrounding ASCII space and one leading '+' allowed, as
+// std::stoll and std::stod read it.
+template <class T>
+dstd::Optional<T> parse_trimmed(dstd::StringView s) {
+    std::size_t b = 0;
+    std::size_t e = s.size();
+    while (b < e && ::dftracer::utils::common::detail::is_ascii_space(s[b]))
+        ++b;
+    while (e > b && ::dftracer::utils::common::detail::is_ascii_space(s[e - 1]))
+        --e;
+    if (b < e && s[b] == '+') {
+        ++b;
+        if (b < e && (s[b] == '-' || s[b] == '+')) return dstd::nullopt;
+    }
+    return dstd::from_chars<T>(s.substr(b, e - b));
+}
+
 template <class Off>
 dftu_series* parse_numbers_w(const dftu_series& v, TypeId mid) {
     const std::int64_t n = v.length;
@@ -162,24 +178,18 @@ dftu_series* parse_numbers_w(const dftu_series& v, TypeId mid) {
             ++out->null_count;
             continue;
         }
-        std::string text(data + off[i],
-                         static_cast<std::size_t>(off[i + 1] - off[i]));
-        std::size_t used = 0;
-        bool ok = false;
-        try {
-            if (mid == TypeId::Int64) {
-                const long long x = std::stoll(text, &used);
-                oi[i] = static_cast<std::int64_t>(x);
-            } else {
-                od[i] = std::stod(text, &used);
-            }
-            while (
-                used < text.size() &&
-                ::dftracer::utils::common::detail::is_ascii_space(text[used]))
-                ++used;
-            ok = used == text.size();
-        } catch (const std::exception&) {
-            ok = false;
+        const dstd::StringView text(
+            data + off[i], static_cast<std::size_t>(off[i + 1] - off[i]));
+        bool ok;
+        if (mid == TypeId::Int64) {
+            const dstd::Optional<std::int64_t> x =
+                parse_trimmed<std::int64_t>(text);
+            ok = x.has_value();
+            if (ok) oi[i] = *x;
+        } else {
+            const dstd::Optional<double> x = parse_trimmed<double>(text);
+            ok = x.has_value();
+            if (ok) od[i] = *x;
         }
         if (ok)
             writable(out->validity)[i >> 3] |=
@@ -194,7 +204,7 @@ dftu_series* parse_numbers_w(const dftu_series& v, TypeId mid) {
 // A shortest round-trip float text with ".0" added when it is only digits, so
 // 2.0 reads "2.0" as Python's repr and pandas give it; "1e+21", "nan" and
 // "inf" already show a point, an exponent or letters.
-std::string float_repr(std::string t) {
+dstd::String float_repr(dstd::String t) {
     bool plain = !t.empty();
     for (char c : t)
         if (c != '-' && (c < '0' || c > '9')) {
@@ -213,19 +223,19 @@ bool is_plain_number(TypeId t) {
 
 template <class T>
 void number_texts(const void* sv, const dftu_series& v,
-                  std::vector<std::string>& owned) {
+                  dstd::Vector<dstd::String>& owned) {
     const T* s = static_cast<const T*>(sv);
     for (std::int64_t i = 0; i < v.length; ++i) {
         if (!row_valid(v, i)) continue;
-        std::string& out = owned[static_cast<std::size_t>(i)];
+        dstd::String& out = owned[static_cast<std::size_t>(i)];
         if constexpr (std::is_same_v<T, float>)
             out = float_repr(dftracer::utils::dstd::float_text(s[i]));
         else if constexpr (std::is_same_v<T, double>)
             out = float_repr(dftracer::utils::dstd::double_text(s[i]));
         else if constexpr (std::is_signed_v<T>)
-            out = std::to_string(static_cast<std::int64_t>(s[i]));
+            out = dstd::to_string(static_cast<std::int64_t>(s[i]));
         else
-            out = std::to_string(static_cast<std::uint64_t>(s[i]));
+            out = dstd::to_string(static_cast<std::uint64_t>(s[i]));
     }
 }
 
@@ -233,7 +243,7 @@ void number_texts(const void* sv, const dftu_series& v,
 // text, "true" / "false". A null stays null.
 dftu_series* to_text(const dftu_series& v) {
     const std::size_t n = static_cast<std::size_t>(v.length);
-    std::vector<std::string> owned(n);
+    dstd::Vector<dstd::String> owned(n);
     if (v.type == TypeId::Bool) {
         const auto* bits = static_cast<const std::uint8_t*>(v.data.data());
         for (std::size_t i = 0; i < n; ++i)
@@ -242,7 +252,7 @@ dftu_series* to_text(const dftu_series& v) {
     } else {
         DF_NUMERIC_DISPATCH(v.type, number_texts, v.data.data(), v, owned)
     }
-    std::vector<dstd::StringView> views(owned.begin(), owned.end());
+    dstd::Vector<dstd::StringView> views(owned.begin(), owned.end());
     return Series::strings(dstd::Span<const dstd::StringView>(views),
                            v.validity.block() ? v.validity.data() : nullptr)
         .release();
@@ -314,7 +324,7 @@ dftu_series* bytes_to_text_w(const dftu_series& v, TypeId text) {
     const Off* off = reinterpret_cast<const Off*>(offsets_of<Off>(v).data());
     const std::uint8_t* valid =
         v.validity.block() ? v.validity.data() : nullptr;
-    std::vector<std::uint8_t> bits((n + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> bits((n + 7) / 8, 0);
     std::int64_t nulls = 0;
     for (std::size_t i = 0; i < n; ++i) {
         const bool present = !valid || ((valid[i >> 3] >> (i & 7)) & 1);
@@ -364,7 +374,7 @@ dftu_series* dftu_series_cast(const dftu_series* v, dftu_dtype target) {
     if (src == TypeId::Bool && dftracer::utils::dataframe::is_numeric(dst)) {
         // Unpack the bits to 0 / 1 as Int64, then widen or narrow from there.
         const std::size_t n = static_cast<std::size_t>(v->length);
-        std::vector<std::int64_t> ones(n);
+        dftracer::utils::dstd::Vector<std::int64_t> ones(n);
         const auto* bits = static_cast<const std::uint8_t*>(v->data.data());
         for (std::size_t i = 0; i < n; ++i)
             ones[i] = (bits[i >> 3] >> (i & 7)) & 1;
@@ -463,7 +473,7 @@ dftu_series* dftu_series_cast(const dftu_series* v, dftu_dtype target) {
             src, sv, static_cast<std::int32_t>(byte_width(src).value_or(0)),
             v->decimal_scale(), static_cast<std::int32_t>(dst), dv, n);
     } else if (dst == TypeId::Float16) {
-        auto tmp = std::vector<float>(n);
+        auto tmp = dftracer::utils::dstd::Vector<float>(n);
         DF_NUMERIC_DISPATCH(src, dftracer::utils::dataframe::cast_from, sv,
                             static_cast<std::int32_t>(TypeId::Float32),
                             tmp.data(), n)

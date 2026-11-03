@@ -4,20 +4,20 @@
 
 #include <Python.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <cstring>
-#include <deque>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::python {
 
 /// The window specs of one window() call in their C ABI shape, with the
 /// column names they point at owned here (a deque keeps them stable).
 struct WindowSpecs {
-    std::deque<std::string> names;
-    std::vector<dftu_window_spec> specs;
+    dftracer::utils::dstd::Deque<dftracer::utils::dstd::String> names;
+    dftracer::utils::dstd::Vector<dftu_window_spec> specs;
 };
 
 inline bool window_func_from_str(const char* name, dftu_window_func* out) {
@@ -244,7 +244,7 @@ inline bool rank_method_from_str(const char* name, dftu_rank_method* out) {
 // group_transform(keys, kind, n=0, method="average", ascending=True): the
 // shared argument parse of the DataFrame and LazyFrame bindings.
 struct GroupwiseArgs {
-    std::vector<std::string> keys;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     dftu_groupwise_op kind = DFTU_GROUPWISE_CUMSUM;
     std::int64_t n = 0;
     dftu_rank_method method = DFTU_RANK_AVERAGE;

@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -162,7 +163,7 @@ static coro::CoroTask<int> run_verify(
                 }
             }
 
-            std::unordered_map<std::string, ScalableBloomFilter> file_blooms;
+            dstd::HashMap<dstd::String, ScalableBloomFilter> file_blooms;
             std::size_t total_events = 0;
 
             for (const auto& chunk : chunks) {

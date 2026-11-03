@@ -59,17 +59,8 @@ inline char* to_chars_double(char* first, char* last, double v) noexcept {
 #endif
 }
 
-/// `v` in shortest round-trip form ("2.5", not "2.500000"). A std::string
-/// twin of @ref double_string, deleted when its last callers (dataframe and
-/// trace) move to dstd::String.
-inline std::string double_text(double v) {
-    char buf[32];
-    char* end = to_chars_double(buf, buf + sizeof(buf), v);
-    return end ? std::string(buf, end) : std::string();
-}
-
-/// double_text into a dstd::String.
-inline String double_string(double v) {
+/// `v` in shortest round-trip form ("2.5", not "2.500000").
+inline String double_text(double v) {
     char buf[32];
     char* end = to_chars_double(buf, buf + sizeof(buf), v);
     return end ? String(buf, end) : String();
@@ -99,16 +90,8 @@ inline char* to_chars_float(char* first, char* last, float v) noexcept {
 #endif
 }
 
-/// `v` in shortest round-trip form for a float ("0.1", not "0.100000001"). A
-/// std::string twin of @ref float_string, deleted with @ref double_text.
-inline std::string float_text(float v) {
-    char buf[32];
-    char* end = to_chars_float(buf, buf + sizeof(buf), v);
-    return end ? std::string(buf, end) : std::string();
-}
-
-/// float_text into a dstd::String.
-inline String float_string(float v) {
+/// `v` in shortest round-trip form for a float ("0.1", not "0.100000001").
+inline String float_text(float v) {
     char buf[32];
     char* end = to_chars_float(buf, buf + sizeof(buf), v);
     return end ? String(buf, end) : String();

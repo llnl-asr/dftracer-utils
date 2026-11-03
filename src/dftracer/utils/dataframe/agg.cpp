@@ -5,22 +5,22 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
 std::int64_t agg_num_groups(const AggState& st) { return st.ngroups(); }
 
-const std::vector<AggSpec>& agg_specs(const AggState& st) { return st.specs; }
+const dstd::Vector<AggSpec>& agg_specs(const AggState& st) { return st.specs; }
 
-std::vector<std::string> agg_group_key(const AggState& st, std::int64_t g) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> agg_group_key(const AggState& st, std::int64_t g) {
+    dstd::Vector<dstd::String> out;
     out.reserve(st.nkeys);
     for (std::size_t k = 0; k < st.nkeys; ++k) {
         if (st.nkey_cols[k][static_cast<std::size_t>(g)]) {
@@ -35,25 +35,25 @@ std::vector<std::string> agg_group_key(const AggState& st, std::int64_t g) {
         const FieldStatDomain kd =
             k < st.key_domain.size() ? st.key_domain[k] : FieldStatDomain::I64;
         if (kd == FieldStatDomain::U64)
-            out.push_back(std::to_string(std::bit_cast<std::uint64_t>(bits)));
+            out.push_back(dstd::to_string(std::bit_cast<std::uint64_t>(bits)));
         else if (kd == FieldStatDomain::F64)
             out.push_back(dftracer::utils::dstd::double_text(
                 std::bit_cast<double>(bits)));
         else
-            out.push_back(std::to_string(bits));
+            out.push_back(dstd::to_string(bits));
     }
     return out;
 }
 
 // A string up to this long lives inside the std::string object.
-static const std::size_t SSO_CAPACITY = std::string().capacity();
+static const std::size_t SSO_CAPACITY = dstd::String().capacity();
 
 std::size_t agg_approx_bytes(const AggState& st) {
     std::size_t total = 0;
     for (std::size_t k = 0; k < st.nkeys; ++k) {
         if (st.key_is_bytes[k]) {
-            total += st.skey_cols[k].capacity() * sizeof(std::string);
-            for (const std::string& v : st.skey_cols[k])
+            total += st.skey_cols[k].capacity() * sizeof(dstd::String);
+            for (const dstd::String& v : st.skey_cols[k])
                 total += v.capacity() > SSO_CAPACITY ? v.capacity() : 0;
         } else {
             total += st.ikey_cols[k].capacity() * sizeof(std::int64_t);
@@ -76,15 +76,15 @@ std::size_t agg_approx_bytes(const AggState& st) {
             (st.fl_first.size() + st.fl_last.size()) * sizeof(std::uint64_t);
         total += (st.fl_first_idx.size() + st.fl_last_idx.size()) *
                  sizeof(std::int64_t);
-        for (const std::string& v : st.fl_first_s) total += v.size();
-        for (const std::string& v : st.fl_last_s) total += v.size();
+        for (const dstd::String& v : st.fl_first_s) total += v.size();
+        for (const dstd::String& v : st.fl_last_s) total += v.size();
     }
     if (st.has_sketch)
         for (const DDSketch& sk : st.sketches)
             total += sk.bins().size() * 24 + 64;
     if (st.has_arg) {
         total += st.arg_by.size() * sizeof(double) + st.arg_has.size();
-        for (const std::string& v : st.arg_repr) total += v.size();
+        for (const dstd::String& v : st.arg_repr) total += v.size();
     }
     if (st.has_bitor) total += st.bitor_acc.size() * sizeof(std::uint64_t);
     if (st.has_prod) total += st.prod_acc.size() * sizeof(double);
@@ -98,7 +98,7 @@ std::size_t agg_approx_bytes(const AggState& st) {
     if (st.has_lst)
         for (const ListItems& items : st.lst)
             for (const auto& [by, repr] : items)
-                total += sizeof(double) + repr.size() + sizeof(std::string);
+                total += sizeof(double) + repr.size() + sizeof(dstd::String);
     if (st.has_ss)
         for (const SpaceSavingMap& m : st.ss_counters)
             for (const auto& [v, c] : m)
@@ -106,7 +106,7 @@ std::size_t agg_approx_bytes(const AggState& st) {
     if (st.has_co) total += st.co.size() * sizeof(CoStat);
     if (st.has_set)
         for (const AggState::StringSet& gset : st.sets)
-            for (const std::string& v : gset) total += v.size() + 32;
+            for (const dstd::String& v : gset) total += v.size() + 32;
     if (st.has_occ) {
         total += (st.occ_total.size() + st.occ_ts.size() + st.occ_te.size()) *
                  sizeof(std::uint64_t);
@@ -117,7 +117,7 @@ std::size_t agg_approx_bytes(const AggState& st) {
         total += st.dyn_names.capacity() * sizeof(dstd::String) +
                  st.dyn_domain.capacity() * sizeof(FieldStatDomain) +
                  st.dyn_ids.values().capacity() *
-                     sizeof(dstd::Pair<std::string, std::uint32_t>) +
+                     sizeof(dstd::Pair<dstd::String, std::uint32_t>) +
                  st.dyn_ids.bucket_count() * sizeof(std::uint32_t);
         for (const dstd::String& n : st.dyn_names)
             total += n.capacity() > SSO_CAPACITY ? n.capacity() + 1 : 0;
@@ -141,12 +141,12 @@ std::size_t agg_approx_bytes(const AggState& st) {
     return total;
 }
 
-std::vector<std::vector<std::int64_t>> agg_split_groups(const AggState& st,
-                                                        std::size_t parts,
-                                                        int salt) {
+dstd::Vector<dstd::Vector<std::int64_t>> agg_split_groups(const AggState& st,
+                                                          std::size_t parts,
+                                                          int salt) {
     if (parts == 0)
         throw std::invalid_argument("agg_split_groups: parts must be > 0");
-    std::vector<std::vector<std::int64_t>> out(parts);
+    dstd::Vector<dstd::Vector<std::int64_t>> out(parts);
     const std::int64_t groups = agg_num_groups(st);
     for (std::int64_t g = 0; g < groups; ++g) {
         std::size_t h = 0;
@@ -273,8 +273,10 @@ int agg_key_cmp(const AggState& a, std::int64_t ga, const AggState& b,
             return xn ? 1 : -1;
         }
         if (a.key_is_bytes[k]) {
-            const std::string& x = a.skey_cols[k][static_cast<std::size_t>(ga)];
-            const std::string& y = b.skey_cols[k][static_cast<std::size_t>(gb)];
+            const dstd::String& x =
+                a.skey_cols[k][static_cast<std::size_t>(ga)];
+            const dstd::String& y =
+                b.skey_cols[k][static_cast<std::size_t>(gb)];
             if (x != y) return x < y ? -1 : 1;
         } else {
             const std::int64_t x = a.ikey_cols[k][static_cast<std::size_t>(ga)];

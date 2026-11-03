@@ -127,10 +127,10 @@ std::string create_grouped_trace(TestEnvironment& env, int per_name = 40) {
 // Wraps a Source so a test can count the rows its cursor actually produced
 // and see whether a narrow() reached it; everything else passes through.
 struct CountingCursor : dataframe::Cursor {
-    std::unique_ptr<dataframe::Cursor> inner;
+    dstd::UniquePtr<dataframe::Cursor> inner;
     std::size_t* rows;
     std::size_t* narrows;
-    CountingCursor(std::unique_ptr<dataframe::Cursor> in, std::size_t* r,
+    CountingCursor(dstd::UniquePtr<dataframe::Cursor> in, std::size_t* r,
                    std::size_t* n)
         : inner(std::move(in)), rows(r), narrows(n) {}
     coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
@@ -155,8 +155,8 @@ struct CountingSource : dataframe::Source {
     dataframe::ScanResult scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r = inner->scan(req);
-        r.cursor = std::make_unique<CountingCursor>(std::move(r.cursor), &rows,
-                                                    &narrows);
+        r.cursor = dstd::make_unique<CountingCursor>(std::move(r.cursor), &rows,
+                                                     &narrows);
         return r;
     }
 };

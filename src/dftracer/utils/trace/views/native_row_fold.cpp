@@ -290,7 +290,7 @@ df::Series column_of(const dstd::Vector<Scalar>& vals, char kind) {
                 t = dstd::int_text(v.i);
                 break;
             case Scalar::K::Dbl:
-                t = dstd::double_string(v.d);
+                t = dstd::double_text(v.d);
                 break;
             default:
                 t = v.s;
@@ -350,8 +350,7 @@ df::Series list_column(EventRows evs,
         }
     }
     dftracer::utils::json::RecordParser parser;
-    // keep std: Series::list takes std::vector<std::int32_t>
-    std::vector<std::int32_t> offsets{0};
+    dstd::Vector<std::int32_t> offsets{0};
     dstd::Vector<std::int64_t> rows;
     bool null_row = false;
     dstd::Vector<Scalar> elems;
@@ -382,10 +381,8 @@ df::Series list_column(EventRows evs,
     }
     df::Series values;
     if (fixed_struct) {
-        // keep std: Series::structs takes std::vector<std::string>
-        std::vector<std::string> names;
-        // keep std: Series::structs takes std::vector<Series>
-        std::vector<df::Series> cols;
+        dstd::Vector<dstd::String> names;
+        dstd::Vector<df::Series> cols;
         for (const auto& [name, kind] : fields) {
             dstd::Vector<Scalar> vals(objects.size());
             for (std::size_t e = 0; e < objects.size(); ++e)
@@ -652,7 +649,7 @@ dstd::String number_text(const FoldEvent::ArgValue& v) {
         return dstd::to_string(*i);
     if (const auto* u = std::get_if<std::uint64_t>(&v))
         return dstd::to_string(*u);
-    return dftracer::utils::dstd::double_string(std::get<double>(v));
+    return dftracer::utils::dstd::double_text(std::get<double>(v));
 }
 
 // The column of `vals` (one per row, null when absent) as `type`.
@@ -860,8 +857,7 @@ df::Series iocat_column(EventRows evs,
 // The acc_pat group key: the constant "0" String for every event, matching the
 // engine agg path (a constant '0'). A single-group, byte-identical key.
 df::Series accpat_column(EventRows evs) {
-    // keep std: Series::strings takes std::vector<std::string>
-    return df::Series::strings(std::vector<std::string>(evs.size(), "0"));
+    return df::Series::strings(dstd::Vector<dstd::String>(evs.size(), "0"));
 }
 
 // `field` of `src` as canonical JSON text; false when absent or null.
@@ -1149,39 +1145,28 @@ dstd::Vector<dstd::String> row_fold_extra_captures(
     return out;
 }
 
-// keep std: dataframe column names are std::string
-std::string canonical_row_column_name(dstd::StringView sel, bool by_path) {
+dstd::String canonical_row_column_name(dstd::StringView sel, bool by_path) {
     if (sel.substr(0, WINDOW_PREFIX.size()) == WINDOW_PREFIX ||
         is_clip_token(sel))
-        // keep std: dataframe names are std::string
-        return std::string(sel);
+        return dstd::String(sel);
     dstd::StringView spec;
     dstd::StringView path;
     if (parse_list_sel(sel, spec, path))
         return canonical_row_column_name(path, by_path);
-    // keep std: dataframe names are std::string
-    if (by_path && !is_path_token(sel)) return std::string(sel);
+    if (by_path && !is_path_token(sel)) return dstd::String(sel);
     dstd::StringView f;
     bool arg_only = false;
     dstd::StringView num_name;
     dstd::StringView deriv_name;
-    // keep std: dataframe names are std::string
-    if (is_agg_key_field(sel, f, arg_only)) return std::string(sel);
-    // keep std: dataframe names are std::string
-    if (is_num_arg_field(sel, num_name)) return std::string(sel);
-    // keep std: dataframe names are std::string
-    if (is_derived_agg_field(sel, deriv_name)) return std::string(deriv_name);
-    // keep std: dataframe names are std::string
-    if (is_top_level(sel)) return std::string(sel);
-    // keep std: dataframe names are std::string
-    if (is_iocat_field(sel)) return std::string(sel);
-    // keep std: dataframe names are std::string
-    if (is_accpat_field(sel)) return std::string(sel);
+    if (is_agg_key_field(sel, f, arg_only)) return dstd::String(sel);
+    if (is_num_arg_field(sel, num_name)) return dstd::String(sel);
+    if (is_derived_agg_field(sel, deriv_name)) return dstd::String(deriv_name);
+    if (is_top_level(sel)) return dstd::String(sel);
+    if (is_iocat_field(sel)) return dstd::String(sel);
+    if (is_accpat_field(sel)) return dstd::String(sel);
     const dstd::StringView key = common::strip_args_prefix(sel);
-    // keep std: dataframe names are std::string
-    if (is_hash_field(key)) return std::string(key);
-    // keep std: dataframe names are std::string
-    std::string name(dftracer::utils::common::ARGS_PREFIX);
+    if (is_hash_field(key)) return dstd::String(key);
+    dstd::String name(dftracer::utils::common::ARGS_PREFIX);
     name.append(key);
     return name;
 }
@@ -1363,8 +1348,7 @@ dataframe::DataFrame build_row_frame(
     return out;
 }
 
-// keep std: the names go into DataFrame::names, a std::vector<std::string>
-std::vector<std::pair<std::string, dataframe::Series>>
+dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>>
 build_dyn_numeric_columns(EventRows evs,
                           const dftracer::utils::dstd::StringIntern& intern,
                           const dstd::Vector<dstd::String>& select) {
@@ -1395,8 +1379,7 @@ build_dyn_numeric_columns(EventRows evs,
             names.insert(dstd::String(key));
         });
     }
-    // keep std: the names go into DataFrame::names
-    std::vector<std::pair<std::string, dataframe::Series>> out;
+    dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>> out;
     out.reserve(names.size());
     for (const dstd::String& name : names) {
         df::Series col = num_arg_column(evs, name, intern);

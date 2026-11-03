@@ -4,11 +4,11 @@
 
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <optional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -20,12 +20,12 @@ namespace dftracer::utils::dataframe {
 /// those columns, in the input row order. Empty when the kind, a column type or
 /// a column name is not covered, and the caller then composes the plan.
 dstd::Optional<LazyFrame> native_group_transform(
-    const LazyFrame& plan, const std::vector<std::string>& keys,
+    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
     GroupwiseOp kind, std::int64_t n, const Schema& typed);
 
 /// The window plan of the same transform: what the native step must equal.
 LazyFrame composed_group_transform(const LazyFrame& plan,
-                                   const std::vector<std::string>& keys,
+                                   const dstd::Vector<dstd::String>& keys,
                                    GroupwiseOp kind, std::int64_t n,
                                    RankMethod method, bool ascending);
 

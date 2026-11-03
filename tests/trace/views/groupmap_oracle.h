@@ -14,11 +14,13 @@
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -41,11 +43,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <map>
-#include <set>
 #include <span>
 #include <string>
-#include <vector>
 
 namespace gmoracle {
 
@@ -68,19 +67,22 @@ namespace stats = dftracer::utils::dataframe;
 
 struct ArgMaxState {
     double by = 0;
-    std::string repr;
+    dftracer::utils::dstd::String repr;
     bool has = false;
 };
 
 struct AggAccum {
-    std::vector<std::string> keys;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     std::uint64_t count = 0;
-    std::vector<FieldStat> fields;
-    std::vector<ArgMaxState> argmax;
-    std::vector<stats::DDSketch> sketches;
-    std::vector<std::set<std::string>> sets;
-    std::map<std::string, FieldStat> dyn;
-    std::map<std::string, stats::DDSketch> dyn_sketches;
+    dftracer::utils::dstd::Vector<FieldStat> fields;
+    dftracer::utils::dstd::Vector<ArgMaxState> argmax;
+    dftracer::utils::dstd::Vector<stats::DDSketch> sketches;
+    dftracer::utils::dstd::Vector<
+        dftracer::utils::dstd::Set<dftracer::utils::dstd::String>>
+        sets;
+    dftracer::utils::dstd::Map<dftracer::utils::dstd::String, FieldStat> dyn;
+    dftracer::utils::dstd::Map<dftracer::utils::dstd::String, stats::DDSketch>
+        dyn_sketches;
     ankerl::unordered_dense::map<std::uint64_t, std::int64_t> occ_deltas;
     std::uint64_t occ_cell_us = 0;
     std::uint64_t occ_total = 0;
@@ -88,7 +90,8 @@ struct AggAccum {
     std::uint64_t occ_te = 0;
 };
 
-using GroupMap = ankerl::unordered_dense::map<std::string, AggAccum>;
+using GroupMap =
+    ankerl::unordered_dense::map<dftracer::utils::dstd::String, AggAccum>;
 
 // The key text of a missing or JSON-null Arg/Field value: a null output cell.
 inline constexpr dftracer::utils::dstd::StringView NULL_KEY{"\0", 1};
@@ -154,8 +157,9 @@ void append_group_dim(Out& out, const Src& src, const GroupKey& gk) {
 }
 
 template <class Src>
-std::string group_dim_str(const Src& src, const GroupKey& gk) {
-    std::string s;
+dftracer::utils::dstd::String group_dim_str(const Src& src,
+                                            const GroupKey& gk) {
+    dftracer::utils::dstd::String s;
     append_group_dim(s, src, gk);
     return s;
 }
@@ -164,8 +168,9 @@ template <class Src>
 void fold_numeric_args_t(AggAccum& a, const Src& src, bool want_sketch) {
     namespace agg = dftracer::utils::index::schemas::dft::agg;
     auto feed = [&](dftracer::utils::dstd::StringView key, double num) {
-        a.dyn[std::string(key)].add(num);
-        if (want_sketch) a.dyn_sketches[std::string(key)].add(num);
+        a.dyn[dftracer::utils::dstd::String(key)].add(num);
+        if (want_sketch)
+            a.dyn_sketches[dftracer::utils::dstd::String(key)].add(num);
     };
     if (auto sz = detail::derived_size_t(src)) feed("size", *sz);
     src.for_each_numeric_arg(
@@ -177,7 +182,7 @@ void fold_numeric_args_t(AggAccum& a, const Src& src, bool want_sketch) {
 
 template <class Src>
 void fold_event_over(GroupMap& map, const Src& src, const ViewPlan& plan,
-                     std::string& keybuf) {
+                     dftracer::utils::dstd::String& keybuf) {
     const AggSchema& sch = *plan.schema;
     keybuf.clear();
     std::int64_t bucket = 0;
@@ -205,7 +210,8 @@ void fold_event_over(GroupMap& map, const Src& src, const ViewPlan& plan,
     if (it == map.end()) {
         AggAccum a;
         a.keys.reserve(plan.group_by.size() + (has_bucket ? 1 : 0));
-        if (has_bucket) a.keys.push_back(std::to_string(bucket));
+        if (has_bucket)
+            a.keys.push_back(dftracer::utils::dstd::to_string(bucket));
         for (const auto& gk : plan.group_by)
             a.keys.push_back(group_dim_str(src, gk));
         a.fields.resize(sch.fields.size());
@@ -259,14 +265,15 @@ void fold_event_over(GroupMap& map, const Src& src, const ViewPlan& plan,
         auto& am = a.argmax[slot];
         if (!am.has || *by > am.by) {
             am.by = *by;
-            am.repr = std::string(src.value(plan.agg[i].field));
+            am.repr =
+                dftracer::utils::dstd::String(src.value(plan.agg[i].field));
             am.has = true;
         }
     }
     for (std::size_t i = 0; i < plan.agg.size(); ++i) {
         const int slot = sch.spec_set[i];
         if (slot < 0) continue;
-        std::string v(src.value(plan.agg[i].field));
+        dftracer::utils::dstd::String v(src.value(plan.agg[i].field));
         if (!v.empty()) a.sets[slot].insert(std::move(v));
     }
     if (plan.auto_numeric_metrics) fold_numeric_args_t(a, src, sch.dyn_sketch);
@@ -317,26 +324,36 @@ inline void merge_maps(GroupMap& dst, const GroupMap& src,
 // oracle resolves fhash/hhash/rank group keys without depending on the built
 // index's name tables.
 struct HarvestMaps {
-    std::map<std::string, std::string> fpath;             // fhash -> file path
-    std::map<std::string, std::string> host;              // hhash -> host name
-    std::unordered_map<std::uint64_t, std::string> rank;  // pid -> rank
-    std::string resolve(GroupKey::Kind kind, const std::string& v) const {
+    dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
+                               dftracer::utils::dstd::String>
+        fpath;  // fhash -> file path
+    dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
+                               dftracer::utils::dstd::String>
+        host;   // hhash -> host name
+    std::unordered_map<std::uint64_t, dftracer::utils::dstd::String>
+        rank;   // pid -> rank
+    dftracer::utils::dstd::String resolve(
+        GroupKey::Kind kind, const dftracer::utils::dstd::String& v) const {
         if (kind == GroupKey::Kind::FilePath) {
             auto it = fpath.find(v);
             return it != fpath.end() ? it->second : v;
         }
         if (kind == GroupKey::Kind::FileName) {
             auto it = fpath.find(v);
-            const std::string& p = it != fpath.end() ? it->second : v;
+            const dftracer::utils::dstd::String& p =
+                it != fpath.end() ? it->second : v;
             const std::size_t slash = p.find_last_of('/');
-            return slash == std::string::npos ? p : p.substr(slash + 1);
+            return slash == dftracer::utils::dstd::String::npos
+                       ? p
+                       : p.substr(slash + 1);
         }
         if (kind == GroupKey::Kind::HostName) {
             auto it = host.find(v);
             return it != host.end() ? it->second : v;
         }
         if (kind == GroupKey::Kind::Rank) {
-            auto it = rank.find(static_cast<std::uint64_t>(std::stoull(v)));
+            auto it = rank.find(
+                dftracer::utils::dstd::from_chars<std::uint64_t>(v).value());
             return it != rank.end() ? it->second : v;
         }
         return v;
@@ -358,16 +375,17 @@ inline void resolve_group_keys(GroupMap& map, const ViewPlan& plan,
     if (!needs_resolve && !any_transform) return;
     const std::size_t off = plan.time_bucket_us > 0 ? 1 : 0;
     GroupMap out;
-    std::string newkey;
+    dftracer::utils::dstd::String newkey;
     for (auto& entry : map) {
         auto& accum = entry.second;
         for (std::size_t j = 0; j < plan.group_by.size(); ++j) {
             const std::size_t idx = off + j;
             if (idx >= accum.keys.size()) continue;
-            std::string v =
+            dftracer::utils::dstd::String v =
                 maps.resolve(plan.group_by[j].kind, std::move(accum.keys[idx]));
-            accum.keys[idx] = std::string(detail::apply_group_transform(
-                plan.group_by[j], dftracer::utils::dstd::String(v)));
+            accum.keys[idx] =
+                dftracer::utils::dstd::String(detail::apply_group_transform(
+                    plan.group_by[j], dftracer::utils::dstd::String(v)));
         }
         newkey.clear();
         for (const auto& part : accum.keys) {
@@ -391,8 +409,9 @@ inline OccSummary occupancy_summary(const AggAccum& a) {
     o.total = a.occ_total;
     o.span = a.occ_te > a.occ_ts ? a.occ_te - a.occ_ts : 0;
     if (a.occ_deltas.empty()) return o;
-    std::vector<dftracer::utils::dstd::Pair<std::uint64_t, std::int64_t>> pts(
-        a.occ_deltas.begin(), a.occ_deltas.end());
+    dftracer::utils::dstd::Vector<
+        dftracer::utils::dstd::Pair<std::uint64_t, std::int64_t>>
+        pts(a.occ_deltas.begin(), a.occ_deltas.end());
     std::sort(pts.begin(), pts.end(),
               [](const auto& x, const auto& y) { return x.first < y.first; });
     std::int64_t depth = 0;
@@ -500,11 +519,12 @@ inline FieldNum finalize_value_typed(const AggAccum& a, const ViewPlan& plan,
     }
 }
 
-inline std::string finalize_set(const AggAccum& a, const ViewPlan& plan,
-                                std::size_t i) {
+inline dftracer::utils::dstd::String finalize_set(const AggAccum& a,
+                                                  const ViewPlan& plan,
+                                                  std::size_t i) {
     const int si = plan.schema->spec_set[i];
     if (si < 0 || static_cast<std::size_t>(si) >= a.sets.size()) return {};
-    std::string out;
+    dftracer::utils::dstd::String out;
     for (const auto& v : a.sets[si]) {
         if (!out.empty()) out.push_back(SET_SEP);
         out += v;
@@ -512,9 +532,8 @@ inline std::string finalize_set(const AggAccum& a, const ViewPlan& plan,
     return out;
 }
 
-inline std::vector<stats::HistogramBin> finalize_hist(const AggAccum& a,
-                                                      const ViewPlan& plan,
-                                                      std::size_t i) {
+inline dftracer::utils::dstd::Vector<stats::HistogramBin> finalize_hist(
+    const AggAccum& a, const ViewPlan& plan, std::size_t i) {
     const AggSchema& sch = *plan.schema;
     const int fi = sch.spec_field[i];
     const int sk = fi >= 0 ? sch.field_sketch[fi] : -1;
@@ -551,30 +570,35 @@ inline double reduce_dyn(const FieldStat& fs, AggOp op, double) {
 
 inline dataframe::DataFrame to_batch(const GroupMap& map,
                                      const ViewPlan& plan) {
-    std::vector<std::string> group_cols, value_cols, text_cols, hist_cols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> group_cols,
+        value_cols, text_cols, hist_cols;
     if (plan.time_bucket_us > 0) group_cols.push_back("time_bucket");
     for (const auto& gk : plan.group_by)
-        group_cols.push_back(std::string(detail::group_col_name(gk)));
+        group_cols.push_back(
+            dftracer::utils::dstd::String(detail::group_col_name(gk)));
     const bool count_col = plan.agg.empty();
     if (count_col) {
         value_cols.push_back("count");
     } else {
         for (const auto& spec : plan.agg) {
             if (spec.op == AggOp::ArgMax || spec.op == AggOp::SetUnion)
-                text_cols.push_back(std::string(detail::agg_col_name(spec)));
+                text_cols.push_back(
+                    dftracer::utils::dstd::String(detail::agg_col_name(spec)));
             else if (spec.op == AggOp::Hist)
-                hist_cols.push_back(std::string(detail::agg_col_name(spec)));
+                hist_cols.push_back(
+                    dftracer::utils::dstd::String(detail::agg_col_name(spec)));
             else
-                value_cols.push_back(std::string(detail::agg_col_name(spec)));
+                value_cols.push_back(
+                    dftracer::utils::dstd::String(detail::agg_col_name(spec)));
         }
     }
     struct DynCol {
-        std::string key;
+        dftracer::utils::dstd::String key;
         AggSpec spec;
     };
-    std::vector<DynCol> dyn_cols;
+    dftracer::utils::dstd::Vector<DynCol> dyn_cols;
     if (plan.auto_numeric_metrics) {
-        std::set<std::string> names;
+        dftracer::utils::dstd::Set<dftracer::utils::dstd::String> names;
         for (const auto& entry : map) {
             for (const auto& [name, m] : entry.second.dyn) names.insert(name);
         }
@@ -587,8 +611,9 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
             for (const auto& n : names)
                 for (const auto& spec : plan.numeric_arg_aggs) {
                     dyn_cols.push_back({n, spec});
-                    value_cols.push_back(std::string(detail::dyn_col_name(
-                        spec, dftracer::utils::dstd::String(n))));
+                    value_cols.push_back(
+                        dftracer::utils::dstd::String(detail::dyn_col_name(
+                            spec, dftracer::utils::dstd::String(n))));
                 }
         }
     }
@@ -602,18 +627,23 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
     if (occ_cell_col) value_cols.push_back("busy_cell_us");
 
     const std::size_t ng = map.size();
-    std::vector<std::vector<std::string>> gk(group_cols.size());
+    dftracer::utils::dstd::Vector<
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>>
+        gk(group_cols.size());
     for (auto& v : gk) v.reserve(ng);
-    std::vector<std::vector<FieldNum>> vcells(value_cols.size());
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Vector<FieldNum>>
+        vcells(value_cols.size());
     for (auto& v : vcells) v.reserve(ng);
-    std::vector<std::vector<std::string>> tvals(text_cols.size());
+    dftracer::utils::dstd::Vector<
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>>
+        tvals(text_cols.size());
     for (auto& v : tvals) v.reserve(ng);
     struct HistBuild {
-        std::vector<std::int32_t> off{0};
-        std::vector<double> lo, hi;
-        std::vector<std::uint64_t> cnt;
+        dftracer::utils::dstd::Vector<std::int32_t> off{0};
+        dftracer::utils::dstd::Vector<double> lo, hi;
+        dftracer::utils::dstd::Vector<std::uint64_t> cnt;
     };
-    std::vector<HistBuild> hvals(hist_cols.size());
+    dftracer::utils::dstd::Vector<HistBuild> hvals(hist_cols.size());
 
     const AggSchema& sch = detail::ensure_schema(plan);
     for (const auto& entry : map) {
@@ -665,9 +695,10 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
     const std::int64_t nrows = static_cast<std::int64_t>(ng);
     for (std::size_t i = 0; i < group_cols.size(); ++i) {
         batch.names.push_back(group_cols[i]);
-        std::vector<dftracer::utils::dstd::StringView> views(gk[i].begin(),
-                                                             gk[i].end());
-        std::vector<std::uint8_t> vbits((views.size() + 7) / 8, 0);
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> views(
+            gk[i].begin(), gk[i].end());
+        dftracer::utils::dstd::Vector<std::uint8_t> vbits(
+            (views.size() + 7) / 8, 0);
         for (std::size_t r = 0; r < views.size(); ++r)
             if (views[r] == NULL_KEY)
                 views[r] = {};
@@ -678,33 +709,34 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
                 const dftracer::utils::dstd::StringView>(views),
             vbits.data()));
     }
-    auto build_value_column = [&](const std::vector<FieldNum>& cells) {
-        FieldStatDomain dom =
-            cells.empty() ? FieldStatDomain::F64 : cells[0].domain;
-        for (const auto& c : cells)
-            if (c.domain != dom) {
-                dom = FieldStatDomain::F64;
-                break;
+    auto build_value_column =
+        [&](const dftracer::utils::dstd::Vector<FieldNum>& cells) {
+            FieldStatDomain dom =
+                cells.empty() ? FieldStatDomain::F64 : cells[0].domain;
+            for (const auto& c : cells)
+                if (c.domain != dom) {
+                    dom = FieldStatDomain::F64;
+                    break;
+                }
+            if (dom == FieldStatDomain::I64) {
+                dftracer::utils::dstd::Vector<std::int64_t> v;
+                v.reserve(cells.size());
+                for (const auto& c : cells) v.push_back(c.i);
+                return dataframe::Series::flat(dataframe::TypeId::Int64,
+                                               v.data(), nrows);
             }
-        if (dom == FieldStatDomain::I64) {
-            std::vector<std::int64_t> v;
+            if (dom == FieldStatDomain::U64) {
+                dftracer::utils::dstd::Vector<std::uint64_t> v;
+                v.reserve(cells.size());
+                for (const auto& c : cells) v.push_back(c.u);
+                return dataframe::Series::flat(dataframe::TypeId::Uint64,
+                                               v.data(), nrows);
+            }
+            dftracer::utils::dstd::Vector<double> v;
             v.reserve(cells.size());
-            for (const auto& c : cells) v.push_back(c.i);
-            return dataframe::Series::flat(dataframe::TypeId::Int64, v.data(),
-                                           nrows);
-        }
-        if (dom == FieldStatDomain::U64) {
-            std::vector<std::uint64_t> v;
-            v.reserve(cells.size());
-            for (const auto& c : cells) v.push_back(c.u);
-            return dataframe::Series::flat(dataframe::TypeId::Uint64, v.data(),
-                                           nrows);
-        }
-        std::vector<double> v;
-        v.reserve(cells.size());
-        for (const auto& c : cells) v.push_back(c.as_double());
-        return dataframe::Series::flat_f64(v.data(), nrows);
-    };
+            for (const auto& c : cells) v.push_back(c.as_double());
+            return dataframe::Series::flat_f64(v.data(), nrows);
+        };
     for (std::size_t i = 0; i < value_cols.size(); ++i) {
         batch.names.push_back(value_cols[i]);
         batch.columns.push_back(build_value_column(vcells[i]));
@@ -716,7 +748,7 @@ inline dataframe::DataFrame to_batch(const GroupMap& map,
     for (std::size_t i = 0; i < hist_cols.size(); ++i) {
         auto& h = hvals[i];
         const auto n = static_cast<std::int64_t>(h.lo.size());
-        std::vector<dataframe::Series> fields;
+        dftracer::utils::dstd::Vector<dataframe::Series> fields;
         fields.push_back(dataframe::Series::flat(dataframe::TypeId::Float64,
                                                  h.lo.data(), n));
         fields.push_back(dataframe::Series::flat(dataframe::TypeId::Float64,
@@ -747,7 +779,7 @@ inline bool plan_wants_names(const ViewPlan& plan) {
 inline void harvest_pr_rank(
     const detail::FoldEvent& ev,
     const dftracer::utils::dstd::StringIntern& intern,
-    std::unordered_map<std::uint64_t, std::string>& ranks) {
+    std::unordered_map<std::uint64_t, dftracer::utils::dstd::String>& ranks) {
     if (ev.name_id == dftracer::utils::dstd::StringIntern::NO_ID ||
         intern.resolve(ev.name_id) != "PR")
         return;
@@ -762,7 +794,8 @@ inline void harvest_pr_rank(
         else if (key == "value")
             rank = intern.resolve(*sid);
     }
-    if (is_rank && !rank.empty()) ranks[ev.pid] = std::string(rank);
+    if (is_rank && !rank.empty())
+        ranks[ev.pid] = dftracer::utils::dstd::String(rank);
 }
 
 class OracleAggFold : public detail::Fold {
@@ -815,7 +848,9 @@ class OracleAggFold : public detail::Fold {
         co_return true;
     }
     GroupMap& map() { return map_; }
-    std::unordered_map<std::uint64_t, std::string>& ranks() { return ranks_; }
+    std::unordered_map<std::uint64_t, dftracer::utils::dstd::String>& ranks() {
+        return ranks_;
+    }
     HarvestMaps& maps() {
         maps_.rank = ranks_;
         return maps_;
@@ -829,7 +864,9 @@ class OracleAggFold : public detail::Fold {
         if (ev.name_id == StringIntern::NO_ID) return;
         const dftracer::utils::dstd::StringView rec =
             intern_->resolve(ev.name_id);
-        std::map<std::string, std::string>* dst = nullptr;
+        dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
+                                   dftracer::utils::dstd::String>* dst =
+            nullptr;
         if (rec == "FH")
             dst = &maps_.fpath;
         else if (rec == "HH")
@@ -846,7 +883,9 @@ class OracleAggFold : public detail::Fold {
             else if (key == "value")
                 value = intern_->resolve(*sid);
         }
-        if (!value.empty()) (*dst)[std::string(value)] = std::string(name);
+        if (!value.empty())
+            (*dst)[dftracer::utils::dstd::String(value)] =
+                dftracer::utils::dstd::String(name);
     }
 
     const ViewPlan* plan_;
@@ -855,8 +894,8 @@ class OracleAggFold : public detail::Fold {
     bool want_ranks_ = false;
     bool want_names_ = false;
     GroupMap map_;
-    std::string keybuf_;
-    std::unordered_map<std::uint64_t, std::string> ranks_;
+    dftracer::utils::dstd::String keybuf_;
+    std::unordered_map<std::uint64_t, dftracer::utils::dstd::String> ranks_;
     HarvestMaps maps_;
 };
 
@@ -872,19 +911,22 @@ inline dataframe::DataFrame groupmap_oracle(const detail::scan::ScanPlan& v) {
     // so it needs no name tables of its own. One directory per file set,
     // reused: a fresh one per call rebuilds an index on every scan, which
     // dominates the run under Valgrind.
-    static std::map<std::string, std::string> bases;
-    std::string key;
+    static dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
+                                      dftracer::utils::dstd::String>
+        bases;
+    dftracer::utils::dstd::String key;
     for (const auto& f : plan.files) key += f.file_path + "\n";
     auto it = bases.find(key);
     if (it == bases.end()) {
-        std::string base = std::string(
+        dftracer::utils::dstd::String base = dftracer::utils::dstd::String(
             dftu_utils_test::make_unique_test_path("gmoracle").str());
         REQUIRE(
             dftracer::utils::dstd::fs::create_directories(base).has_value());
         it = bases.emplace(std::move(key), std::move(base)).first;
     }
     for (std::size_t i = 0; i < plan.files.size(); ++i)
-        plan.files[i].index_path = it->second + "/idx_" + std::to_string(i);
+        plan.files[i].index_path =
+            it->second + "/idx_" + dftracer::utils::dstd::to_string(i);
     plan.resolver.reset();
     detail::ensure_schema(plan);
     ViewDefinition vdef = detail::make_vdef(plan, /*for_aggregation=*/true);

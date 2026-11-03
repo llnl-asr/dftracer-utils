@@ -3,11 +3,11 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <stdexcept>
-#include <vector>
 
 using namespace dftracer::utils::dataframe;
 
@@ -16,25 +16,28 @@ namespace {
 // infer_type must agree with what eval() actually produces, for every op it
 // covers: build one input column per `input_types` (values are irrelevant),
 // evaluate `root` for real, and compare its DataType to infer_type's answer.
-void check_matches_eval(const Expr& root,
-                        const std::vector<DataType>& input_types) {
-    std::vector<Series> cols;
+void check_matches_eval(
+    const Expr& root,
+    const dftracer::utils::dstd::Vector<DataType>& input_types) {
+    dftracer::utils::dstd::Vector<Series> cols;
     cols.reserve(input_types.size());
     for (const DataType& dt : input_types) {
         switch (dt.id) {
             case TypeId::Int64:
                 cols.push_back(Series::flat_i64(
-                    std::vector<std::int64_t>{1, 2, 3}.data(), 3));
+                    dftracer::utils::dstd::Vector<std::int64_t>{1, 2, 3}.data(),
+                    3));
                 break;
             case TypeId::Float64:
                 cols.push_back(Series::flat_f64(
-                    std::vector<double>{1.0, 2.0, 3.0}.data(), 3));
+                    dftracer::utils::dstd::Vector<double>{1.0, 2.0, 3.0}.data(),
+                    3));
                 break;
             case TypeId::String:
                 cols.push_back(Series::strings({"Ab", "Cd", "Ef"}));
                 break;
             case TypeId::Bool: {
-                std::vector<std::uint8_t> bits{0b101};
+                dftracer::utils::dstd::Vector<std::uint8_t> bits{0b101};
                 cols.push_back(Series::flat(TypeId::Bool, bits.data(), 3));
                 break;
             }
@@ -42,7 +45,7 @@ void check_matches_eval(const Expr& root,
                 FAIL("unsupported type in check_matches_eval helper");
         }
     }
-    std::vector<const Series*> ptrs;
+    dftracer::utils::dstd::Vector<const Series*> ptrs;
     for (const Series& c : cols) ptrs.push_back(&c);
 
     DataType inferred = infer_type(root, input_types);

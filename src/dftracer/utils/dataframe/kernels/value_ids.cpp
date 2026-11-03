@@ -2,10 +2,10 @@
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/value_ids.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstring>
-#include <string_view>
 
 namespace dftracer::utils::dataframe {
 
@@ -93,7 +93,7 @@ struct Builder {
             const auto k = static_cast<std::uint32_t>(dict->length);
             const auto* codes =
                 reinterpret_cast<const std::int32_t*>(c->data.data());
-            std::vector<std::int32_t> entry(k, -2);
+            dstd::Vector<std::int32_t> entry(k, -2);
             for (std::int64_t i = 0; i < c->length; ++i) {
                 const std::int64_t row = base + i;
                 if (c->validity.block() &&

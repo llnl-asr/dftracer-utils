@@ -12,7 +12,6 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <string_view>
 
 namespace dftracer::utils::dataframe {
 

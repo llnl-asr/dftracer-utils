@@ -887,7 +887,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         if (cli->select.empty() && !has_window) co_return table;
         dataframe::LazyFrame rows = dataframe::lazy(std::move(table));
         if (!cli->select.empty()) {
-            std::vector<std::string> cols;  // keep std: LazyFrame::select
+            dstd::Vector<dstd::String> cols;
             for (const auto c : binaries::split_csv(cli->select))
                 cols.emplace_back(c);
             rows = rows.select(std::move(cols));

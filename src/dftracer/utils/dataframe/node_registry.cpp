@@ -7,25 +7,41 @@
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <mutex>
-#include <string>
-#include <unordered_map>
 
 namespace dftracer::utils::dataframe {
 namespace {
 
 struct Nodes {
     std::mutex mutex;
-    std::unordered_map<std::string, NodeEntry> by_name;
+    dstd::Optional<dstd::HashMap<dstd::String, NodeEntry>> by_name;
 };
 
-std::mutex& registry_mutex() { return dstd::Singleton<Nodes>::get().mutex; }
+Nodes& registry() {
+    Nodes& held = dstd::Singleton<Nodes>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+            Nodes& dropped = dstd::Singleton<Nodes>::get();
+            const std::lock_guard<std::mutex> lock(dropped.mutex);
+            dropped.by_name.reset();
+        });
+        return true;
+    }();
+    return held;
+}
 
-std::unordered_map<std::string, NodeEntry>& nodes() {
-    return dstd::Singleton<Nodes>::get().by_name;
+std::mutex& registry_mutex() { return registry().mutex; }
+
+dstd::HashMap<dstd::String, NodeEntry>& nodes() {
+    Nodes& n = registry();
+    if (!n.by_name) n.by_name.emplace();
+    return *n.by_name;
 }
 
 }  // namespace

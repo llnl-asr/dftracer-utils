@@ -12,23 +12,23 @@
 // functions skip nulls); the caller decides what a null row outputs.
 
 #include <dftracer/utils/dataframe/kernels/order.h>
+#include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/int128.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <limits>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::dataframe::steps {
 
 using Wide = ::dftracer::utils::dstd::int128_t;
 
 [[noreturn]] inline void overflow(const char* func, const char* type) {
-    throw std::overflow_error(std::string("window: ") + func + " overflows " +
-                              type);
+    throw std::overflow_error(
+        (dstd::String("window: ") + func + " overflows " + type).c_str());
 }
 
 inline std::int64_t to_int64(Wide v, const char* func) {
@@ -139,7 +139,7 @@ struct FrameSumF64 {
 /// the positions `beats` says it beats; whether that includes an equal value
 /// decides if the front is the first or the last of the equal extremes.
 struct SlidingExtreme {
-    std::deque<std::int64_t> candidates;
+    dstd::Deque<std::int64_t> candidates;
 
     /// `beats(back)` is true when the entering row removes position `back`.
     template <class Beats>
@@ -171,7 +171,7 @@ inline double delta_f64(double cur, double prev) { return cur - prev; }
 /// caller carries (a row position, a value and its presence).
 template <class Cell>
 struct Lag {
-    std::vector<Cell> ring;
+    dstd::Vector<Cell> ring;
     std::int64_t seen = 0;
 
     /// Feeds the next row's cell. True, with the cell `n` rows back in `out`,

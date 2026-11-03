@@ -334,7 +334,7 @@ dstd::String number(const Literal& lit) {
     if (const auto* u = std::get_if<std::uint64_t>(&lit.value)) {
         return dstd::int_text(*u);
     }
-    dstd::String s = dstd::double_string(std::get<double>(lit.value));
+    dstd::String s = dstd::double_text(std::get<double>(lit.value));
     if (s.find_first_of(".eEn") == dstd::String::npos) s += ".0";
     return s;
 }

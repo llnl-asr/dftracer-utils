@@ -4,9 +4,12 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -19,9 +22,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace df = dftracer::utils::dataframe;
 using df::AsofDirection;
@@ -32,31 +33,33 @@ using df::TypeId;
 namespace {
 
 using I = dftracer::utils::dstd::Optional<std::int64_t>;
-using S = dftracer::utils::dstd::Optional<std::string>;
+using S = dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>;
 const I NI = dftracer::utils::dstd::nullopt;
 const S NS = dftracer::utils::dstd::nullopt;
 
 template <class T>
-std::vector<std::uint8_t> validity(
-    const std::vector<dftracer::utils::dstd::Optional<T>>& v) {
-    std::vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
+dftracer::utils::dstd::Vector<std::uint8_t> validity(
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::Optional<T>>&
+        v) {
+    dftracer::utils::dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (v[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
     return bits;
 }
 
 template <class T>
-std::vector<T> values_of(const std::vector<I>& v) {
-    std::vector<T> out(v.size(), T{});
+dftracer::utils::dstd::Vector<T> values_of(
+    const dftracer::utils::dstd::Vector<I>& v) {
+    dftracer::utils::dstd::Vector<T> out(v.size(), T{});
     for (std::size_t i = 0; i < v.size(); ++i)
         if (v[i]) out[i] = static_cast<T>(*v[i]);
     return out;
 }
 
 // Float64 stores v * 0.5 so a double column holds fractional times.
-Series typed(TypeId type, const std::vector<I>& v) {
+Series typed(TypeId type, const dftracer::utils::dstd::Vector<I>& v) {
     const auto n = static_cast<std::int64_t>(v.size());
-    const std::vector<std::uint8_t> bits = validity(v);
+    const dftracer::utils::dstd::Vector<std::uint8_t> bits = validity(v);
     switch (type) {
         case TypeId::Int32: {
             const auto d = values_of<std::int32_t>(v);
@@ -83,24 +86,26 @@ double tval(TypeId type, std::int64_t v) {
                                    : static_cast<double>(v);
 }
 
-Series i64s(const std::vector<I>& v) { return typed(TypeId::Int64, v); }
+Series i64s(const dftracer::utils::dstd::Vector<I>& v) {
+    return typed(TypeId::Int64, v);
+}
 
-Series u64s(const std::vector<std::uint64_t>& v) {
+Series u64s(const dftracer::utils::dstd::Vector<std::uint64_t>& v) {
     return Series::flat(TypeId::Uint64, v.data(),
                         static_cast<std::int64_t>(v.size()));
 }
 
-Series f64s(const std::vector<double>& v) {
+Series f64s(const dftracer::utils::dstd::Vector<double>& v) {
     return Series::flat_f64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
-Series strs(const std::vector<S>& v) {
-    std::vector<dftracer::utils::dstd::StringView> views;
+Series strs(const dftracer::utils::dstd::Vector<S>& v) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> views;
     views.reserve(v.size());
     for (const S& s : v)
         views.emplace_back(s ? dftracer::utils::dstd::StringView(*s)
                              : dftracer::utils::dstd::StringView());
-    const std::vector<std::uint8_t> bits = validity(v);
+    const dftracer::utils::dstd::Vector<std::uint8_t> bits = validity(v);
     return Series::strings(
         dftracer::utils::dstd::Span<const dftracer::utils::dstd::StringView>(
             views),
@@ -108,19 +113,22 @@ Series strs(const std::vector<S>& v) {
 }
 
 template <class... Cols>
-DataFrame frame(std::vector<std::string> names, Cols&&... cols) {
+DataFrame frame(
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names,
+    Cols&&... cols) {
     DataFrame out;
     out.names = std::move(names);
     (out.columns.push_back(std::forward<Cols>(cols)), ...);
     return out;
 }
 
-std::vector<I> i64_col(const DataFrame& d, const std::string& name) {
+dftracer::utils::dstd::Vector<I> i64_col(
+    const DataFrame& d, const dftracer::utils::dstd::String& name) {
     Series c = d.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
     REQUIRE(c.type() == TypeId::Int64);
-    std::vector<I> out;
+    dftracer::utils::dstd::Vector<I> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
             out.emplace_back(dftracer::utils::dstd::nullopt);
@@ -130,22 +138,24 @@ std::vector<I> i64_col(const DataFrame& d, const std::string& name) {
     return out;
 }
 
-std::vector<S> str_col(const DataFrame& d, const std::string& name) {
+dftracer::utils::dstd::Vector<S> str_col(
+    const DataFrame& d, const dftracer::utils::dstd::String& name) {
     Series c = d.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
-    std::vector<S> out;
+    dftracer::utils::dstd::Vector<S> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
             out.emplace_back(dftracer::utils::dstd::nullopt);
         else
-            out.emplace_back(std::string(c.string_at(i)));
+            out.emplace_back(dftracer::utils::dstd::String(c.string_at(i)));
     }
     return out;
 }
 
-std::vector<std::string> str_list(const DataFrame& d, const std::string& name,
-                                  std::int64_t row) {
+dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> str_list(
+    const DataFrame& d, const dftracer::utils::dstd::String& name,
+    std::int64_t row) {
     Series c = d.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -153,15 +163,18 @@ std::vector<std::string> str_list(const DataFrame& d, const std::string& name,
     const std::int32_t* off = c.offsets();
     REQUIRE(off != nullptr);
     const Series vals = c.child(0).materialize();
-    std::vector<std::string> out;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
     for (std::int32_t p = off[row]; p < off[row + 1]; ++p)
         out.emplace_back(vals.string_at(p));
     return out;
 }
 
-DataFrame ts_frame(const std::vector<I>& ts) { return frame({"ts"}, i64s(ts)); }
+DataFrame ts_frame(const dftracer::utils::dstd::Vector<I>& ts) {
+    return frame({"ts"}, i64s(ts));
+}
 
-DataFrame ts_vals(const std::vector<I>& ts, const std::vector<S>& vals) {
+DataFrame ts_vals(const dftracer::utils::dstd::Vector<I>& ts,
+                  const dftracer::utils::dstd::Vector<S>& vals) {
     return frame({"ts", "val"}, i64s(ts), strs(vals));
 }
 
@@ -171,10 +184,13 @@ DataFrame asof_g(const DataFrame& l, const DataFrame& r, AsofDirection dir,
     return df::asof(l, r, "ts", {}, dir, tol);
 }
 
-DataFrame points(const std::vector<I>& p) { return frame({"point"}, i64s(p)); }
+DataFrame points(const dftracer::utils::dstd::Vector<I>& p) {
+    return frame({"point"}, i64s(p));
+}
 
-DataFrame spans(const std::vector<I>& lo, const std::vector<I>& hi,
-                const std::vector<S>& vals) {
+DataFrame spans(const dftracer::utils::dstd::Vector<I>& lo,
+                const dftracer::utils::dstd::Vector<I>& hi,
+                const dftracer::utils::dstd::Vector<S>& vals) {
     return frame({"lo", "hi", "val"}, i64s(lo), i64s(hi), strs(vals));
 }
 
@@ -188,16 +204,21 @@ TEST_CASE("asof - backward basic (no by keys)") {
     const DataFrame out =
         asof_g(ts_frame({3, 10, 20, 30}), ts_vals({5, 15, 25}, {"a", "b", "c"}),
                AsofDirection::Backward);
-    CHECK(out.names == std::vector<std::string>{"ts", "val"});
-    CHECK(i64_col(out, "ts") == std::vector<I>{3, 10, 20, 30});
-    CHECK(str_col(out, "val") == std::vector<S>{NS, "a", "b", "c"});
+    CHECK(out.names ==
+          dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"ts",
+                                                                       "val"});
+    CHECK(i64_col(out, "ts") ==
+          dftracer::utils::dstd::Vector<I>{3, 10, 20, 30});
+    CHECK(str_col(out, "val") ==
+          dftracer::utils::dstd::Vector<S>{NS, "a", "b", "c"});
 }
 
 TEST_CASE("asof - forward") {
     const DataFrame out =
         asof_g(ts_frame({3, 10, 20, 30}), ts_vals({5, 15, 25}, {"a", "b", "c"}),
                AsofDirection::Forward);
-    CHECK(str_col(out, "val") == std::vector<S>{"a", "b", "c", NS});
+    CHECK(str_col(out, "val") ==
+          dftracer::utils::dstd::Vector<S>{"a", "b", "c", NS});
 }
 
 TEST_CASE("asof - nearest with backward tie-break") {
@@ -205,13 +226,14 @@ TEST_CASE("asof - nearest with backward tie-break") {
         const DataFrame out =
             asof_g(ts_frame({10, 20}), ts_vals({8, 14, 25}, {"a", "b", "c"}),
                    AsofDirection::Nearest);
-        CHECK(str_col(out, "val") == std::vector<S>{"a", "c"});
+        CHECK(str_col(out, "val") ==
+              dftracer::utils::dstd::Vector<S>{"a", "c"});
     }
     SUBCASE("tie prefers backward") {
         const DataFrame out =
             asof_g(ts_frame({11}), ts_vals({6, 16}, {"a", "b"}),
                    AsofDirection::Nearest);
-        CHECK(str_col(out, "val") == std::vector<S>{"a"});
+        CHECK(str_col(out, "val") == dftracer::utils::dstd::Vector<S>{"a"});
     }
 }
 
@@ -254,9 +276,11 @@ TEST_CASE("asof - by-key partitioning") {
                               i64s({5, 8, 3}), strs({"a1", "a2", "b1"}));
     const DataFrame out = df::asof(l, r, "ts", {"pid"}, AsofDirection::Backward,
                                    dftracer::utils::dstd::nullopt);
-    CHECK(out.names == std::vector<std::string>{"pid", "ts", "val"});
-    CHECK(i64_col(out, "pid") == std::vector<I>{1, 2});
-    CHECK(str_col(out, "val") == std::vector<S>{"a2", "b1"});
+    CHECK(out.names ==
+          dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+              "pid", "ts", "val"});
+    CHECK(i64_col(out, "pid") == dftracer::utils::dstd::Vector<I>{1, 2});
+    CHECK(str_col(out, "val") == dftracer::utils::dstd::Vector<S>{"a2", "b1"});
 }
 
 TEST_CASE("asof - a null by key matches a null by key") {
@@ -265,8 +289,8 @@ TEST_CASE("asof - a null by key matches a null by key") {
                               strs({"a", "b"}));
     const DataFrame out = df::asof(l, r, "ts", {"k"}, AsofDirection::Backward,
                                    dftracer::utils::dstd::nullopt);
-    CHECK(i64_col(out, "k") == std::vector<I>{1, NI});
-    CHECK(str_col(out, "val") == std::vector<S>{"a", "b"});
+    CHECK(i64_col(out, "k") == dftracer::utils::dstd::Vector<I>{1, NI});
+    CHECK(str_col(out, "val") == dftracer::utils::dstd::Vector<S>{"a", "b"});
 }
 
 TEST_CASE("asof - tolerance") {
@@ -274,11 +298,11 @@ TEST_CASE("asof - tolerance") {
     const DataFrame r = ts_vals({4}, {"a"});
     SUBCASE("just outside tol -> null") {
         CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 5), "val") ==
-              std::vector<S>{NS});
+              dftracer::utils::dstd::Vector<S>{NS});
     }
     SUBCASE("just inside tol -> match") {
         CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 6), "val") ==
-              std::vector<S>{"a"});
+              dftracer::utils::dstd::Vector<S>{"a"});
     }
 }
 
@@ -288,18 +312,18 @@ TEST_CASE("asof - far-apart ts near int64 extremes (no signed overflow)") {
     SUBCASE("backward across the full int64 span, out of tol -> null") {
         const DataFrame out = asof_g(ts_frame({hi}), ts_vals({lo}, {"a"}),
                                      AsofDirection::Backward, 1000);
-        CHECK(str_col(out, "val") == std::vector<S>{NS});
+        CHECK(str_col(out, "val") == dftracer::utils::dstd::Vector<S>{NS});
     }
     SUBCASE("nearest picks the closer extreme without overflow") {
         const DataFrame out =
             asof_g(ts_frame({0}), ts_vals({lo, hi}, {"neg", "pos"}),
                    AsofDirection::Nearest);
-        CHECK(str_col(out, "val") == std::vector<S>{"pos"});
+        CHECK(str_col(out, "val") == dftracer::utils::dstd::Vector<S>{"pos"});
     }
     SUBCASE("match near the top of the range") {
         const DataFrame out = asof_g(ts_frame({hi}), ts_vals({hi - 5}, {"a"}),
                                      AsofDirection::Backward, 5);
-        CHECK(str_col(out, "val") == std::vector<S>{"a"});
+        CHECK(str_col(out, "val") == dftracer::utils::dstd::Vector<S>{"a"});
     }
 }
 
@@ -309,11 +333,11 @@ TEST_CASE("asof - uint64 times near the top of the range") {
     const DataFrame r =
         frame({"ts", "val"}, u64s({0, top - 3}), strs({"zero", "near"}));
     CHECK(str_col(asof_g(l, r, AsofDirection::Nearest), "val") ==
-          std::vector<S>{"near"});
+          dftracer::utils::dstd::Vector<S>{"near"});
     CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 3), "val") ==
-          std::vector<S>{"near"});
+          dftracer::utils::dstd::Vector<S>{"near"});
     CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 2), "val") ==
-          std::vector<S>{NS});
+          dftracer::utils::dstd::Vector<S>{NS});
 }
 
 TEST_CASE("asof - a fractional tolerance") {
@@ -321,26 +345,26 @@ TEST_CASE("asof - a fractional tolerance") {
         const DataFrame l = ts_frame({10});
         const DataFrame r = ts_vals({4}, {"a"});
         CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 5.99), "val") ==
-              std::vector<S>{NS});
+              dftracer::utils::dstd::Vector<S>{NS});
         CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 6.5), "val") ==
-              std::vector<S>{"a"});
+              dftracer::utils::dstd::Vector<S>{"a"});
     }
     SUBCASE("float times compare it exactly") {
         const DataFrame l = frame({"ts"}, f64s({1.0}));
         const DataFrame r = frame({"ts", "val"}, f64s({0.995}), strs({"a"}));
         CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 0.004), "val") ==
-              std::vector<S>{NS});
+              dftracer::utils::dstd::Vector<S>{NS});
         CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 0.006), "val") ==
-              std::vector<S>{"a"});
+              dftracer::utils::dstd::Vector<S>{"a"});
     }
     SUBCASE("uint64 distances past 2^53 stay exact") {
         const std::uint64_t top = std::numeric_limits<std::uint64_t>::max();
         const DataFrame l = frame({"ts"}, u64s({top}));
         const DataFrame r = frame({"ts", "val"}, u64s({top - 3}), strs({"a"}));
         CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 2.9), "val") ==
-              std::vector<S>{NS});
+              dftracer::utils::dstd::Vector<S>{NS});
         CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 1e30), "val") ==
-              std::vector<S>{"a"});
+              dftracer::utils::dstd::Vector<S>{"a"});
     }
 }
 
@@ -348,9 +372,9 @@ TEST_CASE("asof - float ts rejects a negative tolerance") {
     const DataFrame l = frame({"ts"}, f64s({10.0}));
     const DataFrame r = frame({"ts", "val"}, f64s({10.0}), strs({"a"}));
     CHECK(str_col(asof_g(l, r, AsofDirection::Backward, -1), "val") ==
-          std::vector<S>{NS});
+          dftracer::utils::dstd::Vector<S>{NS});
     CHECK(str_col(asof_g(l, r, AsofDirection::Backward, 0), "val") ==
-          std::vector<S>{"a"});
+          dftracer::utils::dstd::Vector<S>{"a"});
 }
 
 TEST_CASE("asof - null ts semantics") {
@@ -358,16 +382,20 @@ TEST_CASE("asof - null ts semantics") {
         const DataFrame out =
             asof_g(ts_vals({NI, 20}, {"L0", "L1"}),
                    ts_vals({5, 15}, {"a", "b"}), AsofDirection::Backward);
-        CHECK(out.names == std::vector<std::string>{"ts", "val", "val_right"});
-        CHECK(i64_col(out, "ts") == std::vector<I>{20, NI});
-        CHECK(str_col(out, "val") == std::vector<S>{"L1", "L0"});
-        CHECK(str_col(out, "val_right") == std::vector<S>{"b", NS});
+        CHECK(out.names ==
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "ts", "val", "val_right"});
+        CHECK(i64_col(out, "ts") == dftracer::utils::dstd::Vector<I>{20, NI});
+        CHECK(str_col(out, "val") ==
+              dftracer::utils::dstd::Vector<S>{"L1", "L0"});
+        CHECK(str_col(out, "val_right") ==
+              dftracer::utils::dstd::Vector<S>{"b", NS});
     }
     SUBCASE("right null ts is not a candidate") {
         const DataFrame out =
             asof_g(ts_frame({10}), ts_vals({NI, 5}, {"skip", "a"}),
                    AsofDirection::Backward);
-        CHECK(str_col(out, "val") == std::vector<S>{"a"});
+        CHECK(str_col(out, "val") == dftracer::utils::dstd::Vector<S>{"a"});
     }
 }
 
@@ -378,7 +406,7 @@ TEST_CASE("asof - determinism across input order") {
     const DataFrame o2 =
         asof_g(ts_frame({30, 10, 20}), ts_vals({25, 5, 15}, {"c", "a", "b"}),
                AsofDirection::Backward);
-    CHECK(i64_col(o1, "ts") == std::vector<I>{10, 20, 30});
+    CHECK(i64_col(o1, "ts") == dftracer::utils::dstd::Vector<I>{10, 20, 30});
     CHECK(i64_col(o1, "ts") == i64_col(o2, "ts"));
     CHECK(str_col(o1, "val") == str_col(o2, "val"));
 }
@@ -388,17 +416,22 @@ TEST_CASE("asof - list<utf8> value passthrough") {
                               Series::list({0, 2, 3}, strs({"p", "q", "r"})));
     const DataFrame out =
         asof_g(ts_frame({10, 20}), r, AsofDirection::Backward);
-    CHECK(out.names == std::vector<std::string>{"ts", "tags"});
+    CHECK(out.names ==
+          dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"ts",
+                                                                       "tags"});
     REQUIRE(out.num_rows() == 2);
-    CHECK(str_list(out, "tags", 0) == std::vector<std::string>{"p", "q"});
-    CHECK(str_list(out, "tags", 1) == std::vector<std::string>{"r"});
+    CHECK(
+        str_list(out, "tags", 0) ==
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"p", "q"});
+    CHECK(str_list(out, "tags", 1) ==
+          dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"r"});
 }
 
 TEST_CASE("asof - an exact ts match is taken") {
     const DataFrame out =
         asof_g(ts_frame({10}), ts_vals({5, 10}, {"older", "exact"}),
                AsofDirection::Backward);
-    CHECK(str_col(out, "val") == std::vector<S>{"exact"});
+    CHECK(str_col(out, "val") == dftracer::utils::dstd::Vector<S>{"exact"});
 }
 
 TEST_CASE("asof - errors") {
@@ -430,32 +463,38 @@ TEST_CASE("interval - point in a single interval") {
     const DataFrame r = spans({0, 20}, {10, 30}, {"i0", "i1"});
     SUBCASE("schema: left cols then right non-lo/hi value cols") {
         CHECK(interval_g(l, r, false).names ==
-              std::vector<std::string>{"point", "val"});
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "point", "val"});
     }
     SUBCASE("inner drops the uncovered point") {
         const DataFrame out = interval_g(l, r, false);
-        CHECK(i64_col(out, "point") == std::vector<I>{5, 25});
-        CHECK(str_col(out, "val") == std::vector<S>{"i0", "i1"});
+        CHECK(i64_col(out, "point") == dftracer::utils::dstd::Vector<I>{5, 25});
+        CHECK(str_col(out, "val") ==
+              dftracer::utils::dstd::Vector<S>{"i0", "i1"});
     }
     SUBCASE("outer emits the uncovered point with null right") {
         const DataFrame out = interval_g(l, r, true);
-        CHECK(i64_col(out, "point") == std::vector<I>{5, 15, 25});
-        CHECK(str_col(out, "val") == std::vector<S>{"i0", NS, "i1"});
+        CHECK(i64_col(out, "point") ==
+              dftracer::utils::dstd::Vector<I>{5, 15, 25});
+        CHECK(str_col(out, "val") ==
+              dftracer::utils::dstd::Vector<S>{"i0", NS, "i1"});
     }
 }
 
 TEST_CASE("interval - nested/overlapping emit one row per interval") {
     const DataFrame out = interval_g(
         points({5}), spans({0, 2}, {10, 8}, {"outer", "inner"}), false);
-    CHECK(i64_col(out, "point") == std::vector<I>{5, 5});
-    CHECK(str_col(out, "val") == std::vector<S>{"outer", "inner"});
+    CHECK(i64_col(out, "point") == dftracer::utils::dstd::Vector<I>{5, 5});
+    CHECK(str_col(out, "val") ==
+          dftracer::utils::dstd::Vector<S>{"outer", "inner"});
 }
 
 TEST_CASE("interval - closed boundaries match at lo and hi") {
     const DataFrame out =
         interval_g(points({0, 10}), spans({0}, {10}, {"span"}), false);
-    CHECK(i64_col(out, "point") == std::vector<I>{0, 10});
-    CHECK(str_col(out, "val") == std::vector<S>{"span", "span"});
+    CHECK(i64_col(out, "point") == dftracer::utils::dstd::Vector<I>{0, 10});
+    CHECK(str_col(out, "val") ==
+          dftracer::utils::dstd::Vector<S>{"span", "span"});
 }
 
 TEST_CASE("interval - by-key partitioning") {
@@ -464,9 +503,11 @@ TEST_CASE("interval - by-key partitioning") {
                               i64s({0, 0}), i64s({10, 10}), strs({"p1", "p2"}));
     const DataFrame out =
         df::interval(l, r, "point", "lo", "hi", {"pid"}, false);
-    CHECK(out.names == std::vector<std::string>{"pid", "point", "val"});
-    CHECK(i64_col(out, "pid") == std::vector<I>{1, 2});
-    CHECK(str_col(out, "val") == std::vector<S>{"p1", "p2"});
+    CHECK(out.names ==
+          dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+              "pid", "point", "val"});
+    CHECK(i64_col(out, "pid") == dftracer::utils::dstd::Vector<I>{1, 2});
+    CHECK(str_col(out, "val") == dftracer::utils::dstd::Vector<S>{"p1", "p2"});
 }
 
 TEST_CASE("interval - a null by key matches a null by key") {
@@ -474,8 +515,8 @@ TEST_CASE("interval - a null by key matches a null by key") {
     const DataFrame r = frame({"k", "lo", "hi", "val"}, i64s({NI}), i64s({0}),
                               i64s({10}), strs({"n"}));
     const DataFrame out = df::interval(l, r, "point", "lo", "hi", {"k"}, true);
-    CHECK(i64_col(out, "k") == std::vector<I>{1, NI});
-    CHECK(str_col(out, "val") == std::vector<S>{NS, "n"});
+    CHECK(i64_col(out, "k") == dftracer::utils::dstd::Vector<I>{1, NI});
+    CHECK(str_col(out, "val") == dftracer::utils::dstd::Vector<S>{NS, "n"});
 }
 
 TEST_CASE("interval - determinism across input order") {
@@ -483,7 +524,7 @@ TEST_CASE("interval - determinism across input order") {
         points({5, 25}), spans({0, 20}, {10, 30}, {"i0", "i1"}), true);
     const DataFrame o2 = interval_g(
         points({25, 5}), spans({20, 0}, {30, 10}, {"i1", "i0"}), true);
-    CHECK(i64_col(o1, "point") == std::vector<I>{5, 25});
+    CHECK(i64_col(o1, "point") == dftracer::utils::dstd::Vector<I>{5, 25});
     CHECK(i64_col(o1, "point") == i64_col(o2, "point"));
     CHECK(str_col(o1, "val") == str_col(o2, "val"));
 }
@@ -493,14 +534,16 @@ TEST_CASE("interval - list<utf8> value passthrough") {
                               Series::list({0, 2}, strs({"p", "q"})));
     const DataFrame out = interval_g(points({5}), r, false);
     REQUIRE(out.num_rows() == 1);
-    CHECK(str_list(out, "tags", 0) == std::vector<std::string>{"p", "q"});
+    CHECK(
+        str_list(out, "tags", 0) ==
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"p", "q"});
 }
 
 TEST_CASE("interval - an interval covering no point is dropped") {
     const DataFrame out = interval_g(
         points({5}), spans({0, 20}, {10, 30}, {"hit", "miss"}), false);
-    CHECK(i64_col(out, "point") == std::vector<I>{5});
-    CHECK(str_col(out, "val") == std::vector<S>{"hit"});
+    CHECK(i64_col(out, "point") == dftracer::utils::dstd::Vector<I>{5});
+    CHECK(str_col(out, "val") == dftracer::utils::dstd::Vector<S>{"hit"});
 }
 
 TEST_CASE("interval - null semantics") {
@@ -509,9 +552,12 @@ TEST_CASE("interval - null semantics") {
             frame({"ts", "val"}, i64s({NI, 5}), strs({"L0", "L1"}));
         const DataFrame out = df::interval(l, spans({0}, {10}, {"span"}), "ts",
                                            "lo", "hi", {}, true);
-        CHECK(out.names == std::vector<std::string>{"ts", "val", "val_right"});
-        CHECK(i64_col(out, "ts") == std::vector<I>{5, NI});
-        CHECK(str_col(out, "val_right") == std::vector<S>{"span", NS});
+        CHECK(out.names ==
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "ts", "val", "val_right"});
+        CHECK(i64_col(out, "ts") == dftracer::utils::dstd::Vector<I>{5, NI});
+        CHECK(str_col(out, "val_right") ==
+              dftracer::utils::dstd::Vector<S>{"span", NS});
     }
     SUBCASE("null lo interval is never active") {
         const DataFrame out =
@@ -549,15 +595,15 @@ TEST_CASE("interval - errors") {
 namespace {
 
 struct Rows {
-    std::vector<I> ki;
-    std::vector<I> ks;
-    std::vector<I> t;
-    std::vector<I> hi;
+    dftracer::utils::dstd::Vector<I> ki;
+    dftracer::utils::dstd::Vector<I> ks;
+    dftracer::utils::dstd::Vector<I> t;
+    dftracer::utils::dstd::Vector<I> hi;
     std::size_t size() const { return t.size(); }
 };
 
-const std::vector<TypeId> TIME_TYPES{TypeId::Int64, TypeId::Int32,
-                                     TypeId::Uint64, TypeId::Float64};
+const dftracer::utils::dstd::Vector<TypeId> TIME_TYPES{
+    TypeId::Int64, TypeId::Int32, TypeId::Uint64, TypeId::Float64};
 
 int cmp_null_last(const I& a, const I& b) {
     if (!a || !b) return a ? -1 : (b ? 1 : 0);
@@ -586,15 +632,17 @@ Rows random_rows(std::mt19937& rng, std::int64_t base) {
     return r;
 }
 
-std::vector<std::string> by_names(int by_mode) {
-    std::vector<std::string> out;
+dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> by_names(
+    int by_mode) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
     if (by_mode & 1) out.emplace_back("ki");
     if (by_mode & 2) out.emplace_back("ks");
     return out;
 }
 
-DataFrame keyed(const Rows& rows, const std::string& id, int by_mode) {
-    std::vector<I> ids;
+DataFrame keyed(const Rows& rows, const dftracer::utils::dstd::String& id,
+                int by_mode) {
+    dftracer::utils::dstd::Vector<I> ids;
     for (std::size_t i = 0; i < rows.size(); ++i)
         ids.emplace_back(static_cast<std::int64_t>(i));
     DataFrame out;
@@ -605,9 +653,10 @@ DataFrame keyed(const Rows& rows, const std::string& id, int by_mode) {
         out.columns.push_back(i64s(rows.ki));
     }
     if (by_mode & 2) {
-        std::vector<S> ks;
+        dftracer::utils::dstd::Vector<S> ks;
         for (const I& k : rows.ks)
-            ks.push_back(k ? S("k" + std::to_string(*k)) : NS);
+            ks.push_back(k ? S("k" + dftracer::utils::dstd::to_string(*k))
+                           : NS);
         out.names.emplace_back("ks");
         out.columns.push_back(strs(ks));
     }
@@ -620,18 +669,18 @@ bool same_keys(const Rows& l, std::size_t i, const Rows& r, std::size_t j,
            ((by_mode & 2) == 0 || l.ks[i] == r.ks[j]);
 }
 
-std::vector<std::size_t> left_order(const Rows& l, int by_mode) {
-    std::vector<std::size_t> order(l.size());
+dftracer::utils::dstd::Vector<std::size_t> left_order(const Rows& l,
+                                                      int by_mode) {
+    dftracer::utils::dstd::Vector<std::size_t> order(l.size());
     std::iota(order.begin(), order.end(), std::size_t{0});
-    std::stable_sort(order.begin(), order.end(),
-                     [&](std::size_t a, std::size_t b) {
-                         int c = 0;
-                         if (by_mode & 1) c = cmp_null_last(l.ki[a], l.ki[b]);
-                         if (c == 0 && (by_mode & 2))
-                             c = cmp_null_last(l.ks[a], l.ks[b]);
-                         if (c == 0) c = cmp_null_last(l.t[a], l.t[b]);
-                         return c < 0;
-                     });
+    dftracer::utils::dstd::stable_sort(
+        order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            int c = 0;
+            if (by_mode & 1) c = cmp_null_last(l.ki[a], l.ki[b]);
+            if (c == 0 && (by_mode & 2)) c = cmp_null_last(l.ks[a], l.ks[b]);
+            if (c == 0) c = cmp_null_last(l.t[a], l.t[b]);
+            return c < 0;
+        });
     return order;
 }
 
@@ -700,14 +749,16 @@ TEST_CASE("asof matches a nested-loop reference") {
                                      << " tol=" << (tol ? *tol : -99)
                                      << " trial=" << trial);
 
-                        std::vector<I> lids;
-                        std::vector<I> rids;
+                        dftracer::utils::dstd::Vector<I> lids;
+                        dftracer::utils::dstd::Vector<I> rids;
                         for (std::size_t i : left_order(l, by_mode)) {
                             lids.emplace_back(static_cast<std::int64_t>(i));
                             rids.push_back(
                                 asof_ref(l, i, r, type, by_mode, dir, tol));
                         }
-                        std::vector<std::string> names = left.names;
+                        dftracer::utils::dstd::Vector<
+                            dftracer::utils::dstd::String>
+                            names = left.names;
                         names.emplace_back("rid");
 
                         const DataFrame out = df::asof(
@@ -739,10 +790,10 @@ TEST_CASE("interval matches a nested-loop reference") {
                                  << " by_mode=" << by_mode << " outer=" << outer
                                  << " trial=" << trial);
 
-                    std::vector<I> lids;
-                    std::vector<I> rids;
+                    dftracer::utils::dstd::Vector<I> lids;
+                    dftracer::utils::dstd::Vector<I> rids;
                     for (std::size_t i : left_order(l, by_mode)) {
-                        std::vector<std::size_t> hits;
+                        dftracer::utils::dstd::Vector<std::size_t> hits;
                         for (std::size_t j = 0; l.t[i] && j < r.size(); ++j) {
                             if (!r.t[j] || !r.hi[j] ||
                                 !same_keys(l, i, r, j, by_mode))
@@ -752,12 +803,13 @@ TEST_CASE("interval matches a nested-loop reference") {
                                 x <= tval(type, *r.hi[j]))
                                 hits.push_back(j);
                         }
-                        std::stable_sort(hits.begin(), hits.end(),
-                                         [&](std::size_t a, std::size_t b) {
-                                             if (*r.t[a] != *r.t[b])
-                                                 return *r.t[a] < *r.t[b];
-                                             return *r.hi[a] < *r.hi[b];
-                                         });
+                        dftracer::utils::dstd::stable_sort(
+                            hits.begin(), hits.end(),
+                            [&](std::size_t a, std::size_t b) {
+                                if (*r.t[a] != *r.t[b])
+                                    return *r.t[a] < *r.t[b];
+                                return *r.hi[a] < *r.hi[b];
+                            });
                         if (hits.empty() && outer) {
                             lids.emplace_back(static_cast<std::int64_t>(i));
                             rids.push_back(NI);
@@ -767,7 +819,8 @@ TEST_CASE("interval matches a nested-loop reference") {
                             rids.emplace_back(static_cast<std::int64_t>(j));
                         }
                     }
-                    std::vector<std::string> names = left.names;
+                    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
+                        names = left.names;
                     names.emplace_back("rid");
 
                     const DataFrame out = df::interval(

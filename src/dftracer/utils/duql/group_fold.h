@@ -65,8 +65,7 @@ class GroupFold {
 
     /// One row per group: the keys, then one column per aggregate, as
     /// `names`.
-    // keep std: dataframe::DataFrame::names is a std::vector<std::string>
-    dataframe::DataFrame finish(std::vector<std::string> names);
+    dataframe::DataFrame finish(dstd::Vector<dstd::String> names);
 
    private:
     struct Ord;

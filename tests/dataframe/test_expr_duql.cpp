@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <doctest/doctest.h>
 
@@ -19,9 +20,6 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace df = dftracer::utils::dataframe;
 namespace duql = dftracer::utils::duql;
@@ -40,10 +38,12 @@ constexpr std::uint64_t U64_MAX = std::numeric_limits<std::uint64_t>::max();
 const double NaN = std::numeric_limits<double>::quiet_NaN();
 
 template <class T>
-using Opt = std::vector<dftracer::utils::dstd::Optional<T>>;
+using Opt = dftracer::utils::dstd::Vector<dftracer::utils::dstd::Optional<T>>;
 
-std::vector<std::uint8_t> validity_of(const std::vector<bool>& present) {
-    std::vector<std::uint8_t> bits((present.size() + 7) / 8, 0);
+dftracer::utils::dstd::Vector<std::uint8_t> validity_of(
+    const dftracer::utils::dstd::Vector<bool>& present) {
+    dftracer::utils::dstd::Vector<std::uint8_t> bits((present.size() + 7) / 8,
+                                                     0);
     for (std::size_t i = 0; i < present.size(); ++i)
         if (present[i])
             bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
@@ -52,8 +52,8 @@ std::vector<std::uint8_t> validity_of(const std::vector<bool>& present) {
 
 template <class T>
 Series column(TypeId t, const Opt<T>& rows) {
-    std::vector<T> vals;
-    std::vector<bool> present;
+    dftracer::utils::dstd::Vector<T> vals;
+    dftracer::utils::dstd::Vector<bool> present;
     for (const auto& r : rows) {
         vals.push_back(r.value_or(T{}));
         present.push_back(r.has_value());
@@ -71,9 +71,9 @@ Series uints(const Opt<std::uint64_t>& rows) {
 }
 Series dbls(const Opt<double>& rows) { return column(TypeId::Float64, rows); }
 
-Series strs(const Opt<std::string>& rows) {
-    std::vector<dftracer::utils::dstd::StringView> vals;
-    std::vector<bool> present;
+Series strs(const Opt<dftracer::utils::dstd::String>& rows) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> vals;
+    dftracer::utils::dstd::Vector<bool> present;
     for (const auto& r : rows) {
         vals.push_back(r ? dftracer::utils::dstd::StringView(*r)
                          : dftracer::utils::dstd::StringView());
@@ -87,7 +87,7 @@ Series strs(const Opt<std::string>& rows) {
 }
 
 Series bools(const Opt<bool>& rows) {
-    std::vector<bool> on, present;
+    dftracer::utils::dstd::Vector<bool> on, present;
     for (const auto& r : rows) {
         on.push_back(r.value_or(false));
         present.push_back(r.has_value());
@@ -110,8 +110,8 @@ Opt<T> read(const Series& s, TypeId t) {
         } else if constexpr (std::is_same_v<T, bool>) {
             const std::uint8_t* b = m.data<std::uint8_t>();
             out.emplace_back(((b[i >> 3] >> (i & 7)) & 1) != 0);
-        } else if constexpr (std::is_same_v<T, std::string>) {
-            out.emplace_back(std::string(m.string_at(i)));
+        } else if constexpr (std::is_same_v<T, dftracer::utils::dstd::String>) {
+            out.emplace_back(dftracer::utils::dstd::String(m.string_at(i)));
         } else {
             out.emplace_back(m.data<T>()[i]);
         }
@@ -126,11 +126,12 @@ Opt<double> as_dbls(const Series& s) {
     return read<double>(s, TypeId::Float64);
 }
 Opt<bool> as_bools(const Series& s) { return read<bool>(s, TypeId::Bool); }
-Opt<std::string> as_strs(const Series& s) {
-    return read<std::string>(s, TypeId::String);
+Opt<dftracer::utils::dstd::String> as_strs(const Series& s) {
+    return read<dftracer::utils::dstd::String>(s, TypeId::String);
 }
 
-Series run(const Expr& e, const std::vector<const Series*>& in) {
+Series run(const Expr& e,
+           const dftracer::utils::dstd::Vector<const Series*>& in) {
     return df::eval(e, in);
 }
 
@@ -231,8 +232,8 @@ TEST_CASE("arith mixes Uint64, narrow integers and literals") {
     CHECK(arith_i(ArithOp::Add, u, i) ==
           Opt<std::int64_t>{I64_MAX, dftracer::utils::dstd::nullopt, -2});
 
-    const std::vector<std::int32_t> n32{100, -3};
-    const std::vector<std::int8_t> n8{27, 4};
+    const dftracer::utils::dstd::Vector<std::int32_t> n32{100, -3};
+    const dftracer::utils::dstd::Vector<std::int8_t> n8{27, 4};
     const Series a = Series::flat(TypeId::Int32, n32.data(), 2);
     const Series b = Series::flat(TypeId::Int8, n8.data(), 2);
     CHECK(arith_i(ArithOp::Add, a, b) == Opt<std::int64_t>{127, 1});
@@ -320,7 +321,7 @@ TEST_CASE("expr_cmp against a scalar is exact across integer and double") {
     CHECK(cmp_col(CmpOp::Eq, d, si(9007199254740993)) == Opt<bool>{false});
     CHECK(cmp_col(CmpOp::Ge, d, si(9007199254740993)) == Opt<bool>{false});
 
-    const std::vector<std::int8_t> n8{100, -100};
+    const dftracer::utils::dstd::Vector<std::int8_t> n8{100, -100};
     const Series s8 = Series::flat(TypeId::Int8, n8.data(), 2);
     CHECK(cmp_col(CmpOp::Lt, s8, si(300)) == Opt<bool>{true, true});
     CHECK(cmp_col(CmpOp::Gt, s8, si(-300)) == Opt<bool>{true, true});
@@ -329,7 +330,7 @@ TEST_CASE("expr_cmp against a scalar is exact across integer and double") {
     CHECK(cmp_col(CmpOp::Gt, u, si(-1)) == Opt<bool>{true, true});
     CHECK(cmp_col(CmpOp::Eq, i, su(U64_MAX)) == Opt<bool>{false, false});
 
-    const std::vector<float> f{0.1f};
+    const dftracer::utils::dstd::Vector<float> f{0.1f};
     const Series f32 = Series::flat(TypeId::Float32, f.data(), 1);
     CHECK(cmp_col(CmpOp::Le, f32, sf(0.1)) == Opt<bool>{false});
     CHECK(cmp_col(CmpOp::Gt, f32, sf(0.1)) == Opt<bool>{true});
@@ -359,7 +360,7 @@ TEST_CASE("coalesce takes the first present operand in order") {
     const Series s = strs({dftracer::utils::dstd::nullopt, "x"});
     const Series t = strs({"y", "z"});
     CHECK(as_strs(run(df::expr_coalesce({c0(), c1()}), {&s, &t})) ==
-          Opt<std::string>{"y", "x"});
+          Opt<dftracer::utils::dstd::String>{"y", "x"});
     CHECK_THROWS_AS(run(df::expr_coalesce({c0(), c1()}), {&s, &i}),
                     std::invalid_argument);
     CHECK_THROWS_AS(df::expr_coalesce({}), std::invalid_argument);
@@ -393,7 +394,7 @@ TEST_CASE("least and greatest are null when any operand is null") {
     const Series s = strs({"b", "B"});
     const Series t = strs({"a", "a"});
     CHECK(as_strs(run(df::expr_extreme({c0(), c1()}, true), {&s, &t})) ==
-          Opt<std::string>{"a", "B"});
+          Opt<dftracer::utils::dstd::String>{"a", "B"});
 }
 
 TEST_CASE("concat joins strings and is null when any operand is null") {
@@ -401,7 +402,8 @@ TEST_CASE("concat joins strings and is null when any operand is null") {
     const Series b = strs({"b", "c", "d"});
     CHECK(as_strs(run(df::expr_concat({c0(), c1(), df::expr_lit_str("!")}),
                       {&a, &b})) ==
-          Opt<std::string>{"ab!", dftracer::utils::dstd::nullopt, "d!"});
+          Opt<dftracer::utils::dstd::String>{
+              "ab!", dftracer::utils::dstd::nullopt, "d!"});
     const Series i = ints({1, 2, 3});
     CHECK_THROWS_AS(run(df::expr_concat({c0(), c1()}), {&a, &i}),
                     std::invalid_argument);
@@ -422,7 +424,7 @@ TEST_CASE("round is half away from zero and keeps integers") {
               dftracer::utils::dstd::nullopt, dftracer::utils::dstd::nullopt,
               dftracer::utils::dstd::nullopt});
 
-    const std::vector<std::int32_t> n32{1234, -1250};
+    const dftracer::utils::dstd::Vector<std::int32_t> n32{1234, -1250};
     const Series i32 = Series::flat(TypeId::Int32, n32.data(), 2);
     const Series same = run(df::expr_round(c0(), 2), {&i32});
     CHECK(same.type() == TypeId::Int32);
@@ -451,15 +453,18 @@ TEST_CASE("substr counts UTF-8 characters") {
     const Series s =
         strs({"h\xc3\xa9llo", "ab", dftracer::utils::dstd::nullopt});
     CHECK(as_strs(run(df::expr_str_substr(c0(), 1, 3), {&s})) ==
-          Opt<std::string>{"\xc3\xa9ll", "b", dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{"\xc3\xa9ll", "b",
+                                             dftracer::utils::dstd::nullopt});
     CHECK(as_strs(run(df::expr_str_substr(c0(), 2, -1), {&s})) ==
-          Opt<std::string>{"llo", "", dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{"llo", "",
+                                             dftracer::utils::dstd::nullopt});
     CHECK(as_strs(run(df::expr_str_substr(c0(), 10, 2), {&s})) ==
-          Opt<std::string>{"", "", dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{"", "",
+                                             dftracer::utils::dstd::nullopt});
     CHECK(as_strs(run(df::expr_str_substr(c0(), -1, 2), {&s})) ==
-          Opt<std::string>{dftracer::utils::dstd::nullopt,
-                           dftracer::utils::dstd::nullopt,
-                           dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{dftracer::utils::dstd::nullopt,
+                                             dftracer::utils::dstd::nullopt,
+                                             dftracer::utils::dstd::nullopt});
 }
 
 TEST_CASE("str_pattern runs a compiled duql pattern; a work limit is null") {
@@ -475,7 +480,8 @@ TEST_CASE("str_pattern runs a compiled duql pattern; a work limit is null") {
     CHECK(as_bools(run(df::expr_str_pattern(c0(), *icontains), {&s})) ==
           Opt<bool>{true, true, false, dftracer::utils::dstd::nullopt});
 
-    const Series hard = strs({std::string(10000, 'a') + "!", "AAA"});
+    const Series hard =
+        strs({dftracer::utils::dstd::String(10000, 'a') + "!", "AAA"});
     auto iregex = duql::compile_regex("^(a|aa)+$", true);
     REQUIRE(iregex);
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
@@ -495,19 +501,21 @@ TEST_CASE("str_extract returns a capture group or null") {
     auto re = duql::compile_regex("(\\d+)-(\\d+)", false);
     REQUIRE(re);
     CHECK(as_strs(run(df::expr_str_extract(c0(), *re, 2), {&s})) ==
-          Opt<std::string>{"34", dftracer::utils::dstd::nullopt,
-                           dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{"34",
+                                             dftracer::utils::dstd::nullopt,
+                                             dftracer::utils::dstd::nullopt});
     CHECK(as_strs(run(df::expr_str_extract(c0(), *re, 0), {&s})) ==
-          Opt<std::string>{"12-34", dftracer::utils::dstd::nullopt,
-                           dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{"12-34",
+                                             dftracer::utils::dstd::nullopt,
+                                             dftracer::utils::dstd::nullopt});
     CHECK_THROWS_AS(run(df::expr_str_extract(c0(), *re, 3), {&s}),
                     std::invalid_argument);
 
-    const Series hard = strs({std::string(10000, 'a') + "!"});
+    const Series hard = strs({dftracer::utils::dstd::String(10000, 'a') + "!"});
     auto slow = duql::compile_regex("^(a|aa)+$", false);
     REQUIRE(slow);
     CHECK(as_strs(run(df::expr_str_extract(c0(), *slow, 1), {&hard})) ==
-          Opt<std::string>{dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{dftracer::utils::dstd::nullopt});
 }
 
 TEST_CASE("string predicates take a column needle") {
@@ -554,14 +562,14 @@ TEST_CASE("replace takes column from and to") {
     const Series to = strs({"--", "Z", "Q", "", "a", "a"});
     CHECK(as_strs(run(df::expr_str_replace_col(c0(), c1(), df::expr_col(2)),
                       {&s, &from, &to})) ==
-          Opt<std::string>{"a--b--c", "abc", "Qa", "ac",
-                           dftracer::utils::dstd::nullopt,
-                           dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{"a--b--c", "abc", "Qa", "ac",
+                                             dftracer::utils::dstd::nullopt,
+                                             dftracer::utils::dstd::nullopt});
     CHECK(
         as_strs(run(df::expr_str_replace_col(c0(), df::expr_lit_str("b"), c1()),
-                    {&s, &to})) ==
-        Opt<std::string>{"aX--Xc", "aZc", "aaa", "ac",
-                         dftracer::utils::dstd::nullopt, "xyz"});
+                    {&s, &to})) == Opt<dftracer::utils::dstd::String>{
+                                       "aX--Xc", "aZc", "aaa", "ac",
+                                       dftracer::utils::dstd::nullopt, "xyz"});
     CHECK(
         as_strs(run(df::expr_str_replace_col(c0(), df::expr_lit_str("a"),
                                              df::expr_lit_str("\xc3\xa9")),
@@ -577,26 +585,26 @@ TEST_CASE("substr takes column start and length") {
     const Series len = ints({3, -1, 2, 2, 1, 1});
     CHECK(as_strs(run(df::expr_str_substr_col(c0(), c1(), nullptr),
                       {&s, &start})) ==
-          Opt<std::string>{"\xc3\xa9llo", "abc", dftracer::utils::dstd::nullopt,
-                           "", dftracer::utils::dstd::nullopt,
-                           dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{
+              "\xc3\xa9llo", "abc", dftracer::utils::dstd::nullopt, "",
+              dftracer::utils::dstd::nullopt, dftracer::utils::dstd::nullopt});
     const Expr l = df::expr_col(2);
     CHECK(as_strs(run(df::expr_str_substr_col(c0(), c1(), &l),
                       {&s, &start, &len})) ==
-          Opt<std::string>{"\xc3\xa9ll", dftracer::utils::dstd::nullopt,
-                           dftracer::utils::dstd::nullopt, "",
-                           dftracer::utils::dstd::nullopt,
-                           dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{
+              "\xc3\xa9ll", dftracer::utils::dstd::nullopt,
+              dftracer::utils::dstd::nullopt, "",
+              dftracer::utils::dstd::nullopt, dftracer::utils::dstd::nullopt});
     const Expr lit_len = df::lit(std::int64_t{2});
     CHECK(as_strs(run(df::expr_str_substr_col(c0(), c1(), &lit_len),
                       {&s, &start})) ==
-          Opt<std::string>{"\xc3\xa9l", "ab", dftracer::utils::dstd::nullopt,
-                           "", dftracer::utils::dstd::nullopt,
-                           dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{
+              "\xc3\xa9l", "ab", dftracer::utils::dstd::nullopt, "",
+              dftracer::utils::dstd::nullopt, dftracer::utils::dstd::nullopt});
     const Series fl = dbls({1.0, 1.0, 1.0, 1.0, 1.0, 1.0});
     CHECK(
         as_strs(run(df::expr_str_substr_col(c0(), c1(), nullptr), {&s, &fl})) ==
-        Opt<std::string>{
+        Opt<dftracer::utils::dstd::String>{
             dftracer::utils::dstd::nullopt, dftracer::utils::dstd::nullopt,
             dftracer::utils::dstd::nullopt, dftracer::utils::dstd::nullopt,
             dftracer::utils::dstd::nullopt, dftracer::utils::dstd::nullopt});
@@ -643,7 +651,7 @@ TEST_CASE("extract takes a column of groups") {
     auto re = duql::compile_regex("(\\d+)-(\\d+)", false);
     REQUIRE(re);
     CHECK(as_strs(run(df::expr_str_extract_col(c0(), *re, c1()), {&s, &g})) ==
-          Opt<std::string>{
+          Opt<dftracer::utils::dstd::String>{
               "34", "12-34", dftracer::utils::dstd::nullopt,
               dftracer::utils::dstd::nullopt, dftracer::utils::dstd::nullopt,
               dftracer::utils::dstd::nullopt, dftracer::utils::dstd::nullopt});
@@ -664,8 +672,8 @@ TEST_CASE("str_regex_replace substitutes groups and keeps nulls") {
     REQUIRE(re);
     auto sub = duql::compile_substitution(**re, "${op}#$2$$");
     REQUIRE(sub);
-    const Opt<std::string> want{"open#17$", "none",
-                                dftracer::utils::dstd::nullopt, "/a//b"};
+    const Opt<dftracer::utils::dstd::String> want{
+        "open#17$", "none", dftracer::utils::dstd::nullopt, "/a//b"};
     CHECK(as_strs(run(df::expr_str_regex_replace(c0(), *re, *sub), {&s})) ==
           want);
     CHECK(as_strs(Series{dftu_series_str_regex_replace(
@@ -728,39 +736,42 @@ TEST_CASE("convert to float parses and nulls NaN") {
 TEST_CASE("convert to string and json write duql's text forms") {
     const Series i = ints({-5, dftracer::utils::dstd::nullopt});
     CHECK(as_strs(run(df::expr_convert(ConvertOp::String, c0()), {&i})) ==
-          Opt<std::string>{"-5", dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{"-5",
+                                             dftracer::utils::dstd::nullopt});
     CHECK(as_strs(run(df::expr_convert(ConvertOp::Json, c0()), {&i})) ==
-          Opt<std::string>{"-5", "null"});
+          Opt<dftracer::utils::dstd::String>{"-5", "null"});
 
     const Series d = dbls({0.1, 1.0, 1e21, NaN});
-    CHECK(
-        as_strs(run(df::expr_convert(ConvertOp::String, c0()), {&d})) ==
-        Opt<std::string>{"0.1", "1", "1e+21", dftracer::utils::dstd::nullopt});
+    CHECK(as_strs(run(df::expr_convert(ConvertOp::String, c0()), {&d})) ==
+          Opt<dftracer::utils::dstd::String>{"0.1", "1", "1e+21",
+                                             dftracer::utils::dstd::nullopt});
     CHECK(as_strs(run(df::expr_convert(ConvertOp::Json, c0()), {&d})) ==
-          Opt<std::string>{"0.1", "1", "1e+21", "null"});
+          Opt<dftracer::utils::dstd::String>{"0.1", "1", "1e+21", "null"});
 
     const Series b = bools({true, false});
     CHECK(as_strs(run(df::expr_convert(ConvertOp::String, c0()), {&b})) ==
-          Opt<std::string>{"true", "false"});
+          Opt<dftracer::utils::dstd::String>{"true", "false"});
 
     const Series s = strs({"a\"b\n", dftracer::utils::dstd::nullopt});
     CHECK(as_strs(run(df::expr_convert(ConvertOp::Json, c0()), {&s})) ==
-          Opt<std::string>{"\"a\\\"b\\n\"", "null"});
+          Opt<dftracer::utils::dstd::String>{"\"a\\\"b\\n\"", "null"});
     CHECK(as_strs(run(df::expr_convert(ConvertOp::String, c0()), {&s})) ==
-          Opt<std::string>{"a\"b\n", dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{"a\"b\n",
+                                             dftracer::utils::dstd::nullopt});
 
     const Series u = uints({U64_MAX});
     CHECK(as_strs(run(df::expr_convert(ConvertOp::String, c0()), {&u})) ==
-          Opt<std::string>{"18446744073709551615"});
+          Opt<dftracer::utils::dstd::String>{"18446744073709551615"});
 }
 
 namespace {
 
 // A List column; row i is null where !present[i] (a take of -1).
-Series make_list(const std::vector<std::int32_t>& offsets, Series values,
-                 const std::vector<bool>& present) {
+Series make_list(const dftracer::utils::dstd::Vector<std::int32_t>& offsets,
+                 Series values,
+                 const dftracer::utils::dstd::Vector<bool>& present) {
     const Series list = Series::list(offsets, std::move(values));
-    std::vector<std::int64_t> idx;
+    dftracer::utils::dstd::Vector<std::int64_t> idx;
     for (std::size_t i = 0; i < present.size(); ++i)
         idx.push_back(present[i] ? static_cast<std::int64_t>(i) : -1);
     return list.take(idx).materialize();
@@ -822,7 +833,7 @@ TEST_CASE("list functions") {
 TEST_CASE("literals broadcast to a column of their type") {
     const Series i = ints({1, 2});
     CHECK(as_strs(run(df::expr_lit_str("x"), {&i})) ==
-          Opt<std::string>{"x", "x"});
+          Opt<dftracer::utils::dstd::String>{"x", "x"});
     CHECK(as_bools(run(df::expr_lit_bool(true), {&i})) ==
           Opt<bool>{true, true});
     CHECK(as_ints(run(df::expr_lit_null(TypeId::Int64), {&i})) ==
@@ -838,8 +849,8 @@ TEST_CASE("literals broadcast to a column of their type") {
 }
 
 TEST_CASE("infer_type agrees with the node types") {
-    const std::vector<df::DataType> in{df::scalar(TypeId::Int32),
-                                       df::scalar(TypeId::Float64)};
+    const dftracer::utils::dstd::Vector<df::DataType> in{
+        df::scalar(TypeId::Int32), df::scalar(TypeId::Float64)};
     CHECK(df::infer_type(df::expr_arith(ArithOp::Add, c0(), c0()), in).id ==
           TypeId::Int64);
     CHECK(df::infer_type(df::expr_arith(ArithOp::Div, c0(), c0()), in).id ==
@@ -872,7 +883,8 @@ TEST_CASE("C ABI builders") {
     dftu_expr* s = dftu_expr_lit_str("ab", 2);
     dftu_expr* js = dftu_expr_convert(3, s);
     Series text{dftu_expr_eval(js, in, 2)};
-    CHECK(as_strs(text) == Opt<std::string>{"\"ab\"", "\"ab\""});
+    CHECK(as_strs(text) ==
+          Opt<dftracer::utils::dstd::String>{"\"ab\"", "\"ab\""});
 
     for (dftu_expr* e : {x, y, fd, co, s, js}) dftu_expr_free(e);
 }
@@ -903,12 +915,15 @@ TEST_CASE("kernels run across evaluation chunks") {
 
 TEST_CASE("string kernels run across evaluation chunks") {
     constexpr std::int64_t N = 200000;
-    const Series s = strs(Opt<std::string>(N, std::string("h\xc3\xa9y")));
+    const Series s = strs(Opt<dftracer::utils::dstd::String>(
+        N, dftracer::utils::dstd::String("h\xc3\xa9y")));
     const auto sub = as_strs(run(df::expr_str_substr(c0(), 1, 1), {&s}));
     CHECK(sub.front() ==
-          dftracer::utils::dstd::Optional<std::string>("\xc3\xa9"));
+          dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>(
+              "\xc3\xa9"));
     CHECK(sub.back() ==
-          dftracer::utils::dstd::Optional<std::string>("\xc3\xa9"));
+          dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>(
+              "\xc3\xa9"));
 }
 
 namespace {
@@ -923,8 +938,9 @@ constexpr std::int64_t NS_PER_D = 86400 * NS_PER_S;
 Opt<std::int64_t> part(const Series& s, std::int32_t p, std::int64_t unit) {
     return as_ints(run(df::expr_date_part(c0(), p, unit), {&s}));
 }
-Opt<std::string> fmt(const Series& s, dftracer::utils::dstd::StringView f,
-                     std::int64_t unit) {
+Opt<dftracer::utils::dstd::String> fmt(const Series& s,
+                                       dftracer::utils::dstd::StringView f,
+                                       std::int64_t unit) {
     return as_strs(run(df::expr_format_time(c0(), f, unit), {&s}));
 }
 
@@ -1005,28 +1021,29 @@ TEST_CASE("date_part and format_time: nulls, Float64 floored, other types") {
           Opt<std::int64_t>{123456, 999999, dftracer::utils::dstd::nullopt,
                             dftracer::utils::dstd::nullopt});
     CHECK(fmt(d, "%F %T.%f", 1000) ==
-          Opt<std::string>{
+          Opt<dftracer::utils::dstd::String>{
               "2023-11-14 22:13:20.123456", "1969-12-31 23:59:59.999999",
               dftracer::utils::dstd::nullopt, dftracer::utils::dstd::nullopt});
     const Series i =
         ints({1'700'000'000'123'456, dftracer::utils::dstd::nullopt});
     CHECK(fmt(i, "%F %T.%f", 1000) ==
-          Opt<std::string>{"2023-11-14 22:13:20.123456",
-                           dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{"2023-11-14 22:13:20.123456",
+                                             dftracer::utils::dstd::nullopt});
     const Series u =
         uints({1'700'000'000, U64_MAX, dftracer::utils::dstd::nullopt});
     CHECK(part(u, DFTU_DT_HOUR, NS_PER_S) ==
           Opt<std::int64_t>{22, dftracer::utils::dstd::nullopt,
                             dftracer::utils::dstd::nullopt});
-    const std::vector<std::int32_t> n32{86400, -1};
+    const dftracer::utils::dstd::Vector<std::int32_t> n32{86400, -1};
     const Series i32 = Series::flat(TypeId::Int32, n32.data(), 2);
     CHECK(fmt(i32, "%F %T", NS_PER_S) ==
-          Opt<std::string>{"1970-01-02 00:00:00", "1969-12-31 23:59:59"});
+          Opt<dftracer::utils::dstd::String>{"1970-01-02 00:00:00",
+                                             "1969-12-31 23:59:59"});
     // v * ns_per_unit overflows 64 bits here: the instants are the int64
     // limits in microseconds.
     CHECK(fmt(ints({I64_MAX, I64_MIN}), "%F %T.%f", 1000) ==
-          Opt<std::string>{"294247-01-10 04:00:54.775807",
-                           "-290308-12-21 19:59:05.224192"});
+          Opt<dftracer::utils::dstd::String>{"294247-01-10 04:00:54.775807",
+                                             "-290308-12-21 19:59:05.224192"});
 }
 
 TEST_CASE("format_time directives on fixed instants in every unit") {
@@ -1035,28 +1052,29 @@ TEST_CASE("format_time directives on fixed instants in every unit") {
         fmt(ns,
             "%Y|%y|%m|%d|%H|%I|%M|%S|%f|%j|%a|%A|%b|%B|%p|%F|%T|%s|%z|%Z|%%",
             1) ==
-        Opt<std::string>{
+        Opt<dftracer::utils::dstd::String>{
             "2023|23|11|14|22|10|13|20|123456|318|Tue|Tuesday|Nov|November|PM|"
             "2023-11-14|22:13:20|1700000000|+0000|UTC|%",
             "1969|69|12|31|23|11|59|59|999999|365|Wed|Wednesday|Dec|December|"
             "PM|1969-12-31|23:59:59|-1|+0000|UTC|%"});
     CHECK(fmt(ints({28'333'333}), "%F %T", NS_PER_MIN) ==
-          Opt<std::string>{"2023-11-14 22:13:00"});
+          Opt<dftracer::utils::dstd::String>{"2023-11-14 22:13:00"});
     CHECK(fmt(ints({472'222}), "%F %T", NS_PER_H) ==
-          Opt<std::string>{"2023-11-14 22:00:00"});
+          Opt<dftracer::utils::dstd::String>{"2023-11-14 22:00:00"});
     CHECK(fmt(ints({19'675}), "%F %T %s", NS_PER_D) ==
-          Opt<std::string>{"2023-11-14 00:00:00 1699920000"});
+          Opt<dftracer::utils::dstd::String>{"2023-11-14 00:00:00 1699920000"});
     CHECK(fmt(ints({1'700'000'000'123}), "%T.%f", NS_PER_MS) ==
-          Opt<std::string>{"22:13:20.123000"});
+          Opt<dftracer::utils::dstd::String>{"22:13:20.123000"});
     CHECK(fmt(ints({-62'135'596'800}), "%Y-%m-%d", NS_PER_S) ==
-          Opt<std::string>{"0001-01-01"});
+          Opt<dftracer::utils::dstd::String>{"0001-01-01"});
     CHECK(fmt(ints({-62'135'596'801}), "%Y-%m-%d", NS_PER_S) ==
-          Opt<std::string>{"0000-12-31"});
+          Opt<dftracer::utils::dstd::String>{"0000-12-31"});
     CHECK(fmt(ints({-62'167'219'200 - 86400}), "%Y", NS_PER_S) ==
-          Opt<std::string>{"-0001"});
-    CHECK(fmt(ints({0}), "%I:%M %p", NS_PER_S) == Opt<std::string>{"12:00 AM"});
+          Opt<dftracer::utils::dstd::String>{"-0001"});
+    CHECK(fmt(ints({0}), "%I:%M %p", NS_PER_S) ==
+          Opt<dftracer::utils::dstd::String>{"12:00 AM"});
     CHECK(fmt(ints({43'200}), "%I:%M %p", NS_PER_S) ==
-          Opt<std::string>{"12:00 PM"});
+          Opt<dftracer::utils::dstd::String>{"12:00 PM"});
 }
 
 TEST_CASE("date_part and format_time: types, CSE and refusals") {
@@ -1090,9 +1108,9 @@ TEST_CASE("date_part and format_time: types, CSE and refusals") {
                          df::expr_format_time(c0(), "%M", 1000),
                          df::expr_format_time(c0(), "%H", NS_PER_S)});
     CHECK(as_strs(run(both, {&i})) ==
-          Opt<std::string>{"22"
-                           "13" +
-                           *fmt(i, "%H", NS_PER_S)[0]});
+          Opt<dftracer::utils::dstd::String>{"22"
+                                             "13" +
+                                             *fmt(i, "%H", NS_PER_S)[0]});
     const Expr sum = df::expr_arith(
         ArithOp::Add, df::expr_date_part(c0(), DFTU_DT_YEAR, 1000),
         df::expr_date_part(c0(), DFTU_DT_YEAR, NS_PER_S));
@@ -1113,8 +1131,8 @@ TEST_CASE("date_part and format_time C ABI builders") {
     CHECK(as_ints(Series{dftu_expr_eval(hour, raw, 1)}) ==
           Opt<std::int64_t>{22, dftracer::utils::dstd::nullopt});
     CHECK(as_strs(Series{dftu_expr_eval(text, raw, 1)}) ==
-          Opt<std::string>{"2023-11-14 22:13:20.123456",
-                           dftracer::utils::dstd::nullopt});
+          Opt<dftracer::utils::dstd::String>{"2023-11-14 22:13:20.123456",
+                                             dftracer::utils::dstd::nullopt});
 
     CHECK(dftu_expr_date_part(nullptr, DFTU_DT_HOUR, 1000) == nullptr);
     CHECK(dftu_expr_date_part(col, 99, 1000) == nullptr);

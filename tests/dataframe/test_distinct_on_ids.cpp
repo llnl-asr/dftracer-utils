@@ -11,6 +11,8 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
@@ -20,45 +22,45 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
-using Idx = std::vector<std::int64_t>;
+using Idx = dftracer::utils::dstd::Vector<std::int64_t>;
 constexpr std::int64_t N = 60;
 constexpr std::int64_t CUTS[] = {0, 7, 8, 31, N};
 
 bool nullish(std::int64_t i) { return i % 11 == 4 || i % 17 == 9; }
 
-std::vector<std::uint8_t> validity_bits() {
-    std::vector<std::uint8_t> v(static_cast<std::size_t>((N + 7) / 8), 0);
+dftracer::utils::dstd::Vector<std::uint8_t> validity_bits() {
+    dftracer::utils::dstd::Vector<std::uint8_t> v(
+        static_cast<std::size_t>((N + 7) / 8), 0);
     for (std::int64_t i = 0; i < N; ++i)
         if (!nullish(i)) v[static_cast<std::size_t>(i >> 3)] |= 1u << (i & 7);
     return v;
 }
 
 Series flat_strings() {
-    static const std::vector<std::string> POOL = {
-        "read",
-        "",
-        "a name of exactly 16",
-        "write",
-        "0123456789abcdef",
-        "a considerably longer name than the others"};
-    std::vector<std::string> keep;
+    static const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
+        POOL = {"read",
+                "",
+                "a name of exactly 16",
+                "write",
+                "0123456789abcdef",
+                "a considerably longer name than the others"};
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keep;
     for (std::int64_t i = 0; i < N; ++i)
         keep.push_back(POOL[static_cast<std::size_t>((i * 5 + i / 7) % 6)]);
-    std::vector<dftracer::utils::dstd::StringView> v(keep.begin(), keep.end());
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> v(
+        keep.begin(), keep.end());
     const auto valid = validity_bits();
     return Series::strings(v, valid.data());
 }
 
 Series flat_i64() {
-    std::vector<std::int64_t> v;
+    dftracer::utils::dstd::Vector<std::int64_t> v;
     for (std::int64_t i = 0; i < N; ++i) v.push_back((i * 7) % 9 - 4);
     const auto valid = validity_bits();
     return Series::flat_i64(v.data(), N, valid.data());
@@ -67,7 +69,7 @@ Series flat_i64() {
 Series flat_f64() {
     const double POOL[] = {0.0, -0.0,  std::numeric_limits<double>::quiet_NaN(),
                            1.5, -2.25, std::numeric_limits<double>::infinity()};
-    std::vector<double> v;
+    dftracer::utils::dstd::Vector<double> v;
     for (std::int64_t i = 0; i < N; ++i)
         v.push_back(POOL[static_cast<std::size_t>((i * 5 + i / 7) % 6)]);
     const auto valid = validity_bits();
@@ -75,7 +77,8 @@ Series flat_f64() {
 }
 
 Series flat_bool() {
-    std::vector<std::uint8_t> bits(static_cast<std::size_t>((N + 7) / 8), 0);
+    dftracer::utils::dstd::Vector<std::uint8_t> bits(
+        static_cast<std::size_t>((N + 7) / 8), 0);
     for (std::int64_t i = 0; i < N; ++i)
         if ((i * 3 + i / 5) % 4 < 2)
             bits[static_cast<std::size_t>(i >> 3)] |= 1u << (i & 7);
@@ -91,7 +94,8 @@ Series selection_over(const Series& base, const Idx& idx) {
     o->data = new_buffer(idx.size() * sizeof(std::int64_t));
     std::memcpy(writable(o->data), idx.data(),
                 idx.size() * sizeof(std::int64_t));
-    o->set_child(std::make_shared<dftu_series>(*base.handle()));
+    o->set_child(
+        dftracer::utils::dstd::make_shared<dftu_series>(*base.handle()));
     return Series{o};
 }
 
@@ -108,7 +112,8 @@ Series range_of(const Series& flat, std::int64_t b, std::int64_t e) {
 }
 
 Series chunked_of(const Series& flat, bool is_string) {
-    std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> chunks;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedPtr<dftu_series>>
+        chunks;
     for (int k = 0; k < 4; ++k) {
         Series piece = range_of(flat, CUTS[k], CUTS[k + 1]);
         switch (k % 4) {
@@ -128,15 +133,19 @@ Series chunked_of(const Series& flat, bool is_string) {
             default:
                 break;
         }
-        chunks.push_back(std::make_shared<dftu_series>(*piece.handle()));
+        chunks.push_back(
+            dftracer::utils::dstd::make_shared<dftu_series>(*piece.handle()));
     }
     return Series{make_chunked(std::move(chunks))};
 }
 
-std::vector<dftracer::utils::dstd::Pair<std::string, Series>> layouts(
-    const Series& flat) {
+dftracer::utils::dstd::Vector<
+    dftracer::utils::dstd::Pair<dftracer::utils::dstd::String, Series>>
+layouts(const Series& flat) {
     const bool s = flat.type() == TypeId::String;
-    std::vector<dftracer::utils::dstd::Pair<std::string, Series>> out;
+    dftracer::utils::dstd::Vector<
+        dftracer::utils::dstd::Pair<dftracer::utils::dstd::String, Series>>
+        out;
     out.emplace_back("flat", flat.share());
     if (s) {
         out.emplace_back("view", view_of(flat));
@@ -150,9 +159,10 @@ std::vector<dftracer::utils::dstd::Pair<std::string, Series>> layouts(
     return out;
 }
 
-std::vector<std::string> cells(const Series& in) {
+dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cells(
+    const Series& in) {
     Series s = in.materialize();
-    std::vector<std::string> out;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
     for (std::int64_t i = 0; i < s.length(); ++i) {
         if (s.is_null(i)) {
             out.push_back("<null>");
@@ -160,29 +170,32 @@ std::vector<std::string> cells(const Series& in) {
         }
         switch (s.type()) {
             case TypeId::String:
-                out.push_back(std::string(s.string_at(i)));
+                out.push_back(dftracer::utils::dstd::String(s.string_at(i)));
                 break;
             case TypeId::Int64:
-                out.push_back(std::to_string(s.data<std::int64_t>()[i]));
+                out.push_back(dftracer::utils::dstd::to_string(
+                    s.data<std::int64_t>()[i]));
                 break;
             case TypeId::Float64: {
                 std::uint64_t bits;
                 std::memcpy(&bits, s.data<double>() + i, 8);
-                out.push_back(std::to_string(bits));
+                out.push_back(dftracer::utils::dstd::to_string(bits));
                 break;
             }
             default:
-                out.push_back(std::to_string(
+                out.push_back(dftracer::utils::dstd::to_string(
                     (s.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1));
         }
     }
     return out;
 }
 
-std::vector<std::string> frame_cells(const DataFrame& df) {
-    std::vector<std::string> out;
+dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> frame_cells(
+    const DataFrame& df) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
     for (const Series& c : df.columns)
-        for (const std::string& x : cells(c)) out.push_back(x);
+        for (const dftracer::utils::dstd::String& x : cells(c))
+            out.push_back(x);
     return out;
 }
 
@@ -251,10 +264,16 @@ TEST_SUITE("distinct on ids") {
                 df.names.push_back(NAMES[c]);
                 df.columns.push_back(std::move(pick));
             }
-            for (const std::vector<std::string>& subset :
-                 {std::vector<std::string>{}, std::vector<std::string>{"s"},
-                  std::vector<std::string>{"i", "b"},
-                  std::vector<std::string>{"f", "s"}}) {
+            for (const dftracer::utils::dstd::Vector<
+                     dftracer::utils::dstd::String>& subset :
+                 {dftracer::utils::dstd::Vector<
+                      dftracer::utils::dstd::String>{},
+                  dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                      "s"},
+                  dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                      "i", "b"},
+                  dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                      "f", "s"}}) {
                 CAPTURE(variant);
                 CAPTURE(subset.size());
                 const DataFrame got = df.unique(subset);
@@ -277,9 +296,9 @@ TEST_SUITE("distinct on ids") {
     }
 
     TEST_CASE("float unique keeps every NaN row and the sorted order") {
-        std::vector<double> v{std::nan(""), std::nan(""), 1.0, 0.0,
-                              -0.0,         7.0,          5.0};
-        std::vector<std::uint8_t> valid{0b0111111};
+        dftracer::utils::dstd::Vector<double> v{
+            std::nan(""), std::nan(""), 1.0, 0.0, -0.0, 7.0, 5.0};
+        dftracer::utils::dstd::Vector<std::uint8_t> valid{0b0111111};
         Series s = Series::flat(TypeId::Float64, v.data(), 7, valid.data());
         Series u = s.unique();
         REQUIRE(u.length() == 5);

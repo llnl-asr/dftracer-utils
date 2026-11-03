@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstring>
 #include <limits>
 #include <stdexcept>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -183,7 +184,7 @@ void ViewBuilder::append_column(const dftu_series& col) {
         const std::size_t entries_at = views_.size();
         append_column(*col.child());
         const std::size_t entries = views_.size() - entries_at;
-        const std::vector<std::uint8_t> entry_views(
+        const dstd::Vector<std::uint8_t> entry_views(
             views_.begin() + static_cast<std::ptrdiff_t>(entries_at),
             views_.end());
         views_.resize(entries_at +
@@ -210,7 +211,7 @@ void ViewBuilder::append_column(const dftu_series& col) {
     }
     const std::int64_t n = col.length;
     if (n == 0) return;
-    std::vector<std::int32_t> remap;
+    dstd::Vector<std::int32_t> remap;
     if (col.blobs) {
         remap.reserve(col.blobs->size());
         for (const auto& b : *col.blobs) remap.push_back(add_buffer(b));
@@ -243,10 +244,11 @@ Series ViewBuilder::finish(TypeId type, bool json) {
     out->set_json(json);
     out->encoding = Encoding::View;
     out->length = n;
-    auto bytes = std::make_shared<std::vector<std::uint8_t>>(std::move(views_));
+    auto bytes =
+        dstd::make_shared<dstd::Vector<std::uint8_t>>(std::move(views_));
     out->data = borrow_buffer(bytes->data(), bytes->size(), bytes);
     out->blobs =
-        std::make_shared<const std::vector<BufferView>>(std::move(buffers_));
+        dstd::make_shared<const dstd::Vector<BufferView>>(std::move(buffers_));
     if (!null_rows_.empty()) {
         out->validity = new_buffer(static_cast<std::size_t>((n + 7) / 8));
         std::memset(writable(out->validity), 0xFF, out->validity.size());

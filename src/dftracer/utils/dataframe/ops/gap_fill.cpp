@@ -4,6 +4,8 @@
 #include <dftracer/utils/dataframe/ops/ops_common.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <stdexcept>
@@ -38,10 +40,10 @@ std::int64_t floor_index(std::int64_t t, std::int64_t width) {
 }
 
 // `values` narrowed to the integer type `type`.
-Series integer_column(TypeId type, const std::vector<std::int64_t>& values) {
+Series integer_column(TypeId type, const dstd::Vector<std::int64_t>& values) {
     const auto n = static_cast<std::int64_t>(values.size());
     auto narrow = [&]<class T>() {
-        std::vector<T> out(values.size());
+        dstd::Vector<T> out(values.size());
         for (std::size_t i = 0; i < values.size(); ++i)
             out[i] = static_cast<T>(values[i]);
         return Series::flat(type, out.data(), n);
@@ -75,9 +77,9 @@ struct Real {
 }  // namespace
 
 DataFrame gap_fill(
-    const DataFrame& df, const std::vector<std::string>& partition_by,
-    const std::string& time, std::int64_t bucket,
-    const std::vector<std::string>& values, GapFillMode mode,
+    const DataFrame& df, const dstd::Vector<dstd::String>& partition_by,
+    const dstd::String& time, std::int64_t bucket,
+    const dstd::Vector<dstd::String>& values, GapFillMode mode,
     dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> range) {
     if (bucket <= 0)
         throw std::invalid_argument("gap_fill: bucket_width must be positive");
@@ -85,11 +87,11 @@ DataFrame gap_fill(
     const TypeId time_type = df.columns[time_at].type();
     if (!is_integer_time(time_type))
         throw std::invalid_argument("gap_fill: time column must be integer");
-    std::vector<std::size_t> part_at;
-    std::vector<std::size_t> value_at;
-    for (const std::string& n : partition_by)
+    dstd::Vector<std::size_t> part_at;
+    dstd::Vector<std::size_t> value_at;
+    for (const dstd::String& n : partition_by)
         part_at.push_back(ops::column_named(df, n, "gap_fill"));
-    for (const std::string& n : values) {
+    for (const dstd::String& n : values) {
         const std::size_t at = ops::column_named(df, n, "gap_fill");
         if (mode == GapFillMode::Linear &&
             value_domain(df.columns[at].type()) != ValueDomain::Numeric)
@@ -98,12 +100,12 @@ DataFrame gap_fill(
         value_at.push_back(at);
     }
 
-    const std::vector<ColumnView> parts =
+    const dstd::Vector<ColumnView> parts =
         ops::views_of(df, partition_by, "gap_fill");
-    std::vector<ColumnView> keys = parts;
+    dstd::Vector<ColumnView> keys = parts;
     keys.emplace_back(df.columns[time_at]);
     const ColumnView& times = keys.back();
-    std::vector<ColumnView> linear;
+    dstd::Vector<ColumnView> linear;
     if (mode == GapFillMode::Linear)
         for (const std::size_t at : value_at)
             linear.emplace_back(df.columns[at]);
@@ -114,18 +116,18 @@ DataFrame gap_fill(
     };
 
     const std::int64_t n = df.num_rows();
-    const std::vector<std::int64_t> order = order_rows(keys, n);
+    const dstd::Vector<std::int64_t> order = order_rows(keys, n);
 
     // Per output row: its own row (-1 generated), its partition's row, the
     // last real row before it (Locf) and its time.
-    std::vector<std::int64_t> src;
-    std::vector<std::int64_t> part_src;
-    std::vector<std::int64_t> carried;
-    std::vector<std::int64_t> time_out;
-    std::vector<std::vector<double>> lin_value(linear.size());
-    std::vector<std::vector<std::uint8_t>> lin_valid(linear.size());
+    dstd::Vector<std::int64_t> src;
+    dstd::Vector<std::int64_t> part_src;
+    dstd::Vector<std::int64_t> carried;
+    dstd::Vector<std::int64_t> time_out;
+    dstd::Vector<dstd::Vector<double>> lin_value(linear.size());
+    dstd::Vector<dstd::Vector<std::uint8_t>> lin_valid(linear.size());
 
-    std::vector<Real> reals;
+    dstd::Vector<Real> reals;
     for (std::int64_t p = 0; p < n;) {
         const std::int64_t q = parts.empty() ? n : run_end(parts, order, p);
         reals.clear();
@@ -230,7 +232,7 @@ DataFrame gap_fill(
             out.columns.push_back(col.take(carried));
         } else if (mode == GapFillMode::Linear) {
             const auto at = static_cast<std::size_t>(v - value_at.begin());
-            std::vector<std::uint8_t> bits =
+            dstd::Vector<std::uint8_t> bits =
                 ops::valid_bits(lin_value[at].size());
             for (std::size_t i = 0; i < lin_valid[at].size(); ++i)
                 if (!lin_valid[at][i]) ops::set_null(bits, i);

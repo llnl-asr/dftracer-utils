@@ -6,12 +6,11 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstdint>
 #include <memory>
-#include <string_view>
-#include <vector>
 
 struct dftu_series;
 
@@ -63,10 +62,10 @@ class ViewBuilder {
     void append_flat(const dftu_series& col, std::int64_t row);
     void append_view_row(const dftu_series& col, std::int64_t row);
 
-    std::vector<std::uint8_t> views_;
-    std::vector<BufferView> buffers_;
+    dstd::Vector<std::uint8_t> views_;
+    dstd::Vector<BufferView> buffers_;
     ankerl::unordered_dense::map<const std::uint8_t*, std::int32_t> index_of_;
-    std::vector<std::int64_t> null_rows_;
+    dstd::Vector<std::int64_t> null_rows_;
     const std::uint8_t* last_data_ = nullptr;
     std::int32_t last_index_ = 0;
 };

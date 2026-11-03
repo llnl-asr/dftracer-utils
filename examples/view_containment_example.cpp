@@ -30,7 +30,8 @@ int main(int argc, char** argv) {
     const df::DataFrame& ct = both.call_tree;
     std::printf("call_tree: %lld events (columns: ",
                 static_cast<long long>(ct.num_rows()));
-    for (const std::string& n : ct.names) std::printf("%s ", n.c_str());
+    for (const dftracer::utils::dstd::String& n : ct.names)
+        std::printf("%s ", n.c_str());
     std::printf(")\n");
 
     // Flamegraph: events folded by root-to-node name path.

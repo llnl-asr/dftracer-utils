@@ -36,12 +36,8 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
         return nullptr;
     }
 
-    // keep std: parse_str_list fills a std::vector<std::string>
-    std::vector<std::string> parsed_paths;
-    if (!parse_str_list(paths_obj, "paths", parsed_paths)) return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
-    paths.reserve(parsed_paths.size());
-    for (const auto& p : parsed_paths) paths.emplace_back(p);
+    if (!parse_str_list(paths_obj, "paths", paths)) return nullptr;
 
     // Get runtime
     Runtime* runtime = nullptr;

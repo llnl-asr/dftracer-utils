@@ -361,9 +361,7 @@ struct ValueCol {
 };
 
 dstd::Vector<ValueCol> value_cols(
-    const ViewPlan& plan,
-    // keep std: lowered value names are a std::vector<std::string>
-    const std::vector<std::string>& value_names) {
+    const ViewPlan& plan, const dstd::Vector<dstd::String>& value_names) {
     dstd::Vector<ValueCol> out;
     for (std::size_t vc = 0; vc < value_names.size(); ++vc) {
         dstd::String base = agg_value_base_field(value_names[vc]);
@@ -661,11 +659,8 @@ class Seeder {
     }
 
     // A file key of a row without a file hash is null, as a scan keys it.
-    void keys_of(const AggKey& key,
-                 // keep std: agg_seed_group takes std::vectors
-                 std::vector<std::string>& out,
-                 // keep std: the dataframe API takes std::vector<bool>
-                 std::vector<bool>& nulls) const {
+    void keys_of(const AggKey& key, dstd::Vector<dstd::String>& out,
+                 dstd::Vector<bool>& nulls) const {
         out.clear();
         nulls.clear();
         if (has_bucket_) {
@@ -686,12 +681,10 @@ class Seeder {
         }
     }
 
-    // keep std: agg_seed_group takes std::vectors
-    void seed(dataframe::AggState& state, const std::vector<std::string>& keys,
-              // keep std: the dataframe API takes std::vector<bool>
-              const std::vector<bool>& nulls, const agg::AggPartial& p) {
-        // keep std: agg_seed_group takes std::vectors
-        std::vector<dataframe::AggSeedValue> values;
+    void seed(dataframe::AggState& state,
+              const dstd::Vector<dstd::String>& keys,
+              const dstd::Vector<bool>& nulls, const agg::AggPartial& p) {
+        dstd::Vector<dataframe::AggSeedValue> values;
         values.reserve(cols_.size());
         for (std::size_t i = 0; i < cols_.size(); ++i) {
             dataframe::AggSeedValue v;
@@ -813,10 +806,8 @@ dataframe::AggStatePtr seed_rows_of(const ViewPlan& plan,
                                     const AggQueryResult::Rows& rows) {
     Seeder seeder(plan, keys, extra, quantiles, texts);
     auto state = seeder.new_state();
-    // keep std: agg_seed_group takes std::vectors
-    std::vector<std::string> texts_of_row;
-    // keep std: the dataframe API takes std::vector<bool>
-    std::vector<bool> nulls;
+    dstd::Vector<dstd::String> texts_of_row;
+    dstd::Vector<bool> nulls;
     const bool events_only = plan.phase == Phase::Events;
     for (const auto& [key, partial] : rows) {
         if (events_only && key.kind != AggKind::Event) continue;
@@ -911,10 +902,8 @@ coro::CoroTask<bool> partials_collect_typed(
                   result.strings());
     auto events = seeder.new_state();
     auto profiles = seeder.new_state();
-    // keep std: agg_seed_group takes std::vectors
-    std::vector<std::string> keys;
-    // keep std: the dataframe API takes std::vector<bool>
-    std::vector<bool> nulls;
+    dstd::Vector<dstd::String> keys;
+    dstd::Vector<bool> nulls;
     dstd::String joined;
     for (const auto& [key, partial] : result.rows) {
         if (key.kind == AggKind::System) continue;

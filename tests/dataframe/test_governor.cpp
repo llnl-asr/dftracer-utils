@@ -9,11 +9,14 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
@@ -27,11 +30,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <set>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -88,7 +88,7 @@ class Hooked : public Source {
 
     ScanResult scan(const ScanRequest& req) const override {
         ScanResult r;
-        r.cursor = std::make_unique<Rows>(morsels_, rows_, hook_);
+        r.cursor = dstd::make_unique<Rows>(morsels_, rows_, hook_);
         r.filters.assign(req.filters.size(), Pushed::No);
         return r;
     }
@@ -96,7 +96,7 @@ class Hooked : public Source {
     DataFrame whole() const {
         DataFrame f;
         f.names = {"k", "v", "p"};
-        std::vector<std::int64_t> k, v, p;
+        dstd::Vector<std::int64_t> k, v, p;
         for (std::int64_t i = 0; i < morsels_ * rows_; ++i) {
             k.push_back(key_of(i));
             v.push_back(i);
@@ -117,7 +117,7 @@ class Hooked : public Source {
         coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
             if (at_ >= morsels_) co_return dstd::nullopt;
             if (hook_) hook_(at_);
-            std::vector<std::int64_t> k(static_cast<std::size_t>(rows_)),
+            dstd::Vector<std::int64_t> k(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_)),
                 p(static_cast<std::size_t>(rows_));
             for (std::int64_t i = 0; i < rows_; ++i) {
@@ -146,13 +146,13 @@ class Hooked : public Source {
     bool typed_;
 };
 
-std::vector<std::int64_t> ints(const DataFrame& f, const std::string& name) {
+dstd::Vector<std::int64_t> ints(const DataFrame& f, const dstd::String& name) {
     const auto it = std::find(f.names.begin(), f.names.end(), name);
     REQUIRE(it != f.names.end());
     const Series c =
         f.columns[static_cast<std::size_t>(it - f.names.begin())].materialize();
     const std::int64_t* p = c.data<std::int64_t>();
-    return std::vector<std::int64_t>(p, p + c.length());
+    return dstd::Vector<std::int64_t>(p, p + c.length());
 }
 
 bool ends_with(dstd::StringView s, dstd::StringView tail) {
@@ -160,8 +160,8 @@ bool ends_with(dstd::StringView s, dstd::StringView tail) {
 }
 
 // The open pools whose path ends in `tail`.
-std::vector<memory::PoolStats> pools_named(dstd::StringView tail) {
-    std::vector<memory::PoolStats> out;
+dstd::Vector<memory::PoolStats> pools_named(dstd::StringView tail) {
+    dstd::Vector<memory::PoolStats> out;
     for (memory::PoolStats& p : memory::pool_stats())
         if (ends_with(p.path, tail)) out.push_back(std::move(p));
     return out;
@@ -182,12 +182,12 @@ memory::Status hog(std::size_t bytes) {
 }
 
 // Every row of `f` as one line of its cells, in order or sorted.
-std::vector<std::string> rows_of(const DataFrame& f, bool sorted) {
-    std::vector<std::string> out(static_cast<std::size_t>(f.num_rows()));
+dstd::Vector<dstd::String> rows_of(const DataFrame& f, bool sorted) {
+    dstd::Vector<dstd::String> out(static_cast<std::size_t>(f.num_rows()));
     for (const Series& c : f.columns)
         for (std::int64_t i = 0; i < f.num_rows(); ++i)
             out[static_cast<std::size_t>(i)] +=
-                (c.is_null(i) ? std::string("null") : cell_to_string(c, i)) +
+                (c.is_null(i) ? dstd::String("null") : cell_to_string(c, i)) +
                 "|";
     if (sorted) std::sort(out.begin(), out.end());
     return out;
@@ -217,17 +217,17 @@ struct Asked {
 // smallest one later.
 Asked run_asked(const Plan& plan, dstd::StringView tail, bool typed = true) {
     Asked r;
-    r.plain = plan(LazyFrame::scan(
-                       std::make_shared<Hooked>(MORSELS, ROWS, nullptr, typed)))
+    r.plain = plan(LazyFrame::scan(dstd::make_shared<Hooked>(MORSELS, ROWS,
+                                                             nullptr, typed)))
                   .memory_budget(LAZY_BUDGET)
                   .collect()
                   .get();
     std::uint16_t id = 0;
-    auto source = std::make_shared<Hooked>(
+    auto source = dstd::make_shared<Hooked>(
         MORSELS, ROWS,
         [&](std::int64_t i) {
             if (i == ASK_AT) {
-                const std::vector<memory::PoolStats> pools = pools_named(tail);
+                const dstd::Vector<memory::PoolStats> pools = pools_named(tail);
                 REQUIRE(pools.size() == 1);
                 id = pools.front().id;
                 r.before = pools.front().reserved;
@@ -249,7 +249,7 @@ Asked run_asked(const Plan& plan, dstd::StringView tail, bool typed = true) {
 LazyFrame window_lag(const LazyFrame& plan) {
     const char* part[] = {"p"};
     const char* order[] = {"v"};
-    std::vector<dftu_window_spec> specs(1);
+    dstd::Vector<dftu_window_spec> specs(1);
     specs[0] = dftu_window_spec{};
     specs[0].func = DFTU_WINDOW_LAG;
     specs[0].value = "k";
@@ -257,7 +257,7 @@ LazyFrame window_lag(const LazyFrame& plan) {
     specs[0].param.offset = 1;
     OpArgs args;
     args.strlist(1, part, 1).strlist(2, order, 1).winlist(3, specs);
-    std::vector<std::string> names = plan.schema();
+    dstd::Vector<dstd::String> names = plan.schema();
     names.emplace_back("lag_k");
     return plan.frame_op("dftu.frame.window", args, {}, std::move(names));
 }
@@ -270,9 +270,9 @@ TEST_CASE("a request posted to a sort makes it spill at the next morsel") {
     std::size_t before = 0;
     std::size_t after = SIZE_MAX;
     memory::Status asked = memory::Status::Ok;
-    auto source = std::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
+    auto source = dstd::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
         if (i == ASK_AT) {
-            const std::vector<memory::PoolStats> sorts =
+            const dstd::Vector<memory::PoolStats> sorts =
                 pools_named("query/sort");
             REQUIRE(sorts.size() == 1);
             sort_pool = sorts.front().id;
@@ -300,9 +300,9 @@ TEST_CASE("a request posted to a group by makes it spill at the next morsel") {
     std::size_t before = 0;
     std::size_t after = SIZE_MAX;
     memory::Status asked = memory::Status::Ok;
-    auto source = std::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
+    auto source = dstd::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
         if (i == ASK_AT) {
-            const std::vector<memory::PoolStats> groups =
+            const dstd::Vector<memory::PoolStats> groups =
                 pools_named("query/group_by");
             REQUIRE(groups.size() == 1);
             group_pool = groups.front().id;
@@ -311,7 +311,7 @@ TEST_CASE("a request posted to a group by makes it spill at the next morsel") {
         }
         if (i > ASK_AT) after = std::min(after, reserved_of(group_pool));
     });
-    const std::vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};
+    const dstd::Vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};
     const DataFrame got = LazyFrame::scan(source)
                               .group_by("k", aggs)
                               .memory_budget(LAZY_BUDGET)
@@ -336,9 +336,9 @@ TEST_CASE(
     std::size_t after = SIZE_MAX;
     DataFrame second_got;
     dstd::SharedPtr<Hooked> second_source;
-    auto source = std::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
+    auto source = dstd::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
         if (i == ASK_AT) {
-            const std::vector<memory::PoolStats> sorts =
+            const dstd::Vector<memory::PoolStats> sorts =
                 pools_named("query/sort");
             REQUIRE(sorts.size() == 1);
             first_pool = sorts.front().id;
@@ -347,7 +347,7 @@ TEST_CASE(
             // morsel. Its own reservation cannot cover the shortfall, so
             // the rest is posted to the first query.
             Budget::set(memory::Manager::get().root().reserved() + BUDGET / 32);
-            second_source = std::make_shared<Hooked>(1, SECOND_ROWS, nullptr);
+            second_source = dstd::make_shared<Hooked>(1, SECOND_ROWS, nullptr);
             second_got = LazyFrame::scan(second_source)
                              .sort_by("k")
                              .memory_budget(LAZY_BUDGET)
@@ -377,9 +377,9 @@ TEST_CASE("a run's pools close and its live bytes return to zero") {
     const std::size_t adopted_before = root.adopted();
     std::size_t run_live = 0;
     std::size_t scratch = 0;
-    auto source = std::make_shared<Hooked>(16, 4096, [&](std::int64_t i) {
+    auto source = dstd::make_shared<Hooked>(16, 4096, [&](std::int64_t i) {
         if (i != 8) return;
-        const std::vector<memory::PoolStats> runs = pools_named("root/query");
+        const dstd::Vector<memory::PoolStats> runs = pools_named("root/query");
         REQUIRE(runs.size() == 1);
         run_live = runs.front().live;
         scratch = pools_named("root/query/sort").size();
@@ -435,7 +435,7 @@ TEST_CASE(
             [](LazyFrame lf) {
                 // The request lands on the left side's state, so a small
                 // right side keeps the check and the run short.
-                return lf.compare_agg(LazyFrame::scan(std::make_shared<Hooked>(
+                return lf.compare_agg(LazyFrame::scan(dstd::make_shared<Hooked>(
                                           4, ROWS, nullptr, false)),
                                       1);
             },
@@ -456,7 +456,7 @@ TEST_CASE("a request posted to a join's build side turns it to grace") {
     Budget budget(BUDGET);
     DataFrame left;
     left.names = {"k", "w"};
-    std::vector<std::int64_t> k, w;
+    dstd::Vector<std::int64_t> k, w;
     for (std::int64_t i = 0; i < KEYS / 5; ++i) {
         k.push_back(i * 5);
         w.push_back(i);
@@ -479,7 +479,7 @@ TEST_CASE("unique and head_by keep their results when a grow is refused") {
     // the in-memory path opens none.
     const dftracer::utils::dstd::Path dir =
         dftracer::utils::dstd::fs::temp_directory() /
-        ("dftu_governor_" + std::to_string(::getpid()));
+        ("dftu_governor_" + dstd::to_string(::getpid()));
     dftracer::utils::dstd::fs::remove_all(dir).has_value();
     dftracer::utils::dstd::fs::create_directories(dir).has_value();
     ::setenv("DFTRACER_UTILS_SPILL_DIR", dir.c_str(), 1);
@@ -493,7 +493,7 @@ TEST_CASE("unique and head_by keep their results when a grow is refused") {
     };
     auto run = [&](const Plan& plan, std::size_t& seen) {
         auto source =
-            std::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
+            dstd::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
                 if (i == MORSELS - 1) seen = entries();
             });
         return plan(LazyFrame::scan(source))
@@ -527,8 +527,8 @@ TEST_CASE("a spool spilled on request replays every morsel in order") {
     spill::Spool spool(LAZY_BUDGET);
     std::uint64_t bytes = 0;
     auto add = [&](std::int64_t first) {
-        std::vector<std::int64_t> v{first, first + 1};
-        std::vector<Series> cols;
+        dstd::Vector<std::int64_t> v{first, first + 1};
+        dstd::Vector<Series> cols;
         cols.push_back(Series::flat_i64(v.data(), 2));
         bytes += spill::columns_bytes(cols);
         spool.add(std::move(cols), 2);
@@ -544,8 +544,8 @@ TEST_CASE("a spool spilled on request replays every morsel in order") {
     add(8);
     CHECK(spool.spill() == 0);
 
-    auto values = [](std::unique_ptr<Cursor> c) {
-        std::vector<std::int64_t> out;
+    auto values = [](dstd::UniquePtr<Cursor> c) {
+        dstd::Vector<std::int64_t> out;
         for (;;) {
             auto m = c->next(16).get();
             if (!m) break;
@@ -555,9 +555,9 @@ TEST_CASE("a spool spilled on request replays every morsel in order") {
         return out;
     };
     CHECK(values(spool.reader()) ==
-          std::vector<std::int64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+          dstd::Vector<std::int64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
     CHECK(values(spool.reverse_reader()) ==
-          std::vector<std::int64_t>{8, 9, 6, 7, 4, 5, 2, 3, 0, 1});
+          dstd::Vector<std::int64_t>{8, 9, 6, 7, 4, 5, 2, 3, 0, 1});
 }
 
 namespace {
@@ -569,7 +569,7 @@ struct Held {
 
 // The largest live and reserved bytes of the pool ending in `tail` after the
 // first output morsel, streaming the plan to its end.
-coro::CoroTask<Held> held_while_streaming(LazyFrame lf, std::string tail) {
+coro::CoroTask<Held> held_while_streaming(LazyFrame lf, dstd::String tail) {
     Held held;
     auto g = lf.stream(4096);
     bool first = true;
@@ -588,13 +588,13 @@ coro::CoroTask<Held> held_while_streaming(LazyFrame lf, std::string tail) {
 
 TEST_CASE("unique and is_duplicated keep their tables in their own pool") {
     for (const auto& [plan, tail] :
-         {dstd::Pair<Plan, std::string>{
+         {dstd::Pair<Plan, dstd::String>{
               [](LazyFrame lf) { return lf.unique({"k"}); }, "query/unique"},
-          dstd::Pair<Plan, std::string>{
+          dstd::Pair<Plan, dstd::String>{
               [](LazyFrame lf) { return lf.select({"k"}).is_duplicated(); },
               "query/is_duplicated"}}) {
         CAPTURE(tail);
-        const LazyFrame lf = plan(LazyFrame::scan(std::make_shared<Hooked>(
+        const LazyFrame lf = plan(LazyFrame::scan(dstd::make_shared<Hooked>(
                                       MORSELS, ROWS, nullptr)))
                                  .memory_budget(LAZY_BUDGET);
         CHECK(held_while_streaming(lf, tail).get().live > 0);
@@ -604,16 +604,16 @@ TEST_CASE("unique and is_duplicated keep their tables in their own pool") {
 }
 
 TEST_CASE("is_duplicated reserves its counts on its pool while it emits") {
-    std::set<std::int64_t> keys;
+    dstd::Set<std::int64_t> keys;
     for (std::int64_t i = 0; i < MORSELS * ROWS; ++i) keys.insert(key_of(i));
     const LazyFrame lf =
-        LazyFrame::scan(std::make_shared<Hooked>(MORSELS, ROWS, nullptr))
+        LazyFrame::scan(dstd::make_shared<Hooked>(MORSELS, ROWS, nullptr))
             .select({"k"})
             .is_duplicated()
             .memory_budget(LAZY_BUDGET);
     // One map entry is at least a key string and its count.
     const std::size_t entries =
-        keys.size() * sizeof(dstd::Pair<std::string, std::int64_t>);
+        keys.size() * sizeof(dstd::Pair<dstd::String, std::int64_t>);
     CHECK(held_while_streaming(lf, "query/is_duplicated").get().reserved >=
           entries);
     CHECK(pools_named("query/is_duplicated").empty());

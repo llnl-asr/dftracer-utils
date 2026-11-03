@@ -3,17 +3,17 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_VALUE_IDS_H
 
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
 /// Distinct-value ids of a column: `ids[i]` is the id of row `i`, assigned in
 /// first-seen row order, and `first[id]` is the first row holding it.
 struct ValueIds {
-    std::vector<std::int32_t> ids;
-    std::vector<std::int64_t> first;
+    dstd::Vector<std::int32_t> ids;
+    dstd::Vector<std::int64_t> first;
     /// The id of the null rows, -1 when there are none.
     std::int32_t null_id = -1;
 };

@@ -3,13 +3,13 @@
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <numeric>
 #include <stdexcept>
-#include <string>
 
 namespace dftracer::utils::dataframe {
 
@@ -56,8 +56,9 @@ ColumnView::ColumnView(const Series& column)
     type_ = column_.type();
     const auto kind = kind_of(type_);
     if (!kind)
-        throw std::invalid_argument(std::string("column type '") +
-                                    type_name(type_) + "' has no order");
+        throw std::invalid_argument((dstd::String("column type '") +
+                                     type_name(type_) + "' has no order")
+                                        .c_str());
     kind_ = *kind;
     physical_ = physical_type(type_);
     const dftu_series& h = *column_.handle();
@@ -162,9 +163,9 @@ int ColumnView::compare(std::int64_t a, const ColumnView& other,
     }
 }
 
-std::vector<std::int64_t> order_rows(const std::vector<ColumnView>& keys,
-                                     std::int64_t n) {
-    std::vector<std::int64_t> order(static_cast<std::size_t>(n));
+dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnView>& keys,
+                                      std::int64_t n) {
+    dstd::Vector<std::int64_t> order(static_cast<std::size_t>(n));
     std::iota(order.begin(), order.end(), 0);
     if (keys.empty()) return order;
     std::sort(order.begin(), order.end(), [&](std::int64_t a, std::int64_t b) {
@@ -183,7 +184,7 @@ std::vector<std::int64_t> order_rows(const std::vector<ColumnView>& keys,
     return order;
 }
 
-bool same_keys(const std::vector<ColumnView>& keys, std::int64_t a,
+bool same_keys(const dstd::Vector<ColumnView>& keys, std::int64_t a,
                std::int64_t b) {
     for (const ColumnView& k : keys) {
         const bool na = k.is_null(a);
@@ -194,8 +195,8 @@ bool same_keys(const std::vector<ColumnView>& keys, std::int64_t a,
     return true;
 }
 
-std::int64_t run_end(const std::vector<ColumnView>& keys,
-                     const std::vector<std::int64_t>& order,
+std::int64_t run_end(const dstd::Vector<ColumnView>& keys,
+                     const dstd::Vector<std::int64_t>& order,
                      std::int64_t begin) {
     const auto n = static_cast<std::int64_t>(order.size());
     const std::int64_t rep = order[static_cast<std::size_t>(begin)];

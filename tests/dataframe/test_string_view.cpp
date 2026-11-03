@@ -13,31 +13,31 @@
 #include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <optional>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
-using Row = dftracer::utils::dstd::Optional<std::string>;
-using Rows = std::vector<Row>;
+using Row = dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>;
+using Rows = dftracer::utils::dstd::Vector<Row>;
 
 constexpr std::int32_t INLINE_MAX = 12;
 
 struct Owner {
-    std::vector<std::uint8_t> views;
-    std::vector<std::string> blobs;
-    std::vector<std::uint8_t> validity;
+    dftracer::utils::dstd::Vector<std::uint8_t> views;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> blobs;
+    dftracer::utils::dstd::Vector<std::uint8_t> validity;
     int* released = nullptr;
 };
 
@@ -47,8 +47,8 @@ void on_release(void* ctx) {
     delete o;
 }
 
-void put_view(std::uint8_t* v, const std::string& s, std::int32_t index,
-              std::int32_t offset) {
+void put_view(std::uint8_t* v, const dftracer::utils::dstd::String& s,
+              std::int32_t index, std::int32_t offset) {
     const auto size = static_cast<std::int32_t>(s.size());
     std::memset(v, 0, 16);
     std::memcpy(v, &size, 4);
@@ -62,10 +62,11 @@ void put_view(std::uint8_t* v, const std::string& s, std::int32_t index,
 }
 
 // Long values go to blob (i % 2), so two buffers are in use.
-std::unique_ptr<Owner> build_owner(const Rows& rows, int* released) {
-    auto o = std::make_unique<Owner>();
+dftracer::utils::dstd::UniquePtr<Owner> build_owner(const Rows& rows,
+                                                    int* released) {
+    auto o = dftracer::utils::dstd::make_unique<Owner>();
     o->released = released;
-    o->blobs.assign(2, std::string());
+    o->blobs.assign(2, dftracer::utils::dstd::String());
     o->views.assign(rows.size() * 16, 0);
     bool any_null = false;
     o->validity.assign((rows.size() + 7) / 8, 0);
@@ -75,7 +76,7 @@ std::unique_ptr<Owner> build_owner(const Rows& rows, int* released) {
             continue;
         }
         o->validity[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        const std::string& s = *rows[i];
+        const dftracer::utils::dstd::String& s = *rows[i];
         std::int32_t offset = 0;
         const std::int32_t index = static_cast<std::int32_t>(i % 2);
         if (s.size() > static_cast<std::size_t>(INLINE_MAX)) {
@@ -110,8 +111,8 @@ Series make_view(const Rows& rows, int* released) {
 }
 
 Series make_flat(const Rows& rows) {
-    std::vector<dftracer::utils::dstd::StringView> v;
-    std::vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> v;
+    dftracer::utils::dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
         v.emplace_back(rows[i] ? dftracer::utils::dstd::StringView(*rows[i])
@@ -127,13 +128,15 @@ Series make_flat(const Rows& rows) {
 Rows rows_of(const Series& s) {
     Rows out;
     for (std::int64_t i = 0; i < s.length(); ++i)
-        out.push_back(s.is_null(i) ? Row() : Row(std::string(s.string_at(i))));
+        out.push_back(s.is_null(i)
+                          ? Row()
+                          : Row(dftracer::utils::dstd::String(s.string_at(i))));
     return out;
 }
 
-std::vector<int> bits_of(const Series& mask) {
+dftracer::utils::dstd::Vector<int> bits_of(const Series& mask) {
     const Series m = mask.materialize();
-    std::vector<int> out;
+    dftracer::utils::dstd::Vector<int> out;
     for (std::int64_t i = 0; i < m.length(); ++i) {
         if (m.is_null(i))
             out.push_back(2);
@@ -196,7 +199,7 @@ TEST_SUITE("string view") {
     }
 
     TEST_CASE("the constructor rejects a bad column and releases once") {
-        const std::string blob(40, 'q');
+        const dftracer::utils::dstd::String blob(40, 'q');
         std::uint8_t view[16];
         const void* bufs[1] = {blob.data()};
         const std::int64_t sizes[1] = {40};
@@ -298,15 +301,17 @@ TEST_SUITE("string view") {
         d->length = 5;
         d->data = new_buffer(sizeof(codes));
         std::memcpy(writable(d->data), codes, sizeof(codes));
-        d->set_child(std::make_shared<dftu_series>(*base.handle()));
+        d->set_child(
+            dftracer::utils::dstd::make_shared<dftu_series>(*base.handle()));
         Series dict{d};
         const Rows expected = {values[1], values[0], values[2], values[1],
                                values[1]};
         CHECK(rows_of(dict) == expected);
         CHECK(rows_of(dict.materialize()) == expected);
         CHECK(bits_of(dict.str_contains("long")) ==
-              std::vector<int>{1, 0, 0, 1, 1});
-        CHECK(bits_of(dict.str_eq("pear")) == std::vector<int>{0, 0, 1, 0, 0});
+              dftracer::utils::dstd::Vector<int>{1, 0, 0, 1, 1});
+        CHECK(bits_of(dict.str_eq("pear")) ==
+              dftracer::utils::dstd::Vector<int>{0, 0, 1, 0, 0});
     }
 
     TEST_CASE("normalize, translate and wrap read a view and a dictionary") {
@@ -322,7 +327,8 @@ TEST_SUITE("string view") {
         d->length = 5;
         d->data = new_buffer(sizeof(codes));
         std::memcpy(writable(d->data), codes, sizeof(codes));
-        d->set_child(std::make_shared<dftu_series>(*view.handle()));
+        d->set_child(
+            dftracer::utils::dstd::make_shared<dftu_series>(*view.handle()));
         const Series dict{d};
         const Series from = Series::strings({"a", "\xC3\xA9"});
         const Series to = Series::strings({"A", "e"});
@@ -350,7 +356,8 @@ TEST_SUITE("string view") {
         s->length = 4;
         s->data = new_buffer(sizeof(idx));
         std::memcpy(writable(s->data), idx, sizeof(idx));
-        s->set_child(std::make_shared<dftu_series>(*base.handle()));
+        s->set_child(
+            dftracer::utils::dstd::make_shared<dftu_series>(*base.handle()));
         Series sel{s};
         const Rows expected = {SAMPLE[8], Row(), SAMPLE[3], SAMPLE[1]};
         CHECK(rows_of(sel) == expected);
@@ -391,9 +398,11 @@ TEST_SUITE("string view kernels match the flat column") {
               bits_of(p.flat.str_eq("exactly13byte")));
         const Series mask = p.flat.str_contains("e");
         CHECK(rows_of(p.view.filter(mask)) == rows_of(p.flat.filter(mask)));
-        const std::vector<std::int64_t> idx = {9, 1, 2, 2, 0, 8};
+        const dftracer::utils::dstd::Vector<std::int64_t> idx = {9, 1, 2,
+                                                                 2, 0, 8};
         CHECK(rows_of(p.view.take(idx)) == rows_of(p.flat.take(idx)));
-        const std::vector<std::int64_t> with_null = {3, -1, 1};
+        const dftracer::utils::dstd::Vector<std::int64_t> with_null = {3, -1,
+                                                                       1};
         CHECK(rows_of(p.view.take(with_null)) ==
               rows_of(p.flat.take(with_null)));
     }
@@ -402,7 +411,7 @@ TEST_SUITE("string view kernels match the flat column") {
         Pair p;
         CHECK(rows_of(p.view.sort()) == rows_of(p.flat.sort()));
         CHECK(rows_of(p.view.sort(true)) == rows_of(p.flat.sort(true)));
-        std::vector<std::int64_t> order;
+        dftracer::utils::dstd::Vector<std::int64_t> order;
         const Series a = p.view.argsort();
         for (std::int64_t i = 0; i < a.length(); ++i)
             order.push_back(a.data<std::int64_t>()[i]);
@@ -413,7 +422,7 @@ TEST_SUITE("string view kernels match the flat column") {
 
     TEST_CASE("group_by count and join on the string key") {
         Pair p;
-        std::vector<std::int64_t> v(10);
+        dftracer::utils::dstd::Vector<std::int64_t> v(10);
         for (std::int64_t i = 0; i < 10; ++i)
             v[static_cast<std::size_t>(i)] = i;
         auto frame = [&](const Series& key) {
@@ -424,10 +433,13 @@ TEST_SUITE("string view kernels match the flat column") {
             return f;
         };
         auto counts = [&](const Series& key) {
-            DataFrame g = frame(key).group_by(std::string("k"),
-                                              {GroupAgg{Agg::Count, "v", "n"}});
+            DataFrame g =
+                frame(key).group_by(dftracer::utils::dstd::String("k"),
+                                    {GroupAgg{Agg::Count, "v", "n"}});
             g = g.sort_by("k");
-            std::vector<dftracer::utils::dstd::Pair<Row, std::int64_t>> out;
+            dftracer::utils::dstd::Vector<
+                dftracer::utils::dstd::Pair<Row, std::int64_t>>
+                out;
             const Series k = g.column("k");
             const Series n = g.column("n").materialize();
             for (std::int64_t i = 0; i < g.num_rows(); ++i)
@@ -488,14 +500,14 @@ TEST_SUITE("string view writers") {
     TEST_CASE("spill writes a view column as values") {
         int released = 0;
         const Series s = make_view(SAMPLE, &released);
-        std::string bytes;
+        dftracer::utils::dstd::String bytes;
         spill::put_series(bytes, s);
         const auto* p = reinterpret_cast<const std::uint8_t*>(bytes.data());
         const Series back = spill::get_series(p, p + bytes.size());
         REQUIRE(back.valid());
         CHECK(back.encoding() == Encoding::Flat);
         CHECK(rows_of(back) == SAMPLE);
-        std::vector<Series> cols;
+        dftracer::utils::dstd::Vector<Series> cols;
         cols.push_back(s.share());
         CHECK(spill::columns_bytes(cols) > 10 * 16);
     }
@@ -518,11 +530,13 @@ TEST_SUITE("string view writers") {
         DataFrame f;
         f.names = {"s"};
         f.columns.push_back(make_view(SAMPLE, &released));
-        std::vector<std::uint8_t> bytes;
+        dftracer::utils::dstd::Vector<std::uint8_t> bytes;
         REQUIRE_NOTHROW(bytes = f.to_ipc());
-        const std::string text(bytes.begin(), bytes.end());
-        CHECK(text.find("a value longer than twelve") != std::string::npos);
-        CHECK(text.find("zz another long value here") != std::string::npos);
+        const dftracer::utils::dstd::String text(bytes.begin(), bytes.end());
+        CHECK(text.find("a value longer than twelve") !=
+              dftracer::utils::dstd::String::npos);
+        CHECK(text.find("zz another long value here") !=
+              dftracer::utils::dstd::String::npos);
     }
 #endif
 }
@@ -535,8 +549,8 @@ Series make_large(const Rows& rows, bool binary = false) {
     w->encoding = Encoding::Flat;
     w->length = static_cast<std::int64_t>(rows.size());
     w->offsets = new_buffer((rows.size() + 1) * sizeof(std::int64_t));
-    std::string bytes;
-    std::vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
+    dftracer::utils::dstd::String bytes;
+    dftracer::utils::dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
     auto* off = reinterpret_cast<std::int64_t*>(writable(w->offsets));
     off[0] = 0;
     for (std::size_t i = 0; i < rows.size(); ++i) {
@@ -559,7 +573,7 @@ Series make_large(const Rows& rows, bool binary = false) {
 }
 
 Series make_selection(const Series& base,
-                      const std::vector<std::int64_t>& idx) {
+                      const dftracer::utils::dstd::Vector<std::int64_t>& idx) {
     auto* s = new dftu_series();
     s->type = base.type();
     s->encoding = Encoding::Selection;
@@ -567,7 +581,8 @@ Series make_selection(const Series& base,
     s->data = new_buffer(idx.size() * sizeof(std::int64_t));
     std::memcpy(writable(s->data), idx.data(),
                 idx.size() * sizeof(std::int64_t));
-    s->set_child(std::make_shared<dftu_series>(*base.handle()));
+    s->set_child(
+        dftracer::utils::dstd::make_shared<dftu_series>(*base.handle()));
     return Series{s};
 }
 
@@ -711,7 +726,7 @@ TEST_SUITE("string view concat") {
         CHECK(bin.encoding() == Encoding::View);
         CHECK(bin.length() == 6);
         CHECK(bin.null_count() == 2);
-        CHECK(std::string(bin.string_at(3)) == *rows[0]);
+        CHECK(dftracer::utils::dstd::String(bin.string_at(3)) == *rows[0]);
     }
 
     TEST_CASE("empty and single parts") {

@@ -10,8 +10,12 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -25,7 +29,6 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -77,7 +80,7 @@ class Hooked : public Source {
 
     ScanResult scan(const ScanRequest& req) const override {
         ScanResult r;
-        r.cursor = std::make_unique<Rows>(morsels_, rows_, hook_);
+        r.cursor = dstd::make_unique<Rows>(morsels_, rows_, hook_);
         r.filters.assign(req.filters.size(), Pushed::No);
         return r;
     }
@@ -90,7 +93,7 @@ class Hooked : public Source {
         coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
             if (at_ >= morsels_) co_return dstd::nullopt;
             if (hook_) hook_(at_);
-            std::vector<std::int64_t> k(static_cast<std::size_t>(rows_)),
+            dstd::Vector<std::int64_t> k(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_));
             for (std::int64_t i = 0; i < rows_; ++i) {
                 const std::int64_t row = at_ * rows_ + i;
@@ -132,7 +135,7 @@ struct SpillDirVar {
     dftracer::utils::dstd::Path dir;
     SpillDirVar() {
         dir = dftracer::utils::dstd::fs::current_path().value() /
-              ("spill_external_" + std::to_string(::getpid()));
+              ("spill_external_" + dstd::to_string(::getpid()));
         REQUIRE(dftracer::utils::dstd::fs::remove_all(dir).has_value());
         REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
         ::setenv("DFTRACER_UTILS_SPILL_DIR", dir.c_str(), 1);
@@ -148,7 +151,7 @@ struct SpillDirVar {
 TEST_CASE("spill bytes show as external") {
     SpillDirVar var;
     const bool on_disk = !dftracer::utils::common::is_memory_filesystem(
-        dftracer::utils::common::filesystem_kind(std::string(var.dir.str())));
+        dftracer::utils::common::filesystem_kind(dstd::String(var.dir.str())));
     Budget budget(GLOBAL_BUDGET);
     REQUIRE(spill_slot_bytes() == 0);
 
@@ -156,7 +159,7 @@ TEST_CASE("spill bytes show as external") {
     std::size_t stats_external = 0;
     std::size_t free_budget = 0;
     memory::Status reserved = memory::Status::SlotTableFull;
-    auto source = std::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
+    auto source = dstd::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
         if (i != LOOK_AT) return;
         seen = spill_slot_bytes();
         stats_external = memory::Manager::get().stats().external;
@@ -193,12 +196,12 @@ TEST_CASE("merged sort runs leave the spill slot before the query ends") {
     SpillDirVar var;
     REQUIRE(spill_slot_bytes() == 0);
     std::size_t before_merge = 0;
-    auto source = std::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
+    auto source = dstd::make_shared<Hooked>(MORSELS, ROWS, [&](std::int64_t i) {
         if (i == MORSELS - 1) before_merge = spill_slot_bytes();
     });
     // The small budget cuts about 64 runs and merges them four at a time, so
     // two merge passes run before the first row comes out.
-    std::unique_ptr<Cursor> cursor = LazyFrame::scan(source)
+    dstd::UniquePtr<Cursor> cursor = LazyFrame::scan(source)
                                          .sort_by("k")
                                          .memory_budget(SMALL_SORT_BUDGET)
                                          .open_cursor();

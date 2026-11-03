@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -15,12 +16,8 @@
 
 #include <cstdint>
 #include <memory>
-#include <string>
-#include <string_view>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 // The unified, name-based field entry point `F`: one expression type for both
 // index-pushable filter predicates and in-memory columnar value expressions,
@@ -59,13 +56,13 @@ enum class RhsKind : std::uint8_t { Int, Float, Str, Bool };
 
 struct FNode {
     FKind kind;
-    std::string name;            // Col / Match / In field name
+    dstd::String name;           // Col / Match / In field name
     std::int64_t ival = 0;       // LitI, or Int-rhs Cmp value
     double dval = 0.0;           // LitF, or Float-rhs Cmp value
     int op = 0;                  // Bin / Prim / Cmp / Match op code
     RhsKind rhs = RhsKind::Int;  // Cmp rhs type
     bool bval = false;           // Bool-rhs Cmp value
-    std::string str;             // Str-rhs Cmp / Match pattern
+    dstd::String str;            // Str-rhs Cmp / Match pattern
     bool negated = false;        // In: not-in
     bool in_is_string = false;   // In: string vs int element type
     dstd::Vector<std::int64_t> in_ints;
@@ -78,7 +75,7 @@ using FNodePtr = dstd::SharedPtr<const FNode>;
 
 template <typename... Fields>
 inline FNodePtr make_node(FKind kind, Fields&&... init) {
-    auto n = std::make_shared<FNode>();
+    auto n = dstd::make_shared<FNode>();
     n->kind = kind;
     (init(*n), ...);
     return n;
@@ -108,22 +105,22 @@ enum class AggFn : std::uint8_t {
 /// ArgMax, and the wildcard flag.
 class FieldAggExpr {
    public:
-    FieldAggExpr(AggFn fn, std::string field, bool wildcard = false,
-                 std::string by = "")
+    FieldAggExpr(AggFn fn, dstd::String field, bool wildcard = false,
+                 dstd::String by = "")
         : fn_(fn),
           field_(std::move(field)),
           by_(std::move(by)),
           wildcard_(wildcard) {}
 
     AggFn fn() const noexcept { return fn_; }
-    const std::string& field() const noexcept { return field_; }
-    const std::string& by() const noexcept { return by_; }
+    const dstd::String& field() const noexcept { return field_; }
+    const dstd::String& by() const noexcept { return by_; }
     bool wildcard() const noexcept { return wildcard_; }
 
    private:
     AggFn fn_;
-    std::string field_;
-    std::string by_;
+    dstd::String field_;
+    dstd::String by_;
     bool wildcard_;
 };
 
@@ -239,7 +236,7 @@ class FieldExpr {
     /// argmin: the engine's AggOp has only ArgMax.
     FieldAggExpr argmax_by(dstd::StringView by) const {
         return FieldAggExpr(AggFn::ArgMax, field_name(), false,
-                            std::string(by));
+                            dstd::String(by));
     }
 
     /// Serialize this predicate to an index-pushable duql::Query.
@@ -271,11 +268,11 @@ class FieldExpr {
     /// referenced column is absent from `df`.
     Series apply(const DataFrame& df) const {
         const detail::FNode& root = require();
-        std::vector<std::string> names;
+        dstd::Vector<dstd::String> names;
         collect_value_columns(root, names);
 
-        std::unordered_map<std::string, std::int32_t> index;
-        std::vector<Series> held;
+        dstd::HashMap<dstd::String, std::int32_t> index;
+        dstd::Vector<Series> held;
         held.reserve(names.size());
         for (std::size_t i = 0; i < names.size(); ++i) {
             std::int64_t idx = df.column_index(names[i]);
@@ -289,7 +286,7 @@ class FieldExpr {
             held.push_back(df.column(names[i]));
         }
 
-        std::vector<const Series*> inputs;
+        dstd::Vector<const Series*> inputs;
         inputs.reserve(held.size());
         for (const Series& s : held) inputs.push_back(&s);
 
@@ -325,7 +322,7 @@ class FieldExpr {
                 n.ival = static_cast<std::int64_t>(v);
             } else {
                 n.rhs = detail::RhsKind::Str;
-                n.str = std::string(std::forward<T>(v));
+                n.str = dstd::String(std::forward<T>(v));
             }
         };
         return FieldExpr(detail::make_node(detail::FKind::Cmp, init));
@@ -344,7 +341,7 @@ class FieldExpr {
             detail::make_node(detail::FKind::Match, [&](detail::FNode& n) {
                 n.op = static_cast<int>(op);
                 n.name = field_name();
-                n.str = std::string(pattern);
+                n.str = dstd::String(pattern);
             }));
     }
 
@@ -368,7 +365,7 @@ class FieldExpr {
 
     /// Bare-column name for the predicate-only ops (match/membership), which
     /// require a field leaf on the left.
-    std::string field_name() const {
+    dstd::String field_name() const {
         const detail::FNode& n = require();
         if (n.kind != detail::FKind::Col) {
             throw common::DFTUtilsException::cat(
@@ -444,11 +441,11 @@ class FieldExpr {
     }
 
     static void collect_value_columns(const detail::FNode& n,
-                                      std::vector<std::string>& out) {
+                                      dstd::Vector<dstd::String>& out) {
         using detail::FKind;
         switch (n.kind) {
             case FKind::Col:
-                for (const std::string& e : out)
+                for (const dstd::String& e : out)
                     if (e == n.name) return;
                 out.push_back(n.name);
                 return;
@@ -486,7 +483,7 @@ class FieldExpr {
 
     static Expr to_value_expr(
         const detail::FNode& n,
-        const std::unordered_map<std::string, std::int32_t>& index) {
+        const dstd::HashMap<dstd::String, std::int32_t>& index) {
         using detail::FKind;
         // Use the engine's expr_* builders explicitly: `lit` is shadowed by the
         // field-layer literal factory below, so unqualified `lit` here would be
@@ -645,7 +642,7 @@ inline FieldExpr operator!(const FieldExpr& a) {
 inline FieldExpr field(dstd::StringView name) {
     return FieldExpr(detail::make_node(
         detail::FKind::Col,
-        [&](detail::FNode& n) { n.name = std::string(name); }));
+        [&](detail::FNode& n) { n.name = dstd::String(name); }));
 }
 
 /// The numeric-args wildcard, reached as `F.any`. `mean()` aggregates every

@@ -10,13 +10,13 @@
 #include <dftracer/utils/dataframe/kernels/arithmetic.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <type_traits>
-#include <vector>
 
 // Highway runtime dispatch: foreach_target.h recompiles this TU once per ISA,
 // then HWY_DYNAMIC_DISPATCH selects the best at load time.
@@ -341,7 +341,7 @@ dftu_series* temporal_binop(const dftu_series* a, const dftu_series* b,
         return nullptr;
     }
 
-    std::vector<std::int64_t> tmp_a, tmp_b;
+    dstd::Vector<std::int64_t> tmp_a, tmp_b;
     const auto* pa = static_cast<const std::int64_t*>(
         static_cast<const void*>(a->data.data()));
     const auto* pb = static_cast<const std::int64_t*>(

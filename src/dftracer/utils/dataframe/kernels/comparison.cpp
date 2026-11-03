@@ -14,7 +14,6 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include <string_view>
 #include <type_traits>
 
 namespace dftracer::utils::dataframe {

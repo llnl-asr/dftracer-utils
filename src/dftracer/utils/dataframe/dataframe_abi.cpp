@@ -6,6 +6,9 @@
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/internal/duql_handle.h>
 #include <dftracer/utils/runtime/runtime.h>
 
@@ -15,8 +18,6 @@
 #include <cstring>
 #include <exception>
 #include <optional>
-#include <string>
-#include <vector>
 
 // The opaque dftu_dataframe handle owns a C++ DataFrame.
 struct dftu_dataframe {
@@ -60,8 +61,9 @@ dftu_lazyframe* wrap_lazy(LazyFrame&& lf) {
     return new dftu_lazyframe{std::move(lf)};
 }
 
-std::vector<std::string> key_names(const char* const* keys, int32_t n) {
-    std::vector<std::string> ks;
+dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> key_names(
+    const char* const* keys, int32_t n) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ks;
     ks.reserve(static_cast<std::size_t>(n));
     for (int32_t i = 0; i < n; ++i) ks.emplace_back(keys[i]);
     return ks;
@@ -72,7 +74,7 @@ bool group_transform_args_ok(int32_t kind, int32_t rank_method) {
            rank_method >= DFTU_RANK_AVERAGE && rank_method <= DFTU_RANK_MAX;
 }
 
-char* dup_string(const std::string& s) {
+char* dup_string(const dftracer::utils::dstd::String& s) {
     char* out = static_cast<char*>(std::malloc(s.size() + 1));
     if (!out) return nullptr;
     std::memcpy(out, s.c_str(), s.size() + 1);
@@ -101,7 +103,6 @@ dftracer::utils::dstd::Optional<dftracer::utils::dataframe::Agg> reduce_agg_of(
     case c:                     \
         agg = Agg::id;          \
         break;
-#include <dftracer/utils/dstd/optional.h>
 
 #include <dftracer/utils/dataframe/agg_ops.def>
 #undef DFTU_AGG_OP
@@ -149,7 +150,7 @@ dftu_series* dftu_dataframe_column(const dftu_dataframe* df, const char* name) {
 dftu_dataframe* dftu_dataframe_take(const dftu_dataframe* df,
                                     const int64_t* idx, int64_t n) {
     if (!df) return nullptr;
-    std::vector<std::int64_t> v(idx, idx + n);
+    dftracer::utils::dstd::Vector<std::int64_t> v(idx, idx + n);
     return wrap(df->df.take(v));
 }
 dftu_dataframe* dftu_dataframe_filter(const dftu_dataframe* df,
@@ -177,7 +178,7 @@ dftu_dataframe* dftu_dataframe_topk(const dftu_dataframe* df, const char* name,
 dftu_dataframe* dftu_dataframe_select(const dftu_dataframe* df,
                                       const char* const* names, int32_t n) {
     if (!df) return nullptr;
-    std::vector<std::string> cols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
     cols.reserve(static_cast<std::size_t>(n));
     for (int32_t i = 0; i < n; ++i) cols.emplace_back(names[i]);
     return wrap(df->df.select(cols));
@@ -185,7 +186,7 @@ dftu_dataframe* dftu_dataframe_select(const dftu_dataframe* df,
 dftu_dataframe* dftu_dataframe_rename(const dftu_dataframe* df,
                                       const char* const* new_names, int32_t n) {
     if (!df) return nullptr;
-    std::vector<std::string> names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
     names.reserve(static_cast<std::size_t>(n));
     for (int32_t i = 0; i < n; ++i) names.emplace_back(new_names[i]);
     return wrap(df->df.rename(names));
@@ -212,7 +213,7 @@ dftu_dataframe* dftu_dataframe_unique_by(const dftu_dataframe* df,
                                          const char* const* subset, int32_t n) {
     if (!df || !subset || n <= 0) return nullptr;
     try {
-        std::vector<std::string> cols;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
         cols.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) cols.emplace_back(subset[i]);
         return wrap(df->df.unique(cols));
@@ -229,7 +230,7 @@ dftu_dataframe* dftu_dataframe_concat(const dftu_dataframe* const* parts,
     if (n <= 0 || !parts) return nullptr;
     if (how != DFTU_CONCAT_VERTICAL && how != DFTU_CONCAT_DIAGONAL)
         return nullptr;
-    std::vector<const DataFrame*> frames;
+    dftracer::utils::dstd::Vector<const DataFrame*> frames;
     frames.reserve(static_cast<std::size_t>(n));
     for (int32_t i = 0; i < n; ++i) {
         if (!parts[i]) return nullptr;
@@ -270,7 +271,7 @@ dftu_dataframe* dftu_dataframe_sort_by_multi(const dftu_dataframe* df,
                                              const char* const* names,
                                              int32_t n, int32_t descending) {
     if (!df) return nullptr;
-    std::vector<std::string> cols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
     cols.reserve(static_cast<std::size_t>(n));
     for (int32_t i = 0; i < n; ++i) cols.emplace_back(names[i]);
     return wrap(df->df.sort_by_multi(cols, descending != 0));
@@ -281,10 +282,10 @@ dftu_dataframe* dftu_dataframe_sort_by_multi_per_col(const dftu_dataframe* df,
                                                      const int32_t* descending,
                                                      int32_t descending_n) {
     if (!df) return nullptr;
-    std::vector<std::string> cols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
     cols.reserve(static_cast<std::size_t>(n));
     for (int32_t i = 0; i < n; ++i) cols.emplace_back(names[i]);
-    std::vector<bool> desc;
+    dftracer::utils::dstd::Vector<bool> desc;
     desc.reserve(static_cast<std::size_t>(descending_n));
     for (int32_t i = 0; i < descending_n; ++i)
         desc.push_back(descending[i] != 0);
@@ -346,7 +347,7 @@ dftu_series* dftu_dataframe_partition_id(const dftu_dataframe* df,
                                          int64_t n_parts) {
     if (!df || !keys || n <= 0) return nullptr;
     try {
-        std::vector<std::string> k;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> k;
         k.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) k.emplace_back(keys[i]);
         return df->df.partition_id(k, n_parts).release();
@@ -388,7 +389,7 @@ dftu_dataframe* dftu_dataframe_unpivot(const dftu_dataframe* df,
                                        const char* const* value_vars,
                                        int32_t n_val) {
     if (!df || n_id < 0 || n_val < 0) return nullptr;
-    std::vector<std::string> ids, vals;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ids, vals;
     ids.reserve(static_cast<std::size_t>(n_id));
     vals.reserve(static_cast<std::size_t>(n_val));
     for (int32_t i = 0; i < n_id; ++i) ids.emplace_back(id_vars[i]);
@@ -443,7 +444,7 @@ dftu_dataframe* dftu_dataframe_group_by_dynamic(const dftu_dataframe* df,
                                                 int32_t n_aggs) {
     if (!df || !time_col || n_aggs < 0 || (n_aggs > 0 && !aggs)) return nullptr;
     try {
-        std::vector<dftracer::utils::dataframe::GroupAgg> v;
+        dftracer::utils::dstd::Vector<dftracer::utils::dataframe::GroupAgg> v;
         v.reserve(static_cast<std::size_t>(n_aggs));
         for (int32_t i = 0; i < n_aggs; ++i) {
             dftracer::utils::dataframe::GroupAgg a;
@@ -467,8 +468,8 @@ dftu_dataframe* dftu_dataframe_join(const dftu_dataframe* df,
     if (!df || !other || n < 0 || (n > 0 && (!left_on || !right_on)))
         return nullptr;
     try {
-        std::vector<std::string> l;
-        std::vector<std::string> r;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> l;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> r;
         l.reserve(static_cast<std::size_t>(n));
         r.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
@@ -492,10 +493,10 @@ dftu_dataframe* dftu_dataframe_group_by(const dftu_dataframe* df,
         (n_aggs > 0 && !aggs))
         return nullptr;
     try {
-        std::vector<std::string> ks;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ks;
         ks.reserve(static_cast<std::size_t>(n_keys));
         for (int32_t i = 0; i < n_keys; ++i) ks.emplace_back(keys[i]);
-        std::vector<GroupAgg> ag;
+        dftracer::utils::dstd::Vector<GroupAgg> ag;
         ag.reserve(static_cast<std::size_t>(n_aggs));
         for (int32_t i = 0; i < n_aggs; ++i) {
             GroupAgg a;
@@ -538,8 +539,9 @@ void dftu_lazyframe_free(dftu_lazyframe* lf) { delete lf; }
 char* dftu_lazyframe_schema(const dftu_lazyframe* lf) {
     if (!lf) return nullptr;
     try {
-        std::vector<std::string> names = lf->lf.schema();
-        std::string joined;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names =
+            lf->lf.schema();
+        dftracer::utils::dstd::String joined;
         for (std::size_t i = 0; i < names.size(); ++i) {
             if (i) joined.push_back('\n');
             joined += names[i];
@@ -574,7 +576,7 @@ dftu_lazyframe* dftu_lazyframe_select(const dftu_lazyframe* lf,
                                       const char* const* names, int32_t n) {
     if (!lf || n < 0 || (n > 0 && !names)) return nullptr;
     try {
-        std::vector<std::string> cols;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
         cols.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) cols.emplace_back(names[i]);
         return wrap_lazy(lf->lf.select(std::move(cols)));
@@ -603,10 +605,10 @@ dftu_lazyframe* dftu_lazyframe_group_by(const dftu_lazyframe* lf,
         (n_aggs > 0 && !aggs))
         return nullptr;
     try {
-        std::vector<std::string> ks;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ks;
         ks.reserve(static_cast<std::size_t>(n_keys));
         for (int32_t i = 0; i < n_keys; ++i) ks.emplace_back(keys[i]);
-        std::vector<GroupAgg> ag;
+        dftracer::utils::dstd::Vector<GroupAgg> ag;
         ag.reserve(static_cast<std::size_t>(n_aggs));
         for (int32_t i = 0; i < n_aggs; ++i) {
             GroupAgg a;
@@ -663,7 +665,7 @@ dftu_lazyframe* dftu_lazyframe_unique_by(const dftu_lazyframe* lf,
                                          const char* const* subset, int32_t n) {
     if (!lf || !subset || n <= 0) return nullptr;
     try {
-        std::vector<std::string> cols;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
         cols.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) cols.emplace_back(subset[i]);
         return wrap_lazy(lf->lf.unique(std::move(cols)));
@@ -694,7 +696,7 @@ dftu_lazyframe* dftu_lazyframe_head_by(const dftu_lazyframe* lf,
                                        int64_t n) {
     if (!lf || n_keys < 0 || (n_keys > 0 && !keys)) return nullptr;
     try {
-        std::vector<std::string> ks;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ks;
         ks.reserve(static_cast<std::size_t>(n_keys));
         for (int32_t i = 0; i < n_keys; ++i) {
             if (!keys[i]) return nullptr;
@@ -710,7 +712,7 @@ dftu_lazyframe* dftu_lazyframe_rename(const dftu_lazyframe* lf,
                                       const char* const* names, int32_t n) {
     if (!lf || n < 0 || (n > 0 && !names)) return nullptr;
     try {
-        std::vector<std::string> v;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> v;
         v.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) v.emplace_back(names[i]);
         return wrap_lazy(lf->lf.rename(std::move(v)));
@@ -723,7 +725,7 @@ dftu_lazyframe* dftu_lazyframe_drop(const dftu_lazyframe* lf,
                                     const char* const* names, int32_t n) {
     if (!lf || n < 0 || (n > 0 && !names)) return nullptr;
     try {
-        std::vector<std::string> v;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> v;
         v.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
             if (!names[i]) return nullptr;
@@ -743,7 +745,7 @@ dftu_lazyframe* dftu_lazyframe_rename_columns(const dftu_lazyframe* lf,
     if (!lf || n_from < 0 || n_from != n_to || (n_from > 0 && (!from || !to)))
         return nullptr;
     try {
-        std::vector<std::string> f, t;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> f, t;
         f.reserve(static_cast<std::size_t>(n_from));
         t.reserve(static_cast<std::size_t>(n_from));
         for (int32_t i = 0; i < n_from; ++i) {
@@ -844,7 +846,7 @@ dftu_lazyframe* dftu_lazyframe_unpivot(const dftu_lazyframe* lf,
                                        int32_t n_val) {
     if (!lf || n_id < 0 || n_val < 0) return nullptr;
     try {
-        std::vector<std::string> ids, vals;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ids, vals;
         ids.reserve(static_cast<std::size_t>(n_id));
         vals.reserve(static_cast<std::size_t>(n_val));
         for (int32_t i = 0; i < n_id; ++i) ids.emplace_back(id_vars[i]);
@@ -861,7 +863,7 @@ dftu_lazyframe* dftu_lazyframe_melt(const dftu_lazyframe* lf,
                                     int32_t n_val) {
     if (!lf || n_id < 0 || n_val < 0) return nullptr;
     try {
-        std::vector<std::string> ids, vals;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ids, vals;
         ids.reserve(static_cast<std::size_t>(n_id));
         vals.reserve(static_cast<std::size_t>(n_val));
         for (int32_t i = 0; i < n_id; ++i) ids.emplace_back(id_vars[i]);
@@ -918,7 +920,7 @@ dftu_lazyframe* dftu_lazyframe_group_by_dynamic(const dftu_lazyframe* lf,
                                                 int32_t origin_min) {
     if (!lf || !time_col || n_aggs < 0 || (n_aggs > 0 && !aggs)) return nullptr;
     try {
-        std::vector<GroupAgg> v;
+        dftracer::utils::dstd::Vector<GroupAgg> v;
         v.reserve(static_cast<std::size_t>(n_aggs));
         for (int32_t i = 0; i < n_aggs; ++i) {
             GroupAgg a;
@@ -1009,7 +1011,7 @@ dftu_lazyframe* dftu_lazyframe_take(const dftu_lazyframe* lf,
                                     const int64_t* idx, int32_t n) {
     if (!lf || n < 0 || (n > 0 && !idx)) return nullptr;
     try {
-        std::vector<std::int64_t> v(idx, idx + n);
+        dftracer::utils::dstd::Vector<std::int64_t> v(idx, idx + n);
         return wrap_lazy(lf->lf.take(std::move(v)));
     } catch (const std::exception&) {
         return nullptr;
@@ -1021,7 +1023,7 @@ dftu_lazyframe* dftu_lazyframe_sort_by_multi(const dftu_lazyframe* lf,
                                              int32_t descending) {
     if (!lf || n < 0 || (n > 0 && !by)) return nullptr;
     try {
-        std::vector<std::string> cols;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
         cols.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) cols.emplace_back(by[i]);
         return wrap_lazy(
@@ -1040,8 +1042,8 @@ dftu_lazyframe* dftu_lazyframe_join(const dftu_lazyframe* lf,
     if (!lf || !other || n < 0 || (n > 0 && (!left_on || !right_on)))
         return nullptr;
     try {
-        std::vector<std::string> l;
-        std::vector<std::string> r;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> l;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> r;
         l.reserve(static_cast<std::size_t>(n));
         r.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
@@ -1067,7 +1069,7 @@ dftu_lazyframe* dftu_lazyframe_asof(const dftu_lazyframe* lf,
         direction != DFTU_ASOF_NEAREST)
         return nullptr;
     try {
-        std::vector<std::string> keys;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
         for (int32_t i = 0; i < n_by; ++i) keys.emplace_back(by[i]);
         dftracer::utils::dstd::Optional<double> tol;
         if (tolerance >= 0) tol = tolerance;
@@ -1088,7 +1090,7 @@ dftu_lazyframe* dftu_lazyframe_interval(const dftu_lazyframe* lf,
     if (!lf || !other || !point || !lo || !hi || n_by < 0 || (n_by > 0 && !by))
         return nullptr;
     try {
-        std::vector<std::string> keys;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
         for (int32_t i = 0; i < n_by; ++i) keys.emplace_back(by[i]);
         return wrap_lazy(lf->lf.interval(other->lf, point, lo, hi,
                                          std::move(keys), outer != 0));
@@ -1139,13 +1141,13 @@ dftu_lazyframe* dftu_lazyframe_frame_op(const dftu_lazyframe* lf,
         return nullptr;
     static const dftu_op_arg EMPTY_ARGS{};
     try {
-        std::vector<LazyFrame> plans;
+        dftracer::utils::dstd::Vector<LazyFrame> plans;
         plans.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
             if (!others[i]) return nullptr;
             plans.push_back(others[i]->lf);
         }
-        std::vector<std::string> names;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
         names.reserve(static_cast<std::size_t>(n_out));
         for (int32_t i = 0; i < n_out; ++i) names.emplace_back(out_names[i]);
         return wrap_lazy(lf->lf.frame_op(

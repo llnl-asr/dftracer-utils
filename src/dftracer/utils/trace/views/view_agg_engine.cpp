@@ -213,7 +213,7 @@ dataframe::Series key_column_to_string(const dataframe::Series& col) {
             const double* d = col.data<double>();
             for (std::int64_t i = 0; i < n; ++i)
                 vals[static_cast<std::size_t>(i)] =
-                    dftracer::utils::dstd::double_string(d[i]);
+                    dftracer::utils::dstd::double_text(d[i]);
             break;
         }
         default:
@@ -402,21 +402,17 @@ dataframe::AggOp to_dyn_op(AggOp op) {
 // dyn columns: an empty numeric_arg_aggs is the legacy bare-named per-arg mean;
 // each explicit reduction becomes one AggDynSpec whose out_prefix (dyn_col_name
 // with an empty key) gives the finalized column name out_prefix + arg.
-// keep std: agg_new takes std::vector<AggDynSpec>
-std::vector<dataframe::AggDynSpec> build_dyn_specs(const ViewPlan& plan) {
-    // keep std: agg_new takes std::vector<AggDynSpec>
-    std::vector<dataframe::AggDynSpec> out;
+dstd::Vector<dataframe::AggDynSpec> build_dyn_specs(const ViewPlan& plan) {
+    dstd::Vector<dataframe::AggDynSpec> out;
     if (!plan.auto_numeric_metrics) return out;
     if (plan.numeric_arg_aggs.empty()) {
-        // keep std: dataframe names are std::string
-        out.push_back({dataframe::AggOp::Mean, 0.0, std::string()});
+        out.push_back({dataframe::AggOp::Mean, 0.0, dstd::String()});
         return out;
     }
     for (const AggSpec& r : plan.numeric_arg_aggs)
         out.push_back(
             {to_dyn_op(r.op), r.q,
-             // keep std: dataframe names are std::string
-             std::string(dstd::StringView(dyn_col_name(r, dstd::String())))});
+             dstd::String(dstd::StringView(dyn_col_name(r, dstd::String())))});
     return out;
 }
 
@@ -427,8 +423,7 @@ std::vector<dataframe::AggDynSpec> build_dyn_specs(const ViewPlan& plan) {
 // the AggState's dyn side-table reductions.
 dataframe::DataFrame finalize_engine_frame(
     dataframe::DataFrame r, const ViewPlan& plan,
-    // keep std: the AggState dyn specs are a std::vector
-    const std::vector<dataframe::AggDynSpec>& dyn_specs) {
+    const dstd::Vector<dataframe::AggDynSpec>& dyn_specs) {
     const std::size_t ng = plan.group_by.size();
     const std::size_t off = plan.time_bucket_us > 0 ? 1 : 0;
     dstd::Vector<dstd::String> key_names(ng);
@@ -609,8 +604,7 @@ dstd::Optional<dataframe::Schema> aggregated_output_schema(
 
 dataframe::DataFrame finalize_engine_result(const dataframe::AggState& st,
                                             const ViewPlan& plan) {
-    // keep std: agg_finalize takes std::vector<std::string>
-    std::vector<std::string> names;
+    dstd::Vector<dstd::String> names;
     names.reserve(1 + plan.group_by.size());
     if (plan.time_bucket_us > 0) names.push_back("time_bucket");
     for (const auto& gk : plan.group_by) names.emplace_back(group_col_name(gk));
@@ -678,8 +672,7 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
         });
     const bool needs_value_scale =
         plan.time_scale != 1.0 && (has_bucket || has_scaled_value_agg);
-    // keep std: GroupAgg columns are std::string
-    auto scaled_name = [&](const std::string& f) -> std::string {
+    auto scaled_name = [&](const dstd::String& f) -> dstd::String {
         if (!needs_value_scale) return f;
         if (f == "ts") return SCALED_TS_COL;
         if (f == "dur") return SCALED_DUR_COL;
@@ -728,19 +721,16 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
                         g.op = dataframe::Agg::CountValid;
                         g.column = window_token(win->first, win->second, "");
                     }
-                    // keep std: GroupAgg columns are std::string
-                    auto mask_col =
-                        [&](const dstd::String& field,
-                            // keep std: dataframe names are std::string
-                            std::string& col) {
-                            if (field.empty() ||
-                                (needs_value_scale && is_scaled_field(field)))
-                                return;
-                            col.assign(masked(
-                                computed_name(field)
-                                    ? field
-                                    : value_select_token(field, by_path)));
-                        };
+                    auto mask_col = [&](const dstd::String& field,
+                                        dstd::String& col) {
+                        if (field.empty() ||
+                            (needs_value_scale && is_scaled_field(field)))
+                            return;
+                        col.assign(
+                            masked(computed_name(field)
+                                       ? field
+                                       : value_select_token(field, by_path)));
+                    };
                     mask_col(s.field, g.column);
                     mask_col(s.by, g.by);
                 }
@@ -797,8 +787,7 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
     }
 
     auto add_computed = [&](const ComputedColumn& c, bool mask) {
-        // keep std: expr_remap_cols takes std::vector<std::int32_t>
-        std::vector<std::int32_t> at;
+        dstd::Vector<std::int32_t> at;
         at.reserve(c.inputs.size());
         for (const dstd::String& in : c.inputs) {
             const dstd::String tok = mask ? masked(in) : in;
@@ -953,8 +942,7 @@ class TransformSource final : public dataframe::Source {
         schema_ = inner_.output_schema();
         for (const AggInputSpec::Transform& t : tfs_)
             schema_.fields.push_back(dataframe::Field{
-                // keep std: dataframe names are std::string
-                std::string(t.out_col),
+                dstd::String(t.out_col),
                 dataframe::scalar(dataframe::TypeId::String), true});
     }
 
@@ -964,8 +952,7 @@ class TransformSource final : public dataframe::Source {
     dataframe::ScanResult scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        r.cursor = std::make_unique<Rows>(*this, req.projection);
+        r.cursor = dstd::make_unique<Rows>(*this, req.projection);
         r.filters.assign(req.filters.size(), dataframe::Pushed::No);
         return r;
     }
@@ -973,8 +960,7 @@ class TransformSource final : public dataframe::Source {
    private:
     class Rows final : public dataframe::Cursor {
        public:
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        Rows(const TransformSource& src, std::vector<std::string> projection)
+        Rows(const TransformSource& src, dstd::Vector<dstd::String> projection)
             : batches_(src.inner_.stream()),
               tfs_(src.tfs_),
               resolver_(src.resolver_),
@@ -1006,16 +992,13 @@ class TransformSource final : public dataframe::Source {
        private:
         dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
             dstd::make_shared<dftracer::utils::dstd::StringIntern>();
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::uint32_t> ids_;
+        dstd::Vector<std::uint32_t> ids_;
         coro::AsyncGenerator<dataframe::DataFrame> batches_;
         dstd::Vector<AggInputSpec::Transform> tfs_;
         dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
             resolver_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::string> projection_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::unique_ptr<dataframe::Cursor> rows_;
+        dstd::Vector<dstd::String> projection_;
+        dstd::UniquePtr<dataframe::Cursor> rows_;
     };
 
     dataframe::LazyFrame inner_;
@@ -1041,14 +1024,12 @@ dataframe::DataFrame build_agg_input_frame(
     append_transform_columns(f, spec.transforms, resolver);
 
     if (!spec.computed.empty()) {
-        // keep std: dataframe::eval takes std::vector<const Series*>
-        std::vector<const dataframe::Series*> inputs;
+        dstd::Vector<const dataframe::Series*> inputs;
         inputs.reserve(spec.select.size());
         for (const dstd::String& tok : spec.select)
             inputs.push_back(&f.columns[static_cast<std::size_t>(
                 f.column_index(canonical_row_column_name(tok, spec.by_path)))]);
-        // keep std: the names go into DataFrame::names
-        std::vector<std::pair<std::string, dataframe::Series>> out;
+        dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>> out;
         out.reserve(spec.computed.size());
         for (const AggInputSpec::Computed& c : spec.computed)
             out.emplace_back(c.name, dataframe::eval(c.expr, inputs));
@@ -1179,8 +1160,7 @@ coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
     }
 
     for (const AggInputSpec::Computed& c : spec.computed)
-        // keep std: dataframe names are std::string
-        lf = lf.with_column(std::string(c.name), c.expr);
+        lf = lf.with_column(dstd::String(c.name), c.expr);
 
     // Hidden columns index their source by its select position: expr_col is
     // positional, and the select columns keep positions 0..N-1 in both the

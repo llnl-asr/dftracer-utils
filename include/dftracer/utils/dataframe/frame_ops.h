@@ -7,13 +7,13 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -56,46 +56,46 @@ union WindowParams {
 /// by `func`: set `func` before a name. A name is absent when empty.
 struct WindowColumn {
     WindowFunc func;
-    std::string out;
+    dstd::String out;
     WindowParams params{};
 
-    const std::string* value() const {
+    const dstd::String* value() const {
         return func == WindowFunc::Sessionize ? nullptr : named(0);
     }
-    const std::string* time() const {
+    const dstd::String* time() const {
         if (func == WindowFunc::Rate) return named(1);
         return func == WindowFunc::Sessionize ? named(0) : nullptr;
     }
-    const std::string* end() const {
+    const dstd::String* end() const {
         return func == WindowFunc::Sessionize ? named(1) : nullptr;
     }
     /// The FrameArgMax/FrameArgMin ordering column.
-    const std::string* by() const {
+    const dstd::String* by() const {
         return func == WindowFunc::FrameArgMax ||
                        func == WindowFunc::FrameArgMin
                    ? named(1)
                    : nullptr;
     }
-    void set_by(std::string name) {
+    void set_by(dstd::String name) {
         if (func == WindowFunc::FrameArgMax || func == WindowFunc::FrameArgMin)
             names_[1] = std::move(name);
     }
-    void set_value(std::string name) {
+    void set_value(dstd::String name) {
         if (func != WindowFunc::Sessionize) names_[0] = std::move(name);
     }
-    void set_time(std::string name) {
+    void set_time(dstd::String name) {
         if (func == WindowFunc::Rate) names_[1] = std::move(name);
         if (func == WindowFunc::Sessionize) names_[0] = std::move(name);
     }
-    void set_end(std::string name) {
+    void set_end(dstd::String name) {
         if (func == WindowFunc::Sessionize) names_[1] = std::move(name);
     }
 
    private:
-    const std::string* named(int i) const {
+    const dstd::String* named(int i) const {
         return names_[i].empty() ? nullptr : &names_[i];
     }
-    std::string names_[2];
+    dstd::String names_[2];
 };
 
 /// Whether `f` is a Frame* function (reads WindowParams::frame).
@@ -128,9 +128,9 @@ WindowColumn window_column(const dftu_window_spec& s);
 /// std::out_of_range on an unknown column and std::invalid_argument on an
 /// unsupported column type or an invalid parameter.
 DataFrame window(const DataFrame& df,
-                 const std::vector<std::string>& partition_by,
-                 const std::vector<std::string>& order_by,
-                 const std::vector<WindowColumn>& specs);
+                 const dstd::Vector<dstd::String>& partition_by,
+                 const dstd::Vector<dstd::String>& order_by,
+                 const dstd::Vector<WindowColumn>& specs);
 
 /// One row per grid point per partition of width `bucket` over the integer or
 /// floating `time` column: a real row that lands on a grid point is kept, one
@@ -147,9 +147,9 @@ DataFrame window(const DataFrame& df,
 /// non-numeric column or a grid over 10,000,000 points, and
 /// std::out_of_range on an unknown column.
 DataFrame gap_fill(
-    const DataFrame& df, const std::vector<std::string>& partition_by,
-    const std::string& time, std::int64_t bucket,
-    const std::vector<std::string>& values, GapFillMode mode,
+    const DataFrame& df, const dstd::Vector<dstd::String>& partition_by,
+    const dstd::String& time, std::int64_t bucket,
+    const dstd::Vector<dstd::String>& values, GapFillMode mode,
     dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> range);
 
 /// Matches each `left` row to the one `right` row nearest in the numeric time
@@ -167,7 +167,7 @@ DataFrame gap_fill(
 /// rows ordered by (by, time) with ties in left row order. Throws
 /// std::invalid_argument on non-numeric or unequal time or key types.
 DataFrame asof(const DataFrame& left, const DataFrame& right,
-               const std::string& on, const std::vector<std::string>& by,
+               const dstd::String& on, const dstd::Vector<dstd::String>& by,
                AsofDirection direction, dstd::Optional<double> tolerance);
 
 /// Matches each `left.point` to every `right` row whose closed interval
@@ -179,8 +179,8 @@ DataFrame asof(const DataFrame& left, const DataFrame& right,
 /// colliding name gets "_right"). Throws
 /// std::invalid_argument on non-numeric or unequal types.
 DataFrame interval(const DataFrame& left, const DataFrame& right,
-                   const std::string& point, const std::string& lo,
-                   const std::string& hi, const std::vector<std::string>& by,
+                   const dstd::String& point, const dstd::String& lo,
+                   const dstd::String& hi, const dstd::Vector<dstd::String>& by,
                    bool outer);
 
 }  // namespace dftracer::utils::dataframe

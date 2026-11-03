@@ -258,8 +258,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
                 s->events.events(), s->intern, *select, time_scale, by_path));
         }
         if (frames.empty()) return;  // out stays an empty frame
-        // keep std: dataframe::concat takes std::vector<const DataFrame*>
-        std::vector<const dataframe::DataFrame*> parts;
+        dstd::Vector<const dataframe::DataFrame*> parts;
         parts.reserve(frames.size());
         for (const auto& f : frames) parts.push_back(&f);
         // Slots discover different args, so union their schemas.
@@ -393,8 +392,7 @@ coro::CoroTask<ExportStats> ViewSession::execute() {
     co_return stats;
 }
 
-// keep std: LazyResult::plans is a std::vector<LazyFrame>
-void TraceSession::add(const std::vector<dataframe::LazyFrame>& plans,
+void TraceSession::add(const dstd::Vector<dataframe::LazyFrame>& plans,
                        Resolve resolve) {
     if (*executed_)
         throw common::DFTUtilsException::cat(
@@ -419,15 +417,13 @@ Deferred<ExportStats> TraceSession::materialize(const View& tv) {
 }
 
 coro::CoroTask<void> TraceSession::execute() {
-    // keep std: collect_all returns a std::vector<DataFrame>
-    std::vector<dataframe::DataFrame> frames;
+    dstd::Vector<dataframe::DataFrame> frames;
     if (!plans_.empty())
         frames = co_await dataframe::collect_all(std::move(plans_));
     plans_.clear();
     std::size_t at = 0;
     for (Pending& p : pending_) {
-        // keep std: Resolve takes std::vector<DataFrame>
-        std::vector<dataframe::DataFrame> mine(
+        dstd::Vector<dataframe::DataFrame> mine(
             std::make_move_iterator(frames.begin() + at),
             std::make_move_iterator(frames.begin() + at + p.count));
         at += p.count;
@@ -481,8 +477,7 @@ View View::reshape(
         return common::DFTUtilsException::cat(
             common::ErrorCode::InvalidArgument, "View::", builder, " ", why);
     };
-    // keep std: first_non_filter_op returns std::optional<std::string>
-    if (dstd::Optional<std::string> op =
+    if (dstd::Optional<dstd::String> op =
             dataframe::detail::first_non_filter_op(lf_))
         throw refuse("must come before '" + *op + "'");
     if (!dataframe::detail::first_op(lf_)) {
@@ -494,8 +489,8 @@ View View::reshape(
     // The filters before a builder select the events it sees, so they move
     // into the scan first.
     dataframe::LazyFrame planned = dataframe::detail::optimize_plan(lf_);
-    // keep std: first_op returns std::optional<std::string>
-    dstd::Optional<std::string> residual = dataframe::detail::first_op(planned);
+    dstd::Optional<dstd::String> residual =
+        dataframe::detail::first_op(planned);
     if (!residual) {
         const auto& src = static_cast<const ViewSource&>(
             *dataframe::detail::plan_source(planned));
@@ -533,8 +528,7 @@ scan::ScanPlan View::absorbed(const char* method, Need need) const {
     dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> window;
     if (need == Need::EventsWindow || need == Need::EventsHead)
         window = dataframe::detail::sole_slice(planned);
-    // keep std: first_op returns std::optional<std::string>
-    if (dstd::Optional<std::string> op = dataframe::detail::first_op(planned);
+    if (dstd::Optional<dstd::String> op = dataframe::detail::first_op(planned);
         op && !window)
         throw fail("cannot follow '" + *op + "'");
     const auto* src = dynamic_cast<const ViewSource*>(
@@ -574,20 +568,14 @@ dataframe::LazyFrame terminal_plan(scan::ScanPlan v, TraceOutput output,
 
 dataframe::LazyResult<dstd::String> partial_result(dataframe::LazyFrame plan) {
     return {
-        {std::move(plan)},
-        [](
-            // keep std: Finish takes std::vector<DataFrame>
-            std::vector<dataframe::DataFrame> frames) {
+        {std::move(plan)}, [](dstd::Vector<dataframe::DataFrame> frames) {
             return dataframe::detail::ready(detail::partial_of(frames.front()));
         }};
 }
 
 dataframe::LazyResult<ExportStats> stats_result(dataframe::LazyFrame plan) {
     return {
-        {std::move(plan)},
-        [](
-            // keep std: Finish takes std::vector<DataFrame>
-            std::vector<dataframe::DataFrame> frames) {
+        {std::move(plan)}, [](dstd::Vector<dataframe::DataFrame> frames) {
             return dataframe::detail::ready(detail::stats_of(frames.front()));
         }};
 }
@@ -676,9 +664,7 @@ dataframe::LazyResult<ContainmentResult> View::containment(
                          std::move(name), std::move(group)};
     return {{terminal_plan(v, TraceOutput::CallTree, tree),
              terminal_plan(v, TraceOutput::Flamegraph, tree)},
-            [](
-                // keep std: Finish takes std::vector<DataFrame>
-                std::vector<dataframe::DataFrame> frames) {
+            [](dstd::Vector<dataframe::DataFrame> frames) {
                 return dataframe::detail::ready(ContainmentResult{
                     std::move(frames[0]), std::move(frames[1])});
             }};
@@ -719,8 +705,7 @@ dataframe::LazyResult<TypedResult> View::typed(int shard_begin, int shard_end,
     return {{},
             [v = std::move(v), shard_begin, shard_end,
              progress = dstd::make_shared<ProgressFn>(std::move(progress))](
-                // keep std: LazyResult::Finish takes std::vector<DataFrame>
-                std::vector<dataframe::DataFrame>) {
+                dstd::Vector<dataframe::DataFrame>) {
                 return run_typed(v, shard_begin, shard_end, progress);
             }};
 }
@@ -757,9 +742,8 @@ dataframe::LazyResult<ExportStats> View::sink_trace(TraceWriteOptions opts,
                                                     Lazy) const {
     scan::ScanPlan v = absorbed("sink_trace", Need::EventsWindow);
     return {{},
-            [v = std::move(v), opts = std::move(opts)](
-                // keep std: LazyResult::Finish takes std::vector<DataFrame>
-                std::vector<dataframe::DataFrame>) {
+            [v = std::move(v),
+             opts = std::move(opts)](dstd::Vector<dataframe::DataFrame>) {
                 return run_sink_trace(v, opts);
             }};
 }
@@ -901,8 +885,7 @@ dataframe::LazyResult<ExportStats> View::materialize(
     return {{},
             [v = std::move(v),
              progress = dstd::make_shared<ProgressFn>(std::move(progress))](
-                // keep std: LazyResult::Finish takes std::vector<DataFrame>
-                std::vector<dataframe::DataFrame>) {
+                dstd::Vector<dataframe::DataFrame>) {
                 return run_materialize(v, progress);
             }};
 }
@@ -926,10 +909,8 @@ View View::select(dstd::Vector<dstd::String> names) const {
         return reshape("select", [&](const scan::ScanPlan& v) {
             return scan::select(v, std::move(names));
         });
-    // keep std: LazyOps::select takes std::vector<std::string>
     return LazyOps<View>::select(
-        // keep std: the dataframe API takes std::vector
-        std::vector<std::string>(names.begin(), names.end()));
+        dstd::Vector<dstd::String>(names.begin(), names.end()));
 }
 
 View View::filter(Query q) const {

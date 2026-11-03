@@ -6,7 +6,9 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -14,8 +16,6 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -42,7 +42,7 @@ Series i64(std::int64_t base) {
 // Morsels named by name_ids: the declared a and b, then the undeclared `dyn`.
 class DynCursor : public Cursor {
    public:
-    explicit DynCursor(std::vector<std::string> dyn) : dyn_(std::move(dyn)) {}
+    explicit DynCursor(dstd::Vector<dstd::String> dyn) : dyn_(std::move(dyn)) {}
 
     coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
         if (next_ >= MORSELS) co_return dstd::nullopt;
@@ -56,7 +56,7 @@ class DynCursor : public Cursor {
         m.columns.push_back(i64(100 + 10 * next_));
         d.name_ids.push_back(intern_->get_or_insert("b"));
         std::int64_t base = 1000;
-        for (const std::string& n : dyn_) {
+        for (const dstd::String& n : dyn_) {
             m.columns.push_back(i64(base + 10 * next_));
             d.name_ids.push_back(intern_->get_or_insert(n));
             base += 1000;
@@ -66,15 +66,15 @@ class DynCursor : public Cursor {
     }
 
    private:
-    std::vector<std::string> dyn_;
+    dstd::Vector<dstd::String> dyn_;
     dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
-        std::make_shared<dftracer::utils::dstd::StringIntern>();
+        dstd::make_shared<dftracer::utils::dstd::StringIntern>();
     int next_ = 0;
 };
 
 class DynSource : public Source {
    public:
-    explicit DynSource(std::vector<std::string> dyn) : dyn_(std::move(dyn)) {}
+    explicit DynSource(dstd::Vector<dstd::String> dyn) : dyn_(std::move(dyn)) {}
 
     Schema schema() const override {
         Schema s;
@@ -90,27 +90,27 @@ class DynSource : public Source {
     dftracer::utils::dataframe::ScanResult scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         dftracer::utils::dataframe::ScanResult r;
-        r.cursor = std::make_unique<DynCursor>(dyn_);
+        r.cursor = dstd::make_unique<DynCursor>(dyn_);
         r.filters.assign(req.filters.size(),
                          dftracer::utils::dataframe::Pushed::No);
         return r;
     }
 
    private:
-    std::vector<std::string> dyn_;
+    dstd::Vector<dstd::String> dyn_;
 };
 
-LazyFrame scan(std::vector<std::string> dyn = {"x", "y"}) {
-    return LazyFrame::scan(std::make_shared<DynSource>(std::move(dyn)));
+LazyFrame scan(dstd::Vector<dstd::String> dyn = {"x", "y"}) {
+    return LazyFrame::scan(dstd::make_shared<DynSource>(std::move(dyn)));
 }
 
 DataFrame run(const LazyFrame& lf) {
     return dftracer::utils::default_runtime().submit(lf.collect()).get();
 }
 
-using Names = std::vector<std::string>;
+using Names = dstd::Vector<dstd::String>;
 
-std::int64_t cell(const DataFrame& df, const std::string& name,
+std::int64_t cell(const DataFrame& df, const dstd::String& name,
                   std::int64_t row) {
     for (std::size_t c = 0; c < df.names.size(); ++c)
         if (df.names[c] == name)
@@ -181,7 +181,7 @@ TEST_CASE("drop and rename_columns on an eager frame") {
     df.columns.push_back(i64(10));
     df.columns.push_back(i64(20));
     auto lf = LazyFrame::scan(
-        std::make_shared<dftracer::utils::dataframe::InMemorySource>(
+        dstd::make_shared<dftracer::utils::dataframe::InMemorySource>(
             std::move(df)));
     DataFrame out = run(lf.drop({"b", "zz"}).rename_columns({"c"}, {"C"}));
     CHECK(out.names == Names{"a", "C"});
@@ -196,8 +196,8 @@ TEST_CASE("C ABI drop and rename_columns") {
     df.columns.push_back(i64(10));
     dftu_lazyframe* base = nullptr;
     {
-        std::vector<const char*> names = {"a", "b"};
-        std::vector<dftu_series*> cols;
+        dstd::Vector<const char*> names = {"a", "b"};
+        dstd::Vector<dftu_series*> cols;
         cols.push_back(dftu_series_new_flat(
             DFTU_TYPE_INT64, df.columns[0].values<std::int64_t>().data(), ROWS,
             nullptr));
@@ -214,7 +214,7 @@ TEST_CASE("C ABI drop and rename_columns") {
     dftu_lazyframe* d = dftu_lazyframe_drop(base, drop_names, 1);
     REQUIRE(d != nullptr);
     char* schema = dftu_lazyframe_schema(d);
-    CHECK(std::string(schema).find('b') == std::string::npos);
+    CHECK(dstd::String(schema).find('b') == dstd::String::npos);
     dftu_duql_string_free(schema);
     const char* from[] = {"a"};
     const char* to[] = {"z"};

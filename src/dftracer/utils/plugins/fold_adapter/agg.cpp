@@ -60,8 +60,7 @@ const dftu_svc_agg g_agg = {host_agg_new, host_agg_accumulate, host_agg_result,
         for (dataframe::Series& c : out.columns) handles.push_back(c.release());
         dstd::Vector<const char*> names;
         names.reserve(out.names.size());
-        // keep std: dataframe::DataFrame::names holds std::string
-        for (const std::string& n : out.names) names.push_back(n.c_str());
+        for (const dstd::String& n : out.names) names.push_back(n.c_str());
         return dftu_dataframe_new(names.data(), handles.data(),
                                   static_cast<std::int32_t>(handles.size()));
     } catch (...) {
@@ -89,8 +88,7 @@ const void* detail::agg_ext_vtable() { return &g_agg; }
     if (dstd::UniquePtr<AggAccum>* slot = aggs_.find(key))
         return reinterpret_cast<::dftu_agg*>(slot->get());
 
-    // keep std: AggAccum::value_names is a std::vector<std::string>
-    std::vector<std::string> value_names;
+    dstd::Vector<dstd::String> value_names;
     auto column_index = [&](const char* col) -> std::int32_t {
         if (!col) return -1;
         for (std::size_t i = 0; i < value_names.size(); ++i)
@@ -99,8 +97,7 @@ const void* detail::agg_ext_vtable() { return &g_agg; }
         return static_cast<std::int32_t>(value_names.size() - 1);
     };
 
-    // keep std: dataframe::agg_new takes std::vector<AggSpec>
-    std::vector<dataframe::AggSpec> aspecs;
+    dstd::Vector<dataframe::AggSpec> aspecs;
     aspecs.reserve(spec_n);
     for (std::uint32_t i = 0; i < spec_n; ++i) {
         if (specs[i].op < DFTU_AGG_COUNT || specs[i].op > DFTU_AGG_REGR_R2) {
@@ -154,20 +151,16 @@ void PluginFold::agg_accumulate(::dftu_agg* a, const ::dftu_dataframe* df) {
         return &owned.back();
     };
 
-    // keep std: dataframe::agg_accumulate takes std::vector<const Series*>
-    std::vector<const dataframe::Series*> keys;
+    dstd::Vector<const dataframe::Series*> keys;
     keys.reserve(acc.key_names.size());
-    // keep std: AggAccum::key_names holds std::string
-    for (const std::string& n : acc.key_names) {
+    for (const dstd::String& n : acc.key_names) {
         const dataframe::Series* c = column(n);
         if (!c) return;
         keys.push_back(c);
     }
-    // keep std: dataframe::agg_accumulate takes std::vector<const Series*>
-    std::vector<const dataframe::Series*> values;
+    dstd::Vector<const dataframe::Series*> values;
     values.reserve(acc.value_names.size());
-    // keep std: AggAccum::value_names holds std::string
-    for (const std::string& n : acc.value_names) {
+    for (const dstd::String& n : acc.value_names) {
         const dataframe::Series* c = column(n);
         if (!c) return;
         values.push_back(c);

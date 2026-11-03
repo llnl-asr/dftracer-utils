@@ -98,20 +98,18 @@ struct Pushable {
     bool exact;
 };
 
-// keep std: Source::names and ScanRequest::projection are std::vectors
-dstd::Vector<dstd::String> trace_names(const std::vector<std::string>& names) {
+dstd::Vector<dstd::String> trace_names(
+    const dstd::Vector<dstd::String>& names) {
     dstd::Vector<dstd::String> out;
     out.reserve(names.size());
     for (const auto& n : names) out.emplace_back(n);
     return out;
 }
 
-// keep std: Source::names is a std::vector<std::string>
-bool same_names(const std::vector<std::string>& a,
+bool same_names(const dstd::Vector<dstd::String>& a,
                 const dstd::Vector<dstd::String>& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
-                      // keep std: dataframe names are std::string
-                      [](const std::string& x, const dstd::String& y) {
+                      [](const dstd::String& x, const dstd::String& y) {
                           return dstd::StringView(x) == dstd::StringView(y);
                       });
 }
@@ -391,8 +389,7 @@ dftracer::utils::dataframe::Morsel slice_morsel(
     const dftracer::utils::dataframe::Morsel& m, std::int64_t offset,
     std::int64_t n) {
     dftracer::utils::dataframe::DataFrame tmp;
-    // keep std: dataframe names are std::string
-    tmp.names.assign(m.columns.size(), std::string());
+    tmp.names.assign(m.columns.size(), dstd::String());
     for (const dftracer::utils::dataframe::Series& c : m.columns)
         tmp.columns.push_back(c.share());
     dftracer::utils::dataframe::DataFrame s = tmp.slice(offset, n);
@@ -698,8 +695,7 @@ dstd::Optional<df::SourceApplication> ViewSource::apply_filter(
 }
 
 dstd::Optional<df::SourceApplication> ViewSource::apply_projection(
-    // keep std: Source::apply_projection takes std::vector<NamedExpr>
-    const std::vector<df::NamedExpr>& exprs) const {
+    const dstd::Vector<df::NamedExpr>& exprs) const {
     if (distinct_ || !can_stream_rows()) return dstd::nullopt;
     const dstd::Vector<dstd::String> current = trace_names(names());
     dstd::Vector<dstd::String> cols;
@@ -729,8 +725,7 @@ dstd::Optional<detail::ComputedColumn> computed_from(
     const dstd::Vector<dstd::String>& current) {
     detail::ComputedColumn c;
     c.name = std::move(name);
-    // keep std: expr_remap_cols takes std::vector<std::int32_t>
-    std::vector<std::int32_t> at(current.size(), -1);
+    dstd::Vector<std::int32_t> at(current.size(), -1);
     for (std::size_t i = 0; i < current.size(); ++i) {
         if (!df::expr_references(e, static_cast<std::int32_t>(i))) continue;
         at[i] = static_cast<std::int32_t>(c.inputs.size());
@@ -823,16 +818,14 @@ dstd::Optional<df::SourceApplication> ViewSource::apply_aggregation(
 }
 
 dstd::Optional<df::SourceApplication> ViewSource::apply_distinct(
-    // keep std: Source::apply_distinct takes std::vector<std::string>
-    const std::vector<std::string>& subset) const {
+    const dstd::Vector<dstd::String>& subset) const {
     const detail::ViewPlan& p = *plan_;
     if (distinct_ || emit_dyn_ || !absorb_aggregation_ ||
         output_ != TraceOutput::Events || !can_stream_rows() ||
         p.select.empty() || p.cancelled || p.materialize ||
         !p.sort_col.empty() || !p.topk_col.empty() || p.limit || p.offset)
         return dstd::nullopt;
-    // keep std: Source::names is a std::vector<std::string>
-    const std::vector<std::string> current = names();
+    const dstd::Vector<dstd::String> current = names();
     dstd::Vector<std::int64_t> key_idx;
     if (subset.empty()) {
         key_idx.resize(current.size());
@@ -840,8 +833,7 @@ dstd::Optional<df::SourceApplication> ViewSource::apply_distinct(
             key_idx[i] = static_cast<std::int64_t>(i);
     } else {
         key_idx.reserve(subset.size());
-        // keep std: dataframe names are std::string
-        for (const std::string& name : subset) {
+        for (const dstd::String& name : subset) {
             const auto it = std::find(current.begin(), current.end(), name);
             if (it == current.end()) return dstd::nullopt;
             key_idx.push_back(static_cast<std::int64_t>(it - current.begin()));
@@ -861,8 +853,7 @@ bool ViewSource::static_schema() const {
            detail::is_row_query(*plan_) && !plan_->select.empty();
 }
 
-// keep std: dataframe names are std::string
-dstd::Optional<std::string> ViewSource::batch_key() const {
+dstd::Optional<dstd::String> ViewSource::batch_key() const {
     const detail::ViewPlan& p = *plan_;
     if (distinct_ || emit_dyn_ || !absorb_aggregation_ || p.cancelled ||
         p.materialize || p.auto_numeric_metrics || !p.sort_col.empty() ||
@@ -889,8 +880,7 @@ dstd::Optional<std::string> ViewSource::batch_key() const {
            dstd::to_string(static_cast<int>(p.all_records)) + '\0' +
            p.rollup_root + '\0' + p.views_root + '\0' +
            dstd::to_string(p.memory_budget);
-    // keep std: dataframe names are std::string
-    return std::string(key);
+    return dstd::String(key);
 }
 
 namespace {}  // namespace
@@ -1104,11 +1094,9 @@ coro::CoroTask<void> run_open_batch(
 
 }  // namespace
 
-// keep std: Source::open_batch uses std::vector and std::unique_ptr
-dstd::Optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
-    // keep std: Source::open_batch uses std::vector
-    std::vector<dstd::SharedPtr<const df::Source>> members,
-    std::uint64_t memory_budget) const {
+dstd::Optional<dstd::Vector<dstd::UniquePtr<df::Cursor>>>
+ViewSource::open_batch(dstd::Vector<dstd::SharedPtr<const df::Source>> members,
+                       std::uint64_t memory_budget) const {
     dstd::Vector<const ViewSource*> views;
     views.reserve(members.size());
     for (const auto& m : members) {
@@ -1153,22 +1141,18 @@ dstd::Optional<std::vector<std::unique_ptr<df::Cursor>>> ViewSource::open_batch(
     dstd::SharedFuture<void> producer =
         spawn_on_current_executor(run_open_batch(
             session, std::move(frames), std::move(schemas), channels, budgets));
-    // keep std: open_batch returns std::unique_ptr cursors
-    std::vector<std::unique_ptr<df::Cursor>> cursors;
+    dstd::Vector<dstd::UniquePtr<df::Cursor>> cursors;
     cursors.reserve(views.size());
     for (std::size_t i = 0; i < views.size(); ++i)
-        // keep std: dataframe cursors are std::unique_ptr
-        cursors.push_back(std::make_unique<StreamViewCursor>(
+        cursors.push_back(dstd::make_unique<StreamViewCursor>(
             channels[i], budgets[i], producer, dropped[i], nullptr,
             dstd::Vector<ViewFile>{}, 1.0, dstd::Vector<dstd::String>{}, false,
             nullptr));
     return cursors;
 }
 
-// keep std: Source::collect_batch uses std::vector
-coro::CoroTask<std::vector<df::DataFrame>> ViewSource::collect_batch(
-    // keep std: Source::collect_batch uses std::vector
-    std::vector<dstd::SharedPtr<const df::Source>> members) const {
+coro::CoroTask<dstd::Vector<df::DataFrame>> ViewSource::collect_batch(
+    dstd::Vector<dstd::SharedPtr<const df::Source>> members) const {
     dstd::Vector<dstd::SharedPtr<const ViewSource>> views;
     views.reserve(members.size());
     for (auto& m : members)
@@ -1313,8 +1297,7 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
         if (!plan_->select.empty()) {
             s.fields.reserve(plan_->select.size());
             for (const dstd::String& sel : plan_->select) {
-                // keep std: Field::name is a std::string
-                std::string col_name =
+                dstd::String col_name =
                     detail::canonical_row_column_name(sel, by_path);
                 const df::DataType type = resolve(col_name);
                 s.fields.push_back(df::Field{std::move(col_name), type, true});
@@ -1324,8 +1307,7 @@ dftracer::utils::dataframe::Schema ViewSource::compute_schema() const {
             s.fields.reserve(names.size() + plan_->named_columns.size());
             for (const dstd::String& name : names)
                 s.fields.push_back(
-                    // keep std: dataframe names are std::string
-                    df::Field{std::string(name), resolve(name), true});
+                    df::Field{dstd::String(name), resolve(name), true});
             for (const df::Field& f : plan_->named_columns) {
                 df::Field named = f;
                 named.name = detail::canonical_row_column_name(f.name, by_path);
@@ -1397,8 +1379,7 @@ const dftracer::utils::dataframe::DataFrame* ViewSource::as_frame() const {
     return buffer().get();
 }
 
-// keep std: ScanResult::cursor is a std::unique_ptr
-std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
+dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     const detail::ScanPlan& v, std::uint64_t memory_budget,
     dstd::Vector<dstd::String> fnames) const {
     // Capacity 0 = an effectively unbounded ring (see Channel's ctor); the
@@ -1453,8 +1434,7 @@ std::unique_ptr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
 
     dstd::SharedFuture<void> producer =
         spawn_on_current_executor(std::move(task));
-    // keep std: dataframe cursors are std::unique_ptr
-    return std::make_unique<StreamViewCursor>(
+    return dstd::make_unique<StreamViewCursor>(
         std::move(channel), std::move(budget), std::move(producer),
         std::move(stop), std::move(dyn_prune), v->files, time_scale,
         std::move(fnames), detail::metadata_rows(*v), std::move(gate));
@@ -1476,8 +1456,7 @@ dftracer::utils::dataframe::ScanResult ViewSource::scan(
             buf =
                 dstd::make_shared<const dftracer::utils::dataframe::DataFrame>(
                     buf->select(req.projection));
-        // keep std: dataframe cursors are std::unique_ptr
-        r.cursor = std::make_unique<ViewCursor>(std::move(buf));
+        r.cursor = dstd::make_unique<ViewCursor>(std::move(buf));
         return r;
     }
 

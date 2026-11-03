@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
@@ -549,12 +550,12 @@ TEST_SUITE("View") {
 
         dataframe::DataFrame all = v.collect().get();
         REQUIRE(all.num_rows() == 3);
-        std::vector<std::string> collected = all.names;
-        std::vector<std::string> declared = v.lazy().schema();
+        dstd::Vector<dstd::String> collected = all.names;
+        dstd::Vector<dstd::String> declared = v.lazy().schema();
         std::sort(collected.begin(), collected.end());
         std::sort(declared.begin(), declared.end());
-        auto joined = [](const std::vector<std::string>& xs) {
-            std::string out;
+        auto joined = [](const dstd::Vector<dstd::String>& xs) {
+            dstd::String out;
             for (const auto& x : xs) out += x + ",";
             return out;
         };
@@ -564,20 +565,20 @@ TEST_SUITE("View") {
         for (const char* c : {"args.dur.p99", "args.counters.X.p50",
                               "args.label.v", "args.cqe.raw_ns", "args.run"})
             CHECK(std::binary_search(collected.begin(), collected.end(),
-                                     std::string(c)));
+                                     dstd::String(c)));
         std::vector<std::string> index_cols;
         for (const auto& name : v.columns()) index_cols.emplace_back(name);
-        for (const std::string& c : collected) {
+        for (const dstd::String& c : collected) {
             if (c.rfind("args.", 0) != 0) continue;
             CAPTURE(c);
             CHECK(std::find(index_cols.begin(), index_cols.end(),
-                            c.substr(5)) != index_cols.end());
+                            std::string(c.substr(5))) != index_cols.end());
         }
 
         dataframe::DataFrame sel =
             v.select({"name", "dur", "dur.p99"}).collect().get();
         REQUIRE(sel.names ==
-                std::vector<std::string>{"name", "dur", "args.dur.p99"});
+                dstd::Vector<dstd::String>{"name", "dur", "args.dur.p99"});
         std::map<std::string, dstd::Pair<double, double>> by_name;
         for (std::int64_t i = 0; i < sel.num_rows(); ++i)
             if (bstr(sel, i, "name") != "flat")
@@ -594,8 +595,8 @@ TEST_SUITE("View") {
         REQUIRE(grouped.num_rows() == 2);
         std::map<std::string, double> counts;
         for (std::int64_t i = 0; i < grouped.num_rows(); ++i)
-            counts[dataframe::cell_to_string(grouped.columns[0], i)] =
-                bnum(grouped, i, "n");
+            counts[std::string(dataframe::cell_to_string(
+                grouped.columns[0], i))] = bnum(grouped, i, "n");
         CHECK(counts["3"] == 2);
 
         dataframe::DataFrame tree = test_view_common::run(
@@ -735,13 +736,13 @@ TEST_SUITE("View") {
             // value expr (ignored), count_valid counts the present strings,
             // and a numeric sum over the String value is refused rather than
             // reported as a number.
-            std::vector<const dataframe::Series*> inputs;
+            dstd::Vector<const dataframe::Series*> inputs;
             for (const auto& col : rows.columns) inputs.push_back(&col);
             const auto cyc = dataframe::expr_col(
                 static_cast<std::int32_t>(bcol(rows, "args.cycles")));
             const auto key = dataframe::expr_col(
                 static_cast<std::int32_t>(bcol(rows, "name")));
-            std::vector<dataframe::AggExprSpec> specs = {
+            dstd::Vector<dataframe::AggExprSpec> specs = {
                 dataframe::agg_count("count_cycles")};
             specs[0].value = cyc;
             dataframe::AggExprSpec present;

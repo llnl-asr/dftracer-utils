@@ -224,8 +224,8 @@ PyObject* vec_from_list(PyObject* self, PyObject* args);
 // `s` (or its materialization) read as `type` with the given parameters,
 // sharing its buffers; an invalid Series when the widths differ.
 Series retype_series(const Series& s, TypeId type, dataframe::TimeUnit unit,
-                     const std::string& zone, int precision, int scale,
-                     int width);
+                     const dftracer::utils::dstd::String& zone, int precision,
+                     int scale, int width);
 PyObject* Series_physical(PyObject* self, PyObject*);
 PyObject* Series_get_nbytes(PyObject* self, void*);
 PyObject* Series_to_bytes(PyObject* self, PyObject*);

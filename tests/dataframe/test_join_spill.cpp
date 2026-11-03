@@ -7,7 +7,11 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/grace_join.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -20,7 +24,6 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -47,8 +50,8 @@ struct Rng {
 using Cell = dstd::Optional<std::int64_t>;
 
 struct Table {
-    std::vector<Cell> key;
-    std::vector<std::int64_t> value;
+    dstd::Vector<Cell> key;
+    dstd::Vector<std::int64_t> value;
 };
 
 // Ten percent null keys, and one key that holds `skew` percent of the rows.
@@ -67,8 +70,8 @@ Table random_table(Rng& rng, int n, int keys, int skew, std::int64_t scale) {
 }
 
 DataFrame frame_of(const Table& t, const char* key, const char* value) {
-    std::vector<std::int64_t> k;
-    std::vector<std::uint8_t> bits((t.key.size() + 7) / 8, 0);
+    dstd::Vector<std::int64_t> k;
+    dstd::Vector<std::uint8_t> bits((t.key.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < t.key.size(); ++i) {
         k.push_back(t.key[i].value_or(0));
         if (t.key[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
@@ -82,17 +85,17 @@ DataFrame frame_of(const Table& t, const char* key, const char* value) {
     return f;
 }
 
-std::string text(const Cell& c) { return c ? std::to_string(*c) : "n"; }
+dstd::String text(const Cell& c) { return c ? dstd::to_string(*c) : "n"; }
 
-std::vector<std::string> rows_of(const DataFrame& f) {
-    std::vector<std::string> out;
-    std::vector<Series> cols;
+dstd::Vector<dstd::String> rows_of(const DataFrame& f) {
+    dstd::Vector<dstd::String> out;
+    dstd::Vector<Series> cols;
     for (const Series& c : f.columns) cols.push_back(c.materialize());
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
-        std::string row;
+        dstd::String row;
         for (const Series& c : cols)
-            row += (c.is_null(r) ? std::string("n")
-                                 : std::to_string(c.data<std::int64_t>()[r])) +
+            row += (c.is_null(r) ? dstd::String("n")
+                                 : dstd::to_string(c.data<std::int64_t>()[r])) +
                    ",";
         out.push_back(row);
     }
@@ -101,10 +104,10 @@ std::vector<std::string> rows_of(const DataFrame& f) {
 }
 
 // The nested-loop join of left(lk, lv) and right(rk, rv) on lk == rk.
-std::vector<std::string> reference(const Table& l, const Table& r,
-                                   JoinHow how) {
-    std::vector<std::string> out;
-    std::vector<char> matched(r.key.size(), 0);
+dstd::Vector<dstd::String> reference(const Table& l, const Table& r,
+                                     JoinHow how) {
+    dstd::Vector<dstd::String> out;
+    dstd::Vector<char> matched(r.key.size(), 0);
     for (std::size_t i = 0; i < l.key.size(); ++i) {
         bool any = false;
         for (std::size_t j = 0; j < r.key.size(); ++j) {
@@ -112,12 +115,12 @@ std::vector<std::string> reference(const Table& l, const Table& r,
             any = true;
             matched[j] = 1;
             if (how == JoinHow::Semi || how == JoinHow::Anti) break;
-            out.push_back(text(l.key[i]) + "," + std::to_string(l.value[i]) +
+            out.push_back(text(l.key[i]) + "," + dstd::to_string(l.value[i]) +
                           "," + text(r.key[j]) + "," +
-                          std::to_string(r.value[j]) + ",");
+                          dstd::to_string(r.value[j]) + ",");
         }
-        const std::string left =
-            text(l.key[i]) + "," + std::to_string(l.value[i]) + ",";
+        const dstd::String left =
+            text(l.key[i]) + "," + dstd::to_string(l.value[i]) + ",";
         if (how == JoinHow::Semi && any) out.push_back(left);
         if (how == JoinHow::Anti && !any) out.push_back(left);
         if (!any && (how == JoinHow::Left || how == JoinHow::Outer))
@@ -127,26 +130,26 @@ std::vector<std::string> reference(const Table& l, const Table& r,
         for (std::size_t j = 0; j < r.key.size(); ++j)
             if (!matched[j])
                 out.push_back("n,n," + text(r.key[j]) + "," +
-                              std::to_string(r.value[j]) + ",");
+                              dstd::to_string(r.value[j]) + ",");
     std::sort(out.begin(), out.end());
     return out;
 }
 
 DataFrame join(const DataFrame& l, const DataFrame& r, JoinHow how,
-               std::uint64_t budget, const std::string& suffix = "") {
+               std::uint64_t budget, const dstd::String& suffix = "") {
     const LazyFrame left =
-        LazyFrame::scan(std::make_shared<InMemorySource>(
+        LazyFrame::scan(dstd::make_shared<InMemorySource>(
                             DataFrame{l.names,
                                       [&] {
-                                          std::vector<Series> c;
+                                          dstd::Vector<Series> c;
                                           for (const auto& s : l.columns)
                                               c.push_back(s.share());
                                           return c;
                                       }()}))
             .memory_budget(budget);
-    const LazyFrame right = LazyFrame::scan(std::make_shared<InMemorySource>(
+    const LazyFrame right = LazyFrame::scan(dstd::make_shared<InMemorySource>(
         DataFrame{r.names, [&] {
-                      std::vector<Series> c;
+                      dstd::Vector<Series> c;
                       for (const auto& s : r.columns) c.push_back(s.share());
                       return c;
                   }()}));
@@ -155,22 +158,22 @@ DataFrame join(const DataFrame& l, const DataFrame& r, JoinHow how,
 
 // One row per left row: its two columns and the list of (rk, rv) cells, in
 // the list's order; the rows sorted.
-std::vector<std::string> nest_rows_of(const DataFrame& f) {
+dstd::Vector<dstd::String> nest_rows_of(const DataFrame& f) {
     const Series lk = f.column("lk").materialize();
     const Series lv = f.column("lv").materialize();
     const Series m = f.column("m").materialize();
     const Series rows = m.child(0);
     const Series rk = rows.child(0).materialize();
     const Series rv = rows.child(1).materialize();
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     for (std::int64_t i = 0; i < f.num_rows(); ++i) {
-        std::string row =
-            (lk.is_null(i) ? std::string("n")
-                           : std::to_string(lk.data<std::int64_t>()[i])) +
-            "," + std::to_string(lv.data<std::int64_t>()[i]) + ":";
+        dstd::String row =
+            (lk.is_null(i) ? dstd::String("n")
+                           : dstd::to_string(lk.data<std::int64_t>()[i])) +
+            "," + dstd::to_string(lv.data<std::int64_t>()[i]) + ":";
         for (std::int32_t j = m.offsets()[i]; j < m.offsets()[i + 1]; ++j)
-            row += std::to_string(rk.data<std::int64_t>()[j]) + "=" +
-                   std::to_string(rv.data<std::int64_t>()[j]) + ";";
+            row += dstd::to_string(rk.data<std::int64_t>()[j]) + "=" +
+                   dstd::to_string(rv.data<std::int64_t>()[j]) + ";";
         out.push_back(row);
     }
     std::sort(out.begin(), out.end());
@@ -200,8 +203,8 @@ void block_tables(Table& l, Table& r) {
     }
 }
 
-std::string error_of(const DataFrame& l, const DataFrame& r, JoinHow how,
-                     std::uint64_t budget) {
+dstd::String error_of(const DataFrame& l, const DataFrame& r, JoinHow how,
+                      std::uint64_t budget) {
     try {
         (void)join(l, r, how, budget);
     } catch (const std::invalid_argument& e) {
@@ -303,7 +306,7 @@ TEST_SUITE("join spill") {
         r.key[RIGHT_ROWS - 100] = 3;
         const DataFrame lf = frame_of(l, "lk", "lv");
         const DataFrame rf = frame_of(r, "rk", "rv");
-        const std::string want = error_of(
+        const dstd::String want = error_of(
             lf, rf, JoinHow::Lookup, dftracer::utils::memory::NO_SPILL_BUDGET);
         REQUIRE_FALSE(want.empty());
         for (const std::uint64_t budget :
@@ -379,9 +382,9 @@ TEST_SUITE("join spill") {
     }
 
     TEST_CASE("a lookup matches keys of different number types") {
-        std::vector<std::int64_t> lk;
-        std::vector<double> rk;
-        std::vector<std::int64_t> rv;
+        dstd::Vector<std::int64_t> lk;
+        dstd::Vector<double> rk;
+        dstd::Vector<std::int64_t> rv;
         for (int i = 0; i < 600; ++i) lk.push_back(i % 200);
         for (int j = 0; j < 400; ++j) {
             rk.push_back(static_cast<double>(j));
@@ -403,13 +406,13 @@ TEST_SUITE("join spill") {
     }
 
     TEST_CASE("a partition without right rows keeps a text column") {
-        std::vector<std::int64_t> lk;
+        dstd::Vector<std::int64_t> lk;
         for (int i = 0; i < 1000; ++i) lk.push_back(i);
-        std::vector<std::int64_t> rk;
-        std::vector<std::string> rv;
+        dstd::Vector<std::int64_t> rk;
+        dstd::Vector<dstd::String> rv;
         for (int j = 0; j < 40; ++j) {
             rk.push_back(j);
-            rv.push_back("v" + std::to_string(j));
+            rv.push_back("v" + dstd::to_string(j));
         }
         DataFrame l;
         l.names = {"lk"};
@@ -425,7 +428,7 @@ TEST_SUITE("join spill") {
         for (std::int64_t i = 0; i < out.num_rows(); ++i) {
             const std::int64_t key = k.data<std::int64_t>()[i];
             CHECK(v.is_null(i) == (key >= 40));
-            if (key < 40) CHECK(v.string_at(i) == "v" + std::to_string(key));
+            if (key < 40) CHECK(v.string_at(i) == "v" + dstd::to_string(key));
         }
     }
 
@@ -435,7 +438,7 @@ TEST_SUITE("join spill") {
         const Table r = random_table(rng, 500, 20, 0, 10);
         const DataFrame lf = frame_of(l, "lk", "lv");
         DataFrame rf = frame_of(r, "rk", "rv");
-        std::vector<std::int32_t> off;
+        dstd::Vector<std::int32_t> off;
         for (int i = 0; i <= 500; ++i) off.push_back(i);
         rf.names.push_back("tags");
         rf.columns.push_back(Series::list(off, rf.columns[1].share()));

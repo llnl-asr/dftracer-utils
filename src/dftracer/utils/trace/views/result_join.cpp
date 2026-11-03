@@ -112,8 +112,7 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
     std::sort(rows.begin(), rows.end(),
               [](const Row& a, const Row& b) { return a.key < b.key; });
 
-    // keep std: dataframe::take takes std::vector<std::int64_t>
-    std::vector<std::int64_t> li, ri;
+    dstd::Vector<std::int64_t> li, ri;
     li.reserve(rows.size());
     ri.reserve(rows.size());
     for (const Row& row : rows) {

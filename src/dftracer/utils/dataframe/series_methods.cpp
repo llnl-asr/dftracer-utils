@@ -3,10 +3,9 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
-#include <string_view>
-#include <vector>
 
 // Out-of-line Series methods over the dftu_series_* C ABI.
 namespace dftracer::utils::dataframe {
@@ -234,7 +233,7 @@ Series Series::sample(std::int64_t n, std::uint64_t seed) const {
 Series Series::argsort(bool descending) const {
     return Series{dftu_series_argsort(handle_, descending ? 1 : 0)};
 }
-Series Series::take(const std::vector<std::int64_t>& indices) const {
+Series Series::take(const dstd::Vector<std::int64_t>& indices) const {
     return take(dstd::Span<const std::int64_t>(indices));
 }
 Series Series::take(dstd::Span<const std::int64_t> indices) const {

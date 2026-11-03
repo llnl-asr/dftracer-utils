@@ -32,8 +32,7 @@ index::schemas::dft::ChunkStatistics decode_chunk_statistics_value(
     auto duration_histogram = cursor.str();
     if (!duration_histogram.empty()) {
         stats.duration_histogram = dataframe::Log2Histogram::from_json(
-            // keep std: Log2Histogram::from_json takes std::string
-            std::string(duration_histogram));
+            dstd::String(duration_histogram));
     }
 
     auto name_sketches = cursor.blob_view();

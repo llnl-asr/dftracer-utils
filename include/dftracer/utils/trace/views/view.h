@@ -620,8 +620,7 @@ namespace detail {
 template <class T>
 coro::CoroTask<void> resolve_into(
     dstd::SharedPtr<T> out, typename dataframe::LazyResult<T>::Finish finish,
-    // keep std: LazyResult::Finish takes std::vector<DataFrame>
-    std::vector<dataframe::DataFrame> frames) {
+    dstd::Vector<dataframe::DataFrame> frames) {
     *out = co_await finish(std::move(frames));
 }
 /// A View over `plan` with no ops above the scan, for the C ABI.
@@ -643,8 +642,7 @@ class TraceSession {
     Deferred<T> collect(dataframe::LazyResult<T> result) {
         auto out = dstd::make_shared<T>();
         add(result.plans(), [out, finish = result.finish()](
-                                // keep std: Finish takes std::vector
-                                std::vector<dataframe::DataFrame> frames) {
+                                dstd::Vector<dataframe::DataFrame> frames) {
             return detail::resolve_into<T>(out, finish, std::move(frames));
         });
         return {out, executed_};
@@ -655,19 +653,15 @@ class TraceSession {
     coro::CoroTask<void> execute();
 
    private:
-    // keep std: LazyFrame collect_all hands out std::vector<DataFrame>
-    using Resolve =
-        // keep std: the dataframe API takes std::vector
-        dstd::Function<coro::CoroTask<void>(std::vector<dataframe::DataFrame>)>;
+    using Resolve = dstd::Function<coro::CoroTask<void>(
+        dstd::Vector<dataframe::DataFrame>)>;
     struct Pending {
         std::size_t count;
         Resolve resolve;
     };
-    // keep std: LazyResult::plans is a std::vector<LazyFrame>
-    void add(const std::vector<dataframe::LazyFrame>& plans, Resolve resolve);
+    void add(const dstd::Vector<dataframe::LazyFrame>& plans, Resolve resolve);
 
-    // keep std: collect_all takes std::vector<LazyFrame>
-    std::vector<dataframe::LazyFrame> plans_;
+    dstd::Vector<dataframe::LazyFrame> plans_;
     dstd::Vector<Pending> pending_;
     dstd::SharedPtr<bool> executed_ = dstd::make_shared<bool>(false);
 };
@@ -943,8 +937,7 @@ class View : public dataframe::LazyOps<View> {
                         *slot = std::move(h.get());
                     });
             });
-        // keep std: LazyResult::Finish takes std::vector<DataFrame>
-        return {{std::move(plan)}, [slot](std::vector<dataframe::DataFrame>) {
+        return {{std::move(plan)}, [slot](dstd::Vector<dataframe::DataFrame>) {
                     return dataframe::detail::ready(std::move(*slot));
                 }};
     }

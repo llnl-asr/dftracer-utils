@@ -6,7 +6,6 @@
 #include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
-#include <string_view>
 #include <type_traits>
 
 namespace dftracer::utils::dataframe {

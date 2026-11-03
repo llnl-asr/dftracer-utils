@@ -4,14 +4,12 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -248,7 +246,7 @@ class TypeParams {
 /// another type uses reads as its default.
 struct DataType {
     TypeId id = TypeId::Unknown;
-    std::vector<Field> fields;
+    dstd::Vector<Field> fields;
     TypeParams params;
 
     /// Timestamp, Time32, Time64, Duration; Micro otherwise.
@@ -300,7 +298,7 @@ struct DataType {
 
 /// A named member of a nested type: a Struct field, or a List's element.
 struct Field {
-    std::string name;
+    dstd::String name;
     DataType type;
     bool nullable = true;
 
@@ -324,7 +322,7 @@ inline DataType scalar(TypeId id) noexcept {
 }
 
 /// A List<item_type> @ref DataType, with the element named `item_name`.
-inline DataType list_of(DataType item_type, std::string item_name = "item") {
+inline DataType list_of(DataType item_type, dstd::String item_name = "item") {
     DataType dt;
     dt.id = TypeId::List;
     dt.fields.push_back(
@@ -334,7 +332,7 @@ inline DataType list_of(DataType item_type, std::string item_name = "item") {
 
 /// A LargeList<item_type> @ref DataType, with the element named `item_name`.
 inline DataType large_list_of(DataType item_type,
-                              std::string item_name = "item") {
+                              dstd::String item_name = "item") {
     DataType dt;
     dt.id = TypeId::LargeList;
     dt.fields.push_back(
@@ -344,7 +342,7 @@ inline DataType large_list_of(DataType item_type,
 
 /// A FixedSizeList<item_type> @ref DataType of `size` elements per row.
 inline DataType fixed_size_list_of(DataType item_type, std::int32_t size,
-                                   std::string item_name = "item") {
+                                   dstd::String item_name = "item") {
     DataType dt;
     dt.id = TypeId::FixedSizeList;
     dt.set_fixed_size(size);
@@ -354,7 +352,7 @@ inline DataType fixed_size_list_of(DataType item_type, std::int32_t size,
 }
 
 /// A Struct @ref DataType with the given fields, in order.
-inline DataType struct_of(std::vector<Field> fields) {
+inline DataType struct_of(dstd::Vector<Field> fields) {
     DataType dt;
     dt.id = TypeId::Struct;
     dt.fields = std::move(fields);
@@ -377,7 +375,7 @@ inline DataType map_of(DataType key_type, DataType value_type) {
 }
 
 /// A Timestamp @ref DataType at `unit` granularity, optionally with `tz`.
-inline DataType timestamp(TimeUnit unit, std::string tz = "") {
+inline DataType timestamp(TimeUnit unit, dstd::String tz = "") {
     DataType dt;
     dt.id = TypeId::Timestamp;
     dt.set_time_unit(unit);

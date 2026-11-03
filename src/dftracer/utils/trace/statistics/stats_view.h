@@ -112,12 +112,10 @@ class StatsView {
         // With pid/tid counts wanted, the category aggregate is grouped by
         // pid and tid too, and both breakdowns come from its rows.
         const std::size_t keys = needs.pid_tids ? 3 : 1;
-        // keep std: collect_all takes and returns std::vectors
-        std::vector<dataframe::LazyFrame> plans{
+        dstd::Vector<dataframe::LazyFrame> plans{
             (needs.pid_tids ? cat_pid_agg() : cat_agg()).lazy()};
         if (needs.names) plans.push_back(name_agg().lazy());
-        // keep std: collect_all takes and returns std::vectors
-        std::vector<dataframe::DataFrame> frames =
+        dstd::Vector<dataframe::DataFrame> frames =
             co_await dataframe::collect_all(std::move(plans));
 
         // The category pass also carries the global duration/timestamp

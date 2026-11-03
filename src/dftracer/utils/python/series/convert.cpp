@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // clang-format off
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/python/series_detail.h>  // Python.h first
 #include <datetime.h>
@@ -20,10 +21,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::python::series_detail {
 
@@ -33,10 +31,10 @@ namespace {
 struct Node {
     Series col;
     TypeId type = TypeId::Int64;
-    std::vector<Node> kids;
-    std::vector<std::string> fields;
+    dftracer::utils::dstd::Vector<Node> kids;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> fields;
     dataframe::TimeUnit unit = dataframe::TimeUnit::Micro;
-    std::string zone;
+    dftracer::utils::dstd::String zone;
     std::int32_t scale = 0;
     std::int32_t width = 0;
     PyObject* tz = nullptr;  // borrowed: cached ZoneInfo of `zone`
@@ -82,7 +80,7 @@ PyObject* range_error(const char* what) {
 }
 
 // The `zoneinfo.ZoneInfo` (or fixed-offset timezone) of `name`, cached.
-PyObject* zone_of(const std::string& name) {
+PyObject* zone_of(const dftracer::utils::dstd::String& name) {
     static PyObject* cache = nullptr;
     if (!cache && !(cache = PyDict_New())) return nullptr;
     PyObject* key = PyUnicode_FromString(name.c_str());
@@ -204,8 +202,10 @@ Node build_node(const Series& s) {
             break;
         default:
             throw std::invalid_argument(
-                std::string("no native conversion for column type '") +
-                dataframe::type_name(n.type) + "'");
+                (dftracer::utils::dstd::String(
+                     "no native conversion for column type '") +
+                 dataframe::type_name(n.type) + "'")
+                    .c_str());
     }
     return n;
 }
@@ -373,13 +373,13 @@ PyObject* cell(const Node& n, std::int64_t i) {
             return PyFloat_FromDouble(n.col.data<double>()[at]);
         case TypeId::String:
         case TypeId::LargeString: {
-            const dstd::StringView v = n.col.string_at(i);
+            const dftracer::utils::dstd::StringView v = n.col.string_at(i);
             return PyUnicode_DecodeUTF8(
                 v.data(), static_cast<Py_ssize_t>(v.size()), "strict");
         }
         case TypeId::Binary:
         case TypeId::LargeBinary: {
-            const dstd::StringView v = n.col.string_at(i);
+            const dftracer::utils::dstd::StringView v = n.col.string_at(i);
             return PyBytes_FromStringAndSize(v.data(),
                                              static_cast<Py_ssize_t>(v.size()));
         }
@@ -429,13 +429,14 @@ PyObject* cell(const Node& n, std::int64_t i) {
     }
 }
 
-using Bits = std::vector<std::uint8_t>;
+using Bits = dftracer::utils::dstd::Vector<std::uint8_t>;
 
-std::vector<std::uint8_t> valid_bitmap(std::size_t n) {
-    return std::vector<std::uint8_t>((n + 7) / 8, 0xFF);
+dftracer::utils::dstd::Vector<std::uint8_t> valid_bitmap(std::size_t n) {
+    return dftracer::utils::dstd::Vector<std::uint8_t>((n + 7) / 8, 0xFF);
 }
 
-void clear_bit(std::vector<std::uint8_t>& bits, std::size_t i) {
+void clear_bit(dftracer::utils::dstd::Vector<std::uint8_t>& bits,
+               std::size_t i) {
     bits[i >> 3] &= static_cast<std::uint8_t>(~(1U << (i & 7)));
 }
 
@@ -779,7 +780,7 @@ class StringFiller {
 
    private:
     struct Slot {
-        dstd::StringView text;
+        dftracer::utils::dstd::StringView text;
         PyObject* obj = nullptr;  // borrowed: the destination holds a reference
     };
     static constexpr std::size_t SLOTS = 1U << 16;
@@ -793,8 +794,8 @@ class StringFiller {
         const dftu_series* dict = c->child().get();
         const auto* codes =
             reinterpret_cast<const std::int32_t*>(c->data.data());
-        std::vector<PyObject*> entries(static_cast<std::size_t>(dict->length),
-                                       nullptr);
+        dftracer::utils::dstd::Vector<PyObject*> entries(
+            static_cast<std::size_t>(dict->length), nullptr);
         bool ok = true;
         for (std::int64_t i = 0; i < c->length && ok; ++i) {
             PyObject* v;
@@ -839,8 +840,8 @@ class StringFiller {
             } else {
                 std::int64_t n = 0;
                 const char* p = dftu_series_string_at(c, i, &n);
-                const dstd::StringView t(p ? p : "",
-                                         static_cast<std::size_t>(n));
+                const dftracer::utils::dstd::StringView t(
+                    p ? p : "", static_cast<std::size_t>(n));
                 Slot& slot =
                     cache_[quick_hash(t.data(), t.size()) & (SLOTS - 1)];
                 if (slot.obj && slot.text == t) {
@@ -861,7 +862,7 @@ class StringFiller {
 
     PyObject* na_;
     bool drop_old_;
-    std::vector<Slot> cache_;
+    dftracer::utils::dstd::Vector<Slot> cache_;
 };
 
 bool fill_strings(const Series& col, PyObject* na, PyObject** dst,
@@ -1059,8 +1060,8 @@ PyObject* build_plain(PyObject** items, Py_ssize_t n, Bits& bits, bool any_bool,
                       bool any_bytes, bool any_big) {
     Series out;
     if (any_bool) {
-        std::vector<std::uint8_t> packed((static_cast<std::size_t>(n) + 7) / 8,
-                                         0);
+        dftracer::utils::dstd::Vector<std::uint8_t> packed(
+            (static_cast<std::size_t>(n) + 7) / 8, 0);
         for (Py_ssize_t i = 0; i < n; ++i) {
             if (items[i] == Py_None) {
                 clear_bit(bits, static_cast<std::size_t>(i));
@@ -1071,7 +1072,8 @@ PyObject* build_plain(PyObject** items, Py_ssize_t n, Bits& bits, bool any_bool,
         }
         out = Series::flat(TypeId::Bool, packed.data(), n, bits.data());
     } else if (any_float) {
-        std::vector<double> data(static_cast<std::size_t>(n), 0.0);
+        dftracer::utils::dstd::Vector<double> data(static_cast<std::size_t>(n),
+                                                   0.0);
         for (Py_ssize_t i = 0; i < n; ++i) {
             if (items[i] == Py_None) {
                 clear_bit(bits, static_cast<std::size_t>(i));
@@ -1086,7 +1088,8 @@ PyObject* build_plain(PyObject** items, Py_ssize_t n, Bits& bits, bool any_bool,
         out = Series::flat(TypeId::Float64, data.data(), n, bits.data());
     } else if (any_int) {
         if (any_big) {
-            std::vector<std::uint64_t> data(static_cast<std::size_t>(n), 0);
+            dftracer::utils::dstd::Vector<std::uint64_t> data(
+                static_cast<std::size_t>(n), 0);
             for (Py_ssize_t i = 0; i < n; ++i) {
                 if (items[i] == Py_None) {
                     clear_bit(bits, static_cast<std::size_t>(i));
@@ -1100,7 +1103,8 @@ PyObject* build_plain(PyObject** items, Py_ssize_t n, Bits& bits, bool any_bool,
             }
             out = Series::flat(TypeId::Uint64, data.data(), n, bits.data());
         } else {
-            std::vector<std::int64_t> data(static_cast<std::size_t>(n), 0);
+            dftracer::utils::dstd::Vector<std::int64_t> data(
+                static_cast<std::size_t>(n), 0);
             for (Py_ssize_t i = 0; i < n; ++i) {
                 if (items[i] == Py_None) {
                     clear_bit(bits, static_cast<std::size_t>(i));
@@ -1111,8 +1115,9 @@ PyObject* build_plain(PyObject** items, Py_ssize_t n, Bits& bits, bool any_bool,
             out = Series::flat(TypeId::Int64, data.data(), n, bits.data());
         }
     } else if (any_str || any_bytes) {
-        std::vector<std::int32_t> offsets(static_cast<std::size_t>(n) + 1, 0);
-        std::string bytes;
+        dftracer::utils::dstd::Vector<std::int32_t> offsets(
+            static_cast<std::size_t>(n) + 1, 0);
+        dftracer::utils::dstd::String bytes;
         for (Py_ssize_t i = 0; i < n; ++i) {
             if (items[i] == Py_None) {
                 clear_bit(bits, static_cast<std::size_t>(i));
@@ -1171,7 +1176,7 @@ PyObject* bad_value(const char* what) {
     return nullptr;
 }
 
-dstd::Optional<Kind> kind_of(PyObject* v, bool& other) {
+dftracer::utils::dstd::Optional<Kind> kind_of(PyObject* v, bool& other) {
     if (PyBool_Check(v)) return Kind::Bool;
     if (PyLong_Check(v)) return Kind::Int;
     if (PyFloat_Check(v)) return Kind::Float;
@@ -1184,25 +1189,26 @@ dstd::Optional<Kind> kind_of(PyObject* v, bool& other) {
     if (PyList_Check(v) || PyTuple_Check(v)) return Kind::List;
     if (PyDict_Check(v)) return Kind::Dict;
     PyObject* cls = decimal_class();
-    if (!cls) return dstd::nullopt;
+    if (!cls) return dftracer::utils::dstd::nullopt;
     const int is = PyObject_IsInstance(v, cls);
-    if (is < 0) return dstd::nullopt;
+    if (is < 0) return dftracer::utils::dstd::nullopt;
     if (is) return Kind::Decimal;
     other = true;
-    return dstd::nullopt;
+    return dftracer::utils::dstd::nullopt;
 }
 
 // The offset of an aware datetime as microseconds, or nullopt for a naive
 // one; -1 in `error` on a Python error.
-dstd::Optional<std::int64_t> utc_offset(PyObject* v, bool& error) {
+dftracer::utils::dstd::Optional<std::int64_t> utc_offset(PyObject* v,
+                                                         bool& error) {
     PyObject* off = PyObject_CallMethod(v, "utcoffset", nullptr);
     if (!off) {
         error = true;
-        return dstd::nullopt;
+        return dftracer::utils::dstd::nullopt;
     }
     if (off == Py_None) {
         Py_DECREF(off);
-        return dstd::nullopt;
+        return dftracer::utils::dstd::nullopt;
     }
     const std::int64_t us =
         (static_cast<std::int64_t>(PyDateTime_DELTA_GET_DAYS(off)) * 86400 +
@@ -1215,9 +1221,9 @@ dstd::Optional<std::int64_t> utc_offset(PyObject* v, bool& error) {
 
 // The zone name of an aware datetime: a ZoneInfo key, a pytz zone, UTC, or
 // its fixed offset as +HH:MM.
-std::string zone_name(PyObject* v, std::int64_t offset_us) {
+dftracer::utils::dstd::String zone_name(PyObject* v, std::int64_t offset_us) {
     PyObject* tz = PyObject_GetAttrString(v, "tzinfo");
-    std::string name;
+    dftracer::utils::dstd::String name;
     if (tz) {
         for (const char* attr : {"key", "zone"}) {
             PyObject* n = PyObject_GetAttrString(tz, attr);
@@ -1242,9 +1248,10 @@ std::string zone_name(PyObject* v, std::int64_t offset_us) {
 }
 
 PyObject* build_datetimes(PyObject** items, Py_ssize_t n, Bits& bits) {
-    std::vector<std::int64_t> micros(static_cast<std::size_t>(n), 0);
-    dstd::Optional<bool> aware;
-    std::string zone;
+    dftracer::utils::dstd::Vector<std::int64_t> micros(
+        static_cast<std::size_t>(n), 0);
+    dftracer::utils::dstd::Optional<bool> aware;
+    dftracer::utils::dstd::String zone;
     bool mixed_zones = false;
     for (Py_ssize_t i = 0; i < n; ++i) {
         PyObject* v = items[i];
@@ -1269,7 +1276,7 @@ PyObject* build_datetimes(PyObject** items, Py_ssize_t n, Bits& bits) {
                           PyDateTime_DATE_GET_MICROSECOND(v);
         if (off) {
             us -= *off;
-            const std::string name = zone_name(v, *off);
+            const dftracer::utils::dstd::String name = zone_name(v, *off);
             if (zone.empty())
                 zone = name;
             else if (zone != name)
@@ -1284,7 +1291,8 @@ PyObject* build_datetimes(PyObject** items, Py_ssize_t n, Bits& bits) {
 }
 
 PyObject* build_dates(PyObject** items, Py_ssize_t n, Bits& bits) {
-    std::vector<std::int32_t> days(static_cast<std::size_t>(n), 0);
+    dftracer::utils::dstd::Vector<std::int32_t> days(
+        static_cast<std::size_t>(n), 0);
     for (Py_ssize_t i = 0; i < n; ++i) {
         if (items[i] == Py_None) {
             clear_bit(bits, static_cast<std::size_t>(i));
@@ -1301,7 +1309,8 @@ PyObject* build_dates(PyObject** items, Py_ssize_t n, Bits& bits) {
 }
 
 PyObject* build_times(PyObject** items, Py_ssize_t n, Bits& bits) {
-    std::vector<std::int64_t> micros(static_cast<std::size_t>(n), 0);
+    dftracer::utils::dstd::Vector<std::int64_t> micros(
+        static_cast<std::size_t>(n), 0);
     for (Py_ssize_t i = 0; i < n; ++i) {
         PyObject* v = items[i];
         if (v == Py_None) {
@@ -1323,7 +1332,8 @@ PyObject* build_times(PyObject** items, Py_ssize_t n, Bits& bits) {
 }
 
 PyObject* build_deltas(PyObject** items, Py_ssize_t n, Bits& bits) {
-    std::vector<std::int64_t> micros(static_cast<std::size_t>(n), 0);
+    dftracer::utils::dstd::Vector<std::int64_t> micros(
+        static_cast<std::size_t>(n), 0);
     for (Py_ssize_t i = 0; i < n; ++i) {
         PyObject* v = items[i];
         if (v == Py_None) {
@@ -1347,7 +1357,7 @@ constexpr int MAX_DECIMAL_DIGITS = 38;
 
 struct DecimalParts {
     bool negative = false;
-    std::vector<int> digits;
+    dftracer::utils::dstd::Vector<int> digits;
     long exponent = 0;
 };
 
@@ -1391,7 +1401,8 @@ bool decimal_parts(PyObject* v, DecimalParts& out) {
 }
 
 PyObject* build_decimals(PyObject** items, Py_ssize_t n, Bits& bits) {
-    std::vector<DecimalParts> parts(static_cast<std::size_t>(n));
+    dftracer::utils::dstd::Vector<DecimalParts> parts(
+        static_cast<std::size_t>(n));
     long scale = 0;
     for (Py_ssize_t i = 0; i < n; ++i) {
         if (items[i] == Py_None) {
@@ -1402,7 +1413,8 @@ PyObject* build_decimals(PyObject** items, Py_ssize_t n, Bits& bits) {
         if (!decimal_parts(items[i], p)) return nullptr;
         scale = std::max(scale, -p.exponent);
     }
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(n) * 16, 0);
+    dftracer::utils::dstd::Vector<std::uint8_t> bytes(
+        static_cast<std::size_t>(n) * 16, 0);
     int precision = 1;
     for (Py_ssize_t i = 0; i < n; ++i) {
         if (items[i] == Py_None) continue;
@@ -1467,8 +1479,9 @@ PyObject* with_validity(Series series, const Bits& bits, Py_ssize_t n) {
 
 // The elements of every list (or tuple) as one child column.
 PyObject* build_lists(PyObject** items, Py_ssize_t n, Bits& bits) {
-    std::vector<PyObject*> flat;
-    std::vector<std::int32_t> offsets(static_cast<std::size_t>(n) + 1, 0);
+    dftracer::utils::dstd::Vector<PyObject*> flat;
+    dftracer::utils::dstd::Vector<std::int32_t> offsets(
+        static_cast<std::size_t>(n) + 1, 0);
     for (Py_ssize_t i = 0; i < n; ++i) {
         PyObject* v = items[i];
         if (v == Py_None) {
@@ -1495,7 +1508,7 @@ PyObject* build_lists(PyObject** items, Py_ssize_t n, Bits& bits) {
 
 // One struct field per key, in first-seen order; a missing key is null.
 PyObject* build_structs(PyObject** items, Py_ssize_t n, Bits& bits) {
-    std::vector<std::string> names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
     for (Py_ssize_t i = 0; i < n; ++i) {
         PyObject* d = items[i];
         if (d == Py_None) continue;
@@ -1510,9 +1523,9 @@ PyObject* build_structs(PyObject** items, Py_ssize_t n, Bits& bits) {
                 names.emplace_back(k);
         }
     }
-    std::vector<Series> fields;
-    for (const std::string& name : names) {
-        std::vector<PyObject*> column;
+    dftracer::utils::dstd::Vector<Series> fields;
+    for (const dftracer::utils::dstd::String& name : names) {
+        dftracer::utils::dstd::Vector<PyObject*> column;
         for (Py_ssize_t i = 0; i < n; ++i) {
             PyObject* value = items[i] == Py_None ? nullptr
                                                   : PyDict_GetItemString(

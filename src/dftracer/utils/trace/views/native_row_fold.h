@@ -104,8 +104,7 @@ dataframe::DataFrame build_row_frame(
 /// column layout is unchanged. Empty when the batch holds no numeric arg.
 /// With a window or clip token in `select`, only the events that start in its
 /// window contribute.
-// keep std: the names go into DataFrame::names, a std::vector<std::string>
-std::vector<std::pair<std::string, dataframe::Series>>
+dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>>
 build_dyn_numeric_columns(EventRows events,
                           const dftracer::utils::dstd::StringIntern& intern,
                           const dstd::Vector<dstd::String>& select);
@@ -126,9 +125,8 @@ dstd::Vector<dstd::String> row_fold_extra_captures(
 /// (accepting `sel` bare or "args."-prefixed).
 /// ViewSource::names() uses this so a streamed morsel's schema always matches
 /// what build_row_frame actually emits for the same select.
-// keep std: dataframe column names are std::string
-std::string canonical_row_column_name(dstd::StringView sel,
-                                      bool by_path = false);
+dstd::String canonical_row_column_name(dstd::StringView sel,
+                                       bool by_path = false);
 
 /// The statically known type of the column `canonical_row_column_name(sel)`
 /// names, or TypeId::Unknown when it is data-dependent (a flattened args.*

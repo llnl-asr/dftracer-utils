@@ -34,7 +34,6 @@
 #include <cstdint>
 #include <limits>
 #include <type_traits>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -77,7 +76,7 @@ class BasicDDSketch {
 
     /// Occupied buckets in ascending value order (empty buckets omitted), for a
     /// raw histogram. Bounds are the sketch's relative-error bucket bounds.
-    std::vector<HistogramBin> bins() const;
+    dstd::Vector<HistogramBin> bins() const;
 
     double log_gamma() const { return log_gamma_; }
     std::uint64_t count() const { return count_; }
@@ -90,7 +89,7 @@ class BasicDDSketch {
 
     /// Little-endian bytes: gamma, min, max, count, zero count, offset, bin
     /// count, then the bins.
-    std::vector<std::uint8_t> serialize() const;
+    dstd::Vector<std::uint8_t> serialize() const;
     std::size_t serialized_size() const;
     /// Writes exactly serialized_size() bytes at `out`.
     void write_to(std::uint8_t* out) const;

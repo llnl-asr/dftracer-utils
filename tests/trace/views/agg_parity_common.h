@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -210,7 +211,7 @@ inline dftracer::utils::dataframe::DataFrame collect_groupmap_plan(
 
 inline void check_match(const dftracer::utils::dataframe::DataFrame& a0,
                         const dftracer::utils::dataframe::DataFrame& b0,
-                        const std::string& key) {
+                        const dftracer::utils::dstd::String& key) {
     dftracer::utils::dataframe::DataFrame a = a0.sort_by(key, false);
     dftracer::utils::dataframe::DataFrame b = b0.sort_by(key, false);
     REQUIRE(a.names.size() == b.names.size());
@@ -234,9 +235,10 @@ inline void check_match(const dftracer::utils::dataframe::DataFrame& a0,
         }
 }
 
-inline void check_match_multi(const dftracer::utils::dataframe::DataFrame& a0,
-                              const dftracer::utils::dataframe::DataFrame& b0,
-                              const std::vector<std::string>& keys) {
+inline void check_match_multi(
+    const dftracer::utils::dataframe::DataFrame& a0,
+    const dftracer::utils::dataframe::DataFrame& b0,
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& keys) {
     REQUIRE(a0.names.size() == b0.names.size());
     for (std::size_t i = 0; i < a0.names.size(); ++i) {
         CHECK(a0.names[i] == b0.names[i]);
@@ -278,7 +280,7 @@ inline void check_match_multi(const dftracer::utils::dataframe::DataFrame& a0,
 
 inline void run_both_file(const std::string& file, const std::string& file_idx,
                           const dftracer::utils::trace::views::GroupKey& gk,
-                          const std::string& key_col,
+                          const dftracer::utils::dstd::String& key_col,
                           std::uint64_t mem_budget) {
     auto build = [&] {
         dftracer::utils::trace::views::detail::scan::ScanPlan v =
@@ -316,7 +318,9 @@ inline void run_both_multi(
         files,
     const dftracer::utils::dstd::Vector<
         dftracer::utils::trace::views::GroupKey>& gks,
-    const std::vector<std::string>& key_cols, std::uint64_t mem_budget) {
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&
+        key_cols,
+    std::uint64_t mem_budget) {
     auto build = [&] {
         dftracer::utils::trace::views::detail::scan::ScanPlan v =
             dftracer::utils::trace::views::detail::scan::from_files(files);

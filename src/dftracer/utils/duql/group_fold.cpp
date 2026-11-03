@@ -69,8 +69,7 @@ df::Series joined(const dstd::Vector<df::Series>& parts,
     if (parts.empty()) return empty(type);
     if (parts.size() == 1) return parts.front().share();
     dstd::Vector<df::DataFrame> frames(parts.size());
-    // keep std: df::concat takes std::vector<const DataFrame*>
-    std::vector<const df::DataFrame*> ptrs;
+    dstd::Vector<const df::DataFrame*> ptrs;
     for (std::size_t i = 0; i < parts.size(); ++i) {
         frames[i].names.push_back("v");
         frames[i].columns.push_back(parts[i].share());
@@ -190,14 +189,12 @@ GroupFold::GroupFold(dstd::Vector<df::DataType> key_types,
       members_(aggs_.size()),
       args_(aggs_.size()),
       sketches_(aggs_.size()) {
-    // keep std: df::agg_new takes std::vector<AggSpec>
-    std::vector<df::AggSpec> specs;
+    dstd::Vector<df::AggSpec> specs;
     for (std::size_t a = 0; a < aggs_.size(); ++a) {
         if (aggs_[a].op != FoldOp::Engine) continue;
         const dstd::String name =
             dstd::String("__duql_fold_") + dstd::to_string(a);
-        // keep std: AggSpec::name is a std::string
-        std::string spec_name(name.data(), name.size());
+        dstd::String spec_name(name.data(), name.size());
         specs.push_back({aggs_[a].engine, aggs_[a].in, std::move(spec_name),
                          aggs_[a].param, -1});
     }
@@ -233,8 +230,9 @@ void GroupFold::add(df::DataFrame batch) {
                     key.clear();
                     if (!append_cell_key(key, c, r))
                         throw std::invalid_argument(
-                            "group: key '" + batch.names[0] +
-                            "' holds a list or object; group by a scalar");
+                            ("group: key '" + batch.names[0] +
+                             "' holds a list or object; group by a scalar")
+                                .c_str());
                     const auto text = string_key_text(key);
                     if (text) {
                         sv = *text;
@@ -272,8 +270,9 @@ void GroupFold::add(df::DataFrame batch) {
                 key += '\1';
             } else {
                 throw std::invalid_argument(
-                    "group: key '" + batch.names[k] +
-                    "' holds a list or object; group by a scalar");
+                    ("group: key '" + batch.names[k] +
+                     "' holds a list or object; group by a scalar")
+                        .c_str());
             }
         }
         auto [it, added] = groups_.try_emplace(key, num_groups_);
@@ -289,8 +288,7 @@ void GroupFold::add(df::DataFrame batch) {
     const auto groups = static_cast<std::size_t>(num_groups_);
     if (engine_) {
         const df::Series g = df::Series::flat_i64(gid.data(), n);
-        // keep std: df::agg_accumulate takes std::vector<const Series*>
-        std::vector<const df::Series*> values;
+        dstd::Vector<const df::Series*> values;
         for (const auto& c : batch.columns) values.push_back(&c);
         df::agg_set_row_base(*engine_, rows_);
         df::agg_accumulate(*engine_, {&g}, values);
@@ -451,8 +449,7 @@ void GroupFold::sketches(std::size_t a, const df::Series& in,
     }
 }
 
-// keep std: df::DataFrame::names is a std::vector<std::string>
-df::DataFrame GroupFold::finish(std::vector<std::string> names) {
+df::DataFrame GroupFold::finish(dstd::Vector<dstd::String> names) {
     const auto groups = num_groups_;
     const auto count = static_cast<std::size_t>(groups);
     df::DataFrame out;
@@ -467,10 +464,8 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
     dstd::Optional<df::DataFrame> engine;
     dstd::Vector<std::int64_t> order;
     if (engine_) {
-        // keep std: df::agg_finalize takes std::vector<std::string>
-        engine =
-            // keep std: df::agg_finalize takes std::vector<std::string>
-            df::agg_finalize(*engine_, std::vector<std::string>{"__duql_gid"});
+        engine = df::agg_finalize(*engine_,
+                                  dstd::Vector<dstd::String>{"__duql_gid"});
         order.assign(count, -1);
         const df::Series g = engine->columns.front().cast(TypeId::Int64);
         for (std::int64_t r = 0; r < g.length(); ++r)
@@ -496,8 +491,7 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
             case FoldOp::Collect: {
                 auto& members = members_[a];
                 members.resize(count);
-                // keep std: Series::list takes std::vector<std::int32_t>
-                std::vector<std::int32_t> offsets{0};
+                dstd::Vector<std::int32_t> offsets{0};
                 dstd::Vector<std::int64_t> rows;
                 for (const auto& m : members) {
                     rows.insert(rows.end(), m.begin(), m.end());

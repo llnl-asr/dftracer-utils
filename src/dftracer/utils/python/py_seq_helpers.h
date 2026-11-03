@@ -8,8 +8,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::python {
 
@@ -19,8 +17,8 @@ namespace dftracer::utils::python {
 // `convert(item, out)` returns false with a Python error already set to abort;
 // `out` may be partially filled in that case.
 template <class T, class Convert>
-inline bool parse_seq(PyObject* obj, const char* msg, std::vector<T>& out,
-                      Convert convert) {
+inline bool parse_seq(PyObject* obj, const char* msg,
+                      dftracer::utils::dstd::Vector<T>& out, Convert convert) {
     PyObject* seq = PySequence_Fast(obj, msg);
     if (!seq) return false;
     Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
@@ -36,21 +34,11 @@ inline bool parse_seq(PyObject* obj, const char* msg, std::vector<T>& out,
 }
 
 // Append the UTF-8 strings of a Python sequence to `out`. A non-str item sets
-// the TypeError raised by PyUnicode_AsUTF8. `msg` is the not-a-sequence error.
-inline bool parse_string_seq(PyObject* obj, const char* msg,
-                             std::vector<std::string>& out) {
-    return parse_seq<std::string>(
-        obj, msg, out, [](PyObject* item, std::vector<std::string>& o) {
-            const char* s = PyUnicode_AsUTF8(item);
-            if (!s) return false;
-            o.emplace_back(s);
-            return true;
-        });
-}
-
-// The same into a dstd::Vector, for the index and runtime APIs.
-inline bool parse_string_seq(PyObject* obj, const char* msg,
-                             dstd::Vector<dstd::String>& out) {
+// the TypeError raised by PyUnicode_AsUTF8AndSize. `msg` is the not-a-sequence
+// error.
+inline bool parse_string_seq(
+    PyObject* obj, const char* msg,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& out) {
     PyObject* seq = PySequence_Fast(obj, msg);
     if (!seq) return false;
     const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
@@ -71,10 +59,13 @@ inline bool parse_string_seq(PyObject* obj, const char* msg,
 
 // Append the raw bytes of each item of a Python sequence to `out`; each item
 // must be a bytes object (PyBytes_AsStringAndSize sets the error otherwise).
-inline bool parse_bytes_seq(PyObject* obj, const char* msg,
-                            std::vector<std::string>& out) {
-    return parse_seq<std::string>(
-        obj, msg, out, [](PyObject* item, std::vector<std::string>& o) {
+inline bool parse_bytes_seq(
+    PyObject* obj, const char* msg,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& out) {
+    return parse_seq<dftracer::utils::dstd::String>(
+        obj, msg, out,
+        [](PyObject* item,
+           dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& o) {
             char* buf = nullptr;
             Py_ssize_t len = 0;
             if (PyBytes_AsStringAndSize(item, &buf, &len) < 0) return false;
@@ -86,9 +77,10 @@ inline bool parse_bytes_seq(PyObject* obj, const char* msg,
 // Append the integers of a Python sequence to `out` via PyLong_AsLongLong.
 // A non-int item (or overflow) sets the error PyLong_AsLongLong raises.
 inline bool parse_int_seq(PyObject* obj, const char* msg,
-                          std::vector<std::int64_t>& out) {
+                          dftracer::utils::dstd::Vector<std::int64_t>& out) {
     return parse_seq<std::int64_t>(
-        obj, msg, out, [](PyObject* item, std::vector<std::int64_t>& o) {
+        obj, msg, out,
+        [](PyObject* item, dftracer::utils::dstd::Vector<std::int64_t>& o) {
             long long v = PyLong_AsLongLong(item);
             if (v == -1 && PyErr_Occurred()) return false;
             o.push_back(static_cast<std::int64_t>(v));

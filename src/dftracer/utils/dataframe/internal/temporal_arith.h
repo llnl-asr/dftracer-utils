@@ -5,12 +5,10 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -42,7 +40,7 @@ struct TemporalResult {
     TypeId id;
     TimeUnit unit;
     /// Timestamp only; empty means naive (no timezone).
-    std::string timezone;
+    dstd::String timezone;
 };
 
 /// Result of a Timestamp/Duration/Time64 column-column arithmetic op; see
@@ -70,9 +68,9 @@ inline dstd::Optional<TemporalResult> temporal_binop_result(
 
     if (op == TemporalOp::Add) {
         if (is_ts(a_id) && is_dur(b_id))
-            return TemporalResult{TypeId::Timestamp, unit, std::string(a_tz)};
+            return TemporalResult{TypeId::Timestamp, unit, dstd::String(a_tz)};
         if (is_dur(a_id) && is_ts(b_id))
-            return TemporalResult{TypeId::Timestamp, unit, std::string(b_tz)};
+            return TemporalResult{TypeId::Timestamp, unit, dstd::String(b_tz)};
         if (is_dur(a_id) && is_dur(b_id))
             return TemporalResult{TypeId::Duration, unit, ""};
         if (is_time64(a_id) && is_dur(b_id))
@@ -87,7 +85,7 @@ inline dstd::Optional<TemporalResult> temporal_binop_result(
             return TemporalResult{TypeId::Duration, unit, ""};
         }
         if (is_ts(a_id) && is_dur(b_id))
-            return TemporalResult{TypeId::Timestamp, unit, std::string(a_tz)};
+            return TemporalResult{TypeId::Timestamp, unit, dstd::String(a_tz)};
         if (is_time64(a_id) && is_time64(b_id))
             return TemporalResult{TypeId::Duration, unit, ""};
         if (is_time64(a_id) && is_dur(b_id))
@@ -117,10 +115,10 @@ inline dstd::Optional<TemporalResult> temporal_scalarop_result(TypeId a_id,
 /// the exact integer ratio between the two granularities), checked for
 /// int64 overflow. Only called when `from != to`, coarse-to-fine (see
 /// finer_unit): the caller never asks this to divide, which would truncate.
-inline dstd::Optional<std::vector<std::int64_t>> rescale_ticks_up(
+inline dstd::Optional<dstd::Vector<std::int64_t>> rescale_ticks_up(
     const std::int64_t* p, std::size_t n, TimeUnit from, TimeUnit to) {
     const std::int64_t ratio = nanos_per_unit(from) / nanos_per_unit(to);
-    std::vector<std::int64_t> out(n);
+    dstd::Vector<std::int64_t> out(n);
     for (std::size_t i = 0; i < n; ++i) {
         std::int64_t r;
         if (__builtin_mul_overflow(p[i], ratio, &r)) return dstd::nullopt;

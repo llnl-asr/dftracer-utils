@@ -5,10 +5,10 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <memory>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -42,21 +42,21 @@ Series materialize(const Series& v);
 
 /// Gather the rows of `v` at `indices` into a new FLAT column. Handles every
 /// column type (nested List/Struct included) and propagates validity.
-Series take(const Series& v, const std::vector<std::int64_t>& indices);
+Series take(const Series& v, const dstd::Vector<std::int64_t>& indices);
 /// The same over 32-bit indices, for a caller whose rows fit (a join whose
 /// sides are under 2^31 rows): half the index traffic, the same gather.
-Series take32(const Series& v, const std::vector<std::int32_t>& indices);
+Series take32(const Series& v, const dstd::Vector<std::int32_t>& indices);
 /// Every column of a frame gathered by the same `n` indices, the index list
 /// scanned once for all of them (its bound and its null sentinels).
-std::vector<Series> take_all(const std::vector<Series>& columns,
-                             const std::int64_t* idx, std::int64_t n);
+dstd::Vector<Series> take_all(const dstd::Vector<Series>& columns,
+                              const std::int64_t* idx, std::int64_t n);
 /// The rows of `v` at `indices` as a SELECTION view over `v` (its flat root:
 /// a view over a view composes), no value data copied. What a frame filter
 /// hands each column, so a column the caller never reads is never gathered.
-Series select_rows(const Series& v, const std::vector<std::int64_t>& indices);
+Series select_rows(const Series& v, const dstd::Vector<std::int64_t>& indices);
 /// The same over every column of a frame, the index buffer shared.
-std::vector<Series> select_rows(const std::vector<Series>& columns,
-                                const std::vector<std::int64_t>& indices);
+dstd::Vector<Series> select_rows(const dstd::Vector<Series>& columns,
+                                 const dstd::Vector<std::int64_t>& indices);
 
 }  // namespace dftracer::utils::dataframe
 

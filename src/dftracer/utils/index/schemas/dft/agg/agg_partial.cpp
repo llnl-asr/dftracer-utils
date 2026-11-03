@@ -293,8 +293,7 @@ bool DistinctIds::read_from(dstd::LeReader& r) {
     if (tag == TAG_SPARSE) {
         std::uint64_t n = 0;
         if (!get_count(r, Sketch::SPARSE_LIMIT, n)) return false;
-        // keep std: set_sparse_hashes takes std::vector
-        std::vector<std::uint64_t> hashes;
+        dstd::Vector<std::uint64_t> hashes;
         hashes.reserve(n);
         std::uint64_t prev = 0;
         for (std::uint64_t i = 0; i < n; ++i) {
@@ -309,8 +308,7 @@ bool DistinctIds::read_from(dstd::LeReader& r) {
         const std::uint8_t* regs = r.take(Sketch::REGISTERS);
         if (regs == nullptr) return false;
         sketch->set_dense_registers(
-            // keep std: set_dense_registers takes std::vector
-            std::vector<std::uint8_t>(regs, regs + Sketch::REGISTERS));
+            dstd::Vector<std::uint8_t>(regs, regs + Sketch::REGISTERS));
     } else {
         return false;
     }

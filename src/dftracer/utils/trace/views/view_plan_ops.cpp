@@ -1142,15 +1142,13 @@ dataframe::LazyFrame collect(const ScanPlan& plan_) {
         lf = lf.sort_by(row_query
                             ? detail::canonical_row_column_name(
                                   plan_->sort_col, detail::plan_by_path(*plan_))
-                            // keep std: dataframe names are std::string
-                            : std::string(plan_->sort_col),
+                            : dstd::String(plan_->sort_col),
                         plan_->sort_desc);
     if (!plan_->topk_col.empty())
         lf = lf.topk(row_query
                          ? detail::canonical_row_column_name(
                                plan_->topk_col, detail::plan_by_path(*plan_))
-                         // keep std: dataframe names are std::string
-                         : std::string(plan_->topk_col),
+                         : dstd::String(plan_->topk_col),
                      plan_->topk_k, plan_->topk_largest);
     if (plan_->offset || plan_->limit) {
         const std::int64_t off = static_cast<std::int64_t>(plan_->offset);
@@ -1160,9 +1158,8 @@ dataframe::LazyFrame collect(const ScanPlan& plan_) {
         lf = lf.slice(off, len);
     }
     if (!select_in_scan && !plan_->select.empty())
-        // keep std: LazyFrame::select takes std::vector<std::string>
-        lf = lf.select(std::vector<std::string>(plan_->select.begin(),
-                                                plan_->select.end()));
+        lf = lf.select(dstd::Vector<dstd::String>(plan_->select.begin(),
+                                                  plan_->select.end()));
     return lf;
 }
 

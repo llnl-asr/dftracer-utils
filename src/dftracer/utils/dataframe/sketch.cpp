@@ -4,6 +4,7 @@
 // Datadog, Inc.), see THIRD-PARTY-NOTICES.md.
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cmath>
@@ -178,8 +179,8 @@ void BasicDDSketch<BINS>::collapse_to_fit(int new_max_key) {
 }
 
 template <int BINS>
-std::vector<HistogramBin> BasicDDSketch<BINS>::bins() const {
-    std::vector<HistogramBin> out;
+dstd::Vector<HistogramBin> BasicDDSketch<BINS>::bins() const {
+    dstd::Vector<HistogramBin> out;
     if (zero_count_ > 0)
         out.push_back({0.0, 0.0, static_cast<std::uint64_t>(zero_count_)});
     if (initialized_) {
@@ -406,8 +407,8 @@ std::size_t BasicDDSketch<BINS>::serialized_size() const {
 }
 
 template <int BINS>
-std::vector<std::uint8_t> BasicDDSketch<BINS>::serialize() const {
-    std::vector<std::uint8_t> buf;
+dstd::Vector<std::uint8_t> BasicDDSketch<BINS>::serialize() const {
+    dstd::Vector<std::uint8_t> buf;
     serialize_into(buf);
     return buf;
 }

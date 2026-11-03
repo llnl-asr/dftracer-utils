@@ -284,8 +284,7 @@ dataframe::DataFrame build_call_tree(
     dstd::Vector<std::int64_t> level(static_cast<std::size_t>(n), 0);
     dstd::Vector<std::int64_t> parent(static_cast<std::size_t>(n), -1);
     df::parallel_for(nlanes, 1, [&](std::int64_t lb, std::int64_t le) {
-        // keep std: dataframe containment and flame arenas are std::vectors
-        std::vector<std::pair<std::int64_t, std::int64_t>> stack;
+        dstd::Vector<dstd::Pair<std::int64_t, std::int64_t>> stack;
         for (std::int64_t p = lb; p < le; ++p) {
             const dstd::Vector<std::int64_t>& lane =
                 lanes[lane_order[static_cast<std::size_t>(p)]];
@@ -333,8 +332,7 @@ dataframe::DataFrame build_call_tree(
     return out;
 }
 
-// keep std: dataframe containment and flame arenas are std::vectors
-static std::vector<df::FlameNode> fold_flame_arena(
+static dstd::Vector<df::FlameNode> fold_flame_arena(
     const dstd::Vector<ContainmentRow>& rows,
     const dstd::Vector<dstd::Vector<std::int64_t>>& lanes,
     const dftracer::utils::dstd::StringIntern& intern,
@@ -351,17 +349,14 @@ static std::vector<df::FlameNode> fold_flame_arena(
         return id == 0xFFFFFFFFu ? dstd::StringView{} : intern.resolve(id);
     };
 
-    // keep std: dataframe containment and flame arenas are std::vectors
-    std::vector<std::vector<df::FlameNode>> arenas(
+    dstd::Vector<dstd::Vector<df::FlameNode>> arenas(
         static_cast<std::size_t>(nlanes));
     df::parallel_for(nlanes, 1, [&](std::int64_t lb, std::int64_t le) {
-        // keep std: dataframe containment and flame arenas are std::vectors
-        std::vector<std::pair<std::int64_t, std::uint32_t>> stack;
+        dstd::Vector<dstd::Pair<std::int64_t, std::uint32_t>> stack;
         for (std::int64_t li = lb; li < le; ++li) {
             const dstd::Vector<std::int64_t>& lane =
                 lanes[static_cast<std::size_t>(li)];
-            // keep std: dataframe containment and flame arenas are std::vectors
-            std::vector<df::FlameNode>& arena =
+            dstd::Vector<df::FlameNode>& arena =
                 arenas[static_cast<std::size_t>(li)];
             arena.emplace_back();
             arena[0].name = "all";
@@ -381,8 +376,7 @@ static std::vector<df::FlameNode> fold_flame_arena(
         }
     });
 
-    // keep std: dataframe containment and flame arenas are std::vectors
-    std::vector<df::FlameNode> merged;
+    dstd::Vector<df::FlameNode> merged;
     merged.emplace_back();
     merged[0].name = "all";
     // A group key (any field(s), e.g. pid/cat/hostname) roots each lane under a
@@ -391,8 +385,7 @@ static std::vector<df::FlameNode> fold_flame_arena(
     // together by name path under the single "all" root.
     ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> group_of;
     for (std::size_t li = 0; li < arenas.size(); ++li) {
-        // keep std: dataframe containment and flame arenas are std::vectors
-        std::vector<df::FlameNode>& a = arenas[li];
+        dstd::Vector<df::FlameNode>& a = arenas[li];
         if (a.empty() || lanes[li].empty()) continue;
         const std::uint32_t gid =
             rows[static_cast<std::size_t>(lanes[li][0])].group_id;
@@ -427,8 +420,7 @@ static std::vector<df::FlameNode> fold_flame_arena(
 
 // Root rollup (sum top-level totals) + emit the node frame.
 static dataframe::DataFrame flame_arena_to_frame(
-    // keep std: dataframe containment and flame arenas are std::vectors
-    std::vector<df::FlameNode> merged) {
+    dstd::Vector<df::FlameNode> merged) {
     if (merged.empty()) {
         merged.emplace_back();
         merged[0].name = "all";
@@ -445,8 +437,7 @@ static dataframe::DataFrame flame_arena_to_frame(
     dstd::Vector<std::int64_t> count(static_cast<std::size_t>(nn));
     dstd::Vector<double> total(static_cast<std::size_t>(nn));
     dstd::Vector<double> self(static_cast<std::size_t>(nn));
-    // keep std: Series::strings takes std::vector<std::string>
-    std::vector<std::string> names(static_cast<std::size_t>(nn));
+    dstd::Vector<dstd::String> names(static_cast<std::size_t>(nn));
     for (std::int64_t i = 0; i < nn; ++i) {
         const df::FlameNode& nd = merged[static_cast<std::size_t>(i)];
         node_id[static_cast<std::size_t>(i)] = i;
@@ -486,21 +477,18 @@ dstd::String flamegraph_partial(
     const dstd::Vector<ContainmentRow>& rows,
     const dftracer::utils::dstd::StringIntern& intern,
     const TimeOut& time_out) {
-    // keep std: serialize_flame_arena returns a std::vector
-    std::vector<std::uint8_t> b = df::serialize_flame_arena(
+    dstd::Vector<std::uint8_t> b = df::serialize_flame_arena(
         fold_flame_arena(rows, sorted_lanes(rows), intern, time_out));
     return dstd::String(b.begin(), b.end());
 }
 
 dataframe::DataFrame merge_flamegraph_partials(
     const dstd::Vector<dstd::StringView>& partials) {
-    // keep std: dataframe containment and flame arenas are std::vectors
-    std::vector<df::FlameNode> merged;
+    dstd::Vector<df::FlameNode> merged;
     merged.emplace_back();
     merged[0].name = "all";
     for (dstd::StringView p : partials) {
-        // keep std: dataframe containment and flame arenas are std::vectors
-        std::vector<df::FlameNode> a = df::deserialize_flame_arena(
+        dstd::Vector<df::FlameNode> a = df::deserialize_flame_arena(
             reinterpret_cast<const std::uint8_t*>(p.data()), p.size());
         if (!a.empty()) df::merge_flame_arena(merged, 0, a, 0);
     }

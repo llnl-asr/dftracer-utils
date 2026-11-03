@@ -4,14 +4,13 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <utility>
-#include <vector>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/arrow.h>
@@ -50,15 +49,16 @@ void check_matches_collect(const LazyFrame& lf) {
     }
 }
 
-Series i64(std::vector<std::int64_t> v) {
+Series i64(dftracer::utils::dstd::Vector<std::int64_t> v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
 }
-Series f64(std::vector<double> v) {
+Series f64(dftracer::utils::dstd::Vector<double> v) {
     return Series::flat_f64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
 dftracer::utils::dstd::SharedPtr<const Source> src(DataFrame df) {
-    return std::make_shared<const InMemorySource>(std::move(df));
+    return dftracer::utils::dstd::make_shared<const InMemorySource>(
+        std::move(df));
 }
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -77,8 +77,8 @@ void finish(ArrowArray* a) {
     REQUIRE(ArrowArrayFinishBuildingDefault(a, &err) == NANOARROW_OK);
 }
 
-Series make_timestamp(const std::vector<std::int64_t>& values, TimeUnit unit,
-                      const char* tz) {
+Series make_timestamp(const dftracer::utils::dstd::Vector<std::int64_t>& values,
+                      TimeUnit unit, const char* tz) {
     ArrowTimeUnit au = unit == TimeUnit::Second  ? NANOARROW_TIME_UNIT_SECOND
                        : unit == TimeUnit::Milli ? NANOARROW_TIME_UNIT_MILLI
                        : unit == TimeUnit::Micro ? NANOARROW_TIME_UNIT_MICRO
@@ -96,8 +96,9 @@ Series make_timestamp(const std::vector<std::int64_t>& values, TimeUnit unit,
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_decimal128(std::int32_t precision, std::int32_t scale,
-                       const std::vector<std::int64_t>& values) {
+Series make_decimal128(
+    std::int32_t precision, std::int32_t scale,
+    const dftracer::utils::dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDecimal(&b.schema, NANOARROW_TYPE_DECIMAL128,
@@ -208,7 +209,7 @@ TEST_SUITE("LazyFrame output_schema") {
         DataFrame df;
         df.names = {"k", "vals"};
         df.columns.push_back(i64({1, 2}));
-        std::vector<std::int32_t> off{0, 2, 3};
+        dftracer::utils::dstd::Vector<std::int32_t> off{0, 2, 3};
         df.columns.push_back(Series::list(off, i64({10, 20, 30})));
         LazyFrame lf = LazyFrame::scan(src(std::move(df))).explode("vals");
         Schema s = lf.output_schema();

@@ -6,6 +6,8 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
@@ -551,7 +553,7 @@ TEST_SUITE("ViewIndexParity") {
         const View v = View::from_file(dstd::String(gz), dstd::String(index));
         const df::DataFrame frame =
             v.with_column("z", df::expr_lit(std::int64_t{1}))
-                .group_by(std::vector<std::string>{"z"},
+                .group_by(dstd::Vector<dstd::String>{"z"},
                           {{df::Agg::Count, "", "n"}})
                 .collect()
                 .get();

@@ -117,8 +117,8 @@ class GenSource : public dftracer::utils::dataframe::Source {
     dftracer::utils::dataframe::ScanResult scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         dftracer::utils::dataframe::ScanResult r;
-        // keep std: ScanResult::cursor is a std::unique_ptr
-        r.cursor = std::make_unique<GenCursor>(rows_, keys_, seed_);
+        r.cursor =
+            dftracer::utils::dstd::make_unique<GenCursor>(rows_, keys_, seed_);
         r.filters.assign(req.filters.size(),
                          dftracer::utils::dataframe::Pushed::No);
         return r;

@@ -5,18 +5,17 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>  // spill::Dir
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/budget.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <fstream>
 #include <limits>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 namespace {
@@ -46,7 +45,7 @@ class GroupSource {
 
 class RunSource : public GroupSource {
    public:
-    explicit RunSource(const std::string& path) : reader_(path) {}
+    explicit RunSource(const dstd::String& path) : reader_(path) {}
     bool valid() const override { return reader_.valid(); }
     const AggState& state() const override { return reader_.state(); }
     void advance() override { reader_.advance(); }
@@ -81,7 +80,7 @@ class LiveSource : public GroupSource {
 
    private:
     const AggState* live_;
-    std::vector<std::int64_t> order_;
+    dstd::Vector<std::int64_t> order_;
     std::size_t at_ = 0;
     AggStatePtr cur_;
     bool valid_ = false;
@@ -91,18 +90,19 @@ class LiveSource : public GroupSource {
 
 struct AggSpiller::Impl {
     std::uint64_t budget = 0;
-    std::vector<dstd::SharedPtr<spill::Dir>> dirs;
-    std::vector<std::string> runs;
+    dstd::Vector<dstd::SharedPtr<spill::Dir>> dirs;
+    dstd::Vector<dstd::String> runs;
     int next_id = 0;
 
-    const std::string& new_run_path() {
-        if (dirs.empty()) dirs.push_back(std::make_shared<spill::Dir>());
+    const dstd::String& new_run_path() {
+        if (dirs.empty()) dirs.push_back(dstd::make_shared<spill::Dir>());
         runs.push_back(dirs.back()->run_path(next_id++));
         return runs.back();
     }
 };
 
-AggSpiller::AggSpiller(std::uint64_t budget) : impl_(std::make_unique<Impl>()) {
+AggSpiller::AggSpiller(std::uint64_t budget)
+    : impl_(dstd::make_unique<Impl>()) {
     impl_->budget = memory::resolve_spill_budget(budget);
 }
 AggSpiller::~AggSpiller() = default;
@@ -114,7 +114,7 @@ std::size_t AggSpiller::runs() const { return impl_->runs.size(); }
 bool AggSpiller::maybe_spill(AggStatePtr& state) {
     if (!state || impl_->budget == memory::NO_SPILL_BUDGET) return false;
     if (agg_approx_bytes(*state) <= impl_->budget) return false;
-    std::vector<AggSpec> specs = agg_specs(*state);
+    dstd::Vector<AggSpec> specs = agg_specs(*state);
     spill::write_agg_run(*state, impl_->new_run_path());
     DFTRACER_UTILS_LOG_DEBUG(
         "Aggregation spilled run %d (%lld groups) past the %llu byte budget",
@@ -134,23 +134,23 @@ void AggSpiller::adopt(AggSpiller& other) {
 }
 
 DataFrame AggSpiller::drain(const AggState& live,
-                            const std::vector<std::string>& key_names) const {
+                            const dstd::Vector<dstd::String>& key_names) const {
     if (impl_->runs.empty()) return agg_finalize(live, key_names);
 
-    const std::vector<AggSpec> specs = agg_specs(live);
+    const dstd::Vector<AggSpec> specs = agg_specs(live);
     const bool nested =
         std::any_of(specs.begin(), specs.end(),
                     [](const AggSpec& s) { return op_is_nested(s.op); });
     const std::int64_t chunk = nested ? std::numeric_limits<std::int64_t>::max()
                                       : AGG_SPILL_CHUNK_GROUPS;
 
-    std::vector<std::unique_ptr<GroupSource>> sources;
+    dstd::Vector<dstd::UniquePtr<GroupSource>> sources;
     sources.reserve(impl_->runs.size() + 1);
-    for (const std::string& path : impl_->runs)
-        sources.push_back(std::make_unique<RunSource>(path));
-    sources.push_back(std::make_unique<LiveSource>(live));
+    for (const dstd::String& path : impl_->runs)
+        sources.push_back(dstd::make_unique<RunSource>(path));
+    sources.push_back(dstd::make_unique<LiveSource>(live));
 
-    std::vector<DataFrame> parts;
+    dstd::Vector<DataFrame> parts;
     AggStatePtr merged = agg_new(specs);
     std::int64_t in_chunk = 0;
     for (;;) {
@@ -184,7 +184,7 @@ DataFrame AggSpiller::drain(const AggState& live,
         parts.push_back(agg_finalize(*merged, key_names));
     if (parts.size() == 1) return std::move(parts.front());
 
-    std::vector<const DataFrame*> refs;
+    dstd::Vector<const DataFrame*> refs;
     refs.reserve(parts.size());
     for (const DataFrame& p : parts) refs.push_back(&p);
     return concat(refs);

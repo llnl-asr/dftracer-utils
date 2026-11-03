@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstring>
@@ -135,7 +136,8 @@ dftu_series* dftu_series_new_string_view(
     col->length = n;
     col->data =
         borrow_buffer(v, static_cast<std::size_t>(n * VIEW_BYTES), owner);
-    auto blobs = std::make_shared<std::vector<BufferView>>();
+    auto blobs = dftracer::utils::dstd::make_shared<
+        dftracer::utils::dstd::Vector<BufferView>>();
     blobs->reserve(static_cast<std::size_t>(n_buffers));
     for (std::int32_t k = 0; k < n_buffers; ++k)
         blobs->push_back(borrow_buffer(
@@ -534,7 +536,9 @@ dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
     if (col->is_chunked()) {
         const auto* starts =
             reinterpret_cast<const std::int64_t*>(col->data.data());
-        std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> parts;
+        dftracer::utils::dstd::Vector<
+            dftracer::utils::dstd::SharedPtr<dftu_series>>
+            parts;
         for (std::size_t k = 0; k < col->nested.size(); ++k) {
             const std::int64_t lo = std::max(offset, starts[k]);
             const std::int64_t hi = std::min(offset + len, starts[k + 1]);

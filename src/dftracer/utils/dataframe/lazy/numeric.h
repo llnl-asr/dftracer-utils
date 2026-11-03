@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/lazy/common.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/vector.h>
 
 namespace dftracer::utils::dataframe::lazy_internal {
 
@@ -35,8 +36,8 @@ inline bool num_class(TypeId t, NumClass& cls) {
 // The cells of a numeric column as 64-bit patterns (an int64, a uint64 or a
 // double by the column's class) and whether each is present.
 struct NumCells {
-    std::vector<std::uint64_t> bits;
-    std::vector<std::uint8_t> ok;
+    dstd::Vector<std::uint64_t> bits;
+    dstd::Vector<std::uint8_t> ok;
 };
 
 inline NumCells read_cells(const Series& col) {
@@ -113,12 +114,12 @@ inline NumCells read_cells(const Series& col) {
 
 // A column of 64-bit patterns of class `cls`, narrowed or widened to the type
 // the plan declares, with a null where `ok` is zero.
-inline Series make_numeric(const std::vector<std::uint64_t>& bits,
-                           const std::vector<std::uint8_t>& ok, NumClass cls,
+inline Series make_numeric(const dstd::Vector<std::uint64_t>& bits,
+                           const dstd::Vector<std::uint8_t>& ok, NumClass cls,
                            TypeId out) {
     const auto n = static_cast<std::int64_t>(bits.size());
     bool any_null = false;
-    std::vector<std::uint8_t> bitmap((bits.size() + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> bitmap((bits.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < bits.size(); ++i) {
         if (ok[i])
             bitmap[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
@@ -128,7 +129,7 @@ inline Series make_numeric(const std::vector<std::uint64_t>& bits,
     const std::uint8_t* validity = any_null ? bitmap.data() : nullptr;
     auto as = [&](auto tag) {
         using T = decltype(tag);
-        std::vector<T> v(bits.size());
+        dstd::Vector<T> v(bits.size());
         for (std::size_t i = 0; i < bits.size(); ++i) {
             switch (cls) {
                 case NumClass::Signed:

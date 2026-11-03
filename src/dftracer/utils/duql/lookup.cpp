@@ -479,18 +479,15 @@ dstd::SharedPtr<const LookupTable> make_lookup_table(
     return t;
 }
 
-// keep std: dataframe::eval and agg take std::vector<const Series*>
-dstd::String row_key(const std::vector<const df::Series*>& keys,
+dstd::String row_key(const dstd::Vector<const df::Series*>& keys,
                      std::int64_t r) {
     dstd::String key;
     for (const auto* k : keys) append_cell_key(key, *k, r);
     return key;
 }
 
-Matches match(
-    const LookupTable& table,
-    // keep std: dataframe::eval and agg take std::vector<const Series*>
-    const std::vector<const df::Series*>& keys, std::int64_t n) {
+Matches match(const LookupTable& table,
+              const dstd::Vector<const df::Series*>& keys, std::int64_t n) {
     Matches m;
     m.offsets.reserve(static_cast<std::size_t>(n) + 1);
     m.offsets.push_back(0);
@@ -526,10 +523,9 @@ bool same_cell(const df::Series& x, std::int64_t a, const df::Series& y,
 
 namespace {
 
-df::Series range_column(
-    const TLookup& t, const LookupTable& table,
-    // keep std: dataframe::eval and agg take std::vector<const Series*>
-    const std::vector<const df::Series*>& keys, std::int64_t n) {
+df::Series range_column(const TLookup& t, const LookupTable& table,
+                        const dstd::Vector<const df::Series*>& keys,
+                        std::int64_t n) {
     const std::size_t bounds = (t.low ? 1 : 0) + (t.high ? 1 : 0);
     const std::size_t keyed = keys.size() - bounds;
     const std::size_t subject = keys.size() - t.correlated;
@@ -593,10 +589,9 @@ df::Series range_column(
 
 }  // namespace
 
-df::Series lookup_column(
-    const TLookup& t,
-    // keep std: dataframe::eval and agg take std::vector<const Series*>
-    const std::vector<const df::Series*>& keys, std::int64_t n) {
+df::Series lookup_column(const TLookup& t,
+                         const dstd::Vector<const df::Series*>& keys,
+                         std::int64_t n) {
     const LookupTable* table = t.slot ? t.slot->table.get() : nullptr;
     if (!table) fail("'" + t.name + "' was read before its rows were bound");
     if (t.range != RangeRead::None) return range_column(t, *table, keys, n);
@@ -647,8 +642,7 @@ df::Series lookup_column(
     return value.take(pick);
 }
 
-// keep std: dataframe::eval and agg take std::vector<const Series*>
-df::Series in_column(const std::vector<const df::Series*>& keys,
+df::Series in_column(const dstd::Vector<const df::Series*>& keys,
                      std::size_t subject, const df::Series& matched,
                      bool negated) {
     const std::int64_t n = matched.length();
@@ -670,11 +664,10 @@ df::Series in_column(const std::vector<const df::Series*>& keys,
     return df::Series::flat(df::TypeId::Bool, out.data(), n, valid.data());
 }
 
-df::Series scalar_column(
-    const dstd::String& name,
-    // keep std: dataframe::eval and agg take std::vector<const Series*>
-    const std::vector<const df::Series*>& keys, const df::Series& nest,
-    std::size_t field, const df::DataFrame* empty) {
+df::Series scalar_column(const dstd::String& name,
+                         const dstd::Vector<const df::Series*>& keys,
+                         const df::Series& nest, std::size_t field,
+                         const df::DataFrame* empty) {
     const std::int64_t n = nest.length();
     const std::int32_t* off = nest.offsets();
     df::DataFrame values;

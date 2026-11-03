@@ -8,8 +8,11 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -19,9 +22,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -37,43 +38,43 @@ DataFrame run(coro::CoroTask<DataFrame> t) {
     return dftracer::utils::default_runtime().submit(std::move(t)).get();
 }
 
-Series i64s(const std::vector<std::int64_t>& v,
-            const std::vector<std::uint8_t>& validity = {}) {
+Series i64s(const dstd::Vector<std::int64_t>& v,
+            const dstd::Vector<std::uint8_t>& validity = {}) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
                             validity.empty() ? nullptr : validity.data());
 }
 
 // A string column with nulls where `validity` bit i is 0.
-Series strs(const std::vector<std::string>& v,
-            const std::vector<std::uint8_t>& validity) {
-    std::vector<dstd::StringView> views(v.begin(), v.end());
+Series strs(const dstd::Vector<dstd::String>& v,
+            const dstd::Vector<std::uint8_t>& validity) {
+    dstd::Vector<dstd::StringView> views(v.begin(), v.end());
     return Series::strings(dstd::Span<const dstd::StringView>(views),
                            validity.data());
 }
 
 template <class... S>
-DataFrame frame(std::vector<std::string> names, S... cols) {
+DataFrame frame(dstd::Vector<dstd::String> names, S... cols) {
     DataFrame df;
     df.names = std::move(names);
     (df.columns.push_back(std::move(cols)), ...);
     return df;
 }
 
-std::string cell(const Series& c, std::int64_t i) {
+dstd::String cell(const Series& c, std::int64_t i) {
     if (c.is_null(i)) return "null";
     if (c.type() == dftracer::utils::dataframe::TypeId::String)
-        return std::string(c.string_at(i));
-    return std::to_string(c.data<std::int64_t>()[i]);
+        return dstd::String(c.string_at(i));
+    return dstd::to_string(c.data<std::int64_t>()[i]);
 }
 
 // The rows as sorted text, one string per row: order is not part of a join's
 // contract for the spilled path.
-std::vector<std::string> rows(const DataFrame& df) {
-    std::vector<Series> cols;
+dstd::Vector<dstd::String> rows(const DataFrame& df) {
+    dstd::Vector<Series> cols;
     for (const Series& c : df.columns) cols.push_back(c.materialize());
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     for (std::int64_t r = 0; r < df.num_rows(); ++r) {
-        std::string line;
+        dstd::String line;
         for (std::size_t c = 0; c < cols.size(); ++c)
             line += (c ? "," : "") + cell(cols[c], r);
         out.push_back(line);
@@ -82,7 +83,7 @@ std::vector<std::string> rows(const DataFrame& df) {
     return out;
 }
 
-using Rows = std::vector<std::string>;
+using Rows = dstd::Vector<dstd::String>;
 
 // left: k = [a, null, c], x = [1, 2, 3]; right: k = [a, null], y = [10, 20].
 DataFrame left() {
@@ -99,12 +100,12 @@ DataFrame join(const DataFrame& l, const DataFrame& r, JoinHow how,
 
 LazyFrame lazy_of(const DataFrame& d, std::uint64_t budget = 0) {
     DataFrame copy{d.names, [&] {
-                       std::vector<Series> c;
+                       dstd::Vector<Series> c;
                        for (const Series& s : d.columns) c.push_back(s.share());
                        return c;
                    }()};
     LazyFrame lf =
-        LazyFrame::scan(std::make_shared<InMemorySource>(std::move(copy)));
+        LazyFrame::scan(dstd::make_shared<InMemorySource>(std::move(copy)));
     return budget ? lf.memory_budget(budget) : lf;
 }
 
@@ -195,7 +196,7 @@ TEST_SUITE("join null keys") {
         try {
             left().join(right(), {"k"}, JoinHow::Cross, "_right", true);
         } catch (const std::invalid_argument& e) {
-            CHECK(std::string(e.what()).find("cross") != std::string::npos);
+            CHECK(dstd::String(e.what()).find("cross") != dstd::String::npos);
         }
     }
 
@@ -218,8 +219,8 @@ TEST_SUITE("join null keys") {
 
     TEST_CASE("a spilled join gives the in-memory rows") {
         // A right side much larger than the budget forces the partitioned path.
-        std::vector<std::int64_t> keys, ys;
-        std::vector<std::uint8_t> validity((2000 + 7) / 8, 0xFF);
+        dstd::Vector<std::int64_t> keys, ys;
+        dstd::Vector<std::uint8_t> validity((2000 + 7) / 8, 0xFF);
         for (std::int64_t i = 0; i < 2000; ++i) {
             keys.push_back(i % 50);
             ys.push_back(i);
@@ -227,7 +228,7 @@ TEST_SUITE("join null keys") {
                 validity[static_cast<std::size_t>(i >> 3)] &=
                     static_cast<std::uint8_t>(~(1u << (i & 7)));
         }
-        std::vector<std::int64_t> lkeys{0, 1, 2, 0, 5}, lx{1, 2, 3, 4, 5};
+        dstd::Vector<std::int64_t> lkeys{0, 1, 2, 0, 5}, lx{1, 2, 3, 4, 5};
         const DataFrame r = frame({"k", "y"}, i64s(keys, validity), i64s(ys));
         const DataFrame l = frame({"k", "x"}, i64s(lkeys, {0b10111}), i64s(lx));
         for (JoinHow how :
@@ -245,15 +246,15 @@ TEST_SUITE("join null keys") {
         const DataFrame l = left();
         const DataFrame r = right();
         dftu_dataframe* lh = dftu_dataframe_new(
-            std::vector<const char*>{"k", "x"}.data(),
-            std::vector<dftu_series*>{l.columns[0].share().release(),
-                                      l.columns[1].share().release()}
+            dstd::Vector<const char*>{"k", "x"}.data(),
+            dstd::Vector<dftu_series*>{l.columns[0].share().release(),
+                                       l.columns[1].share().release()}
                 .data(),
             2);
         dftu_dataframe* rh = dftu_dataframe_new(
-            std::vector<const char*>{"k", "y"}.data(),
-            std::vector<dftu_series*>{r.columns[0].share().release(),
-                                      r.columns[1].share().release()}
+            dstd::Vector<const char*>{"k", "y"}.data(),
+            dstd::Vector<dftu_series*>{r.columns[0].share().release(),
+                                       r.columns[1].share().release()}
                 .data(),
             2);
         REQUIRE(lh);

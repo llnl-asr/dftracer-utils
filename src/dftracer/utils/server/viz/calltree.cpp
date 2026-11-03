@@ -72,7 +72,7 @@ static std::vector<std::string> parse_group_param(const QueryParams& params) {
 // function, so the arena stays out of the handler coroutine's frame.
 static std::string calltree_json_from_arena(std::string blob, double dur_us,
                                             int limit, std::int64_t cap) {
-    std::vector<FlameNode> arena = dataframe::deserialize_flame_arena(
+    dstd::Vector<FlameNode> arena = dataframe::deserialize_flame_arena(
         reinterpret_cast<const std::uint8_t*>(blob.data()), blob.size());
     if (arena.empty()) {
         arena.emplace_back();

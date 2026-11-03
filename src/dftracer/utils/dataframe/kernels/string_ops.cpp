@@ -8,10 +8,13 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/duql/substr_simd.h>
 #include <utf8proc.h>
@@ -25,10 +28,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <type_traits>
-#include <unordered_set>
-#include <vector>
 
 // Highway static dispatch (baseline target): only the two
 // naturally-vectorizable string ops use it - str_len_bytes (adjacent int32
@@ -140,7 +140,7 @@ class RowReader {
 
 // Int64 output column with the same length/validity as `v` (nulls preserved).
 dftu_series* make_i64(const dftu_series* v,
-                      const std::vector<std::int64_t>& vals) {
+                      const dftracer::utils::dstd::Vector<std::int64_t>& vals) {
     auto* out = new dftu_series();
     out->type = TypeId::Int64;
     out->encoding = Encoding::Flat;
@@ -156,7 +156,7 @@ dftu_series* make_i64(const dftu_series* v,
 // UInt64 output column with the same length as `v`. `validity` is a fresh
 // Arrow-layout bitmap the caller owns, or NULL to share `v`'s nulls.
 dftu_series* make_u64(const dftu_series* v,
-                      const std::vector<std::uint64_t>& vals,
+                      const dftracer::utils::dstd::Vector<std::uint64_t>& vals,
                       const std::uint8_t* validity) {
     auto* out = new dftu_series();
     out->type = TypeId::Uint64;
@@ -181,10 +181,11 @@ dftu_series* make_u64(const dftu_series* v,
 // narrow (int32 offsets): a derived per-row transform's total size is its own
 // fresh sizing question, not a width the source column forces on it. nullptr
 // when the bytes pass INT32_MAX.
-dftu_series* make_string(const dftu_series* v,
-                         const std::vector<std::string>& parts) {
+dftu_series* make_string(
+    const dftu_series* v,
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& parts) {
     std::size_t total = 0;
-    for (const std::string& p : parts) total += p.size();
+    for (const dftracer::utils::dstd::String& p : parts) total += p.size();
     if (!fits_int32_offsets(total)) return nullptr;
     auto* out = new dftu_series();
     out->type = TypeId::String;
@@ -202,7 +203,8 @@ dftu_series* make_string(const dftu_series* v,
     std::int32_t pos = 0;
     od[0] = 0;
     for (std::int64_t i = 0; i < v->length; ++i) {
-        const std::string& p = parts[static_cast<std::size_t>(i)];
+        const dftracer::utils::dstd::String& p =
+            parts[static_cast<std::size_t>(i)];
         if (!p.empty()) std::memcpy(bd + pos, p.data(), p.size());
         pos += static_cast<std::int32_t>(p.size());
         od[i + 1] = pos;
@@ -291,10 +293,11 @@ dftu_series* ascii_fold_w(const dftu_series* v, std::uint8_t lo,
                             hi, add);
         return out;
     }
-    std::vector<std::string> parts(static_cast<std::size_t>(v->length));
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> parts(
+        static_cast<std::size_t>(v->length));
     for (std::int64_t i = 0; i < v->length; ++i) {
         if (r.is_null(i)) continue;
-        std::string s(r.at(i));
+        dftracer::utils::dstd::String s(r.at(i));
         for (char& c : s)
             if (static_cast<std::uint8_t>(c) >= lo &&
                 static_cast<std::uint8_t>(c) <= hi)
@@ -317,7 +320,8 @@ template <class Off, class Fn>
 dftu_series* string_transform_w(const dftu_series* v, Fn fn) {
     RowReader<Off> r(v);
     if (!r.ok()) return nullptr;
-    std::vector<std::string> parts(static_cast<std::size_t>(v->length));
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> parts(
+        static_cast<std::size_t>(v->length));
     for (std::int64_t i = 0; i < v->length; ++i) {
         if (r.is_null(i)) continue;
         parts[static_cast<std::size_t>(i)] = fn(r.at(i));
@@ -350,13 +354,13 @@ dftracer::utils::dstd::StringView rstrip_ws(
     return s.substr(0, e);
 }
 
-std::string replace_literal(dftracer::utils::dstd::StringView s,
-                            dftracer::utils::dstd::StringView pat,
-                            dftracer::utils::dstd::StringView repl, bool all) {
+dftracer::utils::dstd::String replace_literal(
+    dftracer::utils::dstd::StringView s, dftracer::utils::dstd::StringView pat,
+    dftracer::utils::dstd::StringView repl, bool all) {
     // An empty pattern has no well-defined occurrence; leave the row unchanged
     // (also avoids a zero-advance loop in the all-occurrences case).
-    if (pat.empty()) return std::string(s);
-    std::string out;
+    if (pat.empty()) return dftracer::utils::dstd::String(s);
+    dftracer::utils::dstd::String out;
     std::size_t pos = 0;
     while (true) {
         std::size_t hit = s.find(pat, pos);
@@ -383,7 +387,7 @@ class LimitedRows {
         if (!out || rows_.empty()) return out;
         dftu_series* ok =
             string_mask(v, [this](dftracer::utils::dstd::StringView s) {
-                return !rows_.contains(std::string(s));
+                return !rows_.contains(dftracer::utils::dstd::String(s));
             });
         if (!ok) return out;
         const std::size_t bytes = buffer_bytes(TypeId::Bool, v->length);
@@ -406,7 +410,7 @@ class LimitedRows {
 
    private:
     std::mutex mu_;
-    std::unordered_set<std::string> rows_;
+    dftracer::utils::dstd::HashSet<dftracer::utils::dstd::String> rows_;
 };
 
 // Bool mask of `p` over `v`; a row whose match reached the work limit is null.
@@ -484,10 +488,10 @@ dftu_series* regex_replace_w(const dftu_series* v,
     RowReader<Off> r(v);
     if (!r.ok()) return nullptr;
     const std::size_t n = static_cast<std::size_t>(v->length);
-    std::vector<std::int32_t> offsets(n + 1, 0);
-    std::string data;
+    dftracer::utils::dstd::Vector<std::int32_t> offsets(n + 1, 0);
+    dftracer::utils::dstd::String data;
     dftracer::utils::dstd::String buf;
-    std::vector<std::uint8_t> valid((n + 7) / 8, 0);
+    dftracer::utils::dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < n; ++i) {
         bool hit = false;
@@ -599,9 +603,9 @@ dftu_series* str_extract_w(const dftu_series* v,
     RowReader<Off> r(v);
     if (!r.ok()) return nullptr;
     const std::size_t n = static_cast<std::size_t>(v->length);
-    std::vector<std::int32_t> offsets(n + 1, 0);
-    std::string data;
-    std::vector<std::uint8_t> valid((n + 7) / 8, 0);
+    dftracer::utils::dstd::Vector<std::int32_t> offsets(n + 1, 0);
+    dftracer::utils::dstd::String data;
+    dftracer::utils::dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < n; ++i) {
         bool hit = false;
@@ -685,7 +689,8 @@ dftu_series* dftu_series_str_len_bytes(const dftu_series* v) {
     // byte offsets are not, so the SIMD int32 path stays narrow-only.
     if (v->encoding == Encoding::Flat && v->offsets.block() &&
         !v->wide_offsets()) {
-        std::vector<std::int64_t> vals(static_cast<std::size_t>(v->length), 0);
+        dftracer::utils::dstd::Vector<std::int64_t> vals(
+            static_cast<std::size_t>(v->length), 0);
         if (v->length > 0)
             len_bytes_simd(
                 reinterpret_cast<const std::int32_t*>(v->offsets.data()),
@@ -707,7 +712,8 @@ dftu_series* dftu_series_str_len_chars(const dftu_series* v) {
         const std::int32_t* off =
             reinterpret_cast<const std::int32_t*>(v->offsets.data());
         const std::uint8_t* data = v->data.data();
-        std::vector<std::int64_t> vals(static_cast<std::size_t>(v->length), 0);
+        dftracer::utils::dstd::Vector<std::int64_t> vals(
+            static_cast<std::size_t>(v->length), 0);
         for (std::int64_t i = 0; i < v->length; ++i)
             vals[static_cast<std::size_t>(i)] = count_char_starts(
                 data + off[i], static_cast<std::size_t>(off[i + 1] - off[i]));
@@ -736,7 +742,8 @@ template <class Off>
 dftu_series* fnv1a_w(const dftu_series* v) {
     RowReader<Off> r(v);
     if (!r.ok()) return nullptr;
-    std::vector<std::uint64_t> vals(static_cast<std::size_t>(v->length), 0);
+    dftracer::utils::dstd::Vector<std::uint64_t> vals(
+        static_cast<std::size_t>(v->length), 0);
     for (std::int64_t i = 0; i < v->length; ++i) {
         if (r.is_null(i)) continue;
         vals[static_cast<std::size_t>(i)] =
@@ -758,9 +765,10 @@ template <class Off>
 dftu_series* hex64_parse_w(const dftu_series* v) {
     RowReader<Off> r(v);
     if (!r.ok()) return nullptr;
-    std::vector<std::uint64_t> vals(static_cast<std::size_t>(v->length), 0);
+    dftracer::utils::dstd::Vector<std::uint64_t> vals(
+        static_cast<std::size_t>(v->length), 0);
     std::size_t bitmap_bytes = static_cast<std::size_t>((v->length + 7) / 8);
-    std::vector<std::uint8_t> valid(bitmap_bytes, 0);
+    dftracer::utils::dstd::Vector<std::uint8_t> valid(bitmap_bytes, 0);
     std::int64_t nulls = 0;
     for (std::int64_t i = 0; i < v->length; ++i) {
         dftracer::utils::dstd::Optional<std::uint64_t> parsed;
@@ -840,21 +848,21 @@ dftu_series* dftu_series_str_strip(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_strip(flat_v));
 
     return string_transform(v, [](dftracer::utils::dstd::StringView s) {
-        return std::string(rstrip_ws(lstrip_ws(s)));
+        return dftracer::utils::dstd::String(rstrip_ws(lstrip_ws(s)));
     });
 }
 dftu_series* dftu_series_str_lstrip(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_lstrip(flat_v));
 
     return string_transform(v, [](dftracer::utils::dstd::StringView s) {
-        return std::string(lstrip_ws(s));
+        return dftracer::utils::dstd::String(lstrip_ws(s));
     });
 }
 dftu_series* dftu_series_str_rstrip(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_rstrip(flat_v));
 
     return string_transform(v, [](dftracer::utils::dstd::StringView s) {
-        return std::string(rstrip_ws(s));
+        return dftracer::utils::dstd::String(rstrip_ws(s));
     });
 }
 
@@ -898,9 +906,9 @@ dftu_series* list_transform_w(const dftu_series* v, Fn fn) {
     RowReader<Off> r(v);
     if (!r.ok()) return nullptr;
 
-    std::vector<std::string> all_parts;
-    std::vector<std::int32_t> list_off(static_cast<std::size_t>(v->length + 1),
-                                       0);
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> all_parts;
+    dftracer::utils::dstd::Vector<std::int32_t> list_off(
+        static_cast<std::size_t>(v->length + 1), 0);
     for (std::int64_t i = 0; i < v->length; ++i) {
         if (!r.is_null(i)) fn(r.at(i), all_parts);
         if (!fits_int32_offsets(all_parts.size())) return nullptr;
@@ -908,7 +916,7 @@ dftu_series* list_transform_w(const dftu_series* v, Fn fn) {
             static_cast<std::int32_t>(all_parts.size());
     }
     std::size_t ctotal = 0;
-    for (const std::string& p : all_parts) ctotal += p.size();
+    for (const dftracer::utils::dstd::String& p : all_parts) ctotal += p.size();
     if (!fits_int32_offsets(ctotal)) return nullptr;
 
     auto* child = new dftu_series();
@@ -926,7 +934,7 @@ dftu_series* list_transform_w(const dftu_series* v, Fn fn) {
     std::int32_t cpos = 0;
     cod[0] = 0;
     for (std::size_t k = 0; k < all_parts.size(); ++k) {
-        const std::string& p = all_parts[k];
+        const dftracer::utils::dstd::String& p = all_parts[k];
         if (!p.empty()) std::memcpy(cbd + cpos, p.data(), p.size());
         cpos += static_cast<std::int32_t>(p.size());
         cod[k + 1] = cpos;
@@ -963,7 +971,7 @@ dftu_series* dftu_series_list_len(const dftu_series* v) {
     const std::int32_t* off = dftu_series_offsets(v);
     if (!off) return nullptr;
     const std::size_t n = static_cast<std::size_t>(v->length);
-    std::vector<std::int64_t> len(n);
+    dftracer::utils::dstd::Vector<std::int64_t> len(n);
     for (std::size_t i = 0; i < n; ++i) len[i] = off[i + 1] - off[i];
     auto* out = new dftu_series();
     out->type = TypeId::Int64;
@@ -987,7 +995,7 @@ dftu_series* dftu_series_list_get(const dftu_series* v, int64_t index) {
     const std::size_t n = static_cast<std::size_t>(v->length);
     // A gather of the element at `index` (from the end when negative) per
     // row; -1 marks a null row or one whose list is too short.
-    std::vector<std::int64_t> idx(n, -1);
+    dftracer::utils::dstd::Vector<std::int64_t> idx(n, -1);
     for (std::size_t i = 0; i < n; ++i) {
         if (v->validity.block() &&
             !((v->validity.data()[i >> 3] >> (i & 7)) & 1))
@@ -1128,8 +1136,8 @@ dftu_series* map_strings(const dftu_series* v, LenFn len_of, FillFn fill_of) {
 
 // The bit arrays of one kind over p[0, n), across the pool for a large buffer.
 struct Bits {
-    std::vector<std::uint64_t> bad;
-    std::vector<std::uint64_t> aux;
+    dftracer::utils::dstd::Vector<std::uint64_t> bad;
+    dftracer::utils::dstd::Vector<std::uint64_t> aux;
 };
 
 Bits compute_bits(simd::BitKind kind, const std::uint8_t* p, std::size_t n,
@@ -1159,10 +1167,10 @@ bool lower_byte(std::uint8_t c) { return c >= 'a' && c <= 'z'; }
 
 // Narrow String out of a List<String> shape: row i of the list holds
 // `list_off[i + 1] - list_off[i]` strings.
-dftu_series* make_str_list(const dftu_series* v,
-                           const std::vector<std::int32_t>& list_off,
-                           std::int64_t parts, BufferView coff,
-                           BufferView cdata) {
+dftu_series* make_str_list(
+    const dftu_series* v,
+    const dftracer::utils::dstd::Vector<std::int32_t>& list_off,
+    std::int64_t parts, BufferView coff, BufferView cdata) {
     auto* child = new dftu_series();
     child->type = TypeId::String;
     child->encoding = Encoding::Flat;
@@ -1560,8 +1568,9 @@ dftu_series* split_impl(const dftu_series* v, const F& f,
 
     // Pass 1: where the separator occurs in each row, the part counts and
     // the bytes the parts hold.
-    std::vector<std::size_t> hits;
-    std::vector<std::int32_t> list_off(static_cast<std::size_t>(n + 1), 0);
+    dftracer::utils::dstd::Vector<std::size_t> hits;
+    dftracer::utils::dstd::Vector<std::int32_t> list_off(
+        static_cast<std::size_t>(n + 1), 0);
     std::int64_t parts = 0, bytes = 0;
     for (std::int64_t i = 0; i < n; ++i) {
         if (!f.is_null(i)) {
@@ -1627,8 +1636,10 @@ dftu_series* partition_impl(const dftu_series* v, const F& f,
     const std::size_t sl = sep.size();
     const Bits cand = compute_bits(simd::BitKind::Eq, p, nbytes,
                                    static_cast<std::uint8_t>(sep[0]), false);
-    std::vector<std::size_t> at(static_cast<std::size_t>(n), simd::NPOS);
-    std::vector<std::int32_t> list_off(static_cast<std::size_t>(n + 1), 0);
+    dftracer::utils::dstd::Vector<std::size_t> at(static_cast<std::size_t>(n),
+                                                  simd::NPOS);
+    dftracer::utils::dstd::Vector<std::int32_t> list_off(
+        static_cast<std::size_t>(n + 1), 0);
     std::int64_t parts = 0, bytes = 0;
     for (std::int64_t i = 0; i < n; ++i) {
         if (!f.is_null(i)) {
@@ -1895,9 +1906,10 @@ dftu_series* dftu_series_str_findall(const dftu_series* v, const char* pattern,
         duql::compile_regex(pattern_text(pattern, pattern_len), false));
     if (!re) return nullptr;
     LimitedRows limited;
-    dftu_series* out =
-        list_transform(v, [&](dftracer::utils::dstd::StringView row,
-                              std::vector<std::string>& parts) {
+    dftu_series* out = list_transform(
+        v, [&](dftracer::utils::dstd::StringView row,
+               dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&
+                   parts) {
             const auto r = duql::findall(
                 *re, row, [&](dftracer::utils::dstd::StringView m) {
                     parts.emplace_back(m);
@@ -1949,7 +1961,7 @@ std::size_t utf8_next(const std::uint8_t* p, const std::uint8_t* end,
 }
 
 bool decode_utf8(dftracer::utils::dstd::StringView s,
-                 std::vector<std::uint32_t>& out) {
+                 dftracer::utils::dstd::Vector<std::uint32_t>& out) {
     out.clear();
     const auto* p = reinterpret_cast<const std::uint8_t*>(s.data());
     const auto* end = p + s.size();
@@ -1963,7 +1975,7 @@ bool decode_utf8(dftracer::utils::dstd::StringView s,
     return true;
 }
 
-void encode_utf8(std::uint32_t c, std::string& out) {
+void encode_utf8(std::uint32_t c, dftracer::utils::dstd::String& out) {
     if (c < 0x80) {
         out.push_back(static_cast<char>(c));
     } else if (c < 0x800) {
@@ -1994,10 +2006,10 @@ dftu_series* transform_rows_w(const dftu_series* v, Fn& fn) {
     RowReader<Off> r(v);
     if (!r.ok()) return nullptr;
     const std::size_t n = static_cast<std::size_t>(v->length);
-    std::vector<std::int32_t> offsets(n + 1, 0);
-    std::string data;
-    std::string buf;
-    std::vector<std::uint8_t> valid((n + 7) / 8, 0);
+    dftracer::utils::dstd::Vector<std::int32_t> offsets(n + 1, 0);
+    dftracer::utils::dstd::String data;
+    dftracer::utils::dstd::String buf;
+    dftracer::utils::dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < n; ++i) {
         bool hit = false;
@@ -2033,8 +2045,10 @@ struct TranslateTable {
     // The replacement of an ASCII byte, an index into `reps`, or -1.
     std::int32_t ascii[128];
     // Sorted by codepoint; the other keys.
-    std::vector<dftracer::utils::dstd::Pair<std::uint32_t, std::int32_t>> wide;
-    std::vector<std::string> reps;
+    dftracer::utils::dstd::Vector<
+        dftracer::utils::dstd::Pair<std::uint32_t, std::int32_t>>
+        wide;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> reps;
     TranslateTable() { std::fill(std::begin(ascii), std::end(ascii), -1); }
 
     std::int32_t find(std::uint32_t cp) const {
@@ -2047,8 +2061,8 @@ struct TranslateTable {
 };
 
 struct StringRows {
-    std::vector<std::string> rows;
-    std::vector<bool> nulls;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> rows;
+    dftracer::utils::dstd::Vector<bool> nulls;
 };
 
 template <class Off>
@@ -2066,12 +2080,14 @@ bool read_rows_w(const dftu_series* s, StringRows& out) {
 
 bool read_rows(const dftu_series* s, StringRows& out) {
     if (s->length == 0) return true;
-    std::unique_ptr<dftu_series, decltype(&dftu_series_free)> flat(
-        nullptr, &dftu_series_free);
+    dftu_series* flat = nullptr;
+    const auto free_flat = dftracer::utils::dstd::defer([&] {
+        if (flat) dftu_series_free(flat);
+    });
     if (s->encoding != Encoding::Flat) {
-        flat.reset(dftu_series_materialize(s));
+        flat = dftu_series_materialize(s);
         if (!flat) return false;
-        s = flat.get();
+        s = flat;
     }
     return is_wide_offset_type(s->type) ? read_rows_w<std::int64_t>(s, out)
                                         : read_rows_w<std::int32_t>(s, out);
@@ -2084,13 +2100,14 @@ bool build_translate_table(const dftu_series* from, const dftu_series* to,
         return false;
     StringRows keys, vals;
     if (!read_rows(from, keys) || !read_rows(to, vals)) return false;
-    std::vector<std::uint32_t> key, val;
+    dftracer::utils::dstd::Vector<std::uint32_t> key, val;
     for (std::size_t i = 0; i < keys.rows.size(); ++i) {
         if (keys.nulls[i] || !decode_utf8(keys.rows[i], key) || key.size() != 1)
             return false;
         if (!vals.nulls[i] && !decode_utf8(vals.rows[i], val)) return false;
         const auto rep = static_cast<std::int32_t>(t.reps.size());
-        t.reps.push_back(vals.nulls[i] ? std::string() : vals.rows[i]);
+        t.reps.push_back(vals.nulls[i] ? dftracer::utils::dstd::String()
+                                       : vals.rows[i]);
         if (key[0] < 0x80) {
             if (t.ascii[key[0]] >= 0) return false;
             t.ascii[key[0]] = rep;
@@ -2153,7 +2170,8 @@ class Wrapper {
           break_hyphens_((flags & DFTU_WRAP_BREAK_ON_HYPHENS) != 0) {}
 
     // The lines of `src` joined by "\n" in `out`.
-    void run(const std::vector<std::uint32_t>& src, std::string& out) {
+    void run(const dftracer::utils::dstd::Vector<std::uint32_t>& src,
+             dftracer::utils::dstd::String& out) {
         munge(src);
         if (break_hyphens_)
             split_hyphens();
@@ -2163,7 +2181,7 @@ class Wrapper {
     }
 
    private:
-    void munge(const std::vector<std::uint32_t>& src) {
+    void munge(const dftracer::utils::dstd::Vector<std::uint32_t>& src) {
         t_.clear();
         std::uint32_t col = 0;
         for (const std::uint32_t c : src) {
@@ -2209,7 +2227,7 @@ class Wrapper {
     // em-dash.
     void split_hyphens() {
         chunks_.clear();
-        const std::vector<std::uint32_t>& t = t_;
+        const dftracer::utils::dstd::Vector<std::uint32_t>& t = t_;
         const std::size_t n = t.size();
         std::size_t i = 0;
         while (i < n) {
@@ -2249,7 +2267,7 @@ class Wrapper {
     // The '-' at t_[j] ends a chunk: two letters, or a letter, '-' and a
     // letter, before it, and a letter, an optional '-' and a letter after it.
     bool hyphen_break(std::size_t j) const {
-        const std::vector<std::uint32_t>& t = t_;
+        const dftracer::utils::dstd::Vector<std::uint32_t>& t = t_;
         const std::size_t n = t.size();
         const bool before =
             (j >= 2 && wrap_is_letter(t[j - 2]) && wrap_is_letter(t[j - 1])) ||
@@ -2293,7 +2311,7 @@ class Wrapper {
         }
     }
 
-    void wrap(std::string& out) {
+    void wrap(dftracer::utils::dstd::String& out) {
         out.clear();
         std::size_t pos = 0;
         const std::size_t total = chunks_.size();
@@ -2333,9 +2351,9 @@ class Wrapper {
     bool break_long_;
     bool break_hyphens_;
     bool taken_ = false;
-    std::vector<std::uint32_t> t_;
-    std::vector<WrapChunk> chunks_;
-    std::vector<WrapChunk> line_;
+    dftracer::utils::dstd::Vector<std::uint32_t> t_;
+    dftracer::utils::dstd::Vector<WrapChunk> chunks_;
+    dftracer::utils::dstd::Vector<WrapChunk> line_;
 };
 
 }  // namespace
@@ -2361,9 +2379,9 @@ dftu_series* dftu_series_str_normalize(const dftu_series* v, int32_t form) {
     }
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_normalize(flat_v, form));
     const auto opts = static_cast<utf8proc_option_t>(options);
-    std::vector<utf8proc_int32_t> cps;
+    dftracer::utils::dstd::Vector<utf8proc_int32_t> cps;
     return transform_rows(v, [&](dftracer::utils::dstd::StringView row,
-                                 std::string& out) {
+                                 dftracer::utils::dstd::String& out) {
         out.clear();
         if (is_ascii_row(row)) {
             out.assign(row);
@@ -2396,7 +2414,7 @@ dftu_series* dftu_series_str_translate(const dftu_series* v,
     TranslateTable table;
     if (!build_translate_table(from, to, table)) return nullptr;
     return transform_rows(v, [&](dftracer::utils::dstd::StringView row,
-                                 std::string& out) {
+                                 dftracer::utils::dstd::String& out) {
         out.clear();
         const auto* begin = reinterpret_cast<const std::uint8_t*>(row.data());
         const auto* end = begin + row.size();
@@ -2430,11 +2448,11 @@ dftu_series* dftu_series_str_wrap(const dftu_series* v, int64_t width,
         return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_wrap(flat_v, width, flags));
     Wrapper wrapper(width, flags);
-    std::vector<std::uint32_t> cps;
-    return transform_rows(
-        v, [&](dftracer::utils::dstd::StringView row, std::string& out) {
-            if (!decode_utf8(row, cps)) return false;
-            wrapper.run(cps, out);
-            return true;
-        });
+    dftracer::utils::dstd::Vector<std::uint32_t> cps;
+    return transform_rows(v, [&](dftracer::utils::dstd::StringView row,
+                                 dftracer::utils::dstd::String& out) {
+        if (!decode_utf8(row, cps)) return false;
+        wrapper.run(cps, out);
+        return true;
+    });
 }

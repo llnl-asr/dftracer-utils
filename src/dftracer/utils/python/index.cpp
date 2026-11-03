@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -15,9 +16,6 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace idx = dftracer::utils::index;
 namespace py = dftracer::utils::python;
@@ -25,25 +23,26 @@ namespace py = dftracer::utils::python;
 namespace {
 
 struct StaleCheck {
-    std::vector<std::string> changed;
-    std::vector<std::string> added;
-    std::vector<std::string> removed;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> changed;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> added;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> removed;
 };
 
 // Stat-only: mtime and size are the only signals O(1) to read, so a same-size
 // edit with a restored mtime is invisible here.
-StaleCheck stale_check(const idx::Index &index,
-                       const std::vector<std::string> &paths) {
+StaleCheck stale_check(
+    const idx::Index &index,
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> &paths) {
     const idx::Snapshot snapshot =
         dftracer::utils::common::unwrap(index.snapshot());
 
     StaleCheck result;
     dftracer::utils::dstd::StringViewSet listed;
     listed.reserve(paths.size());
-    for (const std::string &path : paths) {
+    for (const dftracer::utils::dstd::String &path : paths) {
         const dftracer::utils::dstd::String logical =
             idx::store::internal::get_logical_path(path);
-        listed.insert(std::string(logical));
+        listed.insert(dftracer::utils::dstd::String(logical));
         dftracer::utils::common::InputFileStat st;
         if (!dftracer::utils::common::stat_input(path, st)) st = {};
         const idx::SourceStat now{static_cast<std::uint64_t>(st.mtime),
@@ -113,7 +112,7 @@ PyObject *Index_find_stale_files(IndexObject *self, PyObject *args,
         PyErr_SetString(PyExc_RuntimeError, "Index not initialised");
         return nullptr;
     }
-    std::vector<std::string> paths;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
     if (!parse_str_list(paths_obj, "paths", paths)) return nullptr;
 
     StaleCheck result;

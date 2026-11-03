@@ -8,22 +8,22 @@
 #include <dftracer/utils/dataframe/join.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <optional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
 /// `parts` as one frame: vertically when they share names and types, else
 /// diagonally.
-DataFrame merge_morsels(std::vector<DataFrame>& parts);
+DataFrame merge_morsels(dstd::Vector<DataFrame>& parts);
 
 /// The right-side rows a cross join has spooled since the process started. For
 /// tests: a cross join whose right side is over a quarter of its budget
@@ -67,11 +67,11 @@ std::uint64_t grace_join_blocks();
 /// morsel whose column names differ from the first right morsel's.
 class GraceJoin {
    public:
-    GraceJoin(std::vector<std::string> left_names,
-              std::vector<std::string> right_names,
-              std::vector<std::string> left_on,
-              std::vector<std::string> right_on, JoinHow how,
-              std::string suffix, std::uint64_t budget,
+    GraceJoin(dstd::Vector<dstd::String> left_names,
+              dstd::Vector<dstd::String> right_names,
+              dstd::Vector<dstd::String> left_on,
+              dstd::Vector<dstd::String> right_on, JoinHow how,
+              dstd::String suffix, std::uint64_t budget,
               bool nulls_equal = false);
 
     void add_right(const DataFrame& right);
@@ -80,7 +80,7 @@ class GraceJoin {
 
     /// `left_templates` gives one column per left name, read for its type,
     /// for the unmatched right rows of a right or outer join.
-    void start(std::vector<Series> left_templates);
+    void start(dstd::Vector<Series> left_templates);
 
     coro::CoroTask<dstd::Optional<DataFrame>> next(std::int64_t max_rows);
 
@@ -94,14 +94,14 @@ class GraceJoin {
         std::int64_t left_rows = 0;
     };
     struct Work {
-        std::unique_ptr<Part> part;
+        dstd::UniquePtr<Part> part;
         int level = 0;
         bool blocks = false;  // a split cannot cut it: join it block by block
     };
     struct Current {
-        std::unique_ptr<Part> part;
+        dstd::UniquePtr<Part> part;
         dstd::Optional<HashJoin> join;
-        std::unique_ptr<Cursor> left;
+        dstd::UniquePtr<Cursor> left;
         dstd::Optional<DataFrame> left_rows;  // the left morsel being probed
         std::int64_t left_at = 0;             // its next row
         std::int64_t left_base = 0;           // its first row in the partition
@@ -109,8 +109,8 @@ class GraceJoin {
         std::uint64_t out_row_bytes = 0;      // bytes per output row seen
         // Block by block only.
         bool blocks = false;
-        std::unique_ptr<Cursor> right;      // the right spool, read in blocks
-        std::vector<std::uint8_t> matched;  // per left row: a block matched
+        dstd::UniquePtr<Cursor> right;       // the right spool, read in blocks
+        dstd::Vector<std::uint8_t> matched;  // per left row: a block matched
         // Nest only: the group of each key, and the group joined now.
         dstd::StringViewMap<std::uint64_t> group_of;
         std::uint64_t group = 0;
@@ -118,7 +118,7 @@ class GraceJoin {
         bool last_pass = false;  // probing done: the deferred left rows leave
     };
 
-    using Parts = std::vector<std::unique_ptr<Part>>;
+    using Parts = dstd::Vector<dstd::UniquePtr<Part>>;
 
     Parts make_parts(std::size_t n) const;
     void split(const DataFrame& rows, bool right_side, int level, Parts& into);
@@ -127,8 +127,8 @@ class GraceJoin {
     DataFrame empty_right() const;
     coro::CoroTask<dstd::Optional<DataFrame>> right_block(
         std::int64_t max_rows);
-    coro::CoroTask<DataFrame> lookup_heads(std::vector<std::int64_t>& conflicts,
-                                           std::int64_t max_rows);
+    coro::CoroTask<DataFrame> lookup_heads(
+        dstd::Vector<std::int64_t>& conflicts, std::int64_t max_rows);
     coro::CoroTask<void> assign_groups(std::int64_t max_rows);
     coro::CoroTask<dstd::Optional<DataFrame>> next_group(std::int64_t max_rows);
     coro::CoroTask<bool> next_block(std::int64_t max_rows);
@@ -137,22 +137,22 @@ class GraceJoin {
     coro::CoroTask<dstd::Optional<DataFrame>> deferred_left(
         std::int64_t max_rows);
 
-    std::vector<std::string> left_names_;
-    std::vector<std::string> right_names_;
-    std::vector<std::string> left_on_;
-    std::vector<std::string> right_on_;
-    std::vector<std::size_t> left_key_;
-    std::vector<std::size_t> right_key_;
+    dstd::Vector<dstd::String> left_names_;
+    dstd::Vector<dstd::String> right_names_;
+    dstd::Vector<dstd::String> left_on_;
+    dstd::Vector<dstd::String> right_on_;
+    dstd::Vector<std::size_t> left_key_;
+    dstd::Vector<std::size_t> right_key_;
     JoinHow how_;
-    std::string suffix_;
+    dstd::String suffix_;
     std::uint64_t budget_;
     bool nulls_equal_ = false;
     dstd::SharedPtr<spill::Dir> dir_;
     Parts top_;
-    std::deque<Work> queue_;
+    dstd::Deque<Work> queue_;
     dstd::Optional<Current> cur_;
     dstd::Optional<DataFrame> right_template_;
-    std::vector<Series> left_templates_;
+    dstd::Vector<Series> left_templates_;
 };
 
 }  // namespace dftracer::utils::dataframe

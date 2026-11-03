@@ -1090,8 +1090,12 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
         std::vector<VizSummary::GroupRow> rows;
         rows.reserve(merged.size());
         for (auto& kv : merged)
-            rows.push_back({kv.first, kv.second.count, kv.second.total,
-                            kv.second.min, kv.second.max});
+            rows.push_back(
+                {std::string(kv.first.data(),
+                             kv.first.size()),  // keep std: GroupRow moves in
+                                                // the server step
+                 kv.second.count, kv.second.total, kv.second.min,
+                 kv.second.max});
         std::sort(rows.begin(), rows.end(),
                   [](const VizSummary::GroupRow& lhs,
                      const VizSummary::GroupRow& rhs) {

@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <exception>
 #include <stdexcept>
-#include <vector>
 
 namespace dataframe = dftracer::utils::dataframe;
 

@@ -2,15 +2,16 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_JOIN_NAMES_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_JOIN_NAMES_H
 
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+
 #include <cstddef>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
 /// The names separated by ", ", for error and plan text.
-inline std::string join_names(const std::vector<std::string>& names) {
-    std::string out;
+inline dstd::String join_names(const dstd::Vector<dstd::String>& names) {
+    dstd::String out;
     for (std::size_t i = 0; i < names.size(); ++i) {
         if (i) out += ", ";
         out += names[i];

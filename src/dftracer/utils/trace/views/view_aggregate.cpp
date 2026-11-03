@@ -283,10 +283,8 @@ void project_columns(dftracer::utils::dataframe::DataFrame& batch,
                      const dstd::Vector<dstd::String>& select) {
     if (select.empty()) return;
     const dstd::Set<dstd::String> keep(select.begin(), select.end());
-    // keep std: DataFrame::names and columns are std::vectors
-    std::vector<std::string> names;
-    // keep std: DataFrame::columns is a std::vector
-    std::vector<dftracer::utils::dataframe::Series> columns;
+    dstd::Vector<dstd::String> names;
+    dstd::Vector<dftracer::utils::dataframe::Series> columns;
     for (std::size_t i = 0; i < batch.names.size(); ++i) {
         if (keep.count(dstd::StringView(batch.names[i]))) {
             names.push_back(std::move(batch.names[i]));
@@ -300,11 +298,9 @@ void project_columns(dftracer::utils::dataframe::DataFrame& batch,
 dataframe::DataFrame apply_agg_post_ops(dataframe::DataFrame batch,
                                         const ViewPlan& plan) {
     if (!plan.sort_col.empty())
-        // keep std: sort_by takes a std::string
-        batch = batch.sort_by(std::string(plan.sort_col), plan.sort_desc);
+        batch = batch.sort_by(dstd::String(plan.sort_col), plan.sort_desc);
     if (!plan.topk_col.empty())
-        // keep std: topk takes a std::string
-        batch = batch.topk(std::string(plan.topk_col), plan.topk_k,
+        batch = batch.topk(dstd::String(plan.topk_col), plan.topk_k,
                            plan.topk_largest);
     if (plan.offset || plan.limit) {
         const std::int64_t off = static_cast<std::int64_t>(plan.offset);

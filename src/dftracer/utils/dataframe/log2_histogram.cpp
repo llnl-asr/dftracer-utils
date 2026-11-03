@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/log2_histogram.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <simdjson.h>
 
 #include <algorithm>
 #include <cstdio>
-#include <sstream>
 
 namespace dftracer::utils::dataframe {
 
@@ -73,10 +74,10 @@ double Log2Histogram::approx_percentile(double p) const {
 }
 
 namespace {
-std::string format_count(std::uint64_t count) {
-    if (count < 1000) return std::to_string(count);
-    std::string s = std::to_string(count);
-    std::string result;
+dstd::String format_count(std::uint64_t count) {
+    if (count < 1000) return dstd::to_string(count);
+    dstd::String s = dstd::to_string(count);
+    dstd::String result;
     int pos = 0;
     int len = static_cast<int>(s.size());
     for (int i = 0; i < len; ++i) {
@@ -87,8 +88,8 @@ std::string format_count(std::uint64_t count) {
     return result;
 }
 
-std::string format_range(std::uint64_t lo, std::uint64_t hi,
-                         const std::string& unit) {
+dstd::String format_range(std::uint64_t lo, std::uint64_t hi,
+                          const dstd::String& unit) {
     char buf[128];
     if (lo == hi && lo == 0) {
         std::snprintf(buf, sizeof(buf), "0 %s", unit.c_str());
@@ -100,8 +101,8 @@ std::string format_range(std::uint64_t lo, std::uint64_t hi,
 }
 }  // namespace
 
-std::string Log2Histogram::render_ascii(std::size_t max_width,
-                                        const std::string& unit) const {
+dstd::String Log2Histogram::render_ascii(std::size_t max_width,
+                                         const dstd::String& unit) const {
     if (total_count_ == 0) return "    (no data)\n";
 
     // Find max count for scaling
@@ -110,12 +111,12 @@ std::string Log2Histogram::render_ascii(std::size_t max_width,
         if (bins_[i] > max_count) max_count = bins_[i];
     }
 
-    std::ostringstream out;
+    dstd::String out;
     for (std::size_t i = 0; i < NUM_BINS; ++i) {
         if (bins_[i] == 0) continue;
 
-        std::string range = format_range(bin_lower(i), bin_upper(i), unit);
-        std::string count_str = format_count(bins_[i]);
+        dstd::String range = format_range(bin_lower(i), bin_upper(i), unit);
+        dstd::String count_str = format_count(bins_[i]);
 
         // Scale bar
         std::size_t bar_len = 0;
@@ -129,16 +130,16 @@ std::string Log2Histogram::render_ascii(std::size_t max_width,
         char line[256];
         std::snprintf(line, sizeof(line), "    %-24s |%-*s %s\n", range.c_str(),
                       static_cast<int>(max_width),
-                      std::string(bar_len, '#').c_str(), count_str.c_str());
-        out << line;
+                      dstd::String(bar_len, '#').c_str(), count_str.c_str());
+        out += line;
     }
 
-    return out.str();
+    return out;
 }
 
-std::string Log2Histogram::render_blocks(std::size_t max_width,
-                                         const std::string& unit,
-                                         const std::string& indent) const {
+dstd::String Log2Histogram::render_blocks(std::size_t max_width,
+                                          const dstd::String& unit,
+                                          const dstd::String& indent) const {
     if (total_count_ == 0) return indent + "(no data)\n";
 
     // Unicode block elements: 8 levels from thinnest to fullest
@@ -158,12 +159,12 @@ std::string Log2Histogram::render_blocks(std::size_t max_width,
         if (bins_[i] > max_count) max_count = bins_[i];
     }
 
-    std::ostringstream out;
+    dstd::String out;
     for (std::size_t i = 0; i < NUM_BINS; ++i) {
         if (bins_[i] == 0) continue;
 
-        std::string range = format_range(bin_lower(i), bin_upper(i), unit);
-        std::string count_str = format_count(bins_[i]);
+        dstd::String range = format_range(bin_lower(i), bin_upper(i), unit);
+        dstd::String count_str = format_count(bins_[i]);
 
         // Scale to max_width full blocks + fractional last block
         double scaled = static_cast<double>(bins_[i]) /
@@ -174,7 +175,7 @@ std::string Log2Histogram::render_blocks(std::size_t max_width,
             static_cast<int>((scaled - static_cast<double>(full_blocks)) * 8.0);
         if (full_blocks == 0 && frac == 0 && bins_[i] > 0) frac = 1;
 
-        std::string bar;
+        dstd::String bar;
         for (std::size_t b = 0; b < full_blocks; ++b) {
             bar += blocks[8];
         }
@@ -184,55 +185,71 @@ std::string Log2Histogram::render_blocks(std::size_t max_width,
 
         // Pad to fixed display width
         std::size_t display_len = full_blocks + (frac > 0 ? 1 : 0);
-        std::string padding;
+        dstd::String padding;
         if (display_len < max_width) {
-            padding = std::string(max_width - display_len, ' ');
+            padding = dstd::String(max_width - display_len, ' ');
         }
 
         char label[128];
         std::snprintf(label, sizeof(label), "%-24s", range.c_str());
-        out << indent << label << bar << padding << " " << count_str << "\n";
+        out += indent;
+        out += label;
+        out += bar;
+        out += padding;
+        out += " ";
+        out += count_str;
+        out += "\n";
     }
 
-    return out.str();
+    return out;
 }
 
-std::string Log2Histogram::to_json() const {
-    std::ostringstream ss;
-    ss << '[';
+dstd::String Log2Histogram::to_json() const {
+    dstd::String ss;
+    ss += '[';
     bool first = true;
     for (std::size_t i = 0; i < NUM_BINS; ++i) {
         if (bins_[i] == 0) continue;
-        if (!first) ss << ',';
+        if (!first) ss += ',';
         first = false;
-        ss << '[' << i << ',' << bins_[i] << ']';
+        ss += '[';
+        ss += dstd::to_string(i);
+        ss += ',';
+        ss += dstd::to_string(bins_[i]);
+        ss += ']';
     }
-    ss << ']';
-    return ss.str();
+    ss += ']';
+    return ss;
 }
 
-std::string Log2Histogram::to_json_detailed() const {
-    std::ostringstream ss;
-    ss << '[';
+dstd::String Log2Histogram::to_json_detailed() const {
+    dstd::String ss;
+    ss += '[';
     bool first = true;
     for (std::size_t i = 0; i < NUM_BINS; ++i) {
         if (bins_[i] == 0) continue;
-        if (!first) ss << ',';
+        if (!first) ss += ',';
         first = false;
-        ss << "{\"bin\":" << i << ",\"lo\":" << bin_lower(i) << ",\"hi\":";
+        ss += "{\"bin\":";
+        ss += dstd::to_string(i);
+        ss += ",\"lo\":";
+        ss += dstd::to_string(bin_lower(i));
+        ss += ",\"hi\":";
         // Top bin is unbounded (bin_upper is UINT64_MAX); emit null instead.
         if (i >= 64) {
-            ss << "null";
+            ss += "null";
         } else {
-            ss << bin_upper(i);
+            ss += dstd::to_string(bin_upper(i));
         }
-        ss << ",\"count\":" << bins_[i] << '}';
+        ss += ",\"count\":";
+        ss += dstd::to_string(bins_[i]);
+        ss += '}';
     }
-    ss << ']';
-    return ss.str();
+    ss += ']';
+    return ss;
 }
 
-Log2Histogram Log2Histogram::from_json(const std::string& json) {
+Log2Histogram Log2Histogram::from_json(const dstd::String& json) {
     Log2Histogram hist;
 
     simdjson::dom::parser parser;

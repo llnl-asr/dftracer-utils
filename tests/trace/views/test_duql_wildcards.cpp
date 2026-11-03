@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -63,7 +64,7 @@ View view_of(const std::string& gz) {
 
 dataframe::DataFrame frame(const View& v) { return v.collect().get(); }
 
-std::vector<std::string> names(const dataframe::DataFrame& f) {
+dstd::Vector<dstd::String> names(const dataframe::DataFrame& f) {
     return f.names;
 }
 
@@ -125,9 +126,9 @@ TEST_SUITE("DuqlWildcards") {
         TestEnvironment env(10);
         const auto v = view_of(write_counters(env));
         const auto f = frame(v.duql("select args.pos.* | take 3"));
-        std::vector<std::string> want;
+        dstd::Vector<dstd::String> want;
         for (int k = 0; k < 12; ++k)
-            want.push_back("args.pos." + std::to_string(k));
+            want.push_back("args.pos." + dstd::to_string(k));
         CHECK(names(f) == want);
     }
 

@@ -10,8 +10,11 @@
 #include <dftracer/utils/dataframe/kernels/sort.h>  // argsort, parallel_packed_sort
 #include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <atomic>
@@ -19,12 +22,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -35,12 +34,12 @@ namespace {
 // so it goes through the SIMD cast fast path (memcpy for Float64, one
 // Convert/Promote for Float32/Int32/Int64); only the null-skipping compaction
 // path stays scalar.
-std::vector<double> nonnull_values(const Series& v) {
+dstd::Vector<double> nonnull_values(const Series& v) {
     const std::int64_t n = v.length();
     if (n > 0 && v.null_count() == 0 && v.encoding() == Encoding::Flat) {
         const void* src = dftu_series_data(v.handle());
         if (src) {
-            std::vector<double> out(static_cast<std::size_t>(n));
+            dstd::Vector<double> out(static_cast<std::size_t>(n));
             if (v.type() == TypeId::Float64) {
                 std::memcpy(out.data(), src,
                             static_cast<std::size_t>(n) * sizeof(double));
@@ -59,7 +58,7 @@ std::vector<double> nonnull_values(const Series& v) {
     const bool has_nulls = v.null_count() > 0;
     constexpr std::int64_t GRAIN = std::int64_t{1} << 16;
     const std::int64_t chunks = (n + GRAIN - 1) / GRAIN;
-    std::vector<std::vector<double>> parts(static_cast<std::size_t>(chunks));
+    dstd::Vector<dstd::Vector<double>> parts(static_cast<std::size_t>(chunks));
     const dftu_series& h = *v.handle();
     const std::uint8_t* valid =
         h.encoding == Encoding::Flat && h.validity.block() ? h.validity.data()
@@ -68,7 +67,7 @@ std::vector<double> nonnull_values(const Series& v) {
         h.encoding == Encoding::Flat && h.data.block() &&
         (v.type() == TypeId::Float64 || v.type() == TypeId::Int64);
     parallel_for(n, GRAIN, [&](std::int64_t b, std::int64_t e) {
-        std::vector<double>& out = parts[static_cast<std::size_t>(b / GRAIN)];
+        dstd::Vector<double>& out = parts[static_cast<std::size_t>(b / GRAIN)];
         out.reserve(static_cast<std::size_t>(e - b));
         if (flat64) {
             const auto* d =
@@ -87,10 +86,10 @@ std::vector<double> nonnull_values(const Series& v) {
         for (std::int64_t i = b; i < e; ++i)
             if (!has_nulls || !v.is_null(i)) out.push_back(read_f64(v, i));
     });
-    std::vector<std::size_t> at(parts.size() + 1, 0);
+    dstd::Vector<std::size_t> at(parts.size() + 1, 0);
     for (std::size_t c = 0; c < parts.size(); ++c)
         at[c + 1] = at[c] + parts[c].size();
-    std::vector<double> out(at.back());
+    dstd::Vector<double> out(at.back());
     parallel_for(
         static_cast<std::int64_t>(parts.size()), 1,
         [&](std::int64_t b, std::int64_t e) {
@@ -111,8 +110,9 @@ bool equal_at(const Series& v, std::int64_t a, std::int64_t b) {
             return read_f64(v, a) == read_f64(v, b);
         case ValueDomain::None:
             throw std::invalid_argument(
-                std::string("column type '") + type_name(v.type()) +
-                "' has no comparable per-row value (nested type)");
+                (dstd::String("column type '") + type_name(v.type()) +
+                 "' has no comparable per-row value (nested type)")
+                    .c_str());
     }
     return false;
 }
@@ -177,7 +177,7 @@ dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
     auto is_null = [&](std::size_t i) {
         return validity && !((validity[i >> 3] >> (i & 7)) & 1);
     };
-    std::vector<std::uint64_t> sample;
+    dstd::Vector<std::uint64_t> sample;
     sample.reserve(BUCKETS * OVERSAMPLE);
     for (std::size_t i = 0; sample.size() < BUCKETS * OVERSAMPLE; ++i) {
         if (i >= BUCKETS * OVERSAMPLE * 4) return {std::nan(""), std::nan("")};
@@ -185,7 +185,7 @@ dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
         if (!is_null(at)) sample.push_back(key(x[at]));
     }
     std::sort(sample.begin(), sample.end());
-    std::vector<std::uint64_t> splitters;
+    dstd::Vector<std::uint64_t> splitters;
     splitters.reserve(BUCKETS - 1);
     for (std::size_t k = 1; k < BUCKETS; ++k)
         splitters.push_back(sample[k * OVERSAMPLE]);
@@ -196,7 +196,7 @@ dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
     };
     const std::size_t chunks = (n + static_cast<std::size_t>(GRAIN) - 1) /
                                static_cast<std::size_t>(GRAIN);
-    std::vector<std::size_t> hist(chunks * BUCKETS, 0);
+    dstd::Vector<std::size_t> hist(chunks * BUCKETS, 0);
     Scratch<std::uint16_t> which(n);  // each value's bucket, found once
     parallel_for(
         static_cast<std::int64_t>(n), GRAIN,
@@ -214,7 +214,7 @@ dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
                 ++h[w];
             }
         });
-    std::vector<std::size_t> start(BUCKETS + 1, 0);
+    dstd::Vector<std::size_t> start(BUCKETS + 1, 0);
     for (std::size_t k = 0; k < BUCKETS; ++k) {
         std::size_t total = 0;
         for (std::size_t c = 0; c < chunks; ++c) total += hist[c * BUCKETS + k];
@@ -228,18 +228,18 @@ dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
     const std::size_t b1 =
         (lo + 1 < present && lo + 1 >= start[b0 + 1]) ? b0 + 1 : b0;
     if (start[b1 + 1] - start[b0] > n / 4) return {std::nan(""), std::nan("")};
-    std::vector<std::vector<T>> parts(chunks);
+    dstd::Vector<dstd::Vector<T>> parts(chunks);
     parallel_for(
         static_cast<std::int64_t>(n), GRAIN,
         [&](std::int64_t b, std::int64_t e) {
-            std::vector<T>& out = parts[static_cast<std::size_t>(b) / GRAIN];
+            dstd::Vector<T>& out = parts[static_cast<std::size_t>(b) / GRAIN];
             for (std::int64_t i = b; i < e; ++i) {
                 const std::size_t k = which[static_cast<std::size_t>(i)];
                 if (k >= b0 && k <= b1)
                     out.push_back(x[static_cast<std::size_t>(i)]);
             }
         });
-    std::vector<T> held;
+    dstd::Vector<T> held;
     held.reserve(start[b1 + 1] - start[b0]);
     for (const auto& p : parts) held.insert(held.end(), p.begin(), p.end());
     std::sort(held.begin(), held.end());
@@ -280,7 +280,7 @@ double quantile(const Series& v, double q) {
         if (!std::isnan(a))
             return frac == 0.0 ? a : a * (1.0 - frac) + b * frac;
     }
-    std::vector<double> x = nonnull_values(v);
+    dstd::Vector<double> x = nonnull_values(v);
     if (n > (std::size_t{1} << 18) && parallel_backend_installed()) {
         auto [a, b] =
             two_order_statistics(x.data(), n, nullptr, lo, sortable_key);
@@ -313,7 +313,7 @@ Series unique(const Series& v) {
         Series order = argsort(f, false);
         const std::int64_t* idx = order.data<std::int64_t>();
         const bool has_nulls = f.null_count() > 0;
-        std::vector<std::int64_t> keep;
+        dstd::Vector<std::int64_t> keep;
         std::int64_t prev = -1;
         for (std::int64_t k = 0; k < n; ++k) {
             std::int64_t i = idx[k];
@@ -327,7 +327,7 @@ Series unique(const Series& v) {
     }
     ValueIds ids;
     value_ids(*v.handle(), ids);
-    std::vector<std::int64_t> firsts;
+    dstd::Vector<std::int64_t> firsts;
     firsts.reserve(ids.first.size());
     for (std::size_t id = 0; id < ids.first.size(); ++id)
         if (static_cast<std::int32_t>(id) != ids.null_id)
@@ -337,7 +337,7 @@ Series unique(const Series& v) {
     const std::int64_t n = d.length();
     Series order = argsort(d, false);
     const std::int64_t* idx = order.data<std::int64_t>();
-    std::vector<std::int64_t> keep;
+    dstd::Vector<std::int64_t> keep;
     std::int64_t prev = -1;
     for (std::int64_t k = 0; k < n; ++k) {
         std::int64_t i = idx[k];
@@ -357,7 +357,7 @@ Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
     if (v.type() == TypeId::Float64 || v.type() == TypeId::Float32 ||
         v.type() == TypeId::Float16) {
         const bool nulls = v.null_count() > 0;
-        std::vector<std::int64_t> keep;
+        dstd::Vector<std::int64_t> keep;
         keep.reserve(static_cast<std::size_t>(n));
         bool has_nan = false;
         for (std::int64_t i = 0; i < n; ++i) {
@@ -371,9 +371,9 @@ Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
         if (has_nan) {
             const Series ranked = rank(take(v, keep), method, descending, pct);
             const double* r = ranked.data<double>();
-            std::vector<double> out(static_cast<std::size_t>(n), std::nan(""));
-            std::vector<std::uint8_t> ok(static_cast<std::size_t>((n + 7) / 8),
-                                         0);
+            dstd::Vector<double> out(static_cast<std::size_t>(n), std::nan(""));
+            dstd::Vector<std::uint8_t> ok(static_cast<std::size_t>((n + 7) / 8),
+                                          0);
             for (std::size_t t = 0; t < keep.size(); ++t) {
                 const std::int64_t i = keep[t];
                 out[static_cast<std::size_t>(i)] = r[t];
@@ -383,7 +383,7 @@ Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
             return Series::flat(TypeId::Float64, out.data(), n, ok.data());
         }
     }
-    std::vector<double> ranks(static_cast<std::size_t>(n), std::nan(""));
+    dstd::Vector<double> ranks(static_cast<std::size_t>(n), std::nan(""));
     Series order = argsort(v, descending);  // nulls sort last
     const std::int64_t* idx = order.data<std::int64_t>();
     const bool has_nulls = v.null_count() > 0;
@@ -435,7 +435,7 @@ Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
     }
     // A null value has a null rank (pandas and polars both), not a NaN.
     if (!has_nulls) return Series::flat(TypeId::Float64, ranks.data(), n);
-    std::vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     for (std::int64_t i = 0; i < n; ++i)
         if (!v.is_null(i))
             valid[static_cast<std::size_t>(i >> 3)] |=
@@ -448,7 +448,7 @@ namespace {
 // pandas min_periods = window: a window holding a null gives a null. Clears
 // the valid bit of every row within `window` of a null input.
 void null_windows(const Series& v, std::int64_t window,
-                  std::vector<std::uint8_t>& valid) {
+                  dstd::Vector<std::uint8_t>& valid) {
     if (v.null_count() == 0) return;
     const std::int64_t n = v.length();
     std::int64_t last_null = -window;
@@ -466,7 +466,7 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
     if (refuse_non_numeric("rolling", v.type())) return Series{};
     const std::int64_t n = v.length();
     if (window < 1) window = 1;
-    std::vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     // Every full window (rows [window-1, n)) is valid; set that contiguous run
     // in bulk (byte memset for the interior) instead of one bit per row.
     {
@@ -490,7 +490,7 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
     // The values as doubles: a dense Float64 column is read in place, any
     // other widened once (SIMD cast for the dense case), so the window loop
     // indexes a plain array.
-    std::vector<double> vals;
+    dstd::Vector<double> vals;
     const double* p = nullptr;
     if (n > 0 && v.null_count() == 0 && v.encoding() == Encoding::Flat &&
         v.type() == TypeId::Float64) {
@@ -545,7 +545,7 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
         // Monotonic deque of indices: front holds the window extreme.
         const bool is_max = op == RollingOp::Max;
         parallel_for(n, grain, [&](std::int64_t b, std::int64_t e) {
-            std::deque<std::int64_t> dq;
+            dstd::Deque<std::int64_t> dq;
             for (std::int64_t i = std::max<std::int64_t>(0, b - window + 1);
                  i < e; ++i) {
                 const double x = p[i];
@@ -578,7 +578,7 @@ namespace {
 
 // Quantile (linear interpolation between the two nearest ranks) of a scratch
 // vector; the caller may leave it unsorted (this sorts in place). NaN if empty.
-double quantile_sorted(std::vector<double>& x, double q) {
+double quantile_sorted(dstd::Vector<double>& x, double q) {
     const std::size_t n = x.size();
     if (n == 0) return std::nan("");
     std::sort(x.begin(), x.end());
@@ -592,7 +592,7 @@ double quantile_sorted(std::vector<double>& x, double q) {
 }
 
 // Sample variance of a scratch window (divide by n-1); 0 for fewer than 2.
-double window_sample_var(const std::vector<double>& x) {
+double window_sample_var(const dstd::Vector<double>& x) {
     const std::size_t n = x.size();
     if (n < 2) return 0.0;
     double mean = 0.0;
@@ -618,8 +618,8 @@ Series rolling_window(const Series& v, std::int64_t window, Agg agg,
     if (refuse_non_numeric(op_name, v.type())) return Series{};
     const std::int64_t n = v.length();
     if (window < 1) window = 1;
-    std::vector<double> out(static_cast<std::size_t>(n), 0.0);
-    std::vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<double> out(static_cast<std::size_t>(n), 0.0);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     {
         std::int64_t a = std::max<std::int64_t>(window - 1, 0);
         std::int64_t i = a;
@@ -637,7 +637,7 @@ Series rolling_window(const Series& v, std::int64_t window, Agg agg,
                 static_cast<std::uint8_t>(1u << (i & 7));
     }
 
-    std::vector<double> vals;
+    dstd::Vector<double> vals;
     if (n > 0 && v.null_count() == 0 && v.encoding() == Encoding::Flat) {
         vals = nonnull_values(v);
     } else {
@@ -652,7 +652,7 @@ Series rolling_window(const Series& v, std::int64_t window, Agg agg,
     constexpr std::int64_t GRAIN = 1 << 12;
     if (parallel_backend_installed() && rows > GRAIN) {
         parallel_for(rows, GRAIN, [&](std::int64_t b, std::int64_t e) {
-            std::vector<double> buf;
+            dstd::Vector<double> buf;
             buf.reserve(static_cast<std::size_t>(window));
             for (std::int64_t i = begin + b; i < begin + e; ++i) {
                 buf.clear();
@@ -662,7 +662,7 @@ Series rolling_window(const Series& v, std::int64_t window, Agg agg,
             }
         });
     } else {
-        std::vector<double> buf;
+        dstd::Vector<double> buf;
         buf.reserve(static_cast<std::size_t>(window));
         for (std::int64_t i = begin; i < n; ++i) {
             buf.clear();
@@ -680,14 +680,14 @@ Series rolling_window(const Series& v, std::int64_t window, Agg agg,
 Series rolling_var(const Series& v, std::int64_t window) {
     return rolling_window(
         v, window,
-        [](const std::vector<double>& w) { return window_sample_var(w); },
+        [](const dstd::Vector<double>& w) { return window_sample_var(w); },
         "rolling_var");
 }
 
 Series rolling_std(const Series& v, std::int64_t window) {
     return rolling_window(
         v, window,
-        [](const std::vector<double>& w) {
+        [](const dstd::Vector<double>& w) {
             return std::sqrt(window_sample_var(w));
         },
         "rolling_std");
@@ -696,14 +696,14 @@ Series rolling_std(const Series& v, std::int64_t window) {
 Series rolling_median(const Series& v, std::int64_t window) {
     return rolling_window(
         v, window,
-        [](std::vector<double>& w) { return quantile_sorted(w, 0.5); },
+        [](dstd::Vector<double>& w) { return quantile_sorted(w, 0.5); },
         "rolling_median");
 }
 
 Series rolling_quantile(const Series& v, std::int64_t window, double q) {
     return rolling_window(
         v, window,
-        [q](std::vector<double>& w) { return quantile_sorted(w, q); },
+        [q](dstd::Vector<double>& w) { return quantile_sorted(w, q); },
         "rolling_quantile");
 }
 
@@ -724,7 +724,7 @@ static AffineT affine_compose(AffineT lhs, AffineT rhs) {
 // correction: c(0) fixes the true value outright, independent of any seed.
 template <class C>
 void affine_scan_const_a(std::int64_t n, std::int64_t grain, double a, C&& c,
-                         std::vector<double>& out) {
+                         dstd::Vector<double>& out) {
     if (n == 0) return;
     if (!parallel_backend_installed() || n <= grain) {
         double y = c(0);
@@ -769,7 +769,7 @@ void affine_scan_const_a(std::int64_t n, std::int64_t grain, double a, C&& c,
 // multiply against the true entering value.
 template <class A, class C>
 void affine_scan_var_a(std::int64_t n, std::int64_t grain, A&& a, C&& c,
-                       std::vector<double>& out, std::vector<double>& aprod) {
+                       dstd::Vector<double>& out, dstd::Vector<double>& aprod) {
     if (n == 0) return;
     if (!parallel_backend_installed() || n <= grain) {
         double y = c(0);
@@ -813,7 +813,7 @@ void affine_scan_var_a(std::int64_t n, std::int64_t grain, A&& a, C&& c,
 Series ewm_mean(const Series& v, double alpha) {
     if (refuse_non_numeric("ewm_mean", v.type())) return Series{};
     const std::int64_t n = v.length();
-    std::vector<double> out(static_cast<std::size_t>(n), 0.0);
+    dstd::Vector<double> out(static_cast<std::size_t>(n), 0.0);
     if (n == 0) return Series::flat(TypeId::Float64, out.data(), n);
     const double decay = 1.0 - alpha;
     constexpr std::int64_t GRAIN = 1 << 14;
@@ -822,13 +822,13 @@ Series ewm_mean(const Series& v, double alpha) {
         // w_sum[i] = sum_{k=0}^{i} decay^k, a closed form per index, so
         // mean[i] = mean[i-1] * (1 - 1 / w_sum[i]) + x[i] / w_sum[i] is an
         // affine scan with an index-only coefficient.
-        std::vector<double> w_sum(static_cast<std::size_t>(n), 1.0);
+        dstd::Vector<double> w_sum(static_cast<std::size_t>(n), 1.0);
         parallel_for(n, GRAIN, [&](std::int64_t b, std::int64_t e) {
             for (std::int64_t i = std::max<std::int64_t>(b, 1); i < e; ++i)
                 w_sum[static_cast<std::size_t>(i)] =
                     (1.0 - std::pow(decay, i + 1)) / (1.0 - decay);
         });
-        std::vector<double> aprod(static_cast<std::size_t>(n), 0.0);
+        dstd::Vector<double> aprod(static_cast<std::size_t>(n), 0.0);
         affine_scan_var_a(
             n, GRAIN,
             [&](std::int64_t i) {
@@ -842,7 +842,7 @@ Series ewm_mean(const Series& v, double alpha) {
             out, aprod);
         return Series::flat(TypeId::Float64, out.data(), n);
     }
-    std::vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     const bool has_nulls = v.null_count() > 0;
     double w_sum = 0.0, mean = 0.0;
     for (std::int64_t i = 0; i < n; ++i) {
@@ -864,8 +864,8 @@ Series ewm_mean(const Series& v, double alpha) {
 Series ewm_std(const Series& v, double alpha) {
     if (refuse_non_numeric("ewm_std", v.type())) return Series{};
     const std::int64_t n = v.length();
-    std::vector<double> out(static_cast<std::size_t>(n), 0.0);
-    std::vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<double> out(static_cast<std::size_t>(n), 0.0);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     if (n == 0) return Series::flat(TypeId::Float64, out.data(), n);
     // The variance is unchanged by a shift, so run the recurrences on the
     // values minus the first valid one: a running mean of values near 1e9 would
@@ -890,8 +890,8 @@ Series ewm_std(const Series& v, double alpha) {
         // depend only on i, not on any row's value, so each index is a
         // closed-form geometric sum computable independently in parallel:
         // w_sum[i] = sum_{k=0}^{i} decay^k, w2_sum[i] = sum_{k=0}^{i} decay^2k.
-        std::vector<double> w_sum(static_cast<std::size_t>(n), 1.0);
-        std::vector<double> w2_sum(static_cast<std::size_t>(n), 1.0);
+        dstd::Vector<double> w_sum(static_cast<std::size_t>(n), 1.0);
+        dstd::Vector<double> w2_sum(static_cast<std::size_t>(n), 1.0);
         const double decay2 = decay * decay;
         parallel_for(n, GRAIN, [&](std::int64_t b, std::int64_t e) {
             for (std::int64_t i = std::max<std::int64_t>(b, 1); i < e; ++i) {
@@ -905,8 +905,8 @@ Series ewm_std(const Series& v, double alpha) {
         // mean[i] = mean[i-1]*(1 - 1/w_sum[i]) + x[i]/w_sum[i]: an affine
         // scan whose coefficient depends only on i (via w_sum), so it runs
         // through the variable-coefficient scan above.
-        std::vector<double> mean(static_cast<std::size_t>(n), 0.0);
-        std::vector<double> aprod(static_cast<std::size_t>(n), 0.0);
+        dstd::Vector<double> mean(static_cast<std::size_t>(n), 0.0);
+        dstd::Vector<double> aprod(static_cast<std::size_t>(n), 0.0);
         affine_scan_var_a(
             n, GRAIN,
             [&](std::int64_t i) {
@@ -988,12 +988,12 @@ Series cut(const Series& v, const Series& breaks, std::int32_t flags) {
     const bool inner = (flags & DFTU_CUT_INNER) != 0;
     const std::int64_t n = v.length();
     const std::int64_t nb = breaks.length();
-    std::vector<double> edges(static_cast<std::size_t>(nb));
+    dstd::Vector<double> edges(static_cast<std::size_t>(nb));
     for (std::int64_t k = 0; k < nb; ++k)
         edges[static_cast<std::size_t>(k)] = read_f64(breaks, k);
     std::sort(edges.begin(), edges.end());
-    std::vector<std::int32_t> out(static_cast<std::size_t>(n), -1);
-    std::vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<std::int32_t> out(static_cast<std::size_t>(n), -1);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     const bool has_nulls = v.null_count() > 0;
     for (std::int64_t i = 0; i < n; ++i) {
         if (has_nulls && v.is_null(i)) continue;
@@ -1016,8 +1016,8 @@ Series cut(const Series& v, const Series& breaks, std::int32_t flags) {
 Series qcut(const Series& v, std::int32_t q) {
     if (refuse_non_numeric("qcut", v.type())) return Series{};
     if (q < 1) q = 1;
-    std::vector<double> vals = nonnull_values(v);
-    std::vector<double> edges;
+    dstd::Vector<double> vals = nonnull_values(v);
+    dstd::Vector<double> edges;
     edges.reserve(static_cast<std::size_t>(q - 1));
     for (std::int32_t k = 1; k < q; ++k)
         edges.push_back(quantile_sorted(
@@ -1026,8 +1026,8 @@ Series qcut(const Series& v, std::int32_t q) {
     // copy's contents in place, so successive edges stay consistent).
     std::sort(edges.begin(), edges.end());
     const std::int64_t n = v.length();
-    std::vector<std::int32_t> out(static_cast<std::size_t>(n), -1);
-    std::vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<std::int32_t> out(static_cast<std::size_t>(n), -1);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     const bool has_nulls = v.null_count() > 0;
     for (std::int64_t i = 0; i < n; ++i) {
         if (has_nulls && v.is_null(i)) continue;
@@ -1045,11 +1045,11 @@ Series search_sorted(const Series& v, const Series& values) {
     if (refuse_non_numeric("search_sorted", v.type())) return Series{};
     if (refuse_non_numeric("search_sorted", values.type())) return Series{};
     const std::int64_t n = v.length();
-    std::vector<double> self(static_cast<std::size_t>(n));
+    dstd::Vector<double> self(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
         self[static_cast<std::size_t>(i)] = read_f64(v, i);
     const std::int64_t m = values.length();
-    std::vector<std::int64_t> out(static_cast<std::size_t>(m), 0);
+    dstd::Vector<std::int64_t> out(static_cast<std::size_t>(m), 0);
     for (std::int64_t k = 0; k < m; ++k) {
         const double qv = read_f64(values, k);
         auto it = std::lower_bound(self.begin(), self.end(), qv);
@@ -1062,8 +1062,8 @@ Series search_sorted(const Series& v, const Series& values) {
 Series interpolate(const Series& v) {
     if (refuse_non_numeric("interpolate", v.type())) return Series{};
     const std::int64_t n = v.length();
-    std::vector<double> out(static_cast<std::size_t>(n), 0.0);
-    std::vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<double> out(static_cast<std::size_t>(n), 0.0);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     auto mark = [&](std::int64_t i) {
         valid[static_cast<std::size_t>(i >> 3)] |=
             static_cast<std::uint8_t>(1u << (i & 7));
@@ -1080,7 +1080,7 @@ Series interpolate(const Series& v) {
     // Collect anchors (non-null rows) first; the null runs between
     // consecutive anchors are then independent of each other, so they can be
     // filled in parallel once the anchor list (and its values) is known.
-    std::vector<std::int64_t> anchors;
+    dstd::Vector<std::int64_t> anchors;
     for (std::int64_t i = 0; i < n; ++i) {
         if (v.is_null(i)) continue;
         out[static_cast<std::size_t>(i)] = read_f64(v, i);
@@ -1093,7 +1093,7 @@ Series interpolate(const Series& v) {
         // Two threads filling adjacent runs can land bits in the same
         // validity byte, so bit-sets here must be atomic (a plain `|=` would
         // race); fold into the plain bitmap once every run is filled.
-        std::vector<std::atomic<std::uint8_t>> avalid(valid.size());
+        dstd::Vector<std::atomic<std::uint8_t>> avalid(valid.size());
         for (std::size_t i = 0; i < valid.size(); ++i) avalid[i] = valid[i];
         auto amark = [&](std::int64_t i) {
             avalid[static_cast<std::size_t>(i >> 3)].fetch_or(

@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
@@ -44,10 +45,8 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
-#include <string>
 #include <utility>
 #include <variant>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -75,11 +74,13 @@ namespace dftracer::utils::python {
 // A host object's mutable side: the built set (immutable once constructed) and
 // the named results of the most recent run or session.
 struct PluginHostState {
-    dstd::Optional<Plugins> set;
+    dftracer::utils::dstd::Optional<Plugins> set;
     NamedResultRegistry results;
     // wire id -> attribute name, so a caller indexes results[...] with the
     // plugin's declared name rather than its package-qualified wire identity.
-    dstd::Map<dstd::String, dstd::String> result_names;
+    dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
+                               dftracer::utils::dstd::String>
+        result_names;
 };
 
 }  // namespace dftracer::utils::python
@@ -105,12 +106,12 @@ const Plugins* built_set(PluginHostObject* self) {
 
 // Expand any directory in `inputs` to its trace files, index (unless
 // disabled), then drive every loaded plugin as a fold over one fused scan.
-coro::CoroTask<void> run_host_scan(dftracer::utils::coro::Scope& scope,
-                                   std::vector<std::string> inputs,
-                                   std::string index_dir,
-                                   const Plugins* plugins, bool auto_index,
-                                   PluginRun* out) {
-    std::vector<std::string> files;
+coro::CoroTask<void> run_host_scan(
+    dftracer::utils::coro::Scope& scope,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> inputs,
+    dftracer::utils::dstd::String index_dir, const Plugins* plugins,
+    bool auto_index, PluginRun* out) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> files;
     for (const auto& p : inputs) {
         const auto is_dir = dftracer::utils::dstd::fs::is_directory(
             dftracer::utils::dstd::PathView(p));
@@ -156,7 +157,9 @@ coro::CoroTask<void> run_host_scan(dftracer::utils::coro::Scope& scope,
     *out = std::move(*run);
 }
 
-bool collect_inputs(PyObject* traces, std::vector<std::string>& out) {
+bool collect_inputs(
+    PyObject* traces,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& out) {
     if (PyUnicode_Check(traces)) {
         const char* s = PyUnicode_AsUTF8(traces);
         if (!s) return false;
@@ -171,7 +174,8 @@ bool collect_inputs(PyObject* traces, std::vector<std::string>& out) {
 // multi-batch map result to a pull-based pyarrow.RecordBatchReader. Returns a
 // new reference, or nullptr with a Python error set.
 PyObject* result_to_py(NamedResult& result) {
-    if (auto* blob = std::get_if<dstd::Vector<std::byte>>(&result))
+    if (auto* blob =
+            std::get_if<dftracer::utils::dstd::Vector<std::byte>>(&result))
         return PyBytes_FromStringAndSize(
             reinterpret_cast<const char*>(blob->data()),
             static_cast<Py_ssize_t>(blob->size()));
@@ -255,8 +259,10 @@ void ph_dealloc(PluginHostObject* self) {
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
-bool parse_result_names(PyObject* obj,
-                        dstd::Map<dstd::String, dstd::String>& out) {
+bool parse_result_names(
+    PyObject* obj,
+    dftracer::utils::dstd::Map<dftracer::utils::dstd::String,
+                               dftracer::utils::dstd::String>& out) {
     if (!obj || obj == Py_None) return true;
     if (!PyDict_Check(obj)) {
         PyErr_SetString(PyExc_TypeError, "result_names must be a dict or None");
@@ -330,8 +336,9 @@ int ph_init(PluginHostObject* self, PyObject* args, PyObject* kwds) {
 
     auto built = builder.build();
     if (!built) {
-        PyErr_SetString(PyExc_ImportError,
-                        std::string(built.error().message()).c_str());
+        PyErr_SetString(
+            PyExc_ImportError,
+            dftracer::utils::dstd::String(built.error().message()).c_str());
         return -1;
     }
     st->set.emplace(std::move(*built));
@@ -351,13 +358,13 @@ PyObject* ph_run(PluginHostObject* self, PyObject* args, PyObject* kwds) {
                                      &index_dir, &auto_index))
         return nullptr;
 
-    std::vector<std::string> inputs;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> inputs;
     if (!collect_inputs(traces, inputs)) return nullptr;
 
     Runtime* rt = resolve_runtime(self);
     const Plugins* plugins = built_set(self);
     if (!plugins) return nullptr;
-    std::string index_dir_s = index_dir ? index_dir : "";
+    dftracer::utils::dstd::String index_dir_s = index_dir ? index_dir : "";
     PluginRun run;
     if (!run_blocking([&] {
             rt->submit(dftracer::utils::coro::with_scope(

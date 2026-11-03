@@ -9,13 +9,13 @@
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstring>
 #include <limits>
 #include <memory>
-#include <string>
-#include <vector>
 
 using dftracer::utils::dataframe::BufferView;
 using dftracer::utils::dataframe::Encoding;
@@ -40,7 +40,7 @@ bool is_valid(const dftu_series& v, std::int64_t i) {
 // column type T, so 64-bit integers are exact.
 template <class T>
 void select_gt(const dftu_series& v, dftu_scalar threshold,
-               std::vector<std::int64_t>& sel) {
+               dftracer::utils::dstd::Vector<std::int64_t>& sel) {
     const T* p = reinterpret_cast<const T*>(v.data.data());
     const T t = scalar_as<T>(threshold);
     for (std::int64_t i = 0; i < v.length; ++i) {
@@ -85,11 +85,12 @@ dftu_series* make_selection(const dftu_series& base, BufferView indices,
     out->encoding = Encoding::Selection;
     out->length = n;
     out->data = std::move(indices);
-    out->set_child(std::make_shared<dftu_series>(base));
+    out->set_child(dftracer::utils::dstd::make_shared<dftu_series>(base));
     return out;
 }
 
-BufferView index_buffer(const std::vector<std::int64_t>& sel) {
+BufferView index_buffer(
+    const dftracer::utils::dstd::Vector<std::int64_t>& sel) {
     auto buf = new_buffer(sel.size() * sizeof(std::int64_t));
     if (!sel.empty())
         std::memcpy(writable(buf), sel.data(),
@@ -97,8 +98,9 @@ BufferView index_buffer(const std::vector<std::int64_t>& sel) {
     return buf;
 }
 
-dftu_series* make_selection(const dftu_series& base,
-                            const std::vector<std::int64_t>& sel) {
+dftu_series* make_selection(
+    const dftu_series& base,
+    const dftracer::utils::dstd::Vector<std::int64_t>& sel) {
     return make_selection(base, index_buffer(sel),
                           static_cast<std::int64_t>(sel.size()));
 }
@@ -114,7 +116,7 @@ dftu_series* dftu_series_filter_gt(const dftu_series* v,
         v->type == TypeId::Binary)
         return nullptr;
 
-    std::vector<std::int64_t> sel;
+    dftracer::utils::dstd::Vector<std::int64_t> sel;
     if (!v->validity.block()) {
         sel.resize(static_cast<std::size_t>(v->length));
         std::int64_t k =
@@ -138,7 +140,7 @@ BufferView mask_to_indices(const std::uint8_t* bits, std::int64_t n,
     constexpr std::int64_t GRAIN = std::int64_t{1} << 16;  // whole words
     const std::int64_t words = n / 64;
     const std::int64_t chunks = (words + GRAIN - 1) / GRAIN;
-    std::vector<std::int64_t> counts(static_cast<std::size_t>(chunks) + 1, 0);
+    dstd::Vector<std::int64_t> counts(static_cast<std::size_t>(chunks) + 1, 0);
     parallel_for(words, GRAIN, [&](std::int64_t b, std::int64_t e) {
         std::int64_t c = 0;
         for (std::int64_t w = b; w < e; ++w) {
@@ -192,14 +194,14 @@ BufferView mask_to_indices(const dftu_series& mask, std::int64_t& count) {
     if (!mask.is_chunked()) {
         if (mask.encoding == Encoding::Flat)
             return mask_to_indices(mask.data.data(), mask.length, count);
-        std::unique_ptr<dftu_series> flat(dftu_series_materialize(&mask));
+        const auto flat = adopt_series(dftu_series_materialize(&mask));
         return mask_to_indices(flat->data.data(), flat->length, count);
     }
     const auto* starts =
         reinterpret_cast<const std::int64_t*>(mask.data.data());
     const std::size_t k = mask.nested.size();
-    std::vector<BufferView> parts(k);
-    std::vector<std::int64_t> counts(k + 1, 0);
+    dstd::Vector<BufferView> parts(k);
+    dstd::Vector<std::int64_t> counts(k + 1, 0);
     parallel_for(
         static_cast<std::int64_t>(k), 1, [&](std::int64_t b, std::int64_t e) {
             for (std::int64_t c = b; c < e; ++c) {
@@ -504,8 +506,8 @@ static dftu_series* gather_list_w(const dftu_series& base, const Idx* idx,
                                   std::int64_t n, const IdxInfo& info) {
     const Off* boff =
         reinterpret_cast<const Off*>(offsets_of<Off>(base).data());
-    std::vector<std::int64_t> child_idx;
-    std::vector<Off> offsets{0};
+    dftracer::utils::dstd::Vector<std::int64_t> child_idx;
+    dftracer::utils::dstd::Vector<Off> offsets{0};
     offsets.reserve(static_cast<std::size_t>(n) + 1);
     for (std::int64_t i = 0; i < n; ++i) {
         const std::int64_t r = idx[i];
@@ -563,9 +565,9 @@ static dftu_series* gather_bool(const dftu_series& base, const Idx* idx,
 // view or dictionary layout concat gives.
 static dftu_series* rechunk(const dftu_series& v) {
     using dftracer::utils::dataframe::Series;
-    std::vector<Series> owned;
+    dftracer::utils::dstd::Vector<Series> owned;
     owned.reserve(v.nested.size());
-    std::vector<const Series*> parts;
+    dftracer::utils::dstd::Vector<const Series*> parts;
     parts.reserve(v.nested.size());
     for (const dftu_nested& c : v.nested) {
         owned.emplace_back(dftu_series_share(c.series.get()));
@@ -588,7 +590,7 @@ static dftu_series* gather_chunked_runs(const dftu_series& base, const Idx* idx,
         std::int64_t begin, end, top;
         std::size_t chunk;
     };
-    std::vector<Run> runs;
+    dftracer::utils::dstd::Vector<Run> runs;
     std::size_t k = 0;
     std::int64_t begin = 0;
     std::int64_t top = -1;
@@ -605,12 +607,12 @@ static dftu_series* gather_chunked_runs(const dftu_series& base, const Idx* idx,
     }
     if (n > begin) runs.push_back({begin, n, top, k});
     if (runs.empty()) return nullptr;
-    std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> pieces(
-        runs.size());
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedPtr<dftu_series>>
+        pieces(runs.size());
     dftracer::utils::dataframe::parallel_for(
         static_cast<std::int64_t>(runs.size()), 1,
         [&](std::int64_t rb, std::int64_t re) {
-            std::vector<Idx> local;
+            dftracer::utils::dstd::Vector<Idx> local;
             for (std::int64_t r = rb; r < re; ++r) {
                 const Run& run = runs[static_cast<std::size_t>(r)];
                 const std::int64_t shift = starts[run.chunk];
@@ -664,7 +666,7 @@ class ChunkLocator {
    private:
     const std::int64_t* starts_;
     int shift_ = 0;
-    std::vector<std::uint32_t> first_;
+    dftracer::utils::dstd::Vector<std::uint32_t> first_;
 };
 
 // Any indices over a CHUNKED String or Binary column whose chunks are FLAT
@@ -691,8 +693,9 @@ static dftu_series* gather_chunked_text(const dftu_series& base, const Idx* idx,
     for (const dftu_nested& c : base.nested)
         all_dictionary &= c.series->encoding == Encoding::Dictionary;
     if (all_dictionary) return nullptr;
-    std::vector<Src> srcs(chunks);
-    auto blobs = std::make_shared<std::vector<BufferView>>();
+    dftracer::utils::dstd::Vector<Src> srcs(chunks);
+    auto blobs = dftracer::utils::dstd::make_shared<
+        dftracer::utils::dstd::Vector<BufferView>>();
     for (std::size_t c = 0; c < chunks; ++c) {
         Src& src = srcs[c];
         src.chunk = base.nested[c].series.get();
@@ -734,7 +737,8 @@ static dftu_series* gather_chunked_text(const dftu_series& base, const Idx* idx,
     std::uint8_t* vbits = writable(valid);
     constexpr std::int64_t BLOCK = std::int64_t{1} << 13;
     const std::int64_t blocks = (n + BLOCK - 1) / BLOCK;
-    std::vector<std::int64_t> nulls(static_cast<std::size_t>(blocks), 0);
+    dftracer::utils::dstd::Vector<std::int64_t> nulls(
+        static_cast<std::size_t>(blocks), 0);
     auto is_null = [](const dftu_series& c, std::int64_t r) {
         return c.validity.block() &&
                !((c.validity.data()[r >> 3] >> (r & 7)) & 1);
@@ -836,8 +840,8 @@ static dftu_series* gather_chunked_lookup(const dftu_series& base,
         byte_width(base.type, base.fixed_size()).value_or(0);
     if (width == 0) return nullptr;
     const std::size_t chunks = base.nested.size();
-    std::vector<const std::uint8_t*> data(chunks);
-    std::vector<const std::uint8_t*> bitmaps(chunks);
+    dftracer::utils::dstd::Vector<const std::uint8_t*> data(chunks);
+    dftracer::utils::dstd::Vector<const std::uint8_t*> bitmaps(chunks);
     bool any_validity = false;
     for (std::size_t c = 0; c < chunks; ++c) {
         const dftu_series& chunk = *base.nested[c].series;
@@ -961,7 +965,7 @@ static dftu_series* gather_column(const dftu_series& base, const Idx* idx,
         if (!out && !with.sorted)
             out = gather_chunked_lookup(base, idx, n, with);
         if (out) return out;
-        std::unique_ptr<dftu_series> one(rechunk(base));
+        const auto one = adopt_series(rechunk(base));
         if (!one) return nullptr;
         return gather_column(*one, idx, n, &info);
     }
@@ -1128,10 +1132,12 @@ dftu_series* materialize_view(const dftu_series& v) {
 dftu_series* dftu_series_materialize(const dftu_series* v) {
     if (v->encoding == Encoding::Flat) return new dftu_series(*v);
     if (v->is_chunked()) {
-        std::unique_ptr<dftu_series> one(rechunk(*v));
+        dftu_series* one = rechunk(*v);
         if (!one) return nullptr;
-        if (one->encoding == Encoding::Flat) return one.release();
-        return dftu_series_materialize(one.get());
+        if (one->encoding == Encoding::Flat) return one;
+        dftu_series* flat = dftu_series_materialize(one);
+        dftu_series_free(one);
+        return flat;
     }
     if (v->encoding == Encoding::View) return materialize_view(*v);
     if ((v->encoding != Encoding::Selection &&
@@ -1183,14 +1189,14 @@ dftu_series* dftu_series_materialize(const dftu_series* v) {
 }
 
 namespace dftracer::utils::dataframe {
-Series select_rows(const Series& v, const std::vector<std::int64_t>& indices) {
+Series select_rows(const Series& v, const dstd::Vector<std::int64_t>& indices) {
     return Series{make_selection(*v.handle(), indices)};
 }
-std::vector<Series> select_rows(const std::vector<Series>& columns,
-                                const std::vector<std::int64_t>& indices) {
+dstd::Vector<Series> select_rows(const dstd::Vector<Series>& columns,
+                                 const dstd::Vector<std::int64_t>& indices) {
     BufferView shared = index_buffer(indices);
     const auto n = static_cast<std::int64_t>(indices.size());
-    std::vector<Series> out;
+    dstd::Vector<Series> out;
     out.reserve(columns.size());
     for (const Series& c : columns)
         out.emplace_back(make_selection(*c.handle(), shared, n));
@@ -1239,9 +1245,9 @@ dftu_series* where_varwidth(const dftu_series& m, const dftu_series& a,
     const BOff* bo = reinterpret_cast<const BOff*>(offsets_of<BOff>(b).data());
     const char* ad = reinterpret_cast<const char*>(a.data.data());
     const char* bd = reinterpret_cast<const char*>(b.data.data());
-    std::vector<Off> offsets{0};
+    dftracer::utils::dstd::Vector<Off> offsets{0};
     offsets.reserve(static_cast<std::size_t>(n) + 1);
-    std::string out;
+    dftracer::utils::dstd::String out;
     for (std::int64_t i = 0; i < n; ++i) {
         if (mask_bit(m, i))
             out.append(ad + ao[i], static_cast<std::size_t>(ao[i + 1] - ao[i]));
@@ -1348,27 +1354,27 @@ Series materialize(const Series& v) {
     return Series{dftu_series_materialize(v.handle())};
 }
 
-Series take(const Series& v, const std::vector<std::int64_t>& indices) {
+Series take(const Series& v, const dstd::Vector<std::int64_t>& indices) {
     return Series{dftu_series_take(v.handle(), indices.data(),
                                    static_cast<std::int64_t>(indices.size()))};
 }
 
-std::vector<Series> take_all(const std::vector<Series>& columns,
-                             const std::int64_t* idx, std::int64_t n) {
+dstd::Vector<Series> take_all(const dstd::Vector<Series>& columns,
+                              const std::int64_t* idx, std::int64_t n) {
     IdxInfo info = scan_indices(idx, n);
     for (const Series& c : columns)
         if (c.handle()->is_chunked() && !info.sorted_known) {
             info.sorted = indices_sorted(idx, n);
             info.sorted_known = true;
         }
-    std::vector<Series> out;
+    dstd::Vector<Series> out;
     out.reserve(columns.size());
     for (const Series& c : columns)
         out.emplace_back(gather_column(*c.handle(), idx, n, &info));
     return out;
 }
 
-Series take32(const Series& v, const std::vector<std::int32_t>& indices) {
+Series take32(const Series& v, const dstd::Vector<std::int32_t>& indices) {
     return Series{gather_column(*v.handle(), indices.data(),
                                 static_cast<std::int64_t>(indices.size()))};
 }

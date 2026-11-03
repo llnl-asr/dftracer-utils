@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/statistics/stats_view.h>
@@ -10,8 +12,6 @@
 
 #include <fstream>
 #include <functional>
-#include <map>
-#include <string>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -37,14 +37,14 @@ static stats::ViewStats run_stats(const stats::StatsView& sv,
 
 namespace {
 
-std::size_t col(const dataframe::DataFrame& b, const std::string& name) {
+std::size_t col(const dataframe::DataFrame& b, const dstd::String& name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return i;
-    throw std::runtime_error("no column: " + name);
+    throw std::runtime_error(("no column: " + name).c_str());
 }
 
 // Sum an integer count column regardless of its stored width.
-std::int64_t sum_i64(const dataframe::DataFrame& b, const std::string& name) {
+std::int64_t sum_i64(const dataframe::DataFrame& b, const dstd::String& name) {
     const dataframe::Series& c = b.columns[col(b, name)];
     std::int64_t s = 0;
     const std::int64_t* p = c.data<std::int64_t>();
@@ -62,7 +62,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dataframe::DataFrame cats =
             View::from_file(dstd::String(gz), dstd::String(idx))
@@ -80,7 +80,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dataframe::DataFrame names =
             View::from_file(dstd::String(gz), dstd::String(idx))
@@ -105,7 +105,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         stats::ViewStats s = run_stats(
             stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
@@ -132,7 +132,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         stats::ViewStats s = run_stats(
             stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
@@ -155,7 +155,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         stats::ViewStats cold = run_stats(
             stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
@@ -186,7 +186,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dftracer::utils::Runtime rt;
         rt.block_on(coro::named(
@@ -225,7 +225,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dftracer::utils::Runtime rt;
         rt.block_on(coro::named(
@@ -278,7 +278,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // A 1-byte budget forces the AggFold to spill every group to a sorted
         // run and k-way merge them back; the result must still be exact.
@@ -325,12 +325,12 @@ TEST_SUITE("stats via View") {
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         (void)dstd::fs::remove(pfw);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         stats::ViewStats s = run_stats(
             stats::StatsView::from_file(dstd::String(gz), dstd::String(idx)));
-        std::map<std::string, std::uint64_t> m;
-        for (auto& [k, v] : s.pid_tid_counts) m[std::string(k)] = v;
+        dstd::Map<dstd::String, std::uint64_t> m;
+        for (auto& [k, v] : s.pid_tid_counts) m[dstd::String(k)] = v;
         CHECK(m.count("1000:5000") == 1);
         CHECK(m.count("1001:5001") == 1);
         CHECK(m["1000:5000"] == 10);
@@ -341,7 +341,7 @@ TEST_SUITE("stats via View") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = std::string(determine_index_path(gz, ""));
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dataframe::DataFrame d =
             View::from_file(dstd::String(gz), dstd::String(idx))

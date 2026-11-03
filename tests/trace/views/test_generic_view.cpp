@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -93,7 +95,7 @@ TEST_SUITE("GenericView") {
         const auto gz = write_ndjson(env, "s");
         auto sel =
             run(view_of(gz).select({"op", "lat", "io.off"}).lazy().collect());
-        CHECK(sel.names == std::vector<std::string>{"op", "lat", "io.off"});
+        CHECK(sel.names == dstd::Vector<dstd::String>{"op", "lat", "io.off"});
         CHECK(sel.num_rows() == RECORDS);
 
         auto top = run(view_of(gz).topk("lat", 3).lazy().collect());

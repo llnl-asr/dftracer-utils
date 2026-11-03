@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -91,7 +93,7 @@ dataframe::DataFrame frame(const View& v, const std::string& q) {
     return v.duql(q).collect().get();
 }
 
-bool has(const dataframe::DataFrame& f, const std::string& n) {
+bool has(const dataframe::DataFrame& f, const dstd::String& n) {
     return std::find(f.names.begin(), f.names.end(), n) != f.names.end();
 }
 
@@ -103,13 +105,13 @@ bool declares(const View& v, const std::string& path) {
     return false;
 }
 
-std::vector<std::string> sorted(std::vector<std::string> n) {
+dstd::Vector<dstd::String> sorted(dstd::Vector<dstd::String> n) {
     std::sort(n.begin(), n.end());
     return n;
 }
 
 void same_column(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
-                 const std::string& n) {
+                 const dstd::String& n) {
     REQUIRE(a.num_rows() == b.num_rows());
     const auto& ca = a.columns[static_cast<std::size_t>(bcol(a, n))];
     const auto& cb = b.columns[static_cast<std::size_t>(bcol(b, n))];
@@ -123,8 +125,8 @@ void same_column(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
     }
 }
 
-std::string join_names(const dataframe::DataFrame& f) {
-    std::string out;
+dstd::String join_names(const dataframe::DataFrame& f) {
+    dstd::String out;
     for (const auto& n : sorted(f.names)) out += n + " ";
     return out;
 }

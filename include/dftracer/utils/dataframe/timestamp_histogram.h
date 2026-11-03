@@ -3,10 +3,10 @@
 #define DFTRACER_UTILS_DATAFRAME_TIMESTAMP_HISTOGRAM_H
 
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -23,11 +23,11 @@ class TimestampHistogram {
                                  std::uint64_t ts_end_us) const;
     double selectivity(std::uint64_t ts_start_us,
                        std::uint64_t ts_end_us) const;
-    std::vector<double> expansion_weights(std::uint64_t bucket_start_us,
-                                          std::uint64_t bucket_end_us,
-                                          std::size_t num_sub_buckets) const;
+    dstd::Vector<double> expansion_weights(std::uint64_t bucket_start_us,
+                                           std::uint64_t bucket_end_us,
+                                           std::size_t num_sub_buckets) const;
 
-    std::vector<std::uint8_t> serialize() const;
+    dstd::Vector<std::uint8_t> serialize() const;
     static TimestampHistogram deserialize(const std::uint8_t* data,
                                           std::size_t len);
 
@@ -35,7 +35,7 @@ class TimestampHistogram {
     bool empty() const { return bins_.empty(); }
     std::size_t num_bins() const { return bins_.size(); }
 
-    const std::vector<dstd::Pair<std::uint64_t, std::uint64_t>>& bins() const {
+    const dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>>& bins() const {
         return bins_;
     }
 
@@ -53,7 +53,7 @@ class TimestampHistogram {
 
    private:
     /// Sorted by bin_index. Sparse: only non-zero bins stored.
-    std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> bins_;
+    dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> bins_;
     std::uint64_t total_count_ = 0;
 };
 

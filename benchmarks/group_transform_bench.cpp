@@ -15,6 +15,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
@@ -22,10 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace df = dftracer::utils::dataframe;
 using df::DataFrame;
@@ -44,7 +42,7 @@ DataFrame collect(LazyFrame plan) {
         .get();
 }
 
-double median_ms(std::vector<double> ms) {
+double median_ms(dftracer::utils::dstd::Vector<double> ms) {
     std::sort(ms.begin(), ms.end());
     return ms[ms.size() / 2];
 }
@@ -59,11 +57,12 @@ int main(int argc, char** argv) {
     const std::int64_t groups =
         smoke ? 200 : (argc > 2 ? std::atoll(argv[2]) : 20000);
     const int reps = smoke ? 1 : (argc > 3 ? std::atoi(argv[3]) : 5);
-    const std::string only = !smoke && argc > 4 ? argv[4] : "";
+    const dftracer::utils::dstd::String only =
+        !smoke && argc > 4 ? argv[4] : "";
 
-    std::vector<std::int64_t> k(static_cast<std::size_t>(n));
-    std::vector<std::int64_t> v(static_cast<std::size_t>(n));
-    std::vector<double> f(static_cast<std::size_t>(n));
+    dftracer::utils::dstd::Vector<std::int64_t> k(static_cast<std::size_t>(n));
+    dftracer::utils::dstd::Vector<std::int64_t> v(static_cast<std::size_t>(n));
+    dftracer::utils::dstd::Vector<double> f(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i) {
         const auto z = static_cast<std::size_t>(i);
         k[z] = (i * 7919) % groups;
@@ -75,7 +74,8 @@ int main(int argc, char** argv) {
     frame.columns.push_back(Series::flat_i64(k.data(), n));
     frame.columns.push_back(Series::flat_i64(v.data(), n));
     frame.columns.push_back(Series::flat_f64(f.data(), n));
-    const std::vector<std::string> keys = {"k"};
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys = {
+        "k"};
 
     struct Case {
         const char* name;
@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
                 "speedup");
     for (const Case& c : cases) {
         if (!only.empty() && only != c.name) continue;
-        std::vector<double> native, composed;
+        dftracer::utils::dstd::Vector<double> native, composed;
         for (int r = 0; r < reps; ++r) {
             auto t0 = std::chrono::steady_clock::now();
             collect(frame.lazy().group_by(keys).transform(

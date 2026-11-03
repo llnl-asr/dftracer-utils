@@ -63,14 +63,10 @@ struct DynFix {
 /// reductions (auto_numeric_metrics) plus the column-name tag they carry.
 struct EnginePrep {
     dstd::Optional<dftracer::utils::dataframe::LazyFrame> lf;
-    // keep std: the dataframe aggregation API takes std::vector<std::string>
-    std::vector<std::string> group_key_names;
-    // keep std: lower_group_aggs takes std::vector<GroupAgg>
-    std::vector<dftracer::utils::dataframe::GroupAgg> gaggs;
-    // keep std: agg_new takes std::vector<AggDynSpec>
-    std::vector<dftracer::utils::dataframe::AggDynSpec> dyn_specs;
-    // keep std: the dataframe aggregation API takes a std::string
-    std::string dyn_prefix;
+    dstd::Vector<dstd::String> group_key_names;
+    dstd::Vector<dftracer::utils::dataframe::GroupAgg> gaggs;
+    dstd::Vector<dftracer::utils::dataframe::AggDynSpec> dyn_specs;
+    dstd::String dyn_prefix;
 };
 
 /// The one derivation of a ViewPlan's aggregation into engine terms, shared by
@@ -92,14 +88,10 @@ struct AggInputSpec {
     bool emit_dyn = false;         ///< append build_dyn_numeric_columns
     bool by_path = false;          ///< columns named by path
 
-    // keep std: the dataframe aggregation API takes std::vector<std::string>
-    std::vector<std::string> group_key_names;  ///< final key column names
-    // keep std: lower_group_aggs takes std::vector<GroupAgg>
-    std::vector<dftracer::utils::dataframe::GroupAgg> gaggs;
-    // keep std: agg_new takes std::vector<AggDynSpec>
-    std::vector<dftracer::utils::dataframe::AggDynSpec> dyn_specs;
-    // keep std: the dataframe aggregation API takes a std::string
-    std::string dyn_prefix;
+    dstd::Vector<dstd::String> group_key_names;  ///< final key column names
+    dstd::Vector<dftracer::utils::dataframe::GroupAgg> gaggs;
+    dstd::Vector<dftracer::utils::dataframe::AggDynSpec> dyn_specs;
+    dstd::String dyn_prefix;
 
     /// cat key(s) lowercased for grouping only; the base column to lower into
     /// the hidden CAT_KEY_COL, or empty when no non-transformed cat key.

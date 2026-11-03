@@ -184,7 +184,7 @@ class DomSource {
         }
         double d;
         if (e.get_double().get(d) == simdjson::SUCCESS) {
-            out.append(dstd::double_string(d));
+            out.append(dstd::double_text(d));
             return;
         }
         bool b;
@@ -424,7 +424,7 @@ class PodSource {
             char* p = dstd::to_chars_i64(buf, buf + sizeof(buf), i);
             out.append(buf, static_cast<std::size_t>(p - buf));
         } else {
-            out.append(dstd::double_string(d));
+            out.append(dstd::double_text(d));
         }
     }
 

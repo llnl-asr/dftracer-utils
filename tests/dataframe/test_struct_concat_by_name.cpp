@@ -7,12 +7,12 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
 #include <utility>
-#include <vector>
 
 using dftracer::utils::dataframe::concat;
 using dftracer::utils::dataframe::concat_columns;
@@ -23,34 +23,36 @@ using dftracer::utils::dataframe::TypeId;
 
 namespace {
 
-Series i64s(const std::vector<std::int64_t>& v) {
+Series i64s(const dftracer::utils::dstd::Vector<std::int64_t>& v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
                             nullptr);
 }
 
-Series f64s(const std::vector<double>& v) {
+Series f64s(const dftracer::utils::dstd::Vector<double>& v) {
     return Series::flat_f64(v.data(), static_cast<std::int64_t>(v.size()),
                             nullptr);
 }
 
-Series st(std::vector<std::string> names, std::vector<Series> f) {
+Series st(dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names,
+          dftracer::utils::dstd::Vector<Series> f) {
     return Series::structs(std::move(names), std::move(f));
 }
 
-std::vector<Series> one(Series s) {
-    std::vector<Series> v;
+dftracer::utils::dstd::Vector<Series> one(Series s) {
+    dftracer::utils::dstd::Vector<Series> v;
     v.push_back(std::move(s));
     return v;
 }
 
-std::vector<Series> two(Series a, Series b) {
-    std::vector<Series> v;
+dftracer::utils::dstd::Vector<Series> two(Series a, Series b) {
+    dftracer::utils::dstd::Vector<Series> v;
     v.push_back(std::move(a));
     v.push_back(std::move(b));
     return v;
 }
 
-std::int64_t field_index(const Series& s, const std::string& name) {
+std::int64_t field_index(const Series& s,
+                         const dftracer::utils::dstd::String& name) {
     for (std::int64_t f = 0; f < s.num_children(); ++f)
         if (s.field_name(f) == name) return f;
     return -1;

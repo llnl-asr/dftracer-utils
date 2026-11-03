@@ -5,19 +5,17 @@
 #include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <algorithm>
 #include <cstring>
-#include <string>
-#include <string_view>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -87,9 +85,9 @@ struct ShortKeyHash {
 };
 
 template <class Off>
-std::vector<std::int32_t> dictionary_encode_parallel(
+dstd::Vector<std::int32_t> dictionary_encode_parallel(
     const Off* off, const char* data, std::int64_t n,
-    std::vector<Off>& dict_offsets, std::string& dict_data) {
+    dstd::Vector<Off>& dict_offsets, dstd::String& dict_data) {
     // One hash per row: each chunk assigns local codes in its own flat map
     // and records them; the chunk dictionaries are then merged into the
     // global one (ordered by first appearance, as the serial pass would
@@ -104,14 +102,14 @@ std::vector<std::int32_t> dictionary_encode_parallel(
         ankerl::unordered_dense::map<ShortKey, std::int32_t, ShortKeyHash>
             shorts;
         ankerl::unordered_dense::map<dstd::StringView, std::int32_t> longs;
-        std::vector<std::int64_t> first_row;  // per local code
+        dstd::Vector<std::int64_t> first_row;  // per local code
     };
     auto at = [&](std::int64_t i) {
         return dstd::StringView(data + off[i],
                                 static_cast<std::size_t>(off[i + 1] - off[i]));
     };
-    std::vector<Local> local(static_cast<std::size_t>(nchunks));
-    std::vector<std::int32_t> codes(static_cast<std::size_t>(n));
+    dstd::Vector<Local> local(static_cast<std::size_t>(nchunks));
+    dstd::Vector<std::int32_t> codes(static_cast<std::size_t>(n));
     parallel_for(n, DICT_ENCODE_GRAIN, [&](std::int64_t b, std::int64_t e) {
         Local& l = local[static_cast<std::size_t>(b / DICT_ENCODE_GRAIN)];
         for (std::int64_t i = b; i < e; ++i) {
@@ -133,7 +131,7 @@ std::vector<std::int32_t> dictionary_encode_parallel(
         }
     });
     // Global numbering by first appearance.
-    std::vector<dstd::Pair<std::int64_t, dstd::StringView>> ordered;
+    dstd::Vector<dstd::Pair<std::int64_t, dstd::StringView>> ordered;
     ankerl::unordered_dense::map<dstd::StringView, std::int64_t> first_seen;
     for (const Local& l : local)
         for (const std::int64_t row : l.first_row) {
@@ -152,7 +150,7 @@ std::vector<std::int32_t> dictionary_encode_parallel(
         dict_data.append(s);
         dict_offsets.push_back(static_cast<Off>(dict_data.size()));
     }
-    std::vector<std::vector<std::int32_t>> remap(
+    dstd::Vector<dstd::Vector<std::int32_t>> remap(
         static_cast<std::size_t>(nchunks));
     for (std::size_t c = 0; c < local.size(); ++c) {
         remap[c].resize(local[c].first_row.size());
@@ -160,7 +158,7 @@ std::vector<std::int32_t> dictionary_encode_parallel(
             remap[c][lc] = code_of.at(at(local[c].first_row[lc]));
     }
     parallel_for(n, DICT_ENCODE_GRAIN, [&](std::int64_t b, std::int64_t e) {
-        const std::vector<std::int32_t>& r =
+        const dstd::Vector<std::int32_t>& r =
             remap[static_cast<std::size_t>(b / DICT_ENCODE_GRAIN)];
         for (std::int64_t i = b; i < e; ++i)
             codes[static_cast<std::size_t>(i)] =
@@ -174,15 +172,15 @@ dftu_series* dictionary_encode_w(const dftu_series* v) {
     const Off* off = reinterpret_cast<const Off*>(offsets_of<Off>(*v).data());
     const char* data = reinterpret_cast<const char*>(v->data.data());
 
-    std::vector<std::int32_t> codes;
-    std::vector<Off> dict_offsets{0};
-    std::string dict_data;
+    dstd::Vector<std::int32_t> codes;
+    dstd::Vector<Off> dict_offsets{0};
+    dstd::String dict_data;
     if (parallel_backend_installed() && v->length > DICT_ENCODE_GRAIN) {
         codes = dictionary_encode_parallel<Off>(off, data, v->length,
                                                 dict_offsets, dict_data);
     } else {
         codes.resize(static_cast<std::size_t>(v->length));
-        std::unordered_map<dstd::StringView, std::int32_t> codes_of;
+        dstd::HashMap<dstd::StringView, std::int32_t> codes_of;
         for (std::int64_t i = 0; i < v->length; ++i) {
             dstd::StringView s(data + off[i],
                                static_cast<std::size_t>(off[i + 1] - off[i]));

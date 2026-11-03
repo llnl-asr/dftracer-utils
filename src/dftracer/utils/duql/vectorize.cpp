@@ -366,8 +366,7 @@ class Vectorizer {
 
     static V coalesce(dstd::Vector<V> vs, dstd::StringView what) {
         const K k = common(vs, what);
-        // keep std: df::expr_* take dstd::Vector<Expr>
-        std::vector<Expr> args;
+        dstd::Vector<Expr> args;
         for (const V& v : vs)
             if (v.k != K::Nul) args.push_back(v.e);
         if (args.empty()) return null();
@@ -650,8 +649,7 @@ class Vectorizer {
                         no_kernel("min() and max() of a list");
                     return null();
                 }
-                // keep std: df::expr_* take dstd::Vector<Expr>
-                std::vector<Expr> args;
+                dstd::Vector<Expr> args;
                 K k = K::Nul;
                 for (const auto& a : c.args) {
                     const V v = (*this)(*a);
@@ -686,8 +684,7 @@ class Vectorizer {
                 return null();
             }
             case Fn::Concat: {
-                // keep std: df::expr_* take dstd::Vector<Expr>
-                std::vector<Expr> args;
+                dstd::Vector<Expr> args;
                 for (const auto& a : c.args) {
                     const V t = text((*this)(*a));
                     if (t.k == K::Nul) return null();
@@ -940,8 +937,7 @@ namespace {
 
 // The key columns of `l` for `rows` rows: each key term evaluated, FLAT.
 dstd::Vector<df::Series> key_columns(
-    // keep std: dataframe::eval and agg take std::vector<const Series*>
-    const TLookup& l, const std::vector<const df::Series*>& inputs,
+    const TLookup& l, const dstd::Vector<const df::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, std::int64_t rows,
     bool args_fallback) {
     dstd::Vector<df::Series> out;
@@ -963,16 +959,14 @@ const LookupTable& bound(const TLookup& l) {
 }  // namespace
 
 dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
-    // keep std: dataframe::eval and agg take std::vector<const Series*>
-    const TLookup& l, const std::vector<const dataframe::Series*>& inputs,
+    const TLookup& l, const dstd::Vector<const dataframe::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
     try {
         bound(l);
         const dstd::Vector<df::Series> keys =
             key_columns(l, inputs, columns, rows, args_fallback);
-        // keep std: dataframe::eval and agg take std::vector<const Series*>
-        std::vector<const df::Series*> ptrs;
+        dstd::Vector<const df::Series*> ptrs;
         for (const auto& k : keys) ptrs.push_back(&k);
         return lookup_column(l, ptrs, rows);
     } catch (const Failure& f) {
@@ -981,8 +975,7 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
 }
 
 dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
-    // keep std: dataframe::eval and agg take std::vector<const Series*>
-    const TQuant& q, const std::vector<const dataframe::Series*>& inputs,
+    const TQuant& q, const dstd::Vector<const dataframe::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
     const df::Series unknown = df::Series::nulls(TypeId::Bool, rows);
@@ -996,8 +989,7 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
             const LookupTable& t = bound(*l);
             const dstd::Vector<df::Series> keys =
                 key_columns(*l, inputs, columns, rows, args_fallback);
-            // keep std: dataframe::eval and agg take std::vector<const Series*>
-            std::vector<const df::Series*> ptrs;
+            dstd::Vector<const df::Series*> ptrs;
             for (const auto& k : keys) ptrs.push_back(&k);
             Matches m = match(t, ptrs, rows);
             const auto n = static_cast<std::int64_t>(m.rows.size());
@@ -1067,8 +1059,7 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
             owned.push_back(reads(columns[i]) ? inputs[i]->take(parent)
                                               : inputs[i]->share());
         }
-        // keep std: dataframe::eval and agg take std::vector<const Series*>
-        std::vector<const df::Series*> frame;
+        dstd::Vector<const df::Series*> frame;
         for (const auto& c : owned) frame.push_back(&c);
         const V cond = Vectorizer(cols, args_fallback)(*q.cond);
         dstd::Vector<std::uint8_t> yes(static_cast<std::size_t>(n), 0);
@@ -1154,8 +1145,7 @@ dstd::Optional<ListParts> list_parts(const df::Series& s) {
 // where `valid` is false.
 df::Series make_list(const dstd::Vector<std::int64_t>& offsets,
                      df::Series values, const dstd::Vector<bool>& valid) {
-    // keep std: Series::list takes std::vector<std::int32_t>
-    std::vector<std::int32_t> off(offsets.begin(), offsets.end());
+    dstd::Vector<std::int32_t> off(offsets.begin(), offsets.end());
     df::Series out = df::Series::list(off, std::move(values));
     if (std::all_of(valid.begin(), valid.end(), [](bool v) { return v; }))
         return out;
@@ -1284,8 +1274,7 @@ df::Series members_column(const dstd::Vector<df::Series>& args,
     }
     const TypeId elem = type.fields.front().type.id;
     dstd::Vector<df::DataFrame> frames(fields.size());
-    // keep std: df::concat takes std::vector<const DataFrame*>
-    std::vector<const df::DataFrame*> ptrs;
+    dstd::Vector<const df::DataFrame*> ptrs;
     for (std::size_t k = 0; k < fields.size(); ++k) {
         frames[k].names.push_back("v");
         frames[k].columns.push_back(fields[k].second.type() == elem
@@ -1568,8 +1557,7 @@ df::Series list_column(const dstd::Vector<df::Series>& items, std::int64_t n,
     if (items.empty())
         return make_list(offsets, df::Series::nulls(elem, 0), valid);
     dstd::Vector<df::DataFrame> frames(items.size());
-    // keep std: df::concat takes std::vector<const DataFrame*>
-    std::vector<const df::DataFrame*> ptrs;
+    dstd::Vector<const df::DataFrame*> ptrs;
     for (std::size_t k = 0; k < items.size(); ++k) {
         const df::Series s = items[k].null_count() == n
                                  ? df::Series::nulls(elem, n)

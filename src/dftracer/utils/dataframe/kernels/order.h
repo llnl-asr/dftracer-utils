@@ -5,11 +5,10 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cmath>
 #include <cstdint>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -91,17 +90,17 @@ class ColumnView {
 
 /// The row indices [0, n) ordered by `keys` ascending, a null sorting after
 /// every value, ties in row order.
-std::vector<std::int64_t> order_rows(const std::vector<ColumnView>& keys,
-                                     std::int64_t n);
+dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnView>& keys,
+                                      std::int64_t n);
 
 /// Whether rows `a` and `b` hold the same key tuple, a null equal to a null.
-bool same_keys(const std::vector<ColumnView>& keys, std::int64_t a,
+bool same_keys(const dstd::Vector<ColumnView>& keys, std::int64_t a,
                std::int64_t b);
 
 /// Given `order` from order_rows, the end of the run of rows from position
 /// `begin` that share its key tuple.
-std::int64_t run_end(const std::vector<ColumnView>& keys,
-                     const std::vector<std::int64_t>& order,
+std::int64_t run_end(const dstd::Vector<ColumnView>& keys,
+                     const dstd::Vector<std::int64_t>& order,
                      std::int64_t begin);
 
 }  // namespace dftracer::utils::dataframe

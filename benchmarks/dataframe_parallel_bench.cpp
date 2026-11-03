@@ -21,6 +21,9 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
@@ -31,7 +34,6 @@
 #include <cstdlib>
 #include <thread>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils::dataframe;
 
@@ -63,7 +65,7 @@ void thread_backend(void*, std::int64_t n, std::int64_t grain,
             body(bctx, b, e);
         }
     };
-    std::vector<std::thread> pool;
+    dftracer::utils::dstd::Vector<std::thread> pool;
     for (int t = 1; t < g_threads; ++t) pool.emplace_back(worker);
     worker();
     for (auto& th : pool) th.join();
@@ -74,7 +76,8 @@ void do_not_optimize(T&& v) {
     asm volatile("" : : "r,m"(v) : "memory");
 }
 
-double time_group_by(const DataFrame& df, const std::vector<GroupAgg>& aggs,
+double time_group_by(const DataFrame& df,
+                     const dftracer::utils::dstd::Vector<GroupAgg>& aggs,
                      int reps) {
     double best = 1e300;
     for (int r = 0; r < reps; ++r) {
@@ -95,9 +98,12 @@ int main(int argc, char** argv) {
     const std::int64_t rows = argc > 1 ? std::atoll(argv[1]) : 20'000'000;
     const std::int64_t groups = argc > 2 ? std::atoll(argv[2]) : 1000;
 
-    std::vector<std::int64_t> k(static_cast<std::size_t>(rows));
-    std::vector<std::int64_t> v(static_cast<std::size_t>(rows));
-    std::vector<std::int64_t> s(static_cast<std::size_t>(rows));
+    dftracer::utils::dstd::Vector<std::int64_t> k(
+        static_cast<std::size_t>(rows));
+    dftracer::utils::dstd::Vector<std::int64_t> v(
+        static_cast<std::size_t>(rows));
+    dftracer::utils::dstd::Vector<std::int64_t> s(
+        static_cast<std::size_t>(rows));
     for (std::int64_t i = 0; i < rows; ++i) {
         k[static_cast<std::size_t>(i)] = i % groups;
         v[static_cast<std::size_t>(i)] = i;
@@ -109,9 +115,9 @@ int main(int argc, char** argv) {
     df.columns.push_back(Series::flat_i64(k.data(), rows));
     df.columns.push_back(Series::flat_i64(v.data(), rows));
     df.columns.push_back(Series::flat_i64(s.data(), rows));
-    std::vector<GroupAgg> aggs{{Agg::Sum, "v", "sum", 0.0},
-                               {Agg::Mean, "v", "mean", 0.0},
-                               {Agg::Count, "", "cnt", 0.0}};
+    dftracer::utils::dstd::Vector<GroupAgg> aggs{{Agg::Sum, "v", "sum", 0.0},
+                                                 {Agg::Mean, "v", "mean", 0.0},
+                                                 {Agg::Count, "", "cnt", 0.0}};
 
     std::printf("group_by: %lld rows, %lld groups, sum+mean+count\n",
                 static_cast<long long>(rows), static_cast<long long>(groups));
@@ -392,10 +398,12 @@ int main(int argc, char** argv) {
     // String predicate row loop (regex / LIKE): the compute-bound per-row
     // scan parallelized on 8-row (byte) chunk boundaries in string_ops.cpp.
     const std::int64_t srows = 5'000'000;
-    std::vector<std::string> str_vals(static_cast<std::size_t>(srows));
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> str_vals(
+        static_cast<std::size_t>(srows));
     for (std::int64_t i = 0; i < srows; ++i)
         str_vals[static_cast<std::size_t>(i)] =
-            "event_" + std::to_string(i % 97) + "_tag" + std::to_string(i % 13);
+            "event_" + dftracer::utils::dstd::to_string(i % 97) + "_tag" +
+            dftracer::utils::dstd::to_string(i % 13);
     Series str_col = Series::strings(str_vals);
 
     auto time_regex = [&](int reps) {
@@ -583,7 +591,7 @@ int main(int argc, char** argv) {
     }
     bool tk_ok = tk_serial_out.length() == tk_par_out.length();
     {
-        std::vector<std::int64_t> sv, pv;
+        dftracer::utils::dstd::Vector<std::int64_t> sv, pv;
         for (std::int64_t i = 0; i < tk_serial_out.length(); ++i)
             sv.push_back(tk_serial_out.data<std::int64_t>()[i]);
         for (std::int64_t i = 0; i < tk_par_out.length(); ++i)
@@ -606,10 +614,11 @@ int main(int argc, char** argv) {
     DataFrame dummy_df;
     dummy_df.names = {"cat"};
     {
-        std::vector<std::string> cats(static_cast<std::size_t>(drows));
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cats(
+            static_cast<std::size_t>(drows));
         for (std::int64_t i = 0; i < drows; ++i)
             cats[static_cast<std::size_t>(i)] =
-                "c" + std::to_string(i % dgroups);
+                "c" + dftracer::utils::dstd::to_string(i % dgroups);
         dummy_df.columns.push_back(Series::strings(cats));
     }
     auto time_dummies = [&](int reps) {
@@ -667,7 +676,7 @@ int main(int argc, char** argv) {
     // hash_partition: per-row multi-col hash into shared buckets.
     auto time_hp = [&](int reps) {
         double best = 1e300;
-        std::vector<DataFrame> r;
+        dftracer::utils::dstd::Vector<DataFrame> r;
         for (int i = 0; i < reps; ++i) {
             const auto tt0 = std::chrono::steady_clock::now();
             r = hash_partition(dummy_df, {"cat"}, 64);
@@ -682,11 +691,12 @@ int main(int argc, char** argv) {
         return r;
     };
     set_parallel_backend(nullptr, nullptr);
-    std::vector<DataFrame> hp_serial_out = time_hp(3);
+    dftracer::utils::dstd::Vector<DataFrame> hp_serial_out = time_hp(3);
     double hp_ser = 1e300;
     for (int i = 0; i < 3; ++i) {
         const auto tt0 = std::chrono::steady_clock::now();
-        std::vector<DataFrame> r = hash_partition(dummy_df, {"cat"}, 64);
+        dftracer::utils::dstd::Vector<DataFrame> r =
+            hash_partition(dummy_df, {"cat"}, 64);
         const auto tt1 = std::chrono::steady_clock::now();
         std::int64_t total = 0;
         for (const auto& p : r) total += p.num_rows();
@@ -696,11 +706,12 @@ int main(int argc, char** argv) {
             std::chrono::duration<double, std::milli>(tt1 - tt0).count());
     }
     install_runtime_parallel_backend();
-    std::vector<DataFrame> hp_par_out = time_hp(3);
+    dftracer::utils::dstd::Vector<DataFrame> hp_par_out = time_hp(3);
     double hp_par = 1e300;
     for (int i = 0; i < 3; ++i) {
         const auto tt0 = std::chrono::steady_clock::now();
-        std::vector<DataFrame> r = hash_partition(dummy_df, {"cat"}, 64);
+        dftracer::utils::dstd::Vector<DataFrame> r =
+            hash_partition(dummy_df, {"cat"}, 64);
         const auto tt1 = std::chrono::steady_clock::now();
         std::int64_t total = 0;
         for (const auto& p : r) total += p.num_rows();
@@ -936,7 +947,7 @@ int main(int argc, char** argv) {
 
     // Elementwise add: two 20M Float64 columns. Bandwidth-bound - measure
     // whether parallel_for over row ranges actually wins on this machine.
-    std::vector<double> f1(static_cast<std::size_t>(rows)),
+    dftracer::utils::dstd::Vector<double> f1(static_cast<std::size_t>(rows)),
         f2(static_cast<std::size_t>(rows));
     for (std::int64_t i = 0; i < rows; ++i) {
         f1[static_cast<std::size_t>(i)] = static_cast<double>(i);
@@ -1050,11 +1061,11 @@ int main(int argc, char** argv) {
     // concat_columns: many large parts, each a disjoint memcpy destination.
     const std::int64_t nparts = 256;
     const std::int64_t part_len = rows / nparts;
-    std::vector<Series> parts;
+    dftracer::utils::dstd::Vector<Series> parts;
     parts.reserve(static_cast<std::size_t>(nparts));
     for (std::int64_t p = 0; p < nparts; ++p)
         parts.push_back(Series::flat_i64(v.data() + p * part_len, part_len));
-    std::vector<const Series*> part_ptrs;
+    dftracer::utils::dstd::Vector<const Series*> part_ptrs;
     for (const Series& part : parts) part_ptrs.push_back(&part);
     auto time_concat = [&](int reps) {
         double best = 1e300;
@@ -1109,8 +1120,9 @@ int main(int argc, char** argv) {
     ok = ok && ccat_ok;
 
     // interpolate: nulls every 32 rows create many independent short runs.
-    std::vector<double> interp_v(static_cast<std::size_t>(rows));
-    std::vector<std::uint8_t> interp_valid(
+    dftracer::utils::dstd::Vector<double> interp_v(
+        static_cast<std::size_t>(rows));
+    dftracer::utils::dstd::Vector<std::uint8_t> interp_valid(
         static_cast<std::size_t>((rows + 7) / 8), 0xFF);
     for (std::int64_t i = 0; i < rows; ++i) {
         interp_v[static_cast<std::size_t>(i)] = static_cast<double>(i % 1000);
@@ -1230,7 +1242,7 @@ int main(int argc, char** argv) {
 
     // ewm_mean: affine-transform prefix scan. Random walk data (not a flat
     // series) so the recurrence's decaying tail actually mixes many inputs.
-    std::vector<double> ewm_v(static_cast<std::size_t>(rows));
+    dftracer::utils::dstd::Vector<double> ewm_v(static_cast<std::size_t>(rows));
     {
         double acc = 0.0;
         for (std::int64_t i = 0; i < rows; ++i) {

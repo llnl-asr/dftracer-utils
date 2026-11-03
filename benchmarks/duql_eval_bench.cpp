@@ -10,6 +10,8 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_value.h>
 #include <simdjson.h>
@@ -20,9 +22,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
-#include <string_view>
 #include <tuple>
-#include <vector>
 
 namespace duql = dftracer::utils::duql;
 using dftracer::utils::json::JsonValue;
@@ -35,13 +35,16 @@ constexpr const char* NAMES[] = {
     "MPI_Recv",      "cudaMemcpyAsync", "H5Dwrite", "lseek64"};
 constexpr const char* CATS[] = {"POSIX", "STDIO", "MPI"};
 
-std::string record(std::uint32_t i) {
-    std::string r = R"({"name":")" + std::string(NAMES[i % 12]) +
-                    R"(","cat":")" + CATS[i % 3] + R"(","pid":)" +
-                    std::to_string(i % 7) + R"(,"dur":)" +
-                    std::to_string((i * 37) % 200) + R"(,"args":{"size":)" +
-                    std::to_string((i * 131) % 4096);
-    if (i % 5 == 0) r += R"(,"retry":)" + std::to_string(i % 3);
+dftracer::utils::dstd::String record(std::uint32_t i) {
+    dftracer::utils::dstd::String r =
+        R"({"name":")" + dftracer::utils::dstd::String(NAMES[i % 12]) +
+        R"(","cat":")" + CATS[i % 3] + R"(","pid":)" +
+        dftracer::utils::dstd::to_string(i % 7) + R"(,"dur":)" +
+        dftracer::utils::dstd::to_string((i * 37) % 200) +
+        R"(,"args":{"size":)" +
+        dftracer::utils::dstd::to_string((i * 131) % 4096);
+    if (i % 5 == 0)
+        r += R"(,"retry":)" + dftracer::utils::dstd::to_string(i % 3);
     return r + "}}";
 }
 
@@ -49,27 +52,27 @@ std::string record(std::uint32_t i) {
 duql::ValueMap map_of(const duql::Query& q, JsonValue v) {
     duql::ValueMap m;
     for (const auto& f : q.fields()) {
-        JsonValue x = v.at(std::string(f));
+        JsonValue x = v.at(dftracer::utils::dstd::String(f));
         if (!x.exists() &&
             !dftracer::utils::dstd::StringView(f).starts_with("args."))
-            x = v.at("args." + std::string(f));
+            x = v.at("args." + dftracer::utils::dstd::String(f));
         if (!x.exists()) continue;
         if (x.is_string())
-            m[std::string(f)] = dftracer::utils::dstd::String(
+            m[dftracer::utils::dstd::String(f)] = dftracer::utils::dstd::String(
                 x.get<dftracer::utils::dstd::StringView>());
         else if (x.is_int())
-            m[std::string(f)] = x.get<std::int64_t>();
+            m[dftracer::utils::dstd::String(f)] = x.get<std::int64_t>();
         else if (x.is_uint())
-            m[std::string(f)] = x.get<std::uint64_t>();
+            m[dftracer::utils::dstd::String(f)] = x.get<std::uint64_t>();
         else if (x.is_number())
-            m[std::string(f)] = x.get<double>();
+            m[dftracer::utils::dstd::String(f)] = x.get<double>();
     }
     return m;
 }
 
 template <class F>
 double ns_per_record(std::size_t n, int rounds, F&& body) {
-    std::vector<double> times;
+    dftracer::utils::dstd::Vector<double> times;
     for (int r = 0; r < rounds; ++r) {
         const auto t0 = std::chrono::steady_clock::now();
         body();
@@ -83,8 +86,9 @@ double ns_per_record(std::size_t n, int rounds, F&& body) {
 }
 
 // A path of `len` bytes holding "/scratch/"; every fifth ends in ".h5".
-std::string long_path(std::uint32_t i, std::size_t len) {
-    std::string s = "/p/lustre/scratch/run" + std::to_string(i % 97);
+dftracer::utils::dstd::String long_path(std::uint32_t i, std::size_t len) {
+    dftracer::utils::dstd::String s =
+        "/p/lustre/scratch/run" + dftracer::utils::dstd::to_string(i % 97);
     std::uint32_t x = i * 2654435761u + 1;
     while (s.size() + 3 < len) {
         s += '/';
@@ -109,15 +113,15 @@ int main(int argc, char** argv) {
     const int rounds = smoke ? 1 : (argc > 2 ? std::atoi(argv[2]) : 7);
 
     simdjson::dom::parser parser;
-    std::vector<std::string> texts;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> texts;
     texts.reserve(n);
     for (std::size_t i = 0; i < n; ++i)
         texts.push_back(record(static_cast<std::uint32_t>(i)));
-    std::vector<simdjson::padded_string> padded;
+    dftracer::utils::dstd::Vector<simdjson::padded_string> padded;
     padded.reserve(n);
     for (const auto& t : texts) padded.emplace_back(t);
-    std::vector<simdjson::dom::document> docs(n);
-    std::vector<simdjson::dom::element> roots(n);
+    dftracer::utils::dstd::Vector<simdjson::dom::document> docs(n);
+    dftracer::utils::dstd::Vector<simdjson::dom::element> roots(n);
     for (std::size_t i = 0; i < n; ++i) {
         if (parser.parse_into_document(docs[i], padded[i]).get(roots[i]) !=
             simdjson::SUCCESS) {
@@ -151,7 +155,7 @@ int main(int argc, char** argv) {
             std::printf("%-44s %10s %10s %8s\n", text, "n/a", "n/a", "-");
             continue;
         }
-        std::vector<duql::ValueMap> maps;
+        dftracer::utils::dstd::Vector<duql::ValueMap> maps;
         maps.reserve(n);
         for (std::size_t i = 0; i < n; ++i)
             maps.push_back(map_of(*q, JsonValue(roots[i])));
@@ -171,7 +175,7 @@ int main(int argc, char** argv) {
                     kept == kept_map ? "" : " (map differs)");
     }
     namespace df = dftracer::utils::dataframe;
-    std::vector<dftracer::utils::dstd::StringView> names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> names;
     names.reserve(n);
     for (std::size_t i = 0; i < n; ++i) names.push_back(NAMES[i % 12]);
     const df::Series col = df::Series::strings(names);
@@ -203,7 +207,8 @@ int main(int argc, char** argv) {
 
     constexpr const char* VARIED[] = {"MPI_", "cuda", "read",   "wri",
                                       "H5",   "64",   "Memcpy", "zzz"};
-    std::vector<dftracer::utils::dstd::StringView> same_needles, varied_needles;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView>
+        same_needles, varied_needles;
     same_needles.reserve(n);
     varied_needles.reserve(n);
     for (std::size_t i = 0; i < n; ++i) {
@@ -214,7 +219,7 @@ int main(int argc, char** argv) {
     for (const auto& [label, op, lit] :
          {std::tuple{"starts_with", df::StrPredOp::StartsWith, "MPI_"},
           std::tuple{"contains", df::StrPredOp::Contains, "Memcpy"}}) {
-        const std::vector<const df::Series*> in0{&col};
+        const dftracer::utils::dstd::Vector<const df::Series*> in0{&col};
         const df::Expr lit_e = df::expr_str_pred(op, df::expr_col(0), lit);
         const double lit_ns = ns_per_record(n, rounds, [&] {
             if (!df::eval(lit_e, in0).handle()) std::abort();
@@ -225,8 +230,10 @@ int main(int argc, char** argv) {
         const df::Series varied = df::Series::strings(varied_needles);
         const df::Expr col_e =
             df::expr_str_pred_col(op, df::expr_col(0), df::expr_col(1));
-        const std::vector<const df::Series*> in_same{&col, &same};
-        const std::vector<const df::Series*> in_varied{&col, &varied};
+        const dftracer::utils::dstd::Vector<const df::Series*> in_same{&col,
+                                                                       &same};
+        const dftracer::utils::dstd::Vector<const df::Series*> in_varied{
+            &col, &varied};
         const double same_ns = ns_per_record(n, rounds, [&] {
             if (!df::eval(col_e, in_same).handle()) std::abort();
         });
@@ -247,7 +254,7 @@ int main(int argc, char** argv) {
     std::printf("\n%-44s %10s\n", "long value filter (map path)", "ns/record");
     for (const std::size_t len : LONG_LENGTHS) {
         const std::size_t m = std::min<std::size_t>(n, (64u << 20) / len);
-        std::vector<duql::ValueMap> maps(m);
+        dftracer::utils::dstd::Vector<duql::ValueMap> maps(m);
         for (std::size_t i = 0; i < m; ++i)
             maps[i]["fname"] = dftracer::utils::dstd::String(
                 long_path(static_cast<std::uint32_t>(i), len));
@@ -262,9 +269,9 @@ int main(int argc, char** argv) {
             });
             std::printf("%-34s %5zu B %10.1f  kept %zu\n", text, len, ns, kept);
         }
-        std::vector<dftracer::utils::dstd::StringView> views;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> views;
         views.reserve(m);
-        std::vector<std::string> own;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> own;
         own.reserve(m);
         for (std::size_t i = 0; i < m; ++i)
             own.push_back(long_path(static_cast<std::uint32_t>(i), len));

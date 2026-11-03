@@ -24,12 +24,11 @@
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -99,14 +98,14 @@ class BasicDistinctSketch {
 
     /// Dense registers, empty while the sketch is sparse. Serialization keeps
     /// both forms so a sparse sketch stays small (and exact) on disk.
-    const std::vector<std::uint8_t>& dense_registers() const { return dense_; }
-    const std::vector<std::uint64_t>& sparse_hashes() const { return sparse_; }
+    const dstd::Vector<std::uint8_t>& dense_registers() const { return dense_; }
+    const dstd::Vector<std::uint64_t>& sparse_hashes() const { return sparse_; }
 
-    void set_dense_registers(std::vector<std::uint8_t> regs) {
+    void set_dense_registers(dstd::Vector<std::uint8_t> regs) {
         dense_ = std::move(regs);
         sparse_.clear();
     }
-    void set_sparse_hashes(std::vector<std::uint64_t> hashes) {
+    void set_sparse_hashes(dstd::Vector<std::uint64_t> hashes) {
         sparse_ = std::move(hashes);
         dense_.clear();
     }
@@ -146,8 +145,8 @@ class BasicDistinctSketch {
             dftracer::utils::dstd::hash::fnv1a_hash(s));
     }
 
-    std::vector<std::uint64_t> sparse_;
-    std::vector<std::uint8_t> dense_;
+    dstd::Vector<std::uint64_t> sparse_;
+    dstd::Vector<std::uint8_t> dense_;
 };
 
 using DistinctSketch = BasicDistinctSketch<>;

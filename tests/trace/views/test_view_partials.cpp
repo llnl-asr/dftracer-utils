@@ -5,6 +5,8 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
@@ -164,7 +166,7 @@ Rows rows_of(const df::DataFrame& f, const std::vector<std::string>& keys) {
         auto& cells = out[k];
         for (std::size_t c = 0; c < f.names.size(); ++c)
             if (f.columns[c].type() != df::TypeId::String)
-                cells[f.names[c]] = bnum(f, r, f.names[c]);
+                cells[std::string(f.names[c])] = bnum(f, r, f.names[c]);
     }
     return out;
 }
@@ -217,7 +219,7 @@ TEST_SUITE("ViewPartials") {
             {GroupKey::cat(), GroupKey::hhash()}};
         const std::vector<std::vector<std::string>> columns{
             {"name"}, {"hhash"}, {"pid", "name"}, {"cat", "hhash"}};
-        std::vector<df::DataFrame> expected;
+        dstd::Vector<df::DataFrame> expected;
         for (const auto& g : groupings) expected.push_back(scan_events(fx, g));
 
         fx.delete_traces();
@@ -454,7 +456,7 @@ TEST_SUITE("ViewPartials") {
         };
         const TypedResult before_epoch = profiles_by("epoch");
         const TypedResult before_step = profiles_by("step");
-        std::vector<df::DataFrame> expected;
+        dstd::Vector<df::DataFrame> expected;
         for (const char* arg : {"epoch", "step"}) {
             auto p = scan::from_files(fx.files());
             p = scan::filter(

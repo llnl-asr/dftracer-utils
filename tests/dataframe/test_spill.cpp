@@ -4,7 +4,11 @@
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
@@ -14,7 +18,6 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <vector>
 
 using dftracer::utils::dataframe::Morsel;
 using dftracer::utils::dataframe::Series;
@@ -30,18 +33,19 @@ dftracer::utils::dstd::Optional<Morsel> run(
 
 TEST_SUITE("spill") {
     TEST_CASE("round-trip mixed-type morsels through a run file") {
-        std::vector<std::int64_t> a{1, 2, 3, 4};
+        dftracer::utils::dstd::Vector<std::int64_t> a{1, 2, 3, 4};
         std::uint8_t bm = 0b1011;  // row 2 null
-        std::vector<double> b{1.5, 2.5, 3.5, 4.5};
-        std::vector<std::string> s{"foo", "", "bar", "baz"};
+        dftracer::utils::dstd::Vector<double> b{1.5, 2.5, 3.5, 4.5};
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> s{
+            "foo", "", "bar", "baz"};
 
-        std::vector<Series> cols;
+        dftracer::utils::dstd::Vector<Series> cols;
         cols.push_back(Series::flat_i64(a.data(), 4, &bm));
         cols.push_back(Series::flat_f64(b.data(), 4));
         cols.push_back(Series::strings(s));
 
         spill::Dir dir;
-        const std::string path = dir.run_path(0);
+        const dftracer::utils::dstd::String path = dir.run_path(0);
         {
             spill::Writer w(path);
             w.write(cols, 4);
@@ -77,28 +81,28 @@ TEST_SUITE("spill") {
             ~Env() { ::unsetenv("DFTRACER_UTILS_SPILL_COMPRESS"); }
         };
         constexpr std::int64_t N = 20000;
-        std::vector<std::int64_t> a(N);
-        std::vector<std::string> s(N);
-        std::vector<std::uint8_t> valid((N + 7) / 8, 0xFF);
+        dftracer::utils::dstd::Vector<std::int64_t> a(N);
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> s(N);
+        dftracer::utils::dstd::Vector<std::uint8_t> valid((N + 7) / 8, 0xFF);
         std::uint64_t x = 88172645463325252ULL;
         for (std::int64_t i = 0; i < N; ++i) {
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;
             a[i] = i < N / 2 ? i % 97 : static_cast<std::int64_t>(x);
-            s[i] = "name" + std::to_string(i % 31);
+            s[i] = "name" + dftracer::utils::dstd::to_string(i % 31);
             if (i % 13 == 0)
                 valid[i / 8] =
                     static_cast<std::uint8_t>(valid[i / 8] & ~(1u << (i % 8)));
         }
-        std::vector<Series> cols;
+        dftracer::utils::dstd::Vector<Series> cols;
         cols.push_back(Series::flat_i64(a.data(), N, valid.data()));
         cols.push_back(Series::strings(s));
 
         auto round_trip = [&](const char* mode, std::uintmax_t* bytes) {
             Env env(mode);
             spill::Dir dir;
-            const std::string path = dir.run_path(0);
+            const dftracer::utils::dstd::String path = dir.run_path(0);
             {
                 spill::Writer w(path);
                 w.write(cols, N);
@@ -128,7 +132,7 @@ TEST_SUITE("spill") {
 
     TEST_CASE("empty run reads back as no morsels") {
         spill::Dir dir;
-        const std::string path = dir.run_path(1);
+        const dftracer::utils::dstd::String path = dir.run_path(1);
         {
             spill::Writer w(path);
             w.close();
@@ -138,12 +142,16 @@ TEST_SUITE("spill") {
     }
 
     TEST_CASE("a JSON column keeps its flag through a run file") {
-        Series text = Series::strings(std::vector<std::string>{"1", "\"a\""});
-        std::vector<Series> cols;
+        Series text = Series::strings(
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                "1", "\"a\""});
+        dftracer::utils::dstd::Vector<Series> cols;
         cols.push_back(text.as_json());
-        cols.push_back(Series::strings(std::vector<std::string>{"x", "y"}));
+        cols.push_back(Series::strings(
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"x",
+                                                                         "y"}));
         spill::Dir dir;
-        const std::string path = dir.run_path(0);
+        const dftracer::utils::dstd::String path = dir.run_path(0);
         {
             spill::Writer w(path);
             w.write(cols, 2);
@@ -166,11 +174,11 @@ TEST_SUITE("spill errors") {
     }
 
     TEST_CASE("a truncated run is an error, not the end of the run") {
-        std::vector<std::int64_t> a{1, 2, 3, 4, 5, 6, 7, 8};
-        std::vector<Series> cols;
+        dftracer::utils::dstd::Vector<std::int64_t> a{1, 2, 3, 4, 5, 6, 7, 8};
+        dftracer::utils::dstd::Vector<Series> cols;
         cols.push_back(Series::flat_i64(a.data(), 8));
         spill::Dir dir;
-        const std::string path = dir.run_path(0);
+        const dftracer::utils::dstd::String path = dir.run_path(0);
         {
             spill::Writer w(path);
             w.write(cols, 8);
@@ -195,7 +203,7 @@ TEST_SUITE("spill errors") {
 
     TEST_CASE("a truncated aggregate run is an error") {
         spill::Dir dir;
-        const std::string path = dir.run_path(0);
+        const dftracer::utils::dstd::String path = dir.run_path(0);
         {
             std::ofstream os(path.c_str(), std::ios::binary);
             const std::uint32_t len = 100;
@@ -217,7 +225,7 @@ TEST_SUITE("spill errors") {
 
     TEST_CASE("a morsel size that is not in the file is an error") {
         spill::Dir dir;
-        const std::string path = dir.run_path(0);
+        const dftracer::utils::dstd::String path = dir.run_path(0);
         {
             std::ofstream os(path.c_str(), std::ios::binary);
             const std::int64_t sizes[2] = {std::int64_t{1} << 40,
@@ -238,7 +246,7 @@ TEST_SUITE("spill errors") {
 
     TEST_CASE("an aggregate state length past the file is an error") {
         spill::Dir dir;
-        const std::string path = dir.run_path(0);
+        const dftracer::utils::dstd::String path = dir.run_path(0);
         std::ofstream os(path.c_str(), std::ios::binary);
         const std::uint32_t len = 0xFFFFFFF0u;
         os.write(reinterpret_cast<const char*>(&len), sizeof(len));
@@ -248,11 +256,11 @@ TEST_SUITE("spill errors") {
     }
 
     TEST_CASE("write_run with a zero morsel size still writes every row") {
-        std::vector<std::int64_t> a{1, 2, 3};
-        std::vector<Series> cols;
+        dftracer::utils::dstd::Vector<std::int64_t> a{1, 2, 3};
+        dftracer::utils::dstd::Vector<Series> cols;
         cols.push_back(Series::flat_i64(a.data(), 3));
         spill::Dir dir;
-        const std::string path = dir.run_path(0);
+        const dftracer::utils::dstd::String path = dir.run_path(0);
         std::uint64_t largest = 0;
         {
             spill::Writer w(path);
@@ -269,16 +277,16 @@ TEST_SUITE("spill errors") {
     TEST_CASE("a spool takes no morsel after a reader, in memory or on disk") {
         for (const std::uint64_t budget :
              {std::uint64_t{1} << 20, std::uint64_t{1}}) {
-            std::vector<std::int64_t> a{1, 2, 3};
+            dftracer::utils::dstd::Vector<std::int64_t> a{1, 2, 3};
             spill::Spool spool(budget);
-            std::vector<Series> cols;
+            dftracer::utils::dstd::Vector<Series> cols;
             cols.push_back(Series::flat_i64(a.data(), 3));
             spool.add(std::move(cols), 3);
-            std::unique_ptr<dftracer::utils::dataframe::Cursor> first =
-                spool.reader();
-            std::unique_ptr<dftracer::utils::dataframe::Cursor> second =
-                spool.reader();
-            std::vector<Series> more;
+            dftracer::utils::dstd::UniquePtr<dftracer::utils::dataframe::Cursor>
+                first = spool.reader();
+            dftracer::utils::dstd::UniquePtr<dftracer::utils::dataframe::Cursor>
+                second = spool.reader();
+            dftracer::utils::dstd::Vector<Series> more;
             more.push_back(Series::flat_i64(a.data(), 3));
             CHECK_THROWS_AS(spool.add(std::move(more), 3), std::logic_error);
             // Both readers read the three rows.
@@ -297,14 +305,15 @@ TEST_SUITE("spill errors") {
              {std::uint64_t{1} << 20, std::uint64_t{1}}) {
             spill::Spool spool(budget);
             for (std::int64_t m = 0; m < 5; ++m) {
-                std::vector<std::int64_t> a{m * 10, m * 10 + 1, m * 10 + 2};
-                std::vector<Series> cols;
+                dftracer::utils::dstd::Vector<std::int64_t> a{
+                    m * 10, m * 10 + 1, m * 10 + 2};
+                dftracer::utils::dstd::Vector<Series> cols;
                 cols.push_back(Series::flat_i64(a.data(), 3));
                 spool.add(std::move(cols), 3);
             }
             for (int pass = 0; pass < 2; ++pass) {
                 auto back = spool.reverse_reader();
-                std::vector<std::int64_t> firsts;
+                dftracer::utils::dstd::Vector<std::int64_t> firsts;
                 while (auto m = run(back->next(0))) {
                     REQUIRE(m->rows == 3);
                     const Series c = m->columns[0].materialize();
@@ -312,7 +321,8 @@ TEST_SUITE("spill errors") {
                           c.data<std::int64_t>()[0] + 1);
                     firsts.push_back(c.data<std::int64_t>()[0]);
                 }
-                CHECK(firsts == std::vector<std::int64_t>{40, 30, 20, 10, 0});
+                CHECK(firsts == dftracer::utils::dstd::Vector<std::int64_t>{
+                                    40, 30, 20, 10, 0});
             }
         }
     }

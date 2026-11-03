@@ -4,6 +4,8 @@
 #include <dftracer/utils/dataframe/ops/ops_common.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 namespace dftracer::utils::dataframe {
 
@@ -14,8 +16,8 @@ namespace {
 // One sorted morsel of the right side, or a compact copy of the active rows
 // of an interval join. The views read the columns of `cols`.
 struct Seg {
-    std::vector<Series> cols;
-    std::vector<ColumnView> keys;
+    dstd::Vector<Series> cols;
+    dstd::Vector<ColumnView> keys;
     dstd::Optional<ColumnView> t;   // asof time, or interval lo
     dstd::Optional<ColumnView> hi;  // interval hi
     std::int64_t rows = 0;
@@ -36,19 +38,19 @@ struct Ref {
 };
 
 struct Layout {
-    std::vector<std::size_t> lby;
-    std::vector<std::size_t> rby;
+    dstd::Vector<std::size_t> lby;
+    dstd::Vector<std::size_t> rby;
     std::size_t lt = 0;
     std::size_t rt = 0;
     std::size_t rhi = 0;
     bool has_hi = false;
-    std::vector<std::size_t> rout;
-    std::vector<Field> rfields;
+    dstd::Vector<std::size_t> rout;
+    dstd::Vector<Field> rfields;
 };
 
 struct LeftBlock {
     Morsel m;
-    std::vector<ColumnView> by;
+    dstd::Vector<ColumnView> by;
     dstd::Optional<ColumnView> t;
 };
 
@@ -58,7 +60,7 @@ bool is_bytes_type(TypeId t) {
            p == TypeId::LargeString || p == TypeId::LargeBinary;
 }
 
-const Field* field_named(const std::vector<Field>& fs, const std::string& n) {
+const Field* field_named(const dstd::Vector<Field>& fs, const dstd::String& n) {
     const auto it = std::find_if(fs.begin(), fs.end(),
                                  [&](const Field& f) { return f.name == n; });
     return it == fs.end() ? nullptr : &*it;
@@ -66,57 +68,62 @@ const Field* field_named(const std::vector<Field>& fs, const std::string& n) {
 
 // The type checks of the eager ops, over the fields both plans declare. A type
 // that is not known yet (Unknown) is checked when the first morsels arrive.
-void check_field_types(const std::vector<Field>& lf,
-                       const std::vector<Field>& rf, const std::string& who,
-                       const std::string& lt_name, const std::string& rt_name,
-                       const std::vector<std::string>& by,
-                       const std::vector<std::string>& right_also) {
+void check_field_types(const dstd::Vector<Field>& lf,
+                       const dstd::Vector<Field>& rf, const dstd::String& who,
+                       const dstd::String& lt_name, const dstd::String& rt_name,
+                       const dstd::Vector<dstd::String>& by,
+                       const dstd::Vector<dstd::String>& right_also) {
     const auto known = [](const Field* f) {
         return f && f->type.id != TypeId::Unknown;
     };
     const Field* lt = field_named(lf, lt_name);
     const Field* rt = field_named(rf, rt_name);
     if (known(lt) && known(rt) && lt->type.id != rt->type.id)
-        throw std::invalid_argument(who + ": point/ts column types differ");
-    for (const std::string& n : right_also) {
+        throw std::invalid_argument(
+            (who + ": point/ts column types differ").c_str());
+    for (const dstd::String& n : right_also) {
         const Field* f = field_named(rf, n);
         if (known(lt) && known(f) && f->type.id != lt->type.id)
-            throw std::invalid_argument(who + ": point/lo/hi types differ");
+            throw std::invalid_argument(
+                (who + ": point/lo/hi types differ").c_str());
     }
-    for (const std::string& n : by) {
+    for (const dstd::String& n : by) {
         const Field* l = field_named(lf, n);
         const Field* r = field_named(rf, n);
         if (known(l) && known(r) && l->type.id != r->type.id)
-            throw std::invalid_argument(who + ": equi column types differ");
+            throw std::invalid_argument(
+                (who + ": equi column types differ").c_str());
         for (const Field* f : {l, r})
             if (known(f) && !ColumnView::supports(f->type.id))
                 throw std::invalid_argument(
-                    who + ": column '" + n + "' of type " +
-                    std::string(type_name(f->type.id)) + " has no order");
+                    (who + ": column '" + n + "' of type " +
+                     dstd::String(type_name(f->type.id)) + " has no order")
+                        .c_str());
     }
     if (known(lt) &&
         (!ColumnView::supports(lt->type.id) || is_bytes_type(lt->type.id)))
-        throw std::invalid_argument(who + ": time columns must be numeric");
+        throw std::invalid_argument(
+            (who + ": time columns must be numeric").c_str());
 }
 
 // The names of the left columns, then of the right columns not in `skip`; a
 // right name that is taken gets "_right", and a second clash throws.
-std::vector<std::string> joined_names(const std::vector<std::string>& left,
-                                      const std::vector<std::string>& right,
-                                      const std::vector<std::string>& skip,
-                                      const std::string& who) {
-    std::vector<std::string> out = left;
-    const auto taken = [&](const std::string& n) {
+dstd::Vector<dstd::String> joined_names(const dstd::Vector<dstd::String>& left,
+                                        const dstd::Vector<dstd::String>& right,
+                                        const dstd::Vector<dstd::String>& skip,
+                                        const dstd::String& who) {
+    dstd::Vector<dstd::String> out = left;
+    const auto taken = [&](const dstd::String& n) {
         return std::find(out.begin(), out.end(), n) != out.end();
     };
-    for (const std::string& r : right) {
+    for (const dstd::String& r : right) {
         if (std::find(skip.begin(), skip.end(), r) != skip.end()) continue;
-        std::string name = r;
+        dstd::String name = r;
         if (taken(name)) {
             name += "_right";
             if (taken(name))
                 throw std::invalid_argument(
-                    who + ": output column name collision: " + name);
+                    (who + ": output column name collision: " + name).c_str());
         }
         out.push_back(std::move(name));
     }
@@ -127,7 +134,7 @@ std::vector<std::string> joined_names(const std::vector<std::string>& left,
 class RightFeed {
    public:
     RightFeed(LazyFrame sorted, const Layout& lay,
-              std::vector<std::string> rsch)
+              dstd::Vector<dstd::String> rsch)
         : plan_(std::move(sorted)), lay_(lay), rsch_(std::move(rsch)) {}
 
     coro::CoroTask<bool> fill(std::int64_t max_rows) {
@@ -141,10 +148,11 @@ class RightFeed {
                 if (proto_.empty()) empty_proto();
                 co_return false;
             }
-            std::vector<Series> cols = ordered(*df);
+            dstd::Vector<Series> cols = ordered(*df);
             if (proto_.empty()) {
                 for (std::size_t c : lay_.rout)
-                    proto_.push_back(cols[c].take(std::vector<std::int64_t>{}));
+                    proto_.push_back(
+                        cols[c].take(dstd::Vector<std::int64_t>{}));
             }
             if (df->num_rows() == 0) continue;
             seg_ = make_seg(std::move(cols), df->num_rows());
@@ -156,7 +164,7 @@ class RightFeed {
     const SegPtr& seg() const { return seg_; }
     std::int64_t i() const { return i_; }
     void advance() { ++i_; }
-    const std::vector<Series>& proto() const { return proto_; }
+    const dstd::Vector<Series>& proto() const { return proto_; }
     std::uint64_t row_bytes() const {
         return seg_ && seg_->rows > 0
                    ? seg_->bytes / static_cast<std::uint64_t>(seg_->rows)
@@ -164,17 +172,18 @@ class RightFeed {
     }
 
    private:
-    std::vector<Series> ordered(const DataFrame& df) {
+    dstd::Vector<Series> ordered(const DataFrame& df) {
         if (map_.empty()) {
-            for (const std::string& n : rsch_) {
+            for (const dstd::String& n : rsch_) {
                 const int at = column_index_of(df.names, n);
                 if (at < 0)
-                    throw std::runtime_error("asof: the right plan has no '" +
-                                             n + "' column");
+                    throw std::runtime_error(
+                        ("asof: the right plan has no '" + n + "' column")
+                            .c_str());
                 map_.push_back(static_cast<std::size_t>(at));
             }
         }
-        std::vector<Series> cols;
+        dstd::Vector<Series> cols;
         cols.reserve(map_.size());
         for (std::size_t at : map_)
             cols.push_back(df.columns[at].is_flat()
@@ -183,8 +192,8 @@ class RightFeed {
         return cols;
     }
 
-    SegPtr make_seg(std::vector<Series> cols, std::int64_t rows) const {
-        auto s = std::make_shared<Seg>();
+    SegPtr make_seg(dstd::Vector<Series> cols, std::int64_t rows) const {
+        auto s = dstd::make_shared<Seg>();
         s->rows = rows;
         s->bytes = spill::columns_bytes(cols);
         for (std::size_t c : lay_.rby) s->keys.emplace_back(cols[c]);
@@ -202,11 +211,11 @@ class RightFeed {
 
     LazyFrame plan_;
     Layout lay_;
-    std::vector<std::string> rsch_;
-    std::vector<std::size_t> map_;
+    dstd::Vector<dstd::String> rsch_;
+    dstd::Vector<std::size_t> map_;
     dstd::Optional<coro::AsyncGenerator<DataFrame>> gen_;
     SegPtr seg_;
-    std::vector<Series> proto_;
+    dstd::Vector<Series> proto_;
     std::int64_t i_ = 0;
     bool done_ = false;
 };
@@ -216,10 +225,10 @@ class RightFeed {
 // each left row, which right rows pair with it.
 class OrderedJoin : public Cursor {
    public:
-    OrderedJoin(std::unique_ptr<Cursor> left, LazyFrame right_sorted,
-                const Layout& lay, std::vector<std::string> rsch,
-                std::vector<std::string> names, std::uint64_t budget,
-                std::string who)
+    OrderedJoin(dstd::UniquePtr<Cursor> left, LazyFrame right_sorted,
+                const Layout& lay, dstd::Vector<dstd::String> rsch,
+                dstd::Vector<dstd::String> names, std::uint64_t budget,
+                dstd::String who)
         : left_(std::move(left)),
           feed_(std::move(right_sorted), lay, std::move(rsch)),
           lay_(lay),
@@ -245,7 +254,7 @@ class OrderedJoin : public Cursor {
         }
     }
 
-    dstd::Optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
         return names_;
     }
 
@@ -298,7 +307,7 @@ class OrderedJoin : public Cursor {
             auto m = co_await left_->next(max_rows_);
             if (!m) co_return false;
             if (m->rows == 0) continue;
-            auto b = std::make_shared<LeftBlock>();
+            auto b = dstd::make_shared<LeftBlock>();
             for (std::size_t c : lay_.lby) b->by.emplace_back(m->columns[c]);
             b->t.emplace(m->columns[lay_.lt]);
             b->m = std::move(*m);
@@ -323,15 +332,15 @@ class OrderedJoin : public Cursor {
 
     void check_types(const LeftBlock& L, const Seg& s) const {
         if (L.t->type() != s.t->type())
-            throw std::invalid_argument(who_ +
-                                        ": point/ts column types differ");
+            throw std::invalid_argument(
+                (who_ + ": point/ts column types differ").c_str());
         for (std::size_t k = 0; k < L.by.size(); ++k)
             if (L.by[k].type() != s.keys[k].type())
-                throw std::invalid_argument(who_ +
-                                            ": equi column types differ");
+                throw std::invalid_argument(
+                    (who_ + ": equi column types differ").c_str());
         if (L.t->is_bytes())
-            throw std::invalid_argument(who_ +
-                                        ": time columns must be numeric");
+            throw std::invalid_argument(
+                (who_ + ": time columns must be numeric").c_str());
     }
 
     Morsel flush() {
@@ -356,10 +365,10 @@ class OrderedJoin : public Cursor {
         return out;
     }
 
-    std::vector<Series> gather() const {
+    dstd::Vector<Series> gather() const {
         const std::size_t n = out_ref_.size();
-        std::vector<const Seg*> segs;
-        std::vector<std::int64_t> which(n, -1);
+        dstd::Vector<const Seg*> segs;
+        dstd::Vector<std::int64_t> which(n, -1);
         const Seg* last = nullptr;
         std::int64_t last_id = -1;
         for (std::size_t j = 0; j < n; ++j) {
@@ -373,10 +382,10 @@ class OrderedJoin : public Cursor {
             }
             which[j] = last_id;
         }
-        std::vector<Series> out;
+        dstd::Vector<Series> out;
         out.reserve(lay_.rout.size());
         if (segs.size() <= 1) {
-            std::vector<std::int64_t> idx(n);
+            dstd::Vector<std::int64_t> idx(n);
             for (std::size_t j = 0; j < n; ++j)
                 idx[j] = which[j] < 0 ? -1 : out_ref_[j].i;
             for (std::size_t k = 0; k < lay_.rout.size(); ++k)
@@ -385,8 +394,8 @@ class OrderedJoin : public Cursor {
                                   : segs[0]->cols[lay_.rout[k]].take(idx));
             return out;
         }
-        std::vector<std::vector<std::int64_t>> per(segs.size());
-        std::vector<std::int64_t> base(segs.size(), 0);
+        dstd::Vector<dstd::Vector<std::int64_t>> per(segs.size());
+        dstd::Vector<std::int64_t> base(segs.size(), 0);
         for (std::size_t j = 0; j < n; ++j)
             if (which[j] >= 0) ++base[static_cast<std::size_t>(which[j])];
         std::int64_t acc = 0;
@@ -396,7 +405,7 @@ class OrderedJoin : public Cursor {
             base[s] = acc;
             acc += cnt;
         }
-        std::vector<std::int64_t> perm(n, -1);
+        dstd::Vector<std::int64_t> perm(n, -1);
         for (std::size_t j = 0; j < n; ++j) {
             if (which[j] < 0) continue;
             const auto s = static_cast<std::size_t>(which[j]);
@@ -404,23 +413,23 @@ class OrderedJoin : public Cursor {
             per[s].push_back(out_ref_[j].i);
         }
         for (std::size_t k = 0; k < lay_.rout.size(); ++k) {
-            std::vector<Series> pieces;
+            dstd::Vector<Series> pieces;
             pieces.reserve(segs.size());
             for (std::size_t s = 0; s < segs.size(); ++s)
                 pieces.push_back(segs[s]->cols[lay_.rout[k]].take(per[s]));
-            std::vector<const Series*> ptrs;
+            dstd::Vector<const Series*> ptrs;
             for (const Series& p : pieces) ptrs.push_back(&p);
             out.push_back(concat_columns(ptrs).take(perm));
         }
         return out;
     }
 
-    std::unique_ptr<Cursor> left_;
+    dstd::UniquePtr<Cursor> left_;
     RightFeed feed_;
     Layout lay_;
-    std::vector<std::string> names_;
+    dstd::Vector<dstd::String> names_;
     std::uint64_t budget_;
-    std::string who_;
+    dstd::String who_;
     std::int64_t max_rows_ = 0;
 
     dstd::SharedPtr<LeftBlock> lb_;
@@ -429,10 +438,10 @@ class OrderedJoin : public Cursor {
     std::int64_t rep_row_ = 0;
     bool checked_ = false;
 
-    std::vector<std::int64_t> out_left_;
-    std::vector<Ref> out_ref_;
+    dstd::Vector<std::int64_t> out_left_;
+    dstd::Vector<Ref> out_ref_;
     bool left_contig_ = true;
-    std::vector<SegPtr> pinned_;
+    dstd::Vector<SegPtr> pinned_;
     std::uint64_t pinned_bytes_ = 0;
     std::uint64_t pin_cap_ = 0;
     std::size_t row_cap_ = 1;
@@ -444,9 +453,9 @@ class OrderedJoin : public Cursor {
 // are kept.
 class AsofCursor : public OrderedJoin {
    public:
-    AsofCursor(std::unique_ptr<Cursor> left, LazyFrame right_sorted,
-               const Layout& lay, std::vector<std::string> rsch,
-               std::vector<std::string> names, std::uint64_t budget,
+    AsofCursor(dstd::UniquePtr<Cursor> left, LazyFrame right_sorted,
+               const Layout& lay, dstd::Vector<dstd::String> rsch,
+               dstd::Vector<dstd::String> names, std::uint64_t budget,
                AsofDirection direction, dstd::Optional<double> tolerance)
         : OrderedJoin(std::move(left), std::move(right_sorted), lay,
                       std::move(rsch), std::move(names), budget, "asof"),
@@ -539,9 +548,9 @@ class AsofCursor : public OrderedJoin {
 // copies their rows out of the right morsels so a long interval pins none.
 class IntervalCursor : public OrderedJoin {
    public:
-    IntervalCursor(std::unique_ptr<Cursor> left, LazyFrame right_sorted,
-                   const Layout& lay, std::vector<std::string> rsch,
-                   std::vector<std::string> names, std::uint64_t budget,
+    IntervalCursor(dstd::UniquePtr<Cursor> left, LazyFrame right_sorted,
+                   const Layout& lay, dstd::Vector<dstd::String> rsch,
+                   dstd::Vector<dstd::String> names, std::uint64_t budget,
                    bool outer)
         : OrderedJoin(std::move(left), std::move(right_sorted), lay,
                       std::move(rsch), std::move(names), budget, "interval"),
@@ -658,7 +667,7 @@ class IntervalCursor : public OrderedJoin {
     // Copies the active rows of the morsels the feed left, and of mostly dead
     // copies, into one copy.
     void copy_active() {
-        std::vector<const Seg*> from;
+        dstd::Vector<const Seg*> from;
         for (const SegPtr& c : chunks_)
             if (c != feed_.seg() && (!c->copy || 2 * c->live < c->rows))
                 from.push_back(c.get());
@@ -669,27 +678,27 @@ class IntervalCursor : public OrderedJoin {
                        ? -1
                        : static_cast<std::int64_t>(it - from.begin());
         };
-        std::vector<std::vector<std::int64_t>> rows(from.size());
+        dstd::Vector<dstd::Vector<std::int64_t>> rows(from.size());
         for (const Entry& e : active_) {
             const std::int64_t k = slot(e.seg);
             if (k >= 0) rows[static_cast<std::size_t>(k)].push_back(e.i);
         }
-        std::vector<std::int64_t> base(from.size(), 0);
+        dstd::Vector<std::int64_t> base(from.size(), 0);
         std::int64_t total = 0;
         for (std::size_t k = 0; k < from.size(); ++k) {
             std::sort(rows[k].begin(), rows[k].end());
             base[k] = total;
             total += static_cast<std::int64_t>(rows[k].size());
         }
-        auto c = std::make_shared<Seg>();
+        auto c = dstd::make_shared<Seg>();
         c->cols.resize(from.front()->cols.size());
-        std::vector<std::size_t> copied = lay_.rout;
+        dstd::Vector<std::size_t> copied = lay_.rout;
         copied.push_back(lay_.rt);
         copied.push_back(lay_.rhi);
         std::sort(copied.begin(), copied.end());
         copied.erase(std::unique(copied.begin(), copied.end()), copied.end());
         for (std::size_t col : copied) {
-            std::vector<Series> pieces;
+            dstd::Vector<Series> pieces;
             pieces.reserve(from.size());
             for (std::size_t k = 0; k < from.size(); ++k)
                 pieces.push_back(from[k]->cols[col].take(rows[k]));
@@ -697,7 +706,7 @@ class IntervalCursor : public OrderedJoin {
                 c->cols[col] = std::move(pieces.front());
                 continue;
             }
-            std::vector<const Series*> ptrs;
+            dstd::Vector<const Series*> ptrs;
             for (const Series& p : pieces) ptrs.push_back(&p);
             c->cols[col] = concat_columns(ptrs);
         }
@@ -709,7 +718,7 @@ class IntervalCursor : public OrderedJoin {
         const auto move = [&](Entry& e) {
             const std::int64_t k = slot(e.seg);
             if (k < 0) return;
-            const std::vector<std::int64_t>& v =
+            const dstd::Vector<std::int64_t>& v =
                 rows[static_cast<std::size_t>(k)];
             e.i = base[static_cast<std::size_t>(k)] +
                   (std::lower_bound(v.begin(), v.end(), e.i) - v.begin());
@@ -753,9 +762,9 @@ class IntervalCursor : public OrderedJoin {
     }
 
     bool outer_;
-    std::vector<Entry> active_;
-    std::vector<Entry> ordered_;
-    std::vector<SegPtr> chunks_;
+    dstd::Vector<Entry> active_;
+    dstd::Vector<Entry> ordered_;
+    dstd::Vector<SegPtr> chunks_;
     std::size_t emit_pos_ = 0;
     std::size_t sweep_at_ = 64;
     bool emitting_ = false;
@@ -774,24 +783,24 @@ constexpr const char* INTERVAL_WHO = "interval";
 
 namespace lazy_internal {
 
-std::unique_ptr<Cursor> make_ordered_join(std::unique_ptr<Cursor>& in,
-                                          const std::vector<std::string>& sch,
-                                          const std::string& name,
+dstd::UniquePtr<Cursor> make_ordered_join(dstd::UniquePtr<Cursor>& in,
+                                          const dstd::Vector<dstd::String>& sch,
+                                          const dstd::String& name,
                                           const OwnedFrameOpArgs& args_ref,
                                           const LazyFrame& other,
                                           std::uint64_t budget) {
     const OwnedFrameOpArgs* args = &args_ref;
     if (sch.empty() || has_rest(sch)) return nullptr;
-    const std::vector<std::string> rsch = other.schema();
+    const dstd::Vector<dstd::String> rsch = other.schema();
     if (rsch.empty() || has_rest(rsch)) return nullptr;
 
     const bool asof = name == ASOF_OP;
     const char* who = asof ? ASOF_WHO : INTERVAL_WHO;
     Layout lay;
-    std::vector<std::string> by;
-    std::vector<std::string> lkeys, rkeys, skip;
-    std::string ltime, rtime;
-    std::string rhi;
+    dstd::Vector<dstd::String> by;
+    dstd::Vector<dstd::String> lkeys, rkeys, skip;
+    dstd::String ltime, rtime;
+    dstd::String rhi;
     if (asof) {
         ltime = rtime = args->strings_at(2).front();
         by = args->strings_at(3);
@@ -807,7 +816,7 @@ std::unique_ptr<Cursor> make_ordered_join(std::unique_ptr<Cursor>& in,
         skip.push_back(rhi);
         lay.has_hi = true;
     }
-    for (const std::string& n : by) {
+    for (const dstd::String& n : by) {
         lay.lby.push_back(static_cast<std::size_t>(require_col(sch, n, who)));
         lay.rby.push_back(static_cast<std::size_t>(require_col(rsch, n, who)));
     }
@@ -820,47 +829,47 @@ std::unique_ptr<Cursor> make_ordered_join(std::unique_ptr<Cursor>& in,
             lay.rout.push_back(c);
     lay.rfields = other.output_schema().fields;
     if (lay.rfields.size() != rsch.size()) return nullptr;
-    const std::vector<std::string> names = joined_names(sch, rsch, skip, who);
+    const dstd::Vector<dstd::String> names = joined_names(sch, rsch, skip, who);
 
     lkeys = by;
     lkeys.push_back(ltime);
     rkeys = by;
     rkeys.push_back(rtime);
-    std::unique_ptr<Cursor> sorted_left =
+    dstd::UniquePtr<Cursor> sorted_left =
         make_sort_merge(std::move(in), sch, lkeys,
-                        std::vector<bool>(lkeys.size(), false), budget);
+                        dstd::Vector<bool>(lkeys.size(), false), budget);
     LazyFrame sorted_right =
-        other.sort_by_multi(rkeys, std::vector<bool>(rkeys.size(), false));
+        other.sort_by_multi(rkeys, dstd::Vector<bool>(rkeys.size(), false));
     if (asof) {
         const auto direction = static_cast<AsofDirection>(args->i32_at(4));
         dstd::Optional<double> tol;
         const double t = args->f64_at(5);
         if (t >= 0) tol = t;
-        return std::make_unique<AsofCursor>(std::move(sorted_left),
-                                            std::move(sorted_right), lay, rsch,
-                                            names, budget, direction, tol);
+        return dstd::make_unique<AsofCursor>(std::move(sorted_left),
+                                             std::move(sorted_right), lay, rsch,
+                                             names, budget, direction, tol);
     }
-    return std::make_unique<IntervalCursor>(
+    return dstd::make_unique<IntervalCursor>(
         std::move(sorted_left), std::move(sorted_right), lay, rsch, names,
         budget, args->i32_at(6) != 0);
 }
 
 LazyFrame compose_asof(const LazyFrame& left, LazyFrame other,
-                       const std::string& on,
-                       const std::vector<std::string>& by,
+                       const dstd::String& on,
+                       const dstd::Vector<dstd::String>& by,
                        AsofDirection direction,
                        dstd::Optional<double> tolerance) {
     if (tolerance && !(*tolerance >= 0))
         throw std::invalid_argument("asof: tolerance must not be negative");
-    const std::vector<std::string> lnames = left.schema();
-    const std::vector<std::string> rnames = other.schema();
-    std::vector<std::string> skip = by;
+    const dstd::Vector<dstd::String> lnames = left.schema();
+    const dstd::Vector<dstd::String> rnames = other.schema();
+    dstd::Vector<dstd::String> skip = by;
     skip.push_back(on);
-    std::vector<std::string> names;
+    dstd::Vector<dstd::String> names;
     if (!lnames.empty() && !rnames.empty()) {
         require_col(lnames, on, ASOF_WHO);
         require_col(rnames, on, ASOF_WHO);
-        for (const std::string& n : by) {
+        for (const dstd::String& n : by) {
             require_col(lnames, n, ASOF_WHO);
             require_col(rnames, n, ASOF_WHO);
         }
@@ -869,8 +878,8 @@ LazyFrame compose_asof(const LazyFrame& left, LazyFrame other,
                           {});
         names = joined_names(lnames, rnames, skip, ASOF_WHO);
     }
-    std::vector<const char*> by_ptrs;
-    for (const std::string& n : by) by_ptrs.push_back(n.c_str());
+    dstd::Vector<const char*> by_ptrs;
+    for (const dstd::String& n : by) by_ptrs.push_back(n.c_str());
     OpArgs args;
     args.str(2, on.c_str())
         .strlist(3, by_ptrs.data(), static_cast<std::int32_t>(by_ptrs.size()))
@@ -881,20 +890,20 @@ LazyFrame compose_asof(const LazyFrame& left, LazyFrame other,
 }
 
 LazyFrame compose_interval(const LazyFrame& left, LazyFrame other,
-                           const std::string& point, const std::string& lo,
-                           const std::string& hi,
-                           const std::vector<std::string>& by, bool outer) {
-    const std::vector<std::string> lnames = left.schema();
-    const std::vector<std::string> rnames = other.schema();
-    std::vector<std::string> skip = by;
+                           const dstd::String& point, const dstd::String& lo,
+                           const dstd::String& hi,
+                           const dstd::Vector<dstd::String>& by, bool outer) {
+    const dstd::Vector<dstd::String> lnames = left.schema();
+    const dstd::Vector<dstd::String> rnames = other.schema();
+    dstd::Vector<dstd::String> skip = by;
     skip.push_back(lo);
     skip.push_back(hi);
-    std::vector<std::string> names;
+    dstd::Vector<dstd::String> names;
     if (!lnames.empty() && !rnames.empty()) {
         require_col(lnames, point, INTERVAL_WHO);
         require_col(rnames, lo, INTERVAL_WHO);
         require_col(rnames, hi, INTERVAL_WHO);
-        for (const std::string& n : by) {
+        for (const dstd::String& n : by) {
             require_col(lnames, n, INTERVAL_WHO);
             require_col(rnames, n, INTERVAL_WHO);
         }
@@ -903,8 +912,8 @@ LazyFrame compose_interval(const LazyFrame& left, LazyFrame other,
                           by, {hi});
         names = joined_names(lnames, rnames, skip, INTERVAL_WHO);
     }
-    std::vector<const char*> by_ptrs;
-    for (const std::string& n : by) by_ptrs.push_back(n.c_str());
+    dstd::Vector<const char*> by_ptrs;
+    for (const dstd::String& n : by) by_ptrs.push_back(n.c_str());
     OpArgs args;
     args.str(2, point.c_str())
         .str(3, lo.c_str())

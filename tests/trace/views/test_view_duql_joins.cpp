@@ -904,7 +904,9 @@ TEST_SUITE("View duql joins") {
         CHECK(bnum(n, 0, "n") == 3);
         const auto u = frame(view_of(a).duql("select x, y | union (from \"" +
                                              b + "\" | select x, z)"));
-        CHECK(u.names == std::vector<std::string>{"x", "y", "z"});
+        CHECK(u.names ==
+              dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                  "x", "y", "z"});
         CHECK(column(u, "x") == std::vector<std::string>{"1", "2", "2.500000"});
         CHECK(column(u, "y") == std::vector<std::string>{"p", "q", "null"});
         const auto both =

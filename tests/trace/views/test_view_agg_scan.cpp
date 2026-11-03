@@ -53,7 +53,7 @@ TEST_SUITE("View") {
         };
         auto check_match = [](const dataframe::DataFrame& a0,
                               const dataframe::DataFrame& b0,
-                              const std::string& key) {
+                              const dftracer::utils::dstd::String& key) {
             dataframe::DataFrame a = a0.sort_by(key, false);
             dataframe::DataFrame b = b0.sort_by(key, false);
             REQUIRE(a.names.size() == b.names.size());

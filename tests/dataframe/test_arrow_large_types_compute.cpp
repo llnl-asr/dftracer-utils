@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <cstring>
-#include <string>
-#include <vector>
 
 // Confirms LargeString/LargeBinary/LargeList compute, not just round-trip:
 // they keep their own 64-bit-offset physical layout end to end (no narrowing
@@ -47,7 +47,9 @@ void finish(ArrowArray* a) {
     REQUIRE(ArrowArrayFinishBuildingDefault(a, &err) == NANOARROW_OK);
 }
 
-Series make_large_utf8(const std::vector<std::string>& values) {
+Series make_large_utf8(
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&
+        values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_STRING) ==
@@ -55,7 +57,7 @@ Series make_large_utf8(const std::vector<std::string>& values) {
     REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
             NANOARROW_OK);
     REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const std::string& v : values) {
+    for (const dftracer::utils::dstd::String& v : values) {
         ArrowStringView sv{v.data(), static_cast<int64_t>(v.size())};
         REQUIRE(ArrowArrayAppendString(&b.array, sv) == NANOARROW_OK);
     }
@@ -63,7 +65,9 @@ Series make_large_utf8(const std::vector<std::string>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_large_binary(const std::vector<std::string>& values) {
+Series make_large_binary(
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&
+        values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_BINARY) ==
@@ -71,7 +75,7 @@ Series make_large_binary(const std::vector<std::string>& values) {
     REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
             NANOARROW_OK);
     REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const std::string& v : values) {
+    for (const dftracer::utils::dstd::String& v : values) {
         ArrowBufferView bv;
         bv.data.data = v.data();
         bv.size_bytes = static_cast<int64_t>(v.size());
@@ -82,7 +86,8 @@ Series make_large_binary(const std::vector<std::string>& values) {
 }
 
 // large_list<int64>: rows = lists of int64 values.
-Series make_large_list_i64(const std::vector<std::vector<std::int64_t>>& rows) {
+Series make_large_list_i64(const dftracer::utils::dstd::Vector<
+                           dftracer::utils::dstd::Vector<std::int64_t>>& rows) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_LIST) ==
@@ -104,7 +109,8 @@ Series make_large_list_i64(const std::vector<std::vector<std::int64_t>>& rows) {
 
 // large_list<large_utf8>: rows = lists of strings, nested Large both levels.
 Series make_large_list_large_utf8(
-    const std::vector<std::vector<std::string>>& rows) {
+    const dftracer::utils::dstd::Vector<
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>>& rows) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_LIST) ==
@@ -115,7 +121,7 @@ Series make_large_list_large_utf8(
             NANOARROW_OK);
     REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
     for (const auto& row : rows) {
-        for (const std::string& s : row) {
+        for (const dftracer::utils::dstd::String& s : row) {
             ArrowStringView sv{s.data(), static_cast<int64_t>(s.size())};
             REQUIRE(ArrowArrayAppendString(b.array.children[0], sv) ==
                     NANOARROW_OK);
@@ -253,7 +259,7 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
 
     TEST_CASE("LargeString: dftu_series_group_by groups correctly") {
         Series keys = make_large_utf8({"x", "y", "x", "z", "y", "x"});
-        std::vector<std::int64_t> ones(6, 1);
+        dftracer::utils::dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         REQUIRE(keys.valid());
         REQUIRE(values.valid());
@@ -280,14 +286,15 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
     TEST_CASE(
         "LargeBinary: element data survives take/gather at 64-bit "
         "offsets") {
-        std::string b0(3, '\x00');
+        dftracer::utils::dstd::String b0(3, '\x00');
         b0[1] = '\x01';
         Series s = make_large_binary({b0, "abc", "de"});
         REQUIRE(s.valid());
         CHECK(s.type() == TypeId::LargeBinary);
         CHECK(is_wide_offset_type(s.type()));
 
-        Series taken = s.take(std::vector<std::int64_t>{2, 0, 1});
+        Series taken =
+            s.take(dftracer::utils::dstd::Vector<std::int64_t>{2, 0, 1});
         REQUIRE(taken.valid());
         CHECK(taken.type() == TypeId::LargeBinary);
         REQUIRE(taken.offsets64() != nullptr);
@@ -307,7 +314,8 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         REQUIRE(s.offsets64() != nullptr);
         REQUIRE(s.length() == 3);
 
-        Series taken = s.take(std::vector<std::int64_t>{2, 0});
+        Series taken =
+            s.take(dftracer::utils::dstd::Vector<std::int64_t>{2, 0});
         REQUIRE(taken.valid());
         CHECK(taken.type() == TypeId::LargeList);
         REQUIRE(taken.offsets64() != nullptr);
@@ -347,7 +355,8 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
 
         // take/gather on the outer LargeList recurses into the LargeString
         // child, exercising the nested wide-offset gather path.
-        Series taken = s.take(std::vector<std::int64_t>{1, 0});
+        Series taken =
+            s.take(dftracer::utils::dstd::Vector<std::int64_t>{1, 0});
         REQUIRE(taken.valid());
         CHECK(taken.type() == TypeId::LargeList);
         Series tchild = taken.child(0);
@@ -393,7 +402,7 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         using dftracer::utils::dataframe::Agg;
         using dftracer::utils::dataframe::GroupAgg;
         Series keys = make_large_utf8({"x", "y", "x", "z", "y", "x"});
-        std::vector<std::int64_t> ones(6, 1);
+        dftracer::utils::dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = {"k", "v"};
@@ -407,7 +416,7 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         const std::int64_t* n = grouped.column("n").data<std::int64_t>();
         REQUIRE(n != nullptr);
         for (std::int64_t r = 0; r < 3; ++r) {
-            const std::string key(gk.string_at(r));
+            const dftracer::utils::dstd::String key(gk.string_at(r));
             if (key == "x")
                 CHECK(n[r] == 3);
             else if (key == "y")
@@ -424,22 +433,24 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         "AggStates and survive a spill round trip") {
         Series k1 = make_large_utf8({"x", "y", "x"});
         Series k2 = make_large_utf8({"z", "y", "x"});
-        std::vector<std::int64_t> ones3(3, 1);
+        dftracer::utils::dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1, std::vector<const Series*>{&k1},
-                           std::vector<const Series*>{&v1});
+        df::agg_accumulate(*st1,
+                           dftracer::utils::dstd::Vector<const Series*>{&k1},
+                           dftracer::utils::dstd::Vector<const Series*>{&v1});
         AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2, std::vector<const Series*>{&k2},
-                           std::vector<const Series*>{&v2});
+        df::agg_accumulate(*st2,
+                           dftracer::utils::dstd::Vector<const Series*>{&k2},
+                           dftracer::utils::dstd::Vector<const Series*>{&v2});
         df::agg_merge(*st1, *st2);
         REQUIRE(df::agg_num_groups(*st1) == 3);
 
         // Round-trip the merged partial through the spill blob before
         // finalizing, exercising the same path agg/serialize.cpp writes.
-        const std::string blob = df::agg_serialize(*st1);
+        const dftracer::utils::dstd::String blob = df::agg_serialize(*st1);
         AggStatePtr back = df::agg_deserialize(blob);
         REQUIRE(df::agg_num_groups(*back) == 3);
 
@@ -448,7 +459,8 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         CHECK(out.column("k").type() == TypeId::LargeString);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
         for (std::int64_t g = 0; g < df::agg_num_groups(*st1); ++g) {
-            const std::vector<std::string> key = df::agg_group_key(*st1, g);
+            const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
+                key = df::agg_group_key(*st1, g);
             REQUIRE(key.size() == 1);
             if (key[0] == "x")
                 CHECK(n[g] == 3);

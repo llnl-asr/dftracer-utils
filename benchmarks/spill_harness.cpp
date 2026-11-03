@@ -54,6 +54,8 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <sys/resource.h>
@@ -77,9 +79,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <thread>
-#include <vector>
 
 namespace df = dftracer::utils::dataframe;
 namespace coro = dftracer::utils::coro;
@@ -127,7 +127,7 @@ std::uint64_t mix(std::uint64_t x) {
 enum class Gen : std::uint8_t { Random, Skewed, Time, Float, Text };
 
 struct Column {
-    std::string name;
+    dftracer::utils::dstd::String name;
     Gen gen;
     std::int64_t mod = 0;
     std::int64_t step = 0;
@@ -135,7 +135,7 @@ struct Column {
 };
 
 struct Shape {
-    std::vector<Column> columns;
+    dftracer::utils::dstd::Vector<Column> columns;
     std::int64_t rows = 0;
     std::uint64_t seed = 0;
 };
@@ -151,7 +151,9 @@ df::DataType type_of(Gen gen) {
         case Gen::Float:
             return Series::flat_f64(&f, 1).data_type();
         case Gen::Text:
-            return Series::strings(std::vector<std::string>{""}).data_type();
+            return Series::strings(dftracer::utils::dstd::Vector<
+                                       dftracer::utils::dstd::String>{""})
+                .data_type();
     }
     throw std::logic_error("unknown generator");
 }
@@ -164,7 +166,7 @@ Series generate(const Column& c, std::size_t salt, std::uint64_t seed,
     };
     auto count = static_cast<std::size_t>(n);
     if (c.gen == Gen::Float) {
-        std::vector<double> out(count);
+        dftracer::utils::dstd::Vector<double> out(count);
         for (std::size_t j = 0; j < count; ++j)
             out[j] = static_cast<double>(
                          hash(from + static_cast<std::int64_t>(j)) >> 11) *
@@ -172,7 +174,7 @@ Series generate(const Column& c, std::size_t salt, std::uint64_t seed,
         return Series::flat_f64(out.data(), n);
     }
     if (c.gen == Gen::Text) {
-        std::vector<std::string> out(count);
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out(count);
         char buffer[16];
         for (std::size_t j = 0; j < count; ++j) {
             std::snprintf(buffer, sizeof(buffer), "s%012" PRIu64,
@@ -183,7 +185,7 @@ Series generate(const Column& c, std::size_t salt, std::uint64_t seed,
         }
         return Series::strings(out);
     }
-    std::vector<std::int64_t> out(count);
+    dftracer::utils::dstd::Vector<std::int64_t> out(count);
     for (std::size_t j = 0; j < count; ++j) {
         const std::int64_t row = from + static_cast<std::int64_t>(j);
         const std::uint64_t h = hash(row);
@@ -214,7 +216,8 @@ Series generate(const Column& c, std::size_t salt, std::uint64_t seed,
 class GenSource : public df::Source {
    public:
     explicit GenSource(Shape shape)
-        : shape_(std::make_shared<const Shape>(std::move(shape))) {}
+        : shape_(dftracer::utils::dstd::make_shared<const Shape>(
+              std::move(shape))) {}
 
     df::Schema schema() const override {
         df::Schema out;
@@ -224,12 +227,12 @@ class GenSource : public df::Source {
     }
 
     df::ScanResult scan(const df::ScanRequest& req) const override {
-        std::vector<std::size_t> picked;
+        dftracer::utils::dstd::Vector<std::size_t> picked;
         if (req.projection.empty()) {
             for (std::size_t c = 0; c < shape_->columns.size(); ++c)
                 picked.push_back(c);
         } else {
-            for (const std::string& name : req.projection) {
+            for (const dftracer::utils::dstd::String& name : req.projection) {
                 auto it = std::find_if(
                     shape_->columns.begin(), shape_->columns.end(),
                     [&](const Column& c) { return c.name == name; });
@@ -239,7 +242,8 @@ class GenSource : public df::Source {
             }
         }
         df::ScanResult r;
-        r.cursor = std::make_unique<Rows>(shape_, std::move(picked));
+        r.cursor =
+            dftracer::utils::dstd::make_unique<Rows>(shape_, std::move(picked));
         r.filters.assign(req.filters.size(), df::Pushed::No);
         return r;
     }
@@ -248,7 +252,7 @@ class GenSource : public df::Source {
     class Rows : public df::Cursor {
        public:
         Rows(dftracer::utils::dstd::SharedPtr<const Shape> shape,
-             std::vector<std::size_t> picked)
+             dftracer::utils::dstd::Vector<std::size_t> picked)
             : shape_(std::move(shape)), picked_(std::move(picked)) {}
 
         coro::CoroTask<dftracer::utils::dstd::Optional<df::Morsel>> next(
@@ -267,7 +271,7 @@ class GenSource : public df::Source {
 
        private:
         dftracer::utils::dstd::SharedPtr<const Shape> shape_;
-        std::vector<std::size_t> picked_;
+        dftracer::utils::dstd::Vector<std::size_t> picked_;
         std::int64_t pos_ = 0;
     };
 
@@ -283,7 +287,8 @@ struct Inputs {
     std::uint64_t budget;
 
     LazyFrame scan(Shape shape) const {
-        return LazyFrame::scan(std::make_shared<GenSource>(std::move(shape)))
+        return LazyFrame::scan(dftracer::utils::dstd::make_shared<GenSource>(
+                                   std::move(shape)))
             .memory_budget(budget);
     }
 
@@ -304,7 +309,7 @@ struct Inputs {
 LazyFrame window_lag(const LazyFrame& plan) {
     const char* part[] = {"p"};
     const char* order[] = {"t"};
-    std::vector<dftu_window_spec> specs(1);
+    dftracer::utils::dstd::Vector<dftu_window_spec> specs(1);
     specs[0] = dftu_window_spec{};
     specs[0].func = DFTU_WINDOW_LAG;
     specs[0].value = "v";
@@ -312,13 +317,14 @@ LazyFrame window_lag(const LazyFrame& plan) {
     specs[0].param.offset = 1;
     df::OpArgs args;
     args.strlist(1, part, 1).strlist(2, order, 1).winlist(3, specs);
-    std::vector<std::string> names = plan.schema();
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names =
+        plan.schema();
     names.emplace_back("lag_v");
     return plan.frame_op("dftu.frame.window", args, {}, std::move(names));
 }
 
 struct Case {
-    std::string name;
+    dftracer::utils::dstd::String name;
     std::function<LazyFrame(const Inputs&)> plan;
     std::function<bool(std::int64_t out_rows, const Inputs&)> rows_ok;
 };
@@ -329,9 +335,9 @@ bool at_most_groups(std::int64_t out, const Inputs& in) {
     return out > 0 && out <= in.groups();
 }
 
-std::vector<Case> make_cases() {
-    std::vector<df::GroupAgg> aggs{{df::Agg::Sum, "v", "sum_v"},
-                                   {df::Agg::Count, "v", "count_v"}};
+dftracer::utils::dstd::Vector<Case> make_cases() {
+    dftracer::utils::dstd::Vector<df::GroupAgg> aggs{
+        {df::Agg::Sum, "v", "sum_v"}, {df::Agg::Count, "v", "count_v"}};
     return {
         {"sort_by", [](const Inputs& in) { return in.main().sort_by("s"); },
          all_rows},
@@ -351,7 +357,10 @@ std::vector<Case> make_cases() {
                  in.scan({{{"g", Gen::Time, 0, 1}, {"w", Gen::Float}},
                           DIM_ROWS,
                           SEED + 1});
-             return in.main().join(dim, std::vector<std::string>{"g"});
+             return in.main().join(
+                 dim,
+                 dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                     "g"});
          },
          any_rows},
         {"join grace",
@@ -365,7 +374,10 @@ std::vector<Case> make_cases() {
                            {"s", Gen::Text}},
                           in.rows,
                           SEED + 2});
-             return in.main().join(big, std::vector<std::string>{"g"});
+             return in.main().join(
+                 big,
+                 dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{
+                     "g"});
          },
          any_rows},
         {"asof",
@@ -477,7 +489,7 @@ const char* written_source() {
 #endif
 }
 
-const Case* find_case(const std::vector<Case>& cases,
+const Case* find_case(const dftracer::utils::dstd::Vector<Case>& cases,
                       dftracer::utils::dstd::StringView name) {
     for (const Case& c : cases)
         if (c.name == name) return &c;
@@ -489,7 +501,7 @@ std::int64_t rows_for(std::uint64_t bytes) {
 }
 
 int run_one(dftracer::utils::dstd::StringView name, std::uint64_t budget) {
-    std::vector<Case> cases = make_cases();
+    dftracer::utils::dstd::Vector<Case> cases = make_cases();
     const Case* c = find_case(cases, name);
     if (!c) {
         std::fprintf(stderr, "unknown case: %.*s\n",
@@ -529,10 +541,12 @@ struct ChildResult {
 };
 
 dftracer::utils::dstd::Optional<ChildResult> run_child(
-    const std::string& binary, const std::string& name, std::uint64_t budget) {
+    const dftracer::utils::dstd::String& binary,
+    const dftracer::utils::dstd::String& name, std::uint64_t budget) {
     int fds[2];
     if (::pipe(fds) != 0) return dftracer::utils::dstd::nullopt;
-    const std::string budget_arg = std::to_string(budget);
+    const dftracer::utils::dstd::String budget_arg =
+        dftracer::utils::dstd::to_string(budget);
     pid_t pid = ::fork();
     if (pid == 0) {
         ::close(fds[0]);
@@ -543,7 +557,7 @@ dftracer::utils::dstd::Optional<ChildResult> run_child(
         ::_exit(127);
     }
     ::close(fds[1]);
-    std::string out;
+    dftracer::utils::dstd::String out;
     char buffer[256];
     ssize_t n;
     while ((n = ::read(fds[0], buffer, sizeof(buffer))) > 0)
@@ -557,7 +571,7 @@ dftracer::utils::dstd::Optional<ChildResult> run_child(
     unsigned long long spilled = 0;
     std::size_t at = out.find("RESULT ");
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
-        at == std::string::npos ||
+        at == dftracer::utils::dstd::String::npos ||
         std::sscanf(out.c_str() + at,
                     "RESULT rows=%*s out=%*s base=%llu peak=%llu "
                     "spilled=%llu ns=%lf",
@@ -571,7 +585,7 @@ dftracer::utils::dstd::Optional<ChildResult> run_child(
 }
 
 template <class T>
-T median(std::vector<T> values) {
+T median(dftracer::utils::dstd::Vector<T> values) {
     std::sort(values.begin(), values.end());
     return values[values.size() / 2];
 }
@@ -580,13 +594,14 @@ double mib(std::uint64_t bytes) {
     return static_cast<double>(bytes) / static_cast<double>(MIB);
 }
 
-std::string budget_label(std::uint64_t budget) {
-    return budget >= GIB ? std::to_string(budget / GIB) + " GiB"
-                         : std::to_string(budget / MIB) + " MiB";
+dftracer::utils::dstd::String budget_label(std::uint64_t budget) {
+    return budget >= GIB
+               ? dftracer::utils::dstd::to_string(budget / GIB) + " GiB"
+               : dftracer::utils::dstd::to_string(budget / MIB) + " MiB";
 }
 
-int drive(const std::string& self) {
-    std::vector<Case> cases = make_cases();
+int drive(const dftracer::utils::dstd::String& self) {
+    dftracer::utils::dstd::Vector<Case> cases = make_cases();
     const std::size_t headroom =
         dftracer::utils::memory::Manager::get().spill_headroom();
     std::printf(
@@ -602,9 +617,9 @@ int drive(const std::string& self) {
     for (std::uint64_t budget : BUDGETS) {
         const int runs = budget <= SPILLING_BUDGET_MAX ? SPILLING_RUNS : 1;
         for (const Case& c : cases) {
-            std::vector<std::uint64_t> above;
-            std::vector<std::uint64_t> spilled;
-            std::vector<double> ns;
+            dftracer::utils::dstd::Vector<std::uint64_t> above;
+            dftracer::utils::dstd::Vector<std::uint64_t> spilled;
+            dftracer::utils::dstd::Vector<double> ns;
             for (int run = 0; run < runs; ++run) {
                 auto r = run_child(self, c.name, budget);
                 if (!r) break;

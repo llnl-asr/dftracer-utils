@@ -41,7 +41,7 @@ typedef enum {
  *
  * A STR scalar BORROWS `value.s` for the duration of the call: nothing stores a
  * dftu_scalar past the call it was passed to, and the owner of the text (an
- * ExprNode, a caller's std::string) outlives it. `len` sits in the padding
+ * ExprNode, a caller's string) outlives it. `len` sits in the padding
  * after `kind`, so the struct is 16 bytes and 8-aligned exactly as before and
  * no by-value call site changes.
  *

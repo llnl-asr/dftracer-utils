@@ -7,11 +7,10 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <memory>
-#include <string_view>
-#include <vector>
 
 // A native columnar expression engine. Expressions are built as a DAG (col
 // refs, literals, arithmetic, primitives, comparisons, logical ops, casts),
@@ -86,7 +85,7 @@ bool expr_as_not(const Expr& e, Expr* a);
 /// columns are dropped or reordered (projection pushdown). Returns a new Expr;
 /// unchanged subtrees are shared.
 Expr expr_remap_cols(const Expr& e,
-                     const std::vector<std::int32_t>& old_to_new);
+                     const dstd::Vector<std::int32_t>& old_to_new);
 Expr expr_lit(std::int64_t value);
 Expr expr_lit(double value);
 Expr expr_binary(BinaryOp op, const Expr& a, const Expr& b);
@@ -228,15 +227,15 @@ Expr expr_cmp_expr(CmpOp cmp, const Expr& a, const Expr& b);
 
 /// The first operand that is not null in each row; operands are promoted to
 /// one type as arithmetic promotes them (numeric) or must share it.
-Expr expr_coalesce(const std::vector<Expr>& args);
+Expr expr_coalesce(const dstd::Vector<Expr>& args);
 
 /// The least (`least` true) or greatest operand per row; null when any
 /// operand is null. Numeric operands compare exactly; String operands
 /// compare bytewise.
-Expr expr_extreme(const std::vector<Expr>& args, bool least);
+Expr expr_extreme(const dstd::Vector<Expr>& args, bool least);
 
 /// String concatenation of String operands; null when any is null.
-Expr expr_concat(const std::vector<Expr>& args);
+Expr expr_concat(const dstd::Vector<Expr>& args);
 
 /// Round to `digits` decimals, half away from zero; an integer operand with
 /// `digits` >= 0 is returned unchanged.
@@ -363,7 +362,7 @@ inline Expr operator<=(const Expr& a, double v) {
 /// Compile `root` (type inference + CSE + lowering) and evaluate it over
 /// `inputs` in one chunked pass. Throws std::invalid_argument on a malformed
 /// expression or an out-of-range column reference.
-Series eval(const Expr& root, const std::vector<const Series*>& inputs);
+Series eval(const Expr& root, const dstd::Vector<const Series*>& inputs);
 
 /// Compile `roots` into ONE slot program - CSE spans all of them, so a
 /// subexpression shared across outputs (e.g. `a+b` in both `sum(a+b)` and
@@ -371,8 +370,8 @@ Series eval(const Expr& root, const std::vector<const Series*>& inputs);
 /// Only the input columns the program references are materialized (the pruner).
 /// Returns one column per root, aligned to `roots`. Same throwing contract as
 /// eval.
-std::vector<Series> eval_many(const std::vector<Expr>& roots,
-                              const std::vector<const Series*>& inputs);
+dstd::Vector<Series> eval_many(const dstd::Vector<Expr>& roots,
+                               const dstd::Vector<const Series*>& inputs);
 
 /// The @ref DataType `root` would produce over columns typed `input_types`,
 /// without evaluating data. Shares eval()'s compiler, so the two can never
@@ -381,7 +380,8 @@ std::vector<Series> eval_many(const std::vector<Expr>& roots,
 /// other form reports a scalar @ref DataType, since no transform here can
 /// target a parameterized type. Reports TypeId::Unknown where the input type is
 /// itself Unknown. Same throwing contract as eval().
-DataType infer_type(const Expr& root, const std::vector<DataType>& input_types);
+DataType infer_type(const Expr& root,
+                    const dstd::Vector<DataType>& input_types);
 
 }  // namespace dftracer::utils::dataframe
 

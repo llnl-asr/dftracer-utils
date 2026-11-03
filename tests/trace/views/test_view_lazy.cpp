@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_source.h>
@@ -78,7 +79,7 @@ TEST_SUITE("trace scan - lazy collect") {
                 .duql(R"(cat == "NOPE")")
                 .select({"name", "dur"});
         CHECK(run(none.sort_by_multi({"dur", "name"},
-                                     std::vector<bool>{true, false})
+                                     dstd::Vector<bool>{true, false})
                       .slice(0, 10)
                       .collect())
                   .num_rows() == 0);
@@ -142,10 +143,10 @@ std::string optimized(const LazyFrame& lf) {
     LazyFrame opt = optimize_plan(lf);
     const auto* src = dynamic_cast<const ViewSource*>(plan_source(opt).get());
     REQUIRE(src != nullptr);
-    std::string ops = opt.explain();
+    dstd::String ops = opt.explain();
     ops = ops.substr(ops.find('\n') == std::string::npos ? ops.size()
                                                          : ops.find('\n'));
-    return canonical(*src->plan()) + "\nops:" + ops;
+    return canonical(*src->plan()) + "\nops:" + std::string(ops);
 }
 
 void check_same_rows(const DataFrame& a, const DataFrame& b) {
@@ -250,7 +251,7 @@ TEST_SUITE("View - scan plan equality") {
 TEST_SUITE("View - source absorption") {
     TEST_CASE("an Expr filter is absorbed like the DSL filter") {
         View t = base_viewer();
-        const std::vector<std::string> names = t.schema();
+        const dstd::Vector<dstd::String> names = t.schema();
         std::int32_t cat = -1;
         for (std::size_t i = 0; i < names.size(); ++i)
             if (names[i] == "cat") cat = static_cast<std::int32_t>(i);
@@ -266,7 +267,7 @@ TEST_SUITE("View - source absorption") {
     TEST_CASE("a generic group-by on fixed fields is absorbed") {
         View t = base_viewer();
         View generic =
-            t.group_by(std::vector<std::string>{"name"},
+            t.group_by(dstd::Vector<dstd::String>{"name"},
                        {{Agg::Count, "", "n"}, {Agg::Sum, "dur", "sum_dur"}})
                 .sort_by("name");
         CHECK(generic.explain().find("group_by") == std::string::npos);
@@ -279,7 +280,7 @@ TEST_SUITE("View - source absorption") {
 
     TEST_CASE("a generic group-by on cat keeps its raw case") {
         View g = base_viewer()
-                     .group_by(std::vector<std::string>{"cat"},
+                     .group_by(dstd::Vector<dstd::String>{"cat"},
                                {{Agg::Count, "", "n"}})
                      .sort_by("cat");
         CHECK(g.explain().find("group_by") == std::string::npos);
@@ -292,8 +293,8 @@ TEST_SUITE("View - source absorption") {
     TEST_CASE(
         "a group-by on any other field is absorbed as an expression key") {
         View t = base_viewer();
-        View g =
-            t.group_by(std::vector<std::string>{"ph"}, {{Agg::Count, "", "n"}});
+        View g = t.group_by(dstd::Vector<dstd::String>{"ph"},
+                            {{Agg::Count, "", "n"}});
         CHECK(g.explain().find("group_by") == std::string::npos);
         DataFrame r = run(g.collect());
         REQUIRE(r.num_rows() == 1);
@@ -339,7 +340,7 @@ dstd::SharedPtr<const ViewSource> absorbed_source(const LazyFrame& lf) {
         plan_source(optimize_plan(lf)));
 }
 
-std::vector<LazyFrame> mixed_plans() {
+dstd::Vector<LazyFrame> mixed_plans() {
     View t = base_viewer();
     return {
         t.group_by({GroupKey::cat()})
@@ -359,8 +360,8 @@ std::vector<LazyFrame> mixed_plans() {
 
 TEST_SUITE("View - collect_all and sessions") {
     TEST_CASE("collect_all matches collecting each plan alone") {
-        std::vector<LazyFrame> plans = mixed_plans();
-        std::vector<DataFrame> together =
+        dstd::Vector<LazyFrame> plans = mixed_plans();
+        dstd::Vector<DataFrame> together =
             run(dftracer::utils::dataframe::collect_all(plans));
         REQUIRE(together.size() == plans.size());
         for (std::size_t i = 0; i < plans.size(); ++i)
@@ -368,8 +369,8 @@ TEST_SUITE("View - collect_all and sessions") {
     }
 
     TEST_CASE("plans on one trace base share the batch key") {
-        std::vector<LazyFrame> plans = mixed_plans();
-        dstd::Optional<std::string> key =
+        dstd::Vector<LazyFrame> plans = mixed_plans();
+        dstd::Optional<dstd::String> key =
             absorbed_source(plans[0])->batch_key();
         REQUIRE(key);
         for (const LazyFrame& lf : plans)
@@ -390,7 +391,7 @@ TEST_SUITE("View - collect_all and sessions") {
         View early = t.time_range(0, 3000);
         CHECK(absorbed_source(t.lazy())->batch_key() !=
               absorbed_source(early.lazy())->batch_key());
-        std::vector<DataFrame> r = run(
+        dstd::Vector<DataFrame> r = run(
             dftracer::utils::dataframe::collect_all({t.lazy(), early.lazy()}));
         CHECK(r[0].num_rows() == 50);
         CHECK(r[1].num_rows() == run(early.collect()).num_rows());
@@ -403,7 +404,7 @@ TEST_SUITE("View - collect_all and sessions") {
         small.columns.push_back(
             dftracer::utils::dataframe::Series::flat_i64(a.data(), 3));
         View t = base_viewer();
-        std::vector<DataFrame> r = run(dftracer::utils::dataframe::collect_all(
+        dstd::Vector<DataFrame> r = run(dftracer::utils::dataframe::collect_all(
             {t.duql(R"(cat == "POSIX")").lazy(),
              small.lazy().filter(col(0) > std::int64_t{1}),
              t.duql(R"(cat == "STDIO")").lazy()}));
@@ -536,7 +537,7 @@ struct FnameTrace {
 TEST_SUITE("View - streamed batches") {
     TEST_CASE("row roots stream through one scan with their own filters") {
         View t = base_viewer();
-        std::vector<LazyFrame> plans = {
+        dstd::Vector<LazyFrame> plans = {
             t.duql(R"(cat == "POSIX")").select({"name", "dur"}).lazy(),
             t.phase(Phase::Events).duql("dur > 25").lazy(),
             t.duql(R"(cat == "STDIO")").lazy(),
@@ -545,7 +546,7 @@ TEST_SUITE("View - streamed batches") {
                 .sort_by("cat")
                 .lazy(),
         };
-        std::vector<DataFrame> together =
+        dstd::Vector<DataFrame> together =
             run(dftracer::utils::dataframe::collect_all(plans));
         REQUIRE(together.size() == plans.size());
         for (std::size_t i = 0; i < plans.size(); ++i)
@@ -555,7 +556,7 @@ TEST_SUITE("View - streamed batches") {
 
     TEST_CASE("a root that stops early does not stall the others") {
         View t = base_viewer();
-        std::vector<DataFrame> r = run(dftracer::utils::dataframe::collect_all(
+        dstd::Vector<DataFrame> r = run(dftracer::utils::dataframe::collect_all(
             {t.duql(R"(cat == "POSIX")").head(2).lazy(),
              t.duql(R"(cat == "STDIO")").lazy()}));
         CHECK(r[0].num_rows() == 2);
@@ -565,7 +566,7 @@ TEST_SUITE("View - streamed batches") {
     TEST_CASE("a branch predicate on a string arg selects its events") {
         FnameTrace f;
         View t = View::from_file(dstd::String(f.gz), dstd::String(f.idx));
-        std::vector<DataFrame> r = run(dftracer::utils::dataframe::collect_all(
+        dstd::Vector<DataFrame> r = run(dftracer::utils::dataframe::collect_all(
             {t.duql(R"(fname == "/a")").lazy(),
              t.duql(R"(fname == "/b")").lazy(),
              t.duql(R"(fname == "/a")")
@@ -581,8 +582,8 @@ TEST_SUITE("View - streamed batches") {
 
 namespace {
 
-std::int32_t column_at(const View& t, const std::string& name) {
-    const std::vector<std::string> names = t.schema();
+std::int32_t column_at(const View& t, const dstd::String& name) {
+    const dstd::Vector<dstd::String> names = t.schema();
     for (std::size_t i = 0; i < names.size(); ++i)
         if (names[i] == name) return static_cast<std::int32_t>(i);
     FAIL("no column " << name);
@@ -603,7 +604,7 @@ TEST_SUITE("View - expression keys") {
         const std::int32_t dur = column_at(t, "dur");
         auto shape = [&](auto lf) {
             return lf.with_column("big", col(dur) > std::int64_t{25})
-                .group_by(std::vector<std::string>{"big"},
+                .group_by(dstd::Vector<dstd::String>{"big"},
                           {{Agg::Count, "", "n"}, {Agg::Sum, "dur", "s"}})
                 .sort_by("big");
         };
@@ -624,7 +625,7 @@ TEST_SUITE("View - expression keys") {
             return lf
                 .with_column("dur2", col(dur) * dftracer::utils::dataframe::lit(
                                                     std::int64_t{2}))
-                .group_by(std::vector<std::string>{"name"},
+                .group_by(dstd::Vector<dstd::String>{"name"},
                           {{Agg::Sum, "dur2", "s2"}, {Agg::Sum, "dur", "s"}})
                 .sort_by("name");
         };
@@ -650,11 +651,11 @@ TEST_SUITE("View - expression keys") {
         const std::int32_t dur = column_at(t, "dur");
         auto keyed = [&](std::int64_t cut) {
             return t.with_column("big", col(dur) > cut)
-                .group_by(std::vector<std::string>{"big"},
+                .group_by(dstd::Vector<dstd::String>{"big"},
                           {{Agg::Count, "", "n"}});
         };
         auto counts = [&](const DataFrame& f) {
-            std::vector<std::string> out;
+            dstd::Vector<dstd::String> out;
             for (std::int64_t i = 0; i < f.num_rows(); ++i)
                 out.push_back(dftracer::utils::dataframe::cell_to_string(
                                   f.column("big"), i) +
@@ -687,22 +688,22 @@ TEST_SUITE("View - expression keys in a shared scan") {
     TEST_CASE("computed keys and inputs match collecting alone") {
         View t = base_viewer();
         const std::int32_t dur = column_at(t, "dur");
-        std::vector<LazyFrame> plans = {
+        dstd::Vector<LazyFrame> plans = {
             t.with_column("big", col(dur) > std::int64_t{25})
-                .group_by(std::vector<std::string>{"big"},
+                .group_by(dstd::Vector<dstd::String>{"big"},
                           {{Agg::Count, "", "n"}})
                 .sort_by("big")
                 .lazy(),
             t.duql(R"(cat == "POSIX")")
                 .with_column("d2", col(dur) * dftracer::utils::dataframe::lit(
                                                   std::int64_t{2}))
-                .group_by(std::vector<std::string>{"name"},
+                .group_by(dstd::Vector<dstd::String>{"name"},
                           {{Agg::Sum, "d2", "s"}})
                 .sort_by("name")
                 .lazy(),
             t.duql(R"(cat == "STDIO")").lazy(),
         };
-        std::vector<DataFrame> together =
+        dstd::Vector<DataFrame> together =
             run(dftracer::utils::dataframe::collect_all(plans));
         check_same_rows(together[0], run(plans[0].collect()));
         check_same_rows(together[1], run(plans[1].collect()));
@@ -770,12 +771,12 @@ View nested_viewer() {
 
 // The rows of `f` over `cols`, one string each, in sorted order: containment
 // ids depend on scan order, so frames compare by content.
-std::vector<std::string> rows_of(const DataFrame& f,
-                                 const std::vector<std::string>& cols) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> rows_of(const DataFrame& f,
+                                   const dstd::Vector<dstd::String>& cols) {
+    dstd::Vector<dstd::String> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
-        std::string row;
-        for (const std::string& c : cols)
+        dstd::String row;
+        for (const dstd::String& c : cols)
             row += dftracer::utils::dataframe::cell_to_string(f.column(c), r) +
                    "|";
         out.push_back(std::move(row));
@@ -784,10 +785,10 @@ std::vector<std::string> rows_of(const DataFrame& f,
     return out;
 }
 
-const std::vector<std::string> FLAME_COLS = {"name", "level", "total", "self",
-                                             "count"};
-const std::vector<std::string> TREE_COLS = {"pid", "tid",  "ts",
-                                            "dur", "name", "level"};
+const dstd::Vector<dstd::String> FLAME_COLS = {"name", "level", "total", "self",
+                                               "count"};
+const dstd::Vector<dstd::String> TREE_COLS = {"pid", "tid",  "ts",
+                                              "dur", "name", "level"};
 
 }  // namespace
 
@@ -833,12 +834,12 @@ TEST_SUITE("View - trace terminals") {
         });
         LazyFrame fg = t.flamegraph();
         LazyFrame ct = t.call_tree();
-        CHECK(fg.schema() == std::vector<std::string>{"node_id", "parent",
-                                                      "name", "level", "total",
-                                                      "self", "count"});
-        CHECK(ct.schema() == std::vector<std::string>{"pid", "tid", "ts", "dur",
-                                                      "name", "level",
-                                                      "parent_id"});
+        CHECK(fg.schema() ==
+              dstd::Vector<dstd::String>{"node_id", "parent", "name", "level",
+                                         "total", "self", "count"});
+        CHECK(ct.schema() == dstd::Vector<dstd::String>{"pid", "tid", "ts",
+                                                        "dur", "name", "level",
+                                                        "parent_id"});
         CHECK(*polls == 0);
         CHECK(run(fg.collect()).names == fg.schema());
         CHECK(*polls > 0);
@@ -878,7 +879,7 @@ TEST_SUITE("View - trace terminals") {
                                  .flamegraph(),
                              doctest::Contains("aggregates"),
                              dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(t.group_by(std::vector<std::string>{"name"},
+        CHECK_THROWS_WITH_AS(t.group_by(dstd::Vector<dstd::String>{"name"},
                                         {{Agg::Count, "", "n"}})
                                  .containment(),
                              doctest::Contains("aggregates"),
@@ -935,7 +936,7 @@ TEST_SUITE("View - trace terminals") {
         View agg =
             t.group_by({GroupKey::name()}).agg({{AggOp::Count, "", "n"}});
         StringSink sink;
-        std::vector<LazyFrame> plans = {
+        dstd::Vector<LazyFrame> plans = {
             t.flamegraph(),
             t.call_tree(),
             t.duql(R"(cat == "POSIX")").flamegraph(),
@@ -1164,8 +1165,8 @@ TEST_SUITE("View - trace terminals") {
         DataFrame posix = run(
             base.compare(nested_viewer().duql(R"(cat == "POSIX")")).collect());
         CHECK(rows_of(posix, {"name", "l_n", "r_n"}) ==
-              std::vector<std::string>{"decode|8|0|", "read|8|8|", "step|8|0|",
-                                       "write|8|8|"});
+              dstd::Vector<dstd::String>{"decode|8|0|", "read|8|8|",
+                                         "step|8|0|", "write|8|8|"});
         CHECK_THROWS_WITH_AS(nested_viewer().compare(nested_viewer()),
                              doctest::Contains("group_by or agg"),
                              dftracer::utils::common::DFTUtilsException);
@@ -1195,14 +1196,14 @@ TEST_SUITE("View - trace terminals") {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         View t = View::from_file(dstd::String(gz));
         DataFrame rows = run(t.select({"name", "size"}).collect());
-        CHECK(rows.names == std::vector<std::string>{"name", "args.size"});
+        CHECK(rows.names == dstd::Vector<dstd::String>{"name", "args.size"});
         CHECK(rows.num_rows() == 4);
 
         DataFrame agg = run(t.group_by({GroupKey::name()})
                                 .agg({{AggOp::Count, "", "n"}})
                                 .select({"n"})
                                 .collect());
-        CHECK(agg.names == std::vector<std::string>{"n"});
+        CHECK(agg.names == dstd::Vector<dstd::String>{"n"});
         CHECK(bnum(agg, 0, "n") == 4);
     }
 
@@ -1215,7 +1216,7 @@ TEST_SUITE("View - trace terminals") {
                     .agg({{AggOp::Count, "", "n"}})
                     .collect());
         CHECK(rows_of(got, {"name", "n"}) ==
-              std::vector<std::string>{"read|8|", "write|8|"});
+              dstd::Vector<dstd::String>{"read|8|", "write|8|"});
     }
 
     TEST_CASE("a filter the scan cannot evaluate refuses a trace group_by") {
@@ -1328,9 +1329,10 @@ std::string write_args_trace(TestEnvironment& env) {
     return gz;
 }
 
-std::vector<std::string> cells(const DataFrame& df, const std::string& name) {
+dstd::Vector<dstd::String> cells(const DataFrame& df,
+                                 const dstd::String& name) {
     const dftracer::utils::dataframe::Series c = df.column(name).materialize();
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     for (std::int64_t i = 0; i < c.length(); ++i)
         out.push_back(c.is_null(i)
                           ? "null"
@@ -1352,10 +1354,10 @@ TEST_SUITE("View - computed columns over a trace scan") {
                      .with_column("t", df::expr_lit_null(df::TypeId::Int64))
                      .select({"t", "z"});
         DataFrame out = run(a.collect());
-        REQUIRE(out.names == std::vector<std::string>{"t", "z"});
+        REQUIRE(out.names == dstd::Vector<dstd::String>{"t", "z"});
         CHECK(cells(out, "t") ==
-              std::vector<std::string>{"null", "null", "null"});
-        CHECK(cells(out, "z") == std::vector<std::string>{"1", "1", "1"});
+              dstd::Vector<dstd::String>{"null", "null", "null"});
+        CHECK(cells(out, "z") == dstd::Vector<dstd::String>{"1", "1", "1"});
     }
 
     TEST_CASE("a filter on a row index keeps its rows over many morsels") {
@@ -1382,7 +1384,7 @@ TEST_SUITE("View - computed columns over a trace scan") {
             const std::string gz = create_multimember_trace(env, 3000, member);
             LazyFrame lf = scan::collect(scan::ordered(scan::from_file(
                 dstd::String(gz), determine_index_path(gz, ""))));
-            const std::vector<std::string> names = lf.schema();
+            const dstd::Vector<dstd::String> names = lf.schema();
             const auto at = [&](const char* n) {
                 return static_cast<std::int32_t>(
                     std::find(names.begin(), names.end(), n) - names.begin());
@@ -1392,10 +1394,10 @@ TEST_SUITE("View - computed columns over a trace scan") {
                       "k",
                       df::expr_arith(df::ArithOp::Mod, df::expr_col(at("dur")),
                                      df::expr_lit(std::int64_t{7})))
-                    .group_by(std::vector<std::string>{"k"},
+                    .group_by(dstd::Vector<dstd::String>{"k"},
                               {{Agg::First, "ts", "f"}, {Agg::Last, "ts", "l"}})
                     .sort_by("k");
-            std::vector<std::string> want_f, want_l;
+            dstd::Vector<dstd::String> want_f, want_l;
             for (std::int64_t k = 0; k < 7; ++k) {
                 std::int64_t lo = -1, hi = -1;
                 for (std::int64_t i = 0; i < 3000; ++i)
@@ -1403,8 +1405,8 @@ TEST_SUITE("View - computed columns over a trace scan") {
                         if (lo < 0) lo = 1000 + i * 100;
                         hi = 1000 + i * 100;
                     }
-                want_f.push_back(std::to_string(lo));
-                want_l.push_back(std::to_string(hi));
+                want_f.push_back(dstd::to_string(lo));
+                want_l.push_back(dstd::to_string(hi));
             }
             for (std::size_t workers : {1, 2, 8}) {
                 CAPTURE(workers);
@@ -1429,13 +1431,13 @@ TEST_SUITE("View - aggregations over a nullable arg") {
             static_cast<std::int32_t>(lf.schema().size()) - 1;
         const LazyFrame in = lf.with_column("__in", df::expr_col(x));
 
-        const LazyFrame absorbed =
-            in.group_by(std::vector<std::string>{}, {{Agg::Count, "", "n"},
-                                                     {Agg::Sum, "__in", "s"},
-                                                     {Agg::Mean, "__in", "m"}});
+        const LazyFrame absorbed = in.group_by(dstd::Vector<dstd::String>{},
+                                               {{Agg::Count, "", "n"},
+                                                {Agg::Sum, "__in", "s"},
+                                                {Agg::Mean, "__in", "m"}});
         CHECK(optimize_plan(absorbed).explain().find("group_by") ==
               std::string::npos);
-        const LazyFrame engine = in.group_by(std::vector<std::string>{},
+        const LazyFrame engine = in.group_by(dstd::Vector<dstd::String>{},
                                              {{Agg::Count, "", "n"},
                                               {Agg::CountValid, "__in", "c"},
                                               {Agg::Sum, "__in", "s"},
@@ -1444,12 +1446,12 @@ TEST_SUITE("View - aggregations over a nullable arg") {
               std::string::npos);
         for (const LazyFrame& plan : {absorbed, engine}) {
             DataFrame out = run(plan.collect());
-            CHECK(cells(out, "n") == std::vector<std::string>{"3"});
-            CHECK(cells(out, "s") == std::vector<std::string>{"4"});
+            CHECK(cells(out, "n") == dstd::Vector<dstd::String>{"3"});
+            CHECK(cells(out, "s") == dstd::Vector<dstd::String>{"4"});
             CHECK(out.column("m").materialize().data<double>()[0] ==
                   doctest::Approx(2.0));
             if (out.column_index("c") >= 0)
-                CHECK(cells(out, "c") == std::vector<std::string>{"2"});
+                CHECK(cells(out, "c") == dstd::Vector<dstd::String>{"2"});
         }
     }
 }
@@ -1461,11 +1463,11 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
         TestEnvironment env(10);
         const dstd::Vector<dstd::String> cols{"name", "cat", "pid", "tid",
                                               "ts",   "dur", "ph",  "x"};
-        const std::vector<GroupAgg> typed{{Agg::Sum, "args.x", "s"},
-                                          {Agg::Min, "args.x", "lo"},
-                                          {Agg::Max, "args.x", "hi"}};
+        const dstd::Vector<GroupAgg> typed{{Agg::Sum, "args.x", "s"},
+                                           {Agg::Min, "args.x", "lo"},
+                                           {Agg::Max, "args.x", "hi"}};
         // CountValid keeps the group-by in the engine.
-        std::vector<GroupAgg> engine = typed;
+        dstd::Vector<GroupAgg> engine = typed;
         engine.push_back({Agg::CountValid, "args.x", "c"});
 
         const std::string absent_pfw = env.get_dir() + "/absent.pfw";
@@ -1491,11 +1493,11 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
             for (const LazyFrame& lf :
                  {v.select(cols).lazy(), ordered,
                   v.select(cols).duql("derive q = 1").lazy()})
-                for (const std::vector<GroupAgg>& aggs : {typed, engine})
+                for (const dstd::Vector<GroupAgg>& aggs : {typed, engine})
                     for (std::int64_t morsel :
                          {std::int64_t{1}, std::int64_t{0}}) {
                         const LazyFrame agg =
-                            lf.group_by(std::vector<std::string>{}, aggs);
+                            lf.group_by(dstd::Vector<dstd::String>{}, aggs);
                         CAPTURE(optimize_plan(agg).explain());
                         CAPTURE(morsel);
                         // The declared type is Unknown until the index
@@ -1510,11 +1512,12 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
                         DataFrame out = run(agg.collect(morsel));
                         for (const char* c : {"s", "lo", "hi"})
                             CHECK(out.column(c).type() == TypeId::Int64);
-                        CHECK(cells(out, "s") == std::vector<std::string>{"4"});
+                        CHECK(cells(out, "s") ==
+                              dstd::Vector<dstd::String>{"4"});
                         CHECK(cells(out, "lo") ==
-                              std::vector<std::string>{"1"});
+                              dstd::Vector<dstd::String>{"1"});
                         CHECK(cells(out, "hi") ==
-                              std::vector<std::string>{"3"});
+                              dstd::Vector<dstd::String>{"3"});
                     }
         }
     }

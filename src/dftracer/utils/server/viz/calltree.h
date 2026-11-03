@@ -8,11 +8,11 @@
 // arena into JSON. Internal to the server.
 
 #include <dftracer/utils/dataframe/flame_arena.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <simdjson.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -24,7 +24,7 @@ using dataframe::FlameNode;
 
 // Emit one arena node (and its subtree) as JSON, children sorted by total.
 inline void serialize_flame_node(simdjson::builder::string_builder& sb,
-                                 std::vector<FlameNode>& arena,
+                                 dstd::Vector<FlameNode>& arena,
                                  std::uint32_t idx) {
     FlameNode& n = arena[idx];
     sb.start_object();

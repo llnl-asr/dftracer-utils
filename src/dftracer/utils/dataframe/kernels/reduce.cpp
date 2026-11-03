@@ -11,13 +11,11 @@
 #include <dftracer/utils/dataframe/kernels/reduce.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <string>
-#include <string_view>
 #include <type_traits>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -185,7 +183,8 @@ void argextreme_one(const dftu_series& v, bool is_min, std::int64_t& out_idx) {
 // that first reached the top count, so ties resolve to whichever value's
 // count first attains the eventual maximum.
 template <class T>
-void mode_serial(const T* p, const std::vector<std::int64_t>& idx,
+void mode_serial(const T* p,
+                 const dftracer::utils::dstd::Vector<std::int64_t>& idx,
                  dftu_scalar& out) {
     ankerl::unordered_dense::map<T, std::int64_t> counts;
     T best{};
@@ -207,7 +206,7 @@ void mode_one(const dftu_series& v, dftu_scalar& out) {
     const std::int64_t n = v.length;
     const bool has_null = static_cast<bool>(v.validity.block());
 
-    std::vector<std::int64_t> idx;
+    dftracer::utils::dstd::Vector<std::int64_t> idx;
     idx.reserve(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
         if (!has_null || is_valid(v, i)) idx.push_back(i);
@@ -230,7 +229,7 @@ void mode_one(const dftu_series& v, dftu_scalar& out) {
     // "first-reaching-top" tie-break exactly (the last event on the winning
     // path can only ever be caused by a value at the eventual maximum count,
     // so skipping non-candidate rows cannot change the outcome).
-    std::vector<std::int64_t> counts = radix_counts_by<T>(
+    dftracer::utils::dstd::Vector<std::int64_t> counts = radix_counts_by<T>(
         m, [&](std::int64_t j) { return p[idx[static_cast<std::size_t>(j)]]; });
     std::int64_t best_count = 0;
     for (std::int64_t c : counts) best_count = std::max(best_count, c);
@@ -245,7 +244,7 @@ void mode_one(const dftu_series& v, dftu_scalar& out) {
         return;
     }
 
-    std::vector<std::int64_t> tied;
+    dftracer::utils::dstd::Vector<std::int64_t> tied;
     tied.reserve(idx.size());
     for (std::int64_t j : idx)
         if (candidates.count(p[j]) != 0) tied.push_back(j);
@@ -271,8 +270,8 @@ const char* reduce_op_name(std::int32_t op) {
 // The ERR scalar a reduction returns instead of a value. The error and its text
 // live in thread-local storage, so they stay valid until the next reduction on
 // this thread (dftu_error borrows its message).
-dftu_scalar refuse(const std::string& message) {
-    static thread_local std::string text;
+dftu_scalar refuse(const dftracer::utils::dstd::String& message) {
+    static thread_local dftracer::utils::dstd::String text;
     static thread_local dftu_error err;
     text = message;
     err.domain = dftracer::utils::dstd::CORE_ERROR_DOMAIN.id;
@@ -286,8 +285,8 @@ dftu_scalar refuse(const std::string& message) {
 }
 
 dftu_scalar refuse_type(std::int32_t op, dftracer::utils::dataframe::TypeId t) {
-    return refuse(std::string("reduce: ") + reduce_op_name(op) +
-                  " is not defined for type '" +
+    return refuse(dftracer::utils::dstd::String("reduce: ") +
+                  reduce_op_name(op) + " is not defined for type '" +
                   dftracer::utils::dataframe::type_name(t) + "'");
 }
 
@@ -343,7 +342,7 @@ dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
     // any other code is not an operation. The numeric kernel below treats every
     // code that is not SUM or MIN as MAX, so refuse them here.
     if (op != DFTU_REDUCE_SUM && op != DFTU_REDUCE_MIN && op != DFTU_REDUCE_MAX)
-        return refuse(std::string("reduce: ") +
+        return refuse(dftracer::utils::dstd::String("reduce: ") +
                       reduce_op_name(static_cast<std::int32_t>(op)) +
                       " is not a single-column reduction (sum, min or max)");
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat)

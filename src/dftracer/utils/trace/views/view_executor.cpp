@@ -1509,8 +1509,7 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
     dftracer::utils::dstd::StringIntern intern;
     const bool by_path = plan_by_path(plan);
     dstd::Vector<DistinctRowFold::Key> keys;
-    // keep std: LazyFrame::unique takes std::vector<std::string>
-    std::vector<std::string> subset;
+    dstd::Vector<dstd::String> subset;
     keys.reserve(key_idx.size());
     subset.reserve(key_idx.size());
     for (std::int64_t at : key_idx) {
@@ -1628,9 +1627,8 @@ dataframe::AggStatePtr decode_partials(
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Aggregation,
                 "aggregate partial: unknown wire tag");
-        dataframe::AggStatePtr st = dataframe::agg_deserialize(
-            // keep std: agg_deserialize takes std::string
-            std::string(p.substr(1)));
+        dataframe::AggStatePtr st =
+            dataframe::agg_deserialize(dstd::String(p.substr(1)));
         if (!state)
             state = std::move(st);
         else

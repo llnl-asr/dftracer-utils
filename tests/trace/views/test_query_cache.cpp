@@ -226,7 +226,7 @@ TEST_SUITE("QueryCache") {
         auto view = [&](bool generic) {
             View v = View::from_file(dstd::String(gz), dstd::String(idx));
             if (generic) v = v.record_schema("generic");
-            return v.group_by(std::vector<std::string>{"cat"},
+            return v.group_by(dstd::Vector<dstd::String>{"cat"},
                               {{dataframe::Agg::Count, "", "n"}});
         };
         view(false).materialize().get();

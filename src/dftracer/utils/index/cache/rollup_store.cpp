@@ -148,8 +148,8 @@ void persist_rollup(CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
     const std::int64_t ng = dataframe::agg_num_groups(state);
     // agg_group_key renders a null key as "", so the finalized key columns
     // tell a null key apart from an empty one.
-    const dataframe::DataFrame finalized = dataframe::agg_finalize(
-        state, std::vector<std::string>{});  // keep std: agg_finalize signature
+    const dataframe::DataFrame finalized =
+        dataframe::agg_finalize(state, dstd::Vector<dstd::String>{});
     dstd::Vector<dstd::Pair<dstd::String, dstd::String>> entries;
     entries.reserve(static_cast<std::size_t>(ng) + 1);
     std::uint64_t bytes = 0;
@@ -198,8 +198,7 @@ bool rollup_exists(const CacheStore& db, std::uint64_t sig) {
 dataframe::AggStatePtr read_rollup(const CacheStore& db, std::uint64_t sig) {
     dataframe::AggStatePtr merged;
     db.scan(sig, ROW_TAG, [&](dstd::StringView, dstd::StringView blob) {
-        auto one = dataframe::agg_deserialize(
-            std::string(blob));  // keep std: agg_deserialize takes std::string
+        auto one = dataframe::agg_deserialize(dstd::String(blob));
         if (!merged)
             merged = std::move(one);
         else
@@ -302,7 +301,7 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
     // order (dropping the bucket when the query has none, or re-flooring it to
     // the query's coarser grain otherwise).
     const std::size_t src_off = best_bucket > 0 ? 1 : 0;
-    std::vector<std::int32_t> keep;  // keep std: agg_regroup signature
+    dstd::Vector<std::int32_t> keep;
     keep.reserve((plan.time_bucket_us > 0 ? 1 : 0) + plan.group_by.size());
     std::int64_t bucket_recut = 0;
     if (plan.time_bucket_us > 0) {

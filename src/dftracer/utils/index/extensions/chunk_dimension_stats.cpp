@@ -44,7 +44,7 @@ void ChunkDimensionStats::observe(dstd::StringView value) {
         return;
     }
 
-    auto [new_it, _] = value_counts->emplace(dstd::String(value), 1);
+    auto [new_it, _] = value_counts->emplace(value, 1);
     it = new_it;
     distinct_count = value_counts->size();
     last_key_ = &it->first;

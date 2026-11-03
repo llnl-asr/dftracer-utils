@@ -240,8 +240,7 @@ void run_scoped(Fn fn) {
 
 void group_by(const Sizes& s) {
     run_plan(gen(s.frame_rows, s.frame_rows, 1)
-                 // keep std: group_by takes std::vector<std::string>
-                 .group_by(std::vector<std::string>{"k", "v"},
+                 .group_by(dstd::Vector<dstd::String>{"k", "v"},
                            {df::GroupAgg{df::Agg::Sum, "t", "t_sum"}}),
              PLAN_BUDGET);
 }
@@ -267,7 +266,7 @@ void index_build(const Paths& p) {
     options.index_dir = p.index_dir;
     options.bloom->required = false;
     auto indexer = index::Indexer::open(
-        {std::string(p.trace.data(), p.trace.size())}, options);
+        {dstd::String(p.trace.data(), p.trace.size())}, options);
     run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
         co_await indexer.rebuild(scope);
     });

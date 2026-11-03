@@ -116,8 +116,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     dstd::Optional<dftracer::utils::dataframe::SourceApplication> apply_filter(
         const dftracer::utils::dataframe::Expr& predicate) const override;
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
-    // keep std: Source::apply_projection takes std::vector<NamedExpr>
-    apply_projection(const std::vector<dftracer::utils::dataframe::NamedExpr>&
+    apply_projection(const dstd::Vector<dftracer::utils::dataframe::NamedExpr>&
                          exprs) const override;
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
     apply_aggregation(
@@ -132,39 +131,31 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// acc_pat, window, clip, list and agg-engine tokens); the host cursor
     /// then handles it.
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
-    // keep std: Source::apply_distinct takes std::vector<std::string>
-    apply_distinct(const std::vector<std::string>& subset) const override;
+    apply_distinct(const dstd::Vector<dstd::String>& subset) const override;
 
     /// Equal for sources that read the same files with the same scan
     /// settings (time range and scale, metadata, index roots, spill budget),
     /// so they can share one ViewSession scan. Branch-local shape (filters,
     /// phase, group-by, aggregates, select, time bucket) is not part of it.
     /// None for a plan the session cannot run as a branch.
-    // keep std: Source::batch_key returns std::optional<std::string>
-    dstd::Optional<std::string> batch_key() const override;
-    // keep std: Source::collect_batch uses std::vector
-    coro::CoroTask<std::vector<dftracer::utils::dataframe::DataFrame>>
+    dstd::Optional<dstd::String> batch_key() const override;
+    coro::CoroTask<dstd::Vector<dftracer::utils::dataframe::DataFrame>>
     collect_batch(
-        // keep std: Source::collect_batch uses std::vector
-        std::vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
+        dstd::Vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
             members) const override;
 
     /// Row members stream as branches of one ViewSession scan; an aggregation
     /// member arrives as one frame once the scan ends. dstd::nullopt when a
     /// member's rows cannot stream (a select that needs the name resolver).
-    // keep std: Source::open_batch uses std::vector and std::unique_ptr
     dstd::Optional<
-        // keep std: dataframe cursors are std::unique_ptr
-        std::vector<std::unique_ptr<dftracer::utils::dataframe::Cursor>>>
+        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>
     open_batch(
-        // keep std: Source::open_batch uses std::vector
-        std::vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
+        dstd::Vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
             members,
         std::uint64_t memory_budget) const override;
 
     struct Batch {
-        // keep std: collect_batch returns these as a std::vector
-        std::vector<dftracer::utils::dataframe::DataFrame> frames;
+        dstd::Vector<dftracer::utils::dataframe::DataFrame> frames;
         ExportStats stats;
     };
     /// Run `members`, which share one batch_key(), as branches of one
@@ -215,8 +206,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// column list the cursor's morsels carry (schema() when no projection
     /// was pushed), so the returned cursor's narrow() can translate a
     /// predicate positional against it the same way scan() does.
-    // keep std: ScanResult::cursor is a std::unique_ptr
-    std::unique_ptr<dftracer::utils::dataframe::Cursor> open_stream(
+    dstd::UniquePtr<dftracer::utils::dataframe::Cursor> open_stream(
         const detail::ScanPlan& v, std::uint64_t memory_budget,
         dstd::Vector<dstd::String> fnames) const;
 

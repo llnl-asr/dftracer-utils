@@ -376,11 +376,11 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     if (auto hit = index.viz_cache().get(page_key))
         co_return HttpResponse::ok(std::move(*hit));
 
-    std::vector<std::string> columns;
-    std::vector<std::string> names;
+    dstd::Vector<dstd::String> columns;
+    dstd::Vector<dstd::String> names;
     auto add = [&](const std::string& field, const char* name) {
         if (field.empty()) return;
-        columns.push_back(field);
+        columns.emplace_back(field);
         names.emplace_back(name);
     };
     add(fields.label, "name");
@@ -389,8 +389,8 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     add(fields.lane, "tid");
     add(fields.duration, "dur");
     if (!fields.by_path) add("ph", "ph");
-    std::vector<std::string> order;
-    std::vector<bool> descending;
+    dstd::Vector<dstd::String> order;
+    dstd::Vector<bool> descending;
     for (const char* key : {"dur", "pid", "tid", "name"})
         for (std::size_t c = 0; c < names.size(); ++c)
             if (names[c] == key) {
@@ -427,7 +427,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
                 if (c > 0) rb.append_comma();
                 const auto it =
                     std::find(columns.begin(), columns.end(), rows.names[c]);
-                const std::string& name =
+                const dstd::String& name =
                     it == columns.end()
                         ? rows.names[c]
                         : names[static_cast<std::size_t>(it - columns.begin())];

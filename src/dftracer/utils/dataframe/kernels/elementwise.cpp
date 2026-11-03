@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cmath>
 #include <cstddef>
@@ -16,9 +17,7 @@
 #include <limits>
 #include <memory>
 #include <span>
-#include <string_view>
 #include <type_traits>
-#include <vector>
 
 #undef HWY_TARGET_INCLUDE
 #define HWY_TARGET_INCLUDE "dftracer/utils/dataframe/kernels/elementwise.cpp"
@@ -565,7 +564,7 @@ dftu_series* fillna_string(const dftu_series* a, dftu_scalar fill) {
     const char* text = reinterpret_cast<const char*>(a->data.data());
     const std::uint8_t* valid =
         a->validity.block() ? a->validity.data() : nullptr;
-    std::vector<dstd::StringView> views(static_cast<std::size_t>(a->length));
+    dstd::Vector<dstd::StringView> views(static_cast<std::size_t>(a->length));
     for (std::int64_t i = 0; i < a->length; ++i)
         views[static_cast<std::size_t>(i)] =
             (!valid || ((valid[i >> 3] >> (i & 7)) & 1))

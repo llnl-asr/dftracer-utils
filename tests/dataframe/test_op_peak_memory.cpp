@@ -20,6 +20,11 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
@@ -39,15 +44,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <set>
 #include <string>
 #include <thread>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
@@ -101,8 +103,8 @@ class GenCursor : public Cursor {
     coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
         if (at_ >= rows_) co_return dstd::nullopt;
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
-        std::vector<std::int64_t> k(n), t(n), v(n), g(n);
-        std::vector<std::string> s(n);
+        dstd::Vector<std::int64_t> k(n), t(n), v(n), g(n);
+        dstd::Vector<dstd::String> s(n);
         for (std::int64_t i = 0; i < n; ++i) {
             const std::uint64_t h =
                 mix(seed_ + static_cast<std::uint64_t>(at_ + i));
@@ -110,8 +112,8 @@ class GenCursor : public Cursor {
                                              static_cast<std::uint64_t>(keys_));
             t[i] = at_ + i;
             v[i] = static_cast<std::int64_t>(h >> 20) % 1000003;
-            s[i] = pad_ ? std::string(pad_, 'x') + std::to_string(h)
-                        : "s" + std::to_string(h % 977);
+            s[i] = pad_ ? dstd::String(pad_, 'x') + dstd::to_string(h)
+                        : "s" + dstd::to_string(h % 977);
             g[i] = static_cast<std::int64_t>((h >> 40) % 64);
         }
         at_ += n;
@@ -142,7 +144,7 @@ class GenSource : public Source {
     Schema schema() const override {
         const std::int64_t zero = 0;
         const DataType i = Series::flat_i64(&zero, 1).data_type();
-        const std::vector<std::string> blank{""};
+        const dstd::Vector<dstd::String> blank{""};
         const DataType s = Series::strings(blank).data_type();
         Schema out;
         out.fields = {Field{"k", i, true}, Field{"t", i, true},
@@ -153,7 +155,7 @@ class GenSource : public Source {
 
     ScanResult scan(const ScanRequest& req) const override {
         ScanResult r;
-        r.cursor = std::make_unique<GenCursor>(rows_, keys_, seed_, pad_);
+        r.cursor = dstd::make_unique<GenCursor>(rows_, keys_, seed_, pad_);
         r.filters.assign(req.filters.size(), Pushed::No);
         return r;
     }
@@ -168,19 +170,19 @@ class GenSource : public Source {
 // Columns: pid (increasing) and tk, a list of two {value, count} structs per
 // row.
 Series make_tk(std::int64_t n, std::int64_t at) {
-    std::vector<std::int32_t> offsets(static_cast<std::size_t>(n) + 1);
-    std::vector<std::string> value(static_cast<std::size_t>(2 * n));
-    std::vector<std::int64_t> count(static_cast<std::size_t>(2 * n));
+    dstd::Vector<std::int32_t> offsets(static_cast<std::size_t>(n) + 1);
+    dstd::Vector<dstd::String> value(static_cast<std::size_t>(2 * n));
+    dstd::Vector<std::int64_t> count(static_cast<std::size_t>(2 * n));
     for (std::int64_t i = 0; i < n; ++i) {
         offsets[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(2 * i);
         for (std::int64_t j = 0; j < 2; ++j) {
             const auto e = static_cast<std::size_t>(2 * i + j);
-            value[e] = "v" + std::to_string((at + i + j) % 977);
+            value[e] = "v" + dstd::to_string((at + i + j) % 977);
             count[e] = at + i + j;
         }
     }
     offsets[static_cast<std::size_t>(n)] = static_cast<std::int32_t>(2 * n);
-    std::vector<Series> fields;
+    dstd::Vector<Series> fields;
     fields.push_back(Series::strings(value));
     fields.push_back(Series::flat_i64(count.data(), 2 * n));
     return Series::list(offsets,
@@ -194,7 +196,7 @@ class ListCursor : public Cursor {
     coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
         if (at_ >= rows_) co_return dstd::nullopt;
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
-        std::vector<std::int64_t> pid(static_cast<std::size_t>(n));
+        dstd::Vector<std::int64_t> pid(static_cast<std::size_t>(n));
         for (std::int64_t i = 0; i < n; ++i)
             pid[static_cast<std::size_t>(i)] = at_ + i;
         Morsel m;
@@ -225,7 +227,7 @@ class ListSource : public Source {
 
     ScanResult scan(const ScanRequest& req) const override {
         ScanResult r;
-        r.cursor = std::make_unique<ListCursor>(rows_);
+        r.cursor = dstd::make_unique<ListCursor>(rows_);
         r.filters.assign(req.filters.size(), Pushed::No);
         return r;
     }
@@ -235,20 +237,20 @@ class ListSource : public Source {
 };
 
 LazyFrame gen_list(std::int64_t rows) {
-    return LazyFrame::scan(std::make_shared<ListSource>(rows));
+    return LazyFrame::scan(dstd::make_shared<ListSource>(rows));
 }
 
 LazyFrame gen(std::int64_t rows, std::int64_t keys, std::uint64_t seed = 1,
               std::size_t pad = 0) {
-    return LazyFrame::scan(std::make_shared<GenSource>(rows, keys, seed, pad));
+    return LazyFrame::scan(dstd::make_shared<GenSource>(rows, keys, seed, pad));
 }
 
 using Recipe = std::function<LazyFrame(const LazyFrame& base)>;
 
 // Keys are nearly unique (many groups) so a group-by or a distinct cannot fit
 // the budget; `few` has a handful of keys.
-const std::map<std::string, Recipe>& recipes() {
-    static const std::map<std::string, Recipe> r = {
+const dstd::Map<dstd::String, Recipe>& recipes() {
+    static const dstd::Map<dstd::String, Recipe> r = {
         {"select", [](const LazyFrame& b) { return b.select({"k", "v"}); }},
         {"drop", [](const LazyFrame& b) { return b.drop({"s"}); }},
         {"rename",
@@ -284,7 +286,7 @@ const std::map<std::string, Recipe>& recipes() {
          [](const LazyFrame& b) { return b.select({"k", "v"}).is_unique(); }},
         {"group_by",
          [](const LazyFrame& b) {
-             return b.group_by(std::vector<std::string>{"k", "v"},
+             return b.group_by(dstd::Vector<dstd::String>{"k", "v"},
                                {GroupAgg{Agg::Sum, "t", "t_sum"}});
          }},
         {"reduce",
@@ -293,7 +295,7 @@ const std::map<std::string, Recipe>& recipes() {
         {"group_by_dyn",
          [](const LazyFrame& b) {
              return b.rename_columns({"t", "v"}, {"arg.t", "arg.v"})
-                 .group_by(std::vector<std::string>{"k"},
+                 .group_by(dstd::Vector<dstd::String>{"k"},
                            {GroupAgg{Agg::Count, "", "n"}},
                            {AggDynSpec{AggOp::Sum, 0.0, "sum_"}}, "arg.");
          }},
@@ -354,9 +356,9 @@ const std::map<std::string, Recipe>& recipes() {
          [](const LazyFrame& b) {
              LazyFrame w = b.select({"k", "v"});
              for (int i = 0; i < 16; ++i)
-                 w = w.with_column("arg.c" + std::to_string(i),
+                 w = w.with_column("arg.c" + dstd::to_string(i),
                                    col(1) + lit(std::int64_t{i}));
-             return w.group_by(std::vector<std::string>{"k"},
+             return w.group_by(dstd::Vector<dstd::String>{"k"},
                                {GroupAgg{Agg::Count, "", "n"}},
                                {AggDynSpec{AggOp::Sum, 0.0, "sum_"}}, "arg.");
          }},
@@ -429,11 +431,11 @@ const std::map<std::string, Recipe>& recipes() {
              last.func = DFTU_WINDOW_LAST_VALUE;
              last.value = "v";
              last.out = "last";
-             const std::vector<dftu_window_spec> specs{var, run, first, last};
+             const dstd::Vector<dftu_window_spec> specs{var, run, first, last};
              const char* order[] = {"t"};
              OpArgs args;
              args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
-             std::vector<std::string> names = b.schema();
+             dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);
          }},
@@ -453,7 +455,7 @@ const std::map<std::string, Recipe>& recipes() {
                  return w;
              };
              const std::int64_t ALL = DFTU_WINDOW_UNBOUNDED;
-             const std::vector<dftu_window_spec> specs{
+             const dstd::Vector<dftu_window_spec> specs{
                  frame(DFTU_WINDOW_FRAME_VAR, "v", "var", ALL, ALL),
                  frame(DFTU_WINDOW_FRAME_SUM, "v", "rest", 3, ALL),
                  frame(DFTU_WINDOW_FRAME_COUNT, "v", "left", 0, ALL),
@@ -461,7 +463,7 @@ const std::map<std::string, Recipe>& recipes() {
              const char* order[] = {"t"};
              OpArgs args;
              args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
-             std::vector<std::string> names = b.schema();
+             dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);
          }},
@@ -488,7 +490,7 @@ const std::map<std::string, Recipe>& recipes() {
                  return w;
              };
              const std::int64_t ALL = DFTU_WINDOW_UNBOUNDED;
-             const std::vector<dftu_window_spec> specs{
+             const dstd::Vector<dftu_window_spec> specs{
                  frame(DFTU_WINDOW_FRAME_MIN, "v", "lo", 3, ALL),
                  frame(DFTU_WINDOW_FRAME_MAX, "s", "hi", 2, ALL),
                  frame(DFTU_WINDOW_FRAME_VAR, "v", "var", 1, ALL),
@@ -498,14 +500,14 @@ const std::map<std::string, Recipe>& recipes() {
              const char* order[] = {"t"};
              OpArgs args;
              args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
-             std::vector<std::string> names = b.schema();
+             dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);
          }},
         {"compare_agg",
          [](const LazyFrame& b) {
-             const std::vector<GroupAgg> aggs{GroupAgg{Agg::Sum, "v", "v"}};
-             const std::vector<std::string> by{"k"};
+             const dstd::Vector<GroupAgg> aggs{GroupAgg{Agg::Sum, "v", "v"}};
+             const dstd::Vector<dstd::String> by{"k"};
              return b.group_by(by, aggs).compare_agg(
                  gen(ROWS, ROWS, 2).group_by(by, aggs), 1);
          }},
@@ -535,7 +537,7 @@ const std::map<std::string, Recipe>& recipes() {
          }},
         {"filter_mask",
          [](const LazyFrame& b) {
-             std::vector<std::uint8_t> bits(
+             dstd::Vector<std::uint8_t> bits(
                  static_cast<std::size_t>((ROWS + 7) / 8), 0x55);
              return b.filter_mask(
                  Series::flat(TypeId::Bool, bits.data(), ROWS));
@@ -580,8 +582,8 @@ struct Expect {
 };
 
 // Every op of exported_lazy_ops.def, in the table that says what it must do.
-const std::map<std::string, Expect>& expectations() {
-    static const std::map<std::string, Expect> e = {
+const dstd::Map<dstd::String, Expect>& expectations() {
+    static const dstd::Map<dstd::String, Expect> e = {
         {"auto_spill", {Kind::NOT_MEASURED, "plan only"}},
         {"memory_budget", {Kind::NOT_MEASURED, "plan only"}},
         {"describe", {Kind::STREAMING, ""}},
@@ -649,8 +651,8 @@ const std::map<std::string, Expect>& expectations() {
     return e;
 }
 
-std::set<std::string> registry_ops() {
-    std::set<std::string> names;
+dstd::Set<dstd::String> registry_ops() {
+    dstd::Set<dstd::String> names;
 #define DFTU_LAZY_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6) \
     names.insert(#name);
 #include <dftracer/utils/dstd/optional.h>
@@ -667,7 +669,7 @@ coro::CoroTask<std::int64_t> drain_count(LazyFrame lf) {
     co_return n;
 }
 
-int child_main(const std::string& op) {
+int child_main(const dstd::String& op) {
     LazyFrame base = gen(ROWS, ROWS).memory_budget(BUDGET);
     LazyFrame plan = base;
     if (op != "input_only") {
@@ -681,7 +683,7 @@ int child_main(const std::string& op) {
     return 0;
 }
 
-std::string g_self;
+dstd::String g_self;
 
 struct ChildResult {
     bool piped = true;
@@ -689,7 +691,7 @@ struct ChildResult {
     int status = -1;
     std::uint64_t peak_bytes = 0;
     double seconds = 0;
-    std::string out;
+    dstd::String out;
 };
 
 // A child that takes longer than this is killed and fails the test.
@@ -698,7 +700,7 @@ constexpr std::size_t MAX_PARALLEL_CHILDREN = 4;
 
 // Runs on worker threads, so it makes no assertion. The caller checks `piped`
 // and `forked`.
-ChildResult run_child(const std::string& op) {
+ChildResult run_child(const dstd::String& op) {
     const auto started = std::chrono::steady_clock::now();
     ChildResult r;
     int fds[2];
@@ -785,7 +787,7 @@ TEST_CASE("every lazy op is in the expectation table") {
         CHECK_MESSAGE(expectations().count(name) == 1,
                       "lazy op not classified in test_op_peak_memory: ", name);
     // A recipe that runs a registry op another way, to measure that way too.
-    const std::map<std::string, std::string> variants = {
+    const dstd::Map<dstd::String, dstd::String> variants = {
         {"cross_join", "join"},
         {"topk_wide", "topk"},
         {"group_by_dyn", "group_by"},
@@ -826,15 +828,15 @@ TEST_CASE("each op stays within its bound at a small budget" *
                     static_cast<unsigned long long>(bound >> 20));
     // Each child has its own address space, so its peak does not depend on the
     // others running, so they overlap to finish sooner.
-    std::map<std::string, ChildResult> results;
+    dstd::Map<dstd::String, ChildResult> results;
     {
-        std::vector<std::string> names;
+        dstd::Vector<dstd::String> names;
         for (const auto& entry : recipes()) {
             names.push_back(entry.first);
             results[entry.first];
         }
         std::atomic<std::size_t> next{0};
-        std::vector<std::thread> workers;
+        dstd::Vector<std::thread> workers;
         const std::size_t width = std::clamp<std::size_t>(
             std::thread::hardware_concurrency(), 1, MAX_PARALLEL_CHILDREN);
         for (std::size_t w = 0; w < width; ++w)
@@ -886,7 +888,7 @@ TEST_CASE("each op stays within its bound at a small budget" *
 }
 
 int main(int argc, char** argv) {
-    if (argc >= 3 && std::string(argv[1]) == "--child")
+    if (argc >= 3 && dstd::String(argv[1]) == "--child")
         return child_main(argv[2]);
     char* resolved = ::realpath(argv[0], nullptr);
     g_self = resolved ? resolved : argv[0];

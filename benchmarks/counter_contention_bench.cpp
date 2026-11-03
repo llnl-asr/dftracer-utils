@@ -151,8 +151,7 @@ std::uint64_t next_random(std::uint64_t& s) {
 void group_by(const Sizes& s) {
     const df::LazyFrame plan =
         gen(s.frame_rows, s.frame_rows, 1)
-            // keep std: group_by takes std::vector<std::string>
-            .group_by(std::vector<std::string>{"k", "v"},
+            .group_by(dstd::Vector<dstd::String>{"k", "v"},
                       {df::GroupAgg{df::Agg::Sum, "t", "t_sum"}});
     default_runtime()
         .submit(drain_count(plan.memory_budget(PLAN_BUDGET)))

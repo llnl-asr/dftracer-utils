@@ -5,6 +5,8 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -15,8 +17,6 @@
 #include <cstring>
 #include <random>
 #include <string>
-#include <string_view>
-#include <vector>
 
 using dftracer::utils::dataframe::AggOp;
 using dftracer::utils::dataframe::AggSpec;
@@ -56,18 +56,19 @@ enum : std::int32_t { X = 0, Y = 1, S = 2, U = 3 };
 struct Input {
     std::int64_t rows;
     std::int64_t groups;
-    std::vector<std::string> key_text;
-    std::vector<dftracer::utils::dstd::StringView> key_views;
-    std::vector<std::uint8_t> key_valid;
-    std::vector<std::int64_t> time;
-    std::vector<std::int64_t> bigkey;
-    std::vector<double> x, u;
-    std::vector<std::uint8_t> x_valid;
-    std::vector<std::int64_t> y;
-    std::vector<std::string> sval;
-    std::vector<dftracer::utils::dstd::StringView> sval_views;
-    std::vector<std::string> short_text;
-    std::vector<dftracer::utils::dstd::StringView> short_views;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> key_text;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> key_views;
+    dftracer::utils::dstd::Vector<std::uint8_t> key_valid;
+    dftracer::utils::dstd::Vector<std::int64_t> time;
+    dftracer::utils::dstd::Vector<std::int64_t> bigkey;
+    dftracer::utils::dstd::Vector<double> x, u;
+    dftracer::utils::dstd::Vector<std::uint8_t> x_valid;
+    dftracer::utils::dstd::Vector<std::int64_t> y;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> sval;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> sval_views;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> short_text;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView>
+        short_views;
     Series skey, nkey, tkey, bkey, xs, ys, ss, us, shortkey;
 
     // A string key longer than 16 bytes (the packed driver's limit) once with
@@ -90,9 +91,10 @@ struct Input {
         key_valid.assign(static_cast<std::size_t>((rows + 7) / 8), 0);
         for (std::int64_t i = 0; i < rows; ++i) {
             const auto p = static_cast<std::int64_t>(rng() % procs);
-            key_text[i] =
-                "app#host#" + std::to_string(p) + "#" + std::to_string(p);
-            short_text[i] = "k" + std::to_string((i * 7919) % groups);
+            key_text[i] = "app#host#" + dftracer::utils::dstd::to_string(p) +
+                          "#" + dftracer::utils::dstd::to_string(p);
+            short_text[i] =
+                "k" + dftracer::utils::dstd::to_string((i * 7919) % groups);
             time[i] = static_cast<std::int64_t>(rng() % 10);
             bigkey[i] = static_cast<std::int64_t>(rng() % groups) * 1000003;
             x[i] = static_cast<double>(rng() % 100000) / 7.0;
@@ -100,7 +102,7 @@ struct Input {
                 x_valid[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
             u[i] = static_cast<double>(i);
             y[i] = static_cast<std::int64_t>(rng() % 1000) - 500;
-            sval[i] = "v" + std::to_string(rng() % 50);
+            sval[i] = "v" + dftracer::utils::dstd::to_string(rng() % 50);
             if (rng() % 20 != 0)
                 key_valid[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
         }
@@ -127,7 +129,9 @@ struct Input {
         us = Series::flat_f64(u.data(), rows);
     }
 
-    std::vector<const Series*> values() const { return {&xs, &ys, &ss, &us}; }
+    dftracer::utils::dstd::Vector<const Series*> values() const {
+        return {&xs, &ys, &ss, &us};
+    }
 };
 
 // Built once for the binary. A case reads them and changes nothing.
@@ -144,7 +148,7 @@ const Input& packed_input() {
 // The aggregates every many-group driver takes. arg_max is not here: its
 // result depends on the order rows reach a group, and the driver that streams
 // blocks refuses it (specs_with_arg_max).
-std::vector<AggSpec> specs() {
+dftracer::utils::dstd::Vector<AggSpec> specs() {
     auto s = [](AggOp op, std::int32_t col, const char* out, double param = 0.0,
                 std::int32_t by = -1) {
         AggSpec sp;
@@ -174,8 +178,8 @@ std::vector<AggSpec> specs() {
             s(AggOp::Distinct, S, "distinct_s", 1024.0)};
 }
 
-std::vector<AggSpec> specs_with_arg_max() {
-    std::vector<AggSpec> all = specs();
+dftracer::utils::dstd::Vector<AggSpec> specs_with_arg_max() {
+    dftracer::utils::dstd::Vector<AggSpec> all = specs();
     AggSpec sp;
     sp.op = AggOp::ArgMax;
     sp.value_col = X;
@@ -187,9 +191,11 @@ std::vector<AggSpec> specs_with_arg_max() {
 
 // A single-threaded fold of the whole frame: the reference every driver must
 // equal.
-DataFrame reference(const std::vector<const Series*>& keys, const Input& in,
-                    const std::vector<std::string>& key_names,
-                    std::vector<AggSpec> with = specs()) {
+DataFrame reference(
+    const dftracer::utils::dstd::Vector<const Series*>& keys, const Input& in,
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&
+        key_names,
+    dftracer::utils::dstd::Vector<AggSpec> with = specs()) {
     df::AggStatePtr st = df::agg_new(std::move(with));
     df::agg_accumulate(*st, keys, in.values());
     return df::agg_finalize(*st, key_names);
@@ -200,8 +206,10 @@ DataFrame reference(const std::vector<const Series*>& keys, const Input& in,
 // (p50_x) is skipped by the many-group cases: its 128 collapsing bins make a
 // sketch built from rows in another order differ from the fold in the tail
 // bins.
-void expect_equal(const DataFrame& a, const DataFrame& b,
-                  const std::vector<std::string>& skip = {}) {
+void expect_equal(
+    const DataFrame& a, const DataFrame& b,
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& skip =
+        {}) {
     REQUIRE(a.num_rows() == b.num_rows());
     REQUIRE(a.columns.size() == b.columns.size());
     for (std::size_t c = 0; c < a.columns.size(); ++c) {
@@ -255,7 +263,8 @@ void expect_equal(const DataFrame& a, const DataFrame& b,
 
 // Bits, not tolerances: every output column of two frames identical, the float
 // sums and the sketch included.
-bool bit_equal(const DataFrame& a, const DataFrame& b, std::string* why) {
+bool bit_equal(const DataFrame& a, const DataFrame& b,
+               dftracer::utils::dstd::String* why) {
     if (a.num_rows() != b.num_rows() || a.columns.size() != b.columns.size()) {
         *why = "shape";
         return false;
@@ -269,7 +278,8 @@ bool bit_equal(const DataFrame& a, const DataFrame& b, std::string* why) {
         }
         for (std::int64_t i = 0; i < p.length(); ++i) {
             if (p.is_null(i) != q.is_null(i)) {
-                *why = a.names[c] + " validity at " + std::to_string(i);
+                *why = a.names[c] + " validity at " +
+                       dftracer::utils::dstd::to_string(i);
                 return false;
             }
             if (p.is_null(i)) continue;
@@ -295,7 +305,8 @@ bool bit_equal(const DataFrame& a, const DataFrame& b, std::string* why) {
                     break;
             }
             if (!same) {
-                *why = a.names[c] + " at row " + std::to_string(i);
+                *why = a.names[c] + " at row " +
+                       dftracer::utils::dstd::to_string(i);
                 return false;
             }
         }
@@ -305,11 +316,12 @@ bool bit_equal(const DataFrame& a, const DataFrame& b, std::string* why) {
 
 // The same group-by REPEATS times on the thread pool and once serial: the bits
 // must not change with the scheduling or with the number of threads.
-void expect_deterministic(const std::vector<const Series*>& keys,
-                          const Input& in, const std::vector<AggSpec>& with,
-                          const std::vector<std::string>& names) {
+void expect_deterministic(
+    const dftracer::utils::dstd::Vector<const Series*>& keys, const Input& in,
+    const dftracer::utils::dstd::Vector<AggSpec>& with,
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& names) {
     const DataFrame first = df::group_agg(keys, in.values(), with, names);
-    std::string why;
+    dftracer::utils::dstd::String why;
     for (int run = 0; run < REPEATS; ++run) {
         const DataFrame again = df::group_agg(keys, in.values(), with, names);
         INFO("run " << run << ": " << why);
@@ -330,7 +342,7 @@ struct Backend {
 
 TEST_CASE("many groups on a long string key equal the one-thread fold") {
     const Input& in = input();
-    const std::vector<const Series*> keys{&in.skey, &in.tkey};
+    const dftracer::utils::dstd::Vector<const Series*> keys{&in.skey, &in.tkey};
     DataFrame got = df::group_agg(keys, in.values(), specs(), {"proc", "t"});
     REQUIRE(df::parallel_backend_installed());
     CHECK(got.num_rows() > in.groups * 2 / 3);
@@ -339,7 +351,7 @@ TEST_CASE("many groups on a long string key equal the one-thread fold") {
 
 TEST_CASE("many groups on an integer key equal the one-thread fold") {
     const Input& in = input();
-    const std::vector<const Series*> keys{&in.bkey, &in.tkey};
+    const dftracer::utils::dstd::Vector<const Series*> keys{&in.bkey, &in.tkey};
     DataFrame got = df::group_agg(keys, in.values(), specs(), {"big", "t"});
     CHECK(got.num_rows() > in.groups * 2 / 3);
     expect_equal(got, reference(keys, in, {"big", "t"}), {"p50_x"});
@@ -347,7 +359,7 @@ TEST_CASE("many groups on an integer key equal the one-thread fold") {
 
 TEST_CASE("null keys form one group and equal the one-thread fold") {
     const Input& in = input();
-    const std::vector<const Series*> keys{&in.nkey, &in.tkey};
+    const dftracer::utils::dstd::Vector<const Series*> keys{&in.nkey, &in.tkey};
     DataFrame got = df::group_agg(keys, in.values(), specs(), {"proc", "t"});
     expect_equal(got, reference(keys, in, {"proc", "t"}), {"p50_x"});
     // the null string key is one group per time bucket, not one per partition
@@ -359,11 +371,11 @@ TEST_CASE("null keys form one group and equal the one-thread fold") {
 
 TEST_CASE("a float key keeps the existing path and still equals the fold") {
     const Input& in = input();
-    std::vector<double> fk(in.rows);
+    dftracer::utils::dstd::Vector<double> fk(in.rows);
     for (std::int64_t i = 0; i < in.rows; ++i)
         fk[i] = static_cast<double>(i % (in.groups / 3)) * 0.25;
     Series fkey = Series::flat_f64(fk.data(), in.rows);
-    const std::vector<const Series*> keys{&fkey};
+    const dftracer::utils::dstd::Vector<const Series*> keys{&fkey};
     DataFrame got = df::group_agg(keys, in.values(), specs(), {"f"});
     // The quantile sketch is left out: its 128 collapsing bins make a merge of
     // per-thread partial sketches differ from one sketch run to run (a
@@ -373,7 +385,7 @@ TEST_CASE("a float key keeps the existing path and still equals the fold") {
 
 TEST_CASE("arg_max over many groups equals the fold, the first row on a tie") {
     const Input& in = input();
-    const std::vector<const Series*> keys{&in.skey, &in.tkey};
+    const dftracer::utils::dstd::Vector<const Series*> keys{&in.skey, &in.tkey};
     DataFrame got =
         df::group_agg(keys, in.values(), specs_with_arg_max(), {"proc", "t"});
     // The sketch quantile is left out for the reason given above.
@@ -394,7 +406,7 @@ TEST_CASE("many groups give the same bits on every run and thread count") {
     }
     SUBCASE("short string key, order-free aggregates (the packed driver)") {
         const Input& big = packed_input();
-        std::vector<AggSpec> sp;
+        dftracer::utils::dstd::Vector<AggSpec> sp;
         for (const AggSpec& a : specs())
             if (a.op == AggOp::Count || a.op == AggOp::Min ||
                 a.op == AggOp::Max || (a.op == AggOp::Sum && a.value_col == Y))
@@ -412,15 +424,15 @@ TEST_CASE("the group-by of many groups equals the serial one-pass sum") {
     // A sum in row order per group is what the serial fold computes; the
     // by-key driver keeps that order, so its sums are the fold's bits.
     const Input& in = input();
-    const std::vector<const Series*> keys{&in.bkey};
+    const dftracer::utils::dstd::Vector<const Series*> keys{&in.bkey};
     DataFrame got = df::group_agg(keys, in.values(), specs(), {"big"});
     DataFrame ref = reference(keys, in, {"big"});
-    std::string why;
+    dftracer::utils::dstd::String why;
     // Only the columns whose bits do not depend on how partials merge.
-    const std::vector<std::string> same{"n",     "nx",      "sum_y",
-                                        "min_x", "max_x",   "min_y",
-                                        "max_y", "first_x", "last_x"};
-    for (const std::string& name : same) {
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> same{
+        "n",     "nx",    "sum_y",   "min_x", "max_x",
+        "min_y", "max_y", "first_x", "last_x"};
+    for (const dftracer::utils::dstd::String& name : same) {
         std::size_t c = 0;
         while (got.names[c] != name) ++c;
         DataFrame a, b;
@@ -439,8 +451,8 @@ namespace {
 
 // The aggregates the in-place finalize writes: light cells over a float with
 // nulls and an integer, the row count and the count of present values.
-std::vector<AggSpec> light_specs() {
-    std::vector<AggSpec> out;
+dftracer::utils::dstd::Vector<AggSpec> light_specs() {
+    dftracer::utils::dstd::Vector<AggSpec> out;
     for (const AggSpec& a : specs()) {
         switch (a.op) {
             case AggOp::Count:
@@ -463,11 +475,11 @@ std::vector<AggSpec> light_specs() {
 
 // The group-by once in place and once with the stitch path forced (the test
 // switch), bit for bit: values, null masks, key columns, group order.
-void expect_in_place_equals_stitch(const std::vector<const Series*>& keys,
-                                   const Input& in,
-                                   const std::vector<AggSpec>& with,
-                                   const std::vector<std::string>& names,
-                                   bool in_place) {
+void expect_in_place_equals_stitch(
+    const dftracer::utils::dstd::Vector<const Series*>& keys, const Input& in,
+    const dftracer::utils::dstd::Vector<AggSpec>& with,
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& names,
+    bool in_place) {
     const std::uint64_t before = df::agg_in_place_finalizes();
     const DataFrame got = df::group_agg(keys, in.values(), with, names);
     CHECK((df::agg_in_place_finalizes() > before) == in_place);
@@ -477,7 +489,7 @@ void expect_in_place_equals_stitch(const std::vector<const Series*>& keys,
     unsetenv("DFTRACER_UTILS_GROUPBY_STITCH");
     CHECK(df::agg_in_place_finalizes() == mid);
     CHECK(got.num_rows() > 1000);
-    std::string why;
+    dftracer::utils::dstd::String why;
     INFO(why);
     REQUIRE(bit_equal(got, ref, &why));
     REQUIRE(got.names == ref.names);
@@ -521,7 +533,8 @@ TEST_CASE(
 
 TEST_CASE("the in-place finalize handles the packed driver's short keys") {
     const Input& in = packed_input();
-    std::vector<AggSpec> order_free;  // count, min, max, an integer sum
+    dftracer::utils::dstd::Vector<AggSpec>
+        order_free;  // count, min, max, an integer sum
     for (const AggSpec& a : specs())
         if (a.op == AggOp::Count || a.op == AggOp::Min || a.op == AggOp::Max ||
             (a.op == AggOp::Sum && a.value_col == Y))

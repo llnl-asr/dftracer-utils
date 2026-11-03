@@ -12,7 +12,7 @@ namespace dftracer::utils::server {
 // (all little-endian), base64-encoded.
 static constexpr std::size_t CURSOR_BYTES = 16;
 
-std::string QueryCursor::encode() const {
+dstd::String QueryCursor::encode() const {
     unsigned char raw[CURSOR_BYTES];
     std::memcpy(raw, &file_index, 8);
     std::memcpy(raw + 8, &chunk_index, 4);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 // nanoarrow must precede arrow.h: arrow_abi.h (pulled in by arrow.h) defines
@@ -19,9 +20,7 @@
 #include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -37,8 +36,8 @@ Series Series::from_arrow(const ArrowSchema* schema, const ArrowArray* array) {
 }
 
 OwnedArrow DataFrame::to_arrow() const {
-    std::vector<std::string> field_names = names;
-    std::vector<Series> field_columns;
+    dstd::Vector<dstd::String> field_names = names;
+    dstd::Vector<Series> field_columns;
     field_columns.reserve(columns.size());
     for (const Series& col : columns) field_columns.push_back(col.share());
     Series st =
@@ -88,10 +87,10 @@ dstd::Optional<DataFrame> frame_from_ipc(dstd::StringView bytes) {
 #endif
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-std::vector<std::uint8_t> DataFrame::to_ipc() const {
+dstd::Vector<std::uint8_t> DataFrame::to_ipc() const {
     // Export the frame as one struct (record batch) - schema + array.
-    std::vector<std::string> field_names = names;
-    std::vector<Series> field_columns;
+    dstd::Vector<dstd::String> field_names = names;
+    dstd::Vector<Series> field_columns;
     field_columns.reserve(columns.size());
     for (const Series& col : columns)
         field_columns.push_back(col.is_flat() ? col.share()
@@ -130,13 +129,14 @@ std::vector<std::uint8_t> DataFrame::to_ipc() const {
     ArrowError err;
     err.message[0] = '\0';
     const int code = ArrowIpcWriterWriteArrayStream(&writer, &stream, &err);
-    std::vector<std::uint8_t> bytes;
+    dstd::Vector<std::uint8_t> bytes;
     if (code == NANOARROW_OK) bytes.assign(buf.data, buf.data + buf.size_bytes);
     ArrowIpcWriterReset(&writer);  // releases `out`
     ArrowBufferReset(&buf);
     stream.release(&stream);       // releases schema + array
     if (code != NANOARROW_OK)
-        throw std::runtime_error(std::string("to_ipc: ") + err.message);
+        throw std::runtime_error(
+            (dstd::String("to_ipc: ") + err.message).c_str());
     return bytes;
 }
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC

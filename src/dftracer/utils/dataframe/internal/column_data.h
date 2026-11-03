@@ -8,14 +8,12 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <memory>
-#include <string>
-#include <string_view>
-#include <vector>
 
 struct dftu_series;
 
@@ -44,7 +42,7 @@ inline bool offsets_from_lengths(Off* off, std::int64_t n) noexcept {
 /// one child of a list-like, SELECTION or DICTIONARY column (no name).
 struct dftu_nested {
     dftracer::utils::dstd::SharedPtr<dftu_series> series;
-    std::string name;
+    dftracer::utils::dstd::String name;
 };
 
 /// Takes ownership of @p p, freed with dftu_series_free.
@@ -75,13 +73,13 @@ struct dftu_series {
     dftracer::utils::dataframe::BufferView validity;
     /// VIEW: the data buffers the 16-byte views in `data` point into, shared
     /// by every column made from this one. Null for any other encoding.
-    dftracer::utils::dstd::SharedPtr<
-        const std::vector<dftracer::utils::dataframe::BufferView>>
+    dftracer::utils::dstd::SharedPtr<const dftracer::utils::dstd::Vector<
+        dftracer::utils::dataframe::BufferView>>
         blobs;
     /// A flat Struct's fields, in order; a CHUNKED column's chunks, in order;
     /// otherwise at most one entry, the base of a SELECTION or DICTIONARY or
     /// the values of a list-like column.
-    std::vector<dftu_nested> nested;
+    dftracer::utils::dstd::Vector<dftu_nested> nested;
     dftracer::utils::dataframe::TypeParams params;
 
     /// Whether `nested` holds Struct fields.
@@ -188,7 +186,7 @@ inline void adopt_type_params_as(dftu_series& out, const dftu_series& src,
 
 /// A CHUNKED column over `chunks` (at least two, same type, none CHUNKED).
 inline dftu_series* make_chunked(
-    std::vector<dftracer::utils::dstd::SharedPtr<dftu_series>> chunks) {
+    dstd::Vector<dftracer::utils::dstd::SharedPtr<dftu_series>> chunks) {
     auto* out = new dftu_series();
     adopt_type_from(*out, *chunks.front());
     out->encoding = Encoding::Chunked;
@@ -213,13 +211,14 @@ inline dftu_series* make_chunked(
 
 /// The per-chunk results of a row-wise kernel as one CHUNKED column (joined
 /// when their types differ). Takes ownership of `parts`.
-dftu_series* dftu_chunk_results(std::vector<dftu_series*>& parts);
+dftu_series* dftu_chunk_results(
+    dftracer::utils::dstd::Vector<dftu_series*>& parts);
 
 /// `fn(chunk)` on each chunk of the CHUNKED `v`, run in parallel, the results
 /// kept as chunks. Null when any chunk's result is null.
 template <class F>
 dftu_series* dftu_map_chunks(const dftu_series& v, F&& fn) {
-    std::vector<dftu_series*> parts(v.nested.size(), nullptr);
+    dftracer::utils::dstd::Vector<dftu_series*> parts(v.nested.size(), nullptr);
     dftracer::utils::dataframe::parallel_for(
         static_cast<std::int64_t>(parts.size()), 1,
         [&](std::int64_t b, std::int64_t e) {

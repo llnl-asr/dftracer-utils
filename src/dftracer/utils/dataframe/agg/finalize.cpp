@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <algorithm>
@@ -16,9 +17,7 @@
 #include <cstring>
 #include <set>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -36,13 +35,13 @@ struct OccResult {
 };
 
 OccResult occ_summarize(
-    const ankerl::unordered_dense::map<std::uint64_t, std::int64_t>& deltas,
+    const dstd::HashMap<std::uint64_t, std::int64_t>& deltas,
     std::uint64_t total, std::uint64_t ts, std::uint64_t te) {
     OccResult o;
     o.total = total;
     o.span = te > ts ? te - ts : 0;
     if (deltas.empty()) return o;
-    std::vector<dstd::Pair<std::uint64_t, std::int64_t>> pts = deltas.values();
+    dstd::Vector<dstd::Pair<std::uint64_t, std::int64_t>> pts = deltas.values();
     std::sort(pts.begin(), pts.end(),
               [](const auto& x, const auto& y) { return x.first < y.first; });
     std::int64_t depth = 0;
@@ -78,7 +77,7 @@ double kmv_estimate(const KmvMap& m, std::size_t k) {
 // Time32/Time64/Timestamp/Duration group key column. Series::flat has no
 // parametric constructor, so this builds the dftu_series directly to carry
 // the source's own time_unit (and, for Timestamp, timezone).
-Series flat_temporal(TypeId type, TimeUnit unit, const std::string& timezone,
+Series flat_temporal(TypeId type, TimeUnit unit, const dstd::String& timezone,
                      const void* data, std::int64_t n) {
     auto* col = new dftu_series();
     col->type = type;
@@ -95,13 +94,13 @@ Series flat_temporal(TypeId type, TimeUnit unit, const std::string& timezone,
 // A String/Binary (32-bit offset) group key column: skey_cols already holds
 // each group's raw bytes. Series::strings hardcodes TypeId::String, so a
 // Binary key is built directly, mirroring wide_bytes_key below.
-Series bytes_key(TypeId type, const std::vector<std::string>& values) {
+Series bytes_key(TypeId type, const dstd::Vector<dstd::String>& values) {
     auto* col = new dftu_series();
     col->type = type;
     col->encoding = Encoding::Flat;
     col->length = static_cast<std::int64_t>(values.size());
-    std::vector<std::int32_t> off(values.size() + 1, 0);
-    std::string data;
+    dstd::Vector<std::int32_t> off(values.size() + 1, 0);
+    dstd::String data;
     for (std::size_t i = 0; i < values.size(); ++i) {
         data += values[i];
         Series::check_string_bytes(data.size());
@@ -120,13 +119,13 @@ Series bytes_key(TypeId type, const std::vector<std::string>& values) {
 // group's raw bytes (its distinct value). dftu_series_new_string only builds
 // the 32-bit offset String/Binary pair, so this is built directly, mirroring
 // flat_temporal above.
-Series wide_bytes_key(TypeId type, const std::vector<std::string>& values) {
+Series wide_bytes_key(TypeId type, const dstd::Vector<dstd::String>& values) {
     auto* col = new dftu_series();
     col->type = type;
     col->encoding = Encoding::Flat;
     col->length = static_cast<std::int64_t>(values.size());
-    std::vector<std::int64_t> off(values.size() + 1, 0);
-    std::string data;
+    dstd::Vector<std::int64_t> off(values.size() + 1, 0);
+    dstd::String data;
     for (std::size_t i = 0; i < values.size(); ++i) {
         data += values[i];
         off[i + 1] = static_cast<std::int64_t>(data.size());
@@ -149,15 +148,15 @@ Series wide_bytes_key(TypeId type, const std::vector<std::string>& values) {
 Series bytes_flat_key(TypeId type, std::int32_t fixed_size,
                       std::int32_t decimal_precision,
                       std::int32_t decimal_scale,
-                      const std::vector<std::string>& values) {
+                      const dstd::Vector<dstd::String>& values) {
     auto* col = new dftu_series();
     col->type = type;
     col->encoding = Encoding::Flat;
     col->length = static_cast<std::int64_t>(values.size());
     col->set_fixed_size(fixed_size);
     col->set_decimal(decimal_precision, decimal_scale);
-    std::string bytes;
-    for (const std::string& v : values) bytes += v;
+    dstd::String bytes;
+    for (const dstd::String& v : values) bytes += v;
     col->data = new_buffer(bytes.size());
     if (!bytes.empty())
         std::memcpy(writable(col->data), bytes.data(), bytes.size());
@@ -165,11 +164,11 @@ Series bytes_flat_key(TypeId type, std::int32_t fixed_size,
 }
 
 // One list<string> column from a per-group vector of already-ordered reprs.
-Series strings_list(const std::vector<std::vector<std::string>>& rows) {
-    std::vector<std::int32_t> off{0};
-    std::vector<std::string> flat;
+Series strings_list(const dstd::Vector<dstd::Vector<dstd::String>>& rows) {
+    dstd::Vector<std::int32_t> off{0};
+    dstd::Vector<dstd::String> flat;
     off.reserve(rows.size() + 1);
-    for (const std::vector<std::string>& row : rows) {
+    for (const dstd::Vector<dstd::String>& row : rows) {
         flat.insert(flat.end(), row.begin(), row.end());
         off.push_back(static_cast<std::int32_t>(flat.size()));
     }
@@ -209,7 +208,7 @@ double co_readout(AggOp op, const CoStat& c) {
 
 // The null key groups of column k as the output column's validity bitmap.
 static void mark_null_keys(Series& col,
-                           const std::vector<std::uint8_t>& nulls) {
+                           const dstd::Vector<std::uint8_t>& nulls) {
     std::int64_t count = 0;
     for (std::uint8_t n : nulls) count += n ? 1 : 0;
     if (count == 0) return;
@@ -244,14 +243,14 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
                                : TypeId::String;
     const FieldStatDomain dom =
         et == TypeId::String ? FieldStatDomain::I64 : col_domain(et);
-    std::vector<std::int32_t> off{0};
-    std::vector<std::string> strs;
-    std::vector<std::int64_t> ints;
-    std::vector<std::uint64_t> uints;
-    std::vector<double> fls;
-    std::vector<std::uint8_t> bits;
+    dstd::Vector<std::int32_t> off{0};
+    dstd::Vector<dstd::String> strs;
+    dstd::Vector<std::int64_t> ints;
+    dstd::Vector<std::uint64_t> uints;
+    dstd::Vector<double> fls;
+    dstd::Vector<std::uint8_t> bits;
     std::int64_t n = 0;
-    std::vector<dstd::StringView> sorted;
+    dstd::Vector<dstd::StringView> sorted;
     for (std::int64_t g = 0; g < ng; ++g) {
         sorted.clear();
         if (slot >= 0) {
@@ -274,7 +273,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
                         static_cast<std::uint8_t>(1u << (i & 7));
             }
         } else if (dom == FieldStatDomain::F64) {
-            std::vector<double> v;
+            dstd::Vector<double> v;
             for (const dstd::StringView x : sorted) {
                 double d = 0.0;
                 dstd::from_chars_double(x.data(), x.data() + x.size(), d);
@@ -287,19 +286,19 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
             });
             fls.insert(fls.end(), v.begin(), v.end());
         } else if (dom == FieldStatDomain::U64) {
-            std::vector<std::uint64_t> v;
+            dstd::Vector<std::uint64_t> v;
             for (const dstd::StringView x : sorted) {
                 std::uint64_t d = 0;
-                std::from_chars(x.data(), x.data() + x.size(), d);
+                dstd::from_chars(x.data(), x.data() + x.size(), d);
                 v.push_back(d);
             }
             std::sort(v.begin(), v.end());
             uints.insert(uints.end(), v.begin(), v.end());
         } else {
-            std::vector<std::int64_t> v;
+            dstd::Vector<std::int64_t> v;
             for (const dstd::StringView x : sorted) {
                 std::int64_t d = 0;
-                std::from_chars(x.data(), x.data() + x.size(), d);
+                dstd::from_chars(x.data(), x.data() + x.size(), d);
                 v.push_back(d);
             }
             std::sort(v.begin(), v.end());
@@ -327,7 +326,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
 // The finalized columns of one state. `with_keys` false leaves the key columns
 // out, for a caller that writes them itself (the in-place group-by).
 static DataFrame finalize_impl(const AggState& st_in,
-                               const std::vector<std::string>& key_names,
+                               const dstd::Vector<dstd::String>& key_names,
                                bool with_keys,
                                const AggDynLayout* layout = nullptr) {
     // A light state is read cell by cell, never expanded into field stats.
@@ -344,10 +343,10 @@ static DataFrame finalize_impl(const AggState& st_in,
             : (st.nkeys > key_names.size() ? st.nkeys : key_names.size());
     for (std::size_t k = 0; k < nk; ++k) {
         out.names.push_back(k < key_names.size() ? key_names[k]
-                                                 : "key" + std::to_string(k));
+                                                 : "key" + dstd::to_string(k));
         if (k >= st.nkeys) {
             out.columns.push_back(Series::strings(
-                std::vector<std::string>(static_cast<std::size_t>(ng))));
+                dstd::Vector<dstd::String>(static_cast<std::size_t>(ng))));
             continue;
         }
         if (st.key_is_bytes[k]) {
@@ -379,9 +378,9 @@ static DataFrame finalize_impl(const AggState& st_in,
             k < st.key_domain.size() ? st.key_domain[k] : FieldStatDomain::I64;
         const TypeId kt =
             k < st.key_type.size() ? st.key_type[k] : TypeId::Int64;
-        const std::vector<std::int64_t>& bits = st.ikey_cols[k];
+        const dstd::Vector<std::int64_t>& bits = st.ikey_cols[k];
         if (kd == FieldStatDomain::U64) {
-            std::vector<std::uint64_t> v(static_cast<std::size_t>(ng));
+            dstd::Vector<std::uint64_t> v(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g)
                 v[static_cast<std::size_t>(g)] = std::bit_cast<std::uint64_t>(
                     bits[static_cast<std::size_t>(g)]);
@@ -393,14 +392,14 @@ static DataFrame finalize_impl(const AggState& st_in,
             // all recover their original bits. A NaN key's payload does not
             // survive (float_to_half canonicalizes any NaN mantissa), only
             // that the group stays NaN with its original sign.
-            std::vector<std::uint16_t> v(static_cast<std::size_t>(ng));
+            dstd::Vector<std::uint16_t> v(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g)
                 v[static_cast<std::size_t>(g)] =
                     float_to_half(static_cast<float>(std::bit_cast<double>(
                         bits[static_cast<std::size_t>(g)])));
             out.columns.push_back(Series::flat(TypeId::Float16, v.data(), ng));
         } else if (kd == FieldStatDomain::F64) {
-            std::vector<double> v(static_cast<std::size_t>(ng));
+            dstd::Vector<double> v(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g)
                 v[static_cast<std::size_t>(g)] =
                     std::bit_cast<double>(bits[static_cast<std::size_t>(g)]);
@@ -413,16 +412,17 @@ static DataFrame finalize_impl(const AggState& st_in,
             const TimeUnit ku = k < st.key_time_unit.size()
                                     ? st.key_time_unit[k]
                                     : TimeUnit::Micro;
-            const std::string& ktz =
-                k < st.key_timezone.size() ? st.key_timezone[k] : std::string();
+            const dstd::String& ktz = k < st.key_timezone.size()
+                                          ? st.key_timezone[k]
+                                          : dstd::String();
             if (kt == TypeId::Time32) {
-                std::vector<std::int32_t> v(static_cast<std::size_t>(ng));
+                dstd::Vector<std::int32_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = static_cast<std::int32_t>(
                         bits[static_cast<std::size_t>(g)]);
                 out.columns.push_back(flat_temporal(kt, ku, ktz, v.data(), ng));
             } else if (kt == TypeId::Date32) {
-                std::vector<std::int32_t> v(static_cast<std::size_t>(ng));
+                dstd::Vector<std::int32_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = static_cast<std::int32_t>(
                         bits[static_cast<std::size_t>(g)]);
@@ -458,7 +458,7 @@ static DataFrame finalize_impl(const AggState& st_in,
         if (sp.op == AggOp::Pct) {
             const int sk =
                 fi >= 0 ? st.field_sketch[static_cast<std::size_t>(fi)] : -1;
-            std::vector<double> v(static_cast<std::size_t>(ng));
+            dstd::Vector<double> v(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g)
                 v[static_cast<std::size_t>(g)] =
                     sk >= 0 ? st.sketches[static_cast<std::size_t>(g) *
@@ -472,9 +472,9 @@ static DataFrame finalize_impl(const AggState& st_in,
             // sketch's occupied bins (same shape the View emits).
             const int sk =
                 fi >= 0 ? st.field_sketch[static_cast<std::size_t>(fi)] : -1;
-            std::vector<std::int32_t> off{0};
-            std::vector<double> lo, hi;
-            std::vector<std::uint64_t> cnt;
+            dstd::Vector<std::int32_t> off{0};
+            dstd::Vector<double> lo, hi;
+            dstd::Vector<std::uint64_t> cnt;
             for (std::int64_t g = 0; g < ng; ++g) {
                 if (sk >= 0) {
                     for (const auto& bn :
@@ -489,7 +489,7 @@ static DataFrame finalize_impl(const AggState& st_in,
                 off.push_back(static_cast<std::int32_t>(lo.size()));
             }
             const std::int64_t nb = static_cast<std::int64_t>(lo.size());
-            std::vector<Series> fields;
+            dstd::Vector<Series> fields;
             fields.push_back(Series::flat(TypeId::Float64, lo.data(), nb));
             fields.push_back(Series::flat(TypeId::Float64, hi.data(), nb));
             fields.push_back(Series::flat(TypeId::Uint64, cnt.data(), nb));
@@ -498,47 +498,47 @@ static DataFrame finalize_impl(const AggState& st_in,
                 Series::structs({"lo", "hi", "count"}, std::move(fields))));
         } else if (sp.op == AggOp::First || sp.op == AggOp::Last) {
             const bool first = sp.op == AggOp::First;
-            const std::vector<std::uint64_t>& bits =
+            const dstd::Vector<std::uint64_t>& bits =
                 first ? st.fl_first : st.fl_last;
-            const std::vector<std::string>& strs =
+            const dstd::Vector<dstd::String>& strs =
                 first ? st.fl_first_s : st.fl_last_s;
             auto slot = [&](std::int64_t g) {
                 return static_cast<std::size_t>(g) * st.nf +
                        static_cast<std::size_t>(fi);
             };
             if (fi >= 0 && st.field_is_str[static_cast<std::size_t>(fi)]) {
-                std::vector<std::string> v(static_cast<std::size_t>(ng));
+                dstd::Vector<dstd::String> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = strs[slot(g)];
                 out.columns.push_back(Series::strings(v));
             } else if (dom == FieldStatDomain::F64) {
-                std::vector<double> v(static_cast<std::size_t>(ng));
+                dstd::Vector<double> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] =
                         std::bit_cast<double>(bits[slot(g)]);
                 out.columns.push_back(Series::flat_f64(v.data(), ng));
             } else if (dom == FieldStatDomain::U64) {
-                std::vector<std::uint64_t> v(static_cast<std::size_t>(ng));
+                dstd::Vector<std::uint64_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = bits[slot(g)];
                 out.columns.push_back(
                     Series::flat(TypeId::Uint64, v.data(), ng));
             } else {
-                std::vector<std::int64_t> v(static_cast<std::size_t>(ng));
+                dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] =
                         std::bit_cast<std::int64_t>(bits[slot(g)]);
                 out.columns.push_back(Series::flat_i64(v.data(), ng));
             }
         } else if (sp.op == AggOp::SumSq) {
-            std::vector<double> v(static_cast<std::size_t>(ng));
+            dstd::Vector<double> v(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g)
                 v[static_cast<std::size_t>(g)] = fs_at(g).sumsq();
             out.columns.push_back(Series::flat_f64(v.data(), ng));
         } else if (sp.op == AggOp::ArgMax || sp.op == AggOp::ArgMin) {
             const int slot = st.spec_arg[s];
             const int ri = st.spec_arg_repr[s];
-            std::vector<std::string> v(static_cast<std::size_t>(ng));
+            dstd::Vector<dstd::String> v(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g) {
                 if (slot < 0 || ri < 0) continue;
                 if (st.arg_has[static_cast<std::size_t>(g) * st.n_arg +
@@ -551,7 +551,7 @@ static DataFrame finalize_impl(const AggState& st_in,
             out.columns.push_back(Series::strings(v));
         } else if (sp.op == AggOp::BitOr) {
             const int slot = st.spec_bitor[s];
-            std::vector<std::uint64_t> v(static_cast<std::size_t>(ng), 0);
+            dstd::Vector<std::uint64_t> v(static_cast<std::size_t>(ng), 0);
             for (std::int64_t g = 0; g < ng && slot >= 0; ++g)
                 v[static_cast<std::size_t>(g)] =
                     st.bitor_acc[static_cast<std::size_t>(g) * st.n_bitor +
@@ -559,7 +559,7 @@ static DataFrame finalize_impl(const AggState& st_in,
             out.columns.push_back(Series::flat(TypeId::Uint64, v.data(), ng));
         } else if (sp.op == AggOp::Prod) {
             const int slot = st.spec_prod[s];
-            std::vector<double> v(static_cast<std::size_t>(ng), 1.0);
+            dstd::Vector<double> v(static_cast<std::size_t>(ng), 1.0);
             for (std::int64_t g = 0; g < ng && slot >= 0; ++g)
                 v[static_cast<std::size_t>(g)] =
                     st.prod_acc[static_cast<std::size_t>(g) * st.n_prod +
@@ -568,8 +568,8 @@ static DataFrame finalize_impl(const AggState& st_in,
         } else if (sp.op == AggOp::SketchQuantile) {
             const int slot = st.spec_msk[s];
             const auto n = static_cast<std::size_t>(ng);
-            std::vector<double> v(n, 0.0);
-            std::vector<std::uint8_t> valid((n + 7) / 8, 0);
+            dstd::Vector<double> v(n, 0.0);
+            dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
             for (std::size_t g = 0; g < n && slot >= 0; ++g) {
                 const MergeSketch& m =
                     st.msk[g * st.n_msk + static_cast<std::size_t>(slot)];
@@ -580,7 +580,7 @@ static DataFrame finalize_impl(const AggState& st_in,
             out.columns.push_back(Series::flat_f64(v.data(), ng, valid.data()));
         } else if (sp.op == AggOp::Distinct) {
             const int slot = st.spec_kmv[s];
-            std::vector<std::int64_t> v(static_cast<std::size_t>(ng), 0);
+            dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng), 0);
             for (std::int64_t g = 0; g < ng && slot >= 0; ++g) {
                 const std::size_t ks = static_cast<std::size_t>(g) * st.n_kmv +
                                        static_cast<std::size_t>(slot);
@@ -591,12 +591,12 @@ static DataFrame finalize_impl(const AggState& st_in,
             out.columns.push_back(Series::flat_i64(v.data(), ng));
         } else if (sp.op == AggOp::Sample) {
             const int slot = st.spec_kmv[s];
-            std::vector<std::vector<std::string>> rows(
+            dstd::Vector<dstd::Vector<dstd::String>> rows(
                 static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng && slot >= 0; ++g) {
                 const std::size_t ks = static_cast<std::size_t>(g) * st.n_kmv +
                                        static_cast<std::size_t>(slot);
-                std::vector<std::string>& row =
+                dstd::Vector<dstd::String>& row =
                     rows[static_cast<std::size_t>(g)];
                 for (const auto& [h, val] : st.kmv[ks]) row.push_back(val);
                 std::sort(row.begin(), row.end());
@@ -605,14 +605,14 @@ static DataFrame finalize_impl(const AggState& st_in,
         } else if (sp.op == AggOp::ListSorted || sp.op == AggOp::TopK ||
                    sp.op == AggOp::BottomK) {
             const int slot = st.spec_lst[s];
-            std::vector<std::vector<std::string>> rows(
+            dstd::Vector<dstd::Vector<dstd::String>> rows(
                 static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng && slot >= 0; ++g) {
                 const std::size_t ls = static_cast<std::size_t>(slot);
                 ListItems items =
                     st.lst[static_cast<std::size_t>(g) * st.n_lst + ls];
                 list_bound(items, st.lst_kind[ls], st.lst_k[ls]);
-                std::vector<std::string>& row =
+                dstd::Vector<dstd::String>& row =
                     rows[static_cast<std::size_t>(g)];
                 row.reserve(items.size());
                 for (auto& [by, repr] : items) row.push_back(std::move(repr));
@@ -621,15 +621,15 @@ static DataFrame finalize_impl(const AggState& st_in,
         } else if (sp.op == AggOp::ApproxTopK) {
             // list<struct{value, count}>, heaviest first, value breaking ties.
             const int slot = st.spec_ss[s];
-            std::vector<std::int32_t> off{0};
-            std::vector<std::string> vals;
-            std::vector<std::uint64_t> cnts;
+            dstd::Vector<std::int32_t> off{0};
+            dstd::Vector<dstd::String> vals;
+            dstd::Vector<std::uint64_t> cnts;
             for (std::int64_t g = 0; g < ng; ++g) {
                 if (slot >= 0) {
                     const SpaceSavingMap& m =
                         st.ss_counters[static_cast<std::size_t>(g) * st.n_ss +
                                        static_cast<std::size_t>(slot)];
-                    std::vector<dstd::Pair<std::string, std::uint64_t>> hh(
+                    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> hh(
                         m.begin(), m.end());
                     std::sort(hh.begin(), hh.end(),
                               [](const auto& a, const auto& b) {
@@ -645,7 +645,7 @@ static DataFrame finalize_impl(const AggState& st_in,
                 off.push_back(static_cast<std::int32_t>(vals.size()));
             }
             const std::int64_t nv = static_cast<std::int64_t>(vals.size());
-            std::vector<Series> fields;
+            dstd::Vector<Series> fields;
             fields.push_back(Series::strings(vals));
             fields.push_back(Series::flat(TypeId::Uint64, cnts.data(), nv));
             out.columns.push_back(Series::list(
@@ -654,7 +654,7 @@ static DataFrame finalize_impl(const AggState& st_in,
                    sp.op == AggOp::CovarSamp || sp.op == AggOp::RegrSlope ||
                    sp.op == AggOp::RegrIntercept || sp.op == AggOp::RegrR2) {
             const int slot = st.spec_co[s];
-            std::vector<double> v(static_cast<std::size_t>(ng), 0.0);
+            dstd::Vector<double> v(static_cast<std::size_t>(ng), 0.0);
             for (std::int64_t g = 0; g < ng && slot >= 0; ++g) {
                 const std::size_t cs = static_cast<std::size_t>(g) * st.n_co +
                                        static_cast<std::size_t>(slot);
@@ -665,15 +665,15 @@ static DataFrame finalize_impl(const AggState& st_in,
             out.columns.push_back(set_list_column(st, s, ng));
         } else if (sp.op == AggOp::SetUnion) {
             const int slot = st.spec_set[s];
-            std::vector<std::string> v(static_cast<std::size_t>(ng));
+            dstd::Vector<dstd::String> v(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g) {
-                std::string joined;
+                dstd::String joined;
                 if (slot >= 0) {
                     const AggState::StringSet& gset =
                         st.sets[static_cast<std::size_t>(g) * st.n_set +
                                 static_cast<std::size_t>(slot)];
-                    std::vector<dstd::StringView> sorted(gset.begin(),
-                                                         gset.end());
+                    dstd::Vector<dstd::StringView> sorted(gset.begin(),
+                                                          gset.end());
                     std::sort(sorted.begin(), sorted.end());
                     bool first =
                         true;  // an empty string is a value, so test position
@@ -689,7 +689,7 @@ static DataFrame finalize_impl(const AggState& st_in,
         } else if (sp.op == AggOp::Busy || sp.op == AggOp::Concurrency ||
                    sp.op == AggOp::Utilization || sp.op == AggOp::Active) {
             const int slot = st.spec_occ[s];
-            std::vector<double> v(static_cast<std::size_t>(ng), 0.0);
+            dstd::Vector<double> v(static_cast<std::size_t>(ng), 0.0);
             for (std::int64_t g = 0; g < ng; ++g) {
                 if (slot < 0) continue;
                 const std::size_t b = static_cast<std::size_t>(g) * st.n_occ +
@@ -719,13 +719,13 @@ static DataFrame finalize_impl(const AggState& st_in,
             }
             out.columns.push_back(Series::flat_f64(v.data(), ng));
         } else if (sp.op == AggOp::Count) {
-            std::vector<std::int64_t> v(static_cast<std::size_t>(ng));
+            dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g)
                 v[static_cast<std::size_t>(g)] = static_cast<std::int64_t>(
                     st.counts[static_cast<std::size_t>(g)]);
             out.columns.push_back(Series::flat_i64(v.data(), ng));
         } else if (sp.op == AggOp::CountValid) {
-            std::vector<std::int64_t> v(static_cast<std::size_t>(ng));
+            dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g)
                 v[static_cast<std::size_t>(g)] =
                     static_cast<std::int64_t>(fs_at(g).n);
@@ -745,7 +745,7 @@ static DataFrame finalize_impl(const AggState& st_in,
             // A group with no present value has no minimum or maximum: null,
             // not the accumulator's seed. Its sum is 0, as SQL and pandas
             // report it. An integer sum that overflowed its type is null.
-            std::vector<std::uint8_t> valid;
+            dstd::Vector<std::uint8_t> valid;
             const std::uint8_t* validity = nullptr;
             if (sp.op != AggOp::Sum || dom != FieldStatDomain::F64) {
                 valid.assign(static_cast<std::size_t>((ng + 7) / 8), 0);
@@ -761,19 +761,19 @@ static DataFrame finalize_impl(const AggState& st_in,
                 if (any_null) validity = valid.data();
             }
             if (dom == FieldStatDomain::U64) {
-                std::vector<std::uint64_t> v(static_cast<std::size_t>(ng));
+                dstd::Vector<std::uint64_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] =
                         std::bit_cast<std::uint64_t>(exact(fs_at(g)));
                 out.columns.push_back(
                     Series::flat(TypeId::Uint64, v.data(), ng, validity));
             } else if (dom == FieldStatDomain::I64) {
-                std::vector<std::int64_t> v(static_cast<std::size_t>(ng));
+                dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = exact(fs_at(g));
                 out.columns.push_back(Series::flat_i64(v.data(), ng, validity));
             } else {
-                std::vector<double> v(static_cast<std::size_t>(ng));
+                dstd::Vector<double> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = approx(fs_at(g));
                 out.columns.push_back(Series::flat_f64(v.data(), ng, validity));
@@ -787,8 +787,8 @@ static DataFrame finalize_impl(const AggState& st_in,
                                          : sp.op == AggOp::Std  ? 2
                                          : sp.op == AggOp::Skew ? 3
                                                                 : 4;
-            std::vector<double> v(static_cast<std::size_t>(ng));
-            std::vector<std::uint8_t> valid(
+            dstd::Vector<double> v(static_cast<std::size_t>(ng));
+            dstd::Vector<std::uint8_t> valid(
                 static_cast<std::size_t>((ng + 7) / 8), 0);
             bool any_missing = false;
             for (std::int64_t g = 0; g < ng; ++g) {
@@ -850,7 +850,7 @@ static DataFrame finalize_impl(const AggState& st_in,
                                          id);
                 };
                 if (d.op == AggOp::Pct) {
-                    std::vector<double> v(static_cast<std::size_t>(ng), 0.0);
+                    dstd::Vector<double> v(static_cast<std::size_t>(ng), 0.0);
                     for (std::int64_t g = 0; have && g < ng; ++g) {
                         if (const DDSketch* sk = dyn_find_sketch(
                                 st.dyn_sketch[static_cast<std::size_t>(g)], id))
@@ -859,8 +859,8 @@ static DataFrame finalize_impl(const AggState& st_in,
                     }
                     out.columns.push_back(Series::flat_f64(v.data(), ng));
                 } else if (d.op == AggOp::Count) {
-                    std::vector<std::int64_t> v(static_cast<std::size_t>(ng),
-                                                0);
+                    dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng),
+                                                 0);
                     for (std::int64_t g = 0; g < ng; ++g)
                         if (const FieldStat* f = fs_of(g))
                             v[static_cast<std::size_t>(g)] =
@@ -874,7 +874,7 @@ static DataFrame finalize_impl(const AggState& st_in,
                                : d.op == AggOp::Min ? f.emin
                                                     : f.emax;
                     };
-                    std::vector<std::uint8_t> valid(
+                    dstd::Vector<std::uint8_t> valid(
                         static_cast<std::size_t>((ng + 7) / 8), 0xFF);
                     const std::uint8_t* validity = nullptr;
                     if (d.op == AggOp::Sum)
@@ -886,7 +886,7 @@ static DataFrame finalize_impl(const AggState& st_in,
                                 validity = valid.data();
                             }
                     if (dom == FieldStatDomain::U64) {
-                        std::vector<std::uint64_t> v(
+                        dstd::Vector<std::uint64_t> v(
                             static_cast<std::size_t>(ng), 0);
                         for (std::int64_t g = 0; g < ng; ++g)
                             if (const FieldStat* f = fs_of(g))
@@ -895,7 +895,7 @@ static DataFrame finalize_impl(const AggState& st_in,
                         out.columns.push_back(Series::flat(
                             TypeId::Uint64, v.data(), ng, validity));
                     } else {
-                        std::vector<std::int64_t> v(
+                        dstd::Vector<std::int64_t> v(
                             static_cast<std::size_t>(ng), 0);
                         for (std::int64_t g = 0; g < ng; ++g)
                             if (const FieldStat* f = fs_of(g))
@@ -904,7 +904,7 @@ static DataFrame finalize_impl(const AggState& st_in,
                             Series::flat_i64(v.data(), ng, validity));
                     }
                 } else {
-                    std::vector<double> v(static_cast<std::size_t>(ng), 0.0);
+                    dstd::Vector<double> v(static_cast<std::size_t>(ng), 0.0);
                     for (std::int64_t g = 0; g < ng; ++g) {
                         const FieldStat* f = fs_of(g);
                         if (!f) continue;
@@ -951,7 +951,7 @@ static DataFrame finalize_impl(const AggState& st_in,
 }
 
 DataFrame agg_finalize(const AggState& st,
-                       const std::vector<std::string>& key_names) {
+                       const dstd::Vector<dstd::String>& key_names) {
     return finalize_impl(st, key_names, true);
 }
 
@@ -960,14 +960,14 @@ void agg_dyn_layout_add(AggDynLayout& layout, const AggState& in) {
     const AggState& state = settled(in);
     for (std::int64_t g = 0; g < state.ngroups(); ++g)
         state.dyn_each_cell(g, [&](std::uint32_t id, const FieldStat&) {
-            layout.emplace(std::string(state.dyn_name(id)),
+            layout.emplace(dstd::String(state.dyn_name(id)),
                            id < state.dyn_domain.size() ? state.dyn_domain[id]
                                                         : FieldStatDomain::I64);
         });
 }
 
 DataFrame agg_finalize(const AggState& st,
-                       const std::vector<std::string>& key_names,
+                       const dstd::Vector<dstd::String>& key_names,
                        const AggDynLayout& layout) {
     return finalize_impl(st, key_names, true, &layout);
 }
@@ -976,8 +976,8 @@ DataFrame agg_finalize_values(const AggState& st) {
     return finalize_impl(st, {}, false);
 }
 
-DataFrame agg_finalize(const AggState& st, const std::string& key_name) {
-    return agg_finalize(st, std::vector<std::string>{key_name});
+DataFrame agg_finalize(const AggState& st, const dstd::String& key_name) {
+    return agg_finalize(st, dstd::Vector<dstd::String>{key_name});
 }
 
 }  // namespace dftracer::utils::dataframe

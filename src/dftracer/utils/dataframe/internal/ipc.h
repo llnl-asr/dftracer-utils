@@ -8,7 +8,6 @@
 #include <dftracer/utils/dstd/string.h>
 
 #include <optional>
-#include <string_view>
 
 namespace dftracer::utils::dataframe {
 

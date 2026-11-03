@@ -3,11 +3,11 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_RADIX_DEDUP_H
 
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
 // Shared radix-partitioned dedup helpers for the EAGER batch ops, mirroring
 // the pattern already proven in the lazy cursors (lazyframe.cpp
@@ -31,8 +31,8 @@ constexpr std::int64_t RADIX_DEDUP_MIN_ROWS = 1 << 14;
 /// to one serial set when no parallel backend is installed or `m` is below
 /// the fan-out threshold.
 template <class Key, class KeyOf>
-std::vector<std::uint8_t> radix_first_seen_by(std::int64_t m, KeyOf&& key_of) {
-    std::vector<std::uint8_t> keep(static_cast<std::size_t>(m), 0);
+dstd::Vector<std::uint8_t> radix_first_seen_by(std::int64_t m, KeyOf&& key_of) {
+    dstd::Vector<std::uint8_t> keep(static_cast<std::size_t>(m), 0);
     if (!parallel_backend_installed() || m < RADIX_DEDUP_MIN_ROWS) {
         ankerl::unordered_dense::set<Key> seen;
         seen.reserve(static_cast<std::size_t>(m));
@@ -42,7 +42,7 @@ std::vector<std::uint8_t> radix_first_seen_by(std::int64_t m, KeyOf&& key_of) {
         return keep;
     }
     const std::size_t p = RADIX_DEDUP_PARTITIONS;
-    std::vector<std::vector<std::int64_t>> buckets(p);
+    dstd::Vector<dstd::Vector<std::int64_t>> buckets(p);
     std::hash<Key> hasher;
     for (std::int64_t j = 0; j < m; ++j)
         buckets[hasher(key_of(j)) % p].push_back(j);
@@ -63,8 +63,8 @@ std::vector<std::uint8_t> radix_first_seen_by(std::int64_t m, KeyOf&& key_of) {
 /// the occurrence count of each position's key. Falls back to one serial map
 /// below the fan-out threshold.
 template <class Key, class KeyOf>
-std::vector<std::int64_t> radix_counts_by(std::int64_t m, KeyOf&& key_of) {
-    std::vector<std::int64_t> counts(static_cast<std::size_t>(m), 0);
+dstd::Vector<std::int64_t> radix_counts_by(std::int64_t m, KeyOf&& key_of) {
+    dstd::Vector<std::int64_t> counts(static_cast<std::size_t>(m), 0);
     if (!parallel_backend_installed() || m < RADIX_DEDUP_MIN_ROWS) {
         ankerl::unordered_dense::map<Key, std::int64_t> cnt;
         cnt.reserve(static_cast<std::size_t>(m));
@@ -74,7 +74,7 @@ std::vector<std::int64_t> radix_counts_by(std::int64_t m, KeyOf&& key_of) {
         return counts;
     }
     const std::size_t p = RADIX_DEDUP_PARTITIONS;
-    std::vector<std::vector<std::int64_t>> buckets(p);
+    dstd::Vector<dstd::Vector<std::int64_t>> buckets(p);
     std::hash<Key> hasher;
     for (std::int64_t j = 0; j < m; ++j)
         buckets[hasher(key_of(j)) % p].push_back(j);
@@ -92,16 +92,16 @@ std::vector<std::int64_t> radix_counts_by(std::int64_t m, KeyOf&& key_of) {
 }
 
 /// Composite row-key convenience: `keys[j]` is already materialized.
-inline std::vector<std::uint8_t> radix_first_seen_mask(
-    const std::vector<std::string>& keys, std::int64_t n) {
-    return radix_first_seen_by<std::string>(
+inline dstd::Vector<std::uint8_t> radix_first_seen_mask(
+    const dstd::Vector<dstd::String>& keys, std::int64_t n) {
+    return radix_first_seen_by<dstd::String>(
         n, [&](std::int64_t j) { return keys[static_cast<std::size_t>(j)]; });
 }
 
 /// Composite row-key convenience: `keys[j]` is already materialized.
-inline std::vector<std::int64_t> radix_key_counts(
-    const std::vector<std::string>& keys, std::int64_t n) {
-    return radix_counts_by<std::string>(
+inline dstd::Vector<std::int64_t> radix_key_counts(
+    const dstd::Vector<dstd::String>& keys, std::int64_t n) {
+    return radix_counts_by<dstd::String>(
         n, [&](std::int64_t j) { return keys[static_cast<std::size_t>(j)]; });
 }
 

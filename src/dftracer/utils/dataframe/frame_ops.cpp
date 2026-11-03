@@ -3,19 +3,20 @@
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <exception>
 #include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace df = dftracer::utils::dataframe;
 
 namespace {
 
-std::vector<std::string> names_of(const char* const* items, std::int32_t n) {
-    std::vector<std::string> out;
+dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names_of(
+    const char* const* items, std::int32_t n) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
     out.reserve(static_cast<std::size_t>(n));
     for (std::int32_t i = 0; i < n; ++i) out.emplace_back(items[i]);
     return out;
@@ -37,7 +38,7 @@ dftu_dataframe* dftu_dataframe_window(
         (n_specs > 0 && !specs))
         return nullptr;
     try {
-        std::vector<df::WindowColumn> cols;
+        dftracer::utils::dstd::Vector<df::WindowColumn> cols;
         cols.reserve(static_cast<std::size_t>(n_specs));
         for (int32_t i = 0; i < n_specs; ++i) {
             const dftu_window_spec& s = specs[i];
@@ -68,7 +69,9 @@ dftu_dataframe* dftu_dataframe_gap_fill(
         dftracer::utils::dstd::Optional<
             dftracer::utils::dstd::Pair<int64_t, int64_t>>
             r;
-        if (n_range == 2) r = std::make_pair(range[0], range[1]);
+        if (n_range == 2)
+            r = dftracer::utils::dstd::Pair<int64_t, int64_t>{range[0],
+                                                              range[1]};
         return df::dataframe_handle_wrap(df::gap_fill(
             df::dataframe_handle_view(frame), names_of(partition_by, n_part),
             time, bucket, names_of(values, n_values),

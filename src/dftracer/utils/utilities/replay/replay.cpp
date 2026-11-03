@@ -680,8 +680,7 @@ ReplayResult ReplayEngine::replay_with_call_tree(
                                       return start(a) < start(b);
                                   return end(a) > end(b);
                               });
-            // keep std: containment_walk takes a std::vector
-            std::vector<std::pair<std::int64_t, std::int64_t>> stack;
+            dstd::Vector<dstd::Pair<std::int64_t, std::int64_t>> stack;
             dataframe::containment_walk(
                 static_cast<std::int64_t>(rows.size()),
                 [&](std::int64_t k) { return start(rows[k]); },

@@ -3,12 +3,13 @@
 #define DFTRACER_UTILS_DATAFRAME_AGG_SPILL_H
 
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -44,11 +45,11 @@ class AggSpiller {
     /// consumed, and `live` is not modified. With no runs this is exactly
     /// agg_finalize(live, key_names).
     DataFrame drain(const AggState& live,
-                    const std::vector<std::string>& key_names) const;
+                    const dstd::Vector<dstd::String>& key_names) const;
 
    private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    dstd::UniquePtr<Impl> impl_;
 };
 
 }  // namespace dftracer::utils::dataframe

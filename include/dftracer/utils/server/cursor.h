@@ -21,7 +21,7 @@ struct QueryCursor {
     std::uint32_t line_offset = 0;
 
     /// Base64-encode the cursor for URL-safe transmission.
-    std::string encode() const;
+    dstd::String encode() const;
 
     /// Decode a cursor from a Base64 string.
     static dstd::Optional<QueryCursor> decode(dstd::StringView cursor);

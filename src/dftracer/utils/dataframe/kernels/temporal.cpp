@@ -5,12 +5,11 @@
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <string>
-#include <vector>
 
 // The calendar parts of an instant (the pandas .dt accessor) and rounding to a
 // bucket, over a Timestamp / Date32 / Date64 / Duration column (its own unit)
@@ -186,10 +185,10 @@ dftu_series* dftu_series_dt_format(const dftu_series* in, const char* fmt,
     }
     const std::int64_t ns_per_unit =
         days ? common::NS_PER_DAY : common::NS_PER_SECOND / unit_per_second(u);
-    std::vector<std::int32_t> offsets;
+    dstd::Vector<std::int32_t> offsets;
     offsets.reserve(static_cast<std::size_t>(v->length) + 1);
     offsets.push_back(0);
-    std::string text;
+    dstd::String text;
     for (std::int64_t i = 0; i < v->length; ++i) {
         const bool valid = !v->validity.block() ||
                            ((v->validity.data()[i >> 3] >> (i & 7)) & 1);

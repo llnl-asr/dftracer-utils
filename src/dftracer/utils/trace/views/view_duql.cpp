@@ -95,13 +95,10 @@ namespace ix = dftracer::utils::index;
                                          "View::duql ", why);
 }
 
-// keep std: LazyFrame, LazyOps and DataFrame take std::string
-std::string std_str(dstd::StringView s) { return std::string(s); }
+dstd::String std_str(dstd::StringView s) { return dstd::String(s); }
 
-// keep std: LazyFrame, LazyOps and DataFrame take std::vector<std::string>
-std::vector<std::string> std_strs(const dstd::Vector<dstd::String>& v) {
-    // keep std: the return type above
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> std_strs(const dstd::Vector<dstd::String>& v) {
+    dstd::Vector<dstd::String> out;
     out.reserve(v.size());
     for (const auto& n : v) out.emplace_back(n);
     return out;
@@ -141,28 +138,23 @@ bool is_number(df::TypeId t) {
 // hands out: its own when it has every declared column, else the declared
 // ones by position, as the ops above read it, then its own. Columns past the
 // declared ones are those its input returned beyond its schema.
-// keep std: dataframe Source, Cursor and DataFrame names are std types
-std::vector<std::uint32_t> frame_ids(
-    // keep std: dataframe Source, Cursor and DataFrame names are std types
-    const df::DataFrame& f, const std::vector<std::string>& declared,
+dstd::Vector<std::uint32_t> frame_ids(
+    const df::DataFrame& f, const dstd::Vector<dstd::String>& declared,
     dftracer::utils::dstd::StringIntern& intern) {
     const bool by_name =
         std::all_of(declared.begin(), declared.end(), [&](const auto& n) {
             return std::find(f.names.begin(), f.names.end(), n) !=
                    f.names.end();
         });
-    // keep std: dataframe Source, Cursor and DataFrame names are std types
-    std::vector<std::uint32_t> ids;
+    dstd::Vector<std::uint32_t> ids;
     for (std::size_t i = 0; i < f.names.size(); ++i)
         ids.push_back(intern.get_or_insert(
             !by_name && i < declared.size() ? declared[i] : f.names[i]));
     return ids;
 }
 
-// keep std: dataframe Source, Cursor and DataFrame names are std types
-std::vector<std::string> field_names(const df::Schema& s) {
-    // keep std: dataframe Source, Cursor and DataFrame names are std types
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> field_names(const df::Schema& s) {
+    dstd::Vector<dstd::String> out;
     for (const auto& f : s.fields) out.push_back(f.name);
     return out;
 }
@@ -184,8 +176,7 @@ class FinishSource final : public df::Source {
 
     df::ScanResult scan(const df::ScanRequest& req) const override {
         df::ScanResult r;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        r.cursor = std::make_unique<Rows>(
+        r.cursor = dstd::make_unique<Rows>(
             inner_, finish_, req.projection,
             req.projection.empty() ? field_names(schema_) : req.projection);
         r.filters.assign(req.filters.size(), df::Pushed::No);
@@ -196,14 +187,10 @@ class FinishSource final : public df::Source {
     class Rows final : public df::Cursor {
        public:
         Rows(df::LazyFrame inner, dstd::SharedPtr<Finish> finish,
-             // keep std: dataframe Source, Cursor and DataFrame names are std
              // types
-             // keep std: the dataframe API takes std::vector
-             std::vector<std::string> projection,
-             // keep std: dataframe Source, Cursor and DataFrame names are std
+             dstd::Vector<dstd::String> projection,
              // types
-             // keep std: the dataframe API takes std::vector
-             std::vector<std::string> declared)
+             dstd::Vector<dstd::String> declared)
             : inner_(std::move(inner)),
               finish_(std::move(finish)),
               projection_(std::move(projection)),
@@ -233,15 +220,11 @@ class FinishSource final : public df::Source {
        private:
         df::LazyFrame inner_;
         dstd::SharedPtr<Finish> finish_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::string> projection_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::string> declared_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::unique_ptr<df::Cursor> rows_;
+        dstd::Vector<dstd::String> projection_;
+        dstd::Vector<dstd::String> declared_;
+        dstd::UniquePtr<df::Cursor> rows_;
         dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::uint32_t> ids_;
+        dstd::Vector<std::uint32_t> ids_;
     };
 
     df::LazyFrame inner_;
@@ -265,8 +248,7 @@ class MapSource final : public df::Source {
 
     df::ScanResult scan(const df::ScanRequest& req) const override {
         df::ScanResult r;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        r.cursor = std::make_unique<Rows>(
+        r.cursor = dstd::make_unique<Rows>(
             inner_, map_, req.projection,
             req.projection.empty() ? field_names(schema_) : req.projection);
         r.filters.assign(req.filters.size(), df::Pushed::No);
@@ -277,14 +259,10 @@ class MapSource final : public df::Source {
     class Rows final : public df::Cursor {
        public:
         Rows(const df::LazyFrame& inner, dstd::SharedPtr<Map> map,
-             // keep std: dataframe Source, Cursor and DataFrame names are std
              // types
-             // keep std: the dataframe API takes std::vector
-             std::vector<std::string> projection,
-             // keep std: dataframe Source, Cursor and DataFrame names are std
+             dstd::Vector<dstd::String> projection,
              // types
-             // keep std: the dataframe API takes std::vector
-             std::vector<std::string> declared)
+             dstd::Vector<dstd::String> declared)
             : batches_(inner.stream()),
               map_(std::move(map)),
               projection_(std::move(projection)),
@@ -313,16 +291,12 @@ class MapSource final : public df::Source {
        private:
         dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
             dstd::make_shared<dftracer::utils::dstd::StringIntern>();
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::uint32_t> ids_;
+        dstd::Vector<std::uint32_t> ids_;
         coro::AsyncGenerator<df::DataFrame> batches_;
         dstd::SharedPtr<Map> map_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::string> projection_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::string> declared_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::unique_ptr<df::Cursor> rows_;
+        dstd::Vector<dstd::String> projection_;
+        dstd::Vector<dstd::String> declared_;
+        dstd::UniquePtr<df::Cursor> rows_;
     };
 
     df::LazyFrame inner_;
@@ -333,8 +307,7 @@ class MapSource final : public df::Source {
 // `f` with the columns `in` names, in order; one its rows lack is null.
 df::DataFrame aligned(
     df::DataFrame f,
-    // keep std: dataframe Source, Cursor and DataFrame names are std types
-    const std::vector<std::pair<std::string, df::TypeId>>& in) {
+    const dstd::Vector<dstd::Pair<dstd::String, df::TypeId>>& in) {
     bool same = f.names.size() == in.size();
     for (std::size_t i = 0; same && i < in.size(); ++i)
         same = f.names[i] == in[i].first;
@@ -370,11 +343,10 @@ df::DataFrame aligned(
 // stream.
 class FoldSource final : public df::Source {
    public:
-    FoldSource(
-        df::LazyFrame inner, df::Schema schema,
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::pair<std::string, df::TypeId>> in,
-        dstd::Vector<df::DataType> key_types, dstd::Vector<duql::FoldAgg> aggs)
+    FoldSource(df::LazyFrame inner, df::Schema schema,
+               dstd::Vector<dstd::Pair<dstd::String, df::TypeId>> in,
+               dstd::Vector<df::DataType> key_types,
+               dstd::Vector<duql::FoldAgg> aggs)
         : inner_(std::move(inner)),
           schema_(std::move(schema)),
           in_(std::move(in)),
@@ -385,8 +357,7 @@ class FoldSource final : public df::Source {
 
     df::ScanResult scan(const df::ScanRequest& req) const override {
         df::ScanResult r;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        r.cursor = std::make_unique<Rows>(*this, req.projection);
+        r.cursor = dstd::make_unique<Rows>(*this, req.projection);
         r.filters.assign(req.filters.size(), df::Pushed::No);
         return r;
     }
@@ -394,8 +365,7 @@ class FoldSource final : public df::Source {
    private:
     class Rows final : public df::Cursor {
        public:
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        Rows(const FoldSource& src, std::vector<std::string> projection)
+        Rows(const FoldSource& src, dstd::Vector<dstd::String> projection)
             : batches_(src.inner_.stream()),
               fold_(src.key_types_, src.aggs_),
               in_(src.in_),
@@ -421,20 +391,15 @@ class FoldSource final : public df::Source {
        private:
         coro::AsyncGenerator<df::DataFrame> batches_;
         duql::GroupFold fold_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::pair<std::string, df::TypeId>> in_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::string> names_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::string> projection_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::unique_ptr<df::Cursor> rows_;
+        dstd::Vector<dstd::Pair<dstd::String, df::TypeId>> in_;
+        dstd::Vector<dstd::String> names_;
+        dstd::Vector<dstd::String> projection_;
+        dstd::UniquePtr<df::Cursor> rows_;
     };
 
     df::LazyFrame inner_;
     df::Schema schema_;
-    // keep std: dataframe Source, Cursor and DataFrame names are std types
-    std::vector<std::pair<std::string, df::TypeId>> in_;
+    dstd::Vector<dstd::Pair<dstd::String, df::TypeId>> in_;
     dstd::Vector<df::DataType> key_types_;
     dstd::Vector<duql::FoldAgg> aggs_;
 };
@@ -847,16 +812,13 @@ dstd::Pair<dstd::String, df::DataType> list_type(
     }
     if (objects && !scalars && !nested) {
         dstd::String spec = "{";
-        // keep std: struct_of takes std::vector<Field>
-        std::vector<df::Field> members;
+        dstd::Vector<df::Field> members;
         for (const auto& [name, c] : fields) {
             const char k = c ? c : 's';
             if (spec.size() > 1) spec += ',';
             spec += name + "=" + k;
-            // keep std: dataframe names are std::string
             members.push_back(
-                // keep std: dataframe names are std::string
-                df::Field{std::string(name), letter_type(k), true});
+                df::Field{dstd::String(name), letter_type(k), true});
         }
         spec += '}';
         return {detail::list_token(spec, path),
@@ -1271,8 +1233,7 @@ void persist(const CacheKey& key, const dstd::Vector<df::DataFrame>& parts) {
         const auto db = ix::cache::open_lookup_db(
             key.path, ix::cache::CacheStore::Mode::ReadWrite);
         if (!db) return;
-        // keep std: df::concat takes std::vector<const DataFrame*>
-        std::vector<const df::DataFrame*> ptrs;
+        dstd::Vector<const df::DataFrame*> ptrs;
         for (const auto& p : parts) ptrs.push_back(&p);
         ix::cache::persist_lookup(*db, key.sig,
                                   ptrs.size() == 1
@@ -1434,8 +1395,7 @@ class Sides {
             return dstd::make_shared<const df::DataFrame>(std::move(none));
         }
         if (key) persist(*key, parts);
-        // keep std: df::concat takes std::vector<const DataFrame*>
-        std::vector<const df::DataFrame*> ptrs;
+        dstd::Vector<const df::DataFrame*> ptrs;
         for (const auto& part : parts) ptrs.push_back(&part);
         return dstd::make_shared<const df::DataFrame>(
             df::concat(ptrs, df::ConcatHow::Diagonal));
@@ -1513,9 +1473,8 @@ class SideSource final : public df::Source {
 
     df::ScanResult scan(const df::ScanRequest& req) const override {
         df::ScanResult r;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        r.cursor = std::make_unique<Rows>(strong_ ? strong_ : owner(weak_),
-                                          side_, req.projection);
+        r.cursor = dstd::make_unique<Rows>(strong_ ? strong_ : owner(weak_),
+                                           side_, req.projection);
         r.filters.assign(req.filters.size(), df::Pushed::No);
         return r;
     }
@@ -1524,10 +1483,8 @@ class SideSource final : public df::Source {
     class Rows final : public df::Cursor {
        public:
         Rows(dstd::SharedPtr<Sides> sides, std::size_t side,
-             // keep std: dataframe Source, Cursor and DataFrame names are std
              // types
-             // keep std: the dataframe API takes std::vector
-             std::vector<std::string> projection)
+             dstd::Vector<dstd::String> projection)
             : sides_(std::move(sides)),
               side_(side),
               projection_(std::move(projection)) {}
@@ -1549,10 +1506,8 @@ class SideSource final : public df::Source {
        private:
         dstd::SharedPtr<Sides> sides_;
         std::size_t side_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::vector<std::string> projection_;
-        // keep std: dataframe Source, Cursor and DataFrame names are std types
-        std::unique_ptr<df::Cursor> rows_;
+        dstd::Vector<dstd::String> projection_;
+        dstd::UniquePtr<df::Cursor> rows_;
     };
 
     dstd::SharedPtr<Sides> strong_;
@@ -1870,10 +1825,8 @@ class Applier {
             if (read[i] != detail::select_source_field(read[i]) ||
                 read[i].starts_with(detail::list_token("", "").substr(0, 2)))
                 return false;
-            named.push_back(
-                // keep std: dataframe names are std::string
-                df::Field{std::string(read[i]), df::scalar(observed(read[i])),
-                          true});
+            named.push_back(df::Field{dstd::String(read[i]),
+                                      df::scalar(observed(read[i])), true});
         }
         v_ = detail::with_named_columns(v_, std::move(named));
         columns_from_view(true);
@@ -1887,10 +1840,8 @@ class Applier {
         return out;
     }
 
-    // keep std: infer_type takes std::vector<DataType>
-    std::vector<df::DataType> types() const {
-        // keep std: infer_type takes std::vector<DataType>
-        std::vector<df::DataType> out;
+    dstd::Vector<df::DataType> types() const {
+        dstd::Vector<df::DataType> out;
         out.reserve(cols_.size());
         for (const auto& c : cols_) out.push_back(c.type);
         return out;
@@ -2003,7 +1954,6 @@ class Applier {
                                       : duql::vectorize(*t, typed, fb);
                         if (!built)
                             throw std::invalid_argument(
-                                // keep std: invalid_argument takes a C string
                                 (dstd::String(built.error().message) + " in '" +
                                  text + "'")
                                     .c_str());
@@ -2012,10 +1962,8 @@ class Applier {
                     }
                     e = it->second;
                 }
-                // keep std: dataframe::eval and agg take std::vector<const
                 // Series*>
-                // keep std: the dataframe API takes std::vector
-                std::vector<const df::Series*> inputs;
+                dstd::Vector<const df::Series*> inputs;
                 for (const auto& c : f.columns) inputs.push_back(&c);
                 df::Series out = df::eval(e, inputs);
                 f.names.emplace_back(name);
@@ -2034,12 +1982,9 @@ class Applier {
         lines.push_back(std::move(line));
         df::Schema schema;
         for (const auto& c : next)
-            // keep std: dataframe names are std::string
             schema.fields.push_back(
-                // keep std: dataframe names are std::string
-                df::Field{std::string(c.name), c.type, true});
-        // keep std: matches the dataframe Source names
-        std::vector<std::pair<std::string, df::TypeId>> in;
+                df::Field{dstd::String(c.name), c.type, true});
+        dstd::Vector<dstd::Pair<dstd::String, df::TypeId>> in;
         for (const auto& c : cols_) in.emplace_back(c.name, c.type.id);
         v_ = v_.with_lazy(df::LazyFrame::scan(dstd::make_shared<MapSource>(
             v_.lazy(), std::move(schema),
@@ -2213,10 +2158,8 @@ class Applier {
             map_rows(
                 [term, args, keys, arg_types, per_batch, text,
                  name](df::DataFrame f) {
-                    // keep std: dataframe::eval and agg take std::vector<const
                     // Series*>
-                    // keep std: the dataframe API takes std::vector
-                    std::vector<const df::Series*> inputs;
+                    dstd::Vector<const df::Series*> inputs;
                     for (const auto& x : f.columns) inputs.push_back(&x);
                     dstd::Vector<df::Series> values;
                     dstd::Vector<df::DataType> types = arg_types;
@@ -2229,7 +2172,6 @@ class Applier {
                         type = duql::call_type(*term, types);
                     } catch (const std::invalid_argument& e) {
                         throw std::invalid_argument(
-                            // keep std: invalid_argument takes a C string
                             ("'" + text + "': " + e.what()).c_str());
                     }
                     const std::int64_t rows = f.num_rows();
@@ -2260,10 +2202,8 @@ class Applier {
         mark(next.back());
         map_rows(
             [t, term, args, keys, type = *type, name](df::DataFrame f) {
-                // keep std: dataframe::eval and agg take std::vector<const
                 // Series*>
-                // keep std: the dataframe API takes std::vector
-                std::vector<const df::Series*> inputs;
+                dstd::Vector<const df::Series*> inputs;
                 for (const auto& x : f.columns) inputs.push_back(&x);
                 dstd::Vector<df::Series> values;
                 for (const auto& a : args)
@@ -2307,10 +2247,8 @@ class Applier {
             [t, q, in = std::move(in), name, step = step_,
              fb = schema_.args_fallback](df::DataFrame f) {
                 ready(step);
-                // keep std: dataframe::eval and agg take std::vector<const
                 // Series*>
-                // keep std: the dataframe API takes std::vector
-                std::vector<const df::Series*> inputs;
+                dstd::Vector<const df::Series*> inputs;
                 for (const auto& c : f.columns) inputs.push_back(&c);
                 auto truth = duql::quantify(*q, inputs, in, fb);
                 if (!truth) refuse(truth.error().message);
@@ -2432,8 +2370,7 @@ class Applier {
                                              df::JoinHow::Lookup));
             cols_.push_back({matched, df::scalar(df::TypeId::Bool)});
         } else {
-            // keep std: struct_of takes std::vector<Field>
-            std::vector<df::Field> fields;
+            dstd::Vector<df::Field> fields;
             const auto& side_cols = ctx_.sides->columns[l->side];
             for (std::size_t c = 0; c < side_cols.size(); ++c) {
                 fields.push_back(df::Field{std_str(side_cols[c].name),
@@ -2467,10 +2404,8 @@ class Applier {
                 };
                 dstd::Vector<df::Series> keys;
                 for (const auto& k : left) keys.push_back(at(k).materialize());
-                // keep std: dataframe::eval and agg take std::vector<const
                 // Series*>
-                // keep std: the dataframe API takes std::vector
-                std::vector<const df::Series*> ptrs;
+                dstd::Vector<const df::Series*> ptrs;
                 for (const auto& k : keys) ptrs.push_back(&k);
                 df::Series out;
                 if (in) {
@@ -2534,10 +2469,8 @@ class Applier {
             [t, l, in = std::move(in), name, step = step_,
              fb = schema_.args_fallback](df::DataFrame f) {
                 ready(step);
-                // keep std: dataframe::eval and agg take std::vector<const
                 // Series*>
-                // keep std: the dataframe API takes std::vector
-                std::vector<const df::Series*> inputs;
+                dstd::Vector<const df::Series*> inputs;
                 for (const auto& c : f.columns) inputs.push_back(&c);
                 auto values = duql::lookup(*l, inputs, in, fb);
                 if (!values) refuse(values.error().message);
@@ -2686,8 +2619,7 @@ class Applier {
 
     struct SortColumns {
         dstd::Vector<dstd::String> by;
-        // keep std: sort_by_multi takes std::vector<bool>
-        std::vector<bool> desc;
+        dstd::Vector<bool> desc;
         dstd::Vector<dstd::String> keys;  ///< `by` without the null flags.
     };
 
@@ -2896,8 +2828,7 @@ class Applier {
         const dstd::Vector<
             dstd::Pair<const duql::PipelineWinCall*, dstd::String>>& calls,
         const dstd::String& pid) {
-        // keep std: DataFrame::group_by takes std::vector<GroupAgg>
-        std::vector<df::GroupAgg> specs;
+        dstd::Vector<df::GroupAgg> specs;
         dstd::Vector<dstd::String> quantiles;
         dstd::Vector<duql::VectorColumn> next = cols_;
         dstd::String text;
@@ -2930,18 +2861,13 @@ class Applier {
         }
         df::Schema schema;
         for (const auto& c : next)
-            // keep std: dataframe names are std::string
             schema.fields.push_back(
-                // keep std: dataframe names are std::string
-                df::Field{std::string(c.name), c.type, true});
-        // keep std: DataFrame::group_by and join take std::string
-        const std::string spid(pid);
+                df::Field{dstd::String(c.name), c.type, true});
+        const dstd::String spid(pid);
         finish(
             [spid, specs](df::DataFrame f) {
-                // keep std: the dataframe API takes std::vector
                 df::DataFrame g =
-                    // keep std: the dataframe API takes std::vector
-                    f.group_by(std::vector<std::string>{spid}, specs);
+                    f.group_by(dstd::Vector<dstd::String>{spid}, specs);
                 return f.join(g, {spid}, {spid}, df::JoinHow::Lookup);
             },
             "partition aggregates " + text, std::move(schema));
@@ -3268,8 +3194,7 @@ class Applier {
         window_op(part, "__duql_dr", distribution);
         if (!partition.empty()) partition_aggs(partition, pid);
         lines.push_back("sort_by_multi " + pos);
-        // keep std: sort_by_multi takes std::vector<bool>
-        v_ = v_.sort_by_multi({std_str(pos)}, std::vector<bool>{false});
+        v_ = v_.sort_by_multi({std_str(pos)}, dstd::Vector<bool>{false});
         dstd::Vector<dstd::String> keep_names = before;
         dstd::String items;
         for (const auto& it : w.items) {
@@ -3475,11 +3400,8 @@ class Applier {
                         dstd::String(duql::term_text(*ss.end)));
         // Time order, ties in input order.
         lines.push_back("sort_by_multi " + time + ", " + pos);
-        // keep std: sort_by_multi takes std::vector<bool>
-        v_ = v_.sort_by_multi(
-            {std_str(time), std_str(pos)},
-            // keep std: the dataframe API takes std::vector<bool>
-            std::vector<bool>{false, false});
+        v_ = v_.sort_by_multi({std_str(time), std_str(pos)},
+                              dstd::Vector<bool>{false, false});
         const dstd::String ord = "__duql_ord";
         row_index(ord);
 
@@ -3504,8 +3426,7 @@ class Applier {
             v_.lazy().frame_op("dftu.frame.window", a, {}, std_strs(out)));
 
         lines.push_back("sort_by_multi " + pos);
-        // keep std: sort_by_multi takes std::vector<bool>
-        v_ = v_.sort_by_multi({std_str(pos)}, std::vector<bool>{false});
+        v_ = v_.sort_by_multi({std_str(pos)}, dstd::Vector<bool>{false});
         lines.push_back(
             "session keys " + keys_text + "; time " + dstd::String(ss.text) +
             "; gap " + number_text(ss.gap) + "; max " +
@@ -3592,8 +3513,7 @@ class Applier {
                         const df::Series child = lists.child(0);
                         for (std::int64_t i = 0; i < child.num_children();
                              ++i) {
-                            // keep std: dataframe names are std::string
-                            std::string joined_name(name);
+                            dstd::String joined_name(name);
                             joined_name.append(".").append(child.field_name(i));
                             out.names.push_back(std::move(joined_name));
                             out.columns.push_back(child.child(i).take(element));
@@ -3859,8 +3779,7 @@ class Applier {
                 const auto k = static_cast<std::int64_t>(keys.size());
                 dstd::Vector<std::int64_t> parent;
                 dstd::Vector<std::int64_t> pick;
-                // keep std: Series::strings takes std::vector<std::string>
-                std::vector<std::string> names;
+                dstd::Vector<dstd::String> names;
                 for (std::int64_t r = 0; r < n; ++r)
                     for (std::int64_t j = 0; j < k; ++j) {
                         parent.push_back(r);
@@ -3874,8 +3793,7 @@ class Applier {
                     one.columns.push_back(f.columns[v].share());
                     parts.push_back(std::move(one));
                 }
-                // keep std: df::concat takes std::vector<const DataFrame*>
-                std::vector<const df::DataFrame*> ptrs;
+                dstd::Vector<const df::DataFrame*> ptrs;
                 for (const auto& p : parts) ptrs.push_back(&p);
                 df::DataFrame stacked =
                     ptrs.empty() ? df::DataFrame{}
@@ -3919,10 +3837,8 @@ class Applier {
                 side_tap(main_ ? ctx_.sides : nullptr, ctx_.sides, i));
         df::Schema schema;
         for (const auto& c : ctx_.sides->columns[i])
-            // keep std: dataframe names are std::string
             schema.fields.push_back(
-                // keep std: dataframe names are std::string
-                df::Field{std::string(c.name), c.type, true});
+                df::Field{dstd::String(c.name), c.type, true});
         return df::LazyFrame::scan(dstd::make_shared<SideSource>(
             main_ ? ctx_.sides : nullptr, ctx_.sides, i, std::move(schema)));
     }
@@ -3989,8 +3905,7 @@ class Applier {
             if (index(into->name))
                 refuse("'lookup " + l.name + " into " + into->name +
                        "' names a column the rows have; pick another name");
-            // keep std: struct_of takes std::vector<Field>
-            std::vector<df::Field> fields;
+            dstd::Vector<df::Field> fields;
             for (const auto& c : side_cols)
                 fields.push_back(df::Field{std_str(c.name), c.type, true});
             next.push_back({dstd::String(into->name),
@@ -4022,15 +3937,12 @@ class Applier {
         dstd::Vector<dstd::String> right_on = right;
         if (!nest) {
             // The key columns name the row set in the join's errors.
-            // keep std: LazyFrame::schema and rename use
-            // std::vector<std::string>
-            // keep std: the dataframe API takes std::vector
-            std::vector<std::string> renamed = side.schema();
+            // dstd::Vector<dstd::String>
+            dstd::Vector<dstd::String> renamed = side.schema();
             for (auto& n : renamed)
                 if (std::find(right.begin(), right.end(),
                               dstd::StringView(n)) != right.end()) {
-                    // keep std: dataframe names are std::string
-                    std::string prefixed(l.name);
+                    dstd::String prefixed(l.name);
                     prefixed += '.';
                     prefixed += n;
                     n = std::move(prefixed);
@@ -4038,8 +3950,7 @@ class Applier {
             side = side.rename(std::move(renamed));
             for (auto& k : right_on) k = dstd::String(l.name + ".") + k;
             if (inner) {
-                // keep std: dataframe names are std::string
-                side = side.with_column(std::string(HIT_COLUMN),
+                side = side.with_column(dstd::String(HIT_COLUMN),
                                         df::expr_lit_bool(true));
                 next.push_back({HIT_COLUMN, df::scalar(df::TypeId::Bool)});
             }
@@ -4052,8 +3963,7 @@ class Applier {
         v_ = v_.with_lazy(
             v_.lazy().join(std::move(side), std_strs(left), std_strs(right_on),
                            nest ? df::JoinHow::Nest : df::JoinHow::Lookup,
-                           // keep std: dataframe names are std::string
-                           nest ? std_str(into->name) : std::string()));
+                           nest ? std_str(into->name) : dstd::String()));
         cols_ = std::move(next);
         if (inner) {
             if (nest)
@@ -4283,8 +4193,7 @@ class Applier {
             if (index(o.into))
                 refuse("'lookup " + l.name + " overlap into " + o.into +
                        "' names a column the rows have; pick another name");
-            // keep std: struct_of takes std::vector<Field>
-            std::vector<df::Field> fields;
+            dstd::Vector<df::Field> fields;
             for (const auto& c : side_cols)
                 fields.push_back(df::Field{std_str(c.name), c.type, true});
             next.push_back({dstd::String(o.into),
@@ -4297,10 +4206,8 @@ class Applier {
 
         df::Schema schema;
         for (const auto& c : next)
-            // keep std: dataframe names are std::string
             schema.fields.push_back(
-                // keep std: dataframe names are std::string
-                df::Field{std::string(c.name), c.type, true});
+                df::Field{dstd::String(c.name), c.type, true});
         const dstd::Vector<dstd::String> side_names = [&] {
             dstd::Vector<dstd::String> out;
             for (const auto& c : side_cols) out.push_back(c.name);
@@ -4333,7 +4240,6 @@ class Applier {
                     for (std::size_t i = 0; i < f.names.size(); ++i)
                         if (dstd::StringView(f.names[i]) == n)
                             return f.columns[i].share();
-                    // keep std: invalid_argument takes a C string
                     throw std::invalid_argument(
                         ("overlap: no column " + n).c_str());
                 };
@@ -4356,12 +4262,10 @@ class Applier {
                 if (!into.empty()) {
                     for (const auto& c : rows.columns)
                         out.columns.push_back(c.share());
-                    // keep std: Series::list takes std::vector<std::int32_t>
-                    std::vector<std::int32_t> offsets;
+                    dstd::Vector<std::int32_t> offsets;
                     for (const auto x : m.offsets)
                         offsets.push_back(static_cast<std::int32_t>(x));
-                    // keep std: Series::structs takes std::vector<Series>
-                    std::vector<df::Series> parts;
+                    dstd::Vector<df::Series> parts;
                     for (const auto& c : side.columns)
                         parts.push_back(c.take(m.rows));
                     out.names.emplace_back(into);
@@ -4721,11 +4625,8 @@ class Applier {
         if (out != visible) keep(visible, false);
         if (!keys.empty()) {
             lines.push_back("sort_by_multi " + joined(keys));
-            // keep std: sort_by_multi takes std::vector<bool>
-            v_ = v_.sort_by_multi(
-                std_strs(keys),
-                // keep std: the dataframe API takes std::vector<bool>
-                std::vector<bool>(keys.size(), false));
+            v_ = v_.sort_by_multi(std_strs(keys),
+                                  dstd::Vector<bool>(keys.size(), false));
         }
         if (bucket && bucket->fill)
             finish_fill(g, *bucket);
@@ -4964,8 +4865,7 @@ class Applier {
         for (std::size_t k = 0; k < g.keys.size(); ++k)
             keys.push_back(
                 source(g.keys[k], "__duql_key_" + dstd::to_string(k)));
-        // keep std: group_by takes std::vector<GroupAgg>
-        std::vector<df::GroupAgg> specs;
+        dstd::Vector<df::GroupAgg> specs;
         dstd::Vector<duql::FoldAgg> fold(g.aggs.size());
         dstd::Vector<dstd::String> by(g.aggs.size());
         bool folded = false;
@@ -5081,8 +4981,7 @@ class Applier {
     // A group with an aggregate the engine lacks: one streaming pass, in
     // input order, that folds the engine's aggregates and duql's.
     void fold_group(const dstd::Vector<dstd::String>& keys,
-                    // keep std: group_by takes std::vector<GroupAgg>
-                    const std::vector<df::GroupAgg>& specs,
+                    const dstd::Vector<df::GroupAgg>& specs,
                     const dstd::Vector<dstd::String>& by,
                     dstd::Vector<duql::FoldAgg> fold) {
         dstd::Vector<dstd::String> read = keys;
@@ -5103,8 +5002,7 @@ class Applier {
             key_types.push_back(type_of(k));
             schema.fields.push_back(df::Field{std_str(k), type_of(k), true});
         }
-        // keep std: matches the dataframe Source names
-        std::vector<std::pair<std::string, df::TypeId>> in;
+        dstd::Vector<dstd::Pair<dstd::String, df::TypeId>> in;
         for (const auto& n : read) in.emplace_back(n, type_of(n).id);
         for (std::size_t i = 0; i < fold.size(); ++i) {
             auto& f = fold[i];
@@ -5264,8 +5162,7 @@ class Applier {
                            dstd::to_string(reps.size()) +
                            " groups, over DUQL_FILL_MAX_ROWS (" +
                            dstd::to_string(limit) + ")");
-                // keep std: DataFrame::take takes std::vector<std::int64_t>
-                std::vector<std::int64_t> take;
+                dstd::Vector<std::int64_t> take;
                 dstd::Vector<double> starts;
                 for (std::uint64_t s = 0; s < steps; ++s)
                     for (const auto& [k, at_rep] : groups)
@@ -5309,8 +5206,7 @@ class Applier {
                 out = out.select(std_strs(keep))
                           .sort_by_multi(
                               std_strs(key_names),
-                              // keep std: sort_by_multi takes std::vector<bool>
-                              std::vector<bool>(key_names.size(), false));
+                              dstd::Vector<bool>(key_names.size(), false));
                 if (!carry) return out;
                 const std::int64_t total = out.num_rows();
                 const df::Series added_col = out.columns.back().materialize();
@@ -5412,10 +5308,8 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
         side_cols = ctx.sides->columns[i];
         df::Schema schema;
         for (const auto& c : *side_cols)
-            // keep std: dataframe names are std::string
             schema.fields.push_back(
-                // keep std: dataframe names are std::string
-                df::Field{std::string(c.name), c.type, true});
+                df::Field{dstd::String(c.name), c.type, true});
         v = v.with_lazy(df::LazyFrame::scan(dstd::make_shared<SideSource>(
             main ? ctx.sides : nullptr, ctx.sides, i, std::move(schema))));
         lines.push_back(

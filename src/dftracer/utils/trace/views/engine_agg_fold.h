@@ -90,8 +90,7 @@ class EngineAggFold : public Fold {
             build_agg_input_frame(keep, *intern_, spec_, resolver_);
         dftracer::utils::dataframe::agg_accumulate_chunk(
             *state_, f, spec_.group_key_names, lowered_.value_names,
-            // keep std: dataframe names are std::string
-            spec_.emit_dyn ? spec_.dyn_prefix : std::string());
+            spec_.emit_dyn ? spec_.dyn_prefix : dstd::String());
     }
 
     void seal_unit(const ScanUnit&) override {}

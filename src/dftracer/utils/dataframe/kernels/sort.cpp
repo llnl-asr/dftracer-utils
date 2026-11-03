@@ -7,7 +7,9 @@
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <hwy/contrib/sort/vqsort.h>
 
 #include <algorithm>
@@ -16,8 +18,6 @@
 #include <cstring>
 #include <limits>
 #include <numeric>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -100,22 +100,22 @@ int cmp_row(const Series& v, std::int64_t a, std::int64_t b) {
 Series argsort_string(const Series& v, bool descending) {
     const dftu_series* h = v.handle();
     const std::int64_t n = v.length();
-    std::vector<std::int64_t> idx(static_cast<std::size_t>(n));
-    std::vector<std::int32_t> ranks;
+    dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(n));
+    dstd::Vector<std::int32_t> ranks;
     std::int32_t nranks = 0;
     if (string_ranks(h, ranks, nranks)) {
         counting_order(ranks, nranks, descending, idx.data());
         return Series::flat_i64(idx.data(), n);
     }
     std::iota(idx.begin(), idx.end(), 0);
-    std::stable_sort(idx.begin(), idx.end(),
-                     [&](std::int64_t a, std::int64_t b) {
-                         dstd::StringView x, y;
-                         const bool va = str_at(h, a, x);
-                         const bool vb = str_at(h, b, y);
-                         if (!va || !vb) return va && !vb;
-                         return descending ? y < x : x < y;
-                     });
+    dstd::stable_sort(idx.begin(), idx.end(),
+                      [&](std::int64_t a, std::int64_t b) {
+                          dstd::StringView x, y;
+                          const bool va = str_at(h, a, x);
+                          const bool vb = str_at(h, b, y);
+                          if (!va || !vb) return va && !vb;
+                          return descending ? y < x : x < y;
+                      });
     return Series::flat_i64(idx.data(), n);
 }
 
@@ -141,18 +141,18 @@ int cmp_sort_row(const Series& v, std::int64_t a, std::int64_t b) {
 Series argsort_scalar(const Series& v, bool descending) {
     if (is_string_column(*v.handle())) return argsort_string(v, descending);
     const std::int64_t n = v.length();
-    std::vector<std::int64_t> idx(static_cast<std::size_t>(n));
+    dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(n));
     std::iota(idx.begin(), idx.end(), 0);
     const bool has_nulls = v.null_count() > 0;
-    std::stable_sort(idx.begin(), idx.end(),
-                     [&](std::int64_t a, std::int64_t b) {
-                         if (has_nulls) {
-                             bool na = v.is_null(a), nb = v.is_null(b);
-                             if (na || nb) return nb && !na;  // nulls last
-                         }
-                         int c = cmp_sort_row(v, a, b);
-                         return descending ? c > 0 : c < 0;
-                     });
+    dstd::stable_sort(idx.begin(), idx.end(),
+                      [&](std::int64_t a, std::int64_t b) {
+                          if (has_nulls) {
+                              bool na = v.is_null(a), nb = v.is_null(b);
+                              if (na || nb) return nb && !na;  // nulls last
+                          }
+                          int c = cmp_sort_row(v, a, b);
+                          return descending ? c > 0 : c < 0;
+                      });
     return Series::flat_i64(idx.data(), n);
 }
 
@@ -222,10 +222,10 @@ Series topk_packed(std::int64_t n, std::int64_t k, PackFn pack,
                    IndexFn index_of) {
     constexpr std::int64_t RUN = std::int64_t{1} << 18;
     const auto nruns = static_cast<std::size_t>((n + RUN - 1) / RUN);
-    std::vector<std::vector<P>> cand(nruns);
+    dstd::Vector<dstd::Vector<P>> cand(nruns);
     parallel_for(static_cast<std::int64_t>(nruns), 1,
                  [&](std::int64_t c0, std::int64_t c1) {
-                     std::vector<P> buf;
+                     dstd::Vector<P> buf;
                      for (std::int64_t c = c0; c < c1; ++c) {
                          const std::int64_t lo = c * RUN;
                          const std::int64_t hi = std::min(n, lo + RUN);
@@ -240,9 +240,9 @@ Series topk_packed(std::int64_t n, std::int64_t k, PackFn pack,
                              buf.begin() + static_cast<std::ptrdiff_t>(take));
                      }
                  });
-    std::vector<P> merged;
+    dstd::Vector<P> merged;
     merged.reserve(static_cast<std::size_t>(k) * nruns);
-    for (const std::vector<P>& part : cand)
+    for (const dstd::Vector<P>& part : cand)
         merged.insert(merged.end(), part.begin(), part.end());
     const std::size_t kk = std::min(static_cast<std::size_t>(k), merged.size());
     sort_first(merged.data(), merged.size(), kk);
@@ -437,7 +437,7 @@ Series topk_indices(const Series& v, std::int64_t k, bool largest) {
     if (simd.valid()) return simd;
     Series full = argsort_scalar(v, largest);  // strings / nulls / nested
     const std::int64_t* idx = full.data<std::int64_t>();
-    std::vector<std::int64_t> head(idx, idx + k);
+    dstd::Vector<std::int64_t> head(idx, idx + k);
     return Series::flat_i64(head.data(), k);
 }
 

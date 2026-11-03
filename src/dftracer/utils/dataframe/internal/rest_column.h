@@ -6,13 +6,11 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <memory>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -23,8 +21,8 @@ inline constexpr dstd::StringView REST_COLUMN = "__rest";
 
 /// A flat Struct of `rows` rows over `fields` named `names`. Unlike
 /// Series::structs it keeps the length of a struct with no fields.
-inline Series struct_of_length(std::vector<std::string> names,
-                               std::vector<Series> fields, std::int64_t rows) {
+inline Series struct_of_length(dstd::Vector<dstd::String> names,
+                               dstd::Vector<Series> fields, std::int64_t rows) {
     auto* col = new dftu_series();
     col->type = TypeId::Struct;
     col->encoding = Encoding::Flat;

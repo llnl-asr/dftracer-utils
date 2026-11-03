@@ -233,8 +233,7 @@ dstd::Optional<df::DataFrame> stored_rowset(
         return dstd::nullopt;
     }
     if (parts.size() == 1) return std::move(parts.front());
-    // keep std: df::concat takes std::vector
-    std::vector<const df::DataFrame*> ptrs;
+    dstd::Vector<const df::DataFrame*> ptrs;
     for (const auto& p : parts) ptrs.push_back(&p);
     return df::concat(ptrs, df::ConcatHow::Diagonal);
 }

@@ -7,6 +7,8 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/int128.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -137,7 +139,7 @@ std::size_t count_lines(const std::string& s) {
 
 namespace df = dftracer::utils::dataframe;
 
-df::Series make_bool_series(const std::vector<bool>& bits) {
+df::Series make_bool_series(const dstd::Vector<bool>& bits) {
     std::vector<std::uint8_t> packed((bits.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < bits.size(); ++i)
         if (bits[i]) packed[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
@@ -1083,7 +1085,7 @@ TEST_SUITE("DFTracerView JSON cell printer") {
         auto text = df::Series::nulls(df::TypeId::String, 1);
         CHECK(cell(text, 0) == "null");
 
-        std::vector<df::Series> fields;
+        dstd::Vector<df::Series> fields;
         fields.push_back(
             df::Series::flat_i64(std::vector<std::int64_t>{1, 2, 3}.data(), 3));
         fields.push_back(df::Series::strings({"a", "b", "c"}));

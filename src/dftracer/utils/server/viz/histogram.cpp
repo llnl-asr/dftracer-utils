@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
@@ -35,15 +36,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <limits>
-#include <memory>
 #include <numeric>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <unordered_set>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -92,18 +86,18 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
     int nbuckets = params.get_int("buckets", 40);
     nbuckets = std::clamp(nbuckets, 4, 200);
 
-    const std::string cache_key =
-        std::string(req.path) + "?" + params.canonical_key();
+    const dstd::String cache_key =
+        dstd::String(req.path) + "?" + params.canonical_key();
     if (auto hit = index.viz_cache().get(cache_key))
         co_return HttpResponse::ok(std::move(*hit));
 
-    std::vector<const TraceIndex::FileInfo*> target_files =
+    dstd::Vector<const TraceIndex::FileInfo*> target_files =
         select_viz_target_files(index, params, begin, end);
     std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
     bool single_file = !params.get("file").empty();
 
     struct DurAcc {
-        std::vector<double> durs;
+        dstd::Vector<double> durs;
     };
     views::View dv =
         views::View::from_files(to_view_files(target_files))
@@ -127,7 +121,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
         slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0);
 
     bool truncated = scan.stats.truncated;
-    std::vector<double> all = std::move(scan.value.durs);
+    dstd::Vector<double> all = std::move(scan.value.durs);
     std::sort(all.begin(), all.end());
 
     // Durations are in the trace's native unit; scale to us for display.
@@ -148,7 +142,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
         sb.append_comma();
         sb.append_key_value("truncated", truncated);
         sb.end_object();
-        std::string body(sb);
+        dstd::String body(sb);
         if (!req.cancel_token.cancelled())
             index.viz_cache().put(cache_key, body);
         co_return HttpResponse::ok(std::move(body));
@@ -171,7 +165,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
     double lo = std::max(vmin, 1.0);
     double hi = std::max(vmax, lo * 1.0000001);
     double lr = std::log(hi / lo);
-    std::vector<std::uint64_t> counts(static_cast<std::size_t>(nbuckets), 0);
+    dstd::Vector<std::uint64_t> counts(static_cast<std::size_t>(nbuckets), 0);
     for (double d : all) {
         double v = d < lo ? lo : d;
         std::size_t bi =
@@ -201,7 +195,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
     sb.append_comma();
     sb.append_key_value("truncated", truncated);
     sb.append_comma();
-    std::vector<HistBucket> buckets;
+    dstd::Vector<HistBucket> buckets;
     buckets.reserve(static_cast<std::size_t>(nbuckets));
     for (int i = 0; i < nbuckets; ++i) {
         buckets.push_back(
@@ -211,7 +205,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
     }
     sb.append_key_value("buckets", buckets);
     sb.end_object();
-    std::string body(sb);
+    dstd::String body(sb);
     if (!req.cancel_token.cancelled()) index.viz_cache().put(cache_key, body);
     co_return HttpResponse::ok(std::move(body));
 }

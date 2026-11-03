@@ -7,7 +7,10 @@
 // extraction and containment-depth assignment. Internal to the server.
 
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -17,10 +20,7 @@
 
 #include <cmath>
 #include <cstdint>
-#include <map>
-#include <string>
 #include <string_view>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -34,7 +34,7 @@ struct DensityKey {
     std::int64_t pid;
     std::int64_t tid;
     std::int64_t col;
-    std::string group;  // group_by value; "" when grouping is off or missing
+    dstd::String group;  // group_by value; "" when grouping is off or missing
     bool operator==(const DensityKey& o) const {
         return pid == o.pid && tid == o.tid && col == o.col && group == o.group;
     }
@@ -51,7 +51,7 @@ struct DensityKeyHash {
         mix(static_cast<std::uint64_t>(k.pid));
         mix(static_cast<std::uint64_t>(k.tid));
         mix(static_cast<std::uint64_t>(k.col));
-        mix(std::hash<std::string>{}(k.group));
+        mix(std::hash<dstd::String>{}(k.group));
         return h;
     }
 };
@@ -61,7 +61,7 @@ struct DensityAgg {
     double total = 0;
     double max_dur = -1;
     std::uint32_t depth = 0;  // containment depth, set by assign_view_depths
-    std::string
+    dstd::String
         name;  // representative: name of the longest event in the bucket
     // ph="C" counter aggregation: a bucket carries the summed sample value
     // (mean = value_sum / count) so the block can surface the reading on hover.
@@ -91,8 +91,8 @@ static constexpr char GROUP_SEP = '\x1f';
 // canonical home of domain fields, and a path record's own fields). Anything
 // missing or non-scalar yields "" so events are never dropped - the client
 // renders those under "(none)".
-inline std::string extract_one_group_value(simdjson::dom::element root,
-                                           dstd::StringView col) {
+inline dstd::String extract_one_group_value(simdjson::dom::element root,
+                                            dstd::StringView col) {
     if (auto v = find_path(root, col)) return scalar_text(*v);
     auto args = root["args"];
     if (args.error()) return "";
@@ -104,11 +104,11 @@ inline std::string extract_one_group_value(simdjson::dom::element root,
 // yields the per-column values joined by GROUP_SEP so lanes split by the tuple;
 // each component keeps its raw value (hashes stay hashes) for client-side
 // resolution.
-inline std::string extract_group_value(simdjson::dom::element root,
-                                       dstd::StringView col) {
+inline dstd::String extract_group_value(simdjson::dom::element root,
+                                        dstd::StringView col) {
     if (col.find(',') == dstd::StringView::npos)
         return extract_one_group_value(root, col);
-    std::string out;
+    dstd::String out;
     std::size_t start = 0;
     bool first = true;
     while (start <= col.size()) {
@@ -125,12 +125,12 @@ inline std::string extract_group_value(simdjson::dom::element root,
     return out;
 }
 
-inline std::string extract_group_from_line(dstd::StringView event,
-                                           dstd::StringView col) {
+inline dstd::String extract_group_from_line(dstd::StringView event,
+                                            dstd::StringView col) {
     thread_local dftracer::utils::json::RecordParser parser;
-    thread_local std::string buf;
+    thread_local dstd::String buf;
     buf.assign(event);
-    auto res = parser.parse(buf);
+    auto res = parse_string(parser, buf);
     if (res.error()) return "";
     auto root = res.value_unsafe();
     if (!root.is_object()) return "";
@@ -159,7 +159,7 @@ inline void add_to_density(simdjson::dom::element root, double dur,
     if (!nr.error() && nr.is_string()) name = nr.get_string().value_unsafe();
 
     std::int64_t col = static_cast<std::int64_t>((ts - begin) / threshold);
-    std::string group;
+    dstd::String group;
     if (!group_col.empty()) group = extract_group_value(root, group_col);
     DensityKey k{pid, tid, col, std::move(group)};
     auto it = dens.find(k);
@@ -195,14 +195,14 @@ inline bool fold_density(simdjson::dom::element root, double threshold,
 // Demote a set of individual events (indices into `big`, already kept whole
 // because dur >= threshold) into density blocks. Lets a dense window cap its
 // individual-event count without dropping any activity from the view.
-inline void fold_overflow_events(const std::vector<std::string>& big,
-                                 const std::vector<double>& big_dur,
-                                 const std::vector<std::uint32_t>& overflow,
+inline void fold_overflow_events(const dstd::Vector<dstd::String>& big,
+                                 const dstd::Vector<double>& big_dur,
+                                 const dstd::Vector<std::uint32_t>& overflow,
                                  double threshold, double begin,
                                  DensityMap& dens, dstd::StringView group_col) {
     dftracer::utils::json::RecordParser parser;
     for (std::uint32_t i : overflow) {
-        auto res = parser.parse(big[i]);
+        auto res = parse_string(parser, big[i]);
         if (res.error()) continue;
         auto root = res.value_unsafe();
         if (root.is_object())
@@ -216,15 +216,15 @@ inline void fold_overflow_events(const std::vector<std::string>& big,
 // and in a dense window they outweigh the drawable events several times over.
 static constexpr std::size_t MAX_UNREFERENCED_HASH_RECORDS = 500;
 
-inline void drop_unreferenced_hash_records(std::vector<std::string>& big) {
+inline void drop_unreferenced_hash_records(dstd::Vector<dstd::String>& big) {
     thread_local dftracer::utils::json::RecordParser parser;
-    thread_local std::string buf;
-    ankerl::unordered_dense::set<std::string> referenced;
-    std::vector<bool> is_decl(big.size(), false);
+    thread_local dstd::String buf;
+    ankerl::unordered_dense::set<dstd::String> referenced;
+    dstd::Vector<bool> is_decl(big.size(), false);
 
     for (std::size_t i = 0; i < big.size(); ++i) {
         buf.assign(big[i]);
-        auto res = parser.parse(buf);
+        auto res = parse_string(parser, buf);
         if (res.error()) continue;
         auto root = res.value_unsafe();
         if (!root.is_object()) continue;
@@ -250,13 +250,13 @@ inline void drop_unreferenced_hash_records(std::vector<std::string>& big) {
     for (std::size_t i = 0; i < big.size(); ++i) {
         if (is_decl[i]) {
             buf.assign(big[i]);
-            auto res = parser.parse(buf);
+            auto res = parse_string(parser, buf);
             bool keep = false;
             if (!res.error()) {
                 auto v = res.value_unsafe()["args"]["value"];
                 if (!v.error() && v.is_string())
-                    keep = referenced.count(
-                               std::string(v.get_string().value_unsafe())) != 0;
+                    keep = referenced.count(dstd::String(
+                               v.get_string().value_unsafe())) != 0;
             }
             if (!keep) {
                 if (carried >= MAX_UNREFERENCED_HASH_RECORDS) continue;
@@ -297,10 +297,10 @@ inline bool parse_lane_ts_dur(dstd::StringView event, std::int64_t& pid,
 // block is nested only under big events that fully cover its bucket interval
 // [ts, ts+threshold]; a bucket-sized sibling that merely overlaps it is not an
 // ancestor, so folded events stay on their sibling's row.
-inline std::vector<std::uint32_t> assign_view_depths(
-    const std::vector<std::string>& big, DensityMap& dens, double begin,
+inline dstd::Vector<std::uint32_t> assign_view_depths(
+    const dstd::Vector<dstd::String>& big, DensityMap& dens, double begin,
     double threshold) {
-    std::vector<std::uint32_t> depth(big.size(), 0);
+    dstd::Vector<std::uint32_t> depth(big.size(), 0);
 
     struct Item {
         double ts;          // interval start (big) or bucket left edge (block)
@@ -326,14 +326,14 @@ inline std::vector<std::uint32_t> assign_view_depths(
             return h;
         }
     };
-    ankerl::unordered_dense::map<LaneKey, std::vector<Item>, LaneHash> lanes;
+    ankerl::unordered_dense::map<LaneKey, dstd::Vector<Item>, LaneHash> lanes;
 
     for (std::size_t i = 0; i < big.size(); ++i) {
         std::int64_t pid = 0, tid = 0;
         double ts = 0, dur = 0;
         if (!parse_lane_ts_dur(big[i], pid, tid, ts, dur)) continue;
         double end = ts + (dur > 0 ? dur : 0);
-        bool est = big[i].find("\"est\":true") != std::string::npos;
+        bool est = big[i].find("\"est\":true") != dstd::String::npos;
         lanes[LaneKey{pid, tid}].push_back(
             Item{ts, end, static_cast<int>(i), nullptr, est});
     }
@@ -356,7 +356,7 @@ inline std::vector<std::uint32_t> assign_view_depths(
         // Greedy lowest-free-row packing: staggered overlapping spans reuse
         // rows (real concurrency) instead of one row each, while nested events
         // still cascade.
-        std::vector<double> row_end;  // end time occupying each row
+        dstd::Vector<double> row_end;  // end time occupying each row
         for (auto& it : items) {
             if (it.block || it.est) {
                 // Peek at the lowest row free at this time without occupying
@@ -390,8 +390,8 @@ inline std::vector<std::uint32_t> assign_view_depths(
 // counter series at the same column, and a counter can share a real thread
 // lane. Stable row order by series name so rows do not swap between
 // requests/zooms.
-inline void assign_counter_depths(const std::vector<std::string>& big,
-                                  const std::vector<std::uint32_t>& big_depth,
+inline void assign_counter_depths(const dstd::Vector<dstd::String>& big,
+                                  const dstd::Vector<std::uint32_t>& big_depth,
                                   DensityMap& dens) {
     auto lane_of = [](std::int64_t pid, std::int64_t tid) {
         return (pid << 20) ^ tid;
@@ -410,7 +410,7 @@ inline void assign_counter_depths(const std::vector<std::string>& big,
     for (const auto& [k, a] : dens)
         if (!a.counter) bump(lane_of(k.pid, k.tid), a.depth);
 
-    std::map<std::int64_t, std::map<std::string, std::uint32_t>> rows;
+    dstd::Map<std::int64_t, dstd::Map<dstd::String, std::uint32_t>> rows;
     for (const auto& [k, a] : dens)
         if (a.counter) rows[lane_of(k.pid, k.tid)][k.group];
     for (auto& [lane, groups] : rows) {
@@ -426,9 +426,9 @@ inline void assign_counter_depths(const std::vector<std::string>& big,
 // Per-bucket read/write bytes and I/O op counts, aggregated from POSIX/STDIO/IO
 // events (bytes come from args.ret).
 struct CounterAcc {
-    std::vector<double> read_bytes;
-    std::vector<double> write_bytes;
-    std::vector<double> ops;
+    dstd::Vector<double> read_bytes;
+    dstd::Vector<double> write_bytes;
+    dstd::Vector<double> ops;
     void init(std::size_t n) {
         read_bytes.assign(n, 0.0);
         write_bytes.assign(n, 0.0);
@@ -446,9 +446,9 @@ struct CounterAcc {
 inline void fold_counter(dstd::StringView event, double begin, double bucket_us,
                          std::size_t buckets, CounterAcc& acc) {
     thread_local dftracer::utils::json::RecordParser parser;
-    thread_local std::string buf;
+    thread_local dstd::String buf;
     buf.assign(event);
-    auto res = parser.parse(buf);
+    auto res = parse_string(parser, buf);
     if (res.error()) return;
     auto root = res.value_unsafe();
 
@@ -489,7 +489,7 @@ inline void add_counter_bucket(DensityMap& dens, std::int64_t pid,
                                dstd::StringView series, double value_sum,
                                std::uint32_t count) {
     if (count == 0) return;
-    DensityKey k{pid, tid, col, std::string(series)};
+    DensityKey k{pid, tid, col, dstd::String(series)};
     auto it = dens.find(k);
     if (it == dens.end()) it = dens.emplace(std::move(k), DensityAgg{}).first;
     auto& a = it->second;
@@ -542,7 +542,7 @@ inline void fold_counter_density(simdjson::dom::element root, double begin,
         // carries. Keeps junk lanes (dftu_cnt, ts, ...) out.
         if (agg::is_reserved_arg(field.key) || agg::is_preagg_suffix(field.key))
             continue;
-        std::string series(name);
+        dstd::String series(name);
         series.push_back('.');
         series.append(field.key);
         add_counter_bucket(dens, pid, tid, col, series, val, 1);
@@ -553,18 +553,19 @@ inline void fold_counter_density(simdjson::dom::element root, double begin,
 // arg), plus the fields needed to place it: lane and name for a stable row, ts
 // for window inference.
 struct AggRec {
-    std::string raw;
+    dstd::String raw;
     double ts;  // window start, native time units
     std::int64_t pid;
     std::int64_t tid;
-    std::string name;
-    std::string cat;
+    dstd::String name;
+    dstd::String cat;
     std::uint32_t count;  // dftu_cnt
     double total;         // dur_sum, native units
 };
 
 inline bool collect_aggregated(simdjson::dom::element root,
-                               dstd::StringView raw, std::vector<AggRec>& out) {
+                               dstd::StringView raw,
+                               dstd::Vector<AggRec>& out) {
     if (!root.is_object()) return false;
     auto tr = root["ts"];
     if (tr.error()) return false;
@@ -598,8 +599,8 @@ inline bool collect_aggregated(simdjson::dom::element root,
             if (!d.error()) total = json_number(d.value_unsafe());
         }
     }
-    out.push_back(AggRec{std::string(raw), json_number(tr.value_unsafe()), pid,
-                         tid, std::string(name), std::string(cat), count,
+    out.push_back(AggRec{dstd::String(raw), json_number(tr.value_unsafe()), pid,
+                         tid, dstd::String(name), dstd::String(cat), count,
                          total});
     return true;
 }
@@ -611,8 +612,8 @@ inline bool collect_aggregated(simdjson::dom::element root,
 // so a 5s window of millions never floods the response.
 inline void extrapolate_aggregate(const AggRec& r, double interval,
                                   double begin, double end, std::size_t cap,
-                                  std::vector<std::string>& big,
-                                  std::vector<double>& big_dur) {
+                                  dstd::Vector<dstd::String>& big,
+                                  dstd::Vector<double>& big_dur) {
     if (r.count == 0 || interval <= 0) return;
     double spacing = interval / static_cast<double>(r.count);
     if (spacing <= 0) return;
@@ -637,17 +638,18 @@ inline void extrapolate_aggregate(const AggRec& r, double interval,
     // estimated position and a mean dur added, so selection keeps every arg
     // (dftu_cnt, dur_sum, tag_min, ...). The record's ts is its window start;
     // we rewrite that one occurrence.
-    const std::string ts_key =
-        "\"ts\":" + std::to_string(static_cast<long long>(r.ts));
-    const std::string tail =
-        ",\"dur\":" + std::to_string(ev_dur) + ",\"est\":true}";
+    const dstd::String ts_key =
+        "\"ts\":" + dstd::to_string(static_cast<long long>(r.ts));
+    const dstd::String tail =
+        ",\"dur\":" + dstd::to_string(ev_dur) + ",\"est\":true}";
     for (std::int64_t i = i_lo; i <= i_hi; i += step) {
         double ts_i = r.ts + static_cast<double>(i) * spacing;
-        std::string e = r.raw;
+        dstd::String e = r.raw;
         auto pos = e.find(ts_key);
-        if (pos != std::string::npos)
-            e.replace(pos, ts_key.size(),
-                      "\"ts\":" + std::to_string(static_cast<long long>(ts_i)));
+        if (pos != dstd::String::npos)
+            e.replace(
+                pos, ts_key.size(),
+                "\"ts\":" + dstd::to_string(static_cast<long long>(ts_i)));
         if (e.empty() || e.back() != '}') continue;
         e.pop_back();
         e += tail;
@@ -659,7 +661,7 @@ inline void extrapolate_aggregate(const AggRec& r, double interval,
 // Smallest positive gap between distinct aggregate (ph=3) timestamps. Records
 // are emitted on trace_interval_ms boundaries, so this recovers that window.
 // Returns 0 when fewer than two distinct timestamps are present.
-inline double infer_agg_interval(std::vector<double> ts) {
+inline double infer_agg_interval(dstd::Vector<double> ts) {
     if (ts.size() < 2) return 0;
     std::sort(ts.begin(), ts.end());
     double best = 0;

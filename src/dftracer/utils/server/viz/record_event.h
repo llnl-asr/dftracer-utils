@@ -9,18 +9,23 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <simdjson.h>
 
 #include <cmath>
 #include <cstdint>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::server {
+
+// Parse the text of `s` in place when its spare capacity holds the simdjson
+// padding, as simdjson does for a std::string.
+template <class Parser>
+inline auto parse_string(Parser& parser, const dstd::String& s) {
+    return parser.parse(s.data(), s.size(),
+                        s.capacity() - s.size() < simdjson::SIMDJSON_PADDING);
+}
 
 // The value at dotted `path` under `root`.
 inline dstd::Optional<simdjson::dom::element> find_path(
@@ -45,11 +50,11 @@ inline dstd::Optional<simdjson::dom::element> find_path(
 }
 
 // A scalar as display text; "" for null, objects and arrays.
-inline std::string scalar_text(simdjson::dom::element el) {
-    if (el.is_string()) return std::string(el.get_string().value_unsafe());
-    if (el.is_int64()) return std::to_string(el.get_int64().value_unsafe());
-    if (el.is_uint64()) return std::to_string(el.get_uint64().value_unsafe());
-    if (el.is_double()) return std::to_string(el.get_double().value_unsafe());
+inline dstd::String scalar_text(simdjson::dom::element el) {
+    if (el.is_string()) return dstd::String(el.get_string().value_unsafe());
+    if (el.is_int64()) return dstd::to_string(el.get_int64().value_unsafe());
+    if (el.is_uint64()) return dstd::to_string(el.get_uint64().value_unsafe());
+    if (el.is_double()) return dstd::to_string(el.get_double().value_unsafe());
     if (el.is_bool()) return el.get_bool().value_unsafe() ? "true" : "false";
     return "";
 }
@@ -70,18 +75,18 @@ inline std::int64_t lane_id(simdjson::dom::element el) {
 // their own names; a path schema maps them to its roles and a label field.
 struct TraceFields {
     bool by_path = false;
-    std::string time = "ts";
-    std::string duration = "dur";
-    std::string entity = "pid";
-    std::string lane = "tid";
-    std::string label = "name";
+    dstd::String time = "ts";
+    dstd::String duration = "dur";
+    dstd::String entity = "pid";
+    dstd::String lane = "tid";
+    dstd::String label = "name";
     // The entity field's name, which keys the source's hosts and ranks rows.
-    std::string entity_name = "pid";
+    dstd::String entity_name = "pid";
     // Microseconds per unit of time and duration.
     double time_us = 1;
     double duration_us = 1;
     // The event name of a record without a label.
-    std::string fallback_label;
+    dstd::String fallback_label;
 
     explicit TraceFields(const dftracer::utils::index::RecordSchema& s) {
         namespace ix = dftracer::utils::index;
@@ -112,16 +117,16 @@ struct TraceFields {
     // lane), ts and dur in microseconds (dur 0 for an instant, ts absent for
     // a record without a time), ph 1 and args (the record itself). False
     // when `raw` is not a JSON object.
-    bool to_event(dstd::StringView raw, std::string& out) const {
+    bool to_event(dstd::StringView raw, dstd::String& out) const {
         thread_local dftracer::utils::json::RecordParser parser;
-        thread_local std::string buf;
+        thread_local dstd::String buf;
         thread_local simdjson::builder::string_builder b;
         buf.assign(raw);
         buf.append(simdjson::SIMDJSON_PADDING, '\0');
         auto res = parser.parse(buf.data(), raw.size(), false);
         if (res.error() || !res.value_unsafe().is_object()) return false;
         const auto root = res.value_unsafe();
-        auto at = [&](const std::string& path) {
+        auto at = [&](const dstd::String& path) {
             return path.empty() ? dstd::nullopt : find_path(root, path);
         };
         auto number = [](dstd::Optional<simdjson::dom::element> el)
@@ -133,7 +138,7 @@ struct TraceFields {
         b.clear();
         b.start_object();
         const auto name = at(label);
-        const std::string text = name ? scalar_text(*name) : std::string();
+        const dstd::String text = name ? scalar_text(*name) : dstd::String();
         b.append_key_value(
             "name", dstd::StringView(text.empty() ? fallback_label : text));
         b.append_comma();
@@ -165,8 +170,8 @@ struct TraceFields {
     template <typename Fn>
     void with_event(dstd::StringView raw, Fn&& fn) const {
         thread_local dftracer::utils::json::RecordParser parser;
-        thread_local std::string ev;
-        thread_local std::string buf;
+        thread_local dstd::String ev;
+        thread_local dstd::String buf;
         if (!to_event(raw, ev)) return;
         buf.assign(ev);
         buf.append(simdjson::SIMDJSON_PADDING, '\0');
@@ -183,7 +188,7 @@ struct TraceFields {
             for (auto e : events) fn(e);
             return;
         }
-        thread_local std::string ev;
+        thread_local dstd::String ev;
         for (auto e : events)
             if (to_event(e, ev)) fn(dstd::StringView(ev));
     }

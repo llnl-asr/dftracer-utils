@@ -87,8 +87,8 @@ std::unique_ptr<TraceIndex> build_index(const std::string& content,
                                         const dstd::Path& dir) {
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     write_single_member(std::string((dir / "trace.pfw.gz").str()), content);
-    auto index = std::make_unique<TraceIndex>(std::string(dir.str()),
-                                              std::string((dir / "idx").str()));
+    auto index = std::make_unique<TraceIndex>(
+        dstd::String(dir.str()), dstd::String((dir / "idx").str()));
     Runtime rt(4);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
         co_await index->initialize();

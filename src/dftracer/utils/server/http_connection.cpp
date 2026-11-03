@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/scope_exit.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/server/http_connection.h>
 #include <dftracer/utils/server/http_request.h>
@@ -9,7 +11,6 @@
 #include <sys/uio.h>
 
 #include <cstring>
-#include <vector>
 
 #ifdef __linux__
 #include <malloc.h>  // malloc_trim
@@ -56,7 +57,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
 
         // Route and handle. Register a cancellation token keyed by the
         // client-supplied request id so a separate cancel request can reach it.
-        std::string req_id(req.header("x-request-id"));
+        dstd::String req_id(req.header("x-request-id"));
         CancelToken token =
             CancelRegistry::instance().create(req_id, client_fd);
         req.cancel_token = token;
@@ -87,7 +88,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
                 static constexpr char newline_ch = '\n';
                 static constexpr char crlf[] = "\r\n";
                 char hex[24];
-                std::vector<struct iovec> iovs;
+                dstd::Vector<struct iovec> iovs;
 
                 for (;;) {
                     auto chunk = co_await resp.stream->next();

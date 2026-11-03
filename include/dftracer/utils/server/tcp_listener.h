@@ -3,15 +3,15 @@
 #define DFTRACER_UTILS_SERVER_TCP_LISTENER_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 
 #include <atomic>
 #include <cstdint>
-#include <functional>
 #include <mutex>
-#include <string>
-#include <unordered_set>
 
 namespace dftracer::utils::coro {
 class Scope;
@@ -23,7 +23,7 @@ namespace dftracer::utils::server {
 /// coroutine handlers using structured concurrency.
 class TcpListener {
    public:
-    TcpListener(const std::string& addr, uint16_t port);
+    TcpListener(const dstd::String& addr, uint16_t port);
     ~TcpListener();
 
     TcpListener(const TcpListener&) = delete;
@@ -35,7 +35,7 @@ class TcpListener {
     /// Accept loop: yields new client fds via coroutine.
     /// Runs until stop() is called or the listen socket is closed.
     /// Spawns handler(client_fd, addr) for each accepted connection.
-    using ConnectionHandler = std::function<coro::CoroTask<void>(
+    using ConnectionHandler = dstd::Function<coro::CoroTask<void>(
         int client_fd, struct sockaddr_in addr)>;
     coro::CoroTask<void> accept_loop(coro::Scope& scope,
                                      ConnectionHandler handler);
@@ -56,12 +56,12 @@ class TcpListener {
     void untrack_active(int fd);
     void shutdown_active();
 
-    std::string bind_addr_;
+    dstd::String bind_addr_;
     uint16_t port_;
     int listen_fd_ = -1;
     std::atomic<bool> stopped_{false};
     std::mutex active_mu_;
-    std::unordered_set<int> active_fds_;
+    dstd::HashSet<int> active_fds_;
 };
 
 }  // namespace dftracer::utils::server

@@ -52,7 +52,8 @@ TEST_CASE("TraceIndex - discovers .pfw.gz files") {
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(env.get_dir(), env.get_dir());
+            TraceIndex index(dstd::String(env.get_dir()),
+                             dstd::String(env.get_dir()));
             co_await index.initialize();
 
             file_count = index.file_count();
@@ -86,10 +87,11 @@ TEST_CASE("TraceIndex - find_file by path") {
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(env.get_dir(), env.get_dir());
+            TraceIndex index(dstd::String(env.get_dir()),
+                             dstd::String(env.get_dir()));
             co_await index.initialize();
 
-            auto* info = index.find_file(file);
+            auto* info = index.find_file(dstd::String(file));
             if (info != nullptr) {
                 found.store(true);
                 found_path = info->path;
@@ -120,7 +122,8 @@ TEST_CASE("TraceIndex - find_file returns nullptr for missing file") {
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(env.get_dir(), env.get_dir());
+            TraceIndex index(dstd::String(env.get_dir()),
+                             dstd::String(env.get_dir()));
             co_await index.initialize();
 
             auto* info = index.find_file("/nonexistent/path.pfw.gz");
@@ -152,7 +155,8 @@ TEST_CASE("TraceIndex - file_at by index") {
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(env.get_dir(), env.get_dir());
+            TraceIndex index(dstd::String(env.get_dir()),
+                             dstd::String(env.get_dir()));
             co_await index.initialize();
 
             REQUIRE(index.file_count() >= 1);
@@ -186,7 +190,7 @@ TEST_CASE("TraceIndex - empty directory") {
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(std::string(dir.str()), std::string(dir.str()));
+            TraceIndex index(dstd::String(dir.str()), dstd::String(dir.str()));
             co_await index.initialize();
 
             count.store(index.file_count());
@@ -232,7 +236,8 @@ TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
     std::string schema, app, nodes;
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(env.get_dir(), env.get_dir());
+            TraceIndex index(dstd::String(env.get_dir()),
+                             dstd::String(env.get_dir()));
             co_await index.initialize();
             schema = index.record_schema().id;
             app = index.resolve("runs", "run", "app", "ab");

@@ -15,8 +15,6 @@
 #include <dftracer/utils/trace/views/view.h>
 
 #include <algorithm>
-#include <string>
-#include <string_view>
 #include <utility>
 
 namespace dftracer::utils::server {
@@ -42,8 +40,7 @@ coro::CoroTask<HttpResponse> handle_prov_graph(const HttpRequest& req,
     }
     auto graph = co_await trace::provenance::extract_provenance_graph(
         v, slots, std::move(opts));
-    // keep std: HttpResponse::ok takes a std::string
-    co_return HttpResponse::ok(std::string(graph.to_json()));
+    co_return HttpResponse::ok(graph.to_json());
 }
 
 }  // namespace dftracer::utils::server

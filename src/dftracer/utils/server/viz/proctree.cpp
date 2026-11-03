@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
@@ -38,15 +39,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <limits>
-#include <memory>
 #include <numeric>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <unordered_set>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -71,8 +65,8 @@ struct ProcNode {
     std::uint64_t bytes;
     std::uint64_t io_ops;
     double io_busy;
-    const std::string* rank;
-    const std::string* label;
+    const dstd::String* rank;
+    const dstd::String* label;
 };
 
 template <typename builder_type>
@@ -129,32 +123,32 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         ankerl::unordered_dense::map<std::int64_t, std::int64_t> ppid;
         // (ts, parent_pid, child_pid): child_pid is args.ret when the fork
         // event records it (dftracer POSIX), else -1 to fall back to inference.
-        std::vector<dstd::Tuple<std::uint64_t, std::int64_t, std::int64_t>>
+        dstd::Vector<dstd::Tuple<std::uint64_t, std::int64_t, std::int64_t>>
             forks;
         ankerl::unordered_dense::map<std::int64_t, std::uint64_t> bytes;
         // I/O operation count and busy time (us) per process, over I/O-category
         // (POSIX/STDIO/IO) events only.
         ankerl::unordered_dense::map<std::int64_t, std::uint64_t> io_ops;
         ankerl::unordered_dense::map<std::int64_t, double> io_busy;
-        ankerl::unordered_dense::map<std::int64_t, std::string> pid_hhash;
+        ankerl::unordered_dense::map<std::int64_t, dstd::String> pid_hhash;
         // pid -> rank, from "PR" metadata (args.name == "rank").
-        ankerl::unordered_dense::map<std::int64_t, std::string> rank;
+        ankerl::unordered_dense::map<std::int64_t, dstd::String> rank;
         // pid -> entity value, for a path schema's text entities.
-        ankerl::unordered_dense::map<std::int64_t, std::string> label;
-        dftracer::utils::dstd::StringViewMap<std::string> hh;
+        ankerl::unordered_dense::map<std::int64_t, dstd::String> label;
+        dftracer::utils::dstd::StringViewMap<dstd::String> hh;
     };
     std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
-    std::vector<Acc> accs(slots);
+    dstd::Vector<Acc> accs(slots);
     const TraceFields fields(index.record_schema());
     auto on_batch = [&accs, &fields](
                         std::size_t w,
                         const dstd::Vector<dstd::StringView>& events) {
         thread_local dftracer::utils::json::RecordParser parser;
-        thread_local std::string buf;
+        thread_local dstd::String buf;
         Acc& acc = accs[w];
         fields.for_each_event(events, [&](dstd::StringView ev) {
             buf.assign(ev);
-            auto res = parser.parse(buf);
+            auto res = parse_string(parser, buf);
             if (res.error()) return;
             auto root = res.value_unsafe();
             EventScalars s;
@@ -164,7 +158,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
                     find_path(root["args"].value_unsafe(), fields.entity);
                 if (v && v->is_string())
                     acc.label.emplace(
-                        s.pid, std::string(v->get_string().value_unsafe()));
+                        s.pid, dstd::String(v->get_string().value_unsafe()));
             }
 
             // HH metadata (hhash -> hostname) carries no ts.
@@ -176,8 +170,8 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
                     if (!v.error() && v.is_string() && !n.error() &&
                         n.is_string())
                         acc.hh.emplace(
-                            std::string(v.get_string().value_unsafe()),
-                            std::string(n.get_string().value_unsafe()));
+                            dstd::String(v.get_string().value_unsafe()),
+                            dstd::String(n.get_string().value_unsafe()));
                 }
                 return;
             }
@@ -191,7 +185,8 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
                         an.get_string().value_unsafe() == "rank" &&
                         !av.error() && av.is_string())
                         acc.rank.emplace(
-                            s.pid, std::string(av.get_string().value_unsafe()));
+                            s.pid,
+                            dstd::String(av.get_string().value_unsafe()));
                 }
                 return;
             }
@@ -223,7 +218,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
                 if (!hr.error() && hr.is_string() &&
                     acc.pid_hhash.find(pid) == acc.pid_hhash.end())
                     acc.pid_hhash.emplace(
-                        pid, std::string(hr.get_string().value_unsafe()));
+                        pid, dstd::String(hr.get_string().value_unsafe()));
             }
             // I/O bytes per process: args.ret on read/write ops.
             if (ret > 0 && (s.name.find("read") != dstd::StringView::npos ||
@@ -273,7 +268,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     ankerl::unordered_dense::map<std::int64_t, std::uint64_t> first_ts;
     ankerl::unordered_dense::map<std::int64_t, std::int64_t> parent_of;
     ankerl::unordered_dense::map<std::int64_t, std::uint64_t> spawn_of;
-    std::vector<dstd::Pair<std::uint64_t, std::int64_t>>
+    dstd::Vector<dstd::Pair<std::uint64_t, std::int64_t>>
         inf_forks;  // (ts, pid)
     for (auto& a : accs) {
         for (auto& kv : a.first_ts) {
@@ -301,13 +296,13 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     std::sort(inf_forks.begin(), inf_forks.end());
 
     // Merge host (hhash -> hostname resolved) and I/O bytes per process.
-    dftracer::utils::dstd::StringViewMap<std::string> hh;
-    ankerl::unordered_dense::map<std::int64_t, std::string> pid_hhash;
+    dftracer::utils::dstd::StringViewMap<dstd::String> hh;
+    ankerl::unordered_dense::map<std::int64_t, dstd::String> pid_hhash;
     ankerl::unordered_dense::map<std::int64_t, std::uint64_t> bytes;
     ankerl::unordered_dense::map<std::int64_t, std::uint64_t> io_ops;
     ankerl::unordered_dense::map<std::int64_t, double> io_busy;
-    ankerl::unordered_dense::map<std::int64_t, std::string> rank;
-    ankerl::unordered_dense::map<std::int64_t, std::string> label;
+    ankerl::unordered_dense::map<std::int64_t, dstd::String> rank;
+    ankerl::unordered_dense::map<std::int64_t, dstd::String> label;
     for (auto& a : accs) {
         for (auto& kv : a.label) label.emplace(kv.first, kv.second);
         for (auto& kv : a.hh) hh.emplace(kv.first, kv.second);
@@ -318,7 +313,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         for (auto& kv : a.rank) rank.emplace(kv.first, kv.second);
     }
 
-    std::vector<dstd::Pair<std::uint64_t, std::int64_t>>
+    dstd::Vector<dstd::Pair<std::uint64_t, std::int64_t>>
         procs;  // (first_ts, pid)
     procs.reserve(first_ts.size());
     for (auto& kv : first_ts) procs.emplace_back(kv.second, kv.first);
@@ -326,14 +321,14 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
 
     // Time-inference fallback (traces without args.ret/ppid): link a process to
     // the nearest preceding clone in another process.
-    std::vector<bool> used(inf_forks.size(), false);
-    std::vector<ProcNode> nodes;
+    dstd::Vector<bool> used(inf_forks.size(), false);
+    dstd::Vector<ProcNode> nodes;
     nodes.reserve(procs.size());
-    std::vector<std::string> path_hosts;
+    dstd::Vector<dstd::String> path_hosts;
     path_hosts.reserve(procs.size());
     auto entity_key = [&label](std::int64_t pid) {
         auto it = label.find(pid);
-        return it != label.end() ? it->second : std::to_string(pid);
+        return it != label.end() ? it->second : dstd::to_string(pid);
     };
     if (fields.by_path && !fields.entity_name.empty())
         for (const auto& [fts, pid] : procs)
@@ -358,7 +353,8 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         } else {
             auto hi = std::upper_bound(
                 inf_forks.begin(), inf_forks.end(),
-                std::make_pair(fts, std::numeric_limits<std::int64_t>::max()));
+                dstd::Pair<std::uint64_t, std::int64_t>{
+                    fts, std::numeric_limits<std::int64_t>::max()});
             for (auto it = hi; it != inf_forks.begin();) {
                 --it;
                 auto idx = static_cast<std::size_t>(it - inf_forks.begin());
@@ -397,7 +393,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     sb.start_object();
     sb.append_key_value("nodes", nodes);
     sb.end_object();
-    co_return HttpResponse::ok(std::string(sb));
+    co_return HttpResponse::ok(dstd::String(sb));
 }
 
 }  // namespace dftracer::utils::server

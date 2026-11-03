@@ -4,12 +4,11 @@
 
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/server/cancel.h>
 
 #include <cstddef>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -17,7 +16,7 @@ struct HttpRequest {
     dstd::StringView method;
     dstd::StringView path;
     int minor_version = 0;
-    std::vector<dstd::Pair<dstd::StringView, dstd::StringView>> headers;
+    dstd::Vector<dstd::Pair<dstd::StringView, dstd::StringView>> headers;
 
     /// Cooperative cancellation for this request's handler. Empty (never
     /// cancelled) unless set by the connection handler.

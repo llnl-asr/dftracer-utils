@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -41,11 +42,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <limits>
-#include <memory>
-#include <unordered_map>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -132,12 +129,12 @@ constexpr std::uint32_t VIZ_SUMMARY_MAGIC = 0x315A5644;  // "DVZ1"
 constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 0;
 
 struct BufWriter {
-    std::string b;
+    dstd::String b;
     void u32(std::uint32_t v) { b.append(reinterpret_cast<char*>(&v), 4); }
     void u64(std::uint64_t v) { b.append(reinterpret_cast<char*>(&v), 8); }
     void i64(std::int64_t v) { u64(static_cast<std::uint64_t>(v)); }
     void dbl(double v) { b.append(reinterpret_cast<char*>(&v), 8); }
-    void str(const std::string& s) {
+    void str(const dstd::String& s) {
         u64(s.size());
         b.append(s);
     }
@@ -178,13 +175,13 @@ struct BufReader {
         p += 8;
         return v;
     }
-    std::string str() {
+    dstd::String str() {
         std::uint64_t n = u64();
         if (!ok || n > static_cast<std::uint64_t>(end - p)) {
             ok = false;
             return {};
         }
-        std::string s(p, p + n);
+        dstd::String s(p, p + n);
         p += n;
         return s;
     }
@@ -198,7 +195,7 @@ struct BufReader {
 };
 
 void write_group_rows(BufWriter& w,
-                      const std::vector<VizSummary::GroupRow>& rows) {
+                      const dstd::Vector<VizSummary::GroupRow>& rows) {
     w.u64(rows.size());
     for (const auto& r : rows) {
         w.str(r.key);
@@ -209,7 +206,7 @@ void write_group_rows(BufWriter& w,
     }
 }
 
-bool read_group_rows(BufReader& r, std::vector<VizSummary::GroupRow>& rows) {
+bool read_group_rows(BufReader& r, dstd::Vector<VizSummary::GroupRow>& rows) {
     std::uint64_t n = r.u64();
     if (!r.fits(n, 8 + 8 + 8 * 3)) return false;
     rows.resize(n);
@@ -223,7 +220,7 @@ bool read_group_rows(BufReader& r, std::vector<VizSummary::GroupRow>& rows) {
     return r.ok;
 }
 
-void write_spans(BufWriter& w, const std::vector<VizSummary::AppSpan>& spans) {
+void write_spans(BufWriter& w, const dstd::Vector<VizSummary::AppSpan>& spans) {
     w.u64(spans.size());
     for (const auto& s : spans) {
         w.u64(s.begin);
@@ -235,7 +232,7 @@ void write_spans(BufWriter& w, const std::vector<VizSummary::AppSpan>& spans) {
     }
 }
 
-bool read_spans(BufReader& r, std::vector<VizSummary::AppSpan>& spans) {
+bool read_spans(BufReader& r, dstd::Vector<VizSummary::AppSpan>& spans) {
     std::uint64_t n = r.u64();
     if (!r.fits(n, 8 * 4 + 4 + 8)) return false;
     spans.resize(n);
@@ -268,7 +265,7 @@ void serialize_summary(BufWriter& w, const VizSummary& s) {
     for (const auto& lv : s.levels) {
         w.u64(lv.nbuckets);
         w.dbl(lv.bucket_us);
-        auto wvec_lvl = [&](const std::vector<double>& v) {
+        auto wvec_lvl = [&](const dstd::Vector<double>& v) {
             std::uint64_t nonzero = 0;
             for (double x : v) nonzero += x != 0.0;
             w.u64(v.size());
@@ -386,7 +383,7 @@ bool deserialize_summary(BufReader& r, VizSummary& s) {
     for (auto& lv : s.levels) {
         lv.nbuckets = static_cast<std::size_t>(r.u64());
         lv.bucket_us = r.dbl();
-        auto rvec_lvl = [&](std::vector<double>& v) -> bool {
+        auto rvec_lvl = [&](dstd::Vector<double>& v) -> bool {
             std::uint64_t n = r.u64();
             std::uint64_t nonzero = r.u64();
             constexpr std::uint64_t MAX_BUCKETS =
@@ -514,9 +511,9 @@ bool deserialize_summary(BufReader& r, VizSummary& s) {
 
 }  // namespace
 
-TraceIndex::TraceIndex(const std::string& directory,
-                       const std::string& index_dir, std::size_t max_concurrent,
-                       std::size_t checkpoint_size)
+TraceIndex::TraceIndex(const dstd::String& directory,
+                       const dstd::String& index_dir,
+                       std::size_t max_concurrent, std::size_t checkpoint_size)
     : directory_(directory),
       index_dir_(index_dir),
       max_concurrent_(max_concurrent == 0 ? 8 : max_concurrent),
@@ -537,9 +534,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
     global_min_ts_ = std::numeric_limits<std::uint64_t>::max();
     global_max_ts_ = 0;
 
-    std::vector<std::size_t> needs_build;
-    std::vector<std::size_t> large_files;
-    std::vector<const dftracer::utils::index::RecordSchema*> file_schemas(
+    dstd::Vector<std::size_t> needs_build;
+    dstd::Vector<std::size_t> large_files;
+    dstd::Vector<const dftracer::utils::index::RecordSchema*> file_schemas(
         entries.size(), nullptr);
     record_schema_ = nullptr;
 
@@ -581,7 +578,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
 
     for (const auto& entry : entries) {
         FileInfo info;
-        info.path = std::string(entry.path.str());
+        info.path = dstd::String(entry.path.str());
         info.index_path = internal::determine_index_path(info.path, index_dir_);
 
         const auto fsize = dstd::fs::file_size(dstd::PathView(info.path));
@@ -621,7 +618,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
         auto* global_min_ts_ptr = &global_min_ts_;
         auto* global_max_ts_ptr = &global_max_ts_;
         auto* schemas_ptr = &file_schemas;
-        std::string index_dir = index_dir_;
+        dstd::String index_dir = index_dir_;
         std::size_t max_concurrent = max_concurrent_;
         std::size_t checkpoint_size = checkpoint_size_;
 
@@ -636,7 +633,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
 
                     // One batch build per index root; the batch builder assigns
                     // file ids itself, so no manual pre-assignment is needed.
-                    std::unordered_map<std::string, std::vector<std::size_t>>
+                    dstd::HashMap<dstd::String, dstd::Vector<std::size_t>>
                         by_index;
                     for (auto idx : *needs_build_ptr)
                         by_index[(*files_ptr)[idx].index_path].push_back(idx);
@@ -830,7 +827,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
         if (time_metric_ != TimeMetric::Us) {
             DFTRACER_UTILS_LOG_INFO(
                 "TraceIndex: trace time unit is %s (scaling viz to us)",
-                std::string(time_metric_to_string(time_metric_)).c_str());
+                dstd::String(time_metric_to_string(time_metric_)).c_str());
         }
     }
 
@@ -877,10 +874,11 @@ coro::CoroTask<void> TraceIndex::initialize() {
     load_persisted_viz_summary();
 }
 
-std::string TraceIndex::resolve(dstd::StringView rowset, dstd::StringView key,
-                                dstd::StringView value, const std::string& k) {
+dstd::String TraceIndex::resolve(dstd::StringView rowset, dstd::StringView key,
+                                 dstd::StringView value,
+                                 const dstd::String& k) {
     if (k.empty()) return {};
-    std::string column(rowset);
+    dstd::String column(rowset);
     column.append(1, '\0').append(key).append(1, '\0').append(value);
     std::lock_guard<std::mutex> lk(rowset_mutex_);
     auto it = rowset_columns_.find(column);
@@ -892,15 +890,15 @@ std::string TraceIndex::resolve(dstd::StringView rowset, dstd::StringView key,
         dftracer::utils::index::plan::GroupResolver r(
             files, {{"v", dstd::String(rowset), dstd::String(key),
                      dstd::String(value)}});
-        std::unordered_map<std::string, std::string> values;
+        dstd::HashMap<dstd::String, dstd::String> values;
         if (const auto* c = r.column("v"))
             for (const auto& [kk, vv] : *c)
-                values.emplace(kk, std::string(vv.data(), vv.size()));
+                values.emplace(kk, dstd::String(vv.data(), vv.size()));
         it =
             rowset_columns_.emplace(std::move(column), std::move(values)).first;
     }
     const auto hit = it->second.find(k);
-    return hit == it->second.end() ? std::string() : hit->second;
+    return hit == it->second.end() ? dstd::String() : hit->second;
 }
 
 dstd::Path TraceIndex::viz_summary_cache_path() const {
@@ -909,7 +907,7 @@ dstd::Path TraceIndex::viz_summary_cache_path() const {
 
 // A changed source is re-indexed in initialize(), shifting these per-file
 // values, so the cache invalidates itself on mismatch.
-std::string TraceIndex::viz_summary_fingerprint() const {
+dstd::String TraceIndex::viz_summary_fingerprint() const {
     std::uint64_t h = dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
     auto mix = [&](const void* data, std::size_t n) {
         const auto* b = static_cast<const unsigned char*>(data);
@@ -936,7 +934,7 @@ std::string TraceIndex::viz_summary_fingerprint() const {
     char out[17];
     std::snprintf(out, sizeof out, "%016llx",
                   static_cast<unsigned long long>(h));
-    return std::string(out);
+    return dstd::String(out);
 }
 
 bool TraceIndex::load_persisted_viz_summary() {
@@ -950,10 +948,10 @@ bool TraceIndex::load_persisted_viz_summary() {
         if (r.u32() != VIZ_SUMMARY_MAGIC ||
             r.u32() != VIZ_SUMMARY_FORMAT_VERSION)
             return false;
-        std::string fp = r.str();
+        dstd::String fp = r.str();
         if (!r.ok || fp != viz_summary_fingerprint()) return false;
 
-        auto summary = std::make_unique<VizSummary>();
+        auto summary = dstd::make_unique<VizSummary>();
         if (!deserialize_summary(r, *summary)) return false;
 
         set_viz_summary(std::move(summary));
@@ -982,13 +980,10 @@ void TraceIndex::persist_viz_summary() const {
         dstd::String tmp_text(path.str());
         tmp_text.append(".tmp");
         const dstd::Path tmp{dstd::StringView(tmp_text)};
-        {
-            std::ofstream os(tmp.c_str(), std::ios::binary | std::ios::trunc);
-            if (!os.write(w.b.data(),
-                          static_cast<std::streamsize>(w.b.size()))) {
-                (void)dstd::fs::remove(tmp.view());
-                return;
-            }
+        if (!dstd::fs::write_file(tmp.view(),
+                                  dstd::StringView(w.b.data(), w.b.size()))) {
+            (void)dstd::fs::remove(tmp.view());
+            return;
         }
         // A cache that cannot be published is dropped, and the next run
         // builds it again.
@@ -1002,7 +997,7 @@ void TraceIndex::persist_viz_summary() const {
 }
 
 const TraceIndex::FileInfo* TraceIndex::find_file(
-    const std::string& path) const {
+    const dstd::String& path) const {
     auto it = path_to_index_.find(path);
     if (it == path_to_index_.end()) return nullptr;
     return &files_[it->second];
@@ -1032,7 +1027,7 @@ dstd::SharedPtr<const TraceIndex::FileChunkMeta> TraceIndex::chunk_meta(
             const auto ref =
                 snapshot.file(ix::store::internal::get_logical_path(file.path));
             if (ref) {
-                auto m = std::make_shared<FileChunkMeta>();
+                auto m = dstd::make_shared<FileChunkMeta>();
                 m->spans = common::unwrap(ix::spans(snapshot, *ref));
                 m->stats = common::unwrap(ix::chunk_stats(snapshot, *ref));
                 meta = std::move(m);
@@ -1048,12 +1043,12 @@ dstd::SharedPtr<const TraceIndex::FileChunkMeta> TraceIndex::chunk_meta(
     return chunk_meta_.try_emplace(file.path, std::move(meta)).first->second;
 }
 
-std::vector<const TraceIndex::FileInfo*> collect_candidate_files(
+dstd::Vector<const TraceIndex::FileInfo*> collect_candidate_files(
     TraceIndex& index, const QueryParams& params) {
-    std::vector<const TraceIndex::FileInfo*> files;
+    dstd::Vector<const TraceIndex::FileInfo*> files;
     auto file_param = params.get("file");
     if (!file_param.empty()) {
-        auto* f = index.find_file(std::string(file_param));
+        auto* f = index.find_file(dstd::String(file_param));
         if (f) files.push_back(f);
     } else {
         for (const auto& f : index.files()) {

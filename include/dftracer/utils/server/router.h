@@ -3,14 +3,12 @@
 #define DFTRACER_UTILS_SERVER_ROUTER_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
-#include <functional>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -31,37 +29,37 @@ class QueryParams {
 
     /// Order-independent signature of all params, for use as a result-cache
     /// key.
-    std::string canonical_key() const;
+    dstd::String canonical_key() const;
 
    private:
-    std::vector<dstd::Pair<std::string, std::string>> params_;
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> params_;
 };
 
 /// Handler function type for routes.
-using RouteHandler = std::function<coro::CoroTask<HttpResponse>(
+using RouteHandler = dstd::Function<coro::CoroTask<HttpResponse>(
     const HttpRequest&, const QueryParams&)>;
 
 /// One query parameter of a route, for the generated API docs / OpenAPI spec.
 struct RouteParam {
-    std::string name;
-    std::string desc;
+    dstd::String name;
+    dstd::String desc;
     bool required = false;
-    std::string example;  ///< default / example value shown in the explorer
+    dstd::String example;  ///< default / example value shown in the explorer
 };
 
 /// Optional documentation attached to a route. When `summary` is empty the
 /// route is treated as internal and left out of the generated docs.
 struct RouteDoc {
-    std::string summary;
-    std::string tag;  ///< grouping, e.g. "Trace data" / "Visualization"
-    std::vector<RouteParam> params;
-    std::string response_example;  ///< representative JSON response
+    dstd::String summary;
+    dstd::String tag;  ///< grouping, e.g. "Trace data" / "Visualization"
+    dstd::Vector<RouteParam> params;
+    dstd::String response_example;  ///< representative JSON response
 };
 
 /// A registered route plus its docs.
 struct Route {
-    std::string method;
-    std::string path;
+    dstd::String method;
+    dstd::String path;
     RouteHandler handler;
     RouteDoc doc;
 };
@@ -69,25 +67,25 @@ struct Route {
 /// Simple prefix-based HTTP router.
 class Router {
    public:
-    void get(const std::string& path, RouteHandler handler);
-    void get(const std::string& path, RouteHandler handler, RouteDoc doc);
-    void post(const std::string& path, RouteHandler handler);
-    void post(const std::string& path, RouteHandler handler, RouteDoc doc);
+    void get(const dstd::String& path, RouteHandler handler);
+    void get(const dstd::String& path, RouteHandler handler, RouteDoc doc);
+    void post(const dstd::String& path, RouteHandler handler);
+    void post(const dstd::String& path, RouteHandler handler, RouteDoc doc);
 
     /// Registered routes in registration order (for API-docs generation).
-    const std::vector<Route>& routes() const { return routes_; }
+    const dstd::Vector<Route>& routes() const { return routes_; }
 
     /// When non-empty, every request must present this token (via a ?token=
     /// query param or an "Authorization: Bearer <token>" header) or gets 401.
-    void set_auth_token(std::string token) { auth_token_ = std::move(token); }
+    void set_auth_token(dstd::String token) { auth_token_ = std::move(token); }
 
     /// Match request method + path, parse query params, invoke handler.
     /// Returns 404 if no route matches.
     coro::CoroTask<HttpResponse> handle(const HttpRequest& req);
 
    private:
-    std::vector<Route> routes_;
-    std::string auth_token_;
+    dstd::Vector<Route> routes_;
+    dstd::String auth_token_;
 };
 
 }  // namespace dftracer::utils::server

@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -20,12 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory>
 #include <mutex>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -38,8 +34,8 @@ inline constexpr std::size_t VIZ_RESULT_CACHE_BYTES = 256UL * 1024 * 1024;
 class TraceIndex {
    public:
     struct FileInfo {
-        std::string path;
-        std::string index_path;
+        dstd::String path;
+        dstd::String index_path;
         bool has_bloom_data = false;
         bool has_checkpoint_index = false;
         std::uint64_t min_timestamp_us = 0;
@@ -61,7 +57,7 @@ class TraceIndex {
             stats;
     };
 
-    TraceIndex(const std::string& directory, const std::string& index_dir,
+    TraceIndex(const dstd::String& directory, const dstd::String& index_dir,
                std::size_t max_concurrent = 8,
                std::size_t checkpoint_size =
                    common::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
@@ -70,10 +66,10 @@ class TraceIndex {
     coro::CoroTask<void> initialize();
 
     std::size_t file_count() const { return files_.size(); }
-    const std::vector<FileInfo>& files() const { return files_; }
+    const dstd::Vector<FileInfo>& files() const { return files_; }
 
     /// Find a file by its path. Returns nullptr if not found.
-    const FileInfo* find_file(const std::string& path) const;
+    const FileInfo* find_file(const dstd::String& path) const;
 
     /// Find a file by index. Returns nullptr if out of range.
     const FileInfo* file_at(std::size_t index) const;
@@ -83,8 +79,8 @@ class TraceIndex {
     /// nullptr when the file has no index or the read fails. Thread-safe.
     dstd::SharedPtr<const FileChunkMeta> chunk_meta(const FileInfo& file);
 
-    const std::string& directory() const { return directory_; }
-    const std::string& index_dir() const { return index_dir_; }
+    const dstd::String& directory() const { return directory_; }
+    const dstd::String& index_dir() const { return index_dir_; }
     std::size_t max_concurrent() const { return max_concurrent_; }
 
     /// The record schema of the served files (a viewer reads one), from the
@@ -126,7 +122,7 @@ class TraceIndex {
     /// Serializes the build so concurrent requests wait for it instead of each
     /// launching a whole-trace live scan of its own.
     coro::AsyncMutex& viz_summary_mutex() { return viz_summary_mutex_; }
-    void set_viz_summary(std::unique_ptr<VizSummary> summary) {
+    void set_viz_summary(dstd::UniquePtr<VizSummary> summary) {
         viz_summary_ = std::move(summary);
         viz_summary_state_.store(2, std::memory_order_release);
     }
@@ -135,8 +131,8 @@ class TraceIndex {
     /// `k`, read from the row sets the index build stored; each column pair
     /// loads once and stays. Empty when no row matches or no index holds
     /// the row set.
-    std::string resolve(dstd::StringView rowset, dstd::StringView key,
-                        dstd::StringView value, const std::string& k);
+    dstd::String resolve(dstd::StringView rowset, dstd::StringView key,
+                         dstd::StringView value, const dstd::String& k);
 
     /// On-disk summary cache (index_dir/.dftviz_summary), keyed by a
     /// fingerprint of the current file set so a re-indexed trace invalidates
@@ -146,12 +142,12 @@ class TraceIndex {
 
    private:
     dstd::Path viz_summary_cache_path() const;
-    std::string viz_summary_fingerprint() const;
+    dstd::String viz_summary_fingerprint() const;
 
-    std::string directory_;
-    std::string index_dir_;
-    std::vector<FileInfo> files_;
-    std::unordered_map<std::string, std::size_t> path_to_index_;
+    dstd::String directory_;
+    dstd::String index_dir_;
+    dstd::Vector<FileInfo> files_;
+    dstd::HashMap<dstd::String, std::size_t> path_to_index_;
     std::uint64_t global_min_ts_ = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t global_max_ts_ = 0;
     TimeMetric time_metric_ = TimeMetric::Us;
@@ -161,16 +157,15 @@ class TraceIndex {
     VizResultCache viz_cache_{VIZ_RESULT_CACHE_BYTES};
 
     std::mutex chunk_meta_mutex_;
-    std::unordered_map<std::string, dstd::SharedPtr<const FileChunkMeta>>
+    dstd::HashMap<dstd::String, dstd::SharedPtr<const FileChunkMeta>>
         chunk_meta_;
 
     std::mutex rowset_mutex_;
-    std::unordered_map<std::string,
-                       std::unordered_map<std::string, std::string>>
+    dstd::HashMap<dstd::String, dstd::HashMap<dstd::String, dstd::String>>
         rowset_columns_;
 
     coro::AsyncMutex viz_summary_mutex_;
-    std::unique_ptr<VizSummary> viz_summary_;
+    dstd::UniquePtr<VizSummary> viz_summary_;
     std::atomic<int> viz_summary_state_{
         0};  ///< 0 not built, 1 building, 2 ready
 };
@@ -180,7 +175,7 @@ class QueryParams;
 /// Collect the candidate files for a streaming query: the explicit `?file=`
 /// (when present and found in the index) or all indexed files. Callers apply
 /// their own timestamp-overlap filter on top of this.
-std::vector<const TraceIndex::FileInfo*> collect_candidate_files(
+dstd::Vector<const TraceIndex::FileInfo*> collect_candidate_files(
     TraceIndex& index, const QueryParams& params);
 
 }  // namespace dftracer::utils::server

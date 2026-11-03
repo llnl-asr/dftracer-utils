@@ -9,11 +9,10 @@
 #define DFTRACER_UTILS_SERVER_HTTP_PARSER_H
 
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::server::parser {
 
@@ -26,7 +25,7 @@ struct ParsedRequest {
     dstd::StringView method;
     dstd::StringView path;
     int minor_version = 0;
-    std::vector<Header> headers;
+    dstd::Vector<Header> headers;
 };
 
 /// Parse an HTTP/1.1 request from a buffer.

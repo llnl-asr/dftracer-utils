@@ -97,7 +97,7 @@ TEST_SUITE("viz_stats_fastpath") {
 
         write_single_member(src, make_trace(n));
 
-        TraceIndex index(std::string(dir.str()), index_dir);
+        TraceIndex index(dstd::String(dir.str()), dstd::String(index_dir));
         {
             // Rechunk into many small members, then build the index; both need
             // a runtime. Members are the atomic decode/aggregate unit, so

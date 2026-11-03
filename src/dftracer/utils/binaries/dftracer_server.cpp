@@ -145,17 +145,17 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
                  "bytes\n",
                  executor_threads, cli->checkpoint_size);
 
-    TraceIndex trace_index(std::string(dir), std::string(index_dir),
-                           executor_threads, cli->checkpoint_size);
+    TraceIndex trace_index(dir, index_dir, executor_threads,
+                           cli->checkpoint_size);
     co_await trace_index.initialize();
 
     Router router;
-    router.set_auth_token(std::string(cli->auth_token));
+    router.set_auth_token(dstd::String(cli->auth_token));
     register_trace_api(router, trace_index);
     register_viz_api(router, trace_index);
     register_viz_ui(router);
 
-    TcpListener listener(std::string(bind_addr), port);
+    TcpListener listener(bind_addr, port);
     if (!listener.start()) {
         DFTRACER_UTILS_LOG_ERROR("Failed to bind to %s:%u", bind_addr.c_str(),
                                  port);

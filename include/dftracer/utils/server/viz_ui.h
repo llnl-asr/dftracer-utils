@@ -4,8 +4,6 @@
 
 #include <dftracer/utils/dstd/string.h>
 
-#include <string_view>
-
 namespace dftracer::utils::server {
 
 class Router;

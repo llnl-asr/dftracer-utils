@@ -7,17 +7,16 @@
 
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/server/trace_index.h>
+#include <dftracer/utils/server/viz/record_event.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <simdjson.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -69,9 +68,9 @@ inline bool parse_event_scalars(simdjson::dom::element root,
 // borrowed name/cat are valid only until the next parse on this thread.
 inline bool parse_event_scalars(dstd::StringView event, EventScalars& out) {
     thread_local dftracer::utils::json::RecordParser parser;
-    thread_local std::string buf;
+    thread_local dstd::String buf;
     buf.assign(event);
-    auto res = parser.parse(buf);
+    auto res = parse_string(parser, buf);
     if (res.error()) return false;
     return parse_event_scalars(res.value_unsafe(), out);
 }
@@ -100,7 +99,7 @@ using NameMap = dftracer::utils::dstd::StringViewMap<NameStat>;
 
 // Map selected index files to view sources (path + index + cached sizes).
 inline dstd::Vector<trace::views::ViewFile> to_view_files(
-    const std::vector<const TraceIndex::FileInfo*>& fis) {
+    const dstd::Vector<const TraceIndex::FileInfo*>& fis) {
     dstd::Vector<trace::views::ViewFile> v;
     v.reserve(fis.size());
     for (auto* fi : fis) {

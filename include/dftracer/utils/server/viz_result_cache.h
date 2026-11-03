@@ -2,14 +2,13 @@
 #ifndef DFTRACER_UTILS_SERVER_VIZ_RESULT_CACHE_H
 #define DFTRACER_UTILS_SERVER_VIZ_RESULT_CACHE_H
 
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/list.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstddef>
-#include <list>
 #include <mutex>
-#include <optional>
-#include <string>
-#include <unordered_map>
 #include <utility>
 
 namespace dftracer::utils::server {
@@ -21,7 +20,7 @@ class VizResultCache {
    public:
     explicit VizResultCache(std::size_t max_bytes) : max_bytes_(max_bytes) {}
 
-    dstd::Optional<std::string> get(const std::string& key) {
+    dstd::Optional<dstd::String> get(const dstd::String& key) {
         std::lock_guard<std::mutex> lk(mu_);
         auto it = map_.find(key);
         if (it == map_.end()) return dstd::nullopt;
@@ -29,7 +28,7 @@ class VizResultCache {
         return it->second.body;
     }
 
-    void put(const std::string& key, std::string body) {
+    void put(const dstd::String& key, dstd::String body) {
         std::lock_guard<std::mutex> lk(mu_);
         auto it = map_.find(key);
         if (it != map_.end()) {
@@ -52,8 +51,8 @@ class VizResultCache {
 
    private:
     struct Entry {
-        std::string body;
-        std::list<std::string>::iterator pos;
+        dstd::String body;
+        dstd::List<dstd::String>::iterator pos;
     };
 
     void evict() {  // front = MRU, back = LRU
@@ -69,8 +68,8 @@ class VizResultCache {
 
     std::size_t max_bytes_;
     std::size_t bytes_ = 0;
-    std::list<std::string> order_;
-    std::unordered_map<std::string, Entry> map_;
+    dstd::List<dstd::String> order_;
+    dstd::HashMap<dstd::String, Entry> map_;
     std::mutex mu_;
 };
 

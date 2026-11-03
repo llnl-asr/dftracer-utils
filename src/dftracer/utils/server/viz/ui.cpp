@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -7,12 +8,10 @@
 #include <dftracer/utils/server/viz_ui.h>
 #include <simdjson.h>
 
-#include <string>
-
 namespace dftracer::utils::server {
 
 static coro::CoroTask<HttpResponse> handle_index() {
-    co_return HttpResponse::ok(std::string(viz_index_html()),
+    co_return HttpResponse::ok(dstd::String(viz_index_html()),
                                "text/html; charset=utf-8");
 }
 
@@ -21,7 +20,7 @@ namespace {
 // OpenAPI 3.1 generated from the routes' RouteDoc metadata, serialized with
 // simdjson's builder (correct escaping; examples are inlined raw as they are
 // already valid JSON).
-std::string openapi_json(const Router& router) {
+dstd::String openapi_json(const Router& router) {
     auto& b = scratch_json_builder();
     b.start_object();
     b.append_key_value("openapi", "3.1.0");
@@ -55,7 +54,7 @@ std::string openapi_json(const Router& router) {
         b.escape_and_append_with_quotes(r.path);
         b.append_colon();
         b.start_object();
-        std::string method;
+        dstd::String method;
         method.assign(r.method);
         ::dftracer::utils::common::detail::lower_ascii(method);
         b.escape_and_append_with_quotes(method);
@@ -130,14 +129,16 @@ std::string openapi_json(const Router& router) {
     }
     b.end_object();      // paths
     b.end_object();      // root
-    return std::string(b);
+    return dstd::String(b);
 }
 
 }  // namespace
 
 void register_viz_ui(Router& router) {
-    RouteHandler serve_index = [](const HttpRequest&, const QueryParams&)
-        -> coro::CoroTask<HttpResponse> { co_return co_await handle_index(); };
+    auto serve_index = [](const HttpRequest&,
+                          const QueryParams&) -> coro::CoroTask<HttpResponse> {
+        co_return co_await handle_index();
+    };
     router.get("/", serve_index);
     router.get("/index.html", serve_index);
 
@@ -145,7 +146,7 @@ void register_viz_ui(Router& router) {
         "/api",
         [](const HttpRequest&,
            const QueryParams&) -> coro::CoroTask<HttpResponse> {
-            co_return HttpResponse::ok(std::string(viz_api_page_html()),
+            co_return HttpResponse::ok(dstd::String(viz_api_page_html()),
                                        "text/html; charset=utf-8");
         },
         RouteDoc{"Interactive API explorer (web page).", "Meta", {}, ""});

@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
@@ -37,15 +38,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <limits>
-#include <memory>
 #include <numeric>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <unordered_set>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -68,7 +62,7 @@ static GroupBy parse_group_by(dstd::StringView g) {
 
 // One aggregate row, uniform over the live-scan and summary paths.
 struct StatRow {
-    const std::string* key;
+    const dstd::String* key;
     std::uint64_t count;
     double total;
     double min;
@@ -108,8 +102,8 @@ struct StatAgg {
     }
     double coverage(double bw) const {
         if (cov.empty()) return 0;
-        std::vector<dstd::Pair<std::int32_t, std::int32_t>> pts(cov.begin(),
-                                                                cov.end());
+        dstd::Vector<dstd::Pair<std::int32_t, std::int32_t>> pts(cov.begin(),
+                                                                 cov.end());
         std::sort(pts.begin(), pts.end());
         double buckets = 0;
         int running = 0;
@@ -141,10 +135,10 @@ void tag_invoke(simdjson::serialize_tag, builder_type& b, const StatRow& r) {
     b.end_object();
 }
 
-static std::string serialize_stats_body(std::uint64_t total_count,
-                                        double total_dur, double wall,
-                                        bool truncated,
-                                        const std::vector<StatRow>& rows) {
+static dstd::String serialize_stats_body(std::uint64_t total_count,
+                                         double total_dur, double wall,
+                                         bool truncated,
+                                         const dstd::Vector<StatRow>& rows) {
     auto& b = scratch_json_builder();
     b.start_object();
     b.append_key_value("count", total_count);
@@ -157,12 +151,12 @@ static std::string serialize_stats_body(std::uint64_t total_count,
     b.append_comma();
     b.append_key_value("names", rows);
     b.end_object();
-    return std::string(b);
+    return dstd::String(b);
 }
 
 // Scale duration fields (native trace unit -> us) before serialization. The
 // `wall` value is derived from client-us begin/end and is already in us.
-static void scale_stat_durations(std::vector<StatRow>& rows, double& total_dur,
+static void scale_stat_durations(dstd::Vector<StatRow>& rows, double& total_dur,
                                  TraceIndex::TimeMetric metric) {
     const double us = dftracer::utils::trace::time_metric_us_scale(metric);
     if (us == 1.0) return;
@@ -175,7 +169,7 @@ static void scale_stat_durations(std::vector<StatRow>& rows, double& total_dur,
     total_dur *= us;
 }
 
-static const std::vector<VizSummary::GroupRow>& summary_group_rows(
+static const dstd::Vector<VizSummary::GroupRow>& summary_group_rows(
     const VizSummary& s, GroupBy g) {
     switch (g) {
         case GroupBy::Cat:
@@ -227,8 +221,8 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
 
     GroupBy group = parse_group_by(params.get("group"));
 
-    const std::string cache_key =
-        std::string(req.path) + "?" + params.canonical_key();
+    const dstd::String cache_key =
+        dstd::String(req.path) + "?" + params.canonical_key();
     if (auto hit = index.viz_cache().get(cache_key))
         co_return HttpResponse::ok(std::move(*hit));
 
@@ -241,7 +235,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
         const VizSummary* s = co_await ensure_viz_summary(index);
         if (s && !s->has_aggregated) {
             const auto& gr = summary_group_rows(*s, group);
-            std::vector<StatRow> rows;
+            dstd::Vector<StatRow> rows;
             rows.reserve(gr.size());
             std::uint64_t total_count = 0;
             double total_dur = 0;
@@ -271,7 +265,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     // enclosers, whose ts precedes `begin`.
     const TraceFields fields(index.record_schema());
     ViewDefinition view = build_viz_view(params, 0.0, 4e18, 0, fields);
-    std::vector<const TraceIndex::FileInfo*> target_files =
+    dstd::Vector<const TraceIndex::FileInfo*> target_files =
         select_viz_target_files(index, params, begin, end);
 
     // Whole-run enclosers (started long before the window) are taken from the
@@ -292,12 +286,12 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     double scan_begin = begin - enc_threshold_native;
     if (scan_begin < 0) scan_begin = 0;
 
-    const std::string gcol = group == GroupBy::Cat     ? "cat"
-                             : group == GroupBy::Pid   ? fields.entity
-                             : group == GroupBy::Fhash ? "fhash"
-                                                       : "name";
+    const dstd::String gcol = group == GroupBy::Cat     ? "cat"
+                              : group == GroupBy::Pid   ? fields.entity
+                              : group == GroupBy::Fhash ? "fhash"
+                                                        : "name";
 
-    using StatMap = ankerl::unordered_dense::map<std::string, StatAgg>;
+    using StatMap = ankerl::unordered_dense::map<dstd::String, StatAgg>;
     auto merge_stats = [](StatMap&& a, StatMap&& b) {
         for (auto& [k, v] : b) {
             auto& x = a[k];
@@ -320,7 +314,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
                         &fields](StatMap& acc,
                                  const dstd::Vector<dstd::StringView>& events) {
         thread_local dftracer::utils::json::RecordParser parser;
-        thread_local std::string buf;
+        thread_local dstd::String buf;
         fields.for_each_event(events, [&](dstd::StringView ev) {
             // simdjson's SIMD stages read up to SIMDJSON_PADDING bytes past
             // the JSON; a bare std::string leaves those uninitialised.
@@ -351,7 +345,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
                 else if (phr.is_string())
                     is_agg = phr.get_string().value_unsafe() == "A";
             }
-            std::string key = extract_group_value(root, gcol);
+            dstd::String key = extract_group_value(root, gcol);
             if (is_agg) {
                 if (interval_native <= 0) return;
                 double lo = std::max(begin, ts);
@@ -421,7 +415,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
         }
     }
 
-    std::vector<StatRow> rows;
+    dstd::Vector<StatRow> rows;
     rows.reserve(byKey.size());
     std::uint64_t total_count = 0;
     double total_dur = 0;
@@ -440,7 +434,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     });
 
     scale_stat_durations(rows, total_dur, index.time_metric());
-    std::string body = serialize_stats_body(
+    dstd::String body = serialize_stats_body(
         total_count, total_dur, original_end - original_begin, false, rows);
     if (!req.cancel_token.cancelled()) index.viz_cache().put(cache_key, body);
     co_return HttpResponse::ok(std::move(body));

@@ -27,8 +27,6 @@
 #include <cstddef>
 #include <iterator>
 #include <limits>
-#include <string>
-#include <unordered_set>
 
 namespace dftracer::utils::server {
 
@@ -62,7 +60,7 @@ static coro::CoroTask<HttpResponse> handle_files(const HttpRequest& /*req*/,
     b.append_comma();
     b.append_key_value("count", static_cast<std::int64_t>(index.file_count()));
     b.end_object();
-    co_return HttpResponse::ok(std::string(b));
+    co_return HttpResponse::ok(dstd::String(b));
 }
 
 // --- GET /api/files/info ---
@@ -74,7 +72,7 @@ static coro::CoroTask<HttpResponse> handle_file_info(const HttpRequest& /*req*/,
         co_return HttpResponse::bad_request("Missing required parameter: file");
     }
 
-    std::string file_path(file_param);
+    dstd::String file_path(file_param);
     auto* info = index.find_file(file_path);
     if (!info) {
         co_return HttpResponse::not_found();
@@ -101,7 +99,7 @@ static coro::CoroTask<HttpResponse> handle_file_info(const HttpRequest& /*req*/,
     b.append_key_value("uncompressed_size",
                        static_cast<std::int64_t>(info->uncompressed_size));
     b.end_object();
-    co_return HttpResponse::ok(std::string(b));
+    co_return HttpResponse::ok(dstd::String(b));
 }
 
 // --- GET /api/info ---
@@ -136,7 +134,7 @@ static coro::CoroTask<HttpResponse> handle_info(const HttpRequest& /*req*/,
     b.escape_and_append_with_quotes("fields");
     b.append_colon();
     b.start_object();
-    const dstd::Pair<const char*, const std::string*> named[] = {
+    const dstd::Pair<const char*, const dstd::String*> named[] = {
         {"time", &fields.time},     {"duration", &fields.duration},
         {"entity", &fields.entity}, {"lane", &fields.lane},
         {"label", &fields.label},   {"entity_name", &fields.entity_name}};
@@ -188,7 +186,7 @@ static coro::CoroTask<HttpResponse> handle_info(const HttpRequest& /*req*/,
     }
     b.end_array();
     b.end_object();
-    co_return HttpResponse::ok(std::string(b));
+    co_return HttpResponse::ok(dstd::String(b));
 }
 
 void register_trace_api(Router& router, TraceIndex& index) {
@@ -234,10 +232,10 @@ void register_trace_api(Router& router, TraceIndex& index) {
         "/api/rowset",
         [index_ptr](const HttpRequest& /*req*/,
                     const QueryParams& params) -> coro::CoroTask<HttpResponse> {
-            const std::string name(params.get("name"));
-            const std::string key(params.get("key"));
-            const std::string value(params.get("value"));
-            const std::string keys(params.get("keys"));
+            const dstd::String name(params.get("name"));
+            const dstd::String key(params.get("key"));
+            const dstd::String value(params.get("value"));
+            const dstd::String keys(params.get("keys"));
             if (name.empty() || key.empty() || value.empty() || keys.empty())
                 co_return HttpResponse::bad_request(
                     "Missing parameter: name, key, value and keys are "
@@ -253,8 +251,8 @@ void register_trace_api(Router& router, TraceIndex& index) {
             // a key with no row is absent from the reply.
             while (start <= keys.size()) {
                 auto end = keys.find(',', start);
-                if (end == std::string::npos) end = keys.size();
-                std::string one = keys.substr(start, end - start);
+                if (end == dstd::String::npos) end = keys.size();
+                dstd::String one = keys.substr(start, end - start);
                 start = end + 1;
                 if (one.empty()) continue;
                 auto found = index_ptr->resolve(name, key, value, one);
@@ -267,7 +265,7 @@ void register_trace_api(Router& router, TraceIndex& index) {
             }
             b.end_object();
             b.end_object();
-            co_return HttpResponse::ok(std::string(b));
+            co_return HttpResponse::ok(dstd::String(b));
         },
         RouteDoc{"Values of a source row set, by key: column `value` of the "
                  "rows whose column `key` is one of `keys`.",
@@ -282,9 +280,9 @@ void register_trace_api(Router& router, TraceIndex& index) {
         "/api/cancel",
         [](const HttpRequest& /*req*/,
            const QueryParams& params) -> coro::CoroTask<HttpResponse> {
-            std::string id(params.get("id"));
+            dstd::String id(params.get("id"));
             bool found = CancelRegistry::instance().cancel(id);
-            co_return HttpResponse::ok(std::string("{\"cancelled\":") +
+            co_return HttpResponse::ok(dstd::String("{\"cancelled\":") +
                                        (found ? "true" : "false") + "}");
         },
         RouteDoc{"Cancel an in-flight request by its X-Request-Id.",

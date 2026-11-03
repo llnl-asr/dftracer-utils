@@ -3,13 +3,13 @@
 #define DFTRACER_UTILS_SERVER_VIZ_SUMMARY_H
 
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -49,25 +49,25 @@ struct VizSummary {
     struct Lane {
         std::int64_t pid = 0;
         std::int64_t tid = 0;
-        std::vector<std::uint32_t> buckets;
-        std::vector<Cell> cells;
+        dstd::Vector<std::uint32_t> buckets;
+        dstd::Vector<Cell> cells;
     };
 
     struct Level {
         std::size_t nbuckets = 0;
         double bucket_us = 0;
-        std::vector<Lane> lanes;
+        dstd::Vector<Lane> lanes;
         /// I/O counter tracks at this resolution, size == nbuckets. Dense and
         /// lane-independent, so the whole pyramid of them costs a few MB.
-        std::vector<double> read_bytes;
-        std::vector<double> write_bytes;
-        std::vector<double> ops;
+        dstd::Vector<double> read_bytes;
+        dstd::Vector<double> write_bytes;
+        dstd::Vector<double> ops;
     };
 
     /// Whole-trace aggregate for one grouping key (Analyze panel), precomputed
     /// in the same scan so the panel needs no live scan. Sorted by total desc.
     struct GroupRow {
-        std::string key;
+        dstd::String key;
         std::uint64_t count = 0;
         double total = 0;
         double min = 0;
@@ -86,38 +86,38 @@ struct VizSummary {
     /// sum/cnt); a request re-buckets them onto its density columns. ph="C" is
     /// rare, so sparse storage keeps this small.
     struct CounterSeriesData {
-        std::string name;
-        std::string key;
-        std::string cat;
+        dstd::String name;
+        dstd::String key;
+        dstd::String cat;
         std::int64_t pid =
             0;  ///< emitting process (0 = node-level, e.g. cpu/mem)
         std::int64_t tid = 0;
-        std::vector<std::uint32_t> buckets;
-        std::vector<double> sum;
-        std::vector<std::uint32_t> cnt;
+        dstd::Vector<std::uint32_t> buckets;
+        dstd::Vector<double> sum;
+        dstd::Vector<std::uint32_t> cnt;
     };
-    std::vector<CounterSeriesData> counter_series;
+    dstd::Vector<CounterSeriesData> counter_series;
     double fine_bucket_us = 0;  ///< width of a counter_series bucket
 
     /// Coarsest (== level 0, the counter grid) first, finest last.
-    std::vector<Level> levels;
+    dstd::Vector<Level> levels;
 
-    std::vector<std::string> names;  ///< name_id -> name
+    dstd::Vector<dstd::String> names;  ///< name_id -> name
 
     /// Precomputed Analyze aggregates, one per @ref
     /// dftracer::utils::dataframe::GroupBy "GroupBy" dimension.
-    std::vector<GroupRow> by_name;
-    std::vector<GroupRow> by_cat;
-    std::vector<GroupRow> by_pid;
-    std::vector<GroupRow> by_fhash;
+    dstd::Vector<GroupRow> by_name;
+    dstd::Vector<GroupRow> by_cat;
+    dstd::Vector<GroupRow> by_pid;
+    dstd::Vector<GroupRow> by_fhash;
 
     /// Operation name -> category (first seen), so the UI can label each
     /// operation with its real layer instead of guessing from the name.
-    std::vector<dstd::Pair<std::string, std::string>> name_cats;
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> name_cats;
 
     /// Every groupable column present in the trace (top-level scalar fields +
     /// args keys), harvested once per distinct event name. Sorted.
-    std::vector<std::string> columns;
+    dstd::Vector<dstd::String> columns;
 
     std::size_t total_files = 0;  ///< distinct files declared by FH metadata
     std::size_t io_files = 0;     ///< subset actually read from or written to
@@ -139,13 +139,13 @@ struct VizSummary {
         std::uint64_t bytes = 0;
         std::uint64_t io_ops = 0;
         double io_busy = 0;          ///< native
-        std::string hhash;
-        std::string rank;
+        dstd::String hhash;
+        dstd::String rank;
         /// A path schema's entity value when it is not a number (the pid is
         /// then a hash of it); empty otherwise.
-        std::string label;
+        dstd::String label;
     };
-    std::vector<ProcRow> procs;
+    dstd::Vector<ProcRow> procs;
 
     /// fork/clone calls: child is the pid from args.ret, or -1 when the trace
     /// does not record it and the parent has to be inferred by time.
@@ -154,10 +154,10 @@ struct VizSummary {
         std::int64_t pid = 0;
         std::int64_t child = -1;
     };
-    std::vector<ForkEdge> forks;
+    dstd::Vector<ForkEdge> forks;
 
     /// HH metadata: hhash -> hostname.
-    std::vector<dstd::Pair<std::string, std::string>> hosts;
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> hosts;
 
     struct AppSpan {
         std::uint64_t begin = 0;
@@ -166,22 +166,22 @@ struct VizSummary {
         std::int64_t tid = 0;
         /// Set for long_events so folding one back into a cell needs no parse.
         std::uint32_t name_id = std::numeric_limits<std::uint32_t>::max();
-        std::string json;  ///< absolute ts; normalized per request
+        dstd::String json;  ///< absolute ts; normalized per request
     };
-    std::vector<AppSpan> app_spans;
+    dstd::Vector<AppSpan> app_spans;
 
     /// Events at least `long_threshold_us` (the finest bucket width) wide, kept
     /// whole and excluded from every level's cells. A request serves the ones
     /// at least one pixel wide as real spans and folds the rest back into
     /// density blocks, which is what a live scan of the window would do.
-    std::vector<AppSpan> long_events;  ///< ascending by begin
+    dstd::Vector<AppSpan> long_events;  ///< ascending by begin
     double long_threshold_us = 0;
     static constexpr std::size_t MAX_LONG_EVENTS = 1'000'000;
     static constexpr std::size_t MAX_RESPONSE_SPANS = 100'000;
 
     /// Absolute-us spans between runs (no lane active, no process alive). Any
     /// present means a multi-run trace the viewer can timelapse-compress.
-    std::vector<dstd::Pair<std::uint64_t, std::uint64_t>> idle_gaps;
+    dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> idle_gaps;
 
     std::int64_t bucket_of(double abs_ts) const {
         return bucket_of(abs_ts, bucket_us, nbuckets);

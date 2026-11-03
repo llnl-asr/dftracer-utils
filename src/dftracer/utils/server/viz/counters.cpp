@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
@@ -35,15 +36,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <limits>
-#include <memory>
 #include <numeric>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <unordered_set>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -51,12 +45,12 @@ using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::views;
 using dftracer::utils::json::json_number;
 
-static std::string serialize_counters_body(const std::vector<double>& read,
-                                           const std::vector<double>& write,
-                                           const std::vector<double>& ops,
-                                           double original_begin,
-                                           double original_end, int buckets,
-                                           double bucket_us, bool truncated) {
+static dstd::String serialize_counters_body(const dstd::Vector<double>& read,
+                                            const dstd::Vector<double>& write,
+                                            const dstd::Vector<double>& ops,
+                                            double original_begin,
+                                            double original_end, int buckets,
+                                            double bucket_us, bool truncated) {
     auto& b = scratch_json_builder();
     b.start_object();
     b.append_key_value("begin", original_begin);
@@ -75,16 +69,16 @@ static std::string serialize_counters_body(const std::vector<double>& read,
     b.append_comma();
     b.append_key_value("ops", ops);
     b.end_object();
-    return std::string(b);
+    return dstd::String(b);
 }
 
 // Re-aggregate the summary's finest counter buckets into `buckets` output
 // buckets over [begin_abs, end_abs] (absolute us).
-static std::string serve_counters_from_summary(
+static dstd::String serve_counters_from_summary(
     const VizSummary& s, const VizSummary::Level& level, double begin_abs,
     double end_abs, double original_begin, double original_end, int buckets,
     double bucket_us_out, TraceIndex::TimeMetric metric) {
-    std::vector<double> read(buckets, 0.0), write(buckets, 0.0),
+    dstd::Vector<double> read(buckets, 0.0), write(buckets, 0.0),
         ops(buckets, 0.0);
     std::int64_t fb0 = s.bucket_of(begin_abs, level.bucket_us, level.nbuckets);
     std::int64_t fb1 = s.bucket_of(end_abs, level.bucket_us, level.nbuckets);
@@ -131,8 +125,8 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
     double bucket_us = (end - begin) / static_cast<double>(buckets);
     if (bucket_us <= 0) bucket_us = 1;
 
-    const std::string cache_key =
-        std::string(req.path) + "?" + params.canonical_key();
+    const dstd::String cache_key =
+        dstd::String(req.path) + "?" + params.canonical_key();
     if (auto hit = index.viz_cache().get(cache_key))
         co_return HttpResponse::ok(std::move(*hit));
 
@@ -191,7 +185,7 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
     CounterAcc total = std::move(r.value);
     if (total.ops.empty()) total.init(nb);
 
-    std::string body = serialize_counters_body(
+    dstd::String body = serialize_counters_body(
         total.read_bytes, total.write_bytes, total.ops, original_begin,
         original_end, buckets,
         bucket_us *

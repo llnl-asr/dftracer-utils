@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/server/http_response.h>
 
 #include <algorithm>
@@ -15,7 +18,7 @@ bool icase_equal(dstd::StringView a, dstd::StringView b) {
 }
 
 bool has_content_length(
-    const std::vector<dstd::Pair<std::string, std::string>> &headers) {
+    const dstd::Vector<dstd::Pair<dstd::String, dstd::String>> &headers) {
     return std::any_of(headers.begin(), headers.end(), [](const auto &h) {
         return icase_equal(h.first, "Content-Length");
     });
@@ -23,12 +26,12 @@ bool has_content_length(
 
 }  // namespace
 
-std::string HttpResponse::serialize_headers() const {
-    std::string out;
+dstd::String HttpResponse::serialize_headers() const {
+    dstd::String out;
     out.reserve(256);
 
     out += "HTTP/1.1 ";
-    out += std::to_string(status_code);
+    out += dstd::to_string(status_code);
     out += ' ';
     out += status_text;
     out += "\r\n";
@@ -47,7 +50,7 @@ std::string HttpResponse::serialize_headers() const {
 
     if (!body.empty() && !has_content_length(headers)) {
         out += "Content-Length: ";
-        out += std::to_string(body.size());
+        out += dstd::to_string(body.size());
         out += "\r\n";
     }
 
@@ -55,7 +58,7 @@ std::string HttpResponse::serialize_headers() const {
     return out;
 }
 
-std::string HttpResponse::serialize() const {
+dstd::String HttpResponse::serialize() const {
     auto out = serialize_headers();
     out += body;
     return out;
@@ -66,12 +69,12 @@ HttpResponse HttpResponse::ok() {
         .status_code = 200, .status_text = "OK", .headers = {}, .body = {}};
 }
 
-HttpResponse HttpResponse::ok(const std::string &body,
-                              const std::string &content_type) {
+HttpResponse HttpResponse::ok(dstd::String body,
+                              const dstd::String &content_type) {
     return HttpResponse{.status_code = 200,
                         .status_text = "OK",
                         .headers = {{"Content-Type", content_type}},
-                        .body = body};
+                        .body = std::move(body)};
 }
 
 HttpResponse HttpResponse::not_found() {
@@ -81,22 +84,22 @@ HttpResponse HttpResponse::not_found() {
                         .body = "Not Found"};
 }
 
-HttpResponse HttpResponse::bad_request(const std::string &msg) {
+HttpResponse HttpResponse::bad_request(const dstd::String &msg) {
     return HttpResponse{.status_code = 400,
                         .status_text = "Bad Request",
                         .headers = {{"Content-Type", "text/plain"}},
                         .body = msg};
 }
 
-HttpResponse HttpResponse::internal_error(const std::string &msg) {
+HttpResponse HttpResponse::internal_error(const dstd::String &msg) {
     return HttpResponse{.status_code = 500,
                         .status_text = "Internal Server Error",
                         .headers = {{"Content-Type", "text/plain"}},
                         .body = msg};
 }
 
-HttpResponse HttpResponse::streaming(std::unique_ptr<StreamGenerator> gen,
-                                     const std::string &content_type) {
+HttpResponse HttpResponse::streaming(dstd::UniquePtr<StreamGenerator> gen,
+                                     const dstd::String &content_type) {
     HttpResponse resp;
     resp.status_code = 200;
     resp.status_text = "OK";

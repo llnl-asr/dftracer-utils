@@ -2,14 +2,13 @@
 #ifndef DFTRACER_UTILS_SERVER_CANCEL_H
 #define DFTRACER_UTILS_SERVER_CANCEL_H
 
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <atomic>
 #include <cstdint>
-#include <memory>
 #include <mutex>
-#include <string>
-#include <unordered_map>
 
 namespace dftracer::utils::server {
 
@@ -54,14 +53,14 @@ class CancelRegistry {
     /// An empty id yields an unregistered token, still usable for
     /// disconnect-driven cancellation. `peer_fd` (>= 0) enables the disconnect
     /// probe.
-    CancelToken create(const std::string& id, int peer_fd = -1);
-    void remove(const std::string& id);
-    bool cancel(const std::string& id);
+    CancelToken create(const dstd::String& id, int peer_fd = -1);
+    void remove(const dstd::String& id);
+    bool cancel(const dstd::String& id);
     std::size_t size() const;
 
    private:
     mutable std::mutex mu_;
-    std::unordered_map<std::string, dstd::SharedPtr<CancelState>> tokens_;
+    dstd::HashMap<dstd::String, dstd::SharedPtr<CancelState>> tokens_;
 };
 
 }  // namespace dftracer::utils::server

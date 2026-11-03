@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -26,21 +27,17 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <variant>
-#include <vector>
 
 namespace dftracer::utils::server {
 
 using trace::views::ViewDefinition;
 
 // `value`. No-op when the key is absent. Returns whether it rewrote.
-inline bool rewrite_uint_field(std::string& json, dstd::StringView key,
+inline bool rewrite_uint_field(dstd::String& json, dstd::StringView key,
                                std::uint64_t value) {
     auto pos = json.find(key);
-    if (pos == std::string::npos) return false;
+    if (pos == dstd::String::npos) return false;
     pos += key.size();
     while (pos < json.size() &&
            ::dftracer::utils::common::detail::is_ascii_space(json[pos]))
@@ -51,7 +48,7 @@ inline bool rewrite_uint_field(std::string& json, dstd::StringView key,
         ++end_pos;
     }
     if (end_pos == pos) return false;
-    json.replace(pos, end_pos - pos, std::to_string(value));
+    json.replace(pos, end_pos - pos, dstd::to_string(value));
     return true;
 }
 
@@ -59,11 +56,11 @@ inline bool rewrite_uint_field(std::string& json, dstd::StringView key,
 /// from "ts" and scale ts/dur from the trace's native unit `metric` into
 /// microseconds. Falls back to the original string on parse failure. For a US
 /// trace this only subtracts the offset (scaling is identity).
-inline std::string normalize_event_ts(const std::string& event_json,
-                                      std::uint64_t offset,
-                                      TraceIndex::TimeMetric metric) {
+inline dstd::String normalize_event_ts(const dstd::String& event_json,
+                                       std::uint64_t offset,
+                                       TraceIndex::TimeMetric metric) {
     thread_local dftracer::utils::json::RecordParser tl_parser;
-    auto result = tl_parser.parse(event_json);
+    auto result = parse_string(tl_parser, event_json);
     if (result.error()) return event_json;
 
     auto root = result.value_unsafe();
@@ -87,7 +84,7 @@ inline std::string normalize_event_ts(const std::string& event_json,
     std::uint64_t new_ts =
         scale_between(metric, TM::Us, old_ts >= offset ? old_ts - offset : 0);
 
-    std::string modified = event_json;
+    dstd::String modified = event_json;
     if (!rewrite_uint_field(modified, "\"ts\":", new_ts)) return event_json;
 
     if (metric != TM::Us) {
@@ -140,12 +137,12 @@ inline dstd::Optional<HttpResponse> refuse_duql(dstd::StringView query,
             dstd::StringView word = query.substr(stages[i].span.offset);
             word = word.substr(0, word.find_first_of(" \t\r\n("));
             return HttpResponse::bad_request(
-                "endpoint " + std::string(endpoint) +
-                " takes a filter; stages such as '" + std::string(word) +
+                "endpoint " + dstd::String(endpoint) +
+                " takes a filter; stages such as '" + dstd::String(word) +
                 "' are not supported here");
         }
     }
-    return HttpResponse::bad_request("Invalid duql: " + std::string(query));
+    return HttpResponse::bad_request("Invalid duql: " + dstd::String(query));
 }
 
 inline dftracer::utils::dstd::Expected<VizWindow, HttpResponse>
@@ -182,21 +179,21 @@ parse_viz_window(const QueryParams& params, TraceIndex& index,
                      original_end, global_min, normalize};
 }
 
-inline std::string extract_json_value(simdjson::dom::element val) {
+inline dstd::String extract_json_value(simdjson::dom::element val) {
     if (val.is_string()) {
-        return std::string(val.get_string().value_unsafe());
+        return dstd::String(val.get_string().value_unsafe());
     }
     if (val.is_int64()) {
-        return std::to_string(val.get_int64().value_unsafe());
+        return dstd::to_string(val.get_int64().value_unsafe());
     }
     if (val.is_uint64()) {
-        return std::to_string(val.get_uint64().value_unsafe());
+        return dstd::to_string(val.get_uint64().value_unsafe());
     }
     return {};
 }
 
-inline void append_lane_clause(std::string& dsl, const char* field,
-                               const std::string& val) {
+inline void append_lane_clause(dstd::String& dsl, const char* field,
+                               const dstd::String& val) {
     if (!dsl.empty()) dsl += " and ";
     const std::size_t digits = !val.empty() && val[0] == '-' ? 1 : 0;
     bool numeric =
@@ -204,13 +201,13 @@ inline void append_lane_clause(std::string& dsl, const char* field,
         std::all_of(val.begin() + static_cast<std::ptrdiff_t>(digits),
                     val.end(), [](char c) { return std::isdigit(c); });
     if (numeric) {
-        dsl += std::string(field) + " == " + val;
+        dsl += dstd::String(field) + " == " + val;
     } else {
-        dsl += std::string(field) + " == \"" + val + "\"";
+        dsl += dstd::String(field) + " == \"" + val + "\"";
     }
 }
 
-inline void apply_lanes(std::string& dsl, dstd::StringView lanes_str) {
+inline void apply_lanes(dstd::String& dsl, dstd::StringView lanes_str) {
     if (lanes_str.empty()) return;
 
     thread_local dftracer::utils::json::RecordParser tl_parser;
@@ -254,7 +251,7 @@ inline void apply_lanes(std::string& dsl, dstd::StringView lanes_str) {
     }
 }
 
-inline void apply_filters(std::string& dsl, dstd::StringView filters_str,
+inline void apply_filters(dstd::String& dsl, dstd::StringView filters_str,
                           const TraceFields& fields) {
     if (filters_str.empty()) return;
 
@@ -284,11 +281,11 @@ inline void apply_filters(std::string& dsl, dstd::StringView filters_str,
             field_result.value_unsafe().get_c_str().value_unsafe();
         const char* op = op_result.value_unsafe().get_c_str().value_unsafe();
 
-        std::string val = extract_json_value(value_result.value_unsafe());
+        dstd::String val = extract_json_value(value_result.value_unsafe());
         if (val.empty()) continue;
 
-        std::string op_str(op);
-        std::string field_str(field);
+        dstd::String op_str(op);
+        dstd::String field_str(field);
         // Time bounds arrive in microseconds; a path schema's time and
         // duration fields hold their own unit.
         double us = 1;
@@ -302,9 +299,9 @@ inline void apply_filters(std::string& dsl, dstd::StringView filters_str,
         if (field_str.empty()) continue;
         if (us != 1 && !val.empty() &&
             (std::isdigit(static_cast<unsigned char>(val[0])) || val[0] == '-'))
-            val = std::to_string(std::strtod(val.c_str(), nullptr) / us);
+            val = dstd::to_string(std::strtod(val.c_str(), nullptr) / us);
 
-        std::string query_op;
+        dstd::String query_op;
         if (op_str == "=")
             query_op = "==";
         else if (op_str == ">=")
@@ -344,7 +341,7 @@ inline ViewDefinition build_viz_view(const QueryParams& params, double begin,
     // stack buffer (no per-number heap allocation, unlike std::to_string), and
     // literals/string_views are appended directly (no temporary
     // concatenations).
-    std::string dsl;
+    dstd::String dsl;
     dsl.reserve(128);
     char numbuf[20];  // max digits of a uint64_t
     auto append_u64 = [&](std::uint64_t v) {
@@ -367,16 +364,16 @@ inline ViewDefinition build_viz_view(const QueryParams& params, double begin,
     } else if (min_dur > 0 && !fields.duration.empty()) {
         dsl += fields.duration;
         dsl += " >= ";
-        dsl += std::to_string(min_dur / fields.duration_us);
+        dsl += dstd::to_string(min_dur / fields.duration_us);
     }
 
     apply_lanes(dsl, params.get("lanes"));
     apply_filters(dsl, params.get("filters"), fields);
 
     if (auto pid = params.get("pid"); !pid.empty() && !fields.entity.empty())
-        append_lane_clause(dsl, fields.entity.c_str(), std::string(pid));
+        append_lane_clause(dsl, fields.entity.c_str(), dstd::String(pid));
     if (auto tid = params.get("tid"); !tid.empty() && !fields.lane.empty())
-        append_lane_clause(dsl, fields.lane.c_str(), std::string(tid));
+        append_lane_clause(dsl, fields.lane.c_str(), dstd::String(tid));
 
     auto cat = params.get("cat");
     if (!cat.empty()) {
@@ -401,7 +398,7 @@ inline ViewDefinition build_viz_view(const QueryParams& params, double begin,
 
 // Select the files to scan: the explicit ?file= or all indexed files, then drop
 // files whose cached time bounds don't overlap [begin, end]. Pure/synchronous.
-inline std::vector<const TraceIndex::FileInfo*> select_viz_target_files(
+inline dstd::Vector<const TraceIndex::FileInfo*> select_viz_target_files(
     TraceIndex& index, const QueryParams& params, double begin, double end) {
     auto target_files = collect_candidate_files(index, params);
 
@@ -410,7 +407,7 @@ inline std::vector<const TraceIndex::FileInfo*> select_viz_target_files(
     if (!params.get("file").empty()) return target_files;
 
     if (begin > 0 || end > 0) {
-        std::vector<const TraceIndex::FileInfo*> filtered;
+        dstd::Vector<const TraceIndex::FileInfo*> filtered;
         filtered.reserve(target_files.size());
         for (auto* fi : target_files) {
             if (fi->min_timestamp_us == 0 && fi->max_timestamp_us == 0) {

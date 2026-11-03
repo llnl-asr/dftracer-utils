@@ -2,11 +2,13 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_doc_guard.h>
@@ -38,16 +40,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <limits>
-#include <memory>
 #include <numeric>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <unordered_set>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -106,14 +100,14 @@ void tag_invoke(simdjson::serialize_tag, builder_type& b,
 
 // Serialize collected density blocks (+ optional individual events) into the
 // /viz/density response body. Shared by the live-scan and summary paths.
-static std::string serialize_density_body(
-    const std::vector<std::string>& big, const DensityMap& dens,
+static dstd::String serialize_density_body(
+    const dstd::Vector<dstd::String>& big, const DensityMap& dens,
     double original_begin, double original_end, double threshold, int limit,
     bool truncated, bool ts_normalized, std::uint64_t display_global_min,
     double max_dur, TraceIndex::TimeMetric metric,
-    const std::vector<std::uint32_t>* big_depth = nullptr,
-    const ankerl::unordered_dense::map<std::string, std::string>* group_names =
-        nullptr) {
+    const dstd::Vector<std::uint32_t>* big_depth = nullptr,
+    const ankerl::unordered_dense::map<dstd::String, dstd::String>*
+        group_names = nullptr) {
     // Blocks are positioned/sized in native threshold units; scale the visible
     // time fields (block ts/dur, duration sums, max_dur) to microseconds.
     const double us = dftracer::utils::trace::time_metric_us_scale(metric);
@@ -140,7 +134,7 @@ static std::string serialize_density_body(
     }
     b.end_array();
     b.append_comma();
-    std::vector<DensityBlock> blocks;
+    dstd::Vector<DensityBlock> blocks;
     blocks.reserve(dens.size());
     for (const auto& [k, a] : dens) {
         DensityBlock blk{
@@ -196,7 +190,7 @@ static std::string serialize_density_body(
     }
     b.end_object();
     b.end_object();
-    return std::string(b);
+    return dstd::String(b);
 }
 
 // The summary is unfiltered, so any server-side predicate forces a live scan.
@@ -211,7 +205,7 @@ bool viz_summary_eligible(const QueryParams& params,
              (!params.get("pid").empty() || !params.get("tid").empty()));
 }
 
-coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
+coro::CoroTask<void> append_app_spans(dstd::Vector<dstd::String>& out,
                                       TraceIndex& index, double begin,
                                       double end, const QueryParams& params,
                                       const TraceFields& fields) {
@@ -237,7 +231,7 @@ coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
 
 // Re-aggregate one pyramid level's buckets over [begin_abs, end_abs] into
 // pixel-column density blocks. `begin_abs`/`end_abs` are absolute us.
-static std::string serve_density_from_summary(
+static dstd::String serve_density_from_summary(
     const VizSummary& s, const VizSummary::Level& level,
     const QueryParams& params, double begin_abs, double end_abs,
     double original_begin, double original_end, double threshold,
@@ -316,7 +310,7 @@ static std::string serve_density_from_summary(
     // Long events at least one pixel wide are drawn as real spans; the rest
     // fold into density blocks, which is the split a live scan makes. The
     // widest win when there are more than a response can carry.
-    std::vector<const VizSummary::AppSpan*> wide;
+    dstd::Vector<const VizSummary::AppSpan*> wide;
     auto fold_span = [&](const VizSummary::AppSpan& sp) {
         auto dur = static_cast<double>(sp.end - sp.begin);
         std::int64_t col = static_cast<std::int64_t>(
@@ -353,7 +347,7 @@ static std::string serve_density_from_summary(
         wide.resize(VizSummary::MAX_RESPONSE_SPANS);
     }
 
-    std::vector<std::string> spans;
+    dstd::Vector<dstd::String> spans;
     ankerl::unordered_dense::set<std::int64_t> span_lanes;
     for (const auto& sp : s.app_spans) {
         if (has_pid && sp.pid != want_pid) continue;
@@ -392,7 +386,7 @@ static std::string serve_density_from_summary(
         const std::size_t ncols =
             static_cast<std::size_t>((end_abs - begin_abs) / threshold) + 1;
         for (const auto& cd : s.counter_series) {
-            std::string series = cd.name + "." + cd.key;
+            dstd::String series = cd.name + "." + cd.key;
             for (std::size_t i = 0; i < cd.buckets.size(); ++i) {
                 double ts_mid = static_cast<double>(s.t_begin) +
                                 (static_cast<double>(cd.buckets[i]) + 0.5) *
@@ -405,7 +399,7 @@ static std::string serve_density_from_summary(
         }
     }
 
-    std::vector<std::uint32_t> span_depth(napp_spans, 0);
+    dstd::Vector<std::uint32_t> span_depth(napp_spans, 0);
     // Stack counter series above their lane's spans (the summary path skips
     // assign_view_depths, so counters would otherwise pile on depth 0).
     assign_counter_depths(spans, span_depth, dens);
@@ -424,8 +418,8 @@ struct RowSetField {
 
 // Canonicalize one group column ("args.x" to "x"), and set `rt` when it
 // holds keys of one of the dftracer source's row sets.
-static std::string canonicalize_group_col(std::string col,
-                                          dstd::Optional<RowSetField>& rt) {
+static dstd::String canonicalize_group_col(dstd::String col,
+                                           dstd::Optional<RowSetField>& rt) {
     static constexpr dstd::Pair<dstd::StringView, RowSetField> KEYS[] = {
         {"fhash", {"files", "fhash", "path"}},
         {"cwd", {"files", "fhash", "path"}},
@@ -433,7 +427,7 @@ static std::string canonicalize_group_col(std::string col,
         {"exec_hash", {"strings", "shash", "value"}},
         {"cmd_hash", {"strings", "shash", "value"}},
     };
-    col = std::string(common::strip_args_prefix(col));
+    col = dstd::String(common::strip_args_prefix(col));
     rt = dstd::nullopt;
     for (const auto& [field, rs] : KEYS)
         if (col == field) rt = rs;
@@ -464,7 +458,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // Optional density grouping column. A well-formed name that matches no
     // event field is fine (all blocks land in the client's "(none)" group);
     // only malformed names are rejected.
-    std::string group_col(params.get("group_by"));
+    dstd::String group_col(params.get("group_by"));
     if (group_col.size() > 128)
         co_return HttpResponse::bad_request("group_by too long");
     for (char c : group_col) {
@@ -478,21 +472,21 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // group_by may list several comma-separated columns; canonicalize each
     // and record its row set column so the composite value's components
     // resolve independently.
-    std::vector<dstd::Optional<RowSetField>> resolve_types;
+    dstd::Vector<dstd::Optional<RowSetField>> resolve_types;
     {
-        std::string rebuilt;
+        dstd::String rebuilt;
         std::size_t start = 0;
         while (start <= group_col.size()) {
             auto comma = group_col.find(',', start);
-            std::string part(group_col.substr(
-                start, comma == std::string::npos ? group_col.size() - start
-                                                  : comma - start));
+            dstd::String part(group_col.substr(
+                start, comma == dstd::String::npos ? group_col.size() - start
+                                                   : comma - start));
             dstd::Optional<RowSetField> rt;
-            std::string canon = canonicalize_group_col(std::move(part), rt);
+            dstd::String canon = canonicalize_group_col(std::move(part), rt);
             if (!rebuilt.empty()) rebuilt.push_back(',');
             rebuilt += canon;
             resolve_types.push_back(rt);
-            if (comma == std::string::npos) break;
+            if (comma == dstd::String::npos) break;
             start = comma + 1;
         }
         group_col = std::move(rebuilt);
@@ -517,8 +511,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         duration_threshold(begin, end, static_cast<unsigned>(summary),
                            static_cast<unsigned>(width));
 
-    const std::string cache_key =
-        std::string(req.path) + "?" + params.canonical_key();
+    const dstd::String cache_key =
+        dstd::String(req.path) + "?" + params.canonical_key();
     if (auto hit = index.viz_cache().get(cache_key))
         co_return HttpResponse::ok(std::move(*hit));
 
@@ -603,11 +597,11 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // raw in `big` (with their durations). `max_dur` tracks the longest event
     // seen (folded ones included).
     struct Acc {
-        std::vector<std::string> big;
-        std::vector<double> big_dur;  // parallel to `big`
+        dstd::Vector<dstd::String> big;
+        dstd::Vector<double> big_dur;  // parallel to `big`
         DensityMap dens;
         double max_dur = 0;
-        std::vector<AggRec> agg;      // ph=3 records, kept whole
+        dstd::Vector<AggRec> agg;      // ph=3 records, kept whole
     };
     auto merge_acc = [](Acc&& x, Acc&& y) {
         if (y.max_dur > x.max_dur) x.max_dur = y.max_dur;
@@ -680,7 +674,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
                     });
             },
             merge_acc);
-        return std::function<void(const views::ExportStats&)>(
+        return dstd::Function<void(const views::ExportStats&)>(
             [&, ev_h](const views::ExportStats& st) mutable {
                 ev_out = std::move(ev_h.get());
                 truncated = st.truncated;
@@ -711,7 +705,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
                 collect_aggregated(jv.element(), raw, acc.agg);
             },
             merge_acc);
-        return std::function<void(const views::ExportStats&)>(
+        return dstd::Function<void(const views::ExportStats&)>(
             [&, ev_h, cs_h, ag_h](const views::ExportStats& st) mutable {
                 ev_out = std::move(ev_h.get());
                 cs_out = std::move(cs_h.get());
@@ -734,8 +728,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         else
             it->second.merge_from(a);
     }
-    std::vector<std::string> big = std::move(ev_out.big);
-    std::vector<double> big_dur = std::move(ev_out.big_dur);
+    dstd::Vector<dstd::String> big = std::move(ev_out.big);
+    dstd::Vector<double> big_dur = std::move(ev_out.big_dur);
     // Longest event scanned (folded ones included); the client feeds it back as
     // `lookback` so deep zooms still catch long enclosing events.
     double max_dur = ev_out.max_dur;
@@ -744,7 +738,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // the trace-declared cfg as cross-check and single-window fallback.
     double agg_interval = 0;
     if (trace_has_agg || !ag_out.agg.empty()) {
-        std::vector<double> ats;
+        dstd::Vector<double> ats;
         ats.reserve(ag_out.agg.size());
         for (const auto& r : ag_out.agg) ats.push_back(r.ts);
         agg_interval = infer_agg_interval(std::move(ats));
@@ -824,7 +818,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
                         enclose(acc, raw);
                     },
                     merge_acc);
-            return std::function<void(const views::ExportStats&)>(
+            return dstd::Function<void(const views::ExportStats&)>(
                 [&, agg_h, enc_h](const views::ExportStats& st) mutable {
                     if (agg_h) agg_back = std::move(agg_h->get());
                     if (enc_h) enc = std::move(enc_h->get());
@@ -879,21 +873,21 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     const std::size_t cap =
         limit > 0 ? static_cast<std::size_t>(limit) : MAX_DENSITY_EVENTS;
     if (big.size() > cap) {
-        std::vector<std::uint32_t> idx(big.size());
+        dstd::Vector<std::uint32_t> idx(big.size());
         std::iota(idx.begin(), idx.end(), std::uint32_t{0});
         std::nth_element(idx.begin(), idx.begin() + static_cast<long>(cap),
                          idx.end(),
                          [&big_dur](std::uint32_t a, std::uint32_t b) {
                              return big_dur[a] > big_dur[b];
                          });
-        std::vector<std::uint32_t> overflow(
+        dstd::Vector<std::uint32_t> overflow(
             idx.begin() + static_cast<long>(cap), idx.end());
         fold_overflow_events(big, big_dur, overflow, threshold, begin, dens,
                              group_col);
         idx.resize(cap);
         std::sort(idx.begin(), idx.end());
-        std::vector<std::string> kept;
-        std::vector<double> kept_dur;
+        dstd::Vector<dstd::String> kept;
+        dstd::Vector<double> kept_dur;
         kept.reserve(cap);
         kept_dur.reserve(cap);
         for (std::uint32_t i : idx) {
@@ -961,11 +955,11 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // Resolve hash group values (fhash -> path, hhash -> host, ...) for the
     // groups actually present; unresolvable hashes fall back to the raw value
     // on the client.
-    ankerl::unordered_dense::map<std::string, std::string> group_names;
+    ankerl::unordered_dense::map<dstd::String, dstd::String> group_names;
     if (any_resolve && !group_col.empty()) {
         // Split each composite group key into its per-column components and
         // collect the ones from hash columns; resolve each distinct hash once.
-        ankerl::unordered_dense::map<std::string, RowSetField> to_resolve;
+        ankerl::unordered_dense::map<dstd::String, RowSetField> to_resolve;
         auto collect = [&](dstd::StringView composite) {
             std::size_t start = 0, idx = 0;
             while (start <= composite.size() && idx < resolve_types.size()) {
@@ -975,7 +969,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
                                                 ? composite.size() - start
                                                 : sep - start);
                 if (resolve_types[idx] && !part.empty())
-                    to_resolve.emplace(std::string(part), *resolve_types[idx]);
+                    to_resolve.emplace(dstd::String(part), *resolve_types[idx]);
                 ++idx;
                 if (sep == dstd::StringView::npos) break;
                 start = sep + 1;
@@ -995,7 +989,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
 
     // Stable per-event/-block depth (computed in absolute space, before ts
     // normalization rewrites the big strings; order is preserved in place).
-    std::vector<std::uint32_t> big_depth =
+    dstd::Vector<std::uint32_t> big_depth =
         assign_view_depths(big, dens, begin, eff_threshold);
     // Counters get their own rows above the lane's events (assign_view_depths
     // leaves every counter block on depth 0).
@@ -1005,7 +999,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             e = normalize_event_ts(e, global_min, index.time_metric());
     }
 
-    std::string body = serialize_density_body(
+    dstd::String body = serialize_density_body(
         big, dens, original_begin, original_end, eff_threshold, limit,
         truncated, global_min > 0,
         index.native_to_us(index.global_min_timestamp_us()), max_dur,

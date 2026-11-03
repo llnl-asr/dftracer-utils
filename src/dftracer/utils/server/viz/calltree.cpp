@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
@@ -35,15 +36,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <limits>
-#include <memory>
 #include <numeric>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <unordered_set>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -52,8 +46,8 @@ using namespace dftracer::utils::trace::views;
 using dftracer::utils::json::json_number;
 
 // Parse ?group=<field(,field)*> into the flamegraph root-group key.
-static std::vector<std::string> parse_group_param(const QueryParams& params) {
-    std::vector<std::string> group;
+static dstd::Vector<dstd::String> parse_group_param(const QueryParams& params) {
+    dstd::Vector<dstd::String> group;
     dstd::StringView g = params.get("group");
     std::size_t pos = 0;
     while (pos < g.size()) {
@@ -70,8 +64,8 @@ static std::vector<std::string> parse_group_param(const QueryParams& params) {
 // calltree JSON: roll up the "all" root (group nodes are already rolled up by
 // the fold), scale native durations to us, and serialize the tree. A plain
 // function, so the arena stays out of the handler coroutine's frame.
-static std::string calltree_json_from_arena(std::string blob, double dur_us,
-                                            int limit, std::int64_t cap) {
+static dstd::String calltree_json_from_arena(dstd::String blob, double dur_us,
+                                             int limit, std::int64_t cap) {
     dstd::Vector<FlameNode> arena = dataframe::deserialize_flame_arena(
         reinterpret_cast<const std::uint8_t*>(blob.data()), blob.size());
     if (arena.empty()) {
@@ -103,7 +97,7 @@ static std::string calltree_json_from_arena(std::string blob, double dur_us,
     b.append_colon();
     serialize_flame_node(b, arena, 0);
     b.end_object();
-    return std::string(b);
+    return dstd::String(b);
 }
 
 // GET /api/viz/calltree: merge events into a flamegraph tree. The hierarchy
@@ -128,21 +122,21 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
     int limit = params.get_int("limit", 0);
     if (limit < 0) limit = 0;
 
-    std::vector<const TraceIndex::FileInfo*> target_files =
+    dstd::Vector<const TraceIndex::FileInfo*> target_files =
         select_viz_target_files(index, params, begin, end);
 
     bool single_file = !params.get("file").empty();
     // Root the flame tree by an arbitrary group key over the raw events:
     // ?group=pid, ?group=cat, ?group=host,pid, ... (empty folds every lane
     // together). Any field works, not just pid.
-    std::vector<std::string> group = parse_group_param(params);
+    dstd::Vector<dstd::String> group = parse_group_param(params);
     for (auto& g : group)
         if (g == "pid") g = fields.entity;
     const std::int64_t cap =
         limit > 0 ? limit : std::numeric_limits<std::int64_t>::max();
 
-    const std::string cache_key =
-        std::string(req.path) + "?" + params.canonical_key();
+    const dstd::String cache_key =
+        dstd::String(req.path) + "?" + params.canonical_key();
     if (auto hit = index.viz_cache().get(cache_key))
         co_return HttpResponse::ok(std::move(*hit));
 
@@ -175,14 +169,12 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
     const dstd::Vector<dstd::String> group_args(group.begin(), group.end());
     dataframe::LazyResult<dstd::String> partial = v.flamegraph_partial(
         partition, ts_field, dur_field, name_field, group_args);
-    const dstd::String blob_text = co_await partial.collect();
-    // keep std: calltree_json_from_arena takes a std::string
-    std::string blob(blob_text);
+    dstd::String blob = co_await partial.collect();
     if (cancel.cancelled()) co_return HttpResponse::ok(CANCELLED_TREE);
 
     const double dur_us =
         dftracer::utils::trace::time_metric_us_scale(index.time_metric());
-    std::string body =
+    dstd::String body =
         calltree_json_from_arena(std::move(blob), dur_us, limit, cap);
     index.viz_cache().put(cache_key, body);
     co_return HttpResponse::ok(std::move(body));

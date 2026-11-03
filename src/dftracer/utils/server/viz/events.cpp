@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
@@ -37,14 +38,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <limits>
-#include <memory>
 #include <numeric>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -58,12 +53,12 @@ using dftracer::utils::json::json_number;
 // events plus metadata into the Chrome Trace Event Format body. `global_min` is
 // the de-normalization base (already 0 unless normalization is active);
 // `display_global_min` is the value reported in the metadata. Pure/synchronous.
-static std::string build_viz_events_body(std::vector<std::string>& events,
-                                         std::uint64_t global_min,
-                                         double meta_begin, double meta_end,
-                                         int limit, bool truncated,
-                                         std::uint64_t display_global_min,
-                                         TraceIndex::TimeMetric metric) {
+static dstd::String build_viz_events_body(dstd::Vector<dstd::String>& events,
+                                          std::uint64_t global_min,
+                                          double meta_begin, double meta_end,
+                                          int limit, bool truncated,
+                                          std::uint64_t display_global_min,
+                                          TraceIndex::TimeMetric metric) {
     // Even without an offset, a non-US trace still needs ts/dur scaled to us.
     if (global_min > 0 || metric != TraceIndex::TimeMetric::Us) {
         for (auto& event : events) {
@@ -100,7 +95,7 @@ static std::string build_viz_events_body(std::vector<std::string>& events,
     b.append_key_value("global_min_timestamp_us", display_global_min);
     b.end_object();
     b.end_object();
-    return std::string(b);
+    return dstd::String(b);
 }
 
 coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
@@ -171,7 +166,7 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
                 has_pid ? std::strtoll(pid_s.data(), nullptr, 10) : 0;
             std::int64_t want_tid =
                 has_tid ? std::strtoll(tid_s.data(), nullptr, 10) : 0;
-            std::vector<const VizSummary::AppSpan*> hits;
+            dstd::Vector<const VizSummary::AppSpan*> hits;
             for (const auto& ev : s->long_events) {
                 if (static_cast<double>(ev.end - ev.begin) < min_dur) continue;
                 if (static_cast<double>(ev.end) <= begin ||
@@ -193,12 +188,12 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
                     });
                 hits.resize(VizSummary::MAX_RESPONSE_SPANS);
             }
-            std::vector<std::string> collected;
+            dstd::Vector<dstd::String> collected;
             collected.reserve(hits.size());
             for (const auto* ev : hits) collected.push_back(ev->json);
             co_await append_app_spans(collected, index, begin, end, params,
                                       fields);
-            std::string body = build_viz_events_body(
+            dstd::String body = build_viz_events_body(
                 collected, global_min, original_begin, original_end, limit,
                 false, index.native_to_us(index.global_min_timestamp_us()),
                 index.time_metric());
@@ -206,13 +201,13 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
         }
     }
 
-    std::vector<const TraceIndex::FileInfo*> target_files =
+    dstd::Vector<const TraceIndex::FileInfo*> target_files =
         select_viz_target_files(index, params, scan_begin, end);
     std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
     bool single_file = !params.get("file").empty();
 
     struct EvAcc {
-        std::vector<std::string> events;
+        dstd::Vector<dstd::String> events;
     };
     views::View v =
         views::View::from_files(to_view_files(target_files))
@@ -235,7 +230,7 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
         slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0);
 
     bool truncated = scan.stats.truncated;
-    std::vector<std::string> collected_events = std::move(scan.value.events);
+    dstd::Vector<dstd::String> collected_events = std::move(scan.value.events);
     if (limit > 0 && static_cast<int>(collected_events.size()) > limit) {
         collected_events.resize(static_cast<std::size_t>(limit));
         truncated = true;
@@ -244,7 +239,7 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     co_await append_app_spans(collected_events, index, begin, end, params,
                               fields);
 
-    std::string body = build_viz_events_body(
+    dstd::String body = build_viz_events_body(
         collected_events, global_min, original_begin, original_end, limit,
         truncated, index.native_to_us(index.global_min_timestamp_us()),
         index.time_metric());
@@ -271,7 +266,7 @@ void append_cell(simdjson::builder::string_builder& b,
                          : col.type() == TypeId::Uint64
                              ? static_cast<double>(col.data<std::uint64_t>()[r])
                              : col.data<double>()[r];
-        b.append_raw(std::to_string(std::llround(v * scale)));
+        b.append_raw(dstd::to_string(std::llround(v * scale)));
         return;
     }
     switch (col.type()) {
@@ -280,7 +275,7 @@ void append_cell(simdjson::builder::string_builder& b,
             return;
         case TypeId::Int64: {
             const auto v = col.data<std::int64_t>()[r];
-            b.append_raw(std::to_string(
+            b.append_raw(dstd::to_string(
                 time && v > 0 ? static_cast<std::int64_t>(index.native_to_us(
                                     static_cast<std::uint64_t>(v)))
                               : v));
@@ -288,11 +283,11 @@ void append_cell(simdjson::builder::string_builder& b,
         }
         case TypeId::Uint64: {
             const auto v = col.data<std::uint64_t>()[r];
-            b.append_raw(std::to_string(time ? index.native_to_us(v) : v));
+            b.append_raw(dstd::to_string(time ? index.native_to_us(v) : v));
             return;
         }
         case TypeId::Float64:
-            b.append_raw(std::to_string(col.data<double>()[r]));
+            b.append_raw(dstd::to_string(col.data<double>()[r]));
             return;
         default:
             b.append_raw("null");
@@ -317,12 +312,12 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     if (fields.by_path && fields.time.empty())
         co_return HttpResponse::ok(
             R"({"events":[],"count":0,"offset":0,"limit":0})");
-    std::string text =
-        fields.by_path ? fields.time + " is missing" : std::string("ts == 0");
+    dstd::String text =
+        fields.by_path ? fields.time + " is missing" : dstd::String("ts == 0");
     if (const auto user = params.get("duql"); !user.empty()) {
         if (auto refused = refuse_duql(user, req.path))
             co_return std::move(*refused);
-        text = "(" + text + ") and (" + std::string(user) + ")";
+        text = "(" + text + ") and (" + dstd::String(user) + ")";
     }
 
     // Every match, sorted once, is cached as "<count>\n" plus one row object
@@ -331,7 +326,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     // offset and limit, so memory follows the page, not the match count. A
     // path schema's rows name its label, entity and duration fields as the
     // trace fields they play.
-    const auto respond = [&](const std::string& page, std::uint64_t count) {
+    const auto respond = [&](const dstd::String& page, std::uint64_t count) {
         auto& b = scratch_json_builder();
         b.start_object();
         b.escape_and_append_with_quotes("events");
@@ -344,12 +339,12 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
         b.append_comma();
         b.append_key_value("limit", limit);
         b.end_object();
-        return std::string(b);
+        return dstd::String(b);
     };
-    const std::string all_key = std::string("untimed\n") +
-                                std::string(params.get("file")) + "\n" + text;
-    const std::string page_key =
-        all_key + "\n" + std::to_string(offset) + "\n" + std::to_string(limit);
+    const dstd::String all_key = dstd::String("untimed\n") +
+                                 dstd::String(params.get("file")) + "\n" + text;
+    const dstd::String page_key = all_key + "\n" + dstd::to_string(offset) +
+                                  "\n" + dstd::to_string(limit);
     if (auto hit = index.viz_cache().get(all_key)) {
         const dstd::StringView text_rows(*hit);
         const std::size_t head = text_rows.find('\n');
@@ -366,7 +361,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
             const std::size_t nl = text_rows.find('\n', end + 1);
             end = nl == dstd::StringView::npos ? text_rows.size() : nl;
         }
-        std::string page;
+        dstd::String page;
         if (end > pos) {
             page.assign(text_rows.substr(pos + 1, end - pos - 1));
             std::replace(page.begin(), page.end(), '\n', ',');
@@ -378,7 +373,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
 
     dstd::Vector<dstd::String> columns;
     dstd::Vector<dstd::String> names;
-    auto add = [&](const std::string& field, const char* name) {
+    auto add = [&](const dstd::String& field, const char* name) {
         if (field.empty()) return;
         columns.emplace_back(field);
         names.emplace_back(name);
@@ -404,9 +399,9 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
             .cancel_when([&req]() { return req.cancel_token.cancelled(); })
             .select(dstd::Vector<dstd::String>(columns.begin(), columns.end()))
             .sort_by_multi(order, descending);
-    std::string all_rows;
+    dstd::String all_rows;
     bool whole = true;  // all_rows still holds every row so far
-    std::string page;
+    dstd::String page;
     std::uint64_t count = 0;
     const std::uint64_t first = static_cast<std::uint64_t>(offset);
     const std::uint64_t last = first + static_cast<std::uint64_t>(limit);
@@ -447,7 +442,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
                 all_rows += row;
                 if (all_rows.size() > UNTIMED_TEXT_BYTES) {
                     whole = false;
-                    std::string().swap(all_rows);
+                    dstd::String().swap(all_rows);
                 }
             }
             if (in_page) {
@@ -456,11 +451,11 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
             }
         }
     }
-    std::string body = respond(page, count);
+    dstd::String body = respond(page, count);
     if (!req.cancel_token.cancelled()) {
         if (whole)
             index.viz_cache().put(all_key,
-                                  std::to_string(count) + std::move(all_rows));
+                                  dstd::to_string(count) + std::move(all_rows));
         else
             index.viz_cache().put(page_key, body);
     }

@@ -95,7 +95,8 @@ std::unique_ptr<Served> serve(const std::string& name,
                               const std::string& content) {
     auto s = std::make_unique<Served>(name);
     write_gz(s->dir.path() / "trace.pfw.gz", content);
-    s->index = std::make_unique<TraceIndex>(s->dir.str(), s->dir.file("idx"));
+    s->index = std::make_unique<TraceIndex>(dstd::String(s->dir.str()),
+                                            dstd::String(s->dir.file("idx")));
     Runtime rt(4);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
         co_await s->index->initialize();
@@ -125,7 +126,10 @@ std::string get(Served& s, const std::string& target) {
     return body;
 }
 
-std::string file_of(Served& s) { return s.index->files().front().path; }
+// keep std: the test helper returns std::string
+std::string file_of(Served& s) {
+    return std::string(s.index->files().front().path);
+}
 
 constexpr int WEB_RECORDS = 300;
 constexpr int WEB_UNTIMED = 3;

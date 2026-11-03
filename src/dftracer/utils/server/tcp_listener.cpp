@@ -2,6 +2,8 @@
 #include <arpa/inet.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/server/signal_handler.h>
 #include <dftracer/utils/server/tcp_listener.h>
@@ -13,11 +15,10 @@
 #include <cerrno>
 #include <cstring>
 #include <exception>
-#include <memory>
 
 namespace dftracer::utils::server {
 
-TcpListener::TcpListener(const std::string& addr, uint16_t port)
+TcpListener::TcpListener(const dstd::String& addr, uint16_t port)
     : bind_addr_(addr), port_(port) {}
 
 TcpListener::~TcpListener() {
@@ -85,7 +86,7 @@ coro::CoroTask<void> TcpListener::accept_loop(coro::Scope& scope,
     // Connections run in the caller's scope and can outlive this frame, so
     // each one shares ownership of the handler.
     const auto shared_handler =
-        std::make_shared<const ConnectionHandler>(std::move(handler));
+        dstd::make_shared<const ConnectionHandler>(std::move(handler));
     while (!stopped_.load(std::memory_order_acquire) &&
            !g_shutdown_requested.load(std::memory_order_acquire)) {
         struct sockaddr_in client_addr{};

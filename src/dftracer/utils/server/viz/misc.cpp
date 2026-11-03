@@ -2,8 +2,10 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
@@ -34,15 +36,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <limits>
-#include <memory>
 #include <numeric>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <unordered_set>
-#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -80,7 +75,7 @@ coro::CoroTask<HttpResponse> handle_viz_layers(const HttpRequest& /*req*/,
     b.append_key_value("io_files",
                        static_cast<std::int64_t>(s ? s->io_files : 0));
     b.end_object();
-    co_return HttpResponse::ok(std::string(b));
+    co_return HttpResponse::ok(dstd::String(b));
 }
 
 // GET /api/viz/columns: the complete set of groupable columns in the trace
@@ -92,7 +87,7 @@ coro::CoroTask<HttpResponse> handle_viz_columns(const HttpRequest& /*req*/,
     // harvested scalar leaf (nested args as dotted paths), and resolved
     // columns, each with its type. Shares View::column_info() with the
     // C++/Python API instead of re-implementing a column union here.
-    std::vector<const TraceIndex::FileInfo*> all_files;
+    dstd::Vector<const TraceIndex::FileInfo*> all_files;
     all_files.reserve(index.files().size());
     for (const auto& f : index.files()) all_files.push_back(&f);
     views::View v = views::View::from_files(to_view_files(all_files));
@@ -138,7 +133,7 @@ coro::CoroTask<HttpResponse> handle_viz_columns(const HttpRequest& /*req*/,
     b.append_comma();
     b.append_key_value("ready", true);
     b.end_object();
-    co_return HttpResponse::ok(std::string(b));
+    co_return HttpResponse::ok(dstd::String(b));
 }
 
 coro::CoroTask<HttpResponse> handle_viz_breaks(const HttpRequest& /*req*/,
@@ -176,7 +171,7 @@ coro::CoroTask<HttpResponse> handle_viz_breaks(const HttpRequest& /*req*/,
     b.append_comma();
     b.append_key_value("multi_run", s && !s->idle_gaps.empty());
     b.end_object();
-    co_return HttpResponse::ok(std::string(b));
+    co_return HttpResponse::ok(dstd::String(b));
 }
 
 }  // namespace dftracer::utils::server

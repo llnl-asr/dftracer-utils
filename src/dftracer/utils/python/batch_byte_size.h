@@ -19,11 +19,6 @@ inline std::size_t byte_size(const MemoryViewBatchData &b) {
            b.lengths.capacity() * sizeof(Py_ssize_t);
 }
 
-inline std::size_t byte_size(const JsonDictBatch &b) {
-    static constexpr std::size_t ESTIMATED_EVENT_BYTES = 512;
-    return b.events.capacity() * ESTIMATED_EVENT_BYTES;
-}
-
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 inline std::size_t arrow_array_byte_size(const ArrowArray *arr) {

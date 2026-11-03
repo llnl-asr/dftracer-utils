@@ -5,7 +5,6 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/python/batch_byte_size.h>
-#include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_type_helpers.h>
@@ -146,12 +145,6 @@ static void cancel_and_wait_batch_state(MemoryViewBatchIteratorState *bs) {
     if (bs->task_future.valid()) bs->task_future.wait();
 }
 
-static void cancel_and_wait_json_dict_state(JsonDictIteratorState *js) {
-    js->cancelled.store(true, std::memory_order_release);
-    if (js->channel) js->channel->close();
-    if (js->task_future.valid()) js->task_future.wait();
-}
-
 static void TraceReaderIterator_dealloc(TraceReaderIteratorObject *self) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (self->arrow_state) {
@@ -163,11 +156,6 @@ static void TraceReaderIterator_dealloc(TraceReaderIteratorObject *self) {
         Py_END_ALLOW_THREADS self->arrow_state.reset();
     }
 #endif
-    if (self->json_dict_state) {
-        Py_BEGIN_ALLOW_THREADS cancel_and_wait_json_dict_state(
-            self->json_dict_state.get());
-        Py_END_ALLOW_THREADS self->json_dict_state.reset();
-    }
     if (self->batch_state) {
         Py_BEGIN_ALLOW_THREADS cancel_and_wait_batch_state(
             self->batch_state.get());
@@ -184,61 +172,6 @@ static PyObject *TraceReaderIterator_iter(TraceReaderIteratorObject *self) {
 }
 
 static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
-    if (self->mode == IteratorMode::JsonDict) {
-        while (true) {
-            if (self->json_dict_current_batch) {
-                auto &events = self->json_dict_current_batch->events;
-                Py_ssize_t n = static_cast<Py_ssize_t>(events.size());
-                if (self->json_dict_index < n) {
-                    JsonDictValueObject *obj =
-                        (JsonDictValueObject *)JsonDictValueType.tp_alloc(
-                            &JsonDictValueType, 0);
-                    if (!obj) return NULL;
-                    new (&obj->batch)
-                        dftracer::utils::dstd::SharedPtr<JsonDictBatch>(
-                            self->json_dict_current_batch);
-                    obj->event_index =
-                        static_cast<std::size_t>(self->json_dict_index);
-                    obj->is_args = false;
-                    self->json_dict_index++;
-                    return (PyObject *)obj;
-                }
-                self->json_dict_current_batch.reset();
-                self->json_dict_index = 0;
-            }
-
-            auto *js = self->json_dict_state.get();
-            dftracer::utils::dstd::Optional<JsonDictBatch> batch;
-            Py_BEGIN_ALLOW_THREADS batch = js->channel->blocking_receive();
-            Py_END_ALLOW_THREADS
-
-                if (!batch.has_value()) {
-                std::lock_guard<std::mutex> lock(js->error_mtx);
-                if (js->error) {
-                    try {
-                        std::rethrow_exception(js->error);
-                    } catch (const std::exception &e) {
-                        dftracer::utils::python::set_typed_py_error(e);
-                        return NULL;
-                    } catch (...) {
-                        PyErr_SetString(PyExc_RuntimeError,
-                                        "Unknown error in json dict iterator");
-                        return NULL;
-                    }
-                }
-                return NULL;
-            }
-
-            auto dequeued_bytes = dftracer::utils::python::byte_size(*batch);
-            js->bytes_in_queue.fetch_sub(dequeued_bytes,
-                                         std::memory_order_acq_rel);
-            self->json_dict_current_batch =
-                dftracer::utils::dstd::make_shared<JsonDictBatch>(
-                    std::move(*batch));
-            self->json_dict_index = 0;
-        }
-    }
-
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (self->mode == IteratorMode::Arrow) {
         auto *astate = self->arrow_state.get();

@@ -87,37 +87,6 @@ def install_extension_stub() -> None:
         def __arrow_c_stream__(self, requested_schema: object = None) -> object:
             return None
 
-    class JsonDictValue(_BaseNative):
-        """Zero-copy wrapper over a parsed DFTracer JSON event.
-
-        Supports dict-like access: ``event['name']``, ``event['args']['ret']``.
-        Call ``.to_dict()`` to materialize a regular Python dict.
-        """
-
-        def __getitem__(self, key: str) -> object:
-            raise KeyError(key)
-
-        def __len__(self) -> int:
-            return 0
-
-        def __contains__(self, key: str) -> bool:
-            return False
-
-        def keys(self) -> list[str]:
-            return []
-
-        def values(self) -> list[object]:
-            return []
-
-        def items(self) -> list[tuple[str, object]]:
-            return []
-
-        def get(self, key: str, default: object = None) -> object:
-            return default
-
-        def to_dict(self) -> dict[str, object]:
-            return {}
-
     class IndexerCheckpoint(_BaseNative):
         """Information about a checkpoint in the index."""
 
@@ -644,7 +613,6 @@ def install_extension_stub() -> None:
         "Index",
         "Indexer",
         "IndexerCheckpoint",
-        "JsonDictValue",
         "Runtime",
         "TaskHandle",
     ]

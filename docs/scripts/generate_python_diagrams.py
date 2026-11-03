@@ -41,7 +41,6 @@ PAGE_CLASSES = {
     "duql": ["Field", "Expr"],
     "runtime": ["Runtime", "TaskHandle"],
     "indexer": ["Indexer", "AggregationConfig", "IndexStatus", "CheckpointIndexer"],
-    "reader": ["JsonDictValue"],
     "dfanalyzer": ["DFAnalyzerAggregatedTraceViewer", "HLMConfig"],
 }
 
@@ -54,7 +53,6 @@ PAGE_MODULE = {
     "duql": "duql",
     "runtime": "runtime",
     "indexer": "indexer",
-    "reader": "reader",
     "dfanalyzer": "dfanalyzer",
 }
 

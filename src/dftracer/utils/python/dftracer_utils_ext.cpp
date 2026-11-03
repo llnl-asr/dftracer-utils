@@ -15,7 +15,6 @@
 #include <dftracer/utils/python/distribution.h>
 #include <dftracer/utils/python/index.h>
 #include <dftracer/utils/python/indexer.h>
-#include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/lazyframe.h>
 #include <dftracer/utils/python/memoryview_batch.h>
 #include <dftracer/utils/python/op_runner.h>
@@ -186,7 +185,6 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::init_task_handle(m) < 0) return NULL;
     if (dftracer::utils::python::init_runtime(m) < 0) return NULL;
     if (dftracer::utils::python::init_memoryview_batch(m) < 0) return NULL;
-    if (dftracer::utils::python::init_json_dict_value(m) < 0) return NULL;
     if (dftracer::utils::python::init_trace_reader_iterator(m) < 0) return NULL;
     if (dftracer::utils::python::init_arrow_streaming_iterator(m) < 0)
         return NULL;

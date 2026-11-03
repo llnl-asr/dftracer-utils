@@ -32,7 +32,6 @@ from .dftracer_utils_ext import (  # noqa: F401
     DFTUtilsPipelineError,
     DFTUtilsReaderError,
     DFTUtilsValueError,
-    JsonDictValue,  # noqa: F401
     get_log_level,
     set_log_color,
     set_log_level,
@@ -133,7 +132,6 @@ __all__ = [
     "IndexStatus",
     "AggOp",
     "GroupKey",
-    "JsonDictValue",
     "Phase",
     "TimeUnit",
     "TraceViewer",

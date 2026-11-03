@@ -148,7 +148,9 @@ TEST_SUITE("SpillPublish") {
         config.time_interval_us = 100'000;
         auto run = build::start_aggregation(path, config);
         const auto run_bytes = agg::g_agg_run_bytes.exchange(1);
+#if DFTRACER_UTILS_TEST_PROBES
         const auto staged = agg::g_agg_runs_staged.load();
+#endif
 
         std::atomic<bool> stop{false};
         std::atomic<int> visible{0};
@@ -182,7 +184,9 @@ TEST_SUITE("SpillPublish") {
         agg::g_agg_run_bytes.store(run_bytes);
 
         REQUIRE(built.indexed == 1);
+#if DFTRACER_UTILS_TEST_PROBES
         CHECK(agg::g_agg_runs_staged.load() > staged);
+#endif
         CHECK(without_rows.load() == 0);
         MESSAGE("polls that saw the file: " << visible.load());
     }

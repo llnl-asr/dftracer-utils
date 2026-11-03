@@ -1003,6 +1003,13 @@ void clear_unwritten(FileBuild& build,
         build, dstd::Span<const kv::NamespaceSpec>(specs.data(), specs.size()));
 }
 
+void clear_chunk_copies(FileBuild& build) {
+    constexpr store::IndexExtension PER_FILE[] = {
+        store::IndexExtension::Catalog, store::IndexExtension::Profile,
+        store::IndexExtension::Rowset};
+    clear_unwritten(build, PER_FILE);
+}
+
 common::Result<FileBuild> rebuild(const Index& index, dstd::StringView path) {
     auto snapshot = index.snapshot();
     if (!snapshot) return dstd::Unexpected<dstd::Error>(snapshot.error());

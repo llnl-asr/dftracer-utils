@@ -291,6 +291,10 @@ void fail_plugin(FileBuild& build, dstd::StringView name, std::uint32_t version,
 void clear_unwritten(FileBuild& build,
                      dstd::Span<const store::IndexExtension> keep = {});
 
+/// @ref clear_unwritten that keeps the per-file copies (catalog, profile, row
+/// sets), for a build that writes new members and not every chunk extension.
+void clear_chunk_copies(FileBuild& build);
+
 /// Starts a build of a file the index holds, with the stat it was indexed
 /// with, to add or replace extensions at query time.
 Result<FileBuild> rebuild(const Index& index, dstd::StringView path);

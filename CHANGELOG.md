@@ -382,6 +382,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix aggregation queries that aborted with "names chunk N past its N", or read the wrong chunks, after a file was indexed again with another chunk size.
+  A re-index by the gzip indexer or the view's bootstrap build now drops the old per-chunk index data, such as the aggregation partials, and keeps the per-file catalog, profile and row sets.
 - Make `Store::erase` return an `Unsupported` error when another data file holds the current copy of the scope, where it reported success and erased nothing.
 - Close cache stores before the runtime stops at process exit, where a cache writer could wait on a stopped runtime.
   Every store, the runtime and the process caches now close from one `dstd::shutdown` that CLI tools and Python call while the runtime still runs, and the first hook registers it at exit.

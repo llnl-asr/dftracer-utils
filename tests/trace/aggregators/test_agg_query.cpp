@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
@@ -1079,6 +1080,47 @@ TEST_SUITE("AggQuery") {
         CHECK(r.stats.chunks_reread > 0);
         CHECK(r.stats.chunks_from_columns == r.stats.chunks_reread);
         CHECK(r.stats.events_read == fx->events.size());
+    }
+
+    TEST_CASE("a re-index with larger chunks drops the old partials") {
+        constexpr int COUNT = 40000;
+        auto fx = dstd::make_unique<Fixture>();
+        dftu_utils_test::TextOut text;
+        text << "[\n";
+        for (int i = 0; i < COUNT; ++i)
+            text << R"({"id":)" << i << R"(,"name":"r","cat":"c","pid":)"
+                 << 1 + i % 3 << R"(,"tid":1,"ph":"X","ts":)"
+                 << BASE_TS + std::uint64_t{1000} * i
+                 << R"(,"dur":1,"args":{}})"
+                 << "\n";
+        text << "]\n";
+        fx->files.push_back(dftu_utils_test::write_gz_trace(
+            fx->env.get_dir() + "/one.pfw.gz", text.str()));
+        fx->index_dir = fx->env.get_dir() + "/idx_one";
+        index::IndexerOptions o;
+        o.index_dir = fx->index_dir;
+        o.checkpoint_size = std::size_t{64} << 10;
+        o.aggregation = make_config(FIVE_SECONDS_US);
+        index::Indexer::open(
+            dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o)
+            .build();
+        fx->index_path = dstd::String(
+            trace::internal::determine_index_path(fx->files[0], fx->index_dir));
+
+        auto indexer = dstd::make_shared<index::gzip::GzipIndexer>(
+            fx->files[0], fx->index_path, std::size_t{512} << 10, true);
+        runtime().block_on(
+            coro::named("reindex", coro::with_scope([&](coro::Scope&) {
+                            return indexer->build_async();
+                        })));
+
+        Ask ask;
+        ask.window = FIVE_SECONDS_US;
+        ask.by_pid = true;
+        const AggQueryResult r = run(make_query(*fx, ask, FIVE_SECONDS_US));
+        std::uint64_t events = 0;
+        for (const auto& [k, p] : r.rows) events += p.duration.n;
+        CHECK(events == COUNT);
     }
 
     TEST_CASE("a read of many tiny events decodes them in bounded batches") {

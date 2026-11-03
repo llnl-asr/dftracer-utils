@@ -312,6 +312,8 @@ void fill_bootstrap_file(
     dftracer::utils::index::extensions::RowSetFold& rowsets) {
     namespace idx = dftracer::utils::index;
     idx::gzip::persist_gzip_index_artifacts(build, arts);
+    // The new members renumber the chunks the old copies describe.
+    idx::clear_chunk_copies(build);
     idx::put_profile(build, schema.id);
     build.finish(idx::store::IndexExtension::Profile, schema.params_hash());
     bloom.write(build);

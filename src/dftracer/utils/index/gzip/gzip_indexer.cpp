@@ -1209,6 +1209,8 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
         dstd::Expected<void, dstd::Error> committed = {};
         if (build) {
             persist_gzip_index_artifacts(*build, *artifacts);
+            // The new members renumber the chunks the old copies describe.
+            index::clear_chunk_copies(*build);
             committed = co_await build->commit();
         } else {
             committed = dstd::Unexpected<dstd::Error>(build.error());

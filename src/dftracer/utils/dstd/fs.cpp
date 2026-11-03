@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/os.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -15,35 +16,15 @@
 
 namespace dftracer::utils::dstd::fs {
 
+using internal::errno_error;
+using internal::make_message;
+using internal::PathCString;
+
 namespace {
 
 constexpr std::uint64_t NANOSECONDS_PER_SECOND = 1000000000ULL;
 constexpr std::size_t COPY_BUFFER_SIZE = 64 * 1024;
 constexpr std::uint32_t PERMISSION_BITS = 017777;
-
-Condition condition_from_errno(int error) noexcept {
-    if (error == ENOENT || error == ENOTDIR) return Condition::NotFound;
-    if (error == EINVAL || error == ENAMETOOLONG) {
-        return Condition::InvalidArgument;
-    }
-    return Condition::Io;
-}
-
-String make_message(StringView first, StringView second, StringView text) {
-    String message(first);
-    if (!second.empty()) {
-        message.append(" -> ");
-        message.append(second);
-    }
-    message.append(": ");
-    message.append(text);
-    return message;
-}
-
-Error errno_error(int error, StringView first, StringView second = {}) {
-    return Error(condition_from_errno(error),
-                 make_message(first, second, std::strerror(error)));
-}
 
 Error not_a_directory_error(PathView path) {
     return Error(Condition::Io,
@@ -53,29 +34,6 @@ Error not_a_directory_error(PathView path) {
 Error invalid_error(StringView what) {
     return Error(Condition::InvalidArgument, what);
 }
-
-/// A path as a syscall needs it, '\0'-terminated. A PathView promises no
-/// terminator, so short paths are copied into one stack buffer and long ones
-/// into one dstd::String.
-class PathCString {
-   public:
-    explicit PathCString(StringView path) noexcept {
-        if (path.size() < PATH_MAX) {
-            if (!path.empty()) std::memcpy(stack_, path.data(), path.size());
-            stack_[path.size()] = '\0';
-        } else {
-            heap_.assign(path);
-        }
-    }
-
-    const char* c_str() const noexcept {
-        return heap_.empty() ? stack_ : heap_.c_str();
-    }
-
-   private:
-    String heap_;
-    char stack_[PATH_MAX];
-};
 
 FileKind kind_from_mode(std::uint32_t mode) noexcept {
     if (S_ISREG(mode)) return FileKind::File;

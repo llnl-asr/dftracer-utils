@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -25,7 +26,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <fstream>
 #include <initializer_list>
 #include <iterator>
 
@@ -37,6 +37,9 @@ using dftracer::utils::index::IndexStatus;
 using dftu_utils_test::TestEnvironment;
 
 namespace {
+
+constexpr dstd::OpenOptions WRITE_EXISTING{dstd::Access::Write,
+                                           dstd::Creation::OpenExisting};
 
 IndexerOptions with_runtime(Runtime& rt) {
     IndexerOptions o;
@@ -484,10 +487,10 @@ TEST_SUITE("Truncated") {
             dstd::String((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
             0.5);
         {
-            std::fstream f(cut.c_str(),
-                           std::ios::in | std::ios::out | std::ios::binary);
-            f.seekp(-4, std::ios::end);
-            f.write("\xfe\xff\xff\xff", 4);
+            auto f = dstd::File::open(cut, WRITE_EXISTING);
+            REQUIRE(f);
+            REQUIRE(f->write_all_at(f->size().value() - 4,
+                                    dstd::ByteView("\xfe\xff\xff\xff", 4)));
         }
         Indexer::open({dstd::String(dstd::StringView(cut))}, with_runtime(rt))
             .build();
@@ -544,12 +547,12 @@ TEST_SUITE("Truncated") {
         REQUIRE(ref.member_starts.size() > 1);
         const std::size_t last = ref.member_starts.back();
         {
-            std::fstream f(full.c_str(),
-                           std::ios::in | std::ios::out | std::ios::binary);
-            f.seekp(static_cast<std::streamoff>(last + 10));
-            const std::size_t n = dstd::fs::file_size(full).value() - last - 10;
+            auto f = dstd::File::open(full, WRITE_EXISTING);
+            REQUIRE(f);
+            const std::size_t n = f->size().value() - last - 10;
             dstd::String noise(n, static_cast<char>(0xFF));
-            f.write(noise.data(), static_cast<std::streamsize>(n));
+            REQUIRE(
+                f->write_all_at(last + 10, dstd::ByteView(noise.data(), n)));
         }
         Indexer::open({dstd::String(dstd::StringView(full))}, with_runtime(rt))
             .build();

@@ -268,6 +268,7 @@ set(TEST_CPP_SOURCES
     dstd/test_either.cpp
     dstd/test_function_ref.cpp
     dstd/test_path.cpp
+    dstd/test_file.cpp
     dstd/test_fs.cpp
     dstd/test_raw_buffer.cpp
     dstd/test_expected.cpp

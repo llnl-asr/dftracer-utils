@@ -50,7 +50,9 @@ set(DFTRACER_UTILS_DSTD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/base64.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/concurrent_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/fs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/os.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/path.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/shutdown.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/string_intern.cpp

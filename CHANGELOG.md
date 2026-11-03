@@ -264,6 +264,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `dstd::File`, a file handle that reads and writes at explicit offsets only, with `read_exact_at`, `write_all_at`, `size`, `resize`, `sync` and a `close` that reports its error.
 - Add `coro::sync_wait(executor, task)`, which runs a task on an executor and blocks the calling thread until it ends.
 - Add `coro::run_on(executor, task)`, which runs a task on another executor, and `co_await coro::this_coro::executor`.
   A task now resumes its awaiter, and an I/O completion its waiter, on the awaiter's own executor.

@@ -110,3 +110,4 @@ wheelhouse/
 openspec/
 .pi/
 .omp/
+/check_dstd_only.awk

@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/index_batch_writer.h>
@@ -66,7 +67,11 @@ using dftracer::utils::index::schemas::dft::ChunkStatistics;
 using duql::Query;
 
 struct StatsConfig {
+    // keep std: unswept API
     std::string directory;
+    // keep std: unswept API
+    std::vector<std::string> files;
+    // keep std: unswept API
     std::string index_dir;
     bool json_output = false;
     std::uint64_t top_n = 0;
@@ -75,56 +80,61 @@ struct StatsConfig {
     std::size_t checkpoint_size = 0;
     std::size_t executor_threads = 0;
     dstd::Optional<Query> query;
+    // keep std: unswept API
     std::vector<std::string> filter_names;
+    // keep std: unswept API
     std::vector<std::string> filter_cats;
+    // keep std: unswept API
     std::vector<std::string> group_by;
     StatisticsQueryType report_type = StatisticsQueryType::Summary;
 };
 
 class StatsArgParse : public dftracer::utils::binaries::ArgParse {
    public:
-    dftracer::utils::binaries::DirectoryArgs directory{
-        dftracer::utils::binaries::DirMode::DefaultEmpty};
-    dftracer::utils::binaries::FilesArgs files_args{
-        "Trace files to inspect (.pfw.gz)"};
+    dftracer::utils::binaries::InputArgs inputs{
+        dftracer::utils::binaries::DirMode::DefaultEmpty,
+        "Trace files (.pfw.gz) or a folder of them"};
     dftracer::utils::binaries::PipelineArgs pipeline;
     dftracer::utils::binaries::IndexingArgs indexing;
     dftracer::utils::binaries::DuqlArgs duql_args;
 
     bool json_output = false;
-    std::string report_str = "summary";
+    dstd::StringView report_str = "summary";
     std::uint64_t top_n = 0;
     std::uint64_t top_n_pid_tid = 10;
     bool no_auto_index = false;
-    std::vector<std::string> group_by;
-    std::vector<std::string> filter_names;
-    std::vector<std::string> filter_cats;
+    dstd::Vector<dstd::StringView> group_by;
+    dstd::Vector<dstd::StringView> filter_names;
+    dstd::Vector<dstd::StringView> filter_cats;
 
-    explicit StatsArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+    explicit StatsArgParse(binaries::ArgParser& p) : ArgParse(p) {
         indexing.with_force = false;
         indexing.index_dir_help =
             "Directory where .dftindex stores are created";
-        schema(directory, files_args, pipeline, indexing, duql_args);
+        schema(inputs, pipeline, indexing, duql_args);
     }
 
     bool to_config(StatsConfig& config) const {
-        config.directory = directory.value;
-        config.index_dir = indexing.index_dir;
+        config.directory = dstd::String(inputs.directory);
+        for (const auto file : inputs.files) config.files.emplace_back(file);
+        config.index_dir = dstd::String(indexing.index_dir);
         config.json_output = json_output;
         config.top_n = top_n;
         config.top_n_pid_tid = top_n_pid_tid;
         config.no_auto_index = no_auto_index;
         config.checkpoint_size = indexing.checkpoint_size;
         config.executor_threads = pipeline.executor_threads;
-        config.filter_names = filter_names;
-        config.filter_cats = filter_cats;
-        config.group_by = group_by;
+        for (const auto name : filter_names)
+            config.filter_names.emplace_back(name);
+        for (const auto cat : filter_cats) config.filter_cats.emplace_back(cat);
+        for (const auto dim : group_by) config.group_by.emplace_back(dim);
 
-        const auto& duql_str = duql_args.duql;
+        const auto duql_str = duql_args.duql;
         if (!duql_str.empty()) {
-            auto result = Query::from_string(duql_str);
+            // keep std: unswept API
+            auto result = Query::from_string(std::string(duql_str));
             if (!result) {
-                DFTRACER_UTILS_LOG_ERROR("Invalid --duql: %s",
+                DFTRACER_UTILS_LOG_ERROR("Invalid --query: %s",
                                          result.error().format().c_str());
                 return false;
             }
@@ -143,82 +153,53 @@ class StatsArgParse : public dftracer::utils::binaries::ArgParse {
 
    protected:
     void register_args() override {
-        parser().add_argument("--json").help("Output in JSON format").flag();
+        parser().flag(json_output, {"--json"}, "Output in JSON format");
+
+        parser().option(report_str, {"--report"},
+                        "Report type: summary, categories, names, pid_tids, "
+                        "time_range, "
+                        "duration, top-names, top-categories, detailed");
+
+        parser().option(top_n, {"--top-n"},
+                        "Number of results for top-N queries (0 = show all, "
+                        "default: 0)");
+
+        parser().option(
+            top_n_pid_tid, {"--top-n-pid-tid"},
+            "Max PID:TID pairs to display (0 = show all, default: 10)");
+
+        parser().flag(
+            no_auto_index, {"--no-auto-index"},
+            "Disable automatic index building for files missing .dftindex");
 
         parser()
-            .add_argument("--report")
-            .help(
-                "Report type: summary, categories, names, pid_tids, "
-                "time_range, "
-                "duration, top-names, top-categories, detailed")
-            .default_value<std::string>("summary");
-
-        parser()
-            .add_argument("--top-n")
-            .help(
-                "Number of results for top-N queries (0 = show all, "
-                "default: 0)")
-            .scan<'d', std::uint64_t>()
-            .default_value(static_cast<std::uint64_t>(0));
-
-        parser()
-            .add_argument("--top-n-pid-tid")
-            .help("Max PID:TID pairs to display (0 = show all, default: 10)")
-            .scan<'d', std::uint64_t>()
-            .default_value(static_cast<std::uint64_t>(10));
-
-        parser()
-            .add_argument("--no-auto-index")
-            .help(
-                "Disable automatic index building for files missing .dftindex")
-            .flag();
-
-        parser()
-            .add_argument("--group-by")
-            .help(
+            .option(
+                group_by, {"--group-by"},
                 "Group detailed statistics by dimension(s): name, cat, pid, "
                 "tid, fhash, hhash, pid_tid. Multiple values create composite "
                 "keys.")
-            .nargs(argparse::nargs_pattern::at_least_one)
-            .default_value<std::vector<std::string>>({});
+            .at_least_one();
 
-        parser()
-            .add_argument("--filter-names")
-            .help("Filter by event names")
-            .nargs(argparse::nargs_pattern::any)
-            .default_value<std::vector<std::string>>({});
+        parser().option(filter_names, {"--filter-names"},
+                        "Filter by event names");
 
-        parser()
-            .add_argument("--filter-cats")
-            .help("Filter by event categories")
-            .nargs(argparse::nargs_pattern::any)
-            .default_value<std::vector<std::string>>({});
-    }
-
-    void post_parse() override {
-        json_output = parser().get<bool>("--json");
-        report_str = parser().get<std::string>("--report");
-        top_n = parser().get<std::uint64_t>("--top-n");
-        top_n_pid_tid = parser().get<std::uint64_t>("--top-n-pid-tid");
-        no_auto_index = parser().get<bool>("--no-auto-index");
-        group_by = parser().get<std::vector<std::string>>("--group-by");
-        filter_names = parser().get<std::vector<std::string>>("--filter-names");
-        filter_cats = parser().get<std::vector<std::string>>("--filter-cats");
+        parser().option(filter_cats, {"--filter-cats"},
+                        "Filter by event categories");
     }
 
     bool validate() override {
-        const std::vector<std::string> valid_reports = {
+        const dstd::Vector<dstd::StringView> valid_reports = {
             "summary",   "categories",     "names",
             "pid_tids",  "time_range",     "duration",
             "top-names", "top-categories", "detailed"};
         if (std::find(valid_reports.begin(), valid_reports.end(), report_str) ==
             valid_reports.end()) {
             DFTRACER_UTILS_LOG_ERROR("Invalid --report value: %s",
-                                     report_str.c_str());
+                                     dstd::String(report_str).c_str());
             return false;
         }
 
-        const std::vector<std::string> valid_dims = {
+        const dstd::Vector<dstd::StringView> valid_dims = {
             "name", "cat", "pid", "tid", "fhash", "hhash", "pid_tid"};
         for (const auto& dim : group_by) {
             if (std::find(valid_dims.begin(), valid_dims.end(), dim) ==
@@ -226,7 +207,7 @@ class StatsArgParse : public dftracer::utils::binaries::ArgParse {
                 DFTRACER_UTILS_LOG_ERROR(
                     "Invalid --group-by dimension: %s. Valid: name, cat, pid, "
                     "tid, fhash, hhash, pid_tid",
-                    dim.c_str());
+                    dstd::String(dim).c_str());
                 return false;
             }
         }
@@ -235,7 +216,7 @@ class StatsArgParse : public dftracer::utils::binaries::ArgParse {
     }
 
    private:
-    static StatisticsQueryType parse_report_type_str(const std::string& s) {
+    static StatisticsQueryType parse_report_type_str(dstd::StringView s) {
         if (s == "summary") return StatisticsQueryType::Summary;
         if (s == "categories") return StatisticsQueryType::Categories;
         if (s == "names") return StatisticsQueryType::Names;
@@ -256,14 +237,19 @@ using dftracer::utils::index::build::ResolverInput;
 using dftracer::utils::index::build::ResolverResult;
 
 struct IndexPartition {
+    // keep std: unswept API
     std::vector<FileWorkItem> files_needing_index;
+    // keep std: unswept API
     std::vector<ResolvedFile> indexed_entries;
     ResolverResult resolver_result;
+    // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, TraceStatistics>> precomputed_failures;
+    // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, TraceStatistics>> precomputed_successes;
 };
 
 struct AggregateStatsResult {
+    // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, TraceStatistics>> indexed_stats;
     TraceStatistics total;
     std::size_t successful_count = 0;
@@ -273,13 +259,17 @@ struct AggregateStatsResult {
 };
 
 struct IndexedRootSnapshot {
+    // keep std: unswept API
     std::vector<std::string> logical_files;
     IndexPartition partition;
 };
 
 static void append_failed_stats_result(
+    // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, TraceStatistics>>& results,
+    // keep std: unswept API
     std::size_t file_index, const std::string& file_path,
+    // keep std: unswept API
     const std::string& error_message) {
     TraceStatistics failed;
     failed.file_path = file_path;
@@ -289,8 +279,11 @@ static void append_failed_stats_result(
 }
 
 static void append_empty_indexed_stats_result(
+    // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, TraceStatistics>>& results,
+    // keep std: unswept API
     std::size_t file_index, const std::string& file_path,
+    // keep std: unswept API
     const std::string& index_path) {
     TraceStatistics stats;
     stats.file_path = file_path;
@@ -304,10 +297,13 @@ static double ns_to_ms(std::uint64_t ns) {
     return static_cast<double>(ns) / 1'000'000.0;
 }
 
+// keep std: unswept API
 using CountPair = dstd::Pair<std::string, std::uint64_t>;
 
 template <typename Map>
+// keep std: unswept API
 static std::vector<CountPair> sorted_by_count_desc(const Map& counts) {
+    // keep std: unswept API
     std::vector<CountPair> sorted(counts.begin(), counts.end());
     std::sort(sorted.begin(), sorted.end(),
               [](const CountPair& a, const CountPair& b) {
@@ -356,8 +352,11 @@ static DetailedStatistics to_detailed(const TraceStatistics& stats) {
 }
 
 // Resolve a group key for display, looking up hash values if needed
+// keep std: unswept API
 static std::string resolve_display_key(
+    // keep std: unswept API
     const std::string& key,
+    // keep std: unswept API
     const std::unordered_map<std::string, std::string>& hash_resolutions) {
     if (!hash_resolutions.empty()) {
         auto it = hash_resolutions.find(key);
@@ -369,6 +368,7 @@ static std::string resolve_display_key(
 }
 
 // Header plus the optional summary sections (time span, categories, PID:TID).
+// keep std: unswept API
 static void print_detailed_header(const std::string& file_path,
                                   const DetailedStatistics& detailed,
                                   std::uint64_t total_chunks,
@@ -453,14 +453,18 @@ static void print_detailed_global_duration(const DetailedStatistics& detailed) {
 // Per-group duration table, split by category.
 static void print_detailed_grouped_duration(
     const DetailedStatistics& detailed, std::uint64_t top_n,
+    // keep std: unswept API
     const std::unordered_map<std::string, std::string>& hash_resolutions) {
     if (!detailed.grouped_duration.empty()) {
+        // keep std: unswept API
         using DurPair = dstd::Pair<std::string, const DistributionStats*>;
 
         // Group entries by category
+        // keep std: unswept API
         std::unordered_map<std::string, std::vector<DurPair>> by_category;
         for (const auto& [key, dist] : detailed.grouped_duration) {
             auto cat_it = detailed.group_key_category.find(key);
+            // keep std: unswept API
             std::string cat = (cat_it != detailed.group_key_category.end())
                                   ? cat_it->second
                                   : "other";
@@ -468,7 +472,9 @@ static void print_detailed_grouped_duration(
         }
 
         // Sort categories by total event count descending
+        // keep std: unswept API
         using CatPair = dstd::Pair<std::string, std::vector<DurPair>*>;
+        // keep std: unswept API
         std::vector<CatPair> sorted_cats;
         sorted_cats.reserve(by_category.size());
         for (auto& [cat, entries] : by_category) {
@@ -513,6 +519,7 @@ static void print_detailed_grouped_duration(
 
             for (std::size_t i = 0; i < show; ++i) {
                 const auto& [key, dist] = entries[i];
+                // keep std: unswept API
                 std::string display_key =
                     resolve_display_key(key, hash_resolutions);
                 if (display_key.size() > 30) {
@@ -552,13 +559,16 @@ static void print_detailed_grouped_duration(
 // Per-group I/O metrics table (or simple global I/O stats when ungrouped).
 static void print_detailed_grouped_io(
     const DetailedStatistics& detailed, std::uint64_t top_n,
+    // keep std: unswept API
     const std::unordered_map<std::string, std::string>& hash_resolutions) {
     if (!detailed.grouped_io.empty()) {
         // Check if this is the global (no grouping) case
         bool is_global = (detailed.grouped_io.size() == 1 &&
                           detailed.grouped_io.count("__global__") == 1);
 
+        // keep std: unswept API
         using IOPair = dstd::Pair<std::string, const IOEventMetrics*>;
+        // keep std: unswept API
         std::vector<IOPair> sorted_io;
         sorted_io.reserve(detailed.grouped_io.size());
         for (const auto& [key, io] : detailed.grouped_io) {
@@ -626,6 +636,7 @@ static void print_detailed_grouped_io(
 
             for (std::size_t i = 0; i < show; ++i) {
                 const auto& [key, io] = sorted_io[i];
+                // keep std: unswept API
                 std::string display_key =
                     resolve_display_key(key, hash_resolutions);
                 if (display_key.size() > 30) {
@@ -658,6 +669,7 @@ static void print_detailed_grouped_io(
             // Print I/O size histogram for top event
             if (!sorted_io.empty() && sorted_io[0].second->size.count() > 0) {
                 const auto& [top_key, top_io] = sorted_io[0];
+                // keep std: unswept API
                 std::string display_key =
                     resolve_display_key(top_key, hash_resolutions);
                 std::printf("\n  I/O Size Histogram (top: %s):\n",
@@ -670,8 +682,10 @@ static void print_detailed_grouped_io(
 }
 
 static void print_text_detailed(
+    // keep std: unswept API
     const std::string& file_path, const DetailedStatistics& detailed,
     std::uint64_t total_chunks, std::uint64_t top_n,
+    // keep std: unswept API
     const std::unordered_map<std::string, std::string>& hash_resolutions,
     const TraceStatistics* summary = nullptr,
     std::uint64_t top_n_pid_tid = 10) {
@@ -687,15 +701,21 @@ static void print_text_detailed(
 // DetailedStatistics over a View's index-pruned parallel scan, then resolves
 // hashes and produces output.
 static coro::CoroTask<void> process_file_detailed(
+    // keep std: unswept API
     std::string file_path, std::size_t fi, std::string index_dir,
     bool needs_hash_resolution, bool json_output, std::uint64_t top_n,
     const duql::Query* query_ptr,
+    // keep std: unswept API
     const std::vector<std::string>* filter_names_ptr,
+    // keep std: unswept API
     const std::vector<std::string>* filter_cats_ptr,
+    // keep std: unswept API
     const std::vector<std::string>* group_by_ptr,
     DetailedStatistics* aggregate_detailed_ptr, std::mutex* aggregate_mutex_ptr,
     std::mutex* output_mutex_ptr,
+    // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, std::string>>* json_results_ptr) {
+    // keep std: unswept API
     std::string index_path =
         trace::internal::determine_index_path(file_path, index_dir);
 
@@ -710,12 +730,14 @@ static coro::CoroTask<void> process_file_detailed(
             .collect(detail_needs);
 
     // Hash resolution (sequential, all chunks done)
+    // keep std: unswept API
     std::unordered_map<std::string, std::string> hash_resolutions;
     if (needs_hash_resolution &&
         common::unwrap(dstd::fs::exists(
             dstd::PathView(dftracer::utils::index::store_dir(index_path))))) {
         try {
             using dftracer::utils::index::plan::GroupResolver;
+            // keep std: unswept API
             const std::vector<dftracer::utils::index::plan::RowSetFile> files{
                 {file_path, index_path}};
             auto resolve_hashes = [&](const GroupResolver::Column& column) {
@@ -748,7 +770,9 @@ static coro::CoroTask<void> process_file_detailed(
 
     // Output per-file results
     if (json_output) {
+        // keep std: unswept API
         std::string detail_json = file_detailed.to_json();
+        // keep std: unswept API
         std::string json_obj = std::string("{\"file_path\": \"") + file_path +
                                "\", \"detailed\": " + detail_json + "}";
         std::lock_guard<std::mutex> lock(*output_mutex_ptr);
@@ -770,12 +794,17 @@ static coro::CoroTask<void> process_file_detailed(
 }
 
 static void run_detailed_query_workers(
+    // keep std: unswept API
     coro::Scope& scope, const std::vector<std::string>* files_ptr,
+    // keep std: unswept API
     std::size_t executor_threads, const std::string* index_dir_ptr,
     bool needs_hash_resolution, bool json_output, std::size_t top_n,
+    // keep std: unswept API
     const duql::Query* qp, const std::vector<std::string>* fn,
+    // keep std: unswept API
     const std::vector<std::string>* fc, const std::vector<std::string>* gb,
     DetailedStatistics* ad, std::mutex* am, std::mutex* om,
+    // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, std::string>>* jr) {
     auto file_chan = coro::make_channel<std::size_t>(executor_threads * 2);
 
@@ -799,6 +828,7 @@ static void run_detailed_query_workers(
                 auto fi_opt = co_await ch.receive();
                 if (!fi_opt) break;
                 std::size_t fi = *fi_opt;
+                // keep std: unswept API
                 std::string file_path = (*files_ptr)[fi];
                 co_await process_file_detailed(
                     std::move(file_path), fi, *index_dir_ptr,
@@ -884,13 +914,17 @@ static void print_text_query_output(const TraceStatistics& stats,
     }
 }
 
+// keep std: unswept API
 static coro::CoroTask<std::vector<std::string>> collect_files(
+    // keep std: unswept API
     coro::Scope& ctx, const std::vector<std::string>& cli_files,
+    // keep std: unswept API
     std::string directory) {
     if (!directory.empty()) {
         if (!common::input_exists(directory)) {
             DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                      directory.c_str());
+            // keep std: unswept API
             co_return std::vector<std::string>{};
         }
 
@@ -902,7 +936,11 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
             DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
                                      directory.c_str());
         }
-        co_return files;
+        // keep std: unswept API
+        std::vector<std::string> converted;
+        converted.reserve(files.size());
+        for (const auto& file : files) converted.emplace_back(file);
+        co_return converted;
     }
 
     if (cli_files.empty()) {
@@ -912,8 +950,11 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
     co_return cli_files;
 }
 
+// keep std: unswept API
 static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
+    // keep std: unswept API
     const std::string& index_path) {
+    // keep std: unswept API
     auto snapshot = std::make_unique<IndexedRootSnapshot>();
     const auto index_snapshot =
         common::unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
@@ -924,6 +965,7 @@ static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
 
     std::size_t file_index = 0;
     for (const auto& file : registry) {
+        // keep std: unswept API
         std::string logical_path(file.path());
         const bool has_summary = dftracer::utils::index::extension_current(
             index_snapshot, file, IndexExtension::Stats);
@@ -944,7 +986,9 @@ static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
     return snapshot;
 }
 
+// keep std: unswept API
 static coro::CoroTask<std::unique_ptr<IndexedRootSnapshot>>
+// keep std: unswept API
 load_index_root_snapshot(std::string index_path) {
     co_return load_index_root_snapshot_impl(index_path);
 }
@@ -966,6 +1010,7 @@ static IndexPartition build_partition(ResolverResult result) {
 }
 
 static coro::CoroTask<IndexPartition> resolve_index_state(
+    // keep std: unswept API
     std::vector<std::string> files, std::string index_dir,
     StatisticsQueryType report_type) {
     Resolver resolver;
@@ -986,6 +1031,7 @@ run_batch_build(
 }
 
 static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
+                                             // keep std: unswept API
                                              const std::string& index_dir,
                                              std::size_t checkpoint_size,
                                              std::size_t executor_threads) {
@@ -997,6 +1043,7 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
                 partition.files_needing_index.size());
 
     {
+        // keep std: unswept API
         auto batch_config = std::make_shared<
             dftracer::utils::index::build::IndexBuildBatchConfig>();
         batch_config->file_paths.reserve(partition.files_needing_index.size());
@@ -1033,6 +1080,7 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
     }
 
     // Re-resolve newly indexed files
+    // keep std: unswept API
     std::vector<std::string> newly_indexed;
     newly_indexed.reserve(partition.files_needing_index.size());
     for (const auto& item : partition.files_needing_index) {
@@ -1084,6 +1132,7 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
 }
 
 static coro::CoroTask<int> run_detailed_stats(
+    // keep std: unswept API
     const StatsConfig* config_ptr, const std::vector<std::string>* files_ptr) {
     auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -1095,10 +1144,12 @@ static coro::CoroTask<int> run_detailed_stats(
         }
     }
 
+    // keep std: unswept API
     auto aggregate_detailed = std::make_unique<DetailedStatistics>();
     std::mutex aggregate_mutex;
     std::mutex output_mutex;
     auto json_results =
+        // keep std: unswept API
         std::make_unique<std::vector<dstd::Pair<std::size_t, std::string>>>();
 
     auto* filter_names_ptr = &config_ptr->filter_names;
@@ -1150,6 +1201,7 @@ static coro::CoroTask<int> run_detailed_stats(
         std::printf("==========================================\n");
         std::printf("Consolidated Detailed (%zu files)\n", files_ptr->size());
         std::printf("==========================================\n");
+        // keep std: unswept API
         std::unordered_map<std::string, std::string> no_resolutions;
         print_text_detailed(config_ptr->directory, *aggregate_detailed,
                             aggregate_detailed->chunks_scanned +
@@ -1191,6 +1243,7 @@ static dstd::Optional<ChunkStatistics> file_rows_to_statistics(
         dstd::StringViewMap<std::uint64_t> raw;
         add_path_counts(snapshot, file, "cat", raw);
         for (const auto& [cat, count] : raw) {
+            // keep std: unswept API
             std::string lower(cat);
             ::dftracer::utils::common::detail::lower_ascii(lower);
             cs.category_counts[lower] += count;
@@ -1202,8 +1255,11 @@ static dstd::Optional<ChunkStatistics> file_rows_to_statistics(
 }
 
 static coro::CoroTask<void> process_index_group(
+    // keep std: unswept API
     const std::string* index_path_ptr,
+    // keep std: unswept API
     const std::vector<ResolvedFile>* group_ptr,
+    // keep std: unswept API
     std::vector<dstd::Pair<std::size_t, TraceStatistics>>* indexed_stats_ptr,
     std::mutex* stats_mutex_ptr, bool needs_per_file_results,
     TraceStatistics* total_ptr, std::mutex* total_mutex_ptr,
@@ -1228,10 +1284,12 @@ static coro::CoroTask<void> process_index_group(
         // fold and no write. The rest go through the View path below.
         // Release the ReadOnly index handle before materialize(), which opens
         // the same index ReadWrite to persist.
+        // keep std: unswept API
         std::unordered_map<std::size_t, std::uint64_t> num_chunks_map;
         ChunkStatistics fast_total;
         std::uint64_t fast_chunks = 0;
         std::size_t fast_files = 0;
+        // keep std: unswept API
         std::vector<const ResolvedFile*> slow_files;
         {
             const auto snapshot = common::unwrap(
@@ -1297,6 +1355,7 @@ static coro::CoroTask<void> process_index_group(
 
         if (!needs_per_file_results) {
             // Whole-group total: one View aggregation over every file at once.
+            // keep std: unswept API
             std::vector<views::ViewFile> view_files;
             view_files.reserve(slow_files.size());
             std::uint64_t total_chunks = 0;
@@ -1357,8 +1416,10 @@ static coro::CoroTask<void> process_index_group(
 
 static coro::CoroTask<AggregateStatsResult> run_aggregate_stats(
     coro::Scope& /*ctx*/, const StatsConfig* config_ptr,
+    // keep std: unswept API
     std::unique_ptr<IndexPartition> partition_ptr) {
     auto& partition = *partition_ptr;
+    // keep std: unswept API
     auto agg = std::make_unique<AggregateStatsResult>();
     agg->total.success = true;
     agg->total.file_path = config_ptr->directory;
@@ -1419,8 +1480,11 @@ static coro::CoroTask<AggregateStatsResult> run_aggregate_stats(
 }
 
 static coro::CoroTask<int> output_aggregate_stats(
+    // keep std: unswept API
     const StatsConfig* config_ptr, const std::vector<std::string>* files_ptr,
+    // keep std: unswept API
     std::unique_ptr<AggregateStatsResult> agg, common::Timer overall) {
+    // keep std: unswept API
     std::vector<TraceStatistics> all_stats;
     if (config_ptr->json_output) {
         std::sort(
@@ -1463,6 +1527,7 @@ static coro::CoroTask<int> output_aggregate_stats(
         std::printf("==========================================\n");
         if (config_ptr->report_type == StatisticsQueryType::Summary) {
             auto detailed = to_detailed(agg->total);
+            // keep std: unswept API
             std::unordered_map<std::string, std::string> no_resolutions;
             print_text_detailed(agg->total.file_path, detailed,
                                 agg->total.num_chunks, config_ptr->top_n,
@@ -1500,6 +1565,7 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
         args->pipeline.time_profiling ? &stages_storage : nullptr;
     common::Timer overall(true);
 
+    // keep std: unswept API
     std::vector<std::string> files;
     IndexPartition partition;
     bool used_index_source_of_truth = false;
@@ -1512,7 +1578,7 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
                 co_await ensure_index_fresh(config.directory, "",
                                             config.index_dir);
             else
-                co_await ensure_indexes_fresh("", args->files_args.value,
+                co_await ensure_indexes_fresh("", config.files,
                                               config.index_dir);
         }
         if (!config.directory.empty() &&
@@ -1541,8 +1607,8 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
         if (!used_index_source_of_truth) {
             {
                 common::ScopedTimer _cf(stages, "collect_files");
-                files = co_await collect_files(ctx, args->files_args.value,
-                                               config.directory);
+                files =
+                    co_await collect_files(ctx, config.files, config.directory);
             }
             if (files.empty()) {
                 co_return 1;
@@ -1578,12 +1644,15 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
         co_return co_await run_detailed_stats(&config, &files);
     }
 
+    // keep std: unswept API
     std::unique_ptr<AggregateStatsResult> agg_ptr;
     {
         common::ScopedTimer _ag(stages, "aggregate_stats");
         auto agg_val = co_await run_aggregate_stats(
             ctx, &config,
+            // keep std: unswept API
             std::make_unique<IndexPartition>(std::move(partition)));
+        // keep std: unswept API
         agg_ptr = std::make_unique<AggregateStatsResult>(std::move(agg_val));
     }
 

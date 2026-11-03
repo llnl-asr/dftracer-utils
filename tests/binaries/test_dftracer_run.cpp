@@ -104,7 +104,7 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(!create_pfw_gz(env, 50).empty());
 
         RunResult r =
-            run_capture_stderr(run, {"-d", env.get_dir(), "--plugin", plugin});
+            run_capture_stderr(run, {env.get_dir(), "--plugin", plugin});
         CHECK(r.exit_code == 0);
         long events = first_capture(r.err, "events=([0-9]+)");
         long with_dur = first_capture(r.err, "with_dur=([0-9]+)");
@@ -129,7 +129,7 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(!create_pfw_gz(env, 40).empty());
 
         RunResult r =
-            run_capture_stderr(run, {"-d", env.get_dir(), "--plugin", plugin});
+            run_capture_stderr(run, {env.get_dir(), "--plugin", plugin});
         CHECK(r.exit_code == 0);
 
         long total = 0;
@@ -163,7 +163,7 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(!create_pfw_gz(env, 50).empty());
 
         RunResult r =
-            run_capture_stderr(run, {"-d", env.get_dir(), "--plugin", plugin});
+            run_capture_stderr(run, {env.get_dir(), "--plugin", plugin});
         CHECK(r.exit_code == 0);
         long matched = first_capture(r.err, "matched=([0-9]+)");
         long total = first_capture(r.err, "total=([0-9]+)");
@@ -193,8 +193,8 @@ TEST_SUITE("DFTracerRun") {
 
         // Consumer first on the command line: the fold order comes from the
         // declared provides/consumes, so the producer still runs first.
-        RunResult r = run_capture_stderr(run, {"-d", env.get_dir(), "--plugin",
-                                               consumer, "--plugin", producer});
+        RunResult r = run_capture_stderr(
+            run, {env.get_dir(), "--plugin", consumer, "--plugin", producer});
         CHECK(r.exit_code == 0);
         CHECK(r.err.find("perbatch_consumer: WIRED") != std::string::npos);
         // Every generated event carries a duration, so the producer's summed
@@ -220,8 +220,8 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 20).empty());
 
-        RunResult r = run_capture_stderr(
-            run, {"-d", env.get_dir(), "--plugin", consumer});
+        RunResult r =
+            run_capture_stderr(run, {env.get_dir(), "--plugin", consumer});
         CHECK(r.exit_code != 0);
         CHECK(r.err.find("com.example.perbatch_dur") != std::string::npos);
         CHECK(r.err.find("no loaded plugin provides") != std::string::npos);
@@ -249,8 +249,8 @@ TEST_SUITE("DFTracerRun") {
 
         // Consumer first on the command line: agg_result still finds the
         // producer's merged accumulator because the fold order is derived.
-        RunResult r = run_capture_stderr(run, {"-d", env.get_dir(), "--plugin",
-                                               consumer, "--plugin", producer});
+        RunResult r = run_capture_stderr(
+            run, {env.get_dir(), "--plugin", consumer, "--plugin", producer});
         CHECK(r.exit_code == 0);
         CHECK(r.err.find("dur_stats_consumer: WIRED") != std::string::npos);
         // The merged count equals the whole-scan event count only if every
@@ -280,8 +280,8 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 20).empty());
 
-        RunResult r = run_capture_stderr(
-            run, {"-d", env.get_dir(), "--plugin", consumer});
+        RunResult r =
+            run_capture_stderr(run, {env.get_dir(), "--plugin", consumer});
         CHECK(r.exit_code != 0);
         CHECK(r.err.find("com.example.dur_stats") != std::string::npos);
         CHECK(r.err.find("no loaded plugin provides") != std::string::npos);
@@ -302,7 +302,7 @@ TEST_SUITE("DFTracerRun") {
             return;
         }
 
-        // No -d/--files at all: --describe must not require a trace, an
+        // No input path at all: --describe must not require a trace, an
         // index, or a directory argument.
         RunResult r = run_capture_stderr(
             run, {"--describe", "--plugin", producer, "--plugin", consumer});
@@ -348,7 +348,7 @@ TEST_SUITE("DFTracerRun") {
         REQUIRE(!create_pfw_gz(env, 10).empty());
 
         RunResult r = run_capture_stderr(
-            run, {"-d", env.get_dir(), "--plugin", "/no/such/plugin.so"});
+            run, {env.get_dir(), "--plugin", "/no/such/plugin.so"});
         CHECK(r.exit_code != 0);
     }
 }

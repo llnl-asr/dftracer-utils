@@ -38,23 +38,6 @@ find_package(
 # Utility Dependencies
 # ==============================================================================
 
-function(need_argparse)
-  if(NOT argparse_ADDED)
-    cpmaddpackage(
-      NAME
-      argparse
-      GITHUB_REPOSITORY
-      p-ranav/argparse
-      VERSION
-      3.2
-      OPTIONS
-      "ARGPARSE_BUILD_TESTS OFF"
-      "ARGPARSE_BUILD_SAMPLES OFF"
-      FORCE
-      YES)
-  endif()
-endfunction()
-
 function(need_nonstd_span)
   if(NOT nonstd_span_ADDED)
     cpmaddpackage(NAME nonstd_span GITHUB_REPOSITORY nonstd-lite/span-lite

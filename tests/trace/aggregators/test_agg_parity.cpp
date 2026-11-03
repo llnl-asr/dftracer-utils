@@ -893,7 +893,7 @@ TEST_SUITE("AggParity") {
             {"comparator_5s.json", {}},
             {"comparator_1s.json", {"--time-interval", "1s"}},
             {"comparator_posix_2s.json",
-             {"--duql", R"(cat == "POSIX")", "--time-interval", "2s"}},
+             {"-q", R"(cat == "POSIX")", "--time-interval", "2s"}},
             {"comparator_dlio_preset.json", {"--preset", "dlio"}}};
         for (const auto& run : runs) {
             SUBCASE(run.file) {
@@ -910,7 +910,7 @@ TEST_SUITE("AggParity") {
         REQUIRE(!binary.empty());
         const std::string out = fixtures().root.str() + "/dlio_config.yaml";
         REQUIRE(dftu_utils_test::run_process(
-                    binary, {"-d", fixtures().dlio_dir, "-o", out,
+                    binary, {fixtures().dlio_dir, "-o", out,
                              "--simulation-iterations", "2"}) == 0);
         const String produced = read_text(out);
         const String ref = reference("dlio_config.yaml", produced);

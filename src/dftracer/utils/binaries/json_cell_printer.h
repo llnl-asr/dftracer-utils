@@ -7,12 +7,11 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/json_escape.h>
 
 #include <cstdint>
 #include <cstring>
-#include <string>
-#include <vector>
 
 // The JSON cell printer for `dftracer_view --format json`. Split out from
 // dftracer_view.cpp so its exhaustive TypeId switch can be exercised directly
@@ -29,7 +28,7 @@ inline dstd::String decimal_to_exact_string(const std::uint8_t* bytes,
                                             std::size_t nbytes,
                                             std::int32_t scale) {
     const bool negative = (bytes[nbytes - 1] & 0x80) != 0;
-    std::vector<std::uint64_t> words(nbytes / 8);
+    dstd::Vector<std::uint64_t> words(nbytes / 8);
     for (std::size_t w = 0; w < words.size(); ++w) {
         std::uint64_t v;
         std::memcpy(&v, bytes + w * 8, 8);

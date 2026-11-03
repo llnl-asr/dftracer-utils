@@ -91,8 +91,7 @@ TEST_SUITE("dftracer_validate") {
         REQUIRE(!make_valid_pfw(env, work, 20, 1).empty());
 
         int rc = -1;
-        auto out =
-            run_validate_capture(binary, {"-d", std::string(work.str())}, &rc);
+        auto out = run_validate_capture(binary, {std::string(work.str())}, &rc);
         CHECK(rc == 0);
         CHECK(contains(out, "2 passed"));
         CHECK(contains(out, "0 failed"));
@@ -112,8 +111,7 @@ TEST_SUITE("dftracer_validate") {
         REQUIRE(!make_valid_pfw(env, root / "b" / "c", 10, 1).empty());
 
         int rc = -1;
-        auto out =
-            run_validate_capture(binary, {"-d", std::string(root.str())}, &rc);
+        auto out = run_validate_capture(binary, {std::string(root.str())}, &rc);
         CHECK(rc == 0);
         CHECK(contains(out, "2 passed"));
     }
@@ -131,7 +129,7 @@ TEST_SUITE("dftracer_validate") {
         REQUIRE(!bad.empty());
 
         int rc = -1;
-        auto out = run_validate_capture(binary, {"--files", bad}, &rc);
+        auto out = run_validate_capture(binary, {bad}, &rc);
         CHECK(rc == 1);
         CHECK(contains(out, "1 failed"));
     }
@@ -150,11 +148,11 @@ TEST_SUITE("dftracer_validate") {
             dftracer::utils::dstd::fs::create_directories(empty).has_value());
 
         int rc = -1;
-        run_validate_capture(binary, {"-d", std::string(empty.str())}, &rc);
+        run_validate_capture(binary, {std::string(empty.str())}, &rc);
         CHECK(rc == 1);
     }
 
-    TEST_CASE("--files flag validates a single file") {
+    TEST_CASE("a file path validates a single file") {
         auto binary = find_validate_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_validate binary not found, skipping.");
@@ -167,7 +165,7 @@ TEST_SUITE("dftracer_validate") {
         REQUIRE(!f.empty());
 
         int rc = -1;
-        auto out = run_validate_capture(binary, {"--files", f}, &rc);
+        auto out = run_validate_capture(binary, {f}, &rc);
         CHECK(rc == 0);
         CHECK(contains(out, "1 passed"));
     }
@@ -185,8 +183,63 @@ TEST_SUITE("dftracer_validate") {
         REQUIRE(!f.empty());
 
         int rc = -1;
-        run_validate_capture(binary, {"--files", f, "--log-level", "debug"},
-                             &rc);
+        run_validate_capture(binary, {f, "--log-level", "debug"}, &rc);
         CHECK(rc == 0);
+    }
+
+    TEST_CASE("a path that holds a space reaches the tool whole") {
+        auto binary = find_validate_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_validate binary not found, skipping.");
+            return;
+        }
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        auto f = make_valid_pfw(
+            env, dftracer::utils::dstd::Path(env.get_dir()) / "with space", 10,
+            0);
+        REQUIRE(!f.empty());
+
+        int rc = -1;
+        auto out = run_validate_capture(binary, {f}, &rc);
+        CHECK(rc == 0);
+        CHECK(contains(out, "1 passed"));
+    }
+
+    TEST_CASE("an unknown flag exits with 1") {
+        auto binary = find_validate_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_validate binary not found, skipping.");
+            return;
+        }
+        int rc = -1;
+        run_validate_capture(binary, {"--no-such-flag"}, &rc);
+        CHECK(rc == 1);
+    }
+
+    TEST_CASE("a bad number exits with 1") {
+        auto binary = find_validate_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_validate binary not found, skipping.");
+            return;
+        }
+        int rc = -1;
+        run_validate_capture(binary, {"--executor-threads", "many", "."}, &rc);
+        CHECK(rc == 1);
+    }
+
+    TEST_CASE("--help and -v print and exit with 0") {
+        auto binary = find_validate_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_validate binary not found, skipping.");
+            return;
+        }
+        int rc = -1;
+        auto help = run_validate_capture(binary, {"--help"}, &rc);
+        CHECK(rc == 0);
+        CHECK(contains(help, "Usage: dftracer_validate"));
+        auto version = run_validate_capture(binary, {"-v"}, &rc);
+        CHECK(rc == 0);
+        CHECK(!version.empty());
     }
 }

@@ -58,8 +58,9 @@ TEST_SUITE("DFTracerGenFakeTrace") {
 
         std::string out_dir = env.get_dir() + "/output";
         int rc = run_gen_fake_trace(
-            binary, {"-o", out_dir, "-p", "1", "-e", "1", "-s", "1",
-                     "--num-train-files", "1", "--num-val-files", "1"});
+            binary, {"-o", out_dir, "--num-processes", "1", "--num-epochs", "1",
+                     "--steps-per-epoch", "1", "--num-train-files", "1",
+                     "--num-val-files", "1"});
         CHECK(rc == 0);
 
         std::string rank0 = out_dir + "/rank_0.pfw.gz";
@@ -79,8 +80,9 @@ TEST_SUITE("DFTracerGenFakeTrace") {
 
         std::string out_dir = env.get_dir() + "/output";
         int rc = run_gen_fake_trace(
-            binary, {"-o", out_dir, "-p", "3", "-e", "1", "-s", "1",
-                     "--num-train-files", "1", "--num-val-files", "1"});
+            binary, {"-o", out_dir, "--num-processes", "3", "--num-epochs", "1",
+                     "--steps-per-epoch", "1", "--num-train-files", "1",
+                     "--num-val-files", "1"});
         CHECK(rc == 0);
 
         for (int rank = 0; rank < 3; ++rank) {
@@ -103,8 +105,9 @@ TEST_SUITE("DFTracerGenFakeTrace") {
 
         std::string out_dir = env.get_dir() + "/output";
         int rc = run_gen_fake_trace(
-            binary, {"-o", out_dir, "-p", "1", "-e", "1", "-s", "1",
-                     "--num-train-files", "1", "--num-val-files", "1"});
+            binary, {"-o", out_dir, "--num-processes", "1", "--num-epochs", "1",
+                     "--steps-per-epoch", "1", "--num-train-files", "1",
+                     "--num-val-files", "1"});
         CHECK(rc == 0);
 
         std::string rank0 = out_dir + "/rank_0.pfw.gz";
@@ -129,11 +132,11 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         std::string out1 = env.get_dir() + "/run1";
         std::string out2 = env.get_dir() + "/run2";
 
-        std::vector<std::string> common_args = {"-p",
+        std::vector<std::string> common_args = {"--num-processes",
                                                 "1",
-                                                "-e",
+                                                "--num-epochs",
                                                 "1",
-                                                "-s",
+                                                "--steps-per-epoch",
                                                 "2",
                                                 "--num-train-files",
                                                 "1",
@@ -174,10 +177,10 @@ TEST_SUITE("DFTracerGenFakeTrace") {
 
         std::string out_dir = env.get_dir() + "/output";
         // Use minimal parameters to keep the test fast.
-        int rc =
-            run_gen_fake_trace(binary, {"-o", out_dir, "-p", "1", "-e", "1",
-                                        "-s", "1", "--num-train-files", "1",
-                                        "--num-val-files", "1", "--verify"});
+        int rc = run_gen_fake_trace(
+            binary, {"-o", out_dir, "--num-processes", "1", "--num-epochs", "1",
+                     "--steps-per-epoch", "1", "--num-train-files", "1",
+                     "--num-val-files", "1", "--verify"});
         CHECK(rc == 0);
     }
 
@@ -189,7 +192,9 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         }
 
         // Omit -o; binary must exit non-zero.
-        int rc = run_gen_fake_trace(binary, {"-p", "1", "-e", "1", "-s", "1"});
+        int rc =
+            run_gen_fake_trace(binary, {"--num-processes", "1", "--num-epochs",
+                                        "1", "--steps-per-epoch", "1"});
         CHECK(rc != 0);
     }
 }

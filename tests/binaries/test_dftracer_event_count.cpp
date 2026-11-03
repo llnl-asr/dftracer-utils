@@ -136,8 +136,7 @@ TEST_SUITE("DFTracerEventCount") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        auto output =
-            run_event_count_capture(binary, {"-d", env.get_dir(), "-f"});
+        auto output = run_event_count_capture(binary, {env.get_dir(), "-f"});
         int count = parse_event_count(output);
         CHECK(count == 50);
     }
@@ -156,8 +155,7 @@ TEST_SUITE("DFTracerEventCount") {
         REQUIRE(!create_pfw_gz(env, 20, 1).empty());
         REQUIRE(!create_pfw_gz(env, 30, 2).empty());
 
-        auto output =
-            run_event_count_capture(binary, {"-d", env.get_dir(), "-f"});
+        auto output = run_event_count_capture(binary, {env.get_dir(), "-f"});
         int count = parse_event_count(output);
         CHECK(count == 60);
     }
@@ -173,8 +171,7 @@ TEST_SUITE("DFTracerEventCount") {
         REQUIRE(env.is_valid());
 
         // No trace files -- binary either exits non-zero or prints 0.
-        auto output =
-            run_event_count_capture(binary, {"-d", env.get_dir(), "-f"});
+        auto output = run_event_count_capture(binary, {env.get_dir(), "-f"});
         int count = parse_event_count(output);
         // Either the binary reports 0 events or fails; both are acceptable.
         CHECK((count == 0 || count == -1));
@@ -194,13 +191,11 @@ TEST_SUITE("DFTracerEventCount") {
         REQUIRE(!f.empty());
 
         // Both runs stream, since --force ignores any index.
-        auto out1 =
-            run_event_count_capture(binary, {"-d", env.get_dir(), "-f"});
+        auto out1 = run_event_count_capture(binary, {env.get_dir(), "-f"});
         int count1 = parse_event_count(out1);
         CHECK(count1 == 25);
 
-        auto out2 =
-            run_event_count_capture(binary, {"-d", env.get_dir(), "-f"});
+        auto out2 = run_event_count_capture(binary, {env.get_dir(), "-f"});
         int count2 = parse_event_count(out2);
         CHECK(count2 == 25);
     }
@@ -219,7 +214,7 @@ TEST_SUITE("DFTracerEventCount") {
         REQUIRE(!f.empty());
 
         auto output = run_event_count_capture(
-            binary, {"-d", env.get_dir(), "-f", "--executor-threads", "2"});
+            binary, {env.get_dir(), "-f", "--executor-threads", "2"});
         int count = parse_event_count(output);
         CHECK(count == 15);
     }
@@ -242,7 +237,7 @@ TEST_SUITE("DFTracerEventCount") {
             dftracer::utils::dstd::fs::create_directories(idx_dir).has_value());
 
         auto output = run_event_count_capture(
-            binary, {"-d", env.get_dir(), "-f", "--index-dir", idx_dir});
+            binary, {env.get_dir(), "-f", "--index-dir", idx_dir});
         int count = parse_event_count(output);
         CHECK(count == 20);
     }
@@ -264,24 +259,24 @@ TEST_SUITE("DFTracerEventCount") {
             const std::string idx_dir = dir.file("idx");
 
             auto cold = run_event_count_capture(
-                binary, {"-d", dir.str(), "--index-dir", idx_dir});
+                binary, {dir.str(), "--index-dir", idx_dir});
             CHECK(parse_event_count(cold) == expected);
             CHECK(!dftracer::utils::dstd::fs::exists(idx_dir).value());
             CHECK(!dir_has_dftindex(dir.str()));
 
             int exit_code = -1;
             dftu_utils_test::run_process_capture(
-                index_binary, {"-d", dir.str(), "--index-dir", idx_dir}, false,
+                index_binary, {dir.str(), "--index-dir", idx_dir}, false,
                 &exit_code);
             REQUIRE(exit_code == 0);
             REQUIRE(dftracer::utils::dstd::fs::exists(idx_dir).value());
 
             auto warm = run_event_count_capture(
-                binary, {"-d", dir.str(), "--index-dir", idx_dir});
+                binary, {dir.str(), "--index-dir", idx_dir});
             CHECK(parse_event_count(warm) == expected);
 
             auto forced = run_event_count_capture(
-                binary, {"-d", dir.str(), "--index-dir", idx_dir, "-f"});
+                binary, {dir.str(), "--index-dir", idx_dir, "-f"});
             CHECK(parse_event_count(forced) == expected);
         }
     }
@@ -296,7 +291,7 @@ TEST_SUITE("DFTracerEventCount") {
         dftu_utils_test::ScopedTestDir dir("event_count_cold");
         dftu_utils_test::write_gz_trace(dir.file("mixed.pfw.gz"),
                                         mixed_fixture(false));
-        auto out = run_event_count_capture(binary, {"-d", dir.str()});
+        auto out = run_event_count_capture(binary, {dir.str()});
         CHECK(parse_event_count(out) == DFTRACER_FIXTURE_EVENTS);
         CHECK(!dir_has_dftindex(dir.str()));
     }
@@ -324,16 +319,16 @@ TEST_SUITE("DFTracerEventCount") {
         const std::string idx_dir = dir.file("idx");
 
         auto cold = run_event_count_capture(
-            binary, {"-d", dir.str(), "--index-dir", idx_dir});
+            binary, {dir.str(), "--index-dir", idx_dir});
         CHECK(parse_event_count(cold) == EVENTS);
 
         int exit_code = -1;
         dftu_utils_test::run_process_capture(
-            index_binary, {"-d", dir.str(), "--index-dir", idx_dir}, false,
+            index_binary, {dir.str(), "--index-dir", idx_dir}, false,
             &exit_code);
         REQUIRE(exit_code == 0);
         auto warm = run_event_count_capture(
-            binary, {"-d", dir.str(), "--index-dir", idx_dir});
+            binary, {dir.str(), "--index-dir", idx_dir});
         CHECK(parse_event_count(warm) == EVENTS);
     }
 }

@@ -78,17 +78,17 @@ TEST_SUITE("NestedInputs") {
         std::string out;
         SUBCASE("dftracer_index") {
             CHECK(run(tool("DFTRACER_UTILS_INDEX_PATH", "dftracer_index"),
-                      {"-d", in, "--index-dir", work + "/idx"}) == 0);
+                      {in, "--index-dir", work + "/idx"}) == 0);
         }
         SUBCASE("dftracer_event_count") {
             CHECK(run(tool("DFTRACER_UTILS_EVENT_COUNT_PATH",
                            "dftracer_event_count"),
-                      {"-d", in, "--index-dir", work + "/idx"}, &out) == 0);
+                      {in, "--index-dir", work + "/idx"}, &out) == 0);
             CHECK(out.find(total) != std::string::npos);
         }
         SUBCASE("dftracer_info") {
             CHECK(run(tool("DFTRACER_UTILS_INFO_PATH", "dftracer_info"),
-                      {"-d", in, "--index-dir", work + "/idx"}, &out) == 0);
+                      {in, "--index-dir", work + "/idx"}, &out) == 0);
             CHECK(out.find("Total Files:        " +
                            std::to_string(dirs.size())) != std::string::npos);
             CHECK(out.find("Valid Events:       " + total) !=
@@ -96,11 +96,11 @@ TEST_SUITE("NestedInputs") {
         }
         SUBCASE("dftracer_stats") {
             CHECK(run(tool("DFTRACER_UTILS_STATS_PATH", "dftracer_stats"),
-                      {"-d", in, "--index-dir", work + "/idx"}) == 0);
+                      {in, "--index-dir", work + "/idx"}) == 0);
         }
         SUBCASE("dftracer_split") {
             CHECK(run(tool("DFTRACER_UTILS_SPLIT_PATH", "dftracer_split"),
-                      {"-d", in, "-o", work + "/split", "--verify"}) == 0);
+                      {in, "-o", work + "/split", "--verify"}) == 0);
             CHECK_FALSE(files_under(work + "/split").empty());
         }
         SUBCASE("dftracer_comparator") {

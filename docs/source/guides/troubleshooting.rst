@@ -13,7 +13,7 @@ Troubleshoot common problems
 A query returns nothing, "No trace files found" or "Not a gzip trace"
 ----------------------------------------------------------------------
 
-**Symptom**: ``TraceViewer("traces/")`` (or ``dftracer_view -d traces/``)
+**Symptom**: ``TraceViewer("traces/")`` (or ``dftracer_view traces/``)
 collects an empty result, the CLI logs ``No trace files found in: <dir>``,
 or a query fails with ``Not a gzip trace``.
 

@@ -45,8 +45,8 @@ void write_run(const dftracer::utils::dstd::Path& root,
                     call("end", calls * 100 + 100, 0, "dftracer");
     for (int i = 0; i < calls; ++i)
         t += call("f" + std::to_string(i % 7), i * 100, 50);
-    dftu_utils_test::write_gz_trace((dir / "compacted" / "set1.pfw.gz").str(),
-                                    t);
+    dftu_utils_test::write_gz_trace(
+        std::string((dir / "compacted" / "set1.pfw.gz").str()), t);
 }
 
 std::vector<std::string> sorted_gz_lines(const std::string& path) {
@@ -82,10 +82,10 @@ TEST_CASE("ranks split the run groups and join one output") {
 
     REQUIRE(dftu_utils_test::run_mpi(
                 launcher, 1, binary(),
-                {root.str(), "-o", d.file("one.pfw.gz")}) == 0);
+                {std::string(root.str()), "-o", d.file("one.pfw.gz")}) == 0);
     REQUIRE(dftu_utils_test::run_mpi(
                 launcher, 3, binary(),
-                {root.str(), "-o", d.file("three.pfw.gz")}) == 0);
+                {std::string(root.str()), "-o", d.file("three.pfw.gz")}) == 0);
     const auto one = sorted_gz_lines(d.file("one.pfw.gz"));
     REQUIRE_FALSE(one.empty());
     CHECK(sorted_gz_lines(d.file("three.pfw.gz")) == one);
@@ -104,8 +104,8 @@ TEST_CASE("--shard is refused with more than one rank") {
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_mpi_shard");
     write_run(d.path() / "root", "in", 100);
-    CHECK(dftu_utils_test::run_mpi(launcher, 2, binary(),
-                                   {(d.path() / "root").str(), "-o",
-                                    d.file("o.pfw.gz"), "--shard", "0/2"}) !=
-          0);
+    CHECK(
+        dftu_utils_test::run_mpi(launcher, 2, binary(),
+                                 {std::string((d.path() / "root").str()), "-o",
+                                  d.file("o.pfw.gz"), "--shard", "0/2"}) != 0);
 }

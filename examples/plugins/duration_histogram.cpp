@@ -7,7 +7,7 @@
 // examples.
 // Build: c++ -std=c++20 -shared -fPIC -I<repo>/include \
 //            -o duration_histogram.so duration_histogram.cpp
-// Run:   dftracer_run -d ./traces --plugin ./duration_histogram.so
+// Run:   dftracer_run ./traces --plugin ./duration_histogram.so
 
 #include <dftracer/utils/plugins/plugin.h>
 

@@ -52,15 +52,15 @@ struct Shard {
 
 class GenDistArgParse : public binaries::ArgParse {
    public:
-    dstd::Vector<dstd::String> roots;
-    dstd::String output;
+    dstd::Vector<dstd::StringView> roots;
+    dstd::StringView output;
     std::size_t member_size = 0;
-    dstd::String shard_text;
+    dstd::StringView shard_text;
     Shard shard;
     binaries::PipelineArgs pipeline;
     binaries::MemoryArgs memory;
 
-    explicit GenDistArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+    explicit GenDistArgParse(binaries::ArgParser& p) : ArgParse(p) {
         schema(pipeline);
         schema(memory);
     }
@@ -68,48 +68,33 @@ class GenDistArgParse : public binaries::ArgParse {
    protected:
     void register_args() override {
         parser()
-            .add_argument("roots")
-            .help("Genesis trace roots to walk for nodes_<N>/ppn_<M> runs")
-            .nargs(argparse::nargs_pattern::at_least_one);
-        parser()
-            .add_argument("-o", "--output")
-            .help("Output .pfw.gz file")
-            .required();
-        parser()
-            .add_argument("--member-size")
-            .help(
-                "Gzip member size (default: the index checkpoint size). "
-                "Accepts units, e.g. 512KB, 32MB")
-            // keep std: argparse stores std::string
-            .default_value(std::to_string(
-                common::constants::indexer::DEFAULT_CHECKPOINT_SIZE));
-        parser()
-            .add_argument("--shard")
-            .help(
-                "Process only part i of N of the run groups, as i/N with 0 <= "
-                "i < N; the parts split the trace bytes evenly. Under MPI "
-                "with more than one rank, each rank takes its part by default")
-            // keep std: argparse stores std::string
-            .default_value(std::string());
-    }
+            .positional(
+                roots, "roots",
+                "Genesis trace roots to walk for nodes_<N>/ppn_<M> runs")
+            .at_least_one();
 
-    void post_parse() override {
-        // keep std: argparse stores std::string
-        for (const auto& r : parser().get<std::vector<std::string>>("roots"))
-            roots.emplace_back(r.data(), r.size());
-        // keep std: argparse stores std::string
-        const auto out = parser().get<std::string>("--output");
-        output.assign(out.data(), out.size());
-        member_size = binaries::get_bytes_arg(parser(), "--member-size");
-        // keep std: argparse stores std::string
-        const auto shard_arg = parser().get<std::string>("--shard");
-        shard_text.assign(shard_arg.data(), shard_arg.size());
+        parser()
+            .option(output, {"-o", "--output"}, "Output .pfw.gz file")
+            .required();
+
+        parser().bytes(
+            member_size, {"--member-size"},
+            "Gzip member size (default: the index checkpoint size). "
+            "Accepts units, e.g. 512KB, 32MB",
+            dstd::to_string(
+                common::constants::indexer::DEFAULT_CHECKPOINT_SIZE));
+
+        parser().option(
+            shard_text, {"--shard"},
+            "Process only part i of N of the run groups, as i/N with 0 <= "
+            "i < N; the parts split the trace bytes evenly. Under MPI "
+            "with more than one rank, each rank takes its part by default");
     }
 
     bool validate() override {
         if (!output.ends_with(".pfw.gz")) {
             DFTRACER_UTILS_LOG_ERROR("--output must end with .pfw.gz: %s",
-                                     output.c_str());
+                                     binaries::c_str(output));
             return false;
         }
         if (memory.memory_budget != 0 &&
@@ -121,13 +106,14 @@ class GenDistArgParse : public binaries::ArgParse {
         }
         if (!shard_text.empty() && !parse_shard()) {
             DFTRACER_UTILS_LOG_ERROR("--shard must be i/N with 0 <= i < N: %s",
-                                     shard_text.c_str());
+                                     binaries::c_str(shard_text));
             return false;
         }
         for (const auto& r : roots) {
             const auto is_dir = dstd::fs::is_directory(dstd::PathView(r));
             if (!is_dir || !*is_dir) {
-                DFTRACER_UTILS_LOG_ERROR("Not a directory: %s", r.c_str());
+                DFTRACER_UTILS_LOG_ERROR("Not a directory: %.*s",
+                                         static_cast<int>(r.size()), r.data());
                 return false;
             }
         }
@@ -140,9 +126,9 @@ class GenDistArgParse : public binaries::ArgParse {
         const auto slash = t.find('/');
         if (slash == dstd::StringView::npos) return false;
         auto number = [](dstd::StringView v, std::size_t& out) {
-            const auto r = std::from_chars(v.data(), v.data() + v.size(), out);
-            return r.ec == std::errc() && r.ptr == v.data() + v.size() &&
-                   !v.empty();
+            const auto parsed = dstd::from_chars<std::size_t>(v);
+            if (parsed) out = *parsed;
+            return parsed.has_value();
         };
         Shard sh;
         if (!number(t.substr(0, slash), sh.index) ||
@@ -628,9 +614,12 @@ bool copy_into(const dstd::String& from, int to, std::uint64_t offset) {
 // Writes this process's groups to `output`. Skips go to stderr; the summary
 // line is the caller's, after an MPI join.
 coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
-                                 Shard shard, dstd::String output,
+                                 Shard shard, dstd::StringView output,
                                  Report* report) {
-    genesis::Discovery discovery = co_await genesis::discover(ctx, cli->roots);
+    // discover takes owned paths
+    dstd::Vector<dstd::String> roots;
+    for (const auto root : cli->roots) roots.emplace_back(root);
+    genesis::Discovery discovery = co_await genesis::discover(ctx, roots);
     if (shard.count > 1) {
         discovery.groups = take_shard(std::move(discovery.groups), shard);
         // Every part sees the same discovery, so only the first reports it.
@@ -660,20 +649,20 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
                                     writer_bytes / 4 / threads)));
     };
     const std::size_t member_size = member_size_of(writer_budget);
-    auto open_writer = [&](const dstd::String& path, std::uint64_t bytes)
+    auto open_writer = [&](dstd::StringView path, std::uint64_t bytes)
         -> coro::CoroTask<dstd::Optional<fileio::GzipLineWriter>> {
         fileio::GzipWriterOptions opts;
         opts.member_size = member_size_of(bytes);
         opts.workers = std::max<std::size_t>(1, cli->pipeline.executor_threads);
         opts.memory_budget = bytes;
         opts.ordered = false;
+        // keep std: unswept API
+        const std::string writer_path(path.data(), path.size());
         auto opened =
-            // keep std: GzipLineWriter::open takes a std::string path
-            co_await fileio::GzipLineWriter::open(
-                std::string(path.data(), path.size()), std::move(opts));
+            co_await fileio::GzipLineWriter::open(writer_path, std::move(opts));
         if (!opened) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Cannot write %s: %s", path.c_str(),
+                "Cannot write %s: %s", binaries::c_str(path),
                 dstd::String(opened.error().message()).c_str());
             co_return dstd::nullopt;
         }
@@ -681,7 +670,7 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
     };
     // The run and func records go to their own members after the counters,
     // so a query on them reads a few chunks, not every chunk of every run.
-    const dstd::String head_path = output + ".head";
+    const dstd::String head_path = common::str_cat(output, ".head");
     auto head_opened = co_await open_writer(head_path, head_budget);
     if (!head_opened) co_return 1;
     auto body_opened = co_await open_writer(output, writer_budget);
@@ -759,14 +748,14 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
     bool appended = false;
     if (!io_error && closed) {
         const auto end = dstd::fs::file_size(dstd::PathView(output));
-        const int fd = end ? ::open(output.c_str(), O_WRONLY) : -1;
+        const int fd = end ? ::open(binaries::c_str(output), O_WRONLY) : -1;
         appended = fd >= 0 && copy_into(head_path, fd, *end);
         if (fd >= 0 && ::close(fd) != 0) appended = false;
     }
     (void)dstd::fs::remove(dstd::PathView(head_path));
     if (io_error || !closed || !appended) {
         DFTRACER_UTILS_LOG_ERROR(
-            "Cannot write %s%s%s", output.c_str(), closed ? "" : ": ",
+            "Cannot write %s%s%s", binaries::c_str(output), closed ? "" : ": ",
             closed ? "" : dstd::String(closed.error().message()).c_str());
         co_return 1;
     }
@@ -782,7 +771,7 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
     co_return 0;
 }
 
-int run_local(GenDistArgParse& cli, Shard shard, const dstd::String& output,
+int run_local(GenDistArgParse& cli, Shard shard, dstd::StringView output,
               Report* report) {
     return binaries::run_single_task(
         "DFTracer Genesis Gen Dist", cli.pipeline,
@@ -791,9 +780,9 @@ int run_local(GenDistArgParse& cli, Shard shard, const dstd::String& output,
         });
 }
 
-void print_summary(const Report& r, const dstd::String& output) {
-    std::printf("Wrote %zu run(s) to %s, skipped %zu\n", r.runs, output.c_str(),
-                r.skips);
+void print_summary(const Report& r, dstd::StringView output) {
+    std::printf("Wrote %zu run(s) to %s, skipped %zu\n", r.runs,
+                binaries::c_str(output), r.skips);
 }
 
 #ifdef DFTRACER_UTILS_ENABLE_MPI
@@ -808,7 +797,7 @@ bool all_ranks(bool ok) {
 // Joins every rank's part into `output` in rank order: gzip members
 // concatenate into one valid file. Rank 0 sizes the file, then every rank
 // copies its part to its offset at the same time.
-int join_parts(const dstd::String& output, const dstd::String& part, int rank,
+int join_parts(dstd::StringView output, const dstd::String& part, int rank,
                int size, bool ok, const Report& report) {
     const auto part_size = ok ? dstd::fs::file_size(dstd::PathView(part))
                               : dstd::Expected<std::uint64_t, dstd::Error>(0);
@@ -829,13 +818,13 @@ int join_parts(const dstd::String& output, const dstd::String& part, int rank,
     bool made = true;
     if (rank == 0) {
         const int fd =
-            ::open(output.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            ::open(binaries::c_str(output), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         made = fd >= 0 && ::ftruncate(fd, static_cast<off_t>(total)) == 0;
         if (fd >= 0) ::close(fd);
     }
     bool copied = all_ranks(made);
     if (copied) {
-        const int fd = ::open(output.c_str(), O_WRONLY);
+        const int fd = ::open(binaries::c_str(output), O_WRONLY);
         copied = fd >= 0 && copy_into(part, fd, offset);
         if (fd >= 0 && ::close(fd) != 0) copied = false;
     }
@@ -847,7 +836,7 @@ int join_parts(const dstd::String& output, const dstd::String& part, int rank,
                MPI_COMM_WORLD);
     if (rank != 0) return copied ? 0 : 1;
     if (!copied) {
-        DFTRACER_UTILS_LOG_ERROR("Cannot write %s", output.c_str());
+        DFTRACER_UTILS_LOG_ERROR("Cannot write %s", binaries::c_str(output));
         (void)dstd::fs::remove(dstd::PathView(output));
         return 1;
     }

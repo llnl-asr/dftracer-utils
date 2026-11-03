@@ -83,7 +83,7 @@ TEST_SUITE("DFTracerIndex") {
         auto f = create_pfw_gz(env, 100, 0);
         REQUIRE(!f.empty());
 
-        int rc = run_index(binary, {"-d", env.get_dir(), "--force"});
+        int rc = run_index(binary, {env.get_dir(), "--force"});
         CHECK(rc == 0);
 
         CHECK(dftracer::utils::dstd::fs::exists(
@@ -109,8 +109,8 @@ TEST_SUITE("DFTracerIndex") {
         REQUIRE(
             dftracer::utils::dstd::fs::create_directories(idx_dir).has_value());
 
-        int rc = run_index(
-            binary, {"-d", env.get_dir(), "--force", "--index-dir", idx_dir});
+        int rc = run_index(binary,
+                           {env.get_dir(), "--force", "--index-dir", idx_dir});
         CHECK(rc == 0);
 
         CHECK(dftracer::utils::dstd::fs::exists(
@@ -132,7 +132,7 @@ TEST_SUITE("DFTracerIndex") {
         auto f = create_pfw_gz(env, 100, 0);
         REQUIRE(!f.empty());
 
-        int rc1 = run_index(binary, {"-d", env.get_dir(), "--force"});
+        int rc1 = run_index(binary, {env.get_dir(), "--force"});
         CHECK(rc1 == 0);
         REQUIRE(
             dftracer::utils::dstd::fs::exists(
@@ -140,7 +140,7 @@ TEST_SUITE("DFTracerIndex") {
                 .value());
 
         // Second run with --force must overwrite successfully.
-        int rc2 = run_index(binary, {"-d", env.get_dir(), "--force"});
+        int rc2 = run_index(binary, {env.get_dir(), "--force"});
         CHECK(rc2 == 0);
         CHECK(dftracer::utils::dstd::fs::exists(
                   dftracer::utils::trace::internal::determine_index_path(f, ""))
@@ -159,16 +159,15 @@ TEST_SUITE("DFTracerIndex") {
         auto f = create_pfw_gz(env, 100, 0);
         REQUIRE(!f.empty());
 
-        CHECK(
-            run_index(binary, {"-d", env.get_dir(), "--force", "--stats-share",
-                               "0.2", "--path-budget", "5"}) == 0);
+        CHECK(run_index(binary, {env.get_dir(), "--force", "--stats-share",
+                                 "0.2", "--path-budget", "5"}) == 0);
         CHECK(dftracer::utils::dstd::fs::exists(
                   dftracer::utils::trace::internal::determine_index_path(f, ""))
                   .value());
-        CHECK(run_index(binary, {"-d", env.get_dir(), "--force",
-                                 "--stats-share", "0"}) != 0);
-        CHECK(run_index(binary, {"-d", env.get_dir(), "--force",
-                                 "--stats-share", "1.5"}) != 0);
+        CHECK(run_index(binary,
+                        {env.get_dir(), "--force", "--stats-share", "0"}) != 0);
+        CHECK(run_index(binary, {env.get_dir(), "--force", "--stats-share",
+                                 "1.5"}) != 0);
     }
 
     TEST_CASE("a later run reads the index back and builds only new files") {
@@ -188,7 +187,7 @@ TEST_SUITE("DFTracerIndex") {
                                          std::size_t skipped) {
             int rc = -1;
             const std::string out = dftu_utils_test::run_process_capture(
-                binary, {"-d", env.get_dir()}, true, &rc);
+                binary, {env.get_dir()}, true, &rc);
             INFO(out);
             CHECK(rc == 0);
             CHECK(out.find("Files processed: " + std::to_string(processed) +
@@ -218,7 +217,7 @@ TEST_SUITE("DFTracerIndex") {
         dftu_utils_test::set_test_library_path(binary);
         int rc = -1;
         const std::string out = dftu_utils_test::run_process_capture(
-            binary, {"-d", env.get_dir(), "--read-batch-size", "4"}, true, &rc);
+            binary, {env.get_dir(), "--read-batch-size", "4"}, true, &rc);
         INFO(out);
         CHECK(rc != 0);
         CHECK(out.find("--read-batch-size") != std::string::npos);
@@ -246,7 +245,7 @@ TEST_SUITE("DFTracerIndex") {
         dftu_utils_test::set_test_library_path(binary);
         int rc = -1;
         const std::string out = dftu_utils_test::run_process_capture(
-            binary, {"-d", env.get_dir()}, true, &rc);
+            binary, {env.get_dir()}, true, &rc);
         INFO(out);
         CHECK(rc == 0);
         CHECK(out.find("Clearing the aggregation tier of " + index_path) !=
@@ -280,7 +279,7 @@ TEST_SUITE("DFTracerIndex") {
         dftu_utils_test::set_test_library_path(binary);
         int rc = 0;
         const std::string out = dftu_utils_test::run_process_capture(
-            binary, {"-d", env.get_dir(), "--force"}, true, &rc);
+            binary, {env.get_dir(), "--force"}, true, &rc);
         CHECK(rc != 0);
         CHECK(out.find("plain.pfw") != std::string::npos);
         CHECK(out.find("is not gzip") != std::string::npos);
@@ -300,7 +299,7 @@ TEST_SUITE("DFTracerIndex") {
         REQUIRE(!good.empty());
         write_plain_pfw(env.get_dir() + "/plain.pfw");
 
-        CHECK(run_index(binary, {"-d", env.get_dir(), "--force"}) != 0);
+        CHECK(run_index(binary, {env.get_dir(), "--force"}) != 0);
         CHECK(dftracer::utils::dstd::fs::exists(
                   dftracer::utils::trace::internal::determine_index_path(good,
                                                                          ""))

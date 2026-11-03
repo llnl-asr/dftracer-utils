@@ -4,7 +4,7 @@ duql syntax
 ===========
 
 duql is the query language of dftracer-utils. Every query string, from
-``TraceViewer.duql``, ``View::duql``, ``dftracer_view --duql``, the C ABI
+``TraceViewer.duql``, ``View::duql``, ``dftracer_view -q``, the C ABI
 or a plugin, is duql text. This page lists the syntax and what each construct does.
 
 The builders in Python (``dftracer.utils.duql``, see :doc:`../api/duql`) and
@@ -196,7 +196,7 @@ Conditions
 ----------
 
 A View (``View::duql``, ``TraceViewer.duql``, ``dftu_view_duql``,
-``dftracer_view --duql``) runs a pipeline: the stages in `Pipelines`_. Every
+``dftracer_view -q``) runs a pipeline: the stages in `Pipelines`_. Every
 other surface (``Query``, DataFrame masks, the server) takes a single filter:
 no ``from``, no stage after the first. A condition may use:
 
@@ -1259,7 +1259,7 @@ Explain
 
 ``View::explain_duql``, ``TraceViewer.explain_duql`` (also
 ``explain_query``),
-``dftu_view_explain_duql`` and ``dftracer_view --duql ... --explain`` print
+``dftu_view_explain_duql`` and ``dftracer_view -q ... --explain`` print
 the plan without scanning, one step per line:
 
 .. code-block:: text
@@ -1569,7 +1569,7 @@ takes a literal or a ``$param`` (``take n``, an output name, ``as name``)
 does not take a macro parameter. A pipeline macro cannot read another row
 set: use ``let`` for that. An error inside an expanded body points at the
 call. A View query sees all three scopes; a single filter
-(``Query``, a DataFrame mask, ``dftracer_stats --duql``) has no record schema
+(``Query``, a DataFrame mask, ``dftracer_stats -q``) has no record schema
 and sees the query and the path files.
 
 Matching

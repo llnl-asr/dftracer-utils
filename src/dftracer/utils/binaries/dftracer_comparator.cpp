@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -38,20 +39,20 @@ class ComparatorArgParse : public binaries::ArgParse {
     binaries::IndexingArgs indexing;
     binaries::DuqlArgs duql_args{"duql filter (default: all events)"};
 
-    std::string config_path;
-    std::string preset;
-    std::string baseline;
-    std::string variant;
-    std::string baseline_index_dir;
-    std::string variant_index_dir;
-    std::string group_by;
-    std::string format = "table";
+    dstd::StringView config_path;
+    dstd::StringView preset;
+    dstd::StringView baseline;
+    dstd::StringView variant;
+    dstd::StringView baseline_index_dir;
+    dstd::StringView variant_index_dir;
+    dstd::StringView group_by;
+    dstd::StringView format = "table";
     double time_interval = 5000.0;
     double threshold = 0.0;
     bool no_color = false;
     bool compact = false;
 
-    explicit ComparatorArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+    explicit ComparatorArgParse(binaries::ArgParser& p) : ArgParse(p) {
         indexing.with_index_dir = false;
         indexing.force_help = "Force index rebuild";
         schema(pipeline, indexing, duql_args);
@@ -59,93 +60,53 @@ class ComparatorArgParse : public binaries::ArgParse {
 
    protected:
     void register_args() override {
-        parser()
-            .add_argument("--config")
-            .help("JSON config file for hierarchical comparison")
-            .default_value<std::string>("");
+        parser().option(config_path, {"--config"},
+                        "JSON config file for hierarchical comparison");
 
-        parser()
-            .add_argument("--preset")
-            .help("Built-in comparison preset (supported: dlio)")
-            .default_value<std::string>("");
+        parser().option(preset, {"--preset"},
+                        "Built-in comparison preset (supported: dlio)");
 
-        parser()
-            .add_argument("--baseline")
-            .help("Baseline trace file or directory")
-            .default_value<std::string>("");
+        parser().option(baseline, {"--baseline"},
+                        "Baseline trace file or directory");
 
-        parser()
-            .add_argument("--variant")
-            .help("Variant trace file or directory")
-            .default_value<std::string>("");
+        parser().option(variant, {"--variant"},
+                        "Variant trace file or directory");
 
-        parser()
-            .add_argument("--baseline-index-dir")
-            .help(
-                "Index directory for baseline (default: co-located with data)")
-            .default_value<std::string>("");
+        parser().option(
+            baseline_index_dir, {"--baseline-index-dir"},
+            "Index directory for baseline (default: co-located with data)");
 
-        parser()
-            .add_argument("--variant-index-dir")
-            .help("Index directory for variant (default: co-located with data)")
-            .default_value<std::string>("");
+        parser().option(
+            variant_index_dir, {"--variant-index-dir"},
+            "Index directory for variant (default: co-located with data)");
 
-        parser()
-            .add_argument("--group-by")
-            .help("Comma-separated group keys (default: cat,name)")
-            .default_value<std::string>("");
+        parser().option(group_by, {"--group-by"},
+                        "Comma-separated group keys (default: cat,name)");
 
-        parser()
-            .add_argument("--format")
-            .help("Output format: table (default) or json")
-            .default_value<std::string>("table");
+        parser().option(format, {"--format"},
+                        "Output format: table (default) or json");
 
-        parser()
-            .add_argument("-t", "--time-interval")
-            .help(
-                "Time interval for bucketing (default: 5000ms). A bare number "
-                "is milliseconds; suffixed values like 5s are converted")
-            .default_value(std::string("5000"));
+        parser().duration(
+            time_interval, 1e3, {"-t", "--time-interval"},
+            "Time interval for bucketing (default: 5000ms). A bare number "
+            "is milliseconds; suffixed values like 5s are converted",
+            "5000");
 
-        parser()
-            .add_argument("--threshold")
-            .help("Hide changes below this percentage")
-            .scan<'g', double>()
-            .default_value(0.0);
+        parser().option(threshold, {"--threshold"},
+                        "Hide changes below this percentage");
 
-        parser()
-            .add_argument("--no-color")
-            .help("Disable ANSI color output")
-            .flag();
+        parser().flag(no_color, {"--no-color"}, "Disable ANSI color output");
 
-        parser()
-            .add_argument("--compact")
-            .help(
-                "Collapse nodes with only negligible changes to a single line")
-            .flag();
-    }
-
-    void post_parse() override {
-        config_path = parser().get<std::string>("--config");
-        preset = parser().get<std::string>("--preset");
-        baseline = parser().get<std::string>("--baseline");
-        variant = parser().get<std::string>("--variant");
-        baseline_index_dir = parser().get<std::string>("--baseline-index-dir");
-        variant_index_dir = parser().get<std::string>("--variant-index-dir");
-        group_by = parser().get<std::string>("--group-by");
-        format = parser().get<std::string>("--format");
-        time_interval =
-            binaries::get_duration_arg(parser(), "--time-interval", 1e3);
-        threshold = parser().get<double>("--threshold");
-        no_color = parser().get<bool>("--no-color");
-        compact = parser().get<bool>("--compact");
+        parser().flag(
+            compact, {"--compact"},
+            "Collapse nodes with only negligible changes to a single line");
     }
 };
 
 namespace {
 
 void flatten_nodes(const ComparisonNode& node,
-                   std::vector<const ComparisonNode*>& out) {
+                   dstd::Vector<const ComparisonNode*>& out) {
     out.push_back(&node);
     for (const auto& child : node.children) {
         flatten_nodes(child, out);
@@ -158,11 +119,13 @@ struct AggSpec {
 
 struct NodeAggPlan {
     ComparisonNode root;
-    std::vector<AggSpec> specs;
+    dstd::Vector<AggSpec> specs;
 };
 
 static coro::CoroTask<void> aggregate_all(
+    // keep std: unswept API
     const std::vector<std::string>& files,
+    // keep std: unswept API
     const dstd::Vector<ComparisonFilter>& filters, const std::string& index_dir,
     const ComparisonConfig& config, std::size_t workers,
     dstd::StringIntern& strings, SideAggregate& out, bool& failed) {
@@ -186,13 +149,20 @@ static coro::CoroTask<void> aggregate_all(
 // nullopt on any user-facing error (already logged).
 static dstd::Optional<ComparisonConfig> build_comparison_config(
     const ComparatorArgParse* cli) {
-    const auto& config_path = cli->config_path;
-    const auto& preset = cli->preset;
-    const auto& baseline_path = cli->baseline;
-    const auto& variant_path = cli->variant;
-    const auto& duql_str = cli->duql_args.duql;
-    const auto& group_by_str = cli->group_by;
-    auto format = cli->format;
+    // keep std: unswept API
+    const std::string config_path(cli->config_path);
+    // keep std: unswept API
+    const std::string preset(cli->preset);
+    // keep std: unswept API
+    const std::string baseline_path(cli->baseline);
+    // keep std: unswept API
+    const std::string variant_path(cli->variant);
+    // keep std: unswept API
+    const std::string duql_str(cli->duql_args.duql);
+    // keep std: unswept API
+    const std::string group_by_str(cli->group_by);
+    // keep std: unswept API
+    const std::string format(cli->format);
     auto no_color = cli->no_color;
     auto force_rebuild = cli->indexing.force;
     auto checkpoint_size = cli->indexing.checkpoint_size;
@@ -201,6 +171,7 @@ static dstd::Optional<ComparisonConfig> build_comparison_config(
 
     ComparisonConfig config;
     if (!config_path.empty()) {
+        // keep std: unswept API
         std::string error;
         auto parsed = ComparisonConfig::from_json_file(config_path, error);
         if (!parsed) {
@@ -248,9 +219,13 @@ static dstd::Optional<ComparisonConfig> build_comparison_config(
         config.executor_threads = cli->pipeline.executor_threads;
     if (checkpoint_size > 0) config.checkpoint_size = checkpoint_size;
     if (!cli->baseline_index_dir.empty())
-        config.baseline_index_dir = cli->baseline_index_dir;
+        // keep std: unswept API
+        config.baseline_index_dir = std::string(cli->baseline_index_dir);
+    // config API (trace step)
     if (!cli->variant_index_dir.empty())
-        config.variant_index_dir = cli->variant_index_dir;
+        // keep std: unswept API
+        config.variant_index_dir = std::string(cli->variant_index_dir);
+    // API (trace step)
     if (force_rebuild) config.force_rebuild = force_rebuild;
     if (threshold > 0.0) config.defaults.threshold_pct = threshold;
     if (time_interval_ms > 0.0)
@@ -271,13 +246,13 @@ static dstd::Optional<ComparisonConfig> build_comparison_config(
 
 // Returns false on an invalid or unsupported node query (already logged).
 static bool build_agg_plans(const ComparisonConfig& config,
-                            std::vector<NodeAggPlan>& agg_plans,
+                            dstd::Vector<NodeAggPlan>& agg_plans,
                             dstd::Vector<ComparisonFilter>& filters) {
     for (auto& node : config.nodes) {
         NodeAggPlan plan;
         plan.root = node;
 
-        std::vector<const ComparisonNode*> visitors;
+        dstd::Vector<const ComparisonNode*> visitors;
         flatten_nodes(node, visitors);
 
         for (const auto* visitor : visitors) {
@@ -329,7 +304,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
     if (!config_opt) return 1;
     ComparisonConfig config = std::move(*config_opt);
 
-    std::vector<NodeAggPlan> agg_plans;
+    dstd::Vector<NodeAggPlan> agg_plans;
     dstd::Vector<ComparisonFilter> filters;
     if (!build_agg_plans(config, agg_plans, filters)) return 1;
 
@@ -340,8 +315,11 @@ static int run_comparator(const ComparatorArgParse* cli) {
     // Indexes the traces under `path` with the aggregation config the queries
     // use and lists the trace files.
     auto resolve_and_build =
+        // keep std: unswept API
         [&config](const std::string& path, const std::string& index_dir,
+                  // keep std: unswept API
                   std::vector<std::string>& out_files,
+                  // resolver APIs (trace step)
                   std::size_t parallelism) -> coro::CoroTask<void> {
         if (!common::input_exists(path)) {
             DFTRACER_UTILS_LOG_ERROR("Path does not exist: %s", path.c_str());
@@ -376,7 +354,9 @@ static int run_comparator(const ComparatorArgParse* cli) {
     };
 
     // Shared state between tasks
+    // keep std: unswept API
     std::vector<std::string> baseline_files;
+    // keep std: unswept API
     std::vector<std::string> variant_files;
     // The ids of both sides' groups are in this one table.
     dstd::StringIntern strings;
@@ -513,7 +493,9 @@ static int run_comparator(const ComparatorArgParse* cli) {
             std::size_t visitor_index = 0;
             for (std::size_t ni = 0; ni < agg_plans.size(); ++ni) {
                 const auto& plan = agg_plans[ni];
+                // keep std: unswept API
                 std::vector<ComparisonVisitorPair> pairs;
+                // std::vector (trace step)
                 pairs.reserve(plan.specs.size());
 
                 for (std::size_t vi = 0; vi < plan.specs.size(); ++vi) {

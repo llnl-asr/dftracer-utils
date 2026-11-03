@@ -60,32 +60,24 @@ struct Tool {
 std::vector<std::string> index_args(const std::string& in,
                                     const std::string& idx,
                                     const std::string&) {
-    return {"--executor-threads", "2", "-d", in, "--index-dir", idx};
+    return {"--executor-threads", "2", in, "--index-dir", idx};
 }
 
 std::vector<std::string> view_args(const std::string& in,
                                    const std::string& idx, const std::string&) {
-    return {"--executor-threads", "2", "-d",         in,
-            "--index-dir",        idx, "--group-by", "name"};
+    return {"--executor-threads", "2",   in, "--index-dir", idx,
+            "--group-by",         "name"};
 }
 
 std::vector<std::string> split_args(const std::string& in, const std::string&,
                                     const std::string& out) {
-    return {"--executor-threads",
-            "2",
-            "-d",
-            in,
-            "-o",
-            out,
-            "-n",
-            "bench",
-            "-s",
-            "64MB"};
+    return {"--executor-threads", "2",   in, "-o", out, "--app-name", "bench",
+            "--chunk-size",       "64MB"};
 }
 
 std::vector<std::string> validate_args(const std::string& in,
                                        const std::string&, const std::string&) {
-    return {"--executor-threads", "2", "-d", in};
+    return {"--executor-threads", "2", in};
 }
 
 std::vector<std::string> comparator_args(const std::string& in,

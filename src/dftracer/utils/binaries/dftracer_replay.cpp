@@ -17,14 +17,15 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/mpi/mpi_utils.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/replay/replay.h>
-
-#include <argparse/argparse.hpp>
 
 #ifdef DFTRACER_UTILS_MPI_ENABLED
 #include <mpi.h>
@@ -52,16 +53,18 @@ namespace {
 
 // Throws std::invalid_argument on a token that is not a 32-bit unsigned
 // integer.
-std::unordered_set<std::uint32_t> parse_csv_uint32(const std::string& csv) {
+// keep std: unswept API
+std::unordered_set<std::uint32_t> parse_csv_uint32(dstd::StringView csv) {
+    // keep std: unswept API
     std::unordered_set<std::uint32_t> out;
-    for (const auto& token : binaries::split_csv(csv)) {
-        std::uint32_t value = 0;
-        const char* end = token.data() + token.size();
-        const auto parsed = std::from_chars(token.data(), end, value);
-        if (parsed.ec != std::errc{} || parsed.ptr != end)
-            throw std::invalid_argument("\"" + token +
-                                        "\" is not an unsigned integer");
-        out.insert(value);
+    for (const auto token : binaries::split_csv(csv)) {
+        const auto value = dstd::from_chars<std::uint32_t>(token);
+        if (!value) {
+            throw std::invalid_argument(
+                common::str_cat("\"", token, "\" is not an unsigned integer")
+                    .c_str());
+        }
+        out.insert(*value);
     }
     return out;
 }
@@ -70,7 +73,7 @@ class ReplayArgParse : public binaries::ArgParse {
    public:
     binaries::PipelineArgs pipeline;
 
-    std::vector<std::string> inputs;
+    dstd::Vector<dstd::StringView> inputs;
     bool no_timing = false;
     bool dry_run = false;
     bool dftracer_mode = false;
@@ -79,15 +82,17 @@ class ReplayArgParse : public binaries::ArgParse {
     bool hierarchical_replay = false;
     bool respect_call_hierarchy = false;
 
-    std::string filter_pid_csv;
-    std::string exclude_pid_csv;
-    std::string filter_tid_csv;
-    std::string exclude_tid_csv;
-    std::string filter_function_csv;
-    std::string exclude_function_csv;
-    std::string filter_category_csv;
-    std::string exclude_category_csv;
+    dstd::StringView filter_pid_csv;
+    dstd::StringView exclude_pid_csv;
+    dstd::StringView filter_tid_csv;
+    dstd::StringView exclude_tid_csv;
+    dstd::StringView filter_function_csv;
+    dstd::StringView exclude_function_csv;
+    dstd::StringView filter_category_csv;
+    dstd::StringView exclude_category_csv;
 
+    double start_timestamp_us = 0;
+    dstd::Optional<double> end_timestamp_us;
     std::uint64_t start_timestamp = 0;
     std::uint64_t end_timestamp = UINT64_MAX;
     std::int64_t min_size = -1;
@@ -97,154 +102,93 @@ class ReplayArgParse : public binaries::ArgParse {
     std::size_t max_events = 0;
     std::size_t channel_capacity = 4096;
 
-    explicit ReplayArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+    explicit ReplayArgParse(binaries::ArgParser& p) : ArgParse(p) {
         schema(pipeline);
     }
 
    protected:
     void register_args() override {
         auto& p = parser();
-        p.add_argument("inputs")
-            .help(
-                "Trace files (.pfw, .pfw.gz) or directories containing trace "
-                "files")
-            .nargs(argparse::nargs_pattern::at_least_one);
 
-        p.add_argument("--no-timing")
-            .help("Ignore original timing and execute as fast as possible")
-            .flag();
-        p.add_argument("--dry-run")
-            .help("Parse and analyze traces without executing operations")
-            .flag();
-        p.add_argument("--dftracer-mode")
-            .help(
-                "Use DFTracer sleep-based replay (sleep for operation "
-                "duration instead of doing actual I/O)")
-            .flag();
-        p.add_argument("--no-sleep")
-            .help(
-                "When used with --dftracer-mode, disable sleep calls for "
-                "maximum speed")
-            .flag();
-        p.add_argument("--use-call-tree")
-            .help("Build and use call tree structure for hierarchical replay")
-            .flag();
-        p.add_argument("--hierarchical-replay")
-            .help(
-                "Replay operations respecting parent-child call hierarchy "
-                "(requires --use-call-tree)")
-            .flag();
-        p.add_argument("--respect-call-hierarchy")
-            .help(
-                "Replay child nodes immediately after parent (requires "
-                "--use-call-tree and --hierarchical-replay)")
-            .flag();
+        p.positional(inputs, "inputs",
+                     "Trace files (.pfw, .pfw.gz) or directories containing "
+                     "trace files")
+            .at_least_one();
 
-        p.add_argument("--filter-pid")
-            .help("Only replay events from specific PID(s) (comma-separated)")
-            .default_value(std::string(""));
-        p.add_argument("--exclude-pid")
-            .help("Exclude events from specific PID(s) (comma-separated)")
-            .default_value(std::string(""));
-        p.add_argument("--filter-tid")
-            .help("Only replay events from specific TID(s) (comma-separated)")
-            .default_value(std::string(""));
-        p.add_argument("--exclude-tid")
-            .help("Exclude events from specific TID(s) (comma-separated)")
-            .default_value(std::string(""));
-        p.add_argument("--filter-function")
-            .help(
-                "Only replay specific function(s) (comma-separated, e.g., "
-                "'read,write,open')")
-            .default_value(std::string(""));
-        p.add_argument("--exclude-function")
-            .help("Exclude specific function(s) (comma-separated)")
-            .default_value(std::string(""));
-        p.add_argument("--filter-category")
-            .help(
-                "Only replay specific category/categories (comma-separated, "
-                "e.g., 'POSIX,storage')")
-            .default_value(std::string(""));
-        p.add_argument("--exclude-category")
-            .help("Exclude specific category/categories (comma-separated)")
-            .default_value(std::string(""));
+        p.flag(no_timing, {"--no-timing"},
+               "Ignore original timing and execute as fast as possible");
+        p.flag(dry_run, {"--dry-run"},
+               "Parse and analyze traces without executing operations");
+        p.flag(dftracer_mode, {"--dftracer-mode"},
+               "Use DFTracer sleep-based replay (sleep for operation "
+               "duration instead of doing actual I/O)");
+        p.flag(no_sleep, {"--no-sleep"},
+               "When used with --dftracer-mode, disable sleep calls for "
+               "maximum speed");
+        p.flag(use_call_tree, {"--use-call-tree"},
+               "Build and use call tree structure for hierarchical replay");
+        p.flag(hierarchical_replay, {"--hierarchical-replay"},
+               "Replay operations respecting parent-child call hierarchy "
+               "(requires --use-call-tree)");
+        p.flag(respect_call_hierarchy, {"--respect-call-hierarchy"},
+               "Replay child nodes immediately after parent (requires "
+               "--use-call-tree and --hierarchical-replay)");
 
-        p.add_argument("--start-timestamp")
-            .help(
-                "Only replay events after this timestamp (a bare number is "
-                "microseconds; suffixed values like 5s are converted)")
-            .default_value(std::string("0"));
-        p.add_argument("--end-timestamp")
-            .help(
-                "Only replay events before this timestamp (a bare number is "
-                "microseconds; suffixed values like 5s are converted; empty = "
-                "no limit)")
-            .default_value(std::string(""));
-        p.add_argument("--min-size")
-            .help(
-                "Only replay operations with size >= this value (-1 = no "
-                "limit). Accepts units, e.g. 4KB, 1MB")
-            .default_value(std::string("-1"));
-        p.add_argument("--max-size")
-            .help(
-                "Only replay operations with size <= this value (-1 = no "
-                "limit). Accepts units, e.g. 4KB, 1MB")
-            .default_value(std::string("-1"));
+        p.option(filter_pid_csv, {"--filter-pid"},
+                 "Only replay events from specific PID(s) (comma-separated)");
+        p.option(exclude_pid_csv, {"--exclude-pid"},
+                 "Exclude events from specific PID(s) (comma-separated)");
+        p.option(filter_tid_csv, {"--filter-tid"},
+                 "Only replay events from specific TID(s) (comma-separated)");
+        p.option(exclude_tid_csv, {"--exclude-tid"},
+                 "Exclude events from specific TID(s) (comma-separated)");
+        p.option(filter_function_csv, {"--filter-function"},
+                 "Only replay specific function(s) (comma-separated, e.g., "
+                 "'read,write,open')");
+        p.option(exclude_function_csv, {"--exclude-function"},
+                 "Exclude specific function(s) (comma-separated)");
+        p.option(filter_category_csv, {"--filter-category"},
+                 "Only replay specific category/categories (comma-separated, "
+                 "e.g., 'POSIX,storage')");
+        p.option(exclude_category_csv, {"--exclude-category"},
+                 "Exclude specific category/categories (comma-separated)");
 
-        p.add_argument("--sample-rate")
-            .help("Sample rate for replay (0.0-1.0, 1.0=all events, 0.1=10%)")
-            .default_value(1.0)
-            .scan<'g', double>();
-        p.add_argument("--sample-seed")
-            .help("Random seed for sampling (for reproducibility)")
-            .default_value(std::uint64_t(0))
-            .scan<'u', std::uint64_t>();
-        p.add_argument("--max-events")
-            .help("Maximum number of events to replay (0=unlimited)")
-            .default_value(std::size_t(0))
-            .scan<'u', std::size_t>();
-        p.add_argument("--channel-capacity")
-            .help(
-                "Bounded Channel<Trace> capacity between read/parse producer "
-                "and dispatch consumer (default 4096)")
-            .default_value(std::size_t(4096))
-            .scan<'u', std::size_t>();
+        p.duration(start_timestamp_us, 1e6, {"--start-timestamp"},
+                   "Only replay events after this timestamp (a bare number is "
+                   "microseconds; suffixed values like 5s are converted)",
+                   "0");
+        p.optional_duration(
+            end_timestamp_us, 1e6, {"--end-timestamp"},
+            "Only replay events before this timestamp (a bare number is "
+            "microseconds; suffixed values like 5s are converted; empty = "
+            "no limit)");
+        p.bytes_signed(min_size, {"--min-size"},
+                       "Only replay operations with size >= this value (-1 = "
+                       "no limit). Accepts units, e.g. 4KB, 1MB",
+                       "-1");
+        p.bytes_signed(max_size, {"--max-size"},
+                       "Only replay operations with size <= this value (-1 = "
+                       "no limit). Accepts units, e.g. 4KB, 1MB",
+                       "-1");
+
+        p.option(sample_rate, {"--sample-rate"},
+                 "Sample rate for replay (0.0-1.0, 1.0=all events, 0.1=10%)");
+        p.option(sample_seed, {"--sample-seed"},
+                 "Random seed for sampling (for reproducibility)");
+        p.option(max_events, {"--max-events"},
+                 "Maximum number of events to replay (0=unlimited)");
+        p.option(channel_capacity, {"--channel-capacity"},
+                 "Bounded Channel<Trace> capacity between read/parse producer "
+                 "and dispatch consumer (default 4096)");
     }
 
     void post_parse() override {
-        auto& p = parser();
-        inputs = p.get<std::vector<std::string>>("inputs");
-        no_timing = p.get<bool>("--no-timing");
-        dry_run = p.get<bool>("--dry-run");
-        dftracer_mode = p.get<bool>("--dftracer-mode");
-        no_sleep = p.get<bool>("--no-sleep");
-        use_call_tree = p.get<bool>("--use-call-tree");
-        hierarchical_replay = p.get<bool>("--hierarchical-replay");
-        respect_call_hierarchy = p.get<bool>("--respect-call-hierarchy");
-
-        filter_pid_csv = p.get<std::string>("--filter-pid");
-        exclude_pid_csv = p.get<std::string>("--exclude-pid");
-        filter_tid_csv = p.get<std::string>("--filter-tid");
-        exclude_tid_csv = p.get<std::string>("--exclude-tid");
-        filter_function_csv = p.get<std::string>("--filter-function");
-        exclude_function_csv = p.get<std::string>("--exclude-function");
-        filter_category_csv = p.get<std::string>("--filter-category");
-        exclude_category_csv = p.get<std::string>("--exclude-category");
-
-        start_timestamp = static_cast<std::uint64_t>(std::llround(
-            binaries::get_duration_arg(p, "--start-timestamp", 1e6)));
-        const auto end_raw = p.get<std::string>("--end-timestamp");
+        start_timestamp =
+            static_cast<std::uint64_t>(std::llround(start_timestamp_us));
         end_timestamp =
-            end_raw.empty()
-                ? UINT64_MAX
-                : static_cast<std::uint64_t>(std::llround(
-                      binaries::get_duration_arg(p, "--end-timestamp", 1e6)));
-        min_size = binaries::get_bytes_arg_signed(p, "--min-size");
-        max_size = binaries::get_bytes_arg_signed(p, "--max-size");
-        sample_rate = p.get<double>("--sample-rate");
-        sample_seed = p.get<std::uint64_t>("--sample-seed");
-        max_events = p.get<std::size_t>("--max-events");
-        channel_capacity = p.get<std::size_t>("--channel-capacity");
+            end_timestamp_us
+                ? static_cast<std::uint64_t>(std::llround(*end_timestamp_us))
+                : UINT64_MAX;
     }
 
     bool validate() override {
@@ -271,7 +215,7 @@ class ReplayArgParse : public binaries::ArgParse {
                          "Error: --sample-rate must be between 0.0 and 1.0\n");
             return false;
         }
-        const dstd::Pair<const char*, const std::string*> id_lists[] = {
+        const dstd::Pair<const char*, const dstd::StringView*> id_lists[] = {
             {"--filter-pid", &filter_pid_csv},
             {"--exclude-pid", &exclude_pid_csv},
             {"--filter-tid", &filter_tid_csv},
@@ -288,9 +232,11 @@ class ReplayArgParse : public binaries::ArgParse {
     }
 };
 
-std::unordered_set<std::string> parse_csv_string(const std::string& csv) {
+// keep std: unswept API
+std::unordered_set<std::string> parse_csv_string(dstd::StringView csv) {
+    // keep std: unswept API
     std::unordered_set<std::string> out;
-    for (const auto& token : binaries::split_csv(csv)) out.insert(token);
+    for (const auto token : binaries::split_csv(csv)) out.emplace(token);
     return out;
 }
 
@@ -301,6 +247,7 @@ struct RunCtx {
     bool is_root = true;
 
     ReplayConfig config;
+    // keep std: unswept API
     std::vector<std::string> trace_files;
     ReplayResult result;
     int exit_code = 0;
@@ -313,11 +260,12 @@ struct RunCtx {
 coro::CoroTask<void> task_scan(RunCtx* ctx, coro::Scope& scope) {
     const auto t0 = std::chrono::steady_clock::now();
 
-    ctx->trace_files = co_await binaries::collect_input_trace_files(
-        scope, ctx->cli->inputs, /*recursive=*/true, [](const std::string& in) {
+    auto collected = co_await binaries::collect_input_trace_files(
+        scope, ctx->cli->inputs, /*recursive=*/true, [](dstd::StringView in) {
             DFTRACER_UTILS_LOG_ERROR("Input not found or not accessible: %s",
-                                     in.c_str());
+                                     binaries::c_str(in));
         });
+    for (const auto& file : collected) ctx->trace_files.emplace_back(file);
 
     ctx->scan_ms = std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - t0)
@@ -381,6 +329,7 @@ void print_filters(const RunCtx& ctx) {
 
     std::printf("\nActive Filters:\n");
     auto print_uint_set = [](const char* label,
+                             // keep std: unswept API
                              const std::unordered_set<std::uint32_t>& s) {
         if (s.empty()) return;
         std::printf("  %s:", label);
@@ -388,6 +337,7 @@ void print_filters(const RunCtx& ctx) {
         std::printf("\n");
     };
     auto print_str_set = [](const char* label,
+                            // keep std: unswept API
                             const std::unordered_set<std::string>& s) {
         if (s.empty()) return;
         std::printf("  %s:", label);
@@ -449,7 +399,9 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, coro::Scope* scope) {
         if (ctx->is_root) {
             std::printf("Using call tree hierarchical replay mode\n");
         }
-        ctx->result = engine.replay_with_call_tree(ctx->cli->inputs[0]);
+        ctx->result =
+            // keep std: unswept API
+            engine.replay_with_call_tree(std::string(ctx->cli->inputs[0]));
     } else {
         // Pipelined path: producer (read+parse) feeds Channel<Trace>;
         // consumer (apply_timing+execute) drains it.
@@ -492,14 +444,13 @@ int run(int argc, char** argv) {
         return 1;
     }
 
-    argparse::ArgumentParser program("dftracer_replay",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    binaries::ArgParser program(
+        "dftracer_replay", DFTRACER_UTILS_PACKAGE_VERSION,
         "DFTracer replay utility - replays I/O operations from DFTracer "
         "trace files (.pfw, .pfw.gz)");
 
     ReplayArgParse cli(program);
-    if (!binaries::setup_and_parse(cli, argc, argv)) return 1;
+    if (auto code = binaries::setup_and_parse(cli, argc, argv)) return *code;
 
     RunCtx ctx;
     ctx.cli = &cli;
@@ -510,7 +461,7 @@ int run(int argc, char** argv) {
     ctx.is_root = mpi::MPIUtils::instance().is_root();
 #endif
 
-    // Mirror argparse output into ReplayConfig.
+    // Mirror the parsed options into ReplayConfig.
     auto& c = ctx.config;
     c.maintain_timing = !cli.no_timing;
     c.dry_run = cli.dry_run;

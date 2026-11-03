@@ -30,7 +30,7 @@ inline int mpi_main(int argc, char** argv, int (*run)(int, char**)) {
 
 // When multiple ranks share a node, divide executor/io threads by the per-node
 // rank count so the ranks don't collectively oversubscribe the cores. Only
-// values still at the argparse default (hardware_concurrency()) are scaled;
+// values still at the parser default (hardware_concurrency()) are scaled;
 // explicit user-provided values are left alone. With verbose, rank 0 prints the
 // detected layout.
 inline void scale_threads_for_ppn(PipelineArgs& pipeline, int rank,

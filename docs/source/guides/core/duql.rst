@@ -211,8 +211,8 @@ files)`` on the scan, so the index still skips chunks. Arrows also work in
 
       .. code-block:: bash
 
-         dftracer_view --files trace.pfw.gz \
-             --duql 'where fhash -> files.path like "%/scratch/%"'
+         dftracer_view trace.pfw.gz \
+             -q 'where fhash -> files.path like "%/scratch/%"'
 
 The dftracer source declares these row sets:
 
@@ -268,7 +268,7 @@ tools also take ``--duql-path PATH`` (repeatable).
 
    echo 'def slow(t) = dur > t;' > ~/duql/io.duql
    export DFTRACER_UTILS_DUQL_PATH=~/duql
-   dftracer_view --files trace.pfw.gz --duql 'where slow(250us)'
+   dftracer_view trace.pfw.gz -q 'where slow(250us)'
 
 A macro of the query hides one of the record schema's source, which hides one
 from a path file. The rules are in :doc:`../../reference/duql`.
@@ -326,8 +326,8 @@ instead of formatting values into the text.
 
       .. code-block:: bash
 
-         dftracer_view --files trace.pfw.gz \
-             --duql 'where cat == $cat and dur > 250us | derive ms = dur / 1000 | sort -ms | take $n' \
+         dftracer_view trace.pfw.gz \
+             -q 'where cat == $cat and dur > 250us | derive ms = dur / 1000 | sort -ms | take $n' \
              --param cat='"POSIX"' --param n=5
 
 ``250us`` takes the unit of ``dur`` from the record schema. Add
@@ -341,7 +341,7 @@ Aggregate with a pipeline
 
 ``group`` and ``agg`` summarize the rows, and the trace stages cut them by
 time. Each recipe below is one query for ``TraceViewer.duql``,
-``View::duql`` or ``dftracer_view --duql``.
+``View::duql`` or ``dftracer_view -q``.
 
 Time per function
 ~~~~~~~~~~~~~~~~~
@@ -375,7 +375,7 @@ Time per function
 
       .. code-block:: bash
 
-         dftracer_view --files trace.pfw.gz --duql 'where cat == "POSIX"
+         dftracer_view trace.pfw.gz -q 'where cat == "POSIX"
              | group name { calls = count(), total = sum(dur), p99 = quantile(dur, 0.99) }
              | sort -total | take 10'
 

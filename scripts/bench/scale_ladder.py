@@ -19,10 +19,10 @@ script stops with exit 2 when a file or dir owned by this user in the set is
 newer than the run start.
 
 Tools: index event_count info stats view split validate pgzip comparator replay.
-  - A single-file set is passed with --files where the tool has it (info,
-    stats, view, validate) and as a path to comparator and replay. index,
-    event_count and split only take -d and fail on a file, so they get the
-    link dir.
+  - A single-file set is passed as a path where the tool takes files (info,
+    stats, view, validate) and to comparator and replay. index, event_count
+    and split only take a folder and fail on a file, so they get the link
+    dir.
   - view runs with --group-by name, which reads every event.
   - replay runs with --dry-run --dftracer-mode --no-sleep: it parses and
     analyzes the events and does no I/O on the trace paths. --dry-run alone
@@ -430,13 +430,13 @@ def build_cmd(tool, binary, in_path, is_file, run_dir, threads, stage_dir):
     os.makedirs(out)
     in_dir = os.path.dirname(in_path) if is_file else in_path
     if tool in FILES_FLAG:
-        src = ["--files", in_path] if is_file else ["-d", in_dir]
+        src = [in_path] if is_file else [in_dir]
     elif tool in PATH_ARG:
         src = []
     elif tool == "pgzip":
-        src = ["-d", stage_dir]
+        src = [stage_dir]
     else:
-        src = ["-d", in_dir]
+        src = [in_dir]
     cmd = [binary]
     if threads:
         cmd += ["--executor-threads", str(threads)]
@@ -445,7 +445,7 @@ def build_cmd(tool, binary, in_path, is_file, run_dir, threads, stage_dir):
     elif tool == "view":
         cmd += src + ["--index-dir", idx, "--group-by", "name"]
     elif tool == "split":
-        cmd += src + ["-o", out, "-n", "bench", "-s", "64MB"]
+        cmd += src + ["-o", out, "--app-name", "bench", "--chunk-size", "64MB"]
     elif tool in ("validate", "pgzip"):
         cmd += src
     elif tool == "comparator":

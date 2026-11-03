@@ -48,9 +48,6 @@ Runtime dependencies
    * - yaml-cpp
      - ``MIT``
      - https://github.com/jbeder/yaml-cpp
-   * - argparse
-     - ``MIT``
-     - https://github.com/p-ranav/argparse
    * - moodycamel concurrentqueue
      - ``BSD-2-Clause``
      - https://github.com/cameron314/concurrentqueue

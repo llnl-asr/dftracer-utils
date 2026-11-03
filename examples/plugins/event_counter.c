@@ -4,7 +4,7 @@
  *
  * Build: cc -std=c99 -shared -fPIC -I<repo>/include \
  *           -o event_counter.so event_counter.c
- * Run:   dftracer_run -d ./traces --plugin ./event_counter.so
+ * Run:   dftracer_run ./traces --plugin ./event_counter.so
  */
 
 #include <dftracer/utils/dataframe/abi.h>

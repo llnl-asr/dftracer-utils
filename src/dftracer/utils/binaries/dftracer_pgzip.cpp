@@ -4,10 +4,15 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/coro.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
@@ -23,53 +28,45 @@ namespace fileio = dftracer::utils::utilities::fileio;
 
 class PgzipArgParse : public binaries::ArgParse {
    public:
-    binaries::DirectoryArgs directory{binaries::DirMode::DefaultDot,
-                                      "Directory containing .pfw files"};
+    binaries::InputArgs inputs{
+        binaries::DirMode::DefaultDot,
+        "Folder of .pfw files (default: the current folder) or .pfw files"};
     binaries::PipelineArgs pipeline;
     binaries::WatchdogArgs watchdog;
 
     int compression_level = 6;
     std::size_t chunk_size = 4 * 1024 * 1024;
 
-    explicit PgzipArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
-        schema(directory, pipeline, watchdog);
+    explicit PgzipArgParse(binaries::ArgParser& p) : ArgParse(p) {
+        schema(inputs, pipeline, watchdog);
     }
 
    protected:
     void register_args() override {
-        parser()
-            .add_argument("-l", "--compression-level")
-            .help("Compression level (0-12, default: 6)")
-            .scan<'d', int>()
-            .default_value(6);
+        parser().option(compression_level, {"--compression-level"},
+                        "Compression level (0-12, default: 6)");
 
-        parser()
-            .add_argument("--chunk-size")
-            .help(
-                "Chunk size for parallel compression (default: 4MB). Accepts "
-                "units, e.g. 512KB, 4MB")
-            .default_value(std::to_string(4 * 1024 * 1024));
-    }
-
-    void post_parse() override {
-        compression_level = parser().get<int>("--compression-level");
-        chunk_size = binaries::get_bytes_arg(parser(), "--chunk-size");
+        parser().bytes(
+            chunk_size, {"--chunk-size"},
+            "Chunk size for parallel compression (default: 4MB). Accepts "
+            "units, e.g. 512KB, 4MB",
+            "4194304");
     }
 };
 
 namespace {
 
 struct FileResult {
-    std::string input_path;
-    std::string output_path;
+    dstd::String input_path;
+    dstd::String output_path;
     bool success = false;
     std::size_t original_size = 0;
     std::size_t compressed_size = 0;
-    std::string error_message;
+    dstd::String error_message;
 };
 
 static coro::CoroTask<FileResult> compress_file_parallel(
-    const std::string& file_path, int compression_level,
+    const dstd::String& file_path, int compression_level,
     std::size_t num_workers, std::size_t chunk_size) {
     FileResult result;
     result.input_path = file_path;
@@ -88,8 +85,8 @@ static coro::CoroTask<FileResult> compress_file_parallel(
             co_return result;
         }
 
-        std::ifstream ifs(file_path, std::ios::binary);
-        if (!ifs.is_open()) {
+        dstd::ScopedFd input(::open(file_path.c_str(), O_RDONLY));
+        if (input.get() < 0) {
             result.error_message = "Cannot open file: " + file_path;
             co_return result;
         }
@@ -98,15 +95,22 @@ static coro::CoroTask<FileResult> compress_file_parallel(
         opts.member_size = chunk_size;
         opts.level = compression_level;
         opts.workers = num_workers;
+        // keep std: unswept API
+        const std::string writer_path(result.output_path);
         auto writer = common::unwrap(
-            co_await fileio::GzipLineWriter::open(result.output_path, opts));
+            co_await fileio::GzipLineWriter::open(writer_path, opts));
 
-        std::string buf;
-        std::string carry;
+        dstd::String buf;
+        dstd::String carry;
         buf.resize(std::max<std::size_t>(chunk_size, 1 << 20));
-        while (ifs) {
-            ifs.read(buf.data(), static_cast<std::streamsize>(buf.size()));
-            auto n = static_cast<std::size_t>(ifs.gcount());
+        bool read_failed = false;
+        for (;;) {
+            const ssize_t got = ::read(input.get(), buf.data(), buf.size());
+            if (got < 0) {
+                read_failed = true;
+                break;
+            }
+            auto n = static_cast<std::size_t>(got);
             if (n == 0) break;
             dstd::StringView block(buf.data(), n);
             auto nl = block.rfind('\n');
@@ -124,14 +128,17 @@ static coro::CoroTask<FileResult> compress_file_parallel(
             }
             carry.append(block.substr(nl + 1));
         }
-        if (ifs.bad()) throw std::runtime_error("read error: " + file_path);
+        if (read_failed) {
+            throw std::runtime_error(
+                common::str_cat("read error: ", file_path).c_str());
+        }
 
         common::unwrap(co_await writer.close(carry));
         result.compressed_size = static_cast<std::size_t>(common::unwrap(
             dstd::fs::file_size(dstd::PathView(result.output_path))));
         result.success = true;
     } catch (const std::exception& e) {
-        result.error_message = std::string("Compression failed: ") + e.what();
+        result.error_message = dstd::String("Compression failed: ") + e.what();
         (void)dstd::fs::remove(dstd::PathView(result.output_path));
     }
 
@@ -141,13 +148,13 @@ static coro::CoroTask<FileResult> compress_file_parallel(
 }  // namespace
 
 static int run_pgzip(const PgzipArgParse& cli) {
-    const auto input_dir = binaries::absolute_path(cli.directory.value);
+    const auto input_dir = binaries::absolute_path(cli.inputs.directory);
     const auto executor_threads = cli.pipeline.executor_threads;
     const auto compression_level = cli.compression_level;
     const auto chunk_size = cli.chunk_size;
 
-    std::vector<std::string> input_files;
-    {
+    dstd::Vector<dstd::String> input_files;
+    if (!cli.inputs.directory.empty()) {
         const auto dir =
             common::unwrap(dstd::fs::Dir::open(dstd::PathView(input_dir)));
         auto listing = common::unwrap(dir.entries());
@@ -155,9 +162,13 @@ static int run_pgzip(const PgzipArgParse& cli) {
             if (dstd::PathView(entry.name).extension() != ".pfw") continue;
             const auto st = dir.stat(entry.name);
             if (!st || st->kind != dstd::fs::FileKind::File) continue;
-            input_files.push_back(
-                std::string((dstd::PathView(input_dir) / entry.name).str()));
+            input_files.emplace_back(
+                (dstd::PathView(input_dir) / entry.name).str());
         }
+    }
+    for (const auto file : cli.inputs.files) {
+        if (dstd::PathView(file).extension() != ".pfw") continue;
+        input_files.emplace_back(binaries::absolute_path(file).str());
     }
 
     if (input_files.empty()) {
@@ -182,7 +193,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
         "DFTracer Parallel Gzip", cli.pipeline, cli.watchdog);
     Pipeline pipeline(pipeline_config);
 
-    std::vector<FileResult> results;
+    dstd::Vector<FileResult> results;
     std::mutex results_mutex;
 
     auto* files_ptr = &input_files;

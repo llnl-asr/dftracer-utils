@@ -22,7 +22,6 @@ notices here cover only the third-party dependencies.
 | libdeflate | `MIT` | https://github.com/ebiggers/libdeflate |
 | Boost.Math | `BSL-1.0` | https://github.com/boostorg/math |
 | yaml-cpp | `MIT` | https://github.com/jbeder/yaml-cpp |
-| argparse | `MIT` | https://github.com/p-ranav/argparse |
 | moodycamel concurrentqueue | `BSD-2-Clause` | https://github.com/cameron314/concurrentqueue |
 | moodycamel readerwriterqueue | `BSD-2-Clause` | https://github.com/cameron314/readerwriterqueue |
 | unordered_dense | `MIT` | https://github.com/martinus/unordered_dense |

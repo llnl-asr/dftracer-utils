@@ -322,8 +322,8 @@ struct ServerProcess {
         if (pid < 0) return false;
 
         if (pid == 0) {
-            ::execl(binary.c_str(), binary.c_str(), "-d", data_dir.c_str(),
-                    "-p", port_str.c_str(), "--bind", "127.0.0.1",
+            ::execl(binary.c_str(), binary.c_str(), data_dir.c_str(), "-p",
+                    port_str.c_str(), "--bind", "127.0.0.1",
                     "--executor-threads", "2", "--io-threads", "2", nullptr);
             ::_exit(127);
         }

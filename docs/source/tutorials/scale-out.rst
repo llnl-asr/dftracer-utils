@@ -42,14 +42,14 @@ A shard here is just a directory holding its own trace(s) and its own
 2. Index each shard independently
 -------------------------------------
 
-``dftracer_index -d <dir>`` builds ``<dir>/.dftindex`` for everything under
+``dftracer_index <dir>`` builds ``<dir>/.dftindex`` for everything under
 ``<dir>``. Run it once per shard. This is exactly what each worker in a real
 job would do to its own slice, with no coordination between them:
 
 .. code-block:: console
 
-   $ dftracer_index -d shard-a
-   $ dftracer_index -d shard-b
+   $ dftracer_index shard-a
+   $ dftracer_index shard-b
 
 3. Catalog and query the shard set
 --------------------------------------
@@ -125,7 +125,7 @@ What you learned
 -------------------
 
 - A shard is just a directory with its own trace(s) and its own
-  ``.dftindex``; build each independently (``dftracer_index -d <dir>``), with
+  ``.dftindex``; build each independently (``dftracer_index <dir>``), with
   no coordination required between shards.
 - ``write_shard_set(root, shard_dirs)`` catalogs a set of shards into the
   manifest of an index root.

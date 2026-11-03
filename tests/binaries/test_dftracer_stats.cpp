@@ -165,7 +165,7 @@ TEST_SUITE("DFTracerStats") {
 
         // dftracer_stats auto-builds the .bidx when missing.
         int rc = 0;
-        auto output = run_stats_capture(binary, {"-d", env.get_dir()}, &rc);
+        auto output = run_stats_capture(binary, {env.get_dir()}, &rc);
         CHECK(rc == 0);
         // Text summary always prints "Events Scanned:".
         CHECK(output.find("Events Scanned") != std::string::npos);
@@ -185,8 +185,7 @@ TEST_SUITE("DFTracerStats") {
         REQUIRE(!f.empty());
 
         int rc = 0;
-        auto output =
-            run_stats_capture(binary, {"-d", env.get_dir(), "--json"}, &rc);
+        auto output = run_stats_capture(binary, {env.get_dir(), "--json"}, &rc);
         CHECK(rc == 0);
         // JSON output is a JSON array; each element is an object.
         CHECK(output.find('{') != std::string::npos);
@@ -209,7 +208,7 @@ TEST_SUITE("DFTracerStats") {
             REQUIRE(!f.empty());
         }
 
-        int rc = run_stats(binary, {"-d", env.get_dir()});
+        int rc = run_stats(binary, {env.get_dir()});
         CHECK(rc == 0);
     }
 
@@ -234,7 +233,7 @@ TEST_SUITE("DFTracerStats") {
 
         int rc = 0;
         long n1 = total_events(
-            run_stats_capture(binary, {"-d", env.get_dir(), "--json"}, &rc));
+            run_stats_capture(binary, {env.get_dir(), "--json"}, &rc));
         CHECK(rc == 0);
         CHECK(n1 > 0);
 
@@ -245,7 +244,7 @@ TEST_SUITE("DFTracerStats") {
         REQUIRE(dftracer::utils::dstd::fs::rename(raw, f).has_value());
 
         long n2 = total_events(
-            run_stats_capture(binary, {"-d", env.get_dir(), "--json"}, &rc));
+            run_stats_capture(binary, {env.get_dir(), "--json"}, &rc));
         CHECK(rc == 0);
         CHECK(n2 > n1);
     }
@@ -262,14 +261,13 @@ TEST_SUITE("DFTracerStats") {
         const Fixture fx = write_fixture(env.get_dir());
 
         int rc = 0;
-        run_stats_capture(binary, {"-d", env.get_dir()}, &rc);
+        run_stats_capture(binary, {env.get_dir()}, &rc);
         REQUIRE(rc == 0);
         const auto before = snapshot(env.get_dir());
 
         auto report = [&](const std::string& name,
                           std::vector<std::string> extra = {}) {
-            std::vector<std::string> args{"-d", env.get_dir(), "--report",
-                                          name};
+            std::vector<std::string> args{env.get_dir(), "--report", name};
             args.insert(args.end(), extra.begin(), extra.end());
             auto out = run_stats_capture(binary, args, &rc);
             CHECK(rc == 0);
@@ -330,8 +328,7 @@ TEST_SUITE("DFTracerStats") {
 
         int rc = 0;
         auto out = run_stats_capture(
-            binary, {"-d", env.get_dir(), "--json", "--report", "categories"},
-            &rc);
+            binary, {env.get_dir(), "--json", "--report", "categories"}, &rc);
         CHECK(rc == 0);
         for (const char* total :
              {"\"total_events\":60,", "\"total_events\":120,",

@@ -22,10 +22,10 @@ Command line
 .. code-block:: bash
 
    # Minimal: read ./traces, write dlio.yaml
-   dftracer_gen_dlio_config -d ./traces -o dlio.yaml
+   dftracer_gen_dlio_config ./traces -o dlio.yaml
 
    # Tune the simulator: more iterations, tighter convergence
-   dftracer_gen_dlio_config -d ./traces -o dlio.yaml \
+   dftracer_gen_dlio_config ./traces -o dlio.yaml \
        --simulation-iterations 20 --target-e2e-error 0.02
 
 ``-o``/``--output`` is required. ``-d``/``--directory`` defaults to ``.`` and

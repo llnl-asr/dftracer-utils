@@ -31,7 +31,7 @@ process start (full list: :doc:`../../environment`):
 .. code-block:: console
 
    $ DFTRACER_UTILS_MONITOR=tree DFTRACER_UTILS_LOG_LEVEL=debug \
-       dftracer_view -d traces/ --duql 'cat == "POSIX"'
+       dftracer_view traces/ -q 'cat == "POSIX"'
 
 From Python, ``Runtime.get_progress()`` returns a live snapshot (per-worker
 state and per-task durations) you can poll while a run is in flight, without

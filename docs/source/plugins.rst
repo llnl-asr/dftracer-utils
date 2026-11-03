@@ -262,7 +262,7 @@ exactness. Returning nothing scans everything.
       .. code-block:: bash
 
          dftracer_run --plugin ./p.so --parg duql='cat == "POSIX"' \
-                      --files trace.pfw.gz
+                      trace.pfw.gz
 
    .. tab-item:: C (raw ABI)
 
@@ -1043,8 +1043,8 @@ result tables - read those through :class:`~dftracer.utils.plugins.Plugins`):
 
 .. code-block:: bash
 
-   dftracer_run --plugin ./name_edges.so --files trace.pfw.gz
-   dftracer_run --plugin ./a.so --plugin ./b.so -d ./traces      # one shared scan
+   dftracer_run --plugin ./name_edges.so trace.pfw.gz
+   dftracer_run --plugin ./a.so --plugin ./b.so ./traces      # one shared scan
 
 Use ``-d <directory>`` for a whole tree instead of ``--files``.
 

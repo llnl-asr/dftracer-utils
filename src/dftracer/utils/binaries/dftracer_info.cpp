@@ -10,7 +10,9 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
@@ -41,40 +43,25 @@ using dftracer::utils::index::store::IndexExtension;
 
 class InfoArgParse : public binaries::ArgParse {
    public:
-    binaries::DirectoryArgs directory{binaries::DirMode::DefaultEmpty};
-    binaries::FilesArgs files_args{
-        "Compressed files to inspect (GZIP, TAR.GZ)"};
+    binaries::InputArgs inputs{
+        binaries::DirMode::DefaultEmpty,
+        "Compressed files to inspect (GZIP, TAR.GZ) or a folder of them"};
     binaries::PipelineArgs pipeline;
     binaries::IndexingArgs indexing;
 
-    std::string query_type = "summary";
-    bool force_rebuild = false;
+    dstd::StringView report = "summary";
 
-    explicit InfoArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
-        indexing.with_force = false;
+    explicit InfoArgParse(binaries::ArgParser& p) : ArgParse(p) {
         indexing.index_dir_help =
             "Directory to store index files (default: system temp directory)";
-        schema(directory, files_args, pipeline, indexing);
+        schema(inputs, pipeline, indexing);
     }
 
    protected:
     void register_args() override {
-        parser()
-            .add_argument("--query")
-            .help(
-                "Query type: summary (aggregate all files, default) or "
-                "detailed (per-file output)")
-            .default_value<std::string>("summary");
-
-        parser()
-            .add_argument("-f", "--force-rebuild")
-            .help("Force rebuild index files")
-            .flag();
-    }
-
-    void post_parse() override {
-        query_type = parser().get<std::string>("--query");
-        force_rebuild = parser().get<bool>("--force-rebuild");
+        parser().option(report, {"--report"},
+                        "Report type: summary (aggregate all files, default) "
+                        "or detailed (per-file output)");
     }
 };
 
@@ -90,7 +77,9 @@ struct RootInfoSummary {
 };
 
 static coro::CoroTask<dstd::SharedPtr<RootInfoSummary>> load_root_info_summary(
+    // keep std: unswept API
     std::string index_path) {
+    // keep std: unswept API
     auto result = std::make_shared<RootInfoSummary>();
 
     const auto snapshot =
@@ -110,8 +99,11 @@ static coro::CoroTask<dstd::SharedPtr<RootInfoSummary>> load_root_info_summary(
 
 // Files of `index_path` in path order, with the ones whose pruning tier is
 // current added to `group`.
+// keep std: unswept API
 static void load_cached_files(const std::string& index_path,
+                              // keep std: unswept API
                               std::vector<std::string>& files,
+                              // keep std: unswept API
                               std::vector<ResolvedFile>& group) {
     const auto snapshot =
         common::unwrap(index::plan::open_snapshot(index_path));
@@ -127,12 +119,16 @@ static void load_cached_files(const std::string& index_path,
     }
 }
 
+// keep std: unswept API
 static std::vector<MetadataCollectorUtilityOutput>
+// keep std: unswept API
 process_index_group_info_sync(std::string index_path,
+                              // keep std: unswept API
                               std::vector<ResolvedFile> entries) {
     const auto snapshot =
         common::unwrap(index::plan::open_snapshot(index_path));
 
+    // keep std: unswept API
     std::vector<MetadataCollectorUtilityOutput> results;
     results.reserve(entries.size());
 
@@ -193,8 +189,11 @@ process_index_group_info_sync(std::string index_path,
     return results;
 }
 
+// keep std: unswept API
 static coro::CoroTask<std::vector<MetadataCollectorUtilityOutput>>
+// keep std: unswept API
 process_index_group_info(dstd::SharedPtr<std::string> index_path,
+                         // keep std: unswept API
                          dstd::SharedPtr<std::vector<ResolvedFile>> entries) {
     co_return process_index_group_info_sync(std::move(*index_path),
                                             std::move(*entries));
@@ -308,9 +307,12 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
 }
 
 static coro::CoroTask<void> auto_index_and_resolve(
+    // keep std: unswept API
     std::vector<FileWorkItem>& files_needing_index,
+    // keep std: unswept API
     const std::string& index_dir, std::size_t checkpoint_size,
     std::size_t executor_threads,
+    // keep std: unswept API
     std::unordered_map<std::string, std::vector<ResolvedFile>>&
         indexed_groups) {
     auto index_path = internal::determine_index_path(
@@ -318,6 +320,7 @@ static coro::CoroTask<void> auto_index_and_resolve(
     dftracer::utils::index::release_root(index_path);
 
     {
+        // keep std: unswept API
         auto batch_config = std::make_shared<IndexBuildBatchConfig>();
         batch_config->file_paths.reserve(files_needing_index.size());
         for (const auto& item : files_needing_index) {
@@ -339,6 +342,7 @@ static coro::CoroTask<void> auto_index_and_resolve(
         }
     }
 
+    // keep std: unswept API
     std::vector<std::string> newly_indexed;
     newly_indexed.reserve(files_needing_index.size());
     for (const auto& item : files_needing_index) {
@@ -360,21 +364,29 @@ static coro::CoroTask<void> auto_index_and_resolve(
 }
 
 static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
-    const auto& directory = cli->directory.value;
-    const auto& query_type = cli->query_type;
-    const auto force_rebuild = cli->force_rebuild;
+    // keep std: unswept API
+    const std::string directory(cli->inputs.directory);
+    const auto report = cli->report;
+    const auto force_rebuild = cli->indexing.force;
     const auto checkpoint_size = cli->indexing.checkpoint_size;
-    const auto& index_dir = cli->indexing.index_dir;
+    // keep std: unswept API
+    const std::string index_dir(cli->indexing.index_dir);
     const auto executor_threads = cli->pipeline.executor_threads;
-    const bool summary_mode = (query_type != "detailed");
+    const bool summary_mode = (report != "detailed");
 
     common::Timer stages_storage("dftracer_info");
     common::Timer* stages =
         cli->pipeline.time_profiling ? &stages_storage : nullptr;
     common::Timer overall(true);
 
+    // keep std: unswept API
     std::vector<std::string> files;
+    // keep std: unswept API
+    std::vector<std::string> cli_files;
+    for (const auto file : cli->inputs.files) cli_files.emplace_back(file);
+    // keep std: unswept API
     std::vector<FileWorkItem> files_needing_index;
+    // keep std: unswept API
     std::unordered_map<std::string, std::vector<ResolvedFile>> indexed_groups;
 
     {
@@ -439,6 +451,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
             } else {
                 common::ScopedTimer _ds(stages, "scan_and_resolve");
                 Resolver resolver;
+                // keep std: unswept API
                 auto input = std::make_unique<ResolverInput>();
                 input->directory = directory;
                 input->index_dir = index_dir;
@@ -452,11 +465,12 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
             }
         } else {
             common::ScopedTimer _rs(stages, "resolve_index_state");
-            co_await ensure_indexes_fresh("", cli->files_args.value, index_dir,
+            co_await ensure_indexes_fresh("", cli_files, index_dir,
                                           force_rebuild);
             Resolver resolver;
+            // keep std: unswept API
             auto input = std::make_unique<ResolverInput>();
-            input->files = cli->files_args.value;
+            input->files = cli_files;
             input->index_dir = index_dir;
             auto result = co_await resolver(*input);
             files = std::move(result.all_files);
@@ -472,6 +486,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
         co_return 1;
     }
 
+    // keep std: unswept API
     std::vector<MetadataCollectorUtilityOutput> all_results;
     std::mutex results_mutex;
 
@@ -482,8 +497,10 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                 auto* all_results_ptr = &all_results;
                 auto* mutex_ptr = &results_mutex;
                 for (auto& [ip, group] : indexed_groups) {
+                    // keep std: unswept API
                     auto idx_path_ptr = std::make_shared<std::string>(ip);
                     auto entries_ptr =
+                        // keep std: unswept API
                         std::make_shared<std::vector<ResolvedFile>>(
                             std::move(group));
                     scope.spawn([idx_path_ptr, entries_ptr, all_results_ptr,
@@ -513,8 +530,10 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                 auto* all_results_ptr = &all_results;
                 auto* mutex_ptr = &results_mutex;
                 for (auto& [ip, group] : indexed_groups) {
+                    // keep std: unswept API
                     auto idx_path_ptr = std::make_shared<std::string>(ip);
                     auto entries_ptr =
+                        // keep std: unswept API
                         std::make_shared<std::vector<ResolvedFile>>(
                             std::move(group));
                     scope.spawn([idx_path_ptr, entries_ptr, all_results_ptr,
@@ -578,6 +597,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
         co_return (bad == 0) ? 0 : 1;
     }
 
+    // keep std: unswept API
     std::unordered_map<std::string, index::Snapshot> snapshots;
     for (const auto& r : all_results) {
         auto it = snapshots.find(r.index_path);

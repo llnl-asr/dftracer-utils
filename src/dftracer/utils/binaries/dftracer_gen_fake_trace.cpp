@@ -5,6 +5,9 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
@@ -50,17 +53,23 @@ using trace_gen::TraceWriter;
 // Verify: build bloom indices and run queries to prove chunk-skipping works
 // ---------------------------------------------------------------------------
 struct QuerySpec {
+    // keep std: unswept API
     std::string label;
+    // keep std: unswept API
     std::unordered_map<std::string, std::vector<std::string>> predicates;
 };
 
 static coro::CoroTask<int> run_verify(
+    // keep std: unswept API
     const std::vector<std::string>& file_paths,
+    // keep std: unswept API
     const std::vector<QuerySpec>& queries, std::size_t ckpt_size) {
     // Extra dimensions: arbitrary dot-paths into args
+    // keep std: unswept API
     std::vector<std::string> extra_dims = {"ret", "count", "offset", "epoch",
                                            "step"};
 
+    // keep std: unswept API
     std::vector<std::string> all_dimensions = {"name",  "cat",   "pid", "tid",
                                                "hhash", "fhash", "sref"};
     for (const auto& dim : extra_dims) {
@@ -78,15 +87,17 @@ static coro::CoroTask<int> run_verify(
 
     // Batch-build gzip indexes for all files
     {
+        // keep std: unswept API
         std::vector<std::string> abs_paths;
         abs_paths.reserve(file_paths.size());
         for (const auto& fp : file_paths) {
-            abs_paths.push_back(binaries::absolute_path(fp));
+            abs_paths.emplace_back(binaries::absolute_path(fp).str());
         }
 
         auto index_path = internal::determine_index_path(abs_paths.front(), "");
         dftracer::utils::index::release_root(index_path);
 
+        // keep std: unswept API
         auto batch_config = std::make_shared<IndexBuildBatchConfig>();
         batch_config->file_paths = std::move(abs_paths);
         batch_config->checkpoint_size = ckpt_size;
@@ -96,7 +107,9 @@ static coro::CoroTask<int> run_verify(
     }
 
     for (const auto& file_path : file_paths) {
-        std::string abs_path = binaries::absolute_path(file_path);
+        // keep std: unswept API
+        std::string abs_path(binaries::absolute_path(file_path).str());
+        // keep std: unswept API
         std::string index_path = internal::determine_index_path(abs_path, "");
 
         // Collect metadata
@@ -115,6 +128,7 @@ static coro::CoroTask<int> run_verify(
 
         // 3. Index chunks and write to .idx
         try {
+            // keep std: unswept API
             std::string idx_path_bidx =
                 internal::determine_index_path(abs_path, "");
             auto opened = index::Index::open(idx_path_bidx);
@@ -144,6 +158,7 @@ static coro::CoroTask<int> run_verify(
                 std::size_t start;
                 std::size_t end;
             };
+            // keep std: unswept API
             std::vector<ChunkWork> chunks;
 
             if (num_ckpts == 0) {
@@ -159,6 +174,7 @@ static coro::CoroTask<int> run_verify(
                 }
             }
 
+            // keep std: unswept API
             std::unordered_map<std::string, ScalableBloomFilter> file_blooms;
             std::size_t total_events = 0;
 
@@ -241,12 +257,15 @@ static coro::CoroTask<int> run_verify(
         std::size_t chunks_matched = 0;
 
         for (const auto& file_path : file_paths) {
-            std::string abs_path = binaries::absolute_path(file_path);
+            // keep std: unswept API
+            std::string abs_path(binaries::absolute_path(file_path).str());
+            // keep std: unswept API
             std::string idx_path_q =
                 internal::determine_index_path(abs_path, "");
 
             try {
                 // Convert predicate map to query DSL string
+                // keep std: unswept API
                 std::string query_dsl;
                 for (const auto& [dim, vals] : q.predicates) {
                     if (!query_dsl.empty()) query_dsl += " and ";
@@ -296,7 +315,7 @@ class GenFakeTraceArgParse : public binaries::ArgParse {
    public:
     binaries::PipelineArgs pipeline;
 
-    std::string output_dir;
+    dstd::StringView output;
     int num_ranks = 8;
     int num_hosts = 4;
     int num_epochs = 500;
@@ -306,102 +325,67 @@ class GenFakeTraceArgParse : public binaries::ArgParse {
     int num_train_files = 8;
     int num_val_files = 2;
     int step_dur_ms = 100;
+    double step_duration_ms = 100;
     std::uint64_t base_seed = 42;
     bool verify = false;
     std::size_t checkpoint_size = 2 * 1024 * 1024;
 
-    explicit GenFakeTraceArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+    explicit GenFakeTraceArgParse(binaries::ArgParser& p) : ArgParse(p) {
         schema(pipeline);
     }
 
    protected:
     void register_args() override {
         parser()
-            .add_argument("-o", "--output-dir")
-            .help("Output directory for trace files")
+            .option(output, {"-o", "--output"},
+                    "Output folder for the trace files")
             .required();
-        parser()
-            .add_argument("-p", "--num-processes")
-            .help("Number of ranks")
-            .scan<'d', int>()
-            .default_value(8);
-        parser()
-            .add_argument("-H", "--num-hosts")
-            .help("Number of hosts")
-            .scan<'d', int>()
-            .default_value(4);
-        parser()
-            .add_argument("-e", "--num-epochs")
-            .help("Training epochs")
-            .scan<'d', int>()
-            .default_value(500);
-        parser()
-            .add_argument("-s", "--steps-per-epoch")
-            .help("Steps per epoch")
-            .scan<'d', int>()
-            .default_value(1000);
-        parser()
-            .add_argument("--checkpoint-every")
-            .help("Checkpoint every N epochs")
-            .scan<'d', int>()
-            .default_value(5);
-        parser()
-            .add_argument("--validation-every")
-            .help("Validate every N epochs")
-            .scan<'d', int>()
-            .default_value(2);
-        parser()
-            .add_argument("--num-train-files")
-            .help("Training data shards")
-            .scan<'d', int>()
-            .default_value(8);
-        parser()
-            .add_argument("--num-val-files")
-            .help("Validation data shards")
-            .scan<'d', int>()
-            .default_value(2);
-        parser()
-            .add_argument("--step-duration-ms")
-            .help(
-                "Base step duration (default: 100ms). A bare number is "
-                "milliseconds; suffixed values (e.g. 2s) are converted")
-            .default_value(std::string("100"));
-        parser()
-            .add_argument("--seed")
-            .help("Random seed for duration jitter")
-            .scan<'d', std::uint64_t>()
-            .default_value(static_cast<std::uint64_t>(42));
-        parser()
-            .add_argument("--verify")
-            .help(
-                "After generation, build bloom indices and run queries to "
-                "verify chunk-skipping works")
-            .flag();
-        parser()
-            .add_argument("--checkpoint-size")
-            .help(
-                "Gzip checkpoint size for indexing (default: 2MB). Accepts "
-                "units, e.g. 512KB, 2MB. Smaller values produce more chunks "
-                "and better demonstrate chunk-level bloom filter skipping.")
-            .default_value(std::to_string(2 * 1024 * 1024));
+
+        parser().option(num_ranks, {"--num-processes"}, "Number of ranks");
+
+        parser().option(num_hosts, {"--num-hosts"}, "Number of hosts");
+
+        parser().option(num_epochs, {"--num-epochs"}, "Training epochs");
+
+        parser().option(steps_per_epoch, {"--steps-per-epoch"},
+                        "Steps per epoch");
+
+        parser().option(checkpoint_every, {"--checkpoint-every"},
+                        "Checkpoint every N epochs");
+
+        parser().option(validation_every, {"--validation-every"},
+                        "Validate every N epochs");
+
+        parser().option(num_train_files, {"--num-train-files"},
+                        "Training data shards");
+
+        parser().option(num_val_files, {"--num-val-files"},
+                        "Validation data shards");
+
+        parser().duration(
+            step_duration_ms, 1e3, {"--step-duration-ms"},
+            "Base step duration (default: 100ms). A bare number is "
+            "milliseconds; suffixed values (e.g. 2s) are converted",
+            "100");
+
+        parser().option(base_seed, {"--seed"},
+                        "Random seed for duration jitter");
+
+        parser().flag(
+            verify, {"--verify"},
+            "After generation, build bloom indices and run queries to "
+            "verify chunk-skipping works");
+
+        parser().bytes(
+            checkpoint_size, {"--checkpoint-size"},
+            "Gzip checkpoint size for indexing (default: 2MB). Accepts "
+            "units, e.g. 512KB, 2MB. Smaller values produce more chunks "
+            "and better demonstrate chunk-level bloom filter skipping.",
+            dstd::to_string(2 * 1024 * 1024));
     }
 
     void post_parse() override {
-        output_dir = parser().get<std::string>("--output-dir");
-        num_ranks = parser().get<int>("--num-processes");
-        num_hosts = parser().get<int>("--num-hosts");
-        num_epochs = parser().get<int>("--num-epochs");
-        steps_per_epoch = parser().get<int>("--steps-per-epoch");
-        checkpoint_every = parser().get<int>("--checkpoint-every");
-        validation_every = parser().get<int>("--validation-every");
-        num_train_files = parser().get<int>("--num-train-files");
-        num_val_files = parser().get<int>("--num-val-files");
-        step_dur_ms = static_cast<int>(std::lround(
-            binaries::get_duration_arg(parser(), "--step-duration-ms", 1e3)));
-        base_seed = parser().get<std::uint64_t>("--seed");
-        verify = parser().get<bool>("--verify");
-        checkpoint_size =
-            binaries::get_bytes_arg(parser(), "--checkpoint-size");
+        step_dur_ms = static_cast<int>(std::lround(step_duration_ms));
     }
 };
 
@@ -415,7 +399,7 @@ int main(int argc, char** argv) {
         "Produces per-rank .pfw.gz files with known patterns "
         "suitable for testing bloom-filter indexing.",
         [](GenFakeTraceArgParse& cli) -> int {
-            const auto& output_dir = cli.output_dir;
+            const dstd::StringView output_dir = cli.output;
             const int num_ranks = cli.num_ranks;
             const int num_hosts = cli.num_hosts;
             const int num_epochs = cli.num_epochs;
@@ -440,33 +424,46 @@ int main(int argc, char** argv) {
             // -----------------------------------------------------------------------
             // Pre-compute hashes using project HasherUtility
             // -----------------------------------------------------------------------
+            // keep std: unswept API
             std::vector<std::string> host_names(num_hosts);
+            // keep std: unswept API
             std::vector<std::string> host_hashes(num_hosts);
             for (int h = 0; h < num_hosts; ++h) {
+                // keep std: unswept API
                 host_names[h] = "node-" + std::to_string(h);
                 host_hashes[h] = make_hash(host_names[h]);
             }
 
+            // keep std: unswept API
             std::vector<std::string> train_file_names(num_train_files);
+            // keep std: unswept API
             std::vector<std::string> train_file_hashes(num_train_files);
             for (int f = 0; f < num_train_files; ++f) {
                 train_file_names[f] =
+                    // keep std: unswept API
                     "/data/train/shard_" + std::to_string(f) + ".h5";
                 train_file_hashes[f] = make_hash(train_file_names[f]);
             }
 
+            // keep std: unswept API
             std::vector<std::string> val_file_names(num_val_files);
+            // keep std: unswept API
             std::vector<std::string> val_file_hashes(num_val_files);
             for (int f = 0; f < num_val_files; ++f) {
                 val_file_names[f] =
+                    // keep std: unswept API
                     "/data/val/val_" + std::to_string(f) + ".h5";
                 val_file_hashes[f] = make_hash(val_file_names[f]);
             }
 
+            // keep std: unswept API
             const std::string ckpt_file_name = "/checkpoints/model_ckpt.pt";
+            // keep std: unswept API
             const std::string ckpt_file_hash = make_hash(ckpt_file_name);
 
+            // keep std: unswept API
             const std::string script_name = "python train_unet3d.py";
+            // keep std: unswept API
             const std::string script_hash = make_hash(script_name);
 
             // -----------------------------------------------------------------------
@@ -487,15 +484,18 @@ int main(int argc, char** argv) {
             std::printf("  Seed: %llu   Verify: %s\n",
                         static_cast<unsigned long long>(base_seed),
                         verify ? "yes" : "no");
-            std::printf("  Output: %s\n", output_dir.c_str());
+            std::printf("  Output: %s\n", binaries::c_str(output_dir));
             std::printf("==========================================\n\n");
 
+            // keep std: unswept API
             std::vector<std::string> generated_files(num_ranks);
+            // keep std: unswept API
             std::vector<std::size_t> rank_event_counts(num_ranks, 0);
 
             for (int rank = 0; rank < num_ranks; ++rank) {
-                generated_files[rank] =
-                    output_dir + "/rank_" + std::to_string(rank) + ".pfw.gz";
+                // keep std: unswept API
+                generated_files[rank] = std::string(
+                    common::str_cat(output_dir, "/rank_", rank, ".pfw.gz"));
             }
 
             // -----------------------------------------------------------------------
@@ -517,6 +517,7 @@ int main(int argc, char** argv) {
             auto* script_name_ptr = &script_name;
             auto* sref_ptr = &script_hash;
             auto* rank_event_counts_ptr = &rank_event_counts;
+            // keep std: unswept API
             std::vector<dstd::SharedPtr<Task>> rank_tasks;
             for (int rank = 0; rank < num_ranks; ++rank) {
                 auto task = make_task(
@@ -529,10 +530,14 @@ int main(int argc, char** argv) {
                      ckpt_file_name_ptr, ckref_ptr, script_name_ptr, sref_ptr,
                      rank_event_counts_ptr](
                         CoroScope&) -> coro::CoroTask<void> {
+                        // keep std: unswept API
                         const std::string& path = (*generated_files_ptr)[rank];
+                        // and index APIs
                         TraceWriter writer(path);
                         writer.write("[\n");
+                        // keep std: unswept API
                         const std::string& sref = *sref_ptr;
+                        // keep std: unswept API
                         const std::string& ckref = *ckref_ptr;
 
                         std::mt19937_64 rng(base_seed +
@@ -540,6 +545,7 @@ int main(int argc, char** argv) {
                                                 10000ULL);
 
                         const int host_idx = rank % num_hosts;
+                        // keep std: unswept API
                         const std::string& my_hhash =
                             (*host_hashes_ptr)[host_idx];
                         const std::uint64_t pid =
@@ -549,6 +555,7 @@ int main(int argc, char** argv) {
 
                         // Determine which train shards this rank reads
                         // (round-robin)
+                        // keep std: unswept API
                         std::vector<int> my_train_shards;
                         for (int f = rank; f < num_train_files;
                              f += num_ranks) {
@@ -585,6 +592,7 @@ int main(int argc, char** argv) {
 
                         // Helper: fill common fields and auto-assign id
                         auto make_event =
+                            // keep std: unswept API
                             [&](const std::string& name, const std::string& cat,
                                 std::uint64_t event_tid, std::uint64_t event_ts,
                                 std::uint64_t dur, int level) {
@@ -618,6 +626,7 @@ int main(int argc, char** argv) {
                                     my_train_shards[step % static_cast<int>(
                                                                my_train_shards
                                                                    .size())];
+                                // keep std: unswept API
                                 const std::string& data_fhash =
                                     (*train_file_hashes_ptr)[shard_idx];
                                 std::uint64_t io_size = jitter(rng, 4096);
@@ -788,6 +797,7 @@ int main(int argc, char** argv) {
                                 for (int vs = 0; vs < val_steps; ++vs) {
                                     char extra[256];
                                     int vf_idx = vs % num_val_files;
+                                    // keep std: unswept API
                                     const std::string& vf_hash =
                                         (*val_file_hashes_ptr)[vf_idx];
                                     std::uint64_t vio_size = jitter(rng, 4096);
@@ -998,6 +1008,7 @@ int main(int argc, char** argv) {
                         (*rank_event_counts_ptr)[rank] = rank_events;
                         co_return;
                     },
+                    // keep std: unswept API
                     "Rank-" + std::to_string(rank));
                 rank_tasks.push_back(task);
             }
@@ -1062,6 +1073,7 @@ int main(int argc, char** argv) {
             dstd::SharedPtr<Task> verify_task;
 
             if (verify) {
+                // keep std: unswept API
                 std::vector<QuerySpec> test_queries;
 
                 test_queries.push_back({"name=pwrite (sparse, ckpt only)",
@@ -1077,10 +1089,12 @@ int main(int argc, char** argv) {
                 test_queries.push_back(
                     {"cat=APP (all compute events)", {{"cat", {"APP"}}}});
 
+                // keep std: unswept API
                 std::string pid0 = std::to_string(1000);
                 test_queries.push_back(
                     {"pid=" + pid0 + " (rank 0 only)", {{"pid", {pid0}}}});
 
+                // keep std: unswept API
                 std::string tid_io_0 = std::to_string(10001);
                 test_queries.push_back(
                     {"tid=" + tid_io_0 + " (rank 0 io thread)",
@@ -1130,6 +1144,7 @@ int main(int argc, char** argv) {
                 test_queries.push_back(
                     {"fhash=any val file (OR)",
                      {{"fhash",
+                       // keep std: unswept API
                        std::vector<std::string>(val_file_hashes.begin(),
                                                 val_file_hashes.end())}}});
 

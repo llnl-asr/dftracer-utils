@@ -5,6 +5,8 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -34,13 +36,13 @@ namespace {
 
 class GenDlioConfigArgParse : public binaries::ArgParse {
    public:
-    binaries::DirectoryArgs directory{
+    binaries::InputArgs inputs{
         binaries::DirMode::DefaultDot,
-        "Input directory containing .pfw.gz traces"};
+        "Folder of .pfw.gz traces (default: the current folder)"};
     binaries::PipelineArgs pipeline;
     binaries::IndexingArgs indexing;
 
-    std::string output;
+    dstd::StringView output;
     double max_bound_percentile = 95.0;
     int simulation_iterations = 5;
     double target_e2e_error = 0.05;
@@ -56,127 +58,87 @@ class GenDlioConfigArgParse : public binaries::ArgParse {
     double time_interval = 5000.0;
 
     // Optional YAML/JSON file remapping the (cat, name) of each DLIO component.
-    std::string event_map;
+    dstd::StringView event_map;
 
-    explicit GenDlioConfigArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+    explicit GenDlioConfigArgParse(binaries::ArgParser& p) : ArgParse(p) {
         indexing.index_dir_help =
             "Directory to store index files (default: system temp directory)";
         indexing.force_help = "Force index recreation";
-        schema(directory, pipeline, indexing);
+        inputs.folder_only = true;
+        schema(inputs, pipeline, indexing);
     }
 
    protected:
     void register_args() override {
         parser()
-            .add_argument("-o", "--output")
-            .required()
-            .help("Output path for the DLIO YAML config.");
-        parser()
-            .add_argument("--max-bound-percentile")
-            .help("Initial max_bound percentile (0-100, default: 95)")
-            .scan<'g', double>()
-            .default_value(95.0);
-        parser()
-            .add_argument("--simulation-iterations")
-            .help(
-                "Max simulator iterations for percentile refinement (default: "
-                "5)")
-            .scan<'d', int>()
-            .default_value(5);
-        parser()
-            .add_argument("--target-e2e-error")
-            .help(
-                "Target relative E2E error to declare convergence (default: "
-                "0.05)")
-            .scan<'g', double>()
-            .default_value(0.05);
-        parser()
-            .add_argument("--target-cdf-similarity")
-            .help("Target fetch_block CDF similarity (default: 0.90)")
-            .scan<'g', double>()
-            .default_value(0.90);
-        parser()
-            .add_argument("--patience")
-            .help("Early-stop after this many iterations without improvement")
-            .scan<'d', int>()
-            .default_value(10);
-        parser()
-            .add_argument("--epsilon")
-            .help("Base step size for percentile adjustment (default: 1.0)")
-            .scan<'g', double>()
-            .default_value(1.0);
-        parser()
-            .add_argument("--momentum")
-            .help("Momentum factor in [0, 1) (default: 0.9)")
-            .scan<'g', double>()
-            .default_value(0.9);
-        parser()
-            .add_argument("--min-percentile")
-            .help("Floor on max_bound percentile (default: 50)")
-            .scan<'g', double>()
-            .default_value(50.0);
-        parser()
-            .add_argument("--num-workers")
-            .help("DataLoader worker count for the simulator (default: 8)")
-            .scan<'d', int>()
-            .default_value(8);
-        parser()
-            .add_argument("--prefetch-factor")
-            .help("DataLoader prefetch factor (default: 2)")
-            .scan<'d', int>()
-            .default_value(2);
-        parser()
-            .add_argument("--seed")
-            .help("Base seed for simulator + sampler (default: 42)")
-            .scan<'i', std::uint64_t>()
-            .default_value<std::uint64_t>(42);
-        parser()
-            .add_argument("--max-samples-per-entry")
-            .help(
-                "Cap on synthesized samples per AGGREGATION entry (default: "
-                "100)")
-            .scan<'i', std::uint64_t>()
-            .default_value<std::uint64_t>(100);
-        parser()
-            .add_argument("-t", "--time-interval")
-            .help(
-                "Aggregation time interval (default: 5000ms). A bare number is "
-                "milliseconds; suffixed values like 5s are converted")
-            .default_value(std::string("5000"));
+            .option(output, {"-o", "--output"},
+                    "Output file for the DLIO YAML config.")
+            .required();
 
-        parser()
-            .add_argument("--event-map")
-            .help(
-                "YAML or JSON file remapping the (cat, name) of the "
-                "fetch_block / fetch_iter / preprocess / item components")
-            .default_value(std::string{});
-    }
+        parser().option(max_bound_percentile, {"--max-bound-percentile"},
+                        "Initial max_bound percentile (0-100, default: 95)");
 
-    void post_parse() override {
-        output = parser().get<std::string>("--output");
-        max_bound_percentile = parser().get<double>("--max-bound-percentile");
-        simulation_iterations = parser().get<int>("--simulation-iterations");
-        target_e2e_error = parser().get<double>("--target-e2e-error");
-        target_cdf_similarity = parser().get<double>("--target-cdf-similarity");
-        patience = parser().get<int>("--patience");
-        epsilon = parser().get<double>("--epsilon");
-        momentum = parser().get<double>("--momentum");
-        min_percentile = parser().get<double>("--min-percentile");
-        num_workers = parser().get<int>("--num-workers");
-        prefetch_factor = parser().get<int>("--prefetch-factor");
-        seed = parser().get<std::uint64_t>("--seed");
-        max_samples_per_entry =
-            parser().get<std::uint64_t>("--max-samples-per-entry");
-        time_interval =
-            binaries::get_duration_arg(parser(), "--time-interval", 1e3);
-        event_map = parser().get<std::string>("--event-map");
+        parser().option(
+            simulation_iterations, {"--simulation-iterations"},
+            "Max simulator iterations for percentile refinement (default: "
+            "5)");
+
+        parser().option(
+            target_e2e_error, {"--target-e2e-error"},
+            "Target relative E2E error to declare convergence (default: "
+            "0.05)");
+
+        parser().option(target_cdf_similarity, {"--target-cdf-similarity"},
+                        "Target fetch_block CDF similarity (default: 0.90)");
+
+        parser().option(
+            patience, {"--patience"},
+            "Early-stop after this many iterations without improvement");
+
+        parser().option(
+            epsilon, {"--epsilon"},
+            "Base step size for percentile adjustment (default: 1.0)");
+
+        parser().option(momentum, {"--momentum"},
+                        "Momentum factor in [0, 1) (default: 0.9)");
+
+        parser().option(min_percentile, {"--min-percentile"},
+                        "Floor on max_bound percentile (default: 50)");
+
+        parser().option(
+            num_workers, {"--num-workers"},
+            "DataLoader worker count for the simulator (default: 8)");
+
+        parser().option(prefetch_factor, {"--prefetch-factor"},
+                        "DataLoader prefetch factor (default: 2)");
+
+        parser().option(seed, {"--seed"},
+                        "Base seed for simulator + sampler (default: 42)");
+
+        parser().option(
+            max_samples_per_entry, {"--max-samples-per-entry"},
+            "Cap on synthesized samples per AGGREGATION entry (default: "
+            "100)");
+
+        parser().duration(
+            time_interval, 1e3, {"-t", "--time-interval"},
+            "Aggregation time interval (default: 5000ms). A bare number is "
+            "milliseconds; suffixed values like 5s are converted",
+            "5000");
+
+        parser().option(
+            event_map, {"--event-map"},
+            "YAML or JSON file remapping the (cat, name) of the "
+            "fetch_block / fetch_iter / preprocess / item components");
     }
 };
 
 dstd::Optional<dlio::BestModel> fit_best_model(
+    // keep std: unswept API
     const std::vector<double>& data) {
     if (data.empty()) return dstd::nullopt;
     const auto singles = dlio::fit_all_single_distributions(data);
+    // keep std: unswept API
     std::vector<dlio::FittedMixture> mixtures;
     if (data.size() >= 20) {
         mixtures.push_back(dlio::fit_gaussian_mixture(data, 2));
@@ -234,19 +196,21 @@ int main(int argc, char** argv) {
             const agg::AggregationConfig query_config = agg_config;
 
             const auto scanned = binaries::ensure_indexes_fresh_blocking(
-                "DLIO Config Generator", cli.pipeline, cli.directory.value, {},
+                "DLIO Config Generator", cli.pipeline, cli.inputs.directory, {},
                 cli.indexing.index_dir, cli.indexing.force, agg_config,
                 cli.indexing.checkpoint_size);
             if (scanned.empty()) {
                 DFTRACER_UTILS_LOG_ERROR(
                     "No trace files found in %s; cannot generate DLIO config",
-                    cli.directory.value.c_str());
+                    dstd::String(cli.inputs.directory).c_str());
                 return 1;
             }
+            // keep std: unswept API
             const std::string index_path =
                 trace::internal::determine_index_path(
-                    std::string(scanned.front().path.str()),
-                    cli.indexing.index_dir);
+                    dstd::String(scanned.front().path.str()),
+                    // keep std: unswept API
+                    std::string(cli.indexing.index_dir));
 
             // --- Load aggregated traces
             // ---------------------------------------------
@@ -256,7 +220,9 @@ int main(int argc, char** argv) {
             // Remap component (cat, name) selectors from the event map, if any.
             if (!cli.event_map.empty()) {
                 try {
-                    dlio::load_event_map(cli.event_map, loader_opts);
+                    // keep std: unswept API
+                    dlio::load_event_map(std::string(cli.event_map),
+                                         loader_opts);
                 } catch (const std::exception& e) {
                     DFTRACER_UTILS_LOG_ERROR("%s", e.what());
                     return 1;
@@ -265,9 +231,9 @@ int main(int argc, char** argv) {
             dlio::AggregatedTraces traces;
             try {
                 index::build::ResolverInput resolver_input;
-                resolver_input.directory =
-                    binaries::absolute_path(cli.directory.value);
-                resolver_input.index_dir = cli.indexing.index_dir;
+                resolver_input.directory = dstd::String(
+                    binaries::absolute_path(cli.inputs.directory).str());
+                resolver_input.index_dir = dstd::String(cli.indexing.index_dir);
                 resolver_input.require_checkpoints = false;
                 const auto resolved =
                     index::build::Resolver{}(resolver_input).get();
@@ -287,7 +253,7 @@ int main(int argc, char** argv) {
                     loader_opts.fetch_block.name.c_str(),
                     loader_opts.preprocess.cat.c_str(),
                     loader_opts.preprocess.name.c_str(),
-                    cli.directory.value.c_str());
+                    dstd::String(cli.inputs.directory).c_str());
                 return 1;
             }
             std::printf("\n");
@@ -374,18 +340,20 @@ int main(int argc, char** argv) {
                 prep_block_ptr = &(*prep_block_storage);
             }
 
-            std::ofstream out(cli.output);
+            // keep std: unswept API
+            std::ofstream out{std::string(cli.output)};
             if (!out) {
                 DFTRACER_UTILS_LOG_ERROR("Cannot open %s for writing",
-                                         cli.output.c_str());
+                                         dstd::String(cli.output).c_str());
                 return 1;
             }
             if (!dlio::write_dlio_yaml(out, &comp_block, prep_block_ptr)) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to write %s",
-                                         cli.output.c_str());
+                                         dstd::String(cli.output).c_str());
                 return 1;
             }
-            std::printf("  Wrote DLIO config: %s\n", cli.output.c_str());
+            std::printf("  Wrote DLIO config: %s\n",
+                        dstd::String(cli.output).c_str());
             std::printf("==========================================\n");
             return 0;
         });

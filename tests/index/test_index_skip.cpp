@@ -34,7 +34,7 @@ IndexRun run_index(const std::string& dir, bool force) {
     REQUIRE_MESSAGE(::access(binary.c_str(), X_OK) == 0,
                     binary << " is not built");
     dftu_utils_test::set_test_library_path(binary);
-    std::vector<std::string> args{"-d", dir};
+    std::vector<std::string> args{dir};
     if (force) args.push_back("--force");
     IndexRun run;
     const std::string out = dftu_utils_test::run_process_capture(

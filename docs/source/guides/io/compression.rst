@@ -24,7 +24,7 @@ members.
 .. code-block:: bash
 
    # Compress all .pfw in ./traces, 8 MB chunks, max level
-   dftracer_pgzip -d ./traces --chunk-size 8388608 -l 9
+   dftracer_pgzip ./traces --chunk-size 8388608 --compression-level 9
 
 .. list-table::
    :header-rows: 1
@@ -54,7 +54,7 @@ processing.
 .. code-block:: bash
 
    # Split ./traces into ~64 MB gzip chunks under ./split, named run_*
-   dftracer_split -d ./traces -o ./split -n run -s 64MB
+   dftracer_split ./traces -o ./split --app-name run --chunk-size 64MB
 
 .. list-table::
    :header-rows: 1
@@ -90,7 +90,7 @@ pruning and checkpoint unit:
 .. code-block:: bash
 
    # Finer members = finer zoom-in seeks and a larger index
-   dftracer_split -d ./traces -o ./split --checkpoint-size 16777216
+   dftracer_split ./traces -o ./split --checkpoint-size 16777216
 
 Compression in C++
 ------------------

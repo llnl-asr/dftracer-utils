@@ -9,6 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Take the inputs of every command line tool as positional paths, files and folders mixed, and remove `-d`/`--directory` and `--files`.
+  `dftracer_index`, `dftracer_split`, `dftracer_gen_dlio_config` and `dftracer_server` take one folder and no files.
+- Use `-f`/`--force` in every tool that forces a rebuild, where `dftracer_info` had `-f`/`--force-rebuild`.
+- Use `-o`/`--output` in every tool that writes output, where `dftracer_gen_fake_trace` had `-o`/`--output-dir`.
+- Use `-q`/`--query` for duql text in every tool, and remove `--duql`.
+- Choose the `dftracer_info` report with `--report summary|detailed`, where `--query` did.
+- Remove the short forms `-e`, `-H`, `-p` and `-s` of `dftracer_gen_fake_trace`, `-c`, `-n` and `-s` of `dftracer_split`, and `-l` of `dftracer_pgzip`.
+  The tools keep `-h`, `-v`, `-o`, `-f`, `-q`, `-t`, and `-b` and `-p` of `dftracer_server`.
+- Replace argparse with a small option parser in the command line tools.
+  `--help` has a new layout, and a parse error prints a new message.
 - Keep the most recent `task_history` finished tasks (1024 by default, `ExecutorConfig::task_history`) for `get_progress`, where the runtime kept all of them.
 - Move the coroutine headers from `dftracer/utils/runtime/coro/` and the executor headers from `dftracer/utils/runtime/executor/` to `dftracer/utils/coro/`, in a new `dftracer_utils_coro` library that the runtime library links.
   The types are now in namespace `dftracer::utils::coro` (for example `coro::Executor`, `coro::TimerService`), and the I/O backend accessors moved from `coro::Executor` to the runtime's `TaskExecutor`.

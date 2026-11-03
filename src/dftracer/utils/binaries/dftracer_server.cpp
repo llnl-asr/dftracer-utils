@@ -5,6 +5,9 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -33,98 +36,83 @@ using namespace dftracer::utils::server;
 
 class ServerArgParse : public binaries::ArgParse {
    public:
-    binaries::DirectoryArgs directory{binaries::DirMode::Required};
+    binaries::InputArgs inputs{binaries::DirMode::Required,
+                               "Folder of trace files to serve"};
     binaries::PipelineArgs pipeline;
 
-    std::string index_dir;
-    std::string bind_addr = "127.0.0.1";
-    std::string auth_token;
+    dstd::StringView index_dir;
+    dstd::StringView bind_addr = "127.0.0.1";
+    dstd::StringView auth_token;
     uint16_t port = 8080;
     std::size_t checkpoint_size =
         common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t member_cache_size = 1024ull * 1024 * 1024;  // 1 GB
     std::uint64_t timeout_seconds = 0;                      // 0 = no timeout
+    double timeout_raw = 0;
 
-    explicit ServerArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
-        schema(directory, pipeline);
+    explicit ServerArgParse(binaries::ArgParser& p) : ArgParse(p) {
+        inputs.folder_only = true;
+        schema(inputs, pipeline);
     }
 
    protected:
     void register_args() override {
-        parser()
-            .add_argument("--index-dir")
-            .help(
-                "Directory for root-local .dftindex stores (default: same as "
-                "--directory)")
-            .default_value<std::string>("");
+        parser().option(
+            index_dir, {"--index-dir"},
+            "Directory for root-local .dftindex stores (default: same as "
+            "the input folder)");
 
-        parser()
-            .add_argument("-b", "--bind")
-            .help("Bind address (use 0.0.0.0 to expose on all interfaces)")
-            .default_value<std::string>("127.0.0.1");
+        parser().option(
+            bind_addr, {"-b", "--bind"},
+            "Bind address (use 0.0.0.0 to expose on all interfaces)");
 
-        parser()
-            .add_argument("-p", "--port")
-            .help("Listen port")
-            .scan<'d', uint16_t>()
-            .default_value(static_cast<uint16_t>(8080));
+        parser().option(port, {"-p", "--port"}, "Listen port");
 
-        parser()
-            .add_argument("--token")
-            .help(
-                "Optional access token; when set, every request must supply it "
-                "via ?token= or an 'Authorization: Bearer <token>' header")
-            .default_value<std::string>("");
+        parser().option(
+            auth_token, {"--token"},
+            "Optional access token; when set, every request must supply it "
+            "via ?token= or an 'Authorization: Bearer <token>' header");
 
-        parser()
-            .add_argument("--checkpoint-size")
-            .help(
-                "Decompression checkpoint interval for auto-indexing "
-                "(default: " +
-                std::to_string(
+        parser().bytes(
+            checkpoint_size, {"--checkpoint-size"},
+            "Decompression checkpoint interval for auto-indexing "
+            "(default: " +
+                dstd::to_string(
                     common::constants::indexer::DEFAULT_CHECKPOINT_SIZE) +
                 "). Accepts units, e.g. 512KB, 4MB. Smaller = finer zoom-in "
-                "seeks, larger index")
-            .default_value(std::to_string(
+                "seeks, larger index",
+            dstd::to_string(
                 common::constants::indexer::DEFAULT_CHECKPOINT_SIZE));
 
-        parser()
-            .add_argument("--member-cache-size")
-            .help(
-                "Decoded gzip members retained to share across concurrent "
-                "queries (0 disables retention but still coalesces in-flight "
-                "decodes). Accepts units, e.g. 512MB, 2GB; default: 1GB")
-            .default_value(std::to_string(1024ull * 1024 * 1024));
+        parser().bytes(
+            member_cache_size, {"--member-cache-size"},
+            "Decoded gzip members retained to share across concurrent "
+            "queries (0 disables retention but still coalesces in-flight "
+            "decodes). Accepts units, e.g. 512MB, 2GB; default: 1GB",
+            dstd::to_string(1024ull * 1024 * 1024));
 
-        parser()
-            .add_argument("--timeout")
-            .help(
-                "Auto-shutdown after this much uptime (0 disables; default). "
-                "Accepts units, e.g. 30s, 10m, 1.5h. Useful to stop lingering "
-                "processes when a client such as the VSCode extension closes "
-                "without killing the server")
-            .default_value(std::string("0"));
+        parser().seconds(
+            timeout_raw, {"--timeout"},
+            "Auto-shutdown after this much uptime (0 disables; default). "
+            "Accepts units, e.g. 30s, 10m, 1.5h. Useful to stop lingering "
+            "processes when a client such as the VSCode extension closes "
+            "without killing the server",
+            "0");
     }
 
     void post_parse() override {
-        index_dir = parser().get<std::string>("--index-dir");
-        bind_addr = parser().get<std::string>("--bind");
-        auth_token = parser().get<std::string>("--token");
-        port = parser().get<uint16_t>("--port");
-        checkpoint_size =
-            binaries::get_bytes_arg(parser(), "--checkpoint-size");
-        member_cache_size =
-            binaries::get_bytes_arg(parser(), "--member-cache-size");
-        timeout_seconds = static_cast<std::uint64_t>(
-            binaries::get_seconds_arg(parser(), "--timeout"));
+        timeout_seconds = static_cast<std::uint64_t>(timeout_raw);
     }
 };
 
 static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
-    const auto& bind_addr = cli->bind_addr;
+    // keep std: unswept API
+    const std::string bind_addr(cli->bind_addr);
     auto port = cli->port;
-    const auto& dir = cli->directory.value;
-    auto index_dir = cli->index_dir;
+    // keep std: unswept API
+    const std::string dir(cli->inputs.directory);
+    // keep std: unswept API
+    std::string index_dir(cli->index_dir);
     auto executor_threads = cli->pipeline.executor_threads;
 
     if (index_dir.empty()) {
@@ -165,7 +153,8 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
     co_await trace_index.initialize();
 
     Router router;
-    router.set_auth_token(cli->auth_token);
+    // keep std: unswept API
+    router.set_auth_token(std::string(cli->auth_token));
     register_trace_api(router, trace_index);
     register_viz_api(router, trace_index);
     register_viz_ui(router);
@@ -193,7 +182,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
         auto timeout = std::chrono::seconds(cli->timeout_seconds);
         std::fprintf(stderr, "Auto-shutdown scheduled in %llu seconds\n",
                      static_cast<unsigned long long>(cli->timeout_seconds));
-        std::thread([timeout]() {
+        dstd::Thread([timeout]() {
             std::this_thread::sleep_for(timeout);
             if (!g_shutdown_requested.load(std::memory_order_acquire)) {
                 std::fprintf(stderr, "Timeout reached; shutting down\n");

@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_BINARIES_COMMON_CLI_H
 #define DFTRACER_UTILS_BINARIES_COMMON_CLI_H
 
+#include <dftracer/utils/binaries/cli_args.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
@@ -15,10 +16,15 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/index.h>
@@ -33,7 +39,6 @@
 #include <sys/resource.h>
 
 #include <algorithm>
-#include <argparse/argparse.hpp>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -41,7 +46,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
-#include <sstream>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -52,35 +56,33 @@ class ArgParse;
 
 struct CliSchema {
     virtual ~CliSchema() = default;
-    virtual void register_on(argparse::ArgumentParser& p) = 0;
-    virtual void parse_from(const argparse::ArgumentParser& p) = 0;
+    virtual void register_on(ArgParser& p) = 0;
+    virtual void after_parse() {}
     virtual bool validate() { return true; }
 };
 
-// Register/apply the shared --log-level flag on any parser (used by the
-// ArgParse base and the few CLIs that parse argparse directly). A CLI flag
+// Register/apply the shared --log-level flag on any parser. A CLI flag
 // overrides the DFTRACER_UTILS_LOG_LEVEL environment variable.
-inline void add_log_level_arg(argparse::ArgumentParser& p) {
-    p.add_argument("--log-level")
-        .help("Logging verbosity: trace, debug, info, warn, error, off")
-        .default_value(std::string(""));
+inline void add_log_level_arg(ArgParser& p, dstd::StringView& name) {
+    p.option(name, {"--log-level"},
+             "Logging verbosity: trace, debug, info, warn, error, off");
 }
 
-inline void apply_log_level_arg(const argparse::ArgumentParser& p) {
-    const auto name = p.get<std::string>("--log-level");
+inline void apply_log_level_arg(dstd::StringView name) {
     if (name.empty()) return;
     if (auto level = common::logger::level_from_name(name)) {
         common::logger::set_level(*level);
     } else {
         DFTRACER_UTILS_LOG_WARN(
-            "Unknown --log-level '%s'; keeping '%s'", name.c_str(),
+            "Unknown --log-level '%.*s'; keeping '%s'",
+            static_cast<int>(name.size()), name.data(),
             common::logger::level_name(common::logger::get_level()));
     }
 }
 
 class ArgParse {
    public:
-    explicit ArgParse(argparse::ArgumentParser& parser) : parser_(parser) {}
+    explicit ArgParse(ArgParser& parser) : parser_(parser) {}
     virtual ~ArgParse() = default;
 
     ArgParse(const ArgParse&) = delete;
@@ -88,25 +90,37 @@ class ArgParse {
 
     void setup() {
         for (auto* s : schemas_) s->register_on(parser_);
-        add_log_level_arg(parser_);
+        add_log_level_arg(parser_, log_level_);
         register_args();
     }
 
-    bool parse(int argc, char** argv) {
+    // Returns the process exit code when the run ends here (help, version,
+    // a parse error or a failed check), nothing when the tool should run.
+    dstd::Optional<int> parse(int argc, char** argv) {
+        const ParseOutcome outcome = parser_.parse(argc, argv);
+        if (outcome.exit_code) {
+            if (!outcome.out.empty())
+                std::fwrite(outcome.out.data(), 1, outcome.out.size(), stdout);
+            if (!outcome.err.empty()) {
+                DFTRACER_UTILS_LOG_ERROR("Error: %s", outcome.err.c_str());
+                std::fprintf(stderr, "%s\n", parser_.help().c_str());
+            }
+            return outcome.exit_code;
+        }
         try {
-            parser_.parse_args(argc, argv);
-            apply_log_level_arg(parser_);
-            for (auto* s : schemas_) s->parse_from(parser_);
+            apply_log_level_arg(log_level_);
+            for (auto* s : schemas_) s->after_parse();
             post_parse();
         } catch (const std::exception& err) {
             DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
-            std::fprintf(stderr, "%s\n", parser_.help().str().c_str());
-            return false;
+            std::fprintf(stderr, "%s\n", parser_.help().c_str());
+            return 1;
         }
         for (auto* s : schemas_) {
-            if (!s->validate()) return false;
+            if (!s->validate()) return 1;
         }
-        return validate();
+        if (!validate()) return 1;
+        return dstd::nullopt;
     }
 
     template <typename... Schemas>
@@ -119,24 +133,25 @@ class ArgParse {
     virtual void post_parse() {}
     virtual bool validate() { return true; }
 
-    argparse::ArgumentParser& parser() { return parser_; }
-    const argparse::ArgumentParser& parser() const { return parser_; }
+    ArgParser& parser() { return parser_; }
+    const ArgParser& parser() const { return parser_; }
 
    private:
-    argparse::ArgumentParser& parser_;
-    std::vector<CliSchema*> schemas_;
+    ArgParser& parser_;
+    dstd::Vector<CliSchema*> schemas_;
+    dstd::StringView log_level_;
 };
 
-// Register schemas/args then parse argv; returns false on parse error (help
-// is already printed). Collapses the two-line prologue every CLI main repeats.
+// Register schemas/args then parse argv. Returns the exit code when the run
+// ends in the parse (help already printed), nothing otherwise.
 template <class Cli>
-bool setup_and_parse(Cli& cli, int argc, char** argv) {
+dstd::Optional<int> setup_and_parse(Cli& cli, int argc, char** argv) {
     cli.setup();
     return cli.parse(argc, argv);
 }
 
 // Shared CLI main prologue: logger init, parser construction with the package
-// version, description, ArgParse (CliT) setup+parse (returns 1 on failure),
+// version, description, ArgParse (CliT) setup+parse (returns its exit code),
 // then `run(cli)`. `run` is a template param so it inlines with no type
 // erasure; it receives the parsed CliT and returns the process exit code.
 template <class CliT, class RunFn>
@@ -153,12 +168,11 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
                                  configured.error().format().c_str());
         return 1;
     }
-    argparse::ArgumentParser program(name, DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(description);
-    CliT cli(program);
-    if (!setup_and_parse(cli, argc, argv)) return 1;
-    // Starts after the parse, which exits the process itself for --help.
+    // Before the parse, so the input paths it checks are stat'ed once.
     dftracer::utils::common::InputStatScope input_stats;
+    ArgParser program(name, DFTRACER_UTILS_PACKAGE_VERSION, description);
+    CliT cli(program);
+    if (auto code = setup_and_parse(cli, argc, argv)) return *code;
     try {
         return run(cli);
     } catch (const std::exception& err) {
@@ -167,170 +181,89 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     }
 }
 
-// Read a string-valued argument as a byte size, accepting human-readable units
-// (e.g. "64MB", "1.5GiB") as well as a bare byte count. Throws
-// std::runtime_error on malformed input so ArgParse::parse reports it like any
-// other parse error.
-inline std::size_t get_bytes_arg(const argparse::ArgumentParser& p,
-                                 const char* name) {
-    const auto raw = p.get<std::string>(name);
-    auto parsed = dftracer::utils::common::parse_bytes(raw);
-    if (!parsed) {
-        throw std::runtime_error(dftracer::utils::common::str_cat(
-                                     "Invalid byte size for ", name, ": '", raw,
-                                     "' (use e.g. 65536, 64KB, 1.5GB)")
-                                     .c_str());
-    }
-    return static_cast<std::size_t>(*parsed);
-}
-
-// As get_bytes_arg, but the value must carry a unit. A bare number is refused,
-// so a value that once meant megabytes cannot silently become bytes. Throws
-// std::runtime_error like get_bytes_arg.
-inline std::size_t get_bytes_arg_with_unit(const argparse::ArgumentParser& p,
-                                           const char* name) {
-    const auto raw = p.get<std::string>(name);
-    auto parsed = dftracer::utils::common::parse_bytes(raw);
-    const auto parts = dftracer::utils::common::detail::split_value_unit(raw);
-    if (!parsed || !parts || parts->second.empty()) {
-        throw std::runtime_error(
-            dftracer::utils::common::str_cat(
-                "Invalid byte size for ", name, ": '", raw,
-                "' (a unit is required, use e.g. 4MB or 512KB)")
-                .c_str());
-    }
-    return static_cast<std::size_t>(*parsed);
-}
-
-// As get_bytes_arg, but a negative value passes through unchanged as a sentinel
-// (e.g. -1 = "no limit"); non-negative values parse as byte sizes.
-inline std::int64_t get_bytes_arg_signed(const argparse::ArgumentParser& p,
-                                         const char* name) {
-    const auto raw = p.get<std::string>(name);
-    const auto trimmed = dftracer::utils::common::detail::trim_ws(raw);
-    if (!trimmed.empty() && trimmed.front() == '-') {
-        return static_cast<std::int64_t>(
-            std::strtoll(raw.c_str(), nullptr, 10));
-    }
-    return static_cast<std::int64_t>(get_bytes_arg(p, name));
-}
-
-// Read a string-valued argument as a duration in seconds, accepting units
-// (e.g. "30s", "5m", "1.5h") as well as a bare second count. Throws
-// std::runtime_error on malformed input.
-inline double get_seconds_arg(const argparse::ArgumentParser& p,
-                              const char* name) {
-    const auto raw = p.get<std::string>(name);
-    auto parsed = dftracer::utils::common::parse_duration_seconds(raw);
-    if (!parsed) {
-        throw std::runtime_error(dftracer::utils::common::str_cat(
-                                     "Invalid duration for ", name, ": '", raw,
-                                     "' (use e.g. 30, 30s, 5m, 1.5h)")
-                                     .c_str());
-    }
-    return *parsed;
-}
-
-// Read a string-valued duration argument, returning it in the flag's native
-// unit (`native_per_second`, e.g. 1e3 for ms, 1e6 for us). A bare number keeps
-// that native unit; a unit-suffixed value ("5m") is converted. Throws on
-// malformed input.
-inline double get_duration_arg(const argparse::ArgumentParser& p,
-                               const char* name, double native_per_second) {
-    const auto raw = p.get<std::string>(name);
-    auto parsed =
-        dftracer::utils::common::parse_duration_as(raw, native_per_second);
-    if (!parsed) {
-        throw std::runtime_error(dftracer::utils::common::str_cat(
-                                     "Invalid duration for ", name, ": '", raw,
-                                     "' (use e.g. 5000, 5s, 500ms, 1.5h)")
-                                     .c_str());
-    }
-    return *parsed;
-}
-
 enum class DirMode { DefaultDot, DefaultEmpty, Required };
 
-struct DirectoryArgs : CliSchema {
+/// The positional paths of a tool, files and folders mixed. At most one
+/// folder is taken, with any number of files. The views point into argv.
+// A path view here is a whole argv string, so data() ends in a NUL.
+struct InputArgs : CliSchema {
     DirMode mode = DirMode::DefaultDot;
-    std::string help = "Directory containing trace files";
-    std::string value;
+    dstd::StringView help = "Trace files or a folder of trace files";
+    dstd::Vector<dstd::StringView> paths;
+    dstd::StringView directory;
+    dstd::Vector<dstd::StringView> files;
+    bool folder_only = false;
 
-    DirectoryArgs() = default;
-    explicit DirectoryArgs(DirMode m) : mode(m) {}
-    DirectoryArgs(DirMode m, std::string h) : mode(m), help(std::move(h)) {}
+    InputArgs() = default;
+    explicit InputArgs(DirMode m) : mode(m) {}
+    InputArgs(DirMode m, dstd::StringView h) : mode(m), help(h) {}
 
-    void register_on(argparse::ArgumentParser& p) override {
-        auto& arg = p.add_argument("-d", "--directory").help(help);
-        switch (mode) {
-            case DirMode::DefaultDot:
-                arg.default_value<std::string>(".");
-                break;
-            case DirMode::DefaultEmpty:
-                arg.default_value<std::string>("");
-                break;
-            case DirMode::Required:
-                arg.required();
-                break;
-        }
+    void register_on(ArgParser& p) override {
+        auto& spec = p.positional(paths, "PATH", help);
+        if (mode == DirMode::Required) spec.at_least_one();
     }
 
-    void parse_from(const argparse::ArgumentParser& p) override {
-        value = p.get<std::string>("--directory");
+    void after_parse() override {
+        if (mode == DirMode::DefaultDot && paths.empty()) {
+            directory = ".";
+            return;
+        }
+        for (const auto path : paths) {
+            dftracer::utils::common::InputFileStat st;
+            if (!dftracer::utils::common::stat_input(
+                    dstd::CStringView(path.data()), st)) {
+                if (missing_.empty()) missing_ = path;
+                continue;
+            }
+            if (st.is_directory) {
+                if (!directory.empty()) {
+                    folder_error_ = true;
+                    continue;
+                }
+                directory = path;
+            } else {
+                files.push_back(path);
+            }
+        }
     }
 
     bool validate() override {
-        if (mode == DirMode::Required && value.empty()) {
-            DFTRACER_UTILS_LOG_ERROR("%s", "--directory is required");
+        if (folder_only && !files.empty()) {
+            DFTRACER_UTILS_LOG_ERROR(
+                "This tool takes a folder, not files: %.*s",
+                static_cast<int>(files.front().size()), files.front().data());
             return false;
         }
-        if (!value.empty() && !dftracer::utils::common::input_exists(value)) {
-            DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
-                                     value.c_str());
+        if (folder_error_) {
+            DFTRACER_UTILS_LOG_ERROR("%s", "Give at most one folder");
+            return false;
+        }
+        if (!missing_.empty()) {
+            DFTRACER_UTILS_LOG_ERROR("Input does not exist: %.*s",
+                                     static_cast<int>(missing_.size()),
+                                     missing_.data());
             return false;
         }
         return true;
     }
-};
 
-struct FilesArgs : CliSchema {
-    std::string help =
-        "Gzip trace files (.pfw.gz, .jsonl.gz, .ndjson.gz, .json.gz)";
-    std::vector<std::string> value;
-
-    FilesArgs() = default;
-    explicit FilesArgs(std::string h) : help(std::move(h)) {}
-
-    void register_on(argparse::ArgumentParser& p) override {
-        p.add_argument("--files")
-            .help(help)
-            .nargs(argparse::nargs_pattern::any)
-            .default_value<std::vector<std::string>>({});
-    }
-
-    void parse_from(const argparse::ArgumentParser& p) override {
-        value = p.get<std::vector<std::string>>("--files");
-    }
+   private:
+    bool folder_error_ = false;
+    dstd::StringView missing_;
 };
 
 /// --memory-budget, shared by every tool that bounds its memory. 0 means auto,
 /// a third of the memory available to the process.
 struct MemoryArgs : CliSchema {
     std::uint64_t memory_budget = 0;
-    std::string help =
+    dstd::StringView help =
         "Most memory the tool holds, with units (e.g. 64GB). Work beyond it "
         "spills to DFTRACER_UTILS_SPILL_DIR. 0 means a third of the "
         "available memory";
 
-    void register_on(argparse::ArgumentParser& p) override {
-        p.add_group("Memory");
-        p.add_argument("--memory-budget")
-            .help(help)
-            .default_value(std::string("0"));
-    }
-
-    void parse_from(const argparse::ArgumentParser& p) override {
-        memory_budget = get_bytes_arg(p, "--memory-budget");
+    void register_on(ArgParser& p) override {
+        p.group("Memory");
+        p.bytes(memory_budget, {"--memory-budget"}, help, "0");
     }
 };
 
@@ -342,36 +275,21 @@ struct PipelineArgs : CliSchema {
 
     PipelineArgs() = default;
 
-    void register_on(argparse::ArgumentParser& p) override {
-        p.add_group("Pipeline");
-        p.add_argument("--executor-threads")
-            .help(
-                "Number of worker threads for parallel processing "
-                "(default: number of CPU cores)")
-            .scan<'d', std::size_t>()
-            .default_value(
-                static_cast<std::size_t>(common::hardware_concurrency()));
-        p.add_argument("--io-threads")
-            .help(
-                "Number of I/O threads "
-                "(default: number of CPU cores)")
-            .scan<'d', std::size_t>()
-            .default_value(common::hardware_concurrency());
-        p.add_argument("--time-profiling")
-            .help("Print stage timing breakdown to stderr")
-            .flag();
-        p.add_argument("--eager-thread-pools")
-            .help(
-                "Start the full worker pool up front instead of growing it on "
-                "demand (lower first-batch latency, holds all threads)")
-            .flag();
-    }
-
-    void parse_from(const argparse::ArgumentParser& p) override {
-        executor_threads = p.get<std::size_t>("--executor-threads");
-        io_threads = p.get<std::size_t>("--io-threads");
-        time_profiling = p.get<bool>("--time-profiling");
-        eager = p.get<bool>("--eager-thread-pools");
+    void register_on(ArgParser& p) override {
+        p.group("Pipeline");
+        executor_threads = common::hardware_concurrency();
+        io_threads = common::hardware_concurrency();
+        p.option(executor_threads, {"--executor-threads"},
+                 "Number of worker threads for parallel processing "
+                 "(default: number of CPU cores)");
+        p.option(io_threads, {"--io-threads"},
+                 "Number of I/O threads "
+                 "(default: number of CPU cores)");
+        p.flag(time_profiling, {"--time-profiling"},
+               "Print stage timing breakdown to stderr");
+        p.flag(eager, {"--eager-thread-pools"},
+               "Start the full worker pool up front instead of growing it on "
+               "demand (lower first-batch latency, holds all threads)");
     }
 
     bool validate() override {
@@ -391,17 +309,18 @@ struct PipelineArgs : CliSchema {
 };
 
 struct IndexingArgs : CliSchema {
-    std::string index_dir;
+    dstd::StringView index_dir;
     std::size_t checkpoint_size = 0;
     bool force = false;
 
-    std::string index_dir_help = "Directory for .dftindex stores";
-    std::string force_help = "Force index recreation";
-    std::string checkpoint_help =
-        "Checkpoint size for gzip indexing (default: " +
-        std::to_string(common::constants::indexer::DEFAULT_CHECKPOINT_SIZE) +
+    dstd::StringView index_dir_help = "Directory for .dftindex stores";
+    dstd::StringView force_help = "Force index recreation";
+    dstd::String checkpoint_default =
+        dstd::to_string(common::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
+    dstd::String checkpoint_help =
+        "Checkpoint size for gzip indexing (default: " + checkpoint_default +
         "). Accepts units, e.g. 512KB, 4MB";
-    std::string group = "Indexing";
+    dstd::StringView group = "Indexing";
     bool with_index_dir = true;
     bool with_force = true;
     bool with_checkpoint = true;
@@ -409,60 +328,41 @@ struct IndexingArgs : CliSchema {
     IndexingArgs() = default;
     explicit IndexingArgs(bool f) : with_force(f) {}
 
-    void register_on(argparse::ArgumentParser& p) override {
-        p.add_group(group);
+    void register_on(ArgParser& p) override {
+        p.group(group);
         if (with_index_dir) {
-            p.add_argument("--index-dir")
-                .help(index_dir_help)
-                .default_value<std::string>("");
+            p.option(index_dir, {"--index-dir"}, index_dir_help);
         }
         if (with_checkpoint) {
-            p.add_argument("--checkpoint-size")
-                .help(checkpoint_help)
-                .default_value(std::to_string(
-                    common::constants::indexer::DEFAULT_CHECKPOINT_SIZE));
+            p.bytes(checkpoint_size, {"--checkpoint-size"}, checkpoint_help,
+                    checkpoint_default);
         }
         if (with_force) {
-            p.add_argument("-f", "--force").help(force_help).flag();
-        }
-    }
-
-    void parse_from(const argparse::ArgumentParser& p) override {
-        if (with_index_dir) {
-            index_dir = p.get<std::string>("--index-dir");
-        }
-        if (with_checkpoint) {
-            checkpoint_size = get_bytes_arg(p, "--checkpoint-size");
-        }
-        if (with_force) {
-            force = p.get<bool>("--force");
+            p.flag(force, {"-f", "--force"}, force_help);
         }
     }
 };
 
 struct DuqlArgs : CliSchema {
-    std::string duql;
-    std::string help = "duql filter (e.g., 'cat == \"POSIX\" and dur > 1000')";
+    dstd::StringView duql;
+    dstd::Vector<dstd::StringView> macro_paths;
+    dstd::StringView help =
+        "duql filter (e.g., 'cat == \"POSIX\" and dur > 1000')";
 
     DuqlArgs() = default;
-    explicit DuqlArgs(std::string h) : help(std::move(h)) {}
+    explicit DuqlArgs(dstd::StringView h) : help(h) {}
 
-    void register_on(argparse::ArgumentParser& p) override {
-        p.add_group("duql");
-        p.add_argument("--duql", "--query")
-            .help(help)
-            .default_value<std::string>("");
-        p.add_argument("--duql-path")
-            .help(
-                "A .duql macro file or a directory of them, read after "
-                "$DFTRACER_UTILS_DUQL_PATH (repeatable)")
-            .append()
-            .default_value<std::vector<std::string>>({});
+    void register_on(ArgParser& p) override {
+        p.group("duql");
+        p.option(duql, {"-q", "--query"}, help);
+        p.option(macro_paths, {"--duql-path"},
+                 "A .duql macro file or a directory of them, read after "
+                 "$DFTRACER_UTILS_DUQL_PATH (repeatable)")
+            .append();
     }
 
-    void parse_from(const argparse::ArgumentParser& p) override {
-        duql = p.get<std::string>("--duql");
-        for (const auto& path : p.get<std::vector<std::string>>("--duql-path"))
+    void after_parse() override {
+        for (const auto& path : macro_paths)
             dftracer::utils::duql::load_macros(path);
     }
 };
@@ -476,54 +376,42 @@ struct WatchdogArgs : CliSchema {
     int idle_timeout = 300;
     int deadlock_timeout = 600;
 
-    void register_on(argparse::ArgumentParser& p) override {
-        p.add_group("Watchdog");
-        p.add_argument("--disable-watchdog")
-            .help("Disable watchdog for hang detection")
-            .flag();
-        p.add_argument("--watchdog-global-timeout")
-            .help(
-                "Watchdog global timeout for pipeline execution (0 = no "
-                "timeout). Accepts units, e.g. 30s, 5m")
-            .default_value(std::string("0"));
-        p.add_argument("--watchdog-task-timeout")
-            .help(
-                "Watchdog default task timeout (0 = no timeout). Accepts "
-                "units, e.g. 30s, 5m")
-            .default_value(std::string("0"));
-        p.add_argument("--watchdog-interval")
-            .help("Watchdog check interval. Accepts units, e.g. 1s, 500ms")
-            .default_value(std::string("1"));
-        p.add_argument("--watchdog-warning-threshold")
-            .help(
-                "Watchdog long-running task warning threshold. Accepts units, "
-                "e.g. 300s, 5m")
-            .default_value(std::string("300"));
-        p.add_argument("--watchdog-idle-timeout")
-            .help("Watchdog idle timeout (0 = use default). Accepts units")
-            .default_value(std::string("300"));
-        p.add_argument("--watchdog-deadlock-timeout")
-            .help("Watchdog deadlock timeout (0 = use default). Accepts units")
-            .default_value(std::string("600"));
+    void register_on(ArgParser& p) override {
+        p.group("Watchdog");
+        p.flag(disable, {"--disable-watchdog"},
+               "Disable watchdog for hang detection");
+        p.seconds(global_timeout_, {"--watchdog-global-timeout"},
+                  "Watchdog global timeout for pipeline execution (0 = no "
+                  "timeout). Accepts units, e.g. 30s, 5m",
+                  "0");
+        p.seconds(task_timeout_, {"--watchdog-task-timeout"},
+                  "Watchdog default task timeout (0 = no timeout). Accepts "
+                  "units, e.g. 30s, 5m",
+                  "0");
+        p.seconds(interval_, {"--watchdog-interval"},
+                  "Watchdog check interval. Accepts units, e.g. 1s, 500ms",
+                  "1");
+        p.seconds(warning_threshold_, {"--watchdog-warning-threshold"},
+                  "Watchdog long-running task warning threshold. Accepts "
+                  "units, e.g. 300s, 5m",
+                  "300");
+        p.seconds(idle_timeout_, {"--watchdog-idle-timeout"},
+                  "Watchdog idle timeout (0 = use default). Accepts units",
+                  "300");
+        p.seconds(deadlock_timeout_, {"--watchdog-deadlock-timeout"},
+                  "Watchdog deadlock timeout (0 = use default). Accepts units",
+                  "600");
     }
 
-    void parse_from(const argparse::ArgumentParser& p) override {
-        disable = p.get<bool>("--disable-watchdog");
-        global_timeout = seconds_int(p, "--watchdog-global-timeout");
-        task_timeout = seconds_int(p, "--watchdog-task-timeout");
-        interval = seconds_int(p, "--watchdog-interval");
-        warning_threshold = seconds_int(p, "--watchdog-warning-threshold");
-        idle_timeout = seconds_int(p, "--watchdog-idle-timeout");
-        deadlock_timeout = seconds_int(p, "--watchdog-deadlock-timeout");
+    void after_parse() override {
+        global_timeout = whole_seconds(global_timeout_);
+        task_timeout = whole_seconds(task_timeout_);
+        interval = whole_seconds(interval_);
+        warning_threshold = whole_seconds(warning_threshold_);
+        idle_timeout = whole_seconds(idle_timeout_);
+        deadlock_timeout = whole_seconds(deadlock_timeout_);
     }
 
-   private:
-    static int seconds_int(const argparse::ArgumentParser& p,
-                           const char* name) {
-        return static_cast<int>(std::lround(get_seconds_arg(p, name)));
-    }
-
-   public:
     void apply(PipelineConfig& config) const {
         config.with_watchdog(!disable)
             .with_global_timeout(std::chrono::seconds(global_timeout))
@@ -534,6 +422,18 @@ struct WatchdogArgs : CliSchema {
             .with_executor_deadlock_timeout(
                 std::chrono::seconds(deadlock_timeout));
     }
+
+   private:
+    static int whole_seconds(double seconds) {
+        return static_cast<int>(std::lround(seconds));
+    }
+
+    double global_timeout_ = 0;
+    double task_timeout_ = 0;
+    double interval_ = 1;
+    double warning_threshold_ = 300;
+    double idle_timeout_ = 300;
+    double deadlock_timeout_ = 600;
 };
 
 // A CLI's run coroutine runs on main's one-thread coro::RunLoop, so work
@@ -549,14 +449,14 @@ void run_on_pool(const PipelineArgs& pipeline, const char* name, Func&& func) {
         coro::named(name, coro::with_scope(std::forward<Func>(func))));
 }
 
-inline PipelineConfig build_pipeline_config(const std::string& name,
+inline PipelineConfig build_pipeline_config(const char* name,
                                             const PipelineArgs& pipeline) {
     auto config = PipelineConfig().with_name(name).with_watchdog(false);
     pipeline.apply(config);
     return config;
 }
 
-inline PipelineConfig build_pipeline_config(const std::string& name,
+inline PipelineConfig build_pipeline_config(const char* name,
                                             const PipelineArgs& pipeline,
                                             const WatchdogArgs& watchdog) {
     auto config = PipelineConfig().with_name(name);
@@ -567,14 +467,15 @@ inline PipelineConfig build_pipeline_config(const std::string& name,
 
 using utilities::filesystem::is_trace_file;
 
-// Split a comma-separated list, dropping empty fields.
-inline std::vector<std::string> split_csv(const std::string& str) {
-    std::vector<std::string> out;
-    if (str.empty()) return out;
-    std::stringstream ss(str);
-    std::string item;
-    while (std::getline(ss, item, ',')) {
+// Split a comma-separated list into views of `text`, dropping empty fields.
+inline dstd::Vector<dstd::StringView> split_csv(dstd::StringView text) {
+    dstd::Vector<dstd::StringView> out;
+    while (!text.empty()) {
+        const auto comma = text.find(',');
+        const auto item = text.substr(0, comma);
         if (!item.empty()) out.push_back(item);
+        if (comma == dstd::StringView::npos) break;
+        text.remove_prefix(comma + 1);
     }
     return out;
 }
@@ -612,36 +513,36 @@ inline void warn_if_memory_tight(std::size_t required_bytes,
     }
 }
 
-// The absolute, normalized form of `path` as the std::string the options hold.
-// Throws when the current directory cannot be read.
-inline std::string absolute_path(dstd::StringView path) {
-    return std::string(
-        common::unwrap(dstd::fs::absolute(dstd::PathView(path))).str());
+// The absolute, normalized form of `path`. Throws when the current directory
+// cannot be read.
+inline dstd::Path absolute_path(dstd::StringView path) {
+    return common::unwrap(dstd::fs::absolute(dstd::PathView(path)));
 }
 
 // The trace files under `directory`, scanned recursively on a pool of its own
 // (see scan_on_pool) with one I/O thread.
+// keep std: unswept API
 inline std::vector<utilities::filesystem::FileEntry> scan_trace_files_on_pool(
-    const PipelineArgs& pipeline, const std::string& directory,
+    const PipelineArgs& pipeline, dstd::StringView directory,
     bool populate_size = true) {
     return utilities::filesystem::scan_on_pool<
         utilities::filesystem::PatternDirectoryScannerUtility>(
         pipeline.executor_threads, 1,
         utilities::filesystem::PatternDirectoryScannerUtilityInput{
-            directory, utilities::filesystem::trace_file_patterns(), true,
-            populate_size});
+            dstd::String(directory),
+            utilities::filesystem::trace_file_patterns(), true, populate_size});
 }
 
 // Parallel per-subdirectory scan of `directory` for trace files via
 // ctx.spawn (context lets a recursive walk fan out per subdirectory); sizes
 // are not populated. Returns the matched paths.
-inline coro::CoroTask<std::vector<std::string>> scan_directory_trace_files(
-    coro::Scope& ctx, const std::string& directory, bool recursive) {
+inline coro::CoroTask<dstd::Vector<dstd::String>> scan_directory_trace_files(
+    coro::Scope& ctx, dstd::StringView directory, bool recursive) {
     utilities::filesystem::PatternDirectoryScannerUtility scanner;
     utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
         directory, utilities::filesystem::trace_file_patterns(), recursive};
     auto matched = co_await scanner(ctx, scan_input);
-    std::vector<std::string> files;
+    dstd::Vector<dstd::String> files;
     files.reserve(matched.size());
     for (const auto& entry : matched) {
         files.emplace_back(entry.path.str());
@@ -654,18 +555,20 @@ inline coro::CoroTask<std::vector<std::string>> scan_directory_trace_files(
 // for deterministic output. `on_missing(path)` runs for inputs that are
 // neither a regular file nor a directory (template param so it inlines).
 template <class OnMissing>
-coro::CoroTask<std::vector<std::string>> collect_input_trace_files(
-    coro::Scope& ctx, const std::vector<std::string>& inputs, bool recursive,
-    OnMissing&& on_missing) {
-    std::vector<std::string> out;
-    for (const auto& in : inputs) {
-        if (dftracer::utils::common::input_is_directory(in)) {
+coro::CoroTask<dstd::Vector<dstd::String>> collect_input_trace_files(
+    coro::Scope& ctx, const dstd::Vector<dstd::StringView>& inputs,
+    bool recursive, OnMissing&& on_missing) {
+    dstd::Vector<dstd::String> out;
+    for (const auto in : inputs) {
+        if (dftracer::utils::common::input_is_directory(
+                dstd::CStringView(in.data()))) {
             auto scanned =
                 co_await scan_directory_trace_files(ctx, in, recursive);
             out.insert(out.end(), std::make_move_iterator(scanned.begin()),
                        std::make_move_iterator(scanned.end()));
-        } else if (dftracer::utils::common::input_is_regular_file(in)) {
-            out.push_back(in);
+        } else if (dftracer::utils::common::input_is_regular_file(
+                       dstd::CStringView(in.data()))) {
+            out.emplace_back(in);
         } else {
             on_missing(in);
         }
@@ -674,16 +577,17 @@ coro::CoroTask<std::vector<std::string>> collect_input_trace_files(
     co_return out;
 }
 
-inline coro::CoroTask<std::vector<std::string>> collect_input_trace_files(
-    coro::Scope& ctx, const std::vector<std::string>& inputs, bool recursive) {
+inline coro::CoroTask<dstd::Vector<dstd::String>> collect_input_trace_files(
+    coro::Scope& ctx, const dstd::Vector<dstd::StringView>& inputs,
+    bool recursive) {
     co_return co_await collect_input_trace_files(ctx, inputs, recursive,
-                                                 [](const std::string&) {});
+                                                 [](dstd::StringView) {});
 }
 
 // Run `body` as a single-node pipeline and return its int result. `body` is a
 // template param (inlinable, no type erasure); it runs exactly once.
 template <class Body>
-int run_single_task(const std::string& name, const PipelineArgs& pipeline,
+int run_single_task(const char* name, const PipelineArgs& pipeline,
                     Body&& body) {
     Pipeline p(build_pipeline_config(name, pipeline));
     auto task = make_task(
@@ -701,9 +605,10 @@ int run_single_task(const std::string& name, const PipelineArgs& pipeline,
 // which ICEs GCC 12/13. Leaves the scan in `entries` so the caller resolves
 // again without scanning.
 inline coro::CoroTask<int> ensure_indexes_fresh_task(
-    coro::Scope& ctx, std::string directory, std::vector<std::string> files,
-    std::string index_dir, bool force_rebuild,
-    std::vector<utilities::filesystem::FileEntry>* entries,
+    coro::Scope& ctx, dstd::StringView directory,
+    dstd::Vector<dstd::StringView> files, dstd::StringView index_dir,
+    // keep std: unswept API
+    bool force_rebuild, std::vector<utilities::filesystem::FileEntry>* entries,
     dftracer::utils::index::schemas::dft::agg::AggregationConfig aggregation =
         dftracer::utils::index::schemas::dft::agg::
             standard_aggregation_config(),
@@ -719,7 +624,7 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     }
     if (entries->empty()) co_return 0;
     dftracer::utils::index::IndexerOptions options;
-    options.index_dir = std::move(index_dir);
+    options.index_dir.assign(index_dir.data(), index_dir.size());
     options.bloom->required = false;
     options.aggregation = std::move(aggregation);
     if (checkpoint_size != 0) options.checkpoint_size = checkpoint_size;
@@ -732,15 +637,17 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     co_return 0;
 }
 
+// keep std: unswept API
 inline std::vector<utilities::filesystem::FileEntry>
 ensure_indexes_fresh_blocking(
-    const std::string& name, const PipelineArgs& pipeline,
-    const std::string& directory, std::vector<std::string> files,
-    const std::string& index_dir, bool force_rebuild = false,
+    const char* name, const PipelineArgs& pipeline, dstd::StringView directory,
+    dstd::Vector<dstd::StringView> files, dstd::StringView index_dir,
+    bool force_rebuild = false,
     dftracer::utils::index::schemas::dft::agg::AggregationConfig aggregation =
         dftracer::utils::index::schemas::dft::agg::
             standard_aggregation_config(),
     std::size_t checkpoint_size = 0) {
+    // keep std: unswept API
     std::vector<utilities::filesystem::FileEntry> entries;
     if (directory.empty() && files.empty()) return entries;
     run_single_task(

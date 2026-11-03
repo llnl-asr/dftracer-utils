@@ -7,6 +7,9 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
@@ -32,37 +35,37 @@ using dftracer::utils::utilities::fileio::lines::sources::
 
 class ValidateArgParse : public binaries::ArgParse {
    public:
-    binaries::DirectoryArgs directory{binaries::DirMode::DefaultEmpty};
-    binaries::FilesArgs files_args{"Trace files to validate (.pfw.gz)"};
+    binaries::InputArgs inputs{binaries::DirMode::Required,
+                               "Trace files (.pfw.gz) or a folder of them"};
     binaries::PipelineArgs pipeline;
 
-    explicit ValidateArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
-        schema(directory, files_args, pipeline);
+    explicit ValidateArgParse(binaries::ArgParser& p) : ArgParse(p) {
+        schema(inputs, pipeline);
     }
 };
 
 namespace {
 
 struct FileValResult {
-    std::string path;
+    dstd::String path;
     std::size_t total_lines = 0;
     std::size_t invalid_lines = 0;
     std::size_t first_bad_line = 0;
     bool ok = true;
-    std::string error;  // set when the file could not be read at all
+    dstd::String error;  // set when the file could not be read at all
 };
 
-// Explicit --files plus a recursive trace file scan of the directory. The
+// The file inputs plus a recursive trace file scan of the directory. The
 // scanner is spawned on the scope so its recursive walk fans out per
 // subdirectory (parallel readdir); sizes are not needed here.
-coro::CoroTask<std::vector<std::string>> collect_files(
-    coro::Scope& ctx, std::string directory,
-    std::vector<std::string> cli_files) {
-    std::vector<std::string> files;
-    for (auto& f : cli_files) {
-        if (binaries::is_trace_file(f)) files.push_back(std::move(f));
+coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
+    coro::Scope& ctx, dstd::StringView directory,
+    const dstd::Vector<dstd::StringView>* cli_files) {
+    dstd::Vector<dstd::String> files;
+    for (const auto f : *cli_files) {
+        if (binaries::is_trace_file(f)) files.emplace_back(f);
     }
-    if (!directory.empty() && common::input_exists(directory)) {
+    if (!directory.empty()) {
         auto scanned = co_await binaries::scan_directory_trace_files(
             ctx, directory, /*recursive=*/true);
         files.insert(files.end(), std::make_move_iterator(scanned.begin()),
@@ -74,7 +77,7 @@ coro::CoroTask<std::vector<std::string>> collect_files(
 // Stream every line and confirm each non-wrapper line is valid JSON. Wrapper
 // lines ("[" / "]"), blanks, and boundary artifacts are skipped, matching the
 // pfw layout (leading "[" then one JSON object per line, no trailing comma).
-coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
+coro::CoroTask<void> validate_file(dstd::String path, FileValResult* result) {
     result->path = std::move(path);
     try {
         // Stream the gzip directly, never through TraceReader: its indexed
@@ -82,7 +85,9 @@ coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
         // entry is absent from a shared root index resolves to zero bytes, so
         // validate would read no lines and still count the file as passing
         // without ever decompressing it.
-        if (CheckpointIndexerFactory::detect_format(result->path) !=
+        // keep std: unswept API
+        const std::string std_path(result->path);
+        if (CheckpointIndexerFactory::detect_format(std_path) !=
             common::ArchiveFormat::Gzip) {
             throw std::runtime_error(
                 "not a gzip trace (dftracer traces must be gzip-compressed)");
@@ -92,7 +97,7 @@ coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
         // navigates into.
         simdjson::dom::parser parser;
         // A cut trace is invalid here, not recovered.
-        auto gen = async_streaming_gz_lines(result->path, 0, 0,
+        auto gen = async_streaming_gz_lines(std_path, 0, 0,
                                             /*recover_truncated=*/false);
         for (;;) {
             auto line_opt = co_await gen.next();
@@ -122,8 +127,8 @@ coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
 }  // namespace
 
 static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
-    auto files = std::make_shared<std::vector<std::string>>();
-    std::vector<FileValResult> results;
+    auto files = dstd::make_shared<dstd::Vector<dstd::String>>();
+    dstd::Vector<FileValResult> results;
     const auto executor_threads = cli->pipeline.executor_threads;
 
     auto config =
@@ -135,8 +140,8 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
     auto collect_task = make_task(
         [cli, files](CoroScope&) -> coro::CoroTask<void> {
             *files = co_await coro::with_scope([&](coro::Scope& ctx) {
-                return collect_files(ctx, cli->directory.value,
-                                     cli->files_args.value);
+                return collect_files(ctx, cli->inputs.directory,
+                                     &cli->inputs.files);
             });
             co_return;
         },

@@ -280,8 +280,7 @@ TEST_SUITE("DFTracerView") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        int rc = run_view(binary,
-                          {"--duql", R"(cat == "POSIX")", "-d", env.get_dir()});
+        int rc = run_view(binary, {"-q", R"(cat == "POSIX")", env.get_dir()});
         CHECK(rc == 0);
     }
 
@@ -298,8 +297,7 @@ TEST_SUITE("DFTracerView") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        int rc = run_view(binary,
-                          {"--duql", R"(cat == "POSIX")", "-d", env.get_dir()});
+        int rc = run_view(binary, {"-q", R"(cat == "POSIX")", env.get_dir()});
         CHECK(rc == 0);
     }
 
@@ -315,15 +313,15 @@ TEST_SUITE("DFTracerView") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        int rc = run_view(binary, {"--group-by", "cat", "--agg",
-                                   "p99:dur,pct:dur:0.95,skew:dur,kurt:dur",
-                                   "-d", env.get_dir()});
+        int rc = run_view(
+            binary, {"--group-by", "cat", "--agg",
+                     "p99:dur,pct:dur:0.95,skew:dur,kurt:dur", env.get_dir()});
         CHECK(rc == 0);
 
         // pct without a quantile and pNN without a field are rejected.
-        CHECK(run_view(binary, {"--group-by", "cat", "--agg", "pct:dur", "-d",
+        CHECK(run_view(binary, {"--group-by", "cat", "--agg", "pct:dur",
                                 env.get_dir()}) != 0);
-        CHECK(run_view(binary, {"--group-by", "cat", "--agg", "p99", "-d",
+        CHECK(run_view(binary, {"--group-by", "cat", "--agg", "p99",
                                 env.get_dir()}) != 0);
     }
 
@@ -342,8 +340,8 @@ TEST_SUITE("DFTracerView") {
 
         // File output is always a compressed (.gz) trace.
         std::string output = env.get_dir() + "/view_output.pfw";
-        int rc = run_view(binary, {"--duql", R"(cat == "POSIX")", "--no-index",
-                                   "-d", env.get_dir(), "-o", output});
+        int rc = run_view(binary, {"-q", R"(cat == "POSIX")", "--no-index",
+                                   env.get_dir(), "-o", output});
         CHECK(rc == 0);
         REQUIRE(dftracer::utils::dstd::fs::exists(output + ".gz").value());
         CHECK(dftracer::utils::dstd::fs::file_size(output + ".gz").value() > 0);
@@ -374,8 +372,7 @@ TEST_SUITE("DFTracerView") {
         // the event count round-trips, so rc==0 proves the fused member index
         // is correct.
         std::string output = env.get_dir() + "/merged.pfw";
-        int rc =
-            run_view(binary, {"-d", in, "--merge", "--verify", "-o", output});
+        int rc = run_view(binary, {in, "--merge", "--verify", "-o", output});
         CHECK(rc == 0);
         REQUIRE(dftracer::utils::dstd::fs::exists(output + ".gz").value());
         // The index was built by the write, not a separate pass: its .dftindex
@@ -398,9 +395,8 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!f.empty());
 
         int rc = run_view(
-            binary,
-            {"--duql", R"(cat == "POSIX" and name in ["pread", "pwrite"])",
-             "-d", env.get_dir()});
+            binary, {"-q", R"(cat == "POSIX" and name in ["pread", "pwrite"])",
+                     env.get_dir()});
         CHECK(rc == 0);
     }
 
@@ -419,12 +415,11 @@ TEST_SUITE("DFTracerView") {
 
         std::string cap = env.get_dir() + "/cap.txt";
         std::string full, narrow;
-        CHECK(run_view_capture(binary,
-                               {"--duql", "ts >= 0", "-d", env.get_dir()}, cap,
+        CHECK(run_view_capture(binary, {"-q", "ts >= 0", env.get_dir()}, cap,
                                full) == 0);
-        CHECK(run_view_capture(
-                  binary, {"--time-range", "0,1000200000", "-d", env.get_dir()},
-                  cap, narrow) == 0);
+        CHECK(run_view_capture(binary,
+                               {"--time-range", "0,1000200000", env.get_dir()},
+                               cap, narrow) == 0);
         // [0, ts of i=2) keeps only i=1: the window excludes its end.
         CHECK(count_lines(narrow) == 1);
         CHECK(count_lines(full) > count_lines(narrow));
@@ -444,12 +439,12 @@ TEST_SUITE("DFTracerView") {
         std::string plain, numeric;
         CHECK(run_view_capture(
                   binary,
-                  {"--group-by", "cat", "--agg", "count", "-d", env.get_dir()},
-                  cap, plain) == 0);
-        CHECK(run_view_capture(binary,
-                               {"--group-by", "cat", "--agg-numeric-args", "-d",
-                                env.get_dir()},
-                               cap, numeric) == 0);
+                  {"--group-by", "cat", "--agg", "count", env.get_dir()}, cap,
+                  plain) == 0);
+        CHECK(run_view_capture(
+                  binary,
+                  {"--group-by", "cat", "--agg-numeric-args", env.get_dir()},
+                  cap, numeric) == 0);
         CHECK(!numeric.empty());
         // The fixture carries a numeric arg, so --agg-numeric-args adds a value
         // column that a bare count does not.
@@ -492,23 +487,22 @@ TEST_SUITE("DFTracerView") {
 
         std::string cap = env.get_dir() + "/cap.txt";
         std::string shard_out, direct_out;
-        CHECK(run_view_capture(
-                  binary, {"--group-by", "cat", "--agg", "count", "-d", set},
-                  cap, shard_out) == 0);
-        CHECK(run_view_capture(
-                  binary, {"--group-by", "cat", "--agg", "count", "-d", both},
-                  cap, direct_out) == 0);
+        CHECK(run_view_capture(binary,
+                               {"--group-by", "cat", "--agg", "count", set},
+                               cap, shard_out) == 0);
+        CHECK(run_view_capture(binary,
+                               {"--group-by", "cat", "--agg", "count", both},
+                               cap, direct_out) == 0);
 
         CHECK(!shard_out.empty());
         CHECK(sorted_lines(shard_out) == sorted_lines(direct_out));
 
         // The projection and row window apply to the merged table too.
         std::string shaped;
-        CHECK(run_view_capture(
-                  binary,
-                  {"--group-by", "cat", "--agg", "count,sum:dur", "--select",
-                   "cat,count", "--limit", "1", "-d", set},
-                  cap, shaped) == 0);
+        CHECK(run_view_capture(binary,
+                               {"--group-by", "cat", "--agg", "count,sum:dur",
+                                "--select", "cat,count", "--limit", "1", set},
+                               cap, shaped) == 0);
         CHECK(sorted_lines(shaped).size() == 1);
         CHECK(shaped.find("\"count\"") != std::string::npos);
         CHECK(shaped.find("sum_dur") == std::string::npos);
@@ -539,8 +533,8 @@ TEST_SUITE("DFTracerView") {
         std::string cap = env.get_dir() + "/cap.txt";
         std::string out;
         CHECK(run_view_capture(binary,
-                               {"--files", gz, "--duql", "name == \"read\"",
-                                "--select", "name,fhash,bytes"},
+                               {gz, "-q", "name == \"read\"", "--select",
+                                "name,fhash,bytes"},
                                cap, out) == 0);
         // Projected to exactly the selected fields (name top-level; fhash/bytes
         // lifted out of args); the unselected cat/pid/ts/dur are gone.
@@ -551,7 +545,7 @@ TEST_SUITE("DFTracerView") {
         CHECK(out.find("\"dur\"") == std::string::npos);
     }
 
-    TEST_CASE("--duql runs a pipeline with --param and --explain") {
+    TEST_CASE("--query runs a pipeline with --param and --explain") {
         auto binary = find_view_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_view binary not found, skipping.");
@@ -565,9 +559,8 @@ TEST_SUITE("DFTracerView") {
         const std::string q = "sort -ts | take $n | select ts";
 
         std::string out;
-        CHECK(run_view_capture(binary,
-                               {"--files", gz, "--duql", q, "--param", "n=3"},
-                               cap, out) == 0);
+        CHECK(run_view_capture(binary, {gz, "-q", q, "--param", "n=3"}, cap,
+                               out) == 0);
         std::vector<long long> ts;
         for (std::size_t at = out.find("\"ts\":"); at != std::string::npos;
              at = out.find("\"ts\":", at + 1))
@@ -577,20 +570,18 @@ TEST_SUITE("DFTracerView") {
         CHECK(ts[1] >= ts[2]);
 
         std::string plan;
-        CHECK(run_view_capture(
-                  binary,
-                  {"--files", gz, "--duql", q, "--param", "n=3", "--explain"},
-                  cap, plan) == 0);
+        CHECK(run_view_capture(binary,
+                               {gz, "-q", q, "--param", "n=3", "--explain"},
+                               cap, plan) == 0);
         CHECK(plan ==
               "scan select: ts\nscan order: file, then line\nsort_by_multi "
               "ts\nhead 3\nselect ts\n");
 
-        CHECK(run_view(binary, {"--files", gz, "--duql", q}) != 0);
-        CHECK(run_view(binary, {"--files", gz, "--duql", q, "--param", "n"}) !=
-              0);
+        CHECK(run_view(binary, {gz, "-q", q}) != 0);
+        CHECK(run_view(binary, {gz, "-q", q, "--param", "n"}) != 0);
     }
 
-    TEST_CASE("--duql runs a semi-join, an arrow and a lookup") {
+    TEST_CASE("--query runs a semi-join, an arrow and a lookup") {
         auto binary = find_view_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_view binary not found, skipping.");
@@ -603,8 +594,7 @@ TEST_SUITE("DFTracerView") {
         const std::string cap = env.get_dir() + "/cap.txt";
         auto rows = [&](const std::string& q) {
             std::string out;
-            CHECK(run_view_capture(binary, {"--files", gz, "--duql", q}, cap,
-                                   out) == 0);
+            CHECK(run_view_capture(binary, {gz, "-q", q}, cap, out) == 0);
             std::size_t n = 0;
             for (std::size_t at = out.find("\"cat\":"); at != std::string::npos;
                  at = out.find("\"cat\":", at + 1))
@@ -623,14 +613,14 @@ TEST_SUITE("DFTracerView") {
         CHECK(rows(let + "lookup one on cat | where k == 1 | select cat") ==
               posix);
         std::string plan;
-        CHECK(run_view_capture(binary,
-                               {"--files", gz, "--duql",
-                                let + "where cat -> one.k == 1", "--explain"},
-                               cap, plan) == 0);
+        CHECK(run_view_capture(
+                  binary,
+                  {gz, "-q", let + "where cat -> one.k == 1", "--explain"}, cap,
+                  plan) == 0);
         CHECK(plan.find("side one: from data") != std::string::npos);
     }
 
-    TEST_CASE("--duql writes the events an arrow filter keeps") {
+    TEST_CASE("--query writes the events an arrow filter keeps") {
         auto binary = find_view_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_view binary not found, skipping.");
@@ -654,10 +644,10 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
         const std::string cap = env.get_dir() + "/cap.txt";
         std::string out;
-        CHECK(run_view_capture(binary,
-                               {"--files", gz, "--duql",
-                                R"(fhash -> files.path like "/scratch/%")"},
-                               cap, out) == 0);
+        CHECK(run_view_capture(
+                  binary,
+                  {gz, "-q", R"(fhash -> files.path like "/scratch/%")"}, cap,
+                  out) == 0);
         std::size_t events = 0;
         for (std::size_t at = out.find(R"("ph":"X")"); at != std::string::npos;
              at = out.find(R"("ph":"X")", at + 1))
@@ -667,7 +657,7 @@ TEST_SUITE("DFTracerView") {
         CHECK(out.find(R"("ph":"M")") == std::string::npos);
     }
 
-    TEST_CASE("--duql prints the table of a group with --param") {
+    TEST_CASE("--query prints the table of a group with --param") {
         auto binary = find_view_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_view binary not found, skipping.");
@@ -681,9 +671,8 @@ TEST_SUITE("DFTracerView") {
         const std::string q = "where dur >= $min | group cat { n = count() }";
 
         std::string out;
-        CHECK(run_view_capture(binary,
-                               {"--files", gz, "--duql", q, "--param", "min=0"},
-                               cap, out) == 0);
+        CHECK(run_view_capture(binary, {gz, "-q", q, "--param", "min=0"}, cap,
+                               out) == 0);
         long long total = 0;
         std::size_t groups = 0;
         for (std::size_t at = out.find("\"n\":"); at != std::string::npos;
@@ -694,15 +683,14 @@ TEST_SUITE("DFTracerView") {
         CHECK(out.find("\"cat\":") != std::string::npos);
 
         std::string plan;
-        CHECK(run_view_capture(
-                  binary,
-                  {"--files", gz, "--duql", q, "--param", "min=0", "--explain"},
-                  cap, plan) == 0);
+        CHECK(run_view_capture(binary,
+                               {gz, "-q", q, "--param", "min=0", "--explain"},
+                               cap, plan) == 0);
         CHECK(plan.find("group (trace plan): keys cat; aggs n = count()") !=
               std::string::npos);
     }
 
-    TEST_CASE("--duql runs window and expand") {
+    TEST_CASE("--query runs window and expand") {
         auto binary = find_view_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_view binary not found, skipping.");
@@ -726,17 +714,15 @@ TEST_SUITE("DFTracerView") {
             "window cat sort ts { g = ts - lag(ts) } | expand hosts"
             " | select ts, g, hosts";
         std::string out;
-        CHECK(run_view_capture(binary, {"--files", gz, "--duql", q}, cap,
-                               out) == 0);
+        CHECK(run_view_capture(binary, {gz, "-q", q}, cap, out) == 0);
         CHECK(out.find(R"({"ts":10,"g":null,"hosts":"a"})") !=
               std::string::npos);
         CHECK(out.find(R"({"ts":30,"g":10,"hosts":"b"})") != std::string::npos);
         CHECK(out.find(R"("ts":20)") == std::string::npos);
 
         std::string plan;
-        CHECK(run_view_capture(binary,
-                               {"--files", gz, "--duql", q, "--explain"}, cap,
-                               plan) == 0);
+        CHECK(run_view_capture(binary, {gz, "-q", q, "--explain"}, cap, plan) ==
+              0);
         CHECK(plan.find("window keys cat; sort ts; g = ts - lag(ts)\n") !=
               std::string::npos);
         CHECK(plan.find("expand hosts as hosts\n") != std::string::npos);
@@ -758,9 +744,9 @@ TEST_SUITE("DFTracerView") {
         std::vector<std::string> agg = {"--group-by", "name", "--agg",
                                         "count,sum:dur"};
         std::vector<std::string> a1 = agg;
-        a1.insert(a1.end(), {"--memory-budget", "1", "-d", env.get_dir()});
+        a1.insert(a1.end(), {"--memory-budget", "1", env.get_dir()});
         std::vector<std::string> a2 = agg;
-        a2.insert(a2.end(), {"--no-spill", "-d", env.get_dir()});
+        a2.insert(a2.end(), {"--no-spill", env.get_dir()});
         CHECK(run_view_capture(binary, a1, cap, spilled) == 0);
         CHECK(run_view_capture(binary, a2, cap, in_mem) == 0);
         CHECK(!spilled.empty());
@@ -778,8 +764,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
         CHECK(run_view(binary, {"--group-by", "cat", "--agg", "sum:dur",
-                                "--time-scale", "1000", "-d", env.get_dir()}) ==
-              0);
+                                "--time-scale", "1000", env.get_dir()}) == 0);
     }
 
     TEST_CASE("select projects out unselected columns") {
@@ -797,9 +782,9 @@ TEST_SUITE("DFTracerView") {
         std::vector<std::string> agg = {"--group-by", "cat", "--agg",
                                         "count,sum:dur"};
         std::vector<std::string> a1 = agg;
-        a1.insert(a1.end(), {"-d", env.get_dir()});
+        a1.insert(a1.end(), {env.get_dir()});
         std::vector<std::string> a2 = agg;
-        a2.insert(a2.end(), {"--select", "cat,count", "-d", env.get_dir()});
+        a2.insert(a2.end(), {"--select", "cat,count", env.get_dir()});
         CHECK(run_view_capture(binary, a1, cap, full) == 0);
         CHECK(run_view_capture(binary, a2, cap, projected) == 0);
         CHECK(full.find("sum_dur") != std::string::npos);
@@ -820,14 +805,14 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
         std::string cap = env.get_dir() + "/cap.txt";
-        std::vector<std::string> q = {"--group-by",    "cat", "--agg",
-                                      "count,sum:dur", "-d",  env.get_dir()};
+        std::vector<std::string> q = {"--group-by", "cat", "--agg",
+                                      "count,sum:dur", env.get_dir()};
         std::string baseline, requery;
         CHECK(run_view_capture(binary, q, cap, baseline) == 0);
 
-        std::vector<std::string> mat = {
-            "--group-by",    "cat", "--agg",      "count,sum:dur",
-            "--materialize", "-d",  env.get_dir()};
+        std::vector<std::string> mat = {"--group-by",    "cat",
+                                        "--agg",         "count,sum:dur",
+                                        "--materialize", env.get_dir()};
         CHECK(run_view(binary, mat) == 0);
 
         CHECK(run_view_capture(binary, q, cap, requery) == 0);
@@ -848,7 +833,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
         CHECK(run_view(binary, {"--group-by", "cat", "--agg", "count",
-                                "--collect-typed", "-d", env.get_dir()}) == 0);
+                                "--collect-typed", env.get_dir()}) == 0);
     }
 
     // --materialize is meaningless without an aggregation and must be rejected.
@@ -862,8 +847,8 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
-        CHECK(run_view(binary, {"--duql", R"(cat == "POSIX")", "--materialize",
-                                "-d", env.get_dir()}) != 0);
+        CHECK(run_view(binary, {"-q", R"(cat == "POSIX")", "--materialize",
+                                env.get_dir()}) != 0);
     }
 
     // A single-member input larger than the checkpoint size is read through
@@ -883,9 +868,8 @@ TEST_SUITE("DFTracerView") {
         const auto orig_size =
             dftracer::utils::dstd::fs::file_size(orig).value();
 
-        int rc = run_view(
-            binary, {"--group-by", "cat", "--agg", "count", "--checkpoint-size",
-                     "2048", "-d", env.get_dir()});
+        int rc = run_view(binary, {"--group-by", "cat", "--agg", "count",
+                                   "--checkpoint-size", "2048", env.get_dir()});
         CHECK(rc == 0);
         CHECK(dftracer::utils::dstd::fs::file_size(orig).value() == orig_size);
         CHECK_FALSE(dftracer::utils::dstd::fs::exists(env.get_dir() + "/split")
@@ -907,9 +891,9 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         REQUIRE(!make_multimember_pfw_gz(env, 200, 4096, 0).empty());
 
-        int rc = run_view(
-            binary, {"--group-by", "cat", "--agg", "count", "--checkpoint-size",
-                     "1048576", "-d", env.get_dir()});
+        int rc =
+            run_view(binary, {"--group-by", "cat", "--agg", "count",
+                              "--checkpoint-size", "1048576", env.get_dir()});
         CHECK(rc == 0);
         CHECK_FALSE(dftracer::utils::dstd::fs::exists(env.get_dir() + "/split")
                         .value());

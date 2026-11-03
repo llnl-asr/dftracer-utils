@@ -168,7 +168,7 @@ skip the local script entirely and serve queries over HTTP.
 
       .. code-block:: console
 
-         $ dftracer_server -d traces/
+         $ dftracer_server traces/
          # then query the REST API, or open http://127.0.0.1:8080/
 
 Full detail: :doc:`analysis/export` (pandas/polars/Arrow), :doc:`serving/http-server`

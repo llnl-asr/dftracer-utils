@@ -5,7 +5,7 @@
 //
 // Build: c++ -std=c++20 -shared -fPIC -I<repo>/include \
 //            -o query_filter.so query_filter.cpp
-// Run:   dftracer_run -d ./traces --plugin ./query_filter.so
+// Run:   dftracer_run ./traces --plugin ./query_filter.so
 
 #include <dftracer/utils/plugins/plugin.h>
 

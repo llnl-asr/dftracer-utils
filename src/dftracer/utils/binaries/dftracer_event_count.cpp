@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -38,18 +39,19 @@ using namespace dftracer::utils::index::build;
 
 class EventCountArgParse : public binaries::ArgParse {
    public:
-    binaries::DirectoryArgs directory;
+    binaries::InputArgs inputs{binaries::DirMode::DefaultDot,
+                               "Trace files or a folder of trace files"};
     binaries::PipelineArgs pipeline;
     binaries::IndexingArgs indexing;
 
-    explicit EventCountArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+    explicit EventCountArgParse(binaries::ArgParser& p) : ArgParse(p) {
         indexing.index_dir_help =
             "Directory that holds .dftindex stores to read counts from "
             "(never written)";
         indexing.force_help =
             "Ignore any index and stream every file to count its events";
         indexing.with_checkpoint = false;
-        schema(directory, pipeline, indexing);
+        schema(inputs, pipeline, indexing);
     }
 };
 
@@ -65,10 +67,13 @@ constexpr std::size_t INFLATE_STEP_BYTES = std::size_t{1} << 20;
 struct IndexedCounts {
     std::size_t total_events = 0;
     std::size_t files_counted = 0;
+    // keep std: unswept API
     std::vector<std::string> to_stream;
 };
 
+// keep std: unswept API
 IndexedCounts count_from_index(const std::string& index_path,
+                               // keep std: unswept API
                                const std::vector<ResolvedFile>& entries) {
     IndexedCounts counts;
     try {
@@ -134,12 +139,13 @@ class StreamCounter {
 
    private:
     simdjson::dom::parser parser_;
-    std::string carry_;
-    std::string work_;
+    dstd::String carry_;
+    dstd::String work_;
     std::size_t count_ = 0;
     bool path_decoder_;
 };
 
+// keep std: unswept API
 coro::CoroTask<std::size_t> stream_count(std::string path) {
     dstd::ScopedFd fd(::open(path.c_str(), O_RDONLY));
     if (fd.get() < 0)
@@ -165,7 +171,7 @@ coro::CoroTask<std::size_t> stream_count(std::string path) {
             counter.feed(*chunk);
         }
     } else {
-        std::string buf(PLAIN_READ_BYTES, '\0');
+        dstd::String buf(PLAIN_READ_BYTES, '\0');
         std::uint64_t offset = 0;
         while (offset < size) {
             const auto got = co_await io::pread(
@@ -193,14 +199,20 @@ int main(int argc, char** argv) {
 }
 
 static int run_event_count(const EventCountArgParse* cli) {
-    const auto log_dir = binaries::absolute_path(cli->directory.value);
-    const auto index_dir = cli->indexing.index_dir;
+    const dstd::Path log_dir =
+        cli->inputs.directory.empty()
+            ? dstd::Path()
+            : binaries::absolute_path(cli->inputs.directory);
+    // keep std: unswept API
+    const std::string index_dir(cli->indexing.index_dir);
     const auto force = cli->indexing.force;
     const auto executor_threads = cli->pipeline.executor_threads;
 
     Resolver resolver;
     ResolverInput resolve_input;
-    resolve_input.directory = log_dir;
+    resolve_input.directory = dstd::String(log_dir.str());
+    for (const auto file : cli->inputs.files)
+        resolve_input.files.emplace_back(binaries::absolute_path(file).str());
     resolve_input.index_dir = index_dir;
     resolve_input.require_checkpoints = true;
 
@@ -218,7 +230,9 @@ static int run_event_count(const EventCountArgParse* cli) {
     std::atomic<std::size_t> files_processed{0};
     std::atomic<bool> failed{false};
 
+    // keep std: unswept API
     std::vector<std::string> stream_items;
+    // keep std: unswept API
     std::map<std::string, std::vector<ResolvedFile>> index_groups;
     for (auto& entry : resolve_result.cached) {
         if (force) {
@@ -257,6 +271,7 @@ static int run_event_count(const EventCountArgParse* cli) {
                     [total_events_ptr = &total_events,
                      files_processed_ptr = &files_processed,
                      failed_ptr = &failed](
+                        // keep std: unswept API
                         const std::string& path) -> coro::CoroTask<void> {
                         try {
                             const std::size_t n = co_await stream_count(path);

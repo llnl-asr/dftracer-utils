@@ -216,7 +216,7 @@ never picks it up as trace input.
 CLI: dftracer_view autodetects a shard set
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``dftracer_view`` resolves a shard-set root from ``-d``/``--directory`` or
+``dftracer_view`` resolves a shard-set root from its folder input or
 ``--index-dir`` (adding ``.dftindex`` to the path when the path is not an
 index root yet, then reading ``shards.json``) and, when found, routes the
 query through ``ShardedView`` instead of scanning trace files directly. A
@@ -224,7 +224,7 @@ shard set only supports aggregate/counter queries:
 
 .. code-block:: bash
 
-   dftracer_view -d /shared/traces --group-by name --agg count,sum:dur \
+   dftracer_view /shared/traces --group-by name --agg count,sum:dur \
        > result.ndjson
 
 If ``-d``/``--index-dir`` does not resolve to a shard set (no ``shards.json``

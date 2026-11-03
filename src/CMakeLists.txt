@@ -8,7 +8,6 @@ add_rpath()
 need_zlib()
 need_libdeflate()
 need_zstd()
-need_argparse()
 need_simdjson()
 need_readerwriterqueue()
 need_concurrentqueue()
@@ -1819,6 +1818,16 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
 
   set(DFTRACER_UTILS_MPI_BINARIES "")
 
+  add_library(dftracer_utils_cli STATIC
+              ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/cli_args.cpp)
+  target_link_libraries(dftracer_utils_cli PUBLIC dftracer_utils)
+  target_include_directories(
+    dftracer_utils_cli PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../include
+                              ${CMAKE_CURRENT_SOURCE_DIR})
+  target_set_warnings(dftracer_utils_cli)
+  set_target_properties(dftracer_utils_cli PROPERTIES POSITION_INDEPENDENT_CODE
+                                                      ON)
+
   foreach(bin ${DFTRACER_UTILS_BINARIES})
     string(REPLACE ".cpp" "" bin_exec ${bin})
     string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/" ""
@@ -1831,7 +1840,7 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
     target_add_rpath(${bin_exec})
 
     # Link to unified library (which includes both runtime and utilities)
-    target_link_libraries(${bin_exec} PRIVATE dftracer_utils argparse::argparse)
+    target_link_libraries(${bin_exec} PRIVATE dftracer_utils dftracer_utils_cli)
     if(TARGET dftracer_utils_global_new)
       target_link_libraries(${bin_exec} PRIVATE dftracer_utils_global_new)
     endif()
@@ -1965,7 +1974,7 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
                                                        ${CMAKE_BINARY_DIR}/bin)
     target_add_rpath(${bin_exec})
 
-    target_link_libraries(${bin_exec} PRIVATE dftracer_utils argparse::argparse
+    target_link_libraries(${bin_exec} PRIVATE dftracer_utils dftracer_utils_cli
                                               MPI::MPI_CXX)
     target_include_directories(
       ${bin_exec} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -2002,8 +2011,7 @@ if(DFTRACER_UTILS_BUILD_EXAMPLES)
     set_target_properties(${example_name} PROPERTIES OUTPUT_NAME
                                                      "${example_name}")
     target_add_rpath(${example_name})
-    target_link_libraries(${example_name} PRIVATE dftracer_utils
-                                                  argparse::argparse)
+    target_link_libraries(${example_name} PRIVATE dftracer_utils)
 
     target_include_directories(${example_name}
                                PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)

@@ -7,7 +7,7 @@ if(UV_EXECUTABLE)
 file(REMOVE_RECURSE "${WORK}")
 file(MAKE_DIRECTORY "${WORK}")
 execute_process(
-  COMMAND "${GEN}" -o "${WORK}/set/nested/trace" -p 2 -H 1 -e 4 -s 50
+  COMMAND "${GEN}" -o "${WORK}/set/nested/trace" --num-processes 2 --num-hosts 1 --num-epochs 4 --steps-per-epoch 50
           --num-train-files 2 --num-val-files 1
   RESULT_VARIABLE rc)
 if(NOT rc EQUAL 0)

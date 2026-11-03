@@ -77,7 +77,7 @@ TEST_SUITE("DFTracerInfo") {
         REQUIRE(!f.empty());
 
         int rc = 0;
-        auto output = run_info_capture(binary, {"--files", f}, &rc);
+        auto output = run_info_capture(binary, {f}, &rc);
         CHECK(rc == 0);
         // Default summary mode prints aggregate totals.
         CHECK(output.find("Total Files") != std::string::npos);
@@ -98,7 +98,7 @@ TEST_SUITE("DFTracerInfo") {
             REQUIRE(!f.empty());
         }
 
-        int rc = run_info(binary, {"-d", env.get_dir()});
+        int rc = run_info(binary, {env.get_dir()});
         CHECK(rc == 0);
     }
 
@@ -116,12 +116,12 @@ TEST_SUITE("DFTracerInfo") {
         REQUIRE(!f.empty());
 
         int rc_plain = 0;
-        auto plain = run_info_capture(binary, {"--files", f}, &rc_plain);
+        auto plain = run_info_capture(binary, {f}, &rc_plain);
         CHECK(rc_plain == 0);
 
         int rc_detailed = 0;
-        auto detailed = run_info_capture(
-            binary, {"--files", f, "--query", "detailed"}, &rc_detailed);
+        auto detailed =
+            run_info_capture(binary, {f, "--report", "detailed"}, &rc_detailed);
         CHECK(rc_detailed == 0);
 
         // Detailed query adds the "Detailed Statistics:" section.
@@ -141,7 +141,7 @@ TEST_SUITE("DFTracerInfo") {
         auto f = create_pfw_gz(env, 30, 0);
         REQUIRE(!f.empty());
 
-        int rc = run_info(binary, {"--files", f, "--force-rebuild"});
+        int rc = run_info(binary, {f, "--force"});
         CHECK(rc == 0);
     }
 
@@ -165,8 +165,7 @@ TEST_SUITE("DFTracerInfo") {
         REQUIRE(!f.empty());
 
         int rc = 0;
-        long n1 =
-            valid_events(run_info_capture(binary, {"-d", env.get_dir()}, &rc));
+        long n1 = valid_events(run_info_capture(binary, {env.get_dir()}, &rc));
         CHECK(rc == 0);
         CHECK(n1 > 0);
 
@@ -176,8 +175,7 @@ TEST_SUITE("DFTracerInfo") {
         (void)dftracer::utils::dstd::fs::remove(f);
         REQUIRE(dftracer::utils::dstd::fs::rename(raw, f).has_value());
 
-        long n2 =
-            valid_events(run_info_capture(binary, {"-d", env.get_dir()}, &rc));
+        long n2 = valid_events(run_info_capture(binary, {env.get_dir()}, &rc));
         CHECK(rc == 0);
         CHECK(n2 > n1);
     }

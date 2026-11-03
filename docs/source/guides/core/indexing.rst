@@ -141,8 +141,8 @@ without worrying about redundant work.
 
       .. code-block:: console
 
-         $ dftracer_index --directory traces/
-         $ dftracer_index --directory traces/ --force   # rebuild every tier
+         $ dftracer_index traces/
+         $ dftracer_index traces/ --force   # rebuild every tier
 
       Selected flags (see ``dftracer_index --help`` for the full list):
 
@@ -329,7 +329,7 @@ rebuilding the rest.
 
    .. tab-item:: CLI
 
-      ``dftracer_info --query detailed`` prints each file's extensions, and
+      ``dftracer_info --report detailed`` prints each file's extensions, and
       marks one whose build failed or that an older version wrote.
 
 ``explain`` reports, per file, the chunks the query reads for its data events
@@ -374,7 +374,7 @@ chunks. Detection is per file; set the schema to skip it or to override it:
 
       .. code-block:: console
 
-         $ dftracer_index --directory logs/ --schema generic
+         $ dftracer_index logs/ --schema generic
 
 Read a generic trace with a ``TraceViewer`` (C++ ``View``) as usual.
 Columns are named by path, without an ``args.`` prefix (``op``, ``io.off``,
@@ -596,7 +596,7 @@ order in which the pieces were parsed; a build that spills is slower.
 
       .. code-block:: console
 
-         $ dftracer_index --directory traces/ --memory-budget 2GB
+         $ dftracer_index traces/ --memory-budget 2GB
 
 Memory not covered: the aggregation partials, and the per-file totals that grow
 with distinct values rather than with the trace's length (file blooms, file

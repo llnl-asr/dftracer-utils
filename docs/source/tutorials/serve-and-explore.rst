@@ -29,12 +29,12 @@ The server serves a **directory**, so put a trace inside one:
 2. Start the server
 ---------------------
 
-``dftracer_server`` scans ``-d``/``--directory`` on startup, builds any
+``dftracer_server`` scans the folder given as its input on startup, builds any
 missing ``.dftindex`` sidecars, and listens on ``127.0.0.1:8080`` by default:
 
 .. code-block:: console
 
-   $ dftracer_server -d ./traces -p 8099
+   $ dftracer_server ./traces -p 8099
    Using trace directory for indexes: ./traces
    ...
    DFTracer server listening on 127.0.0.1:8099
@@ -118,7 +118,7 @@ data behind the trace viewer's Analyze tab:
 What you learned
 ------------------
 
-- ``dftracer_server -d <dir> -p <port>`` serves a trace directory over HTTP,
+- ``dftracer_server <dir> -p <port>`` serves a trace directory over HTTP,
   building missing indexes on startup.
 - Every ``/api/*`` route returns one JSON response; ``/api/info`` and
   ``/api/files`` need no parameters.

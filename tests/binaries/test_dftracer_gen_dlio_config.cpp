@@ -142,10 +142,10 @@ TEST_SUITE("DFTracerGenDlioConfig") {
     TEST_CASE("missing --output rejected") {
         const auto binary = find_binary();
         if (binary.empty()) return;
-        // Pointing -d at a valid empty dir but no -o; argparse should fail.
+        // Pointing at a valid empty dir but no -o; the parser should fail.
         dftu_utils_test::TestEnvironment env(10);
         REQUIRE(env.is_valid());
-        CHECK(run_binary(binary, {"-d", env.get_dir()}) != 0);
+        CHECK(run_binary(binary, {env.get_dir()}) != 0);
     }
 
     TEST_CASE("directory without DLIO events fails gracefully") {
@@ -159,7 +159,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
         REQUIRE(!trace_gz.empty());
 
         const std::string out = env.get_dir() + "/dlio_config.yaml";
-        const int rc = run_binary(binary, {"-d", env.get_dir(), "-o", out});
+        const int rc = run_binary(binary, {env.get_dir(), "-o", out});
         // Non-zero exit and no YAML produced.
         CHECK(rc != 0);
         CHECK_FALSE(dftracer::utils::dstd::fs::exists(out).value());
@@ -179,8 +179,8 @@ TEST_SUITE("DFTracerGenDlioConfig") {
         }
 
         const std::string out = env.get_dir() + "/dlio_config.yaml";
-        const int rc = run_binary(binary, {"-d", env.get_dir(), "-o", out,
-                                           "--simulation-iterations", "2"});
+        const int rc = run_binary(
+            binary, {env.get_dir(), "-o", out, "--simulation-iterations", "2"});
         CHECK(rc == 0);
         REQUIRE(dftracer::utils::dstd::fs::exists(out).value());
 
@@ -216,9 +216,9 @@ TEST_SUITE("DFTracerGenDlioConfig") {
         // Without overrides the loader looks for DLIO defaults and finds
         // nothing.
         const std::string out_default = env.get_dir() + "/dlio_default.yaml";
-        const int rc_default =
-            run_binary(binary, {"-d", env.get_dir(), "-o", out_default,
-                                "--simulation-iterations", "2"});
+        const int rc_default = run_binary(
+            binary,
+            {env.get_dir(), "-o", out_default, "--simulation-iterations", "2"});
         CHECK(rc_default != 0);
         CHECK_FALSE(dftracer::utils::dstd::fs::exists(out_default).value());
 
@@ -240,8 +240,8 @@ TEST_SUITE("DFTracerGenDlioConfig") {
 
         const std::string out = env.get_dir() + "/dlio_config.yaml";
         const int rc = run_binary(
-            binary, {"-d", env.get_dir(), "-o", out, "--simulation-iterations",
-                     "2", "--event-map", map_path});
+            binary, {env.get_dir(), "-o", out, "--simulation-iterations", "2",
+                     "--event-map", map_path});
         CHECK(rc == 0);
         REQUIRE(dftracer::utils::dstd::fs::exists(out).value());
 
@@ -281,8 +281,8 @@ TEST_SUITE("DFTracerGenDlioConfig") {
 
         const std::string out = env.get_dir() + "/dlio_config.yaml";
         const int rc = run_binary(
-            binary, {"-d", env.get_dir(), "-o", out, "--simulation-iterations",
-                     "2", "--event-map", map_path});
+            binary, {env.get_dir(), "-o", out, "--simulation-iterations", "2",
+                     "--event-map", map_path});
         CHECK(rc == 0);
         CHECK(dftracer::utils::dstd::fs::exists(out).value());
     }
@@ -306,8 +306,8 @@ TEST_SUITE("DFTracerGenDlioConfig") {
 
         const std::string out = env.get_dir() + "/dlio_config.yaml";
         const int rc = run_binary(
-            binary, {"-d", env.get_dir(), "-o", out, "--simulation-iterations",
-                     "2", "--event-map", map_path});
+            binary, {env.get_dir(), "-o", out, "--simulation-iterations", "2",
+                     "--event-map", map_path});
         CHECK(rc != 0);
         CHECK_FALSE(dftracer::utils::dstd::fs::exists(out).value());
     }
@@ -324,7 +324,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
 
         const std::string out = env.get_dir() + "/dlio_config.yaml";
         const int rc = run_binary(
-            binary, {"-d", env.get_dir(), "-o", out, "--num-workers", "4",
+            binary, {env.get_dir(), "-o", out, "--num-workers", "4",
                      "--prefetch-factor", "1", "--simulation-iterations", "2"});
         CHECK(rc == 0);
         CHECK(dftracer::utils::dstd::fs::exists(out).value());

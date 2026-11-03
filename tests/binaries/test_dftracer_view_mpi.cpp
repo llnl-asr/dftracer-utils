@@ -123,9 +123,8 @@ TEST_SUITE("dftracer_view_mpi") {
         // known-correct value.
         const std::string o = env.get_dir() + "/o.pfw";
         const std::vector<std::string> args = {
-            "--directory", in,         "--counters",
-            "--group-by",  "name",     "--agg",
-            "mean:util",   "--output", o};
+            in,      "--counters", "--group-by", "name",
+            "--agg", "mean:util",  "--output",   o};
         REQUIRE(run_mpi(launcher, 2, bin, args) == 0);
 
         const std::string s = read_sorted(o);
@@ -156,8 +155,7 @@ TEST_SUITE("dftracer_view_mpi") {
         // Distributed run only; the merged table must carry the correct mean.
         const std::string o = env.get_dir() + "/a.json";
         const std::vector<std::string> args = {
-            "--directory", in,          "--group-by", "name",
-            "--agg",       "mean:util", "--output",   o};
+            in, "--group-by", "name", "--agg", "mean:util", "--output", o};
         REQUIRE(run_mpi(launcher, 2, bin, args) == 0);
 
         const std::string s = read_sorted(o);
@@ -190,8 +188,7 @@ TEST_SUITE("dftracer_view_mpi") {
 
         const std::string o = env.get_dir() + "/occ.json";
         const std::vector<std::string> args = {
-            "--directory", in,     "--group-by", "name",
-            "--agg",       "busy", "--output",   o};
+            in, "--group-by", "name", "--agg", "busy", "--output", o};
         REQUIRE(run_mpi(launcher, 2, bin, args) == 0);
 
         const std::string s = read_sorted(o);
@@ -223,8 +220,7 @@ TEST_SUITE("dftracer_view_mpi") {
 
         // Distributed --merge: each rank writes its shard, rank 0 concatenates.
         const std::string o = env.get_dir() + "/m.pfw";
-        const std::vector<std::string> args = {"--directory", in, "--merge",
-                                               "--output", o};
+        const std::vector<std::string> args = {in, "--merge", "--output", o};
         REQUIRE(run_mpi(launcher, 2, bin, args) == 0);
 
         // Output is always a compressed trace (.gz).

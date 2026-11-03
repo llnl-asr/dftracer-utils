@@ -670,6 +670,10 @@ set(TEST_BINARY_SOURCES
     binaries/test_nested_inputs.cpp
     )
 
+if(TARGET dftracer_utils_cli)
+  list(APPEND TEST_BINARY_SOURCES binaries/test_cli_args.cpp)
+endif()
+
 if(DFTRACER_UTILS_ENABLE_MPI)
   list(APPEND TEST_BINARY_SOURCES
     binaries/test_dftracer_view_mpi.cpp
@@ -685,6 +689,9 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                                                  ${CMAKE_SOURCE_DIR}/src)
   target_link_libraries(${target_name} PRIVATE doctest::doctest testing_utilities)
+  if(TARGET dftracer_utils_cli)
+    target_link_libraries(${target_name} PRIVATE dftracer_utils_cli)
+  endif()
   target_set_warnings(${target_name})
   target_enable_coroutine(${target_name})
   target_add_rpath(${target_name})

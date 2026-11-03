@@ -37,7 +37,8 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env,
     std::string out_dir = env.get_dir() + "/gen_" + std::to_string(id);
     // Generate a tiny trace: 1 rank, 1 epoch, 2 steps
     std::string cmd = gen + " -o '" + out_dir +
-                      "' -p 1 -e 1 -s 2 --num-train-files 1"
+                      "' --num-processes 1 --num-epochs 1 --steps-per-epoch 2 "
+                      "--num-train-files 1"
                       " --num-val-files 1 --seed 42 2>/dev/null";
     if (std::system(cmd.c_str()) != 0) return "";
 
@@ -244,7 +245,7 @@ std::uint64_t counted_events(const std::string& binary,
     const std::string out = out_dir + "/count.json";
     REQUIRE(run_comparator(binary,
                            {"--baseline", trace, "--variant", trace, "--format",
-                            "json", "--duql", query},
+                            "json", "-q", query},
                            out) == 0);
     const std::string content = read_file(out);
     simdjson::dom::parser parser;
@@ -396,7 +397,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_output.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--no-color",
-                                 "--duql", R"(cat == "POSIX")"},
+                                 "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -426,7 +427,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_diff.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", baseline, "--variant", variant,
-                                 "--no-color", "--duql", R"(cat == "POSIX")"},
+                                 "--no-color", "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -474,7 +475,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_dir.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", base_dir, "--variant", var_dir,
-                                 "--no-color", "--duql", R"(cat == "POSIX")"},
+                                 "--no-color", "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -500,7 +501,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_json.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--format",
-                                 "json", "--duql", R"(cat == "POSIX")"},
+                                 "json", "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -595,7 +596,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_json_zero.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--format",
-                                 "json", "--duql", R"(cat == "POSIX")"},
+                                 "json", "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -635,7 +636,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_interval.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--no-color",
-                                 "-t", "1000", "--duql", R"(cat == "POSIX")"},
+                                 "-t", "1000", "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
     }
